@@ -2,8 +2,12 @@
  * Reading an event log (docs/DESIGN.md sections 4.2 and 4.5).
  *
  * A line is committed only once its newline is on disk. The last line of a file that has no
- * newline, or that does not parse, is a torn write (power loss or a write still in progress): it
- * is ignored and reported, never guessed at. The writer truncates it at the next open.
+ * newline, or that is not JSON at all, is a torn write (power loss or a write still in progress):
+ * it is ignored and reported, never guessed at. The writer truncates it at the next open.
+ *
+ * A complete line that is JSON but fails validation (an event type or value from a newer build,
+ * for example) is committed: it is reported as invalid and skipped wherever it sits, never
+ * truncated, and its `seq` still counts, so a writer continues after it.
  */
 
 import { closeSync, openSync, readSync, statSync } from "node:fs";
@@ -33,23 +37,35 @@ export interface ReadResult {
   seqErrors: string[];
   /** Byte length of the committed part of the input (up to and including the last good newline). */
   committedBytes: number;
+  /** Highest `seq` on any committed line, invalid lines included. 0 when there is none. */
+  lastSeq: number;
 }
 
 const NL = 0x0a;
 const decoder = new TextDecoder("utf-8", { fatal: false });
 
-function parseLine(
-  bytes: Uint8Array,
-): { ok: true; event: LogEvent } | { ok: false; error: string } {
+type ParsedLine =
+  | { ok: true; event: LogEvent }
+  /** `json` is false when the line is not JSON at all; `seq` is the line's own seq, if it has one. */
+  | { ok: false; error: string; json: boolean; seq?: number };
+
+function parseLine(bytes: Uint8Array): ParsedLine {
   const text = decoder.decode(bytes);
   let raw: unknown;
   try {
     raw = JSON.parse(text);
   } catch {
-    return { ok: false, error: "not valid JSON" };
+    return { ok: false, error: "not valid JSON", json: false };
   }
   const v = validateEvent(raw);
-  return v.ok ? { ok: true, event: v.value } : { ok: false, error: v.error };
+  if (v.ok) return { ok: true, event: v.value };
+  const seq = (raw as { seq?: unknown } | null)?.seq;
+  return {
+    ok: false,
+    error: v.error,
+    json: true,
+    seq: typeof seq === "number" && Number.isInteger(seq) && seq > 0 ? seq : undefined,
+  };
 }
 
 /**
@@ -70,6 +86,7 @@ export function parseLog(
   let line = opts.firstLine ?? 1;
   let start = 0;
   let committed = 0;
+  let lastSeq = 0;
 
   while (start < bytes.length) {
     const nl = bytes.indexOf(NL, start);
@@ -94,13 +111,20 @@ export function parseLog(
           );
         }
         expect = Math.max(expect, ev.seq + 1);
+        lastSeq = Math.max(lastSeq, ev.seq);
         events.push(ev);
-      } else if (isLast) {
-        // A final line that does not parse is a torn write even if a newline landed.
+      } else if (isLast && !r.json) {
+        // A final line that is not JSON is a torn write even if a newline landed (power loss can
+        // leave a block of zeros).
         torn = { offset: base + start, bytes: nl + 1 - start, reason: "unparseable" };
         break;
       } else {
         invalid.push({ line, offset: base + start, error: r.error });
+        if (r.seq !== undefined) {
+          // Its seq was assigned by a writer; the sequence continues after it.
+          expect = Math.max(expect, r.seq + 1);
+          lastSeq = Math.max(lastSeq, r.seq);
+        }
       }
     }
     committed = nl + 1;
@@ -108,7 +132,7 @@ export function parseLog(
     line++;
   }
 
-  return { events, torn, invalid, seqErrors, committedBytes: committed };
+  return { events, torn, invalid, seqErrors, committedBytes: committed, lastSeq };
 }
 
 /** Reads a whole log file. A missing file reads as empty. */

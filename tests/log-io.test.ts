@@ -250,6 +250,41 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(String(process.pid));
   });
 
+  test("[Two writers]: two writers taking over the same stale lock at once cannot both win", () => {
+    const dir = callDir();
+    const stale = 999_001;
+    writeFileSync(join(dir, LOCK_FILE), `${stale}\n`);
+    let first: LogWriter | null = null;
+    // B reads the stale pid, then, before B acts on it, A takes the lock over completely.
+    const openB = () =>
+      LogWriter.open(dir, {
+        pid: 2002,
+        isAlive: (pid) => {
+          if (pid === stale && first === null) {
+            first = open(dir, { pid: 1001, isAlive: (p) => p !== stale });
+          }
+          return pid !== stale;
+        },
+      });
+    expect(openB).toThrow(LockError);
+    expect(first).not.toBeNull();
+    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe("1001");
+    expect(readdirSync(dir).sort()).toEqual([LOCK_FILE, EVENTS_FILE].sort());
+  });
+
+  test("[Two writers]: a writer whose stale lock was taken over does not remove the new holder's lock", () => {
+    const dir = callDir();
+    const a = LogWriter.open(dir, { pid: 1001, isAlive: () => true });
+    // B judges 1001 dead and takes the lock over.
+    const b = open(dir, { pid: 1002, isAlive: () => false });
+    expect(b.report.staleLockPid).toBe(1001);
+    a.close();
+    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe("1002");
+    // Positive control: the holder's own close does remove it.
+    b.close();
+    expect(readdirSync(dir)).not.toContain(LOCK_FILE);
+  });
+
   test("processAlive: this process is alive, nonsense pids are not", () => {
     expect(processAlive(process.pid)).toBe(true);
     expect(processAlive(0)).toBe(false);
@@ -290,6 +325,30 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     const w2 = open(dir);
     expect(w2.report.truncated?.reason).toBe("unparseable");
     expect(readFileSync(join(dir, EVENTS_FILE))).toEqual(good);
+  });
+
+  test("a complete last line from a newer schema is kept, skipped and counted, never truncated", async () => {
+    const dir = callDir();
+    const w1 = LogWriter.open(dir);
+    w1.append(created);
+    w1.append(partDraft(1));
+    w1.close();
+    const future = `${JSON.stringify({ seq: 3, t: T0, type: "seg.future", id: "x" })}\n`;
+    appendFileSync(join(dir, EVENTS_FILE), future);
+    const before = readFileSync(join(dir, EVENTS_FILE));
+    const w2 = open(dir);
+    expect(w2.report.truncated).toBeNull();
+    expect(w2.report.invalidLines).toBe(1);
+    expect(readFileSync(join(dir, EVENTS_FILE))).toEqual(before);
+    // The writer continues after the kept line's seq, never reusing it.
+    expect(w2.lastSeq).toBe(3);
+    expect(w2.append(segDraft("l000001")).seq).toBe(4);
+    w2.close();
+    const r = await readLog(join(dir, EVENTS_FILE));
+    expect(r.events.map((e) => e.seq)).toEqual([1, 2, 4]);
+    expect(r.invalid).toHaveLength(1);
+    expect(r.torn).toBeNull();
+    expect(r.seqErrors).toEqual([]);
   });
 
   test("[T3.13] Disk reads give part 1 only: a multi-part call writes one log and no per-part transcript", () => {
@@ -346,6 +405,29 @@ describe("reader (DESIGN 4.2, 4.5)", () => {
     expect(r.invalid).toHaveLength(1);
     expect(r.invalid[0]?.line).toBe(2);
     expect(r.seqErrors).toEqual(["line 3: seq jumps from 1 to 3"]);
+  });
+
+  test("a valid-JSON line that fails validation is invalid wherever it sits, and its seq counts", () => {
+    const future = { seq: 5, t: T0, type: "seg.future", id: "x" };
+    const last = parseLog(`${whole}${JSON.stringify(future)}\n`);
+    expect(last.torn).toBeNull();
+    expect(last.invalid).toHaveLength(1);
+    expect(last.lastSeq).toBe(5);
+    expect(last.seqErrors).toEqual([]);
+    const next = { ...(b.events[3] as object), seq: 6 };
+    const middle = parseLog(`${whole}${JSON.stringify(future)}\n${JSON.stringify(next)}\n`);
+    expect(middle.torn).toBeNull();
+    expect(middle.invalid).toHaveLength(1);
+    expect(middle.seqErrors).toEqual([]);
+    expect(middle.lastSeq).toBe(6);
+    // A tailer consumes it the same way.
+    const dir = callDir();
+    const path = join(dir, EVENTS_FILE);
+    writeFileSync(path, `${whole}${JSON.stringify(future)}\n`);
+    const t = tail(path);
+    expect(t.events.map((e) => e.seq)).toEqual([1, 2, 3, 4]);
+    expect(t.invalid).toHaveLength(1);
+    expect(t.seqErrors).toEqual([]);
   });
 
   test("a missing file reads as empty", async () => {

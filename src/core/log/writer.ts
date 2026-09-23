@@ -2,9 +2,10 @@
  * The single writer of a call's event log (docs/DESIGN.md sections 4.1, 4.2 and 4.5).
  *
  * - One writer per call folder, held by `.akou.lock` (the writer's pid). A second writer refuses
- *   while the holder is alive; a lock left by a dead process is taken over.
+ *   while the holder is alive; a lock left by a dead process is taken over, by one writer only.
  * - The file is opened for append only. Nothing already written is ever changed; the only
- *   exception is a torn last line from a crash, which is truncated when the log is opened.
+ *   exception is a torn last line from a crash (no newline, or not JSON), which is truncated when
+ *   the log is opened. A complete line that fails validation is kept.
  * - One `write()` per line. `fsync` at every lifecycle event, and at most one second after any
  *   other append.
  * - `seq` is assigned here, gap-free from 1, and `t` is the wall clock at write.
@@ -17,6 +18,7 @@ import {
   linkSync,
   openSync,
   readFileSync,
+  renameSync,
   truncateSync,
   unlinkSync,
   writeFileSync,
@@ -129,12 +131,32 @@ function acquireLock(
   if (tryCreateLock(lockPath, pid)) return null;
   const holder = readLockPid(lockPath);
   if (holder !== null && isAlive(holder)) throw new LockError(lockPath, holder);
-  // The holder is gone (a crash): take the lock over. A racing writer that also saw the stale lock
-  // loses at the link step below.
+  // The holder is gone (a crash): take the lock over. Two writers may both have read the same
+  // stale pid, so never delete the lock blindly: move it aside atomically and look at what was
+  // moved. If it is not the stale lock that was judged dead, another writer took it over first;
+  // put it back and refuse.
+  const aside = `${lockPath}.${pid}.${Math.random().toString(36).slice(2)}.stale`;
+  let moved = true;
   try {
-    unlinkSync(lockPath);
+    renameSync(lockPath, aside);
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
+    moved = false;
+  }
+  if (moved) {
+    const found = readLockPid(aside);
+    if (found !== holder) {
+      try {
+        // Restore the other writer's lock; if a third writer already made a new one, keep that.
+        linkSync(aside, lockPath);
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
+      } finally {
+        unlinkSync(aside);
+      }
+      throw new LockError(lockPath, found ?? -1);
+    }
+    unlinkSync(aside);
   }
   if (!tryCreateLock(lockPath, pid)) {
     throw new LockError(lockPath, readLockPid(lockPath) ?? -1);
@@ -180,7 +202,8 @@ export class LogWriter {
         }
         invalidLines = r.invalid.length;
         seqErrors = r.seqErrors;
-        for (const e of r.events) last = Math.max(last, e.seq);
+        // Invalid lines keep their seq too, so a line from a newer build is never given a twin.
+        last = r.lastSeq;
       }
       this.seq = last;
       this.fd = openSync(this.path, "a");
