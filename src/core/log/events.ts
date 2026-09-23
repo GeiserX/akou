@@ -620,7 +620,7 @@ function checkKind(value: unknown, kind: Kind): boolean {
     case "string[]":
       return Array.isArray(value) && value.every((v) => typeof v === "string");
     case "number[]":
-      return Array.isArray(value) && value.every((v) => typeof v === "number");
+      return Array.isArray(value) && value.every((v) => checkKind(v, "number"));
     case "array":
       return Array.isArray(value);
     case "object":
@@ -702,7 +702,7 @@ function validateBody(o: Record<string, unknown>, type: EventType): string | nul
   }
   if (type === "answer") {
     const pack = o.pack as Record<string, unknown>;
-    if (typeof pack.mode !== "string" || typeof pack.tokens !== "number") {
+    if (typeof pack.mode !== "string" || !checkKind(pack.tokens, "number")) {
       return "answer: pack must be {mode: string, tokens: number}";
     }
   }

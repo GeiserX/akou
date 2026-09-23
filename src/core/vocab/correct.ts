@@ -76,9 +76,10 @@ export function foldText(s: string): string {
     .normalize("NFC");
 }
 
-const WORD = /[\p{L}\p{N}]+/gu;
+/** Marks are part of a word: decomposed accents (NFD) and Indic vowel signs must not split it. */
+const WORD = /[\p{L}\p{M}\p{N}]+/gu;
 
-/** Maximal runs of letters and digits; everything else separates words. */
+/** Maximal runs of letters, combining marks and digits; everything else separates words. */
 export function tokenize(s: string): Token[] {
   const out: Token[] = [];
   for (const m of s.matchAll(WORD)) {

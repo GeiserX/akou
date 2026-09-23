@@ -317,6 +317,51 @@ describe("schema v1 (DESIGN 4.3)", () => {
     }
   });
 
+  test("non-finite numbers are refused, since JSON would write them as null", () => {
+    const done = EXAMPLES["final.done"] as Record<string, unknown>;
+    expect(validateDraft({ type: "final.done", ...done, parts: [Number.NaN] }).ok).toBe(false);
+    expect(validateDraft({ type: "final.done", ...done, parts: [1, Infinity] }).ok).toBe(false);
+    const answer = EXAMPLES.answer as Record<string, unknown>;
+    const pack = (tokens: number) => ({ type: "answer", ...answer, pack: { mode: "r", tokens } });
+    expect(validateDraft(pack(Infinity)).ok).toBe(false);
+    expect(validateDraft(pack(Number.NaN)).ok).toBe(false);
+    // Positive control: the same shapes with finite numbers are accepted.
+    expect(validateDraft({ type: "final.done", ...done, parts: [1, 2] }).ok).toBe(true);
+    expect(validateDraft(pack(4200)).ok).toBe(true);
+  });
+
+  test("round trip: whatever a writer accepts, a reader parses back as valid", () => {
+    const odd: unknown[] = [Number.NaN, Infinity, -Infinity, [Number.NaN], [1, Infinity]];
+    // Every leaf of every example, nested ones included, replaced by each odd value in turn.
+    function* variants(v: unknown): Generator<unknown> {
+      yield* odd;
+      if (Array.isArray(v)) {
+        for (let i = 0; i < v.length; i++) {
+          for (const x of variants(v[i])) yield v.map((e, j) => (j === i ? x : e));
+        }
+      } else if (typeof v === "object" && v !== null) {
+        for (const [k, e] of Object.entries(v)) {
+          for (const x of variants(e)) yield { ...v, [k]: x };
+        }
+      }
+    }
+    let accepted = 0;
+    let tried = 0;
+    for (const type of EVENT_TYPES) {
+      for (const draft of variants({ type, ...EXAMPLES[type] })) {
+        tried++;
+        if (!validateDraft(draft).ok) continue;
+        accepted++;
+        const line = JSON.stringify({ ...env, ...(draft as object) });
+        const back = validateEvent(JSON.parse(line));
+        expect(back.ok ? "ok" : `${line} -> ${back.error}`).toBe("ok");
+      }
+    }
+    expect(tried).toBeGreaterThan(1000);
+    // The property is not vacuous: odd values inside free-form fields are accepted and survive.
+    expect(accepted).toBeGreaterThan(0);
+  });
+
   test("lifecycle events are a subset of the schema", () => {
     for (const t of LIFECYCLE_TYPES) expect(EVENT_TYPES).toContain(t);
   });

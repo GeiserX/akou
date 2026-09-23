@@ -44,6 +44,29 @@ describe("read-time correction (DESIGN 5.4)", () => {
     expect(r.text).toBe("kubernetisation and xkubernetis");
   });
 
+  test("decomposed (NFD) text tokenizes and corrects the same as composed (NFC)", () => {
+    const nfc = "Ánnika";
+    const nfd = "Ánnika";
+    expect(nfd).not.toBe(nfc);
+    expect(nfd.normalize("NFC")).toBe(nfc);
+    for (const s of [nfc, nfd]) {
+      expect(tokenize(s)).toEqual([{ folded: "annika", start: 0, end: s.length }]);
+      // A heard form.
+      const heard: VocabRule = { term: "Anika", heard: ["annika"], scope: "call" };
+      const r = correctText(`ask ${s} now`, [heard]);
+      expect(r.text).toBe("ask Anika now");
+      expect(r.corrections.map((c) => c.heard)).toEqual([s]);
+      // A speaker name written either way fuzzy-corrects to the whole name, not a fragment of it.
+      const name: VocabRule = { term: `${s} Ruiz`, heard: [], scope: "name" };
+      expect(correctText("ask annikaa", [name], opts).text).toBe(`ask ${s}`);
+    }
+    // A Devanagari word with vowel signs and a virama stays one token.
+    expect(tokenize("नमस्ते किताब").map((t) => [t.start, t.end])).toEqual([
+      [0, 6],
+      [7, 12],
+    ]);
+  });
+
   test("matching is accent-folded", () => {
     const rule: VocabRule = { term: "Anika", heard: ["annika"], scope: "call" };
     expect(correctText("ask Ánnika", [rule]).text).toBe("ask Anika");
