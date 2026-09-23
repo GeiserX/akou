@@ -406,9 +406,16 @@ export class CallView {
       case "part.ended": {
         const p = this._parts.get(e.part);
         if (p) p.ended = { reason: e.reason, fileSeconds: e.fileSeconds, seq: e.seq };
-        if (this._state !== "failed") {
+        // A restart is make before break: part n+1 may start before part n ends. Only the newest
+        // part ending moves the call's state.
+        const newest = Math.max(e.part, ...this._parts.keys());
+        if (this._state !== "failed" && e.part >= newest) {
           this._state =
-            e.reason === "restart" ? "restarting" : e.reason === "crashed" ? "crashed" : "stopping";
+            e.reason === "restart" || e.reason === "helper-exit"
+              ? "restarting"
+              : e.reason === "crashed"
+                ? "crashed"
+                : "stopping";
         }
         break;
       }
@@ -537,7 +544,13 @@ export class CallView {
           evidence: e.evidence,
           status: e.status,
         });
-        if (wasAccepted || e.status === "accepted") {
+        // As with vocab.add: a term with no heard forms is fuzzy and can touch any segment.
+        if (
+          (wasAccepted && cur?.heard.length === 0) ||
+          (e.status === "accepted" && e.heard.length === 0)
+        ) {
+          this.invalidateAll();
+        } else if (wasAccepted || e.status === "accepted") {
           this.invalidateRuleForms([...(cur?.heard ?? []), ...e.heard]);
         }
         break;

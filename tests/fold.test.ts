@@ -49,6 +49,89 @@ describe("the fold: segments and revisions (DESIGN 4.2, 4.6)", () => {
     expect(fold(b.events).resolve("l000002")?.text).toBe("third");
   });
 
+  test("a revision applied to a view that already rendered the line re-renders it", () => {
+    const b = basicCall();
+    const v = fold(b.events);
+    expect(v.resolve("l000002")?.text).toBe("hello Ana");
+    v.lines();
+    const renders = v.stats.renders;
+    v.apply(b.add({ type: "seg", id: "l000002", rev: 2, text: "edited text", by: "user" }));
+    expect(v.resolve("l000002")?.text).toBe("edited text");
+    expect(v.lines().find((l) => l.id === "l000002")?.text).toBe("edited text");
+    expect(v.stats.renders).toBe(renders + 1);
+  });
+
+  test("every revisioned event keeps its highest rev, whatever order revisions arrive in", () => {
+    const cases: Array<{
+      name: string;
+      events: (rev: number, value: string) => Parameters<LogBuilder["add"]>[0];
+      read: (v: CallView) => unknown;
+      expected: unknown;
+    }> = [
+      {
+        name: "note",
+        events: (rev, text) => ({
+          type: "note",
+          id: "n1",
+          rev,
+          text,
+          w: T0,
+          afterSeq: 1,
+          by: "user",
+        }),
+        read: (v) => v.notes()[0]?.text,
+        expected: "newer",
+      },
+      {
+        name: "remember",
+        events: (rev, text) => ({ type: "remember", id: "r1", rev, text, by: "agent:codex" }),
+        read: (v) => v.remembered()[0]?.text,
+        expected: "newer",
+      },
+      {
+        name: "memo",
+        events: (rev, body) => ({ type: "memo", rev, body, coversSeq: 1, by: "user", model: "m" }),
+        read: (v) => v.memo?.body,
+        expected: "newer",
+      },
+      {
+        name: "vocab.add",
+        events: (rev, value) =>
+          value === "newer"
+            ? { type: "vocab.add", id: "v1", rev, term: null, by: "user" }
+            : { type: "vocab.add", id: "v1", rev, term: "Anika", heard: ["annika"], by: "user" },
+        read: (v) => v.callVocabulary().length,
+        expected: 0,
+      },
+      {
+        name: "vocab.propose",
+        events: (rev, value) => ({
+          type: "vocab.propose",
+          id: "p1",
+          rev,
+          term: "Vercel",
+          heard: ["versal"],
+          by: "user",
+          evidence: {},
+          status: value === "newer" ? "accepted" : "proposed",
+        }),
+        read: (v) => v.proposals()[0]?.status,
+        expected: "accepted",
+      },
+    ];
+    for (const c of cases) {
+      const b = basicCall();
+      b.add(c.events(2, "newer"));
+      b.add(c.events(1, "older"));
+      expect([c.name, c.read(fold(b.events))]).toEqual([c.name, c.expected]);
+      // Positive control: in ascending order the newer revision is what the read returns.
+      const asc = basicCall();
+      asc.add(c.events(1, "older"));
+      asc.add(c.events(2, "newer"));
+      expect([c.name, c.read(fold(asc.events))]).toEqual([c.name, c.expected]);
+    }
+  });
+
   test("text: null retracts a line; it stays resolvable", () => {
     const b = basicCall();
     b.add({ type: "seg", id: "l000002", rev: 2, text: null });
@@ -103,6 +186,32 @@ describe("the fold: segments and revisions (DESIGN 4.2, 4.6)", () => {
     expect(inc.lines()).toEqual(fold(b.events).lines());
   });
 
+  test("incremental apply equals folding the whole log when an accepted proposal has no heard forms", () => {
+    const b = basicCall();
+    b.seg({ id: "l000004", w0: T0 + 4 * S, text: "we deploy on kubernetis today" });
+    const inc = new CallView({ isDictionaryWord });
+    for (const e of b.events) inc.apply(e);
+    expect(inc.resolve("l000004")?.text).toBe("we deploy on kubernetis today");
+    const propose = (rev: number, status: "proposed" | "accepted" | "rejected") =>
+      b.add({
+        type: "vocab.propose",
+        id: "p1",
+        rev,
+        term: "Kubernetes",
+        heard: [],
+        by: "app",
+        evidence: {},
+        status,
+      });
+    inc.apply(propose(1, "proposed"));
+    inc.apply(propose(2, "accepted"));
+    expect(inc.resolve("l000004")?.text).toBe("we deploy on Kubernetes today");
+    expect(inc.lines()).toEqual(fold(b.events, { isDictionaryWord }).lines());
+    inc.apply(propose(3, "rejected"));
+    expect(inc.resolve("l000004")?.text).toBe("we deploy on kubernetis today");
+    expect(inc.lines()).toEqual(fold(b.events, { isDictionaryWord }).lines());
+  });
+
   test("an event applied twice (a reader re-reading its cursor) is ignored", () => {
     const b = basicCall();
     const v = fold(b.events);
@@ -143,6 +252,39 @@ describe("the fold: call state", () => {
     expect(v.live).toBe(false);
     expect(v.part(1)?.pauses[0]?.resumed?.wall).toBe(T0 + 20 * S);
     expect(v.part(1)?.mutes).toEqual([{ a: 12, unmutedAt: 14 }]);
+  });
+
+  test("a make-before-break restart (part n+1 started before part n ended) is recording, not restarting", () => {
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    b.partStarted(2, T0 + 60 * S);
+    const v = fold(b.events);
+    v.apply(b.partEnded(1, "restart"));
+    expect(v.state).toBe("recording");
+    expect(v.live).toBe(true);
+    expect(v.part(1)?.ended?.reason).toBe("restart");
+    v.apply(b.seg({ id: "l000001", part: 2, w0: T0 + 61 * S, text: "in part two" }));
+    expect(v.state).toBe("recording");
+    // The newest part ending still moves the call on.
+    v.apply(b.partEnded(2, "stop"));
+    expect(v.state).toBe("stopping");
+  });
+
+  test("a helper exit is an automatic restart: the call stays live until it is interrupted", () => {
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    const v = fold(b.events);
+    v.apply(b.partEnded(1, "helper-exit"));
+    expect(v.state).toBe("restarting");
+    expect(v.live).toBe(true);
+    v.apply(b.partStarted(2, T0 + 60 * S));
+    expect(v.state).toBe("recording");
+    v.apply(b.partEnded(2, "helper-exit"));
+    v.apply(b.add({ type: "call.ended", reason: "interrupted" }));
+    expect(v.state).toBe("interrupted");
+    expect(v.live).toBe(false);
   });
 
   test("[T2.49] Failed start leaves an orphan folder: a call.failed call is failed and never live", () => {
@@ -285,6 +427,29 @@ describe("the fold: speakers", () => {
     expect(v.resolve("l000004")?.speaker).toBe("Speaker 1");
     expect(v.resolve("l000005")?.speaker).toBe("Speaker 1");
     expect(v.resolve("l000003")?.speaker).toBe("Ben");
+  });
+
+  test("an unmerge only undoes the merge it names", () => {
+    const b = basicCall();
+    b.add({ type: "speaker.merge", from: "c1", into: "c2" });
+    b.add({ type: "speaker.unmerge", from: "c1", into: "c9" });
+    const v = fold(b.events);
+    expect(v.resolveSpeaker("c1")).toBe("c2");
+    // Positive control: the matching unmerge does undo it.
+    v.apply(b.add({ type: "speaker.unmerge", from: "c1", into: "c2" }));
+    expect(v.resolveSpeaker("c1")).toBe("c1");
+  });
+
+  test("a suggestion for a final cluster that is already mapped is ignored", () => {
+    const b = basicCall();
+    b.add({ type: "speaker.map", final: "s0", live: "c1", overlap: 0.9 });
+    b.add({ type: "speaker.suggest", final: "s0", live: "c2", overlap: 0.4 });
+    b.add({ type: "speaker.suggest", final: "s1", live: "c2", overlap: 0.4 });
+    expect(
+      fold(b.events)
+        .speakerSuggestions()
+        .map((x) => x.final),
+    ).toEqual(["s1"]);
   });
 
   test("merges chain, and a merge cycle cannot hang the reader", () => {
@@ -720,6 +885,14 @@ describe("the fold: vocabulary at read time (DESIGN 5.4)", () => {
     expect(v.resolve("l000004")?.text).toBe("thanks siobahn");
     v.apply(b.add({ type: "speaker.name", spk: "c2", name: "Siobhan", by: "user" }));
     expect(v.resolve("l000004")?.text).toBe("thanks Siobhan");
+  });
+
+  test("a full speaker name corrects misspellings of each of its words", () => {
+    const b = basicCall();
+    b.seg({ id: "l000004", w0: T0 + 4 * S, text: "I spoke with Anikaa and Ruizz yesterday" });
+    const v = fold(b.events, { isDictionaryWord });
+    v.apply(b.add({ type: "speaker.name", spk: "c2", name: "Anika Ruiz", by: "user" }));
+    expect(v.resolve("l000004")?.text).toBe("I spoke with Anika and Ruiz yesterday");
   });
 
   test("vocab.used: the latest decode list in force", () => {

@@ -8,7 +8,10 @@
  *    pair is call-scoped. Without a dictionary, akou cannot tell, so only call-scoped pairs apply.
  * 3. Terms without heard forms, and speaker names, are fuzzy-matched: Jaro-Winkler >= 0.92 on
  *    tokens of 4 or more characters. A dictionary word is never fuzzy-corrected, so without a
- *    dictionary there is no fuzzy matching at all.
+ *    dictionary there is no fuzzy matching at all. Each word of 4 or more characters in a speaker
+ *    name is its own fuzzy term (`Anika Ruiz` corrects `Anikaa` to `Anika`). A vocabulary term of
+ *    several words is not split: its words on their own are often ordinary words (`Visual
+ *    Studio`), so such a term needs heard forms to correct anything.
  *
  * The raw text is never changed; the caller gets the corrected text, the annotated form for packs
  * and exports (`Anika (heard: "annika")`) and the list of corrections.
@@ -182,8 +185,14 @@ export function correctText(
       .map((t) => t.folded)
       .join(" ");
     if (rule.heard.length === 0 || rule.scope === "name") {
-      // Fuzzy matching is per token, so only single-word terms take part.
-      if (!termKey.includes(" ")) {
+      // Fuzzy matching is per token. A name contributes each of its words; a vocabulary term
+      // takes part only when it is a single word.
+      if (rule.scope === "name") {
+        for (const t of tokenize(rule.term)) {
+          if (charLength(t.folded) < FUZZY_MIN_CHARS) continue;
+          fuzzy.push({ folded: t.folded, term: rule.term.slice(t.start, t.end), scope: "name" });
+        }
+      } else if (!termKey.includes(" ")) {
         fuzzy.push({ folded: foldText(rule.term), term: rule.term, scope: rule.scope });
       }
       continue;

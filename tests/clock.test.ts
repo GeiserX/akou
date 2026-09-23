@@ -136,6 +136,8 @@ describe("rendering: every time is wall clock (DESIGN 4.4)", () => {
     }
     // Positive control: the detector flags exactly the shape that was once read as a time of day.
     for (const bad of ["00:20", "12:30", " 5:07 ", "59:59"]) expect(isBareOffset(bad)).toBe(true);
+    // A citation renders the wall time without seconds, beside a speaker, never alone.
+    expect(isBareOffset(`[${formatWall(T0, TZ, { seconds: false })} Ben]`)).toBe(false);
     for (const ok of ["15:41:07", "12:30 into the call", "[15:41 Ben]"]) {
       expect(isBareOffset(ok)).toBe(false);
     }

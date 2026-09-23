@@ -184,7 +184,12 @@ export function formatElapsed(ms: number): string {
   return `${clock} into the call`;
 }
 
-/** A bare `mm:ss` or `m:ss` with nothing else: the shape an offset must never be rendered in. */
+/**
+ * A bare `mm:ss` or `m:ss` with nothing else: the shape an offset must never be rendered in. Run it
+ * on a whole rendered row or cell. A wall time without seconds has the same shape and a reader
+ * cannot tell it from an offset, so it is never rendered alone: rows carry seconds (`15:41:07`)
+ * and citations carry a speaker (`[15:41 Ben]`).
+ */
 export function isBareOffset(text: string): boolean {
   return /^\s*\d{1,2}:\d{2}\s*$/.test(text);
 }

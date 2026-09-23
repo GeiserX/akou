@@ -60,6 +60,44 @@ describe("read-time correction (DESIGN 5.4)", () => {
     expect(correctText("deploy to vercell", [file, call], opts).text).toBe("deploy to Vercel");
   });
 
+  test("a longer heard form wins over a shorter one starting at the same word", () => {
+    const short: VocabRule = { term: "Cube", heard: ["cuber"], scope: "call" };
+    const long: VocabRule = { term: "Kubernetes", heard: ["cuber netes"], scope: "call" };
+    expect(correctText("on cuber netes", [short, long]).text).toBe("on Kubernetes");
+    expect(correctText("on cuber netes", [long, short]).text).toBe("on Kubernetes");
+    // Positive control: the shorter form alone does apply there.
+    expect(correctText("on cuber netes", [short]).text).toBe("on Cube netes");
+  });
+
+  test("a heard form equal to its own term corrects nothing", () => {
+    const rule: VocabRule = {
+      term: "Kubernetes",
+      heard: ["kubernetes", "kubernetis"],
+      scope: "call",
+    };
+    const r = correctText("on kubernetes and kubernetis", [rule]);
+    expect(r.corrections.map((c) => c.heard)).toEqual(["kubernetis"]);
+    expect(r.annotated).toBe('on kubernetes and Kubernetes (heard: "kubernetis")');
+  });
+
+  test("fuzzy: every word of a full speaker name is matched on its own", () => {
+    const rule: VocabRule = { term: "Anika Ruiz", heard: [], scope: "name" };
+    const r = correctText("I spoke with Anikaa and Ruizz", [rule], opts);
+    expect(r.text).toBe("I spoke with Anika and Ruiz");
+    expect(r.corrections.map((c) => [c.term, c.heard])).toEqual([
+      ["Anika", "Anikaa"],
+      ["Ruiz", "Ruizz"],
+    ]);
+    // Words under 4 characters are not fuzzy terms: "Ben" never rewrites "Bern".
+    const ben: VocabRule = { term: "Ben Carter", heard: [], scope: "name" };
+    expect(correctText("Bern and Cartr", [ben], opts).text).toBe("Bern and Carter");
+  });
+
+  test("fuzzy: a multi-word vocabulary term without heard forms is not split into words", () => {
+    const rule: VocabRule = { term: "Visual Studio", heard: [], scope: "file" };
+    expect(correctText("open studoi now", [rule], opts).corrections).toEqual([]);
+  });
+
   test("[spike] A heard form that is a real word: file pairs skip dictionary words and forms of 3 characters or fewer", () => {
     const file: VocabRule[] = [
       { term: "Vessl", heard: ["vessel"], scope: "file" },
