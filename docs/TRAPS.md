@@ -1,0 +1,149 @@
+# Traps
+
+A trap is a failure that already bit us once and is now written down so it cannot bite twice. This file lists every trap from the predecessors (hark, hark-viewer, the call skill) and from the akou spikes that still applies to akou's design, rewritten as an invariant or a regression test in the form "given X, akou must Y". Ids in brackets point into the design inventory (`T<reader>.<n>`, see [REQUIREMENTS.md](REQUIREMENTS.md)) or say `spike`. Each entry becomes a named test, and the milestone in parentheses says when.
+
+Traps that belong to the user's own downstream pipelines (archive formats, word-list harvesting, search indexes, merging with a second recording source) are not listed: T3.16 to T3.22, T3.28, T3.44 and T3.45. akou hands those pipelines clean material and owns none of them. Traps whose feature akou does not have are listed at the end under "Retired with the feature", so nobody mistakes a retired trap for a forgotten one.
+
+## Capture
+
+- **Dead call side hidden behind a live mic** [T0.2, T1.29] (M1). Given the OS reports output running and the call stream has delivered exact zeros or nothing for 10 s, akou must open a probe, rebuild the call stream if the probe hears audio, back off 10/30/60 s then every minute, stop after 5 rebuilds per part, and write a `health {state: dead}` event and a red banner. Given a zero run with output not running, akou must not rebuild. Test: a fake helper that kills its tap at t = 30 s; a real-device test with a debug kill switch that is compiled out of release builds, with a test proving the switch is absent.
+- **A hung OS teardown** [T0.9] (M0). Given the helper's stop does not return within 5 s, akou must kill it, finalize the log, mark `part.ended {reason: killed}`, and accept a new start immediately in a fresh helper. Test: a debug-only "hang on teardown" switch; measure that the next `POST /calls` answers 201 within 3 s.
+- **Unbounded queue when one source stops** [T0.15] (M0). Given one source delivers nothing for 10 minutes while the other keeps going, akou must keep both channels frame-aligned with zeros on the silent side, use bounded memory, and write a file whose two channels have the same length. Test: the packet gap test from the capture spike, extended to 10 minutes.
+- **A tap silent from the start blocks the mic** [T0.16, T1.33] (M0). Given nothing plays on the computer for the first minutes of a call, akou must still deliver mic frames from the first second, and the first `seg` on the mic channel must appear. Test: start capture with the output device idle for 2 minutes while speaking into a virtual mic.
+- **Permission grant keyed by path** [T0.18] (M0). Given an app update that changes the binary, akou must keep its microphone and system-audio grants. Test in the release checklist: grant, update, record 10 s, assert the call channel is not all zeros.
+- **Permission attribution to the wrong process** [spike, T0.19 closed] (M0). Given the helper is spawned by the app, the grant prompt must name akou and the grant must attach to the app bundle, never to a terminal. Test on hardware; if it fails, build the capture crate as the in-process addon.
+- **Backend selection without a fallback** [T0.27]. Given the design, akou must never depend on ScreenCaptureKit for audio. Test: a grep that `ScreenCaptureKit` does not appear in the capture crate.
+- **Health verdicts on the wrong format** [T0.28, T1.31, T0.7]. Given any device format (16, 24, 32-bit integer or float, interleaved or not), akou must convert to float at the edge and compute every health verdict on converted data with the maximum over all channels. Given a rebuild, akou must re-derive and re-announce the health capability. Test: property tests over every input format in the converter; a rebuild followed by a `health` event.
+- **Probe click in Bluetooth headphones** [T0.29] (M1). Given a Bluetooth headset, building the probe device must not produce an audible click. Test: a human listening check in the M1 hardware release checklist (it needs the Rust probe device, which exists only once the helper is built; [DESIGN risk F12](DESIGN.md#12-risks-and-falsifiers)). If it clicks, the probe runs only on non-Bluetooth routes and the banner says "no lines for 90 s" instead.
+- **Own audio in the call channel** [spike] (M1). Given the window plays audio, that audio must not appear in the call channel on macOS or Windows. On macOS akou must exclude the WebKit GPU helper process ("akou Graphics and Media"), not the app's process id, and re-resolve the exclusion on every rebuild. On Linux the window must not play audio while recording. Test: play a tone from the window during capture; assert the right channel is silent.
+- **A device that only runs at one rate** [T4.21] (M1). Given a device whose only supported rate differs from the default, akou must open it at its native rate and resample. Test: a fake device reporting 48 kHz only; assert the file is correct pitch.
+- **Room noise above the silence floor** [T4.23]. Given a mic idling at -48 dBFS, akou must still segment speech, because it uses Silero VAD only and no amplitude threshold. Test: the VAD fixtures with -48 dBFS pink noise mixed in.
+- **Capture priority under load** [T3.8] (M1). Given a fully loaded CPU, the audio file must have no gaps; the transcript may lag and must say so. Test: the soak with a CPU burner at 100 % on every core; assert the file duration matches wall time within 100 ms and an `asr.lag` event appears.
+- **Wake from sleep** [spike, ElectroBun #550] (M1). Given the machine sleeps mid-call, akou must hold a keep-awake assertion while recording, and if it sleeps anyway, write a `gap` event on wake, keep wall times correct, and keep the recording running even if the window froze. Test: a monotonic-clock jump injected into a fake helper.
+- **Aggregate device leaks** [I0.14]. Given a killed helper, no `akou-capture` or `akou-probe` aggregate device may remain. Test: enumerate devices after a kill.
+- **Drift between two clocks** [T4.33, F0.28] (M0). Given 60 minutes of recording with a 1.5 kHz ping every 10 s heard by both channels, the left-right offset must stay under 200 ms per hour and gaps under 20 ms. Test: `scripts/drift-test.ts` on real devices.
+
+## Transcription
+
+- **Short spans lose their words** [T1.9, T4.19] (M1). Given a 0.2 s "Yes." on any path (live, final, single file), akou must pad it to 0.5 s with trailing zeros in one shared function and transcribe it. The 0.3 s floor behind this came from hark's engines and is unmeasured on sherpa-onnx. The streaming-zipformer evidence about padding is contradictory and must not be carried to Parakeet: one spike test said leading padding loses the first words, and the vocabulary spike found the opposite, that a fresh stream of that model drops the first words until it has had 2 to 8 s of leading audio. Test: the 0.2 s fixture through each path, run against Parakeet through sherpa-onnx, with leading padding, trailing padding and none as three conditions, and the result recorded.
+- **A chunk fed twice** [T1.11]. Given a non-float source, akou must feed every frame exactly once. Test: frame-count property tests in the converter.
+- **Quadratic token mapping** [T1.19]. Given a 3-hour call, per-question and per-segment work must stay bounded. Test: pack build and segment commit timings on a 3-hour synthetic log stay flat.
+- **Stop during a slow start marked failed** [T1.26] (M1). Given a stop before `capturing`, akou must cancel the part with `reason: cancelled`, never "wedged" or failed. No timeout may begin before the helper is spawned, and the start budget ([DESIGN 2.4](DESIGN.md#24-the-helper-protocol-akou-capture1): 3 s warm, 10 s on the first cold tap) is the only deadline. Tests: (a) stop 200 ms after start with a fake cold-tap helper that delays `capturing` by 3 s, inside the budget; (b) a fake helper that delays `capturing` past the budget, and the start fails cleanly with `503 capture_failed {stage: "open"}` and a `call.failed` event.
+- **Spanish worse on the streaming model** [T1.44]. Given a Spanish fixture, the live path must not use a streaming model that is worse than the segmented one. Test: nightly WER per language with a floor.
+- **Only channel 0 read** [T2.7, T4.17] (M1). Given a file with speech only on the right channel, the final pass must produce call lines. Given the call channel has energy and the final pass produced no text, `final.done` must carry a warning. Test: a right-only fixture.
+- **VAD gating loses words** [spike] (M1). Given a short word after 0.8 s of silence that Silero VAD misses in a continuous stream, the final pass must still transcribe it, because VAD only proposes cut points and every second of audio above silence is decoded. Test: the spike fixture where VAD drops "Thanks."; assert it appears in the final layer.
+- **Empty audio still loads models** [T4.18]. Given a part with no energy, the final pass must skip it before loading any model. Test: a silent part; assert model load is not called.
+- **Models loaded twice** [T4.18, F1.7]. Given two channels and several parts, each model must be loaded once per app run. Test: a load counter.
+- **Undefined order of simultaneous lines** [T1.42]. Given two lines with the same `w0`, every reader must order mic before call, then by `seq`. Test: a unit test on the sort key.
+- **Harmless engine noise on stderr** [T1.45]. Given a model prints warnings, they must go to the app log, never to the user. Test: stderr capture in the Worker.
+- **Relabel wastes a transcription** [T4.32]. Given a re-cluster request, akou must not transcribe again. Test: `akou name --merge` completes without a recognizer call.
+
+## Event log and clocks
+
+- **Offsets shown as times of day** [T3.9] (M1). Given any rendering for a person or a model, akou must show local wall-clock time and never a bare `mm:ss` offset. Test: a renderer test that greps every pack, export and window row for `^\d\d:\d\d$`-style offsets and fails on any.
+- **Clock drifts by paused time** [T2.52] (M1). Given a 5-minute pause, a line after it must carry the correct wall time. Test: a fake helper with a pause; assert `w0`.
+- **Failed start leaves an orphan folder** [T2.49] (M1). Given a start that never captured, akou must write `call.failed`, keep the folder and any audio, list it under `--failed`, and never present it as live. Test: a fake helper exiting 77.
+- **Restart splits one call into several folders** [T3.2, T2.48] (M1). Given any number of restarts, one call must be one folder, one log, one clock. Test: three restarts; `akou show` lists three parts in one call.
+- **Speaker numbers restart per part** [T2.48, T3.10] (M1). Given a restart, cluster ids must continue (centroids persisted), and names given before the restart must still render after it. Test: name `c2` in part 1, restart, assert a `c2` segment in part 2 renders the name.
+- **A wrong speaker merge with no way back** [judging] (M1). Given a `speaker.merge`, `speaker.unmerge` must restore the two ids for later segments and the window must offer it. Test: merge, unmerge, assert rendering.
+- **`current` points at a finished call** [T3.14] (M1). Given no live call, `live` must return 404 with `last` in the body, every pack must start with `LIVE` or `ENDED at HH:MM`, and `last` must be refused on live controls. Test: ask after stop; assert 404 and the status line; assert `POST /calls/last/stop` answers 400.
+- **Whole transcript re-read per question** [T3.12] (M1). Given a 3-hour call, an MCP `akou_context` call must return at most the requested budget (default 6k tokens) regardless of length. Test: a synthetic 3-hour log; assert token count.
+- **Disk reads give part 1 only** [T3.13] (M1). Given the on-disk layout, there must be no per-part transcript file that an agent could read by mistake. Test: a directory listing assertion after a multi-part call.
+- **Names lost after the agent's context is compacted** [T3.10] (M1). Given a `speaker.name` written by an agent, a new agent session's first `akou_context` must contain it in the roster. Test: name, then call context from a fresh client.
+- **Answers from uncorrected recognition** [T3.11] (M1). Given a vocabulary entry `Kubernetes` with heard forms `kubernetis` and `cubernetes`, the pack and the export must show `Kubernetes (heard: "kubernetis")` and the window must show the raw text on hover; the log must keep the raw text. Test: a fixture with the variant.
+- **Torn last line** [F2.50]. Given a truncated final line, readers must ignore it and the writer must truncate it at the next open. Test: chop the file mid-line.
+- **Two writers** (M1). Given a second app instance on the same folder, it must refuse (`.akou.lock`). Test: two writers.
+- **Layer switch confuses a live reader** [design risk] (M1). Given a reader holding live ids across `final.part.done` and `final.done`, the ids must still resolve and the `best` view must switch per part on `final.part.done`. Given a resume after `final.done`, the new part must show the live layer until the final pass re-runs. Test: the fold suite.
+
+## Custom vocabulary
+
+Every number here comes from the vocabulary spike ([VOCABULARY.md section 8](VOCABULARY.md#8-what-was-measured)): a synthetic TTS set and a small real-call set.
+
+- **The raw heard text is never overwritten** [decision] (M1). Given any correction (a `vocab.add`, a post-call pass result, an accepted proposal), the `seg` event's `text` must stay as the recognizer wrote it; corrections are events applied at read time, and a whole-line user edit is a `seg` revision that leaves the first revision in the log. Test: apply every correction path to a fixture log and diff the original events.
+- **A vocabulary entry never inserts a term where nothing similar was said** [spike] (M1). Given the control clips (sentences with sound-alike words and no listed term), read-time correction must produce zero insertions, and decode biasing at the default boost with a list under the cap must stay under the insertion ceiling. Measured: boost 3 put a listed word into 2 of 30 real negative clips, boost 4 into 11 of 30, boost 5 into 24 of 30. Test: the nightly vocabulary evaluation with a positive control at boost 5 that must breach the ceiling, which proves the test can fail.
+- **A mid-call add applies forward to decoding and backward to reading** [decision] (M1). Given a `vocab.add` written during a call, the next segment must be decoded with the word in its stream's list, and every earlier segment's rendered text must show the correction at once, with the raw text untouched. Test: the fold suite with a `vocab.add` after segment 10; assert segment 3 renders corrected and the live Worker's next `createStream` call carries the word.
+- **The decode list is long** [spike] (M1). Given more entries than the cap, akou must truncate to 24 in the documented priority order and warn. Measured: 214 words at boost 3 halved the target hits and inserted 43 unsaid names; 398 words changed 23.5 % of the other words on real clips. Test: a 100-entry workspace file; assert `vocab.used` lists 24.
+- **The boost is a slider** [spike] (M1). Given the settings schema, there must be no user-facing global boost; the constant is 3, per-entry values are capped at 5 and only `akou vocab check --boost` sets one above 3. Test: schema assertion plus a config file with `vocab.boost` refused.
+- **The `bpe.vocab` from the upstream recipe** [spike] (M1). Given the Parakeet tokenizer, akou must build `bpe.vocab` from the model's own `tokenizer.json` and verify each listed word tokenizes the same way under sherpa-onnx's rules as under the real tokenizer; a word that differs is dropped from the decode list with a warning. Measured: the recipe's file mis-tokenized 7 of 10 terms and cost 8 hits of 140. Test: the tokenization check over the synthetic term list must report 0 mismatches, and a deliberately wrong score file must report them.
+- **Hotwords that silently do nothing** [spike] (M1). Given a hotword that fails to encode, akou must log an error and drop it, never continue on a stderr line. Measured: pre-tokenized words without `modelingUnit` failed 7 of 10 and hits stayed at the unbiased 48 of 140. Test: a word with a piece not in the vocab; assert the error and its absence from `vocab.used`.
+- **Hotwords to a non-transducer model kill the process** [spike, source read] (M1). Given a Moonshine or Whisper recognizer, akou must never call `createStream` with a list or set `hotwordsFile`, because sherpa-onnx logs "Only transducer models support contextual biasing" and exits. The recording would die with it. Test: a Moonshine recognizer built with a non-empty vocabulary; assert the Worker's stream calls carry no argument.
+- **A hazardous first token** [spike] (M1). Given a term whose first model token is among the 200 most frequent, `akou vocab check` must set `decode: false`. Measured: one such term caused 13 of 19 false insertions at boost 4 and 40 of 61 at boost 5. Test: the check on that class of term.
+- **A heard form that is a real word** [spike] (M1). Given a proposed pair whose heard form is a dictionary word or 3 characters or shorter (`vessel`, `ira`, `r`), file entries must not apply it at read time and the skill must propose, never add. Only a call-scoped `vocab.add` may carry such a pair. Test: a fixture log containing the real word; assert it renders unchanged.
+- **An unconfirmed entry does something** [decision] (M1). Given `confirmed: false`, the entry must be absent from the decode list and from read-time correction. Test: an unconfirmed entry with a matching heard form; assert no correction and no `vocab.used` entry.
+- **The pass corrects a span that is not there** [decision] (M2). Given a post-call pass output whose `heard` span does not occur in the named segment, akou must drop that correction, the same rule as enhanced-note citations. Test: a fake provider returning a bad span.
+- **A YAML term turns into a boolean** [design] (M1). Given a term `No`, `On` or `Yes`, the writer must quote every string and the reader must get a string back. Test: round-trip those terms.
+- **Biasing measured on synthetic speech only** [design] (M1). Given a claim about hit rates or insertions, it must come from the nightly evaluation that includes the real-call clips, never from the TTS set alone. The TTS numbers guard against regressions and say nothing about accuracy. Test: the evaluation job fails if the real set is missing rather than passing on the synthetic one.
+
+## Query engine and notes
+
+- **Provisional text quoted as fact** [design] (M1). Given a pack, at most one draft line may appear, only for `now` questions, marked as unconfirmed, and only if updated in the last 3 s. Test: pack builder with a stale draft.
+- **Memo and recency window leave a gap** [judging] (M1). Given a memo covering up to `seq` N and a window of the last 5 minutes that starts after N, the window must start at N instead. Test: pack builder with a stale memo.
+- **Hallucinated citation in enhanced notes** [judging] (M2). Given a model bullet citing a segment id that does not exist or shares no content word with the cited line, akou must drop the bullet. Test: a fake provider returning a bad citation.
+- **Agent-authored notes indistinguishable from the user's** [decision] (M1). Given a note from MCP or the CLI, the event must carry `by: agent:<client>` and the window must render it differently. Test: schema validation.
+- **Provider unavailable answered with nothing** [decision] (M1). Given no harness found, a non-zero exit, a rate-limit message or no answer within 60 s, the ask box must still show excerpts within 300 ms, state the reason, and offer "Copy context". Test: a fake `claude` binary that exits 1 with a usage-limit message.
+- **Harness not found from an app bundle** [decision] (M0). Given `claude` installed only through the user's login shell PATH, the packaged app must find it. Test: launch the app from Finder with `PATH` minimal and assert `akou status` shows the harness.
+- **Unattended harness use** [decision] (M2). Given the harness provider, the rolling memo must be off unless the user turned it on; ask and enhance run only on explicit requests. Test: config default assertion.
+
+## Start and control
+
+- **Minutes to start** [T3.6] (M1). Given the app is running, `akou start` must answer 201 within 1 s; given it is not, within 3 s; and the skill's first tool call must be `akou start`. Test: timed CLI runs on the reference machine; a skill lint that the first command block is `akou start`.
+- **A stop that loses the after-chat** [T3.15] (M2). Given the user presses Stop while the meeting app still holds the microphone, akou must show "Call audio was active N s ago" inline with a 10 s undo. Test: window test with a fake OS signal.
+- **Quit untested** [T2.51] (M1). Given a test environment (`AKOU_HOME`, spare port), `akou quit` must stop the fake helper, fsync the log and exit, without any process-name pattern kill. Test: an integration test.
+- **Signals swallowed by the shell** [spike] (M1). Given ElectroBun's main script ignores SIGINT and SIGTERM, akou must flush and finalize from its before-quit path. Test: send `POST /quit` mid-recording; assert the log ends with `part.ended` and the Opus file is valid.
+- **Command-line arguments dropped by the launcher** [spike, ElectroBun #554, #540] (M1). Given Linux or the first macOS launch, headless mode must be selected by the `AKOU_HEADLESS` environment variable, never argv. Test: a grep that no code reads `process.argv` for mode selection.
+- **Login agent does not start mid-session** [T4.11] (M1). Given the app is not running, the CLI must launch it directly (through the app bundle on macOS) and not rely on a login item having registered. Test: `akou start` with no app running.
+
+## API security
+
+- **Cross-origin `POST /stop` accepted** [known bug] (M1). Given a request from a web page on another origin (form POST, `no-cors` fetch, or a fetch with `Origin`), akou must answer 403 and keep recording. Given a request with a foreign `Host`, 403. Given no bearer token, 401. Test: the security job with a positive control (guards compiled out must let the request through).
+- **Proxy on loopback** [F2.7, closed hark traps] (M1). Given `HTTP_PROXY` set in the environment, the CLI, MCP and the app's own client must still reach `127.0.0.1` directly. Test: run the CLI with a proxy pointing at a dead port.
+- **Hutch cannot fetch behind a proxy** [spike] (M1). Given CI with proxy variables set, the build script must unset them for Hutch. Test: CI job environment assertion.
+- **Token file readable by others** (M1). Given a fresh install, the token file must be mode 0600 (or a user-only ACL on Windows) and created atomically. Test: stat after `akou doctor`.
+
+## Configuration and documentation
+
+- **Ranges bypassed by a hand-edited file** [T4.9] (M1). Given `segmentPause: 99` in the config file, akou must refuse the key with a message and use the default, the same way `akou config set` would. Test: a bad config file.
+- **Docs drift from code** [T1.39, T1.40, T1.41, T3.42] (M1). Given the settings schema, the CLI help, `config show`, validation and the reference table must be generated from it, and CI must fail if the committed docs differ. Given docs that name a model, they must instead point at `akou status`. Test: the docs diff job.
+- **Version drift across artifacts** [T0.30] (M1). Given a tag `v1.2.3`, the app, the helper, `Info.plist`, the CLI and the `hello` handshake must all report `1.2.3`. Test: the release job.
+- **Gated tests pass silently** [T4.20] (M1). Given a test that needs a model or hardware, the runner must report it as skipped with a reason, and every job must fail if fewer than its minimum number of tests ran. Test: a deliberately broken control test in the nightly job that must fail.
+- **Test helpers that hang instead of asserting** [T4.31]. Given a teardown test, the budget must be an injected parameter with a fake clock, and the assertion must time out below the budget. Test: review rule plus a unit test with a 100 ms fake budget.
+
+## Packaging
+
+- **`Info.plist` cannot carry the system-audio usage string** [spike] (M1). Given a Hutch build, the release workflow must patch `NSAudioCaptureUsageDescription` into the plist and re-sign, and the release checklist must confirm the system-audio prompt appears. Test: `plutil -p` on the built bundle in CI.
+- **Native libraries missing from the bundle** [spike] (M1). Given sherpa-onnx's `.node` file, both dylibs must be listed in `build.copy`, and the packaged app must load the addon. Test: a post-build load test in the release job.
+- **Compiled Bun binary killed on launch** [spike, oven-sh/bun#39764] (M4). Given `bun build --compile` for the Linux CLI tarball or any macOS CLI binary, Bun must be 1.4.2 or newer: 1.4.0 and 1.4.1 write an invalid ad-hoc Mach-O signature and macOS kills the binary at exec. The ElectroBun-bundled Bun 1.4.0 is used only as the app runtime. Test: a version assertion in the build script, plus `codesign -s - -f` and `codesign --verify --strict` on the output, which fail the build on a bad signature.
+- **Hutch and ElectroBun version pairing** [spike] (M1). Given ElectroBun 2.0.1, Hutch must be the exact version that produced a working signed build in M0 (the spike built with 0.27.0-canary.10 from source; we have not seen a Hutch version break 2.0.1). Test: the build script asserts `hutch --version` equals the pin.
+- **Homebrew tap push without a token** [T4.12] (M1). Given a formula-only tap in another repository, the release job must push the cask bump with a fine-scoped token (a GitHub App or a PAT limited to the tap repository) stored as a secret, never the default `GITHUB_TOKEN`, which cannot push to another repository. Test: a dry-run bump in CI that fails without the secret.
+- **Updater replaces the app mid-call** (M1). Given a live call or a running final pass, the updater must defer. Test: a fake update while a fake call runs.
+- **Tap does not auto-start** [spike, cpal changelog] (M0). Given a tap-only aggregate, `tap_auto_start` must be true. Test: a property read after creation.
+
+## Agent skill
+
+- **The skill drifts from the tooling** [T3.0, T3.1] (M1). Given the skill ships with the app, `akou skill install` must refuse to install a `SKILL.md` whose version differs from the app's. Test: install with a mismatched version; assert refusal.
+- **The call channel labelled as one person** [T3.43] (M1). Given the call channel carries everyone remote, the pack roster and the export must never label the whole call channel with one person's name; clusters are named one by one. Test: a two-cluster call with one named cluster; assert the other cluster keeps its own label.
+
+## Kept from closed traps, as invariants
+
+The predecessors fixed these, and they must stay true in akou:
+
+- The mic never waits for the call side and the call side never clocks the mic.
+- One continuous resampler per stream, never per chunk.
+- akou applies gain only to the recognizer's copy, never to the recording.
+- Health monitors do nothing while paused; one monitor tick never runs two rebuilds.
+- Recording uses only crash-safe containers (Ogg Opus).
+- Tests never play audio through real outputs; fixtures are generated, never real calls.
+- Language and quality claims come from real recordings in the nightly evaluation, never from synthetic speech alone.
+- A start answers 201 only after audio is being written, and never leaves a call that looks live after a failure.
+- The final pass runs after every ending, including endings that happened while akou was not running.
+- A stale restart (last audio over an hour old) needs explicit confirmation.
+
+## Retired with the feature
+
+These predecessor traps have no invariant because akou does not have the feature that caused them. Each one names the REQUIREMENTS line that drops the feature.
+
+- **Existing-file overwrite policy on start (a collision should have answered 409)** [T1.34]. Retired by F4.0: call folders are unique by construction and nothing is overwritten.
+- **Makefile and Xcode version breakage** [T1.46]. Retired by F4.10: there is no Makefile; `bun` and `cargo` are the interface.
+- **Comparison-lane tool exited 0 with an error message** [T2.14]. Retired by F2.32: the third-party comparison lane is dropped.
+- **Page refetched the whole transcript every second** [T2.50]. Retired by F2.50: the window gets RPC pushes and other clients use SSE with a cursor.
+- **Meet userscript never exercised** [T4.16]. Retired by F4.6: there is no userscript; meeting detection, if built, uses OS signals.
