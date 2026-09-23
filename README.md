@@ -19,7 +19,6 @@ Design stage. There is nothing to install yet. The documents in this repository 
 Start with [INDEX.md](docs/INDEX.md). The main ones:
 
 - [DESIGN.md](docs/DESIGN.md): the architecture, starting simple and then covering every part in depth.
-- [VOCABULARY.md](docs/VOCABULARY.md): how akou spells rare words right, with the measurements.
 - [REQUIREMENTS.md](docs/REQUIREMENTS.md): what the predecessors did and what akou does with each feature.
 - [TRAPS.md](docs/TRAPS.md): failures that already bit once, written as tests.
 - [ROADMAP.md](docs/ROADMAP.md): milestones with exit criteria.

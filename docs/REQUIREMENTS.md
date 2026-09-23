@@ -213,7 +213,7 @@ Status words:
 
 ## Custom vocabulary (new, no predecessor feature)
 
-The predecessors had a read-time word list (they called it a glossary) applied by the user's own scripts after the call. akou makes the list a product feature, calls it vocabulary everywhere, and builds it in three layers. The design and measurements are in [VOCABULARY.md](VOCABULARY.md).
+The predecessors had a read-time word list (they called it a glossary) applied by the user's own scripts after the call. akou makes the list a product feature, calls it vocabulary everywhere, and builds it in three layers. The design is in DESIGN.md, section 3 and the read path.
 
 - V1 one user-owned word list, global plus per workspace plus extra files, YAML, each entry with term, heard forms, source, confirmed flag and date: **new (M1)**.
 - V2 decode-time biasing of the live and final recognizer with a short per-call list: **new (M1)**, Parakeet only (sherpa-onnx hotwords, boost 3, cap 24, `bpe.vocab` built by akou from the model's tokenizer). Moonshine and Whisper get none.

@@ -57,7 +57,7 @@ Traps that belong to the user's own downstream pipelines (archive formats, word-
 
 ## Custom vocabulary
 
-Every number here comes from the vocabulary spike ([VOCABULARY.md section 8](VOCABULARY.md#8-what-was-measured)): a synthetic TTS set and a small real-call set.
+Every number here comes from our vocabulary measurements: a synthetic TTS set and a small real-call set.
 
 - **The raw heard text is never overwritten** [decision] (M1). Given any correction (a `vocab.add`, a post-call pass result, an accepted proposal), the `seg` event's `text` must stay as the recognizer wrote it; corrections are events applied at read time, and a whole-line user edit is a `seg` revision that leaves the first revision in the log. Test: apply every correction path to a fixture log and diff the original events.
 - **A vocabulary entry never inserts a term where nothing similar was said** [spike] (M1). Given the control clips (sentences with sound-alike words and no listed term), read-time correction must produce zero insertions, and decode biasing at the default boost with a list under the cap must stay under the insertion ceiling. Measured: boost 3 put a listed word into 2 of 30 real negative clips, boost 4 into 11 of 30, boost 5 into 24 of 30. Test: the nightly vocabulary evaluation with a positive control at boost 5 that must breach the ceiling, which proves the test can fail.
