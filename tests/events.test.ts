@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  EVENT_FIELDS,
   EVENT_TYPES,
   LIFECYCLE_TYPES,
   validateDraft,
@@ -179,6 +180,41 @@ describe("schema v1 (DESIGN 4.3)", () => {
     expect(checked).toBeGreaterThan(100);
   });
 
+  test("every field's type is enforced: a wrong-typed value in any field is refused", () => {
+    const wrong: Record<string, unknown[]> = {
+      string: [42, null, ["x"]],
+      number: ["1", Number.NaN, null],
+      int: [1.5, "1", null],
+      boolean: ["true", 1],
+      "string|null": [42, ["x"]],
+      "string[]": ["x", [1]],
+      "number[]": ["x", ["1"]],
+      array: ["x", {}],
+      object: ["x", [], null],
+      author: [42, "claude"],
+      noteAuthor: [42, "app"],
+      channel: ["left", 1],
+      layer: ["draft", 1],
+    };
+    let checked = 0;
+    for (const type of EVENT_TYPES) {
+      const example = EXAMPLES[type] as Record<string, unknown>;
+      for (const [field, spec] of Object.entries(EVENT_FIELDS[type])) {
+        if (spec.kind === "any") continue;
+        const bad = Array.isArray(spec.kind) ? ["not-in-enum", 1] : wrong[spec.kind as string];
+        expect([type, field, bad === undefined]).toEqual([type, field, false]);
+        for (const value of bad ?? []) {
+          const r = validateEvent({ ...env, type, ...example, [field]: value });
+          expect(r.ok ? `${type}.${field} accepted ${JSON.stringify(value)}` : "refused").toBe(
+            "refused",
+          );
+          checked++;
+        }
+      }
+    }
+    expect(checked).toBeGreaterThan(250);
+  });
+
   test("optional fields may be left out", () => {
     const { template: _t, ...created } = EXAMPLES["call.created"] as Record<string, unknown>;
     expect(validateEvent({ ...env, type: "call.created", ...created }).ok).toBe(true);
@@ -258,6 +294,26 @@ describe("schema v1 (DESIGN 4.3)", () => {
     // Positive control: an author that hides who wrote it is refused.
     for (const by of ["claude", "agent:", "app", "", "User"]) {
       expect(validateEvent({ ...env, type: "note", ...note, by }).ok).toBe(false);
+    }
+  });
+
+  test("[decision] every author field takes user, app or agent:<client>, and nothing else", () => {
+    const carriers = EVENT_TYPES.filter((t) => "by" in EVENT_FIELDS[t]);
+    expect(carriers.length).toBeGreaterThanOrEqual(10);
+    for (const type of carriers) {
+      const body = { ...env, type, ...EXAMPLES[type] };
+      const isNote = type === "note" || type === "note.del";
+      for (const by of ["user", "agent:codex"]) {
+        expect([type, by, validateEvent({ ...body, by }).ok]).toEqual([type, by, true]);
+      }
+      expect([type, "app", validateEvent({ ...body, by: "app" }).ok]).toEqual([
+        type,
+        "app",
+        !isNote,
+      ]);
+      for (const by of ["claude", "agent:", "", "User", "agent: x", " user"]) {
+        expect([type, by, validateEvent({ ...body, by }).ok]).toEqual([type, by, false]);
+      }
     }
   });
 

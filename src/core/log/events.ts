@@ -416,7 +416,7 @@ export const LIFECYCLE_TYPES: ReadonlySet<EventType> = new Set<EventType>([
 // ---------------------------------------------------------------------------
 // Runtime validation
 
-type Kind =
+export type Kind =
   | "string"
   | "number"
   | "int"
@@ -433,7 +433,7 @@ type Kind =
   | "layer"
   | readonly string[];
 
-interface FieldSpec {
+export interface FieldSpec {
   kind: Kind;
   optional?: boolean;
 }
@@ -590,6 +590,10 @@ const SPECS: { [T in EventType]: Spec } = {
 };
 
 export const EVENT_TYPES: readonly EventType[] = Object.keys(SPECS) as EventType[];
+
+/** The field table of schema v1: every field of every event type, with its kind. */
+export const EVENT_FIELDS: { readonly [T in EventType]: Readonly<Record<string, FieldSpec>> } =
+  SPECS;
 
 /** `user`, `agent:<client>`, or `app` for what akou itself decided (the post-call pass). */
 const AUTHOR = /^(user|app|agent:\S+)$/;
