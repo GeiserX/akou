@@ -481,6 +481,32 @@ describe("reader (DESIGN 4.2, 4.5)", () => {
     expect(r.seqErrors).toEqual([]);
   });
 
+  test("tail: an unparseable last line stays pending, so the writer's truncation loses nothing", () => {
+    const dir = callDir();
+    const path = join(dir, EVENTS_FILE);
+    const w1 = LogWriter.open(dir);
+    w1.append(created);
+    w1.append(partDraft(1));
+    w1.close();
+    const good = readFileSync(path).length;
+    appendFileSync(path, "\u0000\u0000\u0000\n");
+    const first = tail(path);
+    expect(first.events.map((e) => e.seq)).toEqual([1, 2]);
+    // The next open truncates the torn line and appends after it.
+    const w2 = open(dir);
+    expect(w2.report.truncated?.reason).toBe("unparseable");
+    w2.append(segDraft("l000001"));
+    w2.append(segDraft("l000002"));
+    const second = tail(path, first.cursor);
+    expect(second.events.map((e) => e.seq)).toEqual([3, 4]);
+    expect(second.invalid).toEqual([]);
+    expect(second.seqErrors).toEqual([]);
+    expect(second.pending).toBeNull();
+    // The torn line was left pending and reported, not consumed.
+    expect(first.cursor.offset).toBe(good);
+    expect(first.pending).toEqual({ offset: good, bytes: 4, reason: "unparseable" });
+  });
+
   test("tail: a revision reaches a cursor holder as an ordinary new event", () => {
     const dir = callDir();
     const w = LogWriter.open(dir);

@@ -163,7 +163,10 @@ export interface TailResult {
   cursor: TailCursor;
   invalid: InvalidLine[];
   seqErrors: string[];
-  /** A trailing partial line that was left for the next poll. */
+  /**
+   * A trailing line left for the next poll: partial (no newline yet), or unparseable (a torn
+   * write the next writer open truncates).
+   */
   pending: TornTail | null;
 }
 
@@ -204,26 +207,29 @@ export function tail(path: string, cursor: TailCursor = START_CURSOR): TailResul
     expectSeq: cursor.offset === 0 ? 1 : cursor.seq + 1,
   });
   const events = r.events.filter((e) => e.seq > cursor.seq);
-  const invalid = [...r.invalid];
-  if (r.torn) {
-    // A newline-terminated line that does not parse, followed by nothing yet: report it.
-    invalid.push({ line: -1, offset: r.torn.offset, error: `unparseable line (${r.torn.reason})` });
-  }
-  const consumedLines = countNewlines(complete);
+  // A newline-terminated last line that is not JSON is a torn write that the next writer open
+  // truncates. It is not consumed: the cursor stops before it, so once the writer truncates and
+  // appends, the next poll starts on a line boundary. It is reported as pending.
+  const consumed = r.torn ? r.committedBytes : complete.length;
+  const consumedLines = countNewlines(complete.subarray(0, consumed));
   const last = events.at(-1);
-  const pendingBytes = buf.length - complete.length;
+  const pendingBytes = buf.length - consumed;
   return {
     events,
     cursor: {
-      offset: cursor.offset + complete.length,
+      offset: cursor.offset + consumed,
       seq: last ? last.seq : cursor.seq,
       line: cursor.line + consumedLines,
     },
-    invalid,
+    invalid: r.invalid,
     seqErrors: r.seqErrors,
     pending:
       pendingBytes > 0
-        ? { offset: cursor.offset + complete.length, bytes: pendingBytes, reason: "no-newline" }
+        ? {
+            offset: cursor.offset + consumed,
+            bytes: pendingBytes,
+            reason: r.torn ? "unparseable" : "no-newline",
+          }
         : null,
   };
 }
