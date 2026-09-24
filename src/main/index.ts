@@ -277,6 +277,11 @@ export class AkouApp implements ApiApp {
   private modelsPull: ModelsPull = { running: null, done: new Map() };
   /** The recognizer waits for its model files (`startAsr`). */
   private asrAwaitingModels = false;
+  /**
+   * The speaker-label engine the running recognizer started with. `asr.diarizer` takes effect at
+   * the next start, and the final pass runs this one until then.
+   */
+  private asrDiarizer: DiarizerKind | null = null;
 
   private cfg: LoadedConfig;
   private readonly clock: Clock;
@@ -487,13 +492,13 @@ export class AkouApp implements ApiApp {
   }
 
   /** The real engines on the models folder, with the speaker-label engine the settings choose. */
-  private sherpaSpec(s: Settings): ModelSpec {
+  private sherpaSpec(s: Settings, diarizer = s["asr.diarizer"] as DiarizerKind): ModelSpec {
     return {
       kind: "sherpa",
       dir: s["asr.modelsDir"],
       cacheDir: join(s["asr.modelsDir"], ".cache"),
       threads: s["asr.threads"],
-      diarizer: s["asr.diarizer"] as DiarizerKind,
+      diarizer,
       diarizeHelper: locateHelper(s["asr.diarizeHelper"], { name: DIARIZE_HELPER_NAME }).command,
     };
   }
@@ -607,6 +612,7 @@ export class AkouApp implements ApiApp {
       this.asrState = { state: "unavailable", reason: "no recognizer configured" };
       return;
     }
+    this.asrDiarizer = s["asr.diarizer"] as DiarizerKind;
     const asr = new LiveAsr(
       {
         models: spec,
@@ -1326,11 +1332,16 @@ export class AkouApp implements ApiApp {
       last: last
         ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
         : null,
-      asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
+      asr: {
+        ...this.asrState,
+        loads: this.asr?.loads ?? {},
+        diarizer: this.asrDiarizer ?? s["asr.diarizer"],
+      },
       models: this.models(),
       // The helper this app spawns, resolved from inside the bundle: `akou doctor` from the
       // standalone CLI, which has no helper beside it, reads its answer here.
       helper: findHelper(s["capture.helper"]),
+      diarizeHelper: findHelper(s["asr.diarizeHelper"], undefined, { name: DIARIZE_HELPER_NAME }),
       provider: await this.providerStatus(),
       harnesses: this.discovery,
       share: { active: this.sharing.status().length > 0, shares: this.sharing.status() },
@@ -1364,8 +1375,11 @@ export class AkouApp implements ApiApp {
   /** The recognizer models for the final pass, or null when there are none. */
   private finalModels(): ModelSpec | null {
     if (this.o.models !== undefined) return this.o.models;
-    const dir = this.cfg.settings["asr.modelsDir"];
-    return modelsPresent(dir, this.registry()) ? this.sherpaSpec(this.cfg.settings) : null;
+    const s = this.cfg.settings;
+    // A change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
+    const diarizer = this.asrDiarizer ?? (s["asr.diarizer"] as DiarizerKind);
+    const registry = this.o.modelRegistry ?? modelsFor(diarizer);
+    return modelsPresent(s["asr.modelsDir"], registry) ? this.sherpaSpec(s, diarizer) : null;
   }
 
   /** Starts the final pass in the background. Returns why it cannot run, or null once started. */

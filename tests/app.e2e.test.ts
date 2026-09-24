@@ -94,6 +94,31 @@ describe("the final pass without readable audio", () => {
   );
 });
 
+describe("asr.diarizer changed while the app runs", () => {
+  test(
+    "the running engine stays until the next start, so the final pass never asks for the other engine's models",
+    async () => {
+      const home = tempDir("akou-app-");
+      const rig = await appRig({ home: home.dir });
+      expect((await rig.api("GET", "/status")).body.asr.diarizer).toBe("nemotron");
+      expect((await rig.api("PATCH", "/config", { "asr.diarizer": "embeddings" })).status).toBe(
+        200,
+      );
+      expect(rig.app.config().settings["asr.diarizer"]).toBe("embeddings");
+      // The recognizer runs on with Nemotron, and the final pass with it (finalModels reads the
+      // same engine), so a machine without the pyannote files keeps its final pass.
+      expect((await rig.api("GET", "/status")).body.asr.diarizer).toBe("nemotron");
+      await rig.close();
+      // Positive control: the next start runs what the setting says.
+      const next = await appRig({ home: home.dir, settings: { "asr.diarizer": "embeddings" } });
+      expect((await next.api("GET", "/status")).body.asr.diarizer).toBe("embeddings");
+      await next.close();
+      home.cleanup();
+    },
+    LONG,
+  );
+});
+
 describe("[spike] Command-line arguments dropped by the launcher", () => {
   test("no code reads process.argv for mode selection; headless comes from AKOU_HEADLESS", () => {
     // The CLI's entry point is the one reader: its arguments are its interface, not the app's
