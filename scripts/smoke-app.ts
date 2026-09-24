@@ -280,6 +280,17 @@ console.log(JSON.stringify({ bun: Bun.version, open: open.split("\\n").filter((l
   else if (allowMissingHelper && !existsSync(join(ROOT, "native", "akou-capture", "Cargo.toml")))
     console.log("SKIP the capture helper is not in the bundle (--allow-missing-helper)");
   else check(false, "the capture helper is in the bundle", helper);
+  // The diarization helper: beside the capture helper, and it runs.
+  const diarize = join(main, "akou-diarize");
+  if (check(existsSync(diarize), "the diarization helper is in the bundle", diarize)) {
+    const v = spawnSync(diarize, ["--version"]);
+    const out = v.stdout.toString().trim();
+    check(
+      v.status === 0 && out === `akou-diarize ${version}`,
+      `akou-diarize --version is ${version}`,
+      out,
+    );
+  }
 }
 
 async function main(argv: string[]): Promise<void> {
