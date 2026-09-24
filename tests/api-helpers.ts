@@ -60,6 +60,7 @@ export interface RigOptions {
   home?: string;
   provider?: Provider;
   discover?: (env: Record<string, string | undefined>) => Promise<Discovery>;
+  openExternal?: (url: string) => Promise<boolean>;
 }
 
 /** A WAV the fake recognizer reads as words: "hello world" on the mic, "ok great" on the call. */
@@ -104,6 +105,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     guard: o.guard,
     provider: o.provider,
     discover: o.discover,
+    openExternal: o.openExternal,
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

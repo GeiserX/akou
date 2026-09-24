@@ -104,6 +104,21 @@ export const SETTINGS = {
     env: "AKOU_HEADLESS",
     doc: "Run with no window. Selected by the environment, never by command-line arguments.",
   },
+  "share.bind": {
+    type: "string",
+    min: 1,
+    max: 45,
+    default: "tailnet",
+    doc: "Where a share link listens: `tailnet`, `lan` (plain HTTP, visible to that network) or an IPv4 address. Never every interface unless you type `0.0.0.0`.",
+  },
+  "share.port": {
+    type: "integer",
+    min: 1024,
+    max: 65535,
+    also: [0],
+    default: 8477,
+    doc: "Port of the read-only share link. 0 picks a free port.",
+  },
   "capture.helper": {
     type: "string[]",
     default: [],

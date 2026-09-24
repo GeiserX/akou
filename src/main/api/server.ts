@@ -18,6 +18,7 @@ import type { ImportResult } from "../import/hark-viewer.ts";
 import type { Provider } from "../llm/provider.ts";
 import type { Template } from "../notes/templates.ts";
 import type { CallQuery } from "../query/context.ts";
+import type { ShareHandle, ShareStatus } from "../share/transport.ts";
 import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
 import { authorOf, errorResponse, HttpError, json, Router } from "./http.ts";
 import { callRoutes } from "./routes/calls.ts";
@@ -88,6 +89,18 @@ export interface ApiApp {
     dirs: readonly string[],
     o: { workspace?: string },
   ): Promise<{ imported: ImportResult[]; skipped: { source: string; reason: string }[] }>;
+  /** Active share links (DESIGN 8.3). */
+  shares(): ShareStatus[];
+  startShare(
+    call: string,
+    o: { bind?: string; notes?: boolean; expires?: string },
+  ): Promise<ShareStatus>;
+  stopShare(call?: string): Promise<ShareHandle[]>;
+  /**
+   * `POST /window`: shows the window on a call, or, with no window (headless), answers the address
+   * of the window in a browser with a one-time code.
+   */
+  openWindow(call?: string): Promise<{ shown: true } | { url: string }>;
   /** The clean shutdown, after the answer is sent. */
   quit(): void;
 }

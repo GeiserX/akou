@@ -1,0 +1,377 @@
+/**
+ * What the window shows, decided without the DOM (docs/DESIGN.md section 7), so each rule has a
+ * plain unit test: the state label, the banner, the final-pass note, speaker hues, durations and
+ * citations. The DOM modules only draw what these return.
+ *
+ * Every time shown is local wall clock in the call's zone; a length of time always carries a unit
+ * or a label ("12 min into the call"), never a bare `mm:ss` (TRAPS "Offsets shown as times of
+ * day").
+ */
+
+import { formatWall } from "../core/log/clock.ts";
+import type { CallView } from "../core/log/fold.ts";
+import type { AppStatus } from "./protocol.ts";
+
+// ---------------------------------------------------------------------------
+// Speaker hues
+
+/** You are always blue; everyone else gets the next hue in order of first appearance. */
+export const YOU_HUE = 214;
+export const HUES = [36, 145, 285, 5, 178, 58, 325, 100] as const;
+
+/**
+ * Stable hues per speaker id. Keyed by the id, not the name, so a renamed speaker keeps its hue;
+ * a merged id takes the hue of the speaker it merged into.
+ */
+export class HueBook {
+  private readonly hues = new Map<string, number>([["you", YOU_HUE]]);
+  private next = 0;
+
+  hue(spk: string): number {
+    const cur = this.hues.get(spk);
+    if (cur !== undefined) return cur;
+    const h = HUES[this.next % HUES.length] as number;
+    this.next++;
+    this.hues.set(spk, h);
+    return h;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Time
+
+/** A length of time with its units: `45 s`, `3 min 5 s`, `1 h 2 min`. Never `mm:ss`. */
+export function formatDuration(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  if (s < 60) return `${s} s`;
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  if (h > 0) return `${h} h ${m} min`;
+  const r = s % 60;
+  return r > 0 ? `${m} min ${r} s` : `${m} min`;
+}
+
+// ---------------------------------------------------------------------------
+// The state label (hark-viewer's states, with "offline" split by what actually happened)
+
+export type StateClass =
+  | "ready"
+  | "recording"
+  | "paused"
+  | "saved"
+  | "offline"
+  | "failed"
+  | "other";
+
+export interface StateLabel {
+  cls: StateClass;
+  label: string;
+  meta: string;
+}
+
+export interface StateInput {
+  view: CallView | null;
+  status: AppStatus | null;
+  /** The follower cannot reach the app. */
+  disconnected: boolean;
+  now: number;
+  /** When the last committed line arrived, for "last line 5 s ago". */
+  lastLineAt: number | null;
+  /** When the last audio level arrived; a live call with none for 5 s is not capturing. */
+  levelAt: number | null;
+  lines: number;
+}
+
+/** Channel health states that mean nothing is being recorded on that side. */
+const DEAD_STATES = new Set(["dead", "stalled", "no-buffers"]);
+
+export function notCapturing(v: CallView, now: number, levelAt: number | null): boolean {
+  if (!v.live || v.state === "paused") return false;
+  const mic = v.channelHealth("mic")?.state;
+  const call = v.channelHealth("call")?.state;
+  if (mic && call && DEAD_STATES.has(mic) && DEAD_STATES.has(call)) return true;
+  const started = v.parts().at(-1)?.wallStart ?? now;
+  return levelAt === null ? now - started > 5000 : now - levelAt > 5000;
+}
+
+export function stateLabel(i: StateInput): StateLabel {
+  const v = i.view;
+  const liveId = i.status?.live?.call ?? null;
+  if (i.disconnected) {
+    return { cls: "offline", label: "reconnecting", meta: "akou is not answering; retrying" };
+  }
+  if (!v?.call) {
+    if (liveId) return { cls: "other", label: "another call is recording", meta: "" };
+    return { cls: "ready", label: "ready", meta: "" };
+  }
+  if (v.live) {
+    const first = v.parts()[0]?.wallStart ?? i.now;
+    const bits = [`recording for ${formatDuration((i.now - first) / 1000)}`];
+    if (v.muted) bits.push("mic muted");
+    if (i.lastLineAt !== null) {
+      bits.push(`last line ${formatDuration((i.now - i.lastLineAt) / 1000)} ago`);
+    }
+    if (v.state === "paused") return { cls: "paused", label: "paused", meta: bits.join("  ·  ") };
+    if (notCapturing(v, i.now, i.levelAt)) {
+      return {
+        cls: "offline",
+        label: "not capturing",
+        meta: "the call is open and nothing is being recorded",
+      };
+    }
+    return { cls: "recording", label: "rec", meta: bits.join("  ·  ") };
+  }
+  const lines = `${i.lines} ${i.lines === 1 ? "line" : "lines"}`;
+  if (liveId && liveId !== v.call.id) {
+    return { cls: "other", label: "another call is recording", meta: lines };
+  }
+  switch (v.state) {
+    case "failed":
+      return {
+        cls: "failed",
+        label: "recording failed",
+        meta: v.failure ? `${v.failure.stage}: ${v.failure.error}` : "",
+      };
+    case "crashed":
+      return {
+        cls: "offline",
+        label: "ended unexpectedly",
+        meta: `${lines}  ·  press Restart to carry on`,
+      };
+    case "interrupted":
+      return { cls: "offline", label: "interrupted", meta: lines };
+    case "starting":
+    case "stopping":
+    case "restarting":
+      return { cls: "recording", label: v.state, meta: "" };
+    default:
+      return { cls: "saved", label: "saved", meta: lines };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The banner under the header: red proven, amber a guess or a lag, grey quiet, green recovered
+
+export type BannerKind = "dead" | "permission" | "guess" | "lag" | "quiet" | "recovered";
+
+export interface Banner {
+  kind: BannerKind;
+  text: string;
+  /** The action the banner offers. */
+  action?: "restart" | "open-settings";
+}
+
+export interface BannerInput {
+  view: CallView | null;
+  now: number;
+  lastLineAt: number | null;
+  /** When the call channel's level last rose above -60 dBFS (null: never while shown). */
+  callHeardAt: number | null;
+  levelAt: number | null;
+  /** The platform, for naming the right settings pane. */
+  platform: "mac" | "windows" | "linux";
+}
+
+export const QUIET_AFTER_MS = 90_000;
+export const LAG_AMBER_S = 10;
+export const RECOVERED_FOR_MS = 30_000;
+
+export function banner(i: BannerInput): Banner | null {
+  const v = i.view;
+  if (!v?.call) return null;
+  if (v.state === "interrupted") {
+    return {
+      kind: "dead",
+      text: "RECORDING INTERRUPTED. The capture failed five times in ten minutes and akou stopped trying. Press Restart to carry on in the same call.",
+      action: "restart",
+    };
+  }
+  if (!v.live) return null;
+  const call = v.channelHealth("call");
+  const mic = v.channelHealth("mic");
+  if (call?.state === "stalled" || mic?.state === "stalled") {
+    return {
+      kind: "dead",
+      text: "NOTHING IS BEING RECORDED. The capture stopped sending audio; akou is restarting it. If this stays, press Restart.",
+      action: "restart",
+    };
+  }
+  if (call?.state === "dead") {
+    const n = call.rebuilds;
+    return {
+      kind: "dead",
+      text: `CALL AUDIO LOST for ${formatDuration(call.silentFor + (i.now - call.t) / 1000)}. Audio is playing and akou hears none of it. akou is rebuilding the capture${n > 0 ? ` (${n} ${n === 1 ? "rebuild" : "rebuilds"} so far)` : ""} and restarts it after a minute. If this stays, press Restart.`,
+      action: "restart",
+    };
+  }
+  if (call?.state === "permission-suspect" || mic?.state === "permission-suspect") {
+    const what = call?.state === "permission-suspect" ? "System Audio Recording" : "Microphone";
+    const where =
+      i.platform === "mac"
+        ? `System Settings > Privacy & Security > ${what}`
+        : i.platform === "windows"
+          ? "Settings > Privacy > Microphone"
+          : "your system's sound settings";
+    return {
+      kind: "permission",
+      text: `akou hears only silence while audio is playing: check that akou is allowed in ${where}.`,
+      action: "open-settings",
+    };
+  }
+  if (v.state === "paused") return null;
+  const lag = v.asrLag?.seconds ?? 0;
+  if (lag > LAG_AMBER_S) {
+    return {
+      kind: "lag",
+      text: `transcript ${Math.round(lag)} s behind. The recording is fine; lines will catch up.`,
+    };
+  }
+  if (call?.state === "no-buffers" || mic?.state === "no-buffers") {
+    return {
+      kind: "guess",
+      text: "no audio has arrived from the capture yet; akou is rebuilding it. If this stays, press Restart.",
+      action: "restart",
+    };
+  }
+  const since = i.lastLineAt ?? v.parts().at(-1)?.wallStart ?? i.now;
+  if (i.now - since > QUIET_AFTER_MS) {
+    return {
+      kind: "guess",
+      text: `no new lines for ${formatDuration((i.now - since) / 1000)}. If people are talking, the capture may have died: press Restart.`,
+      action: "restart",
+    };
+  }
+  if (call?.state === "ok") {
+    const history = v.healthHistory().filter((h) => h.ch === "call" && h.part === call.part);
+    const wasDead = history.some((h) => h.state === "dead" && h.seq < call.seq);
+    if (wasDead && i.now - call.t < RECOVERED_FOR_MS) {
+      const n = call.rebuilds;
+      return {
+        kind: "recovered",
+        text: `call audio is back${n > 0 ? ` after ${n} ${n === 1 ? "rebuild" : "rebuilds"}` : ""}`,
+      };
+    }
+  }
+  const heard = i.callHeardAt ?? v.parts().at(-1)?.wallStart ?? i.now;
+  if (i.levelAt !== null && i.now - heard > QUIET_AFTER_MS) {
+    return { kind: "quiet", text: `call side quiet for ${formatDuration((i.now - heard) / 1000)}` };
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// The final pass note and the languages chip
+
+export interface FinalNote {
+  text: string;
+  state: "running" | "failed" | "done";
+  /** 0 to 1 while running. */
+  progress?: number;
+}
+
+export function finalNote(v: CallView): FinalNote | null {
+  const f = v.final;
+  if (f.state === "none") return null;
+  if (f.state === "failed") {
+    return {
+      state: "failed",
+      text: `final transcript: failed${f.failed ? ` (${f.failed.error})` : ""}`,
+    };
+  }
+  if (f.state === "running") {
+    const total = Math.max(1, v.parts().length);
+    return {
+      state: "running",
+      text: `final transcript: running (${f.partsDone.length} of ${total} ${total === 1 ? "part" : "parts"})`,
+      progress: f.partsDone.length / total,
+    };
+  }
+  const skipped = f.done?.skipped.length ?? 0;
+  const bits = ["final transcript: ready"];
+  if (skipped > 0) bits[0] += ` (${skipped} ${skipped === 1 ? "span" : "spans"} skipped)`;
+  if (f.done?.warning) bits.push(f.done.warning);
+  return { state: "done", text: bits.join("  ·  ") };
+}
+
+/** The languages a model reported in the final pass; empty when none did (Parakeet). */
+export function languages(v: CallView): string[] {
+  return v.final.state === "done" ? [...(v.final.done?.languages ?? [])] : [];
+}
+
+// ---------------------------------------------------------------------------
+// Citations in answers and enhanced notes
+
+export type Piece =
+  | { kind: "text"; text: string }
+  | { kind: "time"; text: string; time: string; speaker: string }
+  | { kind: "seg"; text: string; id: string };
+
+const CITE = /\[(\d{1,2}:\d{2}(?::\d{2})?) ([^\]\n]{1,60})\]|\[#([lf]\d{6,})\]|#([lf]\d{6,})\b/g;
+
+/** Splits text into plain runs and citations: `[15:41 Ben]` and `[#l000031]`. */
+export function splitCitations(text: string): Piece[] {
+  const out: Piece[] = [];
+  let at = 0;
+  for (const m of text.matchAll(CITE)) {
+    const i = m.index ?? 0;
+    if (i > at) out.push({ kind: "text", text: text.slice(at, i) });
+    if (m[1] && m[2]) out.push({ kind: "time", text: m[0], time: m[1], speaker: m[2] });
+    else out.push({ kind: "seg", text: m[0], id: (m[3] ?? m[4]) as string });
+    at = i + m[0].length;
+  }
+  if (at < text.length) out.push({ kind: "text", text: text.slice(at) });
+  return out;
+}
+
+/**
+ * The line a `[15:41 Ben]` citation points at: among the answer's cited ids first, then the whole
+ * call, the first line of that speaker starting in that minute.
+ */
+export function resolveTimeCitation(
+  v: CallView,
+  time: string,
+  speaker: string,
+  cites: readonly string[],
+): string | null {
+  const tz = v.call?.tz ?? "UTC";
+  const seconds = time.split(":").length === 3;
+  const match = (id: string) => {
+    const l = v.resolve(id);
+    if (!l || l.retracted) return false;
+    const t = formatWall(l.w0, tz, { seconds });
+    return t === time && l.speaker.toLowerCase() === speaker.trim().toLowerCase();
+  };
+  for (const id of cites) if (match(id)) return id;
+  for (const l of v.lines("best")) if (match(l.id)) return l.id;
+  // A citation whose speaker was renamed since still points at its minute.
+  for (const id of cites) {
+    const l = v.resolve(id);
+    if (l && formatWall(l.w0, tz, { seconds }) === time) return id;
+  }
+  return null;
+}
+
+// ---------------------------------------------------------------------------
+// The ask box presets (DESIGN 7)
+
+export function presets(speakers: readonly string[]): { label: string; question: string }[] {
+  const out = [
+    { label: "Catch me up", question: "Catch me up: what has been said so far?" },
+    { label: "Was my name mentioned?", question: "Was my name mentioned? By whom and when?" },
+    { label: "Decisions so far", question: "What decisions have been made so far?" },
+    { label: "Action items", question: "What are the action items so far, with owners?" },
+  ];
+  for (const s of speakers) {
+    out.push({ label: `What did ${s} say?`, question: `What did ${s} say so far?` });
+  }
+  return out;
+}
+
+/** The markers the notepad knows: `- `, `[] ` (action), `? ` (open question), `# ` (section). */
+export function noteKind(text: string): "text" | "bullet" | "action" | "question" | "section" {
+  if (text.startsWith("[] ") || text.startsWith("[ ] ")) return "action";
+  if (text.startsWith("? ")) return "question";
+  if (text.startsWith("# ")) return "section";
+  if (text.startsWith("- ")) return "bullet";
+  return "text";
+}

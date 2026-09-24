@@ -455,7 +455,9 @@ describe("after the call", () => {
     expect([enh.status, enh.body.error]).toEqual([503, "provider_unavailable"]);
     expect(enh.body.message).toContain("enhance/context");
     expect((await rig.api("GET", "/calls/last/enhance/context")).status).toBe(200);
-    expect((await rig.api("POST", "/share", { bind: "lan" })).status).toBe(501);
+    // Sharing is built: an address that is not one is refused, and nothing is shared.
+    const share = await rig.api("POST", "/share", { call: "last", bind: "nowhere" });
+    expect([share.status, share.body.error]).toEqual([400, "bad_bind"]);
     expect((await rig.api("GET", "/share")).body).toEqual({ active: false, shares: [] });
     expect((await rig.api("POST", "/vocab/suggest", {})).status).toBe(501);
   });

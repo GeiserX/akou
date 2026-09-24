@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>akou</title>
+<link rel="stylesheet" href="theme.css">
+<script type="module" src="index.js"></script>
+</head>
+<body class="ready">
+<header>
+  <span id="dot" aria-hidden="true"></span>
+  <span id="state" role="status" aria-live="polite">…</span>
+  <span id="title"></span>
+  <span id="meta"></span>
+  <span id="pills">
+    <span class="pill" id="pill-clock"></span>
+    <span class="pill" id="pill-ws" hidden></span>
+    <span class="pill" id="pill-template" hidden></span>
+    <span class="pill" id="pill-provider" hidden></span>
+    <span class="pill" id="pill-models" hidden></span>
+    <span class="pill warn" id="pill-review" hidden></span>
+    <span class="pill" id="pill-lang" hidden></span>
+    <span class="pill shared" id="pill-share" hidden><span id="share-text"></span> <button id="share-stop" type="button" aria-label="Stop sharing">Stop</button></span>
+  </span>
+  <div id="controls" role="toolbar" aria-label="Recording controls">
+    <input class="idle" id="workspace" list="workspaces" placeholder="workspace" aria-label="Workspace" maxlength="60" autocomplete="off">
+    <datalist id="workspaces"></datalist>
+    <input class="idle" id="newtitle" placeholder="Call title (optional)" aria-label="Call title" maxlength="80" autocomplete="off">
+    <select class="idle" id="template" aria-label="Template"><option value="">template: automatic</option></select>
+    <button class="idle go" id="record" type="button">● Record</button>
+    <button class="busy" id="mute" type="button">Mute mic</button>
+    <button class="busy" id="pause" type="button">Pause</button>
+    <button id="restart" type="button" hidden title="Capture broke, or the call ended? Carry on recording into the same call">↻ Restart</button>
+    <button class="busy stop" id="stop" type="button">■ Stop</button>
+    <button id="share-start" type="button" hidden title="A read-only live link to this call">Share</button>
+    <button id="settings-open" type="button">Settings</button>
+  </div>
+  <fieldset id="meters"><legend>Levels</legend>
+    <span class="meter"><span class="health" id="health-mic" data-state="none"></span><label for="meter-mic">mic</label> <meter id="meter-mic" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
+    <span class="meter"><span class="health" id="health-call" data-state="none"></span><label for="meter-call">call</label> <meter id="meter-call" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
+  </fieldset>
+</header>
+<div id="fatal" role="alert" hidden></div>
+<div id="banner" role="status" hidden><span id="banner-text"></span> <button id="banner-action" type="button" hidden></button></div>
+<div id="final" hidden><span id="final-text"></span> <progress id="final-progress" max="1" value="0" hidden></progress> <span id="handoff"></span></div>
+<div id="confirm" role="status" hidden></div>
+<div id="layout">
+  <nav id="sidebar" aria-label="Calls">
+    <h2>Calls</h2>
+    <ul id="calls"></ul>
+  </nav>
+  <main id="scroller" tabindex="-1">
+    <div id="lines" role="log" aria-label="Transcript"></div>
+    <div id="partial" hidden></div>
+    <div id="empty"></div>
+  </main>
+  <aside id="side">
+    <div role="tablist" aria-label="Notes, questions and enhanced notes">
+      <button role="tab" id="tab-notes" aria-controls="pane-notes" aria-selected="true" type="button">Notes</button>
+      <button role="tab" id="tab-ask" aria-controls="pane-ask" aria-selected="false" tabindex="-1" type="button">Ask</button>
+      <button role="tab" id="tab-enhanced" aria-controls="pane-enhanced" aria-selected="false" tabindex="-1" type="button">Enhanced</button>
+    </div>
+    <section id="pane-notes" role="tabpanel" aria-labelledby="tab-notes">
+      <ul id="notes"></ul>
+      <input id="note-input" placeholder="Type a note, Enter to add it  (- bullet · [] action · ? question · # section)" aria-label="New note" autocomplete="off">
+    </section>
+    <section id="pane-ask" role="tabpanel" aria-labelledby="tab-ask" hidden>
+      <form id="ask-form">
+        <input id="ask-input" placeholder="Ask about this call" aria-label="Question" maxlength="2000" autocomplete="off">
+        <button type="submit" class="go">Ask</button>
+      </form>
+      <div id="ask-presets"></div>
+      <div id="ask-out"></div>
+    </section>
+    <section id="pane-enhanced" role="tabpanel" aria-labelledby="tab-enhanced" hidden>
+      <div class="bar">
+        <select id="enhance-template" aria-label="Template for the notes"><option value="">template: automatic</option></select>
+        <button id="enhance" type="button" class="go">Enhance</button>
+        <select id="enhance-rev" aria-label="Revision" hidden></select>
+      </div>
+      <p id="enhance-status" role="status"></p>
+      <div id="enhanced-body"></div>
+    </section>
+    <div id="player-bar">
+      <!-- biome-ignore lint/a11y/useMediaCaption: the transcript beside it is the caption of every line played -->
+      <audio id="player" preload="none"></audio>
+      <label for="balance">mic</label>
+      <input id="balance" type="range" min="-1" max="1" step="0.1" value="0" aria-label="Playback balance, mic to call">
+      <label for="balance">call</label>
+    </div>
+  </aside>
+</div>
+<div id="toast" role="alert" hidden></div>
+<button id="jump" class="go" type="button">↓ Back to live</button>
+<div id="popover" role="dialog" hidden></div>
+<dialog id="settings" aria-label="Settings">
+  <!-- The registry validates every value (PATCH /config); the browser must not block a value the registry allows, such as port 0. -->
+  <form id="settings-form" novalidate>
+    <h2>Settings</h2>
+    <div id="settings-fields"></div>
+    <div id="settings-vocab"></div>
+    <div class="bar">
+      <button type="submit" class="go">Save</button>
+      <button type="button" id="settings-close">Close</button>
+    </div>
+  </form>
+</dialog>
+</body>
+</html>
