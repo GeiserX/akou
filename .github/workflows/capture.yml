@@ -158,9 +158,11 @@ jobs:
 
   # ROADMAP M3: the helper on a Windows runner. It must load and list devices. GitHub's Windows
   # runners have no audio endpoint, so a virtual cable (VB-CABLE, through LABSN's CI helper) is
-  # installed; when that works, the call side records a tone played through it by process
-  # loopback, and a player inside the tree the helper is told to exclude is not heard. When no
-  # endpoint exists the summary says so; the loopback test is then not run, and never passed.
+  # installed, and the call side records a tone played through it by process loopback, and a
+  # player inside the tree the helper is told to exclude is not heard. The cable is required: a
+  # runner where it gives no output endpoint fails the job, because a green job that recorded
+  # nothing would claim the exclusion was checked. Which processes the real app's tree holds
+  # (ElectroBun's launcher, the WebView2 processes) is the M3 real-call check, not this job.
   capture-windows:
     runs-on: windows-latest
     timeout-minutes: 30
@@ -193,7 +195,6 @@ jobs:
           fi
       - name: a virtual audio cable
         id: cable
-        continue-on-error: true
         uses: LABSN/sound-ci-helpers@e9d6ba52163a3283714a68412036ddf33f78d49c # v1.0.4
       - name: the Windows audio service
         continue-on-error: true
@@ -203,7 +204,6 @@ jobs:
           Start-Service -Name audiosrv
           Get-Service -Name audiosrv, audioendpointbuilder | Format-Table -AutoSize
       - name: devices with the cable
-        id: devices
         run: |
           set +e
           native/akou-capture/target/release/akou-capture.exe devices > devices.json 2> devices.err
@@ -211,7 +211,6 @@ jobs:
           set -e
           cat devices.json devices.err
           outputs=$(grep -o '"outputs":\[[^]]*\]' devices.json | grep -o '"id"' | wc -l || true)
-          echo "outputs=$outputs" >> "$GITHUB_OUTPUT"
           {
             echo "### akou-capture on Windows"
             echo
@@ -219,17 +218,18 @@ jobs:
             echo "- cable install: ${{ steps.cable.outcome }}"
             echo "- \`devices\` after (exit $code): $(cat devices.json devices.err | head -c 600)"
             if [ "$outputs" = 0 ]; then
-              echo "- **no audio output endpoint on this runner: the loopback test did not run**"
+              echo "- **no audio output endpoint on this runner: the loopback test cannot run**"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+          if [ "$outputs" = 0 ]; then
+            echo "the virtual cable gave no output endpoint; the exclusion test cannot run"
+            exit 1
+          fi
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
-        if: steps.devices.outputs.outputs != '0'
         with:
           bun-version: 1.4.2
-      - if: steps.devices.outputs.outputs != '0'
-        run: bun install --frozen-lockfile
+      - run: bun install --frozen-lockfile
       - name: process loopback hears a player and leaves out the excluded tree
-        if: steps.devices.outputs.outputs != '0'
         env:
           AKOU_CAPTURE_LIVE: "1"
           AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture.exe

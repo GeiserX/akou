@@ -66,7 +66,7 @@ In: the capture helper for Windows (process loopback in exclude mode on the app 
 
 Exit criteria:
 
-- [ ] A real call on a Windows 11 machine with WebView2: left = mic, right = call, window audio absent from the call channel.
+- [ ] A real call on a Windows 11 machine with WebView2: left = mic, right = call, window audio absent from the call channel. The app's process tree (Bun, ElectroBun's launcher, the WebView2 processes, the helper) is recorded once, and the root the app passes with `--exclude-responsible` is pinned to it.
 - [ ] Endpoint loopback fallback verified on a Windows 10 build below 20348.
 - [ ] Default-device change mid-call rebuilds the stream with under 1 s of lost audio.
 - [ ] The updater applies a patch release on Windows (issue #535 covered), or the full-installer link is shown.
