@@ -704,8 +704,12 @@ pub fn run(
             match ev {
                 Event::Chunk(c) => {
                     if p.on[c.ch.index()] {
-                        let now = if driven { p.now } else { clock::now() };
-                        p.fit_latency(now.awake_ns.saturating_sub(c.awake_ns));
+                        // Buffers from before the anchor (a mic that ran while the call side
+                        // opened) are dropped by the timeline and say nothing about lateness.
+                        if c.awake_ns >= p.anchor.awake_ns {
+                            let now = if driven { p.now } else { clock::now() };
+                            p.fit_latency(now.awake_ns.saturating_sub(c.awake_ns));
+                        }
                         p.aligner
                             .push(c.ch, c.awake_ns, c.rate, &c.samples, c.heard);
                     }
@@ -849,7 +853,12 @@ pub fn run(
     if !p.stalled {
         for s in p.aligner.flush(now.awake_ns) {
             if s.len() < SLOT {
-                tail = Some(s.clone());
+                // `emit` mutes its own copy; the tail goes to the file through `finish`.
+                let mut t = s.clone();
+                if p.muted {
+                    t.ch[0].samples.iter_mut().for_each(|v| *v = 0.0);
+                }
+                tail = Some(t);
                 if let Flow::Crash = p.emit(fe.as_mut(), s, true) {
                     return Outcome::Exit(exit::SOFTWARE);
                 }

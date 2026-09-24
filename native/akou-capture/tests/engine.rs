@@ -369,6 +369,132 @@ fn a_mic_on_time_never_reports_late_audio() {
     assert!(late_warns(&lines).is_empty(), "{lines:#?}");
 }
 
+/// A host-clock front end whose mic runs during `open`, as on macOS where the mic opens first
+/// and the call side's open can take seconds: a second of mic buffers is queued before the
+/// anchor. Then both sources deliver 10 ms buffers in real time.
+struct Live {
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Frontend for Live {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Host
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        let before = akou_capture::clock::now().awake_ns - 1_000_000_000;
+        for i in 0..100 {
+            let c = Chunk {
+                ch: Ch::Mic,
+                awake_ns: before + i * 10_000_000,
+                rate: 16_000,
+                samples: tone(440.0, 16_000, 0.01, 0.3),
+                heard: true,
+            };
+            tx.send(Event::Chunk(c)).unwrap();
+        }
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: Some(MicInfo {
+                id: "live".into(),
+                name: "live".into(),
+                rate: 16_000,
+            }),
+            call: Some(CallInfo {
+                mode: "system".into(),
+                rate: 16_000,
+            }),
+            exclude: vec![],
+        })
+    }
+    fn start(&mut self, anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        std::thread::spawn(move || {
+            for i in 0..300u64 {
+                let at = anchor.awake_ns + i * 10_000_000;
+                let due = at + 10_000_000;
+                let now = akou_capture::clock::now().awake_ns;
+                if due > now {
+                    std::thread::sleep(Duration::from_nanos(due - now));
+                }
+                for ch in Ch::BOTH {
+                    let c = Chunk {
+                        ch,
+                        awake_ns: at,
+                        rate: 16_000,
+                        samples: tone(440.0, 16_000, 0.01, 0.3),
+                        heard: true,
+                    };
+                    if tx.send(Event::Chunk(c)).is_err() {
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {}
+    fn status(&mut self) -> Status {
+        Status {
+            output_running: Some(true),
+            mic_running: true,
+            default_input: None,
+            default_output: None,
+        }
+    }
+    fn close(self: Box<Self>) {}
+}
+
+/// Mic buffers queued before the anchor are dropped by the timeline, so they say nothing about
+/// how late a source is: they must not grow the emit latency. The part keeps the 100 ms device
+/// latency, not the 400 ms bound.
+#[test]
+fn mic_buffers_from_before_capturing_do_not_grow_the_emit_latency() {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let out = Shared::default();
+    let err = Shared::default();
+    let cfg = RunConfig {
+        out: tmp("pre-anchor.opus"),
+        mic_default: false,
+        call: CallMode::System,
+        faults: Faults::none(),
+    };
+    let (o, e) = (out.clone(), err.clone());
+    let handle = std::thread::spawn(move || {
+        engine::run(
+            cfg,
+            Box::new(Live { tx: None }),
+            Box::new(Stdin { rx, buf: vec![] }),
+            Box::new(o),
+            Box::new(e),
+        )
+    });
+    // How far the newest mic packet on stdout trails the clock; the least of many looks, so a
+    // slow runner that delays one look cannot make the part look slower than it is.
+    std::thread::sleep(Duration::from_millis(700));
+    let mut least = u64::MAX;
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(25));
+        let bytes = out.0.lock().unwrap().clone();
+        let now = akou_capture::clock::now().cont_ns;
+        let (p, _) = protocol::decode_packets(&bytes).unwrap();
+        if let Some(last) = p.iter().rev().find(|x| x.ch == Ch::Mic) {
+            least = least.min(now.saturating_sub(last.capture_ns));
+        }
+    }
+    drop(tx);
+    assert_eq!(handle.join().unwrap(), Outcome::Exit(0));
+    assert!(
+        least < 250_000_000,
+        "mic packets trail the clock by {least} ns"
+    );
+}
+
 fn typed<'a>(lines: &'a [String], t: &str) -> Vec<&'a String> {
     let tag = format!("\"type\":\"{t}\"");
     lines.iter().filter(|l| l.contains(&tag)).collect()
@@ -536,6 +662,50 @@ fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
         p.iter()
             .filter(|x| x.ch == Ch::Call)
             .all(|c| !c.zero_filled || c.file_seconds == 0.0)
+    );
+}
+
+/// A part that ends muted on a short last slot: that tail goes to the file through
+/// `finish`, and it is muted there too.
+#[test]
+fn a_part_that_ends_muted_writes_no_mic_in_the_last_short_slot() {
+    // 1.01 s at 48 kHz: 50 full 20 ms slots and a 480-sample tail.
+    let r = Run::start(
+        "muted-tail.opus",
+        stereo(48_000, 1.01),
+        1.0,
+        false,
+        CallMode::System,
+        Faults::none(),
+    );
+    r.send("mute");
+    let (outcome, r) = r.join();
+    assert_eq!(outcome, Outcome::Exit(0));
+    let mut dec = opus::Decoder::new(48_000, opus::Channels::Stereo).unwrap();
+    let mut reader = ogg::reading::PacketReader::new(std::io::BufReader::new(
+        std::fs::File::open(&r.path).unwrap(),
+    ));
+    let mut pcm = vec![0.0f32; 5760 * 2];
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    while let Some(p) = reader.read_packet().unwrap() {
+        i += 1;
+        if i <= 2 {
+            continue;
+        }
+        let n = dec.decode_float(&p.data, &mut pcm, false).unwrap();
+        for f in 0..n {
+            left.push(pcm[2 * f]);
+            right.push(pcm[2 * f + 1]);
+        }
+    }
+    let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    // The call side is audible to the end, so the tail is really in the file.
+    assert!(peak(&right[right.len() - 1_000..]) > 0.1);
+    assert!(
+        peak(&left) < 0.05,
+        "mic peak {} in a muted file",
+        peak(&left)
     );
 }
 
