@@ -1,0 +1,3 @@
+[test]
+# The UI suite drives a headless browser; `bun run test:ui` runs it, `bun run check` does not.
+pathIgnorePatterns = ["tests/ui/**"]
