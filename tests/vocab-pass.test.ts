@@ -240,4 +240,15 @@ describe("suggestions: frequency times rarity", () => {
     expect(rarityOf("Anika", true)).toBe(0);
     expect(rarityOf("review", false)).toBe(0);
   });
+
+  test("one long pasted text is read in one pass, not once per word from the start", () => {
+    // About four request bodies' worth: rescanning the text before every word took seconds here.
+    const text = "We moved the build to Hetzner. Deploys ran on k3s. ".repeat(6000);
+    const t = performance.now();
+    const s = suggestTerms([{ text }], { known: [], rejected: [], stopwords, k: 10 });
+    expect(performance.now() - t).toBeLessThan(1000);
+    // A sentence start is still read from the punctuation before the word.
+    expect(s.map((x) => x.term)).not.toContain("Deploys");
+    expect(s.map((x) => x.term)).toContain("Hetzner");
+  });
 });

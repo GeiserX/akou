@@ -85,7 +85,7 @@ export function suggestTerms(
       const word = m[0];
       const at = m.index ?? 0;
       const between = src.text.slice(prevEnd, at);
-      const sentenceStart = prevEnd === 0 || SENTENCE_END.test(src.text.slice(0, at).trimEnd());
+      const sentenceStart = prevEnd === 0 || SENTENCE_END.test(between);
       prevEnd = at + word.length;
       const folded = termKey(word);
       const stop = o.stopwords.has(folded) || [...folded].length < 3;
