@@ -576,12 +576,14 @@ pub fn run(
     let cmds = spawn_stdin(stdin);
     let hang = cfg.faults.hang_on_stop();
 
-    // A stop before `capturing` cancels the part: nothing was opened, nothing to finish.
-    let stop_requested = |cmds: &Receiver<Input>| -> bool {
+    // A stop before `capturing` cancels the part: nothing was opened, nothing to finish. Any
+    // other line is kept for the part, so a `mute` sent during a slow open still mutes it.
+    let mut early = Vec::new();
+    let mut stop_requested = |cmds: &Receiver<Input>| -> bool {
         loop {
             match cmds.try_recv() {
                 Ok(Input::Cmd(Command::Stop)) | Ok(Input::Eof) => return !hang,
-                Ok(_) => continue,
+                Ok(i) => early.push(i),
                 Err(TryRecvError::Empty) => return false,
                 Err(TryRecvError::Disconnected) => return !hang,
             }
@@ -684,6 +686,7 @@ pub fn run(
     let mic_default = on[0] && cfg.mic_default;
     p.poll_status(fe.as_mut(), &cfg.call, mic_default);
     let mut last_status = Instant::now();
+    let mut early = early.into_iter();
 
     let reason: &'static str = 'run: loop {
         // Source events: wait briefly for one, then take whatever else is queued.
@@ -758,9 +761,9 @@ pub fn run(
             }
         }
 
-        // Commands.
+        // Commands, those that came before `capturing` first.
         loop {
-            match cmds.try_recv() {
+            match early.next().map_or_else(|| cmds.try_recv(), Ok) {
                 Ok(Input::Cmd(Command::Stop)) | Ok(Input::Eof) => {
                     if hang {
                         // A teardown that never returns: no more audio, no exit.

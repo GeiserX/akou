@@ -642,6 +642,46 @@ mod faults {
             .count()
     }
 
+    /// A command sent during a slow open is kept for the part, not dropped while the helper
+    /// checks for a stop: a `mute` before `capturing` mutes the first packet, and a line it
+    /// cannot read is still reported.
+    #[test]
+    fn commands_before_capturing_are_kept_for_the_part() {
+        let r = Run::start(
+            "early.opus",
+            stereo(48_000, 1.0),
+            1.0,
+            true,
+            CallMode::System,
+            with(&["capturing-delay=300"]),
+        );
+        r.send("mute");
+        r.send("dance");
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(
+            !typed(&r.lines(), "capturing").is_empty(),
+            "{:#?}",
+            r.lines()
+        );
+        r.send("stop");
+        let (outcome, r) = r.finish();
+        assert_eq!(outcome, Outcome::Exit(0));
+        let lines = r.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(r#""code":"unknown-command""#)),
+            "{lines:#?}"
+        );
+        let p = r.packets();
+        let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
+        assert!(mic.len() >= 10, "{}", mic.len());
+        assert!(
+            mic.iter().all(|m| m.samples.iter().all(|v| *v == 0.0)),
+            "a mic packet went out unmuted"
+        );
+    }
+
     /// [T0.2] The call side dies while output keeps running (a tap-only aggregate delivers
     /// nothing when it dies). The dead-call rule owns that symptom end to end: after 10 s of
     /// nothing the probe hears audio, the call side is rebuilt and `health {state: dead}` goes
