@@ -55,6 +55,9 @@ describe("Claude Code stream-json (recorded from claude 2.1.281)", () => {
       expect(text).not.toMatch(/"session_id":"(?!00000000-0000-4000-8000-000000000000)/);
       expect(text).not.toMatch(/"(utilization|memory_paths|messaging_socket_path)"/);
       expect(text).not.toMatch(/@[a-z0-9-]+\.[a-z]{2,}/i);
+      // Request ids, Cloudflare rays (whose suffix names the edge) and real timestamps.
+      expect(text).not.toMatch(/req_(?!fixture\b)[A-Za-z0-9]+|cf-ray: (?!0{16}-XXX\b)/);
+      expect(text).not.toMatch(/"timestamp":"(?!2026-01-01T00:00:00\.000Z")/);
     }
   });
 
@@ -223,18 +226,24 @@ describe("invocation and discovery", () => {
       try {
         const bin = join(t.dir, "bin");
         mkdirSync(bin);
-        // A fake `claude` that only answers --version.
+        // Fakes that only answer --version, for both names, so no real harness on the host's
+        // system PATH (restored by /etc/profile) is ever run.
         const fake = join(bin, "claude");
         writeFileSync(fake, '#!/bin/sh\necho "9.8.7 (Claude Code)"\n');
         chmodSync(fake, 0o755);
+        const fakeCodex = join(bin, "codex");
+        writeFileSync(fakeCodex, '#!/bin/sh\necho "codex-cli 0.200.0"\n');
+        chmodSync(fakeCodex, 0o755);
         // The login shell's profile is the only place that puts it on PATH.
         writeFileSync(join(t.dir, ".profile"), `PATH="${bin}:$PATH"; export PATH\n`);
         const env = { HOME: t.dir, SHELL: "/bin/sh", PATH: "/nonexistent" };
         const d = await discoverHarnesses(env, process.platform);
         expect(d.claude).toEqual({ kind: "claude", path: fake, version: "9.8.7" });
+        expect(d.codex).toEqual({ kind: "codex", path: fakeCodex, version: "0.200.0" });
         // Positive control: with no login shell to ask, a minimal PATH finds nothing.
         const bare = await discoverHarnesses({ HOME: t.dir, PATH: "/nonexistent" });
         expect(bare.claude).toBeNull();
+        expect(bare.codex).toBeNull();
       } finally {
         t.cleanup();
       }
