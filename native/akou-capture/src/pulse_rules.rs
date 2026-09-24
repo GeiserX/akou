@@ -95,6 +95,36 @@ impl Framer {
     }
 }
 
+/// Audio a stream delivers at its first open before its buffers are used: enough delivery
+/// periods for the lowest arrival to have come, whatever the server's quantum (1024 frames
+/// against our 20 ms fragments repeats every 320 ms). It comes before `capturing`.
+pub const SETTLE_S: f64 = 0.4;
+
+/// The first-open hold-back. The aligner places a source by its first buffer, so at the first
+/// open (before `capturing`) buffers are held back until the arrival stamps have settled, or the
+/// whole stream would sit up to a delivery period late. The hold-back ends when the stamps have
+/// settled, when a gap restarted the clock (the first words after a silence are never held
+/// back), or when `open` has stopped waiting for the settle (`released`): from then on
+/// `capturing` is said, and every buffer belongs to the part.
+pub struct Settle {
+    holding: bool,
+}
+
+impl Settle {
+    /// `settle` is false for a rebuild, which forwards at once.
+    pub fn new(settle: bool) -> Self {
+        Settle { holding: settle }
+    }
+
+    /// Whether this buffer is forwarded.
+    pub fn forward(&mut self, seen_s: f64, restarts: u64, released: bool) -> bool {
+        if self.holding && (released || seen_s >= SETTLE_S || restarts > 0) {
+            self.holding = false;
+        }
+        !self.holding
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -193,5 +223,35 @@ mod tests {
             i = end;
         }
         assert_eq!(out, bytes);
+    }
+
+    /// A source that sends nothing during the settle wait (a null sink with nothing playing, a
+    /// Bluetooth headset still switching profile): `open` gives up waiting and says `capturing`,
+    /// and the first buffer after that is forwarded, not the first 0.4 s of it dropped.
+    #[test]
+    fn a_source_silent_through_the_settle_wait_forwards_its_first_buffer_after_capturing() {
+        let mut s = Settle::new(true);
+        // Before `capturing`, a stream that has only started is held back.
+        assert!(!s.forward(0.02, 0, false));
+        // Released: the next buffer, 20 ms into the stream, is forwarded.
+        assert!(s.forward(0.04, 0, true));
+        // Once forwarding, it stays forwarding.
+        assert!(s.forward(0.06, 0, false));
+        // Positive control: without the release the first 0.4 s after `capturing` are dropped.
+        let mut held = Settle::new(true);
+        let dropped = (1..=40)
+            .filter(|k| !held.forward(*k as f64 * 0.02, 0, false))
+            .count();
+        assert_eq!(dropped, 19, "every buffer until 0.4 s of audio was seen");
+    }
+
+    #[test]
+    fn the_hold_back_ends_on_settled_stamps_or_a_gap_and_a_rebuild_has_none() {
+        let mut s = Settle::new(true);
+        assert!(!s.forward(0.38, 0, false));
+        assert!(s.forward(0.40, 0, false));
+        let mut gap = Settle::new(true);
+        assert!(gap.forward(0.02, 1, false));
+        assert!(Settle::new(false).forward(0.0, 0, false));
     }
 }

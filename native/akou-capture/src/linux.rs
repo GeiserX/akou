@@ -41,7 +41,7 @@ use crate::convert::{Format, SampleKind, to_mono};
 use crate::health::dead_call::PROBE_S;
 use crate::health::device_watch::DeviceId;
 use crate::protocol::{CallInfo, Ch, MicInfo};
-use crate::pulse_rules::{Framer, SourceView, fragment_bytes, pick_mic};
+use crate::pulse_rules::{Framer, SETTLE_S, Settle, SourceView, fragment_bytes, pick_mic};
 use crate::source::{
     CallMode, Chunk, ClockKind, DeviceConfig, Endpoint, Endpoints, Event, Frontend, OpenError,
     Opened, Status,
@@ -52,10 +52,6 @@ const OPEN_BUDGET: Duration = Duration::from_secs(10);
 const REBUILD_BUDGET: Duration = Duration::from_secs(3);
 const STATUS_BUDGET: Duration = Duration::from_millis(500);
 const CLOSE_BUDGET: Duration = Duration::from_millis(600);
-/// Audio a stream delivers at its first open before its buffers are used: enough delivery
-/// periods for the lowest arrival to have come, whatever the server's quantum (1024 frames
-/// against our 20 ms fragments repeats every 320 ms). It comes before `capturing`.
-const SETTLE_S: f64 = 0.4;
 /// The longest `open` waits for that: a stream may deliver nothing (a suspended source).
 const SETTLE_BUDGET: Duration = Duration::from_secs(1);
 
@@ -107,7 +103,8 @@ struct Live {
     reported: bool,
 }
 
-/// Opens a record stream on `src` that sends `ch` chunks to `events`.
+/// Opens a record stream on `src` that sends `ch` chunks to `events`. `settle` is the flag
+/// `open` sets when it stops waiting, at a channel's first open; a rebuild has none.
 fn record(
     client: &Client,
     src: &SourceInfo,
@@ -115,7 +112,7 @@ fn record(
     events: &SyncSender<Event>,
     received: &Arc<AtomicU64>,
     dropped: &Arc<AtomicU64>,
-    settle: bool,
+    settle: Option<&Arc<AtomicBool>>,
 ) -> Result<(Live, u32), ClientError> {
     let rate = src.sample_spec.sample_rate;
     let channels = src.sample_spec.channels.max(1);
@@ -153,9 +150,14 @@ fn record(
     };
     let mut framer = Framer::new(channels as usize * 4);
     let mut arrivals = clock::ArrivalClock::new(rate);
-    let mut forwarding = !settle;
+    let mut hold = Settle::new(settle.is_some());
     let mut whole = Vec::new();
-    let (tx, frames, drop_count) = (events.clone(), received.clone(), dropped.clone());
+    let (tx, frames, drop_count, released) = (
+        events.clone(),
+        received.clone(),
+        dropped.clone(),
+        settle.cloned(),
+    );
     // Runs on the client's reader thread: convert, stamp, hand over, never block.
     let sink = move |data: &[u8]| {
         whole.clear();
@@ -168,16 +170,14 @@ fn record(
         let now = clock::now().awake_ns;
         let awake_ns = arrivals.stamp(now, samples.len());
         frames.fetch_add(samples.len() as u64, Ordering::Relaxed);
-        // The aligner places a source by its first buffer: at the first open (before
-        // `capturing`, so nothing of the part is lost) hold back until the stamps have settled,
-        // or the whole stream would sit up to a delivery period late. A source that went quiet
-        // (a PulseAudio null sink with nothing playing sends nothing) starts forwarding at once:
-        // the first words after a silence are never held back.
-        if !forwarding {
-            if arrivals.seen_s() < SETTLE_S && arrivals.restarts() == 0 {
-                return;
-            }
-            forwarding = true;
+        // The first-open hold-back (`pulse_rules::Settle`): it ends with the settle wait in
+        // `open`, so nothing after `capturing` is held back.
+        if !hold.forward(
+            arrivals.seen_s(),
+            arrivals.restarts(),
+            released.as_ref().is_some_and(|r| r.load(Ordering::Acquire)),
+        ) {
+            return;
         }
         let chunk = Chunk {
             ch,
@@ -230,6 +230,8 @@ struct Worker {
     /// A stream has been opened on this channel before: a rebuild forwards at once.
     opened: [bool; 2],
     dropped: Arc<AtomicU64>,
+    /// Set when `open` stops waiting for the first streams to settle.
+    released: Arc<AtomicBool>,
 }
 
 impl Worker {
@@ -320,7 +322,7 @@ impl Worker {
             &self.events,
             &self.received[ch.index()],
             &self.dropped,
-            !self.opened[ch.index()],
+            (!self.opened[ch.index()]).then_some(&self.released),
         )
         .map_err(|e| self.failed("opening the stream", e))?;
         self.live[ch.index()] = Some(live);
@@ -428,6 +430,7 @@ impl Handle {
         events: SyncSender<Event>,
         received: [Arc<AtomicU64>; 2],
         dropped: Arc<AtomicU64>,
+        released: Arc<AtomicBool>,
     ) -> Handle {
         let (tx, rx) = mpsc::channel::<Msg>();
         let handle = std::thread::spawn(move || {
@@ -439,6 +442,7 @@ impl Handle {
                 received,
                 opened: [false; 2],
                 dropped,
+                released,
             };
             for msg in rx {
                 match msg {
@@ -628,6 +632,8 @@ pub struct LinuxFrontend {
     probing: Arc<AtomicBool>,
     received: [Arc<AtomicU64>; 2],
     dropped: Arc<AtomicU64>,
+    /// The first-open hold-back is over (see `pulse_rules::Settle`).
+    released: Arc<AtomicBool>,
     awake: Option<Inhibitor>,
 }
 
@@ -639,6 +645,7 @@ pub fn frontend(cfg: &DeviceConfig) -> Result<Box<dyn Frontend>, OpenError> {
         probing: Arc::new(AtomicBool::new(false)),
         received: [Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0))],
         dropped: Arc::new(AtomicU64::new(0)),
+        released: Arc::new(AtomicBool::new(false)),
         awake: None,
     }))
 }
@@ -659,6 +666,7 @@ impl Frontend for LinuxFrontend {
             tx.clone(),
             self.received.clone(),
             self.dropped.clone(),
+            self.released.clone(),
         );
         let mut opened = Opened::default();
         // The mic first: it never depends on the call side (TRAPS T0.16).
@@ -694,6 +702,9 @@ impl Frontend for LinuxFrontend {
         {
             std::thread::sleep(Duration::from_millis(10));
         }
+        // Settled or not, `capturing` comes next: a stream that has not delivered its first
+        // 0.4 s yet forwards from its next buffer, or the part would lose its start.
+        self.released.store(true, Ordering::Release);
         match Inhibitor::hold() {
             Ok(i) => self.awake = Some(i),
             Err(e) => {
