@@ -19,6 +19,9 @@ const exportCmd: Command = {
     const to = str(p, "to");
     const r = await api(ctx, "POST", `/calls/${enc(call)}/export`, {
       body: { to: to === undefined ? undefined : resolve(to) },
+      // Queued behind the call's hand-off hooks, so it may wait as long as `akou hooks run`.
+      timeoutMs: 60 * 60_000,
+      signal: ctx.io.signal,
     });
     return finish(ctx, r, (b) => {
       const what = !b.written

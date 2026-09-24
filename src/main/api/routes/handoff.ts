@@ -22,6 +22,8 @@ export function handoffRoutes(r: Router<ApiApp>): void {
       throw new HttpError(400, "bad_field", "`to` must be an absolute folder");
     }
     const id = callId(c, { allowLast: true });
+    // The export waits behind the call's earlier hand-off work, hooks included.
+    c.timeout?.(0);
     const o = await c.app.exportCall(id, { to: b.to });
     if (!o.ok) return outcome(o);
     const { draft: _draft, ...rest } = o;
