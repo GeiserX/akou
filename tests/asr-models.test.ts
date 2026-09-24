@@ -111,6 +111,22 @@ describe("the registry", () => {
     ]);
   });
 
+  test("the diarize CI job smokes the same Nemotron file the registry pins", () => {
+    const pin = (yml: string) => ({
+      url: /^\s*MODEL_URL:\s*(\S+)\s*$/m.exec(yml)?.[1],
+      sha256: /^\s*MODEL_SHA256:\s*(\S+)\s*$/m.exec(yml)?.[1],
+    });
+    const yml = readFileSync(
+      join(import.meta.dir, "..", ".github", "workflows", "diarize.yml"),
+      "utf8",
+    );
+    const f = MODELS.find((x) => x.id === NEMOTRON)?.files[0];
+    expect(pin(yml)).toEqual({ url: f?.url, sha256: f?.sha256 });
+    // Positive control: a pin bumped on one side only is caught.
+    const bumped = yml.replace(f?.sha256 as string, "0".repeat(64));
+    expect(pin(bumped)).not.toEqual({ url: f?.url, sha256: f?.sha256 });
+  });
+
   test("a machine downloads only what its asr.diarizer needs", () => {
     const ids = (k: "nemotron" | "embeddings") => modelsFor(k).map((m) => m.id);
     // TitaNet stays with Nemotron: it carries names across a stream that starts over.

@@ -4,10 +4,10 @@
 use std::collections::BTreeSet;
 use std::process::Command;
 
-/// The targets the helper ships for.
-const TARGETS: [&str; 6] = [
+/// The targets the helper builds for. No Intel Mac: ort-sys has no prebuilt ONNX Runtime for
+/// `x86_64-apple-darwin`, so the helper does not build there without its own `ORT_LIB_LOCATION`.
+const TARGETS: [&str; 5] = [
     "aarch64-apple-darwin",
-    "x86_64-apple-darwin",
     "x86_64-unknown-linux-gnu",
     "aarch64-unknown-linux-gnu",
     "x86_64-pc-windows-msvc",

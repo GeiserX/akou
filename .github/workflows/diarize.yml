@@ -1,9 +1,9 @@
 name: diarize
 
 # The diarization helper (native/akou-diarize) on every OS: format, lint, unit tests and the NOTICE
-# check, the release build, then the real Nemotron model through it for 60 s in both modes. That
-# last step is the one that says the statically linked ONNX Runtime loads and runs on Windows,
-# which no other job covers. The model is fetched here from its pinned URL, checked against its
+# check, the release build, then the real Nemotron model through it in both modes, over a
+# generated two-voice conversation it must tell apart. That last step is the one that says the
+# statically linked ONNX Runtime loads and infers on Windows, which no other job covers. The model is fetched here from its pinned URL, checked against its
 # pinned SHA-256 and cached by it; akou's own downloader stays off in CI.
 
 on:
@@ -15,6 +15,7 @@ on:
       - "src/main/asr/nemotron.ts"
       - "src/main/asr/models.ts"
       - "scripts/diarize-smoke.ts"
+      - "tests/fixtures/two-voices.*"
       - ".github/workflows/diarize.yml"
       - "NOTICE"
   workflow_dispatch:
@@ -80,7 +81,7 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
-      - name: 60 s through the real model, final and live
+      - name: two voices through the real model, final and live
         run: |
           bun scripts/diarize-smoke.ts "native/akou-diarize/target/release/akou-diarize$EXE" models/nemotron3_diar_v3.onnx | tee smoke.log
           { echo; sed 's/^/    /' smoke.log; } >> "$GITHUB_STEP_SUMMARY"
