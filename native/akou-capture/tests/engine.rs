@@ -7,12 +7,16 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+use akou_capture::clock::Now;
 use akou_capture::engine::{self, Outcome, RunConfig};
 use akou_capture::file_source::FileSource;
 use akou_capture::opus_writer;
 use akou_capture::protocol::{self, Ch, Packet};
+use akou_capture::protocol::{CallInfo, MicInfo};
 use akou_capture::simulate::Faults;
-use akou_capture::source::CallMode;
+use akou_capture::source::{
+    CallMode, Chunk, ClockKind, Event, Frontend, OpenError, Opened, Status,
+};
 use akou_capture::wav::{self, Wav};
 
 #[derive(Clone, Default)]
@@ -142,6 +146,156 @@ impl Run {
         let h = std::mem::replace(&mut self.handle, std::thread::spawn(|| Outcome::Exit(-1)));
         (h.join().unwrap(), self)
     }
+}
+
+/// A driven front end whose sources the test scripts: `delivers(ch, t)` says whether a source
+/// sends its 10 ms buffer at `t` seconds, and mic buffers are stamped `mic_lag_ns` before the
+/// host clock that carries them (a high-latency input). Output is running, the mic is running.
+struct Scripted {
+    secs: f64,
+    delivers: fn(Ch, f64) -> bool,
+    mic_lag_ns: u64,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Frontend for Scripted {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Driven
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: Some(MicInfo {
+                id: "scripted".into(),
+                name: "scripted".into(),
+                rate: 16_000,
+            }),
+            call: Some(CallInfo {
+                mode: "system".into(),
+                rate: 16_000,
+            }),
+            exclude: vec![],
+        })
+    }
+    fn start(&mut self, anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        let (secs, delivers, lag) = (self.secs, self.delivers, self.mic_lag_ns);
+        std::thread::spawn(move || {
+            let steps = (secs * 100.0) as u64;
+            for i in 0..steps {
+                let t = i as f64 / 100.0;
+                let at = anchor.awake_ns + i * 10_000_000;
+                for ch in Ch::BOTH {
+                    if !delivers(ch, t) {
+                        continue;
+                    }
+                    let stamp = if ch == Ch::Mic {
+                        at.saturating_sub(lag)
+                    } else {
+                        at
+                    };
+                    let samples = tone(440.0, 16_000, 0.01, 0.3);
+                    let c = Chunk {
+                        ch,
+                        awake_ns: stamp,
+                        rate: 16_000,
+                        samples,
+                        heard: true,
+                    };
+                    if tx.send(Event::Chunk(c)).is_err() {
+                        return;
+                    }
+                }
+                let end = at + 10_000_000;
+                let tick = Now {
+                    awake_ns: end,
+                    cont_ns: anchor.cont_ns + (end - anchor.awake_ns),
+                };
+                if tx.send(Event::Tick(tick)).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.try_send(Event::Probe { heard: true });
+        }
+    }
+    fn status(&mut self) -> Status {
+        Status {
+            output_running: Some(true),
+            mic_running: true,
+            default_input: None,
+            default_output: None,
+        }
+    }
+    fn close(self: Box<Self>) {}
+}
+
+/// Runs a scripted front end to its end; returns stderr lines and packets.
+fn run_scripted(name: &str, fe: Scripted) -> (Vec<String>, Vec<Packet>) {
+    let path = tmp(name);
+    let (_tx, rx) = mpsc::channel::<Vec<u8>>();
+    let out = Shared::default();
+    let err = Shared::default();
+    let cfg = RunConfig {
+        out: path,
+        mic_default: false,
+        call: CallMode::System,
+        faults: Faults::none(),
+    };
+    let outcome = engine::run(
+        cfg,
+        Box::new(fe),
+        Box::new(Stdin { rx, buf: vec![] }),
+        Box::new(out.clone()),
+        Box::new(err.clone()),
+    );
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines: Vec<String> = String::from_utf8(err.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    let bytes = out.0.lock().unwrap().clone();
+    let (packets, _) = protocol::decode_packets(&bytes).unwrap();
+    (lines, packets)
+}
+
+/// The split of the two rules, from the mic's side: the stall rule still owns a source that
+/// clocks on its own. A mic that stops delivering while its device runs is `stalled` and
+/// rebuilt every 3 s (positive control for the dead-call tests, where the call side never is).
+#[test]
+fn a_stalled_mic_is_rebuilt_every_3_s_by_the_stall_rule() {
+    let (lines, _) = run_scripted(
+        "mic-stall.opus",
+        Scripted {
+            secs: 12.0,
+            delivers: |ch, t| ch == Ch::Call || t < 1.0,
+            mic_lag_ns: 0,
+            tx: None,
+        },
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"health","ch":"mic","state":"stalled""#)),
+        "{lines:#?}"
+    );
+    let mic_rebuilds = lines
+        .iter()
+        .filter(|l| l.contains(r#""type":"device","ch":"mic","event":"rebuilt""#))
+        .count();
+    // Last audio at 0.99 s: rebuilt at 4, 7 and 10 s.
+    assert_eq!(mic_rebuilds, 3, "{lines:#?}");
 }
 
 fn typed<'a>(lines: &'a [String], t: &str) -> Vec<&'a String> {
@@ -366,76 +520,77 @@ mod faults {
         f
     }
 
-    /// [T0.2] The call side dies while output keeps running: the stall rule rebuilds it after
-    /// 3 s, and after 10 s of nothing the probe hears audio, the call side is rebuilt again and
-    /// `health {state: dead}` goes out.
-    #[test]
-    fn t0_2_a_dead_call_side_is_probed_rebuilt_and_reported() {
-        let f = with(&["call-dead-at=1"]);
-        let r = Run::start(
-            "dead.opus",
-            stereo(48_000, 2.0),
-            20.0,
-            true,
-            CallMode::System,
-            f,
-        );
-        std::thread::sleep(Duration::from_millis(1500));
-        r.send("stop");
-        let (_, r) = r.finish();
-        let lines = r.lines();
-        let health = typed(&lines, "health");
-        let stalled = health
+    /// The call side's health lines, as `(state, rebuilds)`.
+    fn call_health(lines: &[String]) -> Vec<(String, u32)> {
+        typed(lines, "health")
             .iter()
-            .position(|l| l.contains(r#""state":"stalled""#))
-            .expect("stalled");
-        let dead = health
-            .iter()
-            .position(|l| l.contains(r#""state":"dead""#))
-            .expect("dead");
-        assert!(stalled < dead);
-        assert!(
-            health[dead].contains(r#""ch":"call""#) && health[dead].contains(r#""rebuilds":1"#)
-        );
-        assert!(num_field(health[dead], "silent_for") >= 10.0);
-        assert!(
-            lines
-                .iter()
-                .any(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#))
-        );
+            .filter(|l| l.contains(r#""ch":"call""#))
+            .map(|l| {
+                let at = l.find(r#""state":""#).unwrap() + 9;
+                let state = l[at..at + l[at..].find('"').unwrap()].to_string();
+                (state, num_field(l, "rebuilds") as u32)
+            })
+            .collect()
     }
 
-    /// A dead call side that a rebuild brings back is fixed by the stall rule within seconds and
-    /// never reaches the dead-call verdict.
+    fn call_rebuilds(lines: &[String]) -> usize {
+        lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#))
+            .count()
+    }
+
+    /// [T0.2] The call side dies while output keeps running (a tap-only aggregate delivers
+    /// nothing when it dies). The dead-call rule owns that symptom end to end: after 10 s of
+    /// nothing the probe hears audio, the call side is rebuilt and `health {state: dead}` goes
+    /// out, and the next rebuild waits for the backoff. The stall rule never rebuilds the call
+    /// side on its own, so there is no rebuild every 3 s and no `stalled` line.
     #[test]
-    fn a_call_side_that_a_rebuild_heals_recovers_without_a_dead_verdict() {
-        let f = with(&["call-dead-at=1", "rebuild-heals"]);
+    fn t0_2_a_dead_call_side_is_probed_rebuilt_and_reported() {
+        let r = Run::start(
+            "dead.opus",
+            stereo(16_000, 30.0),
+            20.0,
+            false,
+            CallMode::System,
+            with(&["call-dead-at=1"]),
+        );
+        let (_, r) = r.join();
+        let lines = r.lines();
+        let health = call_health(&lines);
+        assert!(health.iter().all(|(s, _)| s != "stalled"), "{health:?}");
+        // Dead at 11 s (10 s after the tap died), again at 21 s (10 s backoff); the 30 s backoff
+        // puts the third past the end of the file.
+        assert_eq!(
+            health,
+            vec![("dead".to_string(), 1), ("dead".to_string(), 2)],
+            "{health:?}"
+        );
+        assert_eq!(call_rebuilds(&lines), 2, "{lines:#?}");
+        let dead = typed(&lines, "health")
+            .into_iter()
+            .find(|l| l.contains(r#""state":"dead""#))
+            .unwrap();
+        assert!(num_field(dead, "silent_for") >= 10.0);
+    }
+
+    /// A dead call side that a rebuild brings back: the dead-call rule's rebuild heals it, and
+    /// audio returning reports `ok`.
+    #[test]
+    fn a_call_side_that_a_rebuild_heals_reports_dead_then_ok() {
         let r = Run::start(
             "heal.opus",
-            stereo(48_000, 2.0),
+            stereo(16_000, 20.0),
             20.0,
-            true,
+            false,
             CallMode::System,
-            f,
+            with(&["call-dead-at=1", "rebuild-heals"]),
         );
-        std::thread::sleep(Duration::from_millis(1000));
-        r.send("stop");
-        let (_, r) = r.finish();
+        let (_, r) = r.join();
         let lines = r.lines();
-        let health: Vec<&String> = typed(&lines, "health");
-        let states: Vec<&str> = health
-            .iter()
-            .map(|l| {
-                if l.contains(r#""state":"stalled""#) {
-                    "stalled"
-                } else if l.contains(r#""state":"ok""#) {
-                    "ok"
-                } else {
-                    "other"
-                }
-            })
-            .collect();
-        assert_eq!(states, vec!["stalled", "ok"], "{health:?}");
+        let states: Vec<String> = call_health(&lines).into_iter().map(|h| h.0).collect();
+        assert_eq!(states, vec!["dead", "ok"], "{lines:#?}");
+        assert_eq!(call_rebuilds(&lines), 1);
     }
 
     #[test]

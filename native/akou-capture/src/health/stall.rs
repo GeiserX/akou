@@ -1,8 +1,10 @@
 //! Stall and silent-from-start (DESIGN 2.5).
 //!
 //! - **Stall.** A source that has delivered audio and then delivers nothing for 3 s *while the
-//!   OS reports the device present and running* is rebuilt, retrying every 3 s. A quiet tap during
-//!   silence is not a stall: with no output running, a tap delivers nothing by design.
+//!   OS reports the device present and running* is rebuilt, retrying every 3 s. The engine runs it
+//!   on the mic only. The call side's "nothing while output runs" is the dead-call rule's, with its
+//!   probe, backoff and cap: a dead tap-only aggregate delivers nothing, and so does a quiet tapped
+//!   app while other apps play, so a 3 s rebuild there would pre-empt the probe and never stop.
 //! - **Silent from start.** If neither stream has delivered anything 2 s after `capturing`, the
 //!   helper reports `no-buffers` once for each open channel; the app shows a banner and asks for
 //!   one rebuild of each.

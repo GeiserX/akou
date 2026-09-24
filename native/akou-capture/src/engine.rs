@@ -197,7 +197,8 @@ struct Part {
     level_n: usize,
     dead: Option<DeadCallMonitor>,
     suspect: Option<PermissionSuspect>,
-    stall: [StallMonitor; 2],
+    /// The mic's stall rule; the call side has the dead-call rule instead.
+    stall: StallMonitor,
     no_buffers: NoBuffers,
     watch_in: DeviceWatch,
     watch_out: DeviceWatch,
@@ -400,26 +401,26 @@ impl Part {
                 ));
             }
         }
-        let running = [
-            self.status.mic_running,
-            self.status.output_running.unwrap_or(false),
-        ];
-        for ch in Ch::BOTH.into_iter().filter(|c| on[c.index()]) {
-            let i = ch.index();
-            for a in self.stall[i].tick(st, slot.ch[i].delivered, running[i], false) {
+        // The stall rule owns the mic only. The call side's "nothing while output runs" is the
+        // dead-call rule's, end to end (probe, backoff, cap): a tap-only aggregate delivers
+        // nothing when it dies, and a quiet tapped app delivers nothing while other apps play,
+        // so a 3 s rebuild there would pre-empt the probe and never stop (DESIGN 2.5).
+        if self.on[0] {
+            let running = self.status.mic_running;
+            for a in self.stall.tick(st, slot.ch[0].delivered, running, false) {
                 match a {
                     StallAction::Stalled { silent_for } => self.say.line(&protocol::health(
-                        ch,
+                        Ch::Mic,
                         "stalled",
                         silent_for,
-                        self.stall[i].rebuilds,
+                        self.stall.rebuilds,
                         "the source stopped delivering while its device is running; rebuilding",
                     )),
                     StallAction::Rebuild { .. } => {
-                        self.rebuild(fe, ch, "stalled");
+                        self.rebuild(fe, Ch::Mic, "stalled");
                     }
                     StallAction::Recovered { rebuilds } => self.say.line(&protocol::health(
-                        ch,
+                        Ch::Mic,
                         "ok",
                         0.0,
                         rebuilds,
@@ -436,15 +437,18 @@ impl Part {
                 paused: false,
             };
             if let Some(d) = self.dead.as_mut() {
-                let mut actions = d.tick(tick);
-                // A probe whose verdict never arrived is taken as "heard nothing".
+                let mut actions = vec![];
+                // A probe whose verdict never arrived is taken as "heard nothing". Checked before
+                // the tick, so a probe the tick starts is never timed against an older one.
                 if d.probing()
                     && self
                         .probe_since
                         .is_some_and(|s| st - s > dead_call::PROBE_S + 2.0)
                 {
+                    self.probe_since = None;
                     actions.extend(d.probe_result(st, false));
                 }
+                actions.extend(d.tick(tick));
                 self.dead_actions(fe, actions);
             }
             if let Some(s) = self.suspect.as_mut()
@@ -470,9 +474,7 @@ impl Part {
                 paused: true,
             });
         }
-        for s in &mut self.stall {
-            s.tick(t, false, false, true);
-        }
+        self.stall.tick(t, false, false, true);
     }
 
     fn poll_status(&mut self, fe: &mut dyn Frontend, call: &CallMode, mic_default: bool) {
@@ -608,7 +610,7 @@ pub fn run(
         level_n: 0,
         dead: on[1].then(|| DeadCallMonitor::new(0.0)),
         suspect: (on[1] && fe.permission_suspect()).then(PermissionSuspect::new),
-        stall: [StallMonitor::new(), StallMonitor::new()],
+        stall: StallMonitor::new(),
         no_buffers: NoBuffers::default(),
         watch_in: DeviceWatch::new(),
         watch_out: DeviceWatch::new(),
@@ -651,6 +653,7 @@ pub fn run(
                     let t = p.t_of(p.now.awake_ns);
                     let by_dead = p.dead.as_ref().is_some_and(|d| d.probing());
                     if by_dead {
+                        p.probe_since = None;
                         let actions = p
                             .dead
                             .as_mut()
