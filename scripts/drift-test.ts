@@ -17,9 +17,16 @@
  * - **Memory.** The sampler's RSS readings (`epoch,app_rss_kb,helper_rss_kb,…`), over the run
  *   and inside the muted window.
  * - **Length.** The file's seconds against the wall time the part lasted.
+ * - **Quiet windows.** When the source ran without a mic side (`--mic-device none`), nothing played
+ *   before the call started or while it was paused, so the tap itself was quiet. The call
+ *   channel's level in those windows shows it was, which is what makes the first-words and
+ *   muted-memory checks mean something.
  *
  *   bun scripts/drift-test.ts --folder <call folder> --signal <signal.jsonl> [--memory memory.csv]
- *     [--clip first-words.f32] [--out result.json]
+ *     [--clip first-words.f32] [--file other-audio] [--out result.json]
+ *
+ * `--file` analyses another audio file against the same schedule and log: the positive controls
+ * (`scripts/gates/g4-controls.ts`) feed it a copy of the recording with a known offset or drift.
  *
  * Needs `ffmpeg` on PATH to decode the Opus file. Channels are decoded one at a time as 16-bit
  * 48 kHz mono, so an hour costs about 350 MB of memory per channel.
@@ -48,6 +55,8 @@ interface SignalStart {
   mute_at_s: number;
   mute_for_s: number;
   seconds: number;
+  /** False when the source played nothing on the mic side. Absent in older schedules: true. */
+  mic?: boolean;
 }
 
 interface Chirp {
@@ -226,6 +235,19 @@ function rmsDb(x: Int16Array, a: number, b: number): number {
   return n > 0 && s > 0 ? 10 * Math.log10(s / n) : -Infinity;
 }
 
+function peakDb(x: Int16Array, a: number, b: number): number {
+  let m = 0;
+  for (
+    let i = Math.max(0, Math.round(a * RATE));
+    i < Math.min(x.length, Math.round(b * RATE));
+    i++
+  ) {
+    const v = Math.abs(x[i] ?? 0);
+    if (v > m) m = v;
+  }
+  return m > 0 ? 20 * Math.log10(m / 32768) : -Infinity;
+}
+
 /** Least-squares line through (x, y); slope per unit of x. */
 function fit(xs: number[], ys: number[]): { slope: number; intercept: number } {
   const n = xs.length;
@@ -278,7 +300,7 @@ async function main(): Promise<void> {
   const part = parts[0];
   if (!part) throw new Error("no part.started in the log");
   const partEnd = ended.find((e) => e.part === part.part);
-  const file = join(folder, part.file as string);
+  const file = a.file ?? join(folder, part.file as string);
   // The host time of file position 0 (DESIGN 2.4 `capturing.capture_ns`), in ns.
   const captureNs = Math.round((part.monoStart as number) * 1e6);
   const expectAt = (hostNs: number) => (hostNs - captureNs) / 1e9;
@@ -305,6 +327,37 @@ async function main(): Promise<void> {
     );
   }
 
+  const micPlayed = start.mic !== false;
+  // When the call side played, in file seconds: from each clip (its first sample) to the next
+  // pause or the end of the source.
+  const callSpans: Array<[number, number]> = [];
+  {
+    const marks = sig
+      .filter((e) => e.ev === "clip" || e.ev === "call.pause" || e.ev === "call.end")
+      .map((e) => ({ ev: e.ev as string, at: expectAt(e.host_ns as number) }))
+      .sort((p, q) => p.at - q.at);
+    let from: number | null = null;
+    for (const m of marks) {
+      // 20 ms after the clip's host time, past the output latency (about 8 ms here), so the scan
+      // starts where the first sample can already be in the recording.
+      if (m.ev === "clip") from = m.at + 0.02;
+      else if (from !== null) {
+        callSpans.push([from, m.at]);
+        from = null;
+      }
+    }
+  }
+  // When nothing played at all (no mic side): before the first clip and inside each pause, with
+  // half a second of margin at both ends.
+  const quiet: Array<[number, number]> = [];
+  if (!micPlayed) {
+    let prev = 0;
+    for (const [p, q] of callSpans) {
+      if (p - prev > 1.5) quiet.push([prev + 0.5, p - 0.5]);
+      prev = q;
+    }
+  }
+
   // Latency of each chirp against its host time, per side and per channel it was found in.
   const latency: Record<string, Array<{ k: number; t: number; ms: number; score: number }>> = {};
   const levels: Record<string, number> = {};
@@ -314,6 +367,7 @@ async function main(): Promise<void> {
   ] as const) {
     const x = await decode(file, chan);
     levels[`${name}_rms_dbfs`] = round(rmsDb(x, 0, x.length / RATE), 1);
+    levels[`${name}_peak_dbfs`] = round(peakDb(x, 0, x.length / RATE), 1);
     result[`${name}Seconds`] = round(x.length / RATE, 3);
     for (const side of ["mic", "call"] as const) {
       const key = `${side}@${name}`;
@@ -325,16 +379,38 @@ async function main(): Promise<void> {
         if (f) latency[key]?.push({ k: c.k, t: e, ms: (f.at - e) * 1000, score: f.score });
       }
     }
-    // Gaps: from the first second to the end of the source (the mic pilot plays throughout and
-    // the global tap hears it too, so both channels should never be near zero in that span).
+    // Gaps. With a mic side, from the first second to the end of the source: the mic pilot plays
+    // throughout and the global tap hears it too, so neither channel should be near zero in that
+    // span. Without one, only the call channel while the call side played (from each clip start,
+    // its first sample, to the pause or the end), and the mic channel is not scanned.
     const endS = sigEnd ? Math.min(expectAt(sigEnd), x.length / RATE) : x.length / RATE;
-    const g = gaps(x, [[1, endS - 0.5]], 5);
+    // The mic side's first buffer, when the source started after the recording did.
+    const micFirst = sig.find((e) => e.ev === "first_callback" && e.ch === "mic");
+    const scanFrom = Math.max(1, micFirst ? expectAt(micFirst.host_ns as number) + 0.1 : 1);
+    const spans: Array<[number, number]> = micPlayed
+      ? [[scanFrom, endS - 0.5]]
+      : name === "right"
+        ? callSpans.map(([p, q]): [number, number] => [p, Math.min(q, endS) - 0.5])
+        : [];
+    const g = gaps(x, spans, 5);
     result[`${name}Gaps`] = {
+      scannedSeconds: round(
+        spans.reduce((t, [p, q]) => t + Math.max(0, q - p), 0),
+        1,
+      ),
       over5ms: g.length,
       over20ms: g.filter((q) => q.ms > 20).length,
       longestMs: round(g[0]?.ms ?? 0, 1),
       worst: g.slice(0, 10).map((q) => ({ at: round(q.at, 3), ms: round(q.ms, 1) })),
     };
+    if (name === "right" && quiet.length > 0) {
+      result.quietWindows = quiet.map(([p, q]) => ({
+        from: round(p, 1),
+        to: round(q, 1),
+        callRmsDbfs: round(rmsDb(x, p, q), 1),
+        callPeakDbfs: round(peakDb(x, p, q), 1),
+      }));
+    }
     // First words after each silence: the clip against the recording, 20 ms steps from its start.
     if (name === "right" && a.clip) {
       const raw = readFileSync(a.clip);
@@ -406,6 +482,9 @@ async function main(): Promise<void> {
       latencyMs: stats(rows.map((r) => round(r.ms, 3))),
       slopeMsPerHour: round(f.slope * 3600, 2),
       minScore: round(Math.min(...rows.map((r) => r.score)), 3),
+      // The first and last few, so a step at a start or a rebuild is visible, not only the fit.
+      firstRows: rows.slice(0, 4).map((r) => ({ k: r.k, t: round(r.t, 2), ms: round(r.ms, 3) })),
+      lastRows: rows.slice(-2).map((r) => ({ k: r.k, t: round(r.t, 2), ms: round(r.ms, 3) })),
     };
   }
   result.chirps = summary;

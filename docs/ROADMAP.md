@@ -19,11 +19,11 @@ Each gate ends in a measured yes or no. Nothing else starts until every gate has
 
 Results so far, on the reference Mac mini (M4, macOS 26.6, SIP off), are in [gates/M0-results.md](gates/M0-results.md):
 
-- G3: partial. The app-spawned helper records the tap on the right channel. Over SSH the mic is silent for lack of a Microphone grant, and attribution to a signed app is still untested.
-- G4: failed as run. The call channel held the host clock within 0.16 ms for an hour, but one tap death cost 10.5 s before the dead-call rule rebuilt it, and the left-right drift was not measured because the mic channel was silent. Re-run from a session that holds both grants.
+- G3: partial. The app-spawned helper records the tap on the right channel (10 minutes, every call chirp found). Over SSH the mic is silent for lack of a Microphone grant, and attribution to a signed app is still untested.
+- G4: failed as run. The call channel held the host clock within 0.16 ms for an hour, and positive controls show the analysis catches a 75 ms per hour drift. But one tap death cost 10.5 s before the dead-call rule rebuilt it, and in a run with a really quiet tap the first start lost 20 ms of speech: the rule rebuilt a tap that had just started. Mic frames flow while the tap is silent, and helper memory stayed flat through a 10-minute mute. Left-right drift between two clocks was not measured: it needs a Mac with a real input device, because a BlackHole mic runs on the host clock.
 - G5: pass. Hang, crash and a real SIGKILL each lose at most 1.13 s, and the next start answers 201 in about 100 ms.
 - G6: pass on the M-series half. Real-time factor 0.081 for both channels, committed line 1.02 s median and 1.14 s worst after the utterance ends. The 4-core x64 half is open.
-- G8: pass. Cold p95 257 ms, warm p95 145 ms. The first tap after a reboot is not measured.
+- G8: pass. Cold p95 193 ms over 20 separate app launches, warm p95 159 ms. The first tap after a reboot is not measured.
 
 Also in M0: pin ElectroBun 2.0.1 with its bundled Bun 1.4.0 for the app runtime, and pin Hutch to the version whose `hutch --version` produced the working signed build; re-run `soak.ts` on Bun and Cottontail and keep the output; verify the `Info.plist` patch and re-sign; verify both sherpa dylibs land in the bundle; confirm the WebKit GPU helper exclusion removes the window's audio from the call channel.
 

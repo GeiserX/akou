@@ -10,6 +10,10 @@
 //!   `--mute-for` seconds at `--mute-at`, and each time it starts it plays the `--clip` (48 kHz mono
 //!   f32, the "first words after silence") from its very first sample.
 //!
+//! `--mic-device none` plays nothing on the mic side. Then nothing at all plays while the call side
+//! is silent, so the process tap, which hears every output device, is really quiet: the case the
+//! "first words after silence" and "memory with the call source muted" checks need.
+//!
 //! Every chirp and clip start is written to `--events` as JSON lines with its host time in
 //! nanoseconds (the awake host clock, which cpal reports), so the analysis
 //! (`scripts/drift-test.ts`) can check the recording against the schedule.
@@ -252,12 +256,15 @@ mod imp {
         };
         let mic_clip = Arc::new(AtomicBool::new(false));
         let call_clip = Arc::new(AtomicBool::new(false));
-        let (mic, _) = open(
-            &host,
-            &mic_name,
-            gen_for("mic", 500.0, 3000.0, 4500.0, 0.0, mic_clip),
-        )
-        .unwrap_or_else(|e| panic!("{e}"));
+        let mic = (mic_name != "none").then(|| {
+            open(
+                &host,
+                &mic_name,
+                gen_for("mic", 500.0, 3000.0, 4500.0, 0.0, mic_clip),
+            )
+            .unwrap_or_else(|e| panic!("{e}"))
+            .0
+        });
         let (call, _) = open(
             &host,
             &call_name,
@@ -280,13 +287,16 @@ mod imp {
         write(
             &mut events,
             format!(
-                "{{\"ev\":\"start\",\"t0_ns\":{t0_ns},\"period_s\":{PERIOD_S},\"call_offset_s\":{},\"chirp_s\":{CHIRP_S},\"call_start_s\":{call_start},\"mute_at_s\":{},\"mute_for_s\":{mute_for},\"seconds\":{seconds},\"clip_samples\":{}}}",
+                "{{\"ev\":\"start\",\"t0_ns\":{t0_ns},\"period_s\":{PERIOD_S},\"call_offset_s\":{},\"chirp_s\":{CHIRP_S},\"call_start_s\":{call_start},\"mute_at_s\":{},\"mute_for_s\":{mute_for},\"seconds\":{seconds},\"clip_samples\":{},\"mic\":{}}}",
                 PERIOD_S / 2.0,
                 if mute_at.is_finite() { mute_at } else { -1.0 },
-                clip.len()
+                clip.len(),
+                mic.is_some()
             ),
         );
-        mic.play().expect("mic stream");
+        if let Some(m) = &mic {
+            m.play().expect("mic stream");
+        }
 
         // The call side's schedule, in seconds from t0.
         let mut plan: Vec<(f64, &str)> = vec![(call_start, "play")];

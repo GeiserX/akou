@@ -4,7 +4,9 @@
  *
  * - **Cold**: the app is not running, so the CLI launches it headless and waits for its API, then
  *   the app spawns the helper and answers once audio is being written. Between runs the call is
- *   stopped and the app quit, and the next run waits until its process is gone.
+ *   stopped and the app quit, and the next run waits until its process is gone. Each cold run
+ *   records the app's pid from `runtime.json`; the run fails if the previous app is still alive
+ *   after 10 s, or if a cold start answers from a pid an earlier run already used.
  * - **Warm**: the app is running; start, record 2 s, stop.
  *
  *   AKOU_HOME=… bun scripts/gates/g8-start.ts --cli <cli.ts> [--runs 20] [--out result.json]
@@ -57,9 +59,12 @@ async function quitAndWait(): Promise<void> {
   const pid = appPid();
   await cli("quit");
   for (let i = 0; pid && alive(pid) && i < 200; i++) await sleep(50);
+  if (pid && alive(pid)) throw new Error(`the app (pid ${pid}) was still running 10 s after quit`);
 }
 
-function summary(rows: Array<{ code: number; ms: number; firstAudioMs?: number }>) {
+function summary(
+  rows: Array<{ code: number; ms: number; firstAudioMs?: number; appPid?: number | null }>,
+) {
   const ms = rows.map((r) => r.ms).sort((a, b) => a - b);
   const q = (p: number) => ms[Math.min(ms.length - 1, Math.ceil(p * ms.length) - 1)] ?? Number.NaN;
   const r1 = (v: number) => Math.round(v);
@@ -72,22 +77,28 @@ function summary(rows: Array<{ code: number; ms: number; firstAudioMs?: number }
     maxMs: r1(ms[ms.length - 1] ?? Number.NaN),
     firstAudioMs: rows.map((r) => r.firstAudioMs ?? null),
     allMs: rows.map((r) => r1(r.ms)),
+    appPids: rows.map((r) => r.appPid ?? null),
+    distinctAppPids: new Set(rows.map((r) => r.appPid).filter((p) => p != null)).size,
   };
 }
 
-const cold: Array<{ code: number; ms: number; firstAudioMs?: number }> = [];
+const cold: Array<{ code: number; ms: number; firstAudioMs?: number; appPid?: number | null }> = [];
+const seen = new Set<number>();
 await quitAndWait();
 for (let i = 0; i < runs; i++) {
   const r = await cli("start", "-t", `g8-cold-${i + 1}`);
   const body = r.code === 0 ? JSON.parse(r.out) : null;
-  cold.push({ code: r.code, ms: r.ms, firstAudioMs: body?.firstAudioMs });
+  const pid = appPid();
+  if (pid == null || seen.has(pid)) throw new Error(`cold run ${i + 1} answered from pid ${pid}`);
+  seen.add(pid);
+  cold.push({ code: r.code, ms: r.ms, firstAudioMs: body?.firstAudioMs, appPid: pid });
   await sleep(2000);
   await cli("stop");
   await quitAndWait();
   await sleep(1000);
 }
 
-const warm: Array<{ code: number; ms: number; firstAudioMs?: number }> = [];
+const warm: Array<{ code: number; ms: number; firstAudioMs?: number; appPid?: number | null }> = [];
 await cli("status");
 const launch = await cli("start", "-t", "g8-warm-launch");
 await sleep(2000);
@@ -97,7 +108,7 @@ for (let i = 0; i < runs; i++) {
   await sleep(1000);
   const r = await cli("start", "-t", `g8-warm-${i + 1}`);
   const body = r.code === 0 ? JSON.parse(r.out) : null;
-  warm.push({ code: r.code, ms: r.ms, firstAudioMs: body?.firstAudioMs });
+  warm.push({ code: r.code, ms: r.ms, firstAudioMs: body?.firstAudioMs, appPid: appPid() });
   await sleep(2000);
   await cli("stop");
 }
