@@ -177,6 +177,37 @@ describe("the file a recognizer loaded and a new list", () => {
     expect(added.keep).toEqual(["vercel", "hetzner", "kubernetes"]);
   });
 
+  test("a covered term the loaded file spoils gets a file for this list, not a drop", () => {
+    // Its own tokenizer: "abc" merges to one piece that "abcd" never forms, so a file holding
+    // "abc" and "bd" gives "abcd" a two-piece path that beats its canonical three.
+    const merges: [string, string][] = [
+      ["c", "d"],
+      ["b", "c"],
+      ["▁", "a"],
+      ["▁a", "bc"],
+    ];
+    const v: Record<string, number> = { "<unk>": 0 };
+    for (const c of ["▁", "a", "b", "c", "d"]) v[c] = Object.keys(v).length;
+    for (const [a, b] of merges) v[a + b] = Object.keys(v).length;
+    const t = BpeTokenizer.fromJson({
+      model: { type: "BPE", vocab: v, merges, byte_fallback: false },
+      pre_tokenizer: { type: "Metaspace" },
+    });
+    const ts = new Set(Object.keys(v));
+    const first = planHotwords(t, ts, null, ["abc", "bd", "abcd"]);
+    expect(first.dropped.map((d) => d.term)).toEqual(["abcd"]);
+    expect(coveredBy(t, first.vocab, ["abcd"])).toBe(true);
+    const next = planHotwords(t, ts, first.vocab, ["abcd"]);
+    expect(next.reload).toEqual(["abcd"]);
+    expect(next.keep).toEqual(["abcd"]);
+    // Positive control: when a fresh file fails the term too (here a model without "cd"), the
+    // loaded file stays and the term is dropped, so there is no pointless reload.
+    const noCd = new Set([...ts].filter((p) => p !== "cd"));
+    const stuck = planHotwords(t, noCd, first.vocab, ["abcd"]);
+    expect(stuck.reload).toBeNull();
+    expect(stuck.dropped.map((d) => d.term)).toEqual(["abcd"]);
+  });
+
   test("a single character in the file is not a canonical piece for coverage", () => {
     const built = buildBpeVocab(tok, ["vercel"]);
     expect(built.pieces.get("h")).toBe(CHAR_SCORE);

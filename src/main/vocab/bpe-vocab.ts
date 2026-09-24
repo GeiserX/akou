@@ -316,9 +316,10 @@ export interface HotwordPlan {
 
 /**
  * Decides what a decode list needs: the loaded file if it already holds every canonical piece of
- * every usable term, else a new file for exactly this list (a smaller file leaves fewer ways for
- * one word's pieces to spoil another's path). Then checks every term under the file that will be
- * in force, so a term sherpa-onnx would spell differently never reaches it.
+ * every usable term and spoils none that a file of its own would spell right, else a new file for
+ * exactly this list (a smaller file leaves fewer ways for one word's pieces to spoil another's
+ * path). Then checks every term under the file that will be in force, so a term sherpa-onnx would
+ * spell differently never reaches it.
  */
 export function planHotwords(
   tok: BpeTokenizer,
@@ -327,14 +328,29 @@ export function planHotwords(
   terms: readonly string[],
 ): HotwordPlan {
   const usable = terms.filter((t) => !tok.encode(t).some((p) => SPECIAL.test(p)));
+  const fresh = () => buildBpeVocab(tok, usable).pieces;
   let vocab: ScoreVocab;
   let reload: string[] | null = null;
-  if (loaded && coveredBy(tok, loaded, usable)) vocab = loaded;
-  else {
-    vocab = buildBpeVocab(tok, usable).pieces;
+  let checks: TermCheck[];
+  if (loaded && coveredBy(tok, loaded, usable)) {
+    vocab = loaded;
+    checks = checkTerms(tok, vocab, tokens, terms);
+    // Pieces left from an earlier list can spoil a term's path. If a file for exactly this list
+    // spells a failing term right, load that one instead of dropping the term for the call.
+    const failing = checks.filter((c) => !c.ok && usable.includes(c.term)).map((c) => c.term);
+    if (failing.length > 0) {
+      const own = fresh();
+      if (checkTerms(tok, own, tokens, failing).some((c) => c.ok)) {
+        vocab = own;
+        reload = [...usable];
+        checks = checkTerms(tok, vocab, tokens, terms);
+      }
+    }
+  } else {
+    vocab = fresh();
     reload = [...usable];
+    checks = checkTerms(tok, vocab, tokens, terms);
   }
-  const checks = checkTerms(tok, vocab, tokens, terms);
   return {
     reload,
     vocab,
