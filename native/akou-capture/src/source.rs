@@ -45,6 +45,9 @@ pub enum Event {
         code: &'static str,
         msg: String,
     },
+    /// The OS said a device came, went or became the default: poll `status` now rather than at
+    /// the next second, so a changed default is rebuilt at once.
+    Devices,
     /// The file source reached its end.
     Eof,
 }
@@ -106,6 +109,10 @@ pub struct Opened {
     pub call: Option<CallInfo>,
     /// Names of the processes the call side excludes.
     pub exclude: Vec<String>,
+    /// The device each source opened, `[mic, call]`, when the front end knows it. The device
+    /// watch starts from it, so a default that changed while the part was opening is followed
+    /// at the first status poll rather than taken as the starting point.
+    pub devices: [Option<DeviceId>; 2],
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -157,6 +164,24 @@ impl OpenError {
             msg: msg.into(),
         }
     }
+}
+
+/// One audio device, as `akou-capture devices` lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Endpoint {
+    /// What `--mic <id>` takes.
+    pub id: String,
+    pub name: String,
+    pub default: bool,
+}
+
+/// Every input and output the OS reports. Listing opens no stream and asks for no permission.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Endpoints {
+    /// The audio system that answered (`coreaudio`, `wasapi`, `pulse`).
+    pub backend: &'static str,
+    pub inputs: Vec<Endpoint>,
+    pub outputs: Vec<Endpoint>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

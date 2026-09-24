@@ -178,6 +178,7 @@ impl Frontend for Scripted {
                 rate: 16_000,
             }),
             exclude: vec![],
+            ..Default::default()
         })
     }
     fn start(&mut self, anchor: Now) {
@@ -407,6 +408,7 @@ impl Frontend for Live {
                 rate: 16_000,
             }),
             exclude: vec![],
+            ..Default::default()
         })
     }
     fn start(&mut self, anchor: Now) {
@@ -492,6 +494,195 @@ fn mic_buffers_from_before_capturing_do_not_grow_the_emit_latency() {
     assert!(
         least < 250_000_000,
         "mic packets trail the clock by {least} ns"
+    );
+}
+
+/// A front end whose default output changes 400 ms in, well before the engine's once-a-second
+/// status poll. With `notify` it says so with `Event::Devices`, as the Windows device
+/// notifications do; without it the change waits for the poll.
+struct Notifying {
+    notify: bool,
+    /// The output the call side reports it opened.
+    opened_on: Option<&'static str>,
+    changed: Arc<std::sync::atomic::AtomicBool>,
+    polls: Arc<Mutex<Vec<std::time::Instant>>>,
+    sent: Arc<Mutex<Option<std::time::Instant>>>,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Frontend for Notifying {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Host
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: None,
+            call: Some(CallInfo {
+                mode: "system".into(),
+                rate: 16_000,
+            }),
+            exclude: vec![],
+            devices: [
+                None,
+                self.opened_on
+                    .map(|id| akou_capture::health::device_watch::DeviceId {
+                        id: id.into(),
+                        name: id.into(),
+                    }),
+            ],
+        })
+    }
+    fn start(&mut self, _anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        let (notify, changed, sent) = (self.notify, self.changed.clone(), self.sent.clone());
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(400));
+            changed.store(true, std::sync::atomic::Ordering::SeqCst);
+            *sent.lock().unwrap() = Some(std::time::Instant::now());
+            if notify {
+                let _ = tx.send(Event::Devices);
+            }
+            std::thread::sleep(Duration::from_millis(300));
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {}
+    fn status(&mut self) -> Status {
+        self.polls.lock().unwrap().push(std::time::Instant::now());
+        let id = if self.changed.load(std::sync::atomic::Ordering::SeqCst) {
+            "headset"
+        } else {
+            "speakers"
+        };
+        Status {
+            output_running: Some(false),
+            mic_running: false,
+            default_input: None,
+            default_output: Some(akou_capture::health::device_watch::DeviceId {
+                id: id.into(),
+                name: id.into(),
+            }),
+        }
+    }
+    fn close(self: Box<Self>) {}
+}
+
+fn run_notifying(name: &str, notify: bool) -> (Vec<String>, Duration) {
+    run_notifying_from(name, notify, None, false)
+}
+
+fn run_notifying_from(
+    name: &str,
+    notify: bool,
+    opened_on: Option<&'static str>,
+    changed_already: bool,
+) -> (Vec<String>, Duration) {
+    let (_tx, rx) = mpsc::channel::<Vec<u8>>();
+    let err = Shared::default();
+    let polls = Arc::new(Mutex::new(vec![]));
+    let sent = Arc::new(Mutex::new(None));
+    let fe = Notifying {
+        notify,
+        opened_on,
+        changed: Arc::new(std::sync::atomic::AtomicBool::new(changed_already)),
+        polls: polls.clone(),
+        sent: sent.clone(),
+        tx: None,
+    };
+    let cfg = RunConfig {
+        out: tmp(name),
+        mic_default: false,
+        call: CallMode::System,
+        faults: Faults::none(),
+    };
+    let outcome = engine::run(
+        cfg,
+        Box::new(fe),
+        Box::new(Stdin { rx, buf: vec![] }),
+        Box::new(Shared::default()),
+        Box::new(err.clone()),
+    );
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines: Vec<String> = String::from_utf8(err.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    let sent = sent.lock().unwrap().expect("the change happened");
+    // How soon after the change the engine asked for the status again.
+    let after = polls
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|t| **t >= sent)
+        .map(|t| t.duration_since(sent))
+        .min()
+        .unwrap_or(Duration::MAX);
+    (lines, after)
+}
+
+/// DESIGN 2.2: a default-device change the OS announces is followed at once, not at the next
+/// once-a-second poll, so a changed output is rebuilt with well under a second lost (ROADMAP M3).
+#[test]
+fn a_device_notification_rebuilds_the_changed_default_at_once() {
+    let (lines, after) = run_notifying("notify.opus", true);
+    assert!(
+        after < Duration::from_millis(200),
+        "polled {after:?} after the change"
+    );
+    assert!(
+        lines.iter().any(
+            |l| l.contains(r#""type":"device","ch":"call","event":"changed","name":"headset""#)
+        ),
+        "{lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    // Positive control: without the notification nothing looks before the poll, and the part
+    // (which ends 700 ms in, before the first poll at 1 s) never sees the change.
+    let (lines, after) = run_notifying("no-notify.opus", false);
+    assert!(
+        after >= Duration::from_millis(300),
+        "polled {after:?} after the change"
+    );
+    assert!(
+        !lines.iter().any(|l| l.contains(r#""event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+}
+
+/// The default output changed while the call side was opening: the source opened on the old
+/// one, the first status already names the new one. The part follows it at the first poll.
+#[test]
+fn a_default_that_changed_during_the_open_is_followed_at_once() {
+    let (lines, _) = run_notifying_from("changed-in-open.opus", false, Some("speakers"), true);
+    assert!(
+        lines.iter().any(
+            |l| l.contains(r#""type":"device","ch":"call","event":"changed","name":"headset""#)
+        ),
+        "{lines:#?}"
+    );
+    assert!(
+        lines.iter().any(|l| l.contains(r#""event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    // Positive control: a front end that does not say what it opened takes the new default as
+    // its starting point, and the stream stays on the old device.
+    let (lines, _) = run_notifying_from("changed-in-open-unknown.opus", false, None, true);
+    assert!(
+        !lines.iter().any(|l| l.contains(r#""event":"rebuilt""#)),
+        "{lines:#?}"
     );
 }
 

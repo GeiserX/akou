@@ -46,11 +46,11 @@ pub struct MicWorker {
     handle: Option<JoinHandle<()>>,
 }
 
-fn device_id(d: &cpal::Device) -> String {
+pub(crate) fn device_id(d: &cpal::Device) -> String {
     d.id().map(|i| i.id().to_string()).unwrap_or_default()
 }
 
-fn device_name(d: &cpal::Device) -> String {
+pub(crate) fn device_name(d: &cpal::Device) -> String {
     d.description()
         .map(|x| x.name().to_string())
         .unwrap_or_else(|_| "microphone".into())

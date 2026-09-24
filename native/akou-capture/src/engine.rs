@@ -668,8 +668,8 @@ pub fn run(
         suspect: (on[1] && fe.permission_suspect()).then(PermissionSuspect::new),
         stall: StallMonitor::new(),
         no_buffers: NoBuffers::default(),
-        watch_in: DeviceWatch::new(),
-        watch_out: DeviceWatch::new(),
+        watch_in: DeviceWatch::starting_at(opened.devices[0].as_ref()),
+        watch_out: DeviceWatch::starting_at(opened.devices[1].as_ref()),
         status: Status::default(),
         faults: cfg.faults.clone(),
         stalled: false,
@@ -757,6 +757,10 @@ pub fn run(
                     ));
                 }
                 Event::Warn { code, msg } => p.say.line(&protocol::warn(code, &msg)),
+                Event::Devices => {
+                    last_status = Instant::now();
+                    p.poll_status(fe.as_mut(), &cfg.call, mic_default);
+                }
                 Event::Eof => break 'run "eof",
             }
             // With the file source, keep the queue moving: emit after every tick.

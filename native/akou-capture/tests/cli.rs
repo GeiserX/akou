@@ -109,3 +109,27 @@ fn a_vanishingly_small_speed_is_a_usage_error() {
         );
     }
 }
+
+/// `devices` lists devices without opening one, so it too is refused in file-only mode, and it
+/// takes no arguments.
+#[test]
+fn devices_is_refused_in_file_only_mode_and_takes_no_arguments() {
+    let bin = env!("CARGO_BIN_EXE_akou-capture");
+    let out = Command::new(bin)
+        .arg("devices")
+        .env("AKOU_CAPTURE_FILE_ONLY", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(exit::UNAVAILABLE));
+    assert!(String::from_utf8_lossy(&out.stderr).contains(r#""code":"file-only""#));
+    assert!(out.stdout.is_empty());
+    let out = Command::new(bin)
+        .args(["devices", "--all"])
+        .env("AKOU_CAPTURE_FILE_ONLY", "1")
+        .output()
+        .unwrap();
+    assert_eq!(out.status.code(), Some(exit::USAGE));
+    // Positive control: the usage text names the command.
+    let out = Command::new(bin).arg("--help").output().unwrap();
+    assert!(String::from_utf8_lossy(&out.stdout).contains("akou-capture devices"));
+}
