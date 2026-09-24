@@ -429,7 +429,9 @@ export function vocabRoutes(r: Router<ApiApp>): void {
           for (const h of e.heard) if (!heard.some((x) => termKey(x) === termKey(h))) heard.push(h);
           next = upsertEntry(next, cur ? { ...cur, heard, confirmed: true } : e);
         }
-        for (const e of file.entries) {
+        // Over `next`, not `file`: a term a call's proposal just confirmed keeps its merged heard
+        // forms, and is counted once.
+        for (const e of next.entries) {
           if (!keys.has(termKey(e.term)) || e.confirmed) continue;
           next =
             action === "approve"

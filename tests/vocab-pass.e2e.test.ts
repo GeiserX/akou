@@ -186,6 +186,69 @@ describe("the post-call pass", () => {
     expect(text).toContain("akou vocab approve TERM --call ID");
   });
 
+  test("an entry the file holds unconfirmed is only proposed, never corrected at once", async () => {
+    // An inferred entry (an agent's, sent with `confirmed: false`) waits for the user's yes.
+    const add = await rig.api("POST", "/vocab", {
+      term: "Wurld",
+      workspace: "work",
+      confirmed: false,
+    });
+    expect(add.status).toBe(201);
+    provider.answer = (req) => {
+      const mic = lineOf(req.prompt, "hello world");
+      return JSON.stringify({ corrections: [{ line: `#${mic}`, heard: "world", term: "Wurld" }] });
+    };
+    const r = await rig.api("POST", `/calls/${id}/vocab/pass`);
+    expect(r.status).toBe(200);
+    expect(r.body.corrections).toEqual([]);
+    expect(r.body.proposals).toEqual([
+      expect.objectContaining({ term: "Wurld", heard: ["world"] }),
+    ]);
+    const lines = (await rig.api("GET", `/calls/${id}/transcript`)).body.lines;
+    expect(lines.some((l: { text: string }) => l.text === "hello world")).toBe(true);
+    expect(lines.some((l: { text: string }) => l.text.includes("Wurld"))).toBe(false);
+  });
+
+  test("approving a call's proposal for an unconfirmed file entry keeps the heard form", async () => {
+    const add = await rig.api("POST", "/vocab", {
+      term: "Hallo",
+      workspace: "work",
+      confirmed: false,
+    });
+    expect(add.status).toBe(201);
+    provider.answer = (req) => {
+      const mic = lineOf(req.prompt, "hello world");
+      return JSON.stringify({ proposals: [{ term: "Hallo", heard: ["hello"], lines: [mic] }] });
+    };
+    const r = await rig.api("POST", `/calls/${id}/vocab/pass`);
+    expect(r.body.proposals).toEqual([
+      expect.objectContaining({ term: "Hallo", heard: ["hello"] }),
+    ]);
+    const ok = await rig.api("POST", "/vocab/approve", { terms: ["Hallo"], call: id });
+    expect(ok.status).toBe(200);
+    expect(ok.body.approved).toEqual(["Hallo"]);
+    const entry = (await rig.api("GET", "/vocab?workspace=work")).body.entries.find(
+      (e: { term: string }) => e.term === "Hallo",
+    );
+    expect(entry).toMatchObject({ heard: ["hello"], confirmed: true });
+  });
+
+  test("a term rejected in the file is never proposed again", async () => {
+    const rej = await rig.api("POST", "/vocab/reject", { terms: ["Hellow"], workspace: "work" });
+    expect(rej.status).toBe(200);
+    provider.answer = (req) => {
+      const mic = lineOf(req.prompt, "hello world");
+      return JSON.stringify({ proposals: [{ term: "Hellow", heard: ["hello"], lines: [mic] }] });
+    };
+    const r = await rig.api("POST", `/calls/${id}/vocab/pass`);
+    expect(r.status).toBe(200);
+    expect(r.body.proposals).toEqual([]);
+    expect(r.body.dropped.map((d: { reason: string }) => d.reason)).toContain(
+      '"Hellow" was rejected before',
+    );
+    expect(provider.requests.at(-1)?.prompt).toMatch(/Rejected, never propose: .*Hellow/);
+  });
+
   test("suggestions come from the call, ranked, without known words", async () => {
     const r = await rig.api("POST", "/vocab/suggest", { call: id, k: 5 });
     expect(r.status).toBe(200);
