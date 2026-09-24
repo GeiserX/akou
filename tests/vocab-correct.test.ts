@@ -40,6 +40,14 @@ describe("read-time correction (DESIGN 5.4)", () => {
     // A heard form in Devanagari corrects only its own word.
     const r = correctText("किताब कतब", [{ term: "Kitab", heard: ["कतब"], scope: "call" }]);
     expect(r.text).toBe("किताब Kitab");
+  });
+
+  test("Arabic harakat and Hebrew niqqud are optional: a pointed word folds to its bare form", () => {
+    expect(foldText("مُحَمَّد")).toBe(foldText("محمد"));
+    expect(foldText("שָׁלוֹם")).toBe(foldText("שלום"));
+    expect(tokenize("قال مُحَمَّد").map((t) => t.folded)).toEqual(["قال", "محمد"]);
+    const r = correctText("שָׁלוֹם", [{ term: "Shalom", heard: ["שלום"], scope: "call" }]);
+    expect(r.text).toBe("Shalom");
     expect(tokenize("we deploy on cubernetes, right?").map((t) => t.folded)).toEqual([
       "we",
       "deploy",
