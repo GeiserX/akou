@@ -8,17 +8,21 @@
     "bun": ">=1.3"
   },
   "scripts": {
-    "check": "biome check && tsc --noEmit && bun test",
+    "check": "biome check && tsc --noEmit && tsc --noEmit -p tsconfig.ui.json && bun test",
     "lint": "biome check",
     "format": "biome check --write",
-    "typecheck": "tsc --noEmit",
-    "test": "bun test"
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.ui.json",
+    "test": "bun test",
+    "test:ui": "bun test --path-ignore-patterns='nothing/**' --timeout 60000 ./tests/ui/",
+    "build:ui": "bun src/main/window/bundle.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
     "@modelcontextprotocol/client": "2.1.0",
     "@types/bun": "1.4.2",
+    "electrobun": "2.0.1",
     "gpt-tokenizer": "4.0.0",
+    "playwright-core": "1.60.0",
     "typescript": "7.0.2"
   },
   "dependencies": {

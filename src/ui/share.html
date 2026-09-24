@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>akou (shared)</title>
+<link rel="stylesheet" href="theme.css">
+<script type="module" src="share.js"></script>
+</head>
+<body class="share recording">
+<header>
+  <span id="dot" aria-hidden="true"></span>
+  <span id="state" role="status" aria-live="polite">connecting</span>
+  <span id="title"></span>
+  <span id="meta"></span>
+</header>
+<div id="layout" class="share-layout">
+  <main id="scroller" tabindex="-1">
+    <div id="lines" role="log" aria-label="Transcript"></div>
+    <div id="partial" hidden></div>
+    <div id="empty">Waiting for the first line.</div>
+  </main>
+  <aside id="share-notes" hidden></aside>
+</div>
+<button id="jump" class="go" type="button">↓ Back to live</button>
+</body>
+</html>

@@ -1,8 +1,10 @@
 /**
- * The app itself (docs/DESIGN.md section 6.2): status, settings, templates, sharing and quit.
+ * The app itself (docs/DESIGN.md section 6.2): status, settings, templates, sharing, the window and
+ * quit.
  *
  * `GET /status` always answers 200. `PATCH /config` validates through the settings registry, the
- * same way a hand-edited file is validated (TRAPS T4.9). Sharing is M4 and answers 501 on changes.
+ * same way a hand-edited file is validated (TRAPS T4.9). `POST /share` starts a read-only live link
+ * to a call (default `live`), `DELETE /share` stops it.
  */
 
 import { join } from "node:path";
@@ -15,6 +17,7 @@ import {
 } from "../../config/schema.ts";
 import { HttpError, json, type Router, readBody } from "../http.ts";
 import type { ApiApp } from "../server.ts";
+import { resolveRef } from "./common.ts";
 
 export function settingsRoutes(r: Router<ApiApp>): void {
   r.add("GET", "/status", async (c) => json(200, await c.app.status()));
@@ -31,7 +34,16 @@ export function settingsRoutes(r: Router<ApiApp>): void {
           const s: SettingSpec = SETTINGS[k];
           return [
             k,
-            { type: s.type, min: s.min, max: s.max, env: s.env, secret: s.secret, doc: s.doc },
+            {
+              type: s.type,
+              min: s.min,
+              max: s.max,
+              env: s.env,
+              secret: s.secret,
+              // File only when false: it names a program akou runs or where transcripts are sent.
+              apiWritable: s.apiWritable !== false,
+              doc: s.doc,
+            },
           ];
         }),
       ),
@@ -69,18 +81,33 @@ export function settingsRoutes(r: Router<ApiApp>): void {
     });
   });
 
-  r.add("GET", "/share", () => json(200, { active: false, shares: [] }));
-  for (const method of ["POST", "DELETE"]) {
-    r.add(method, "/share", async (c) => {
-      await readBody(c.req, {
-        "call?": "string",
-        "bind?": "string",
-        "notes?": "boolean",
-        "expires?": "string",
-      });
-      throw new HttpError(501, "not_implemented", "sharing is not built yet (M4)");
-    });
-  }
+  r.add("GET", "/share", (c) => {
+    const shares = c.app.shares();
+    return json(200, { active: shares.length > 0, shares });
+  });
+
+  r.add("POST", "/share", async (c) => {
+    const b = await readBody<{ call?: string; bind?: string; notes?: boolean; expires?: string }>(
+      c.req,
+      { "call?": "string", "bind?": "string", "notes?": "boolean", "expires?": "string" },
+    );
+    const call = resolveRef(c.app, b.call ?? "live", { allowLast: true });
+    const share = await c.app.startShare(call, b);
+    return json(201, share);
+  });
+
+  r.add("DELETE", "/share", async (c) => {
+    const b = await readBody<{ call?: string }>(c.req, { "call?": "string" });
+    const call = b.call === undefined ? undefined : resolveRef(c.app, b.call, { allowLast: true });
+    const stopped = await c.app.stopShare(call);
+    return json(200, { ok: true, stopped });
+  });
+
+  r.add("POST", "/window", async (c) => {
+    const b = await readBody<{ call?: string }>(c.req, { "call?": "string" });
+    const call = b.call === undefined ? undefined : resolveRef(c.app, b.call, { allowLast: true });
+    return json(200, await c.app.openWindow(call));
+  });
 
   r.add("POST", "/quit", async (c) => {
     await readBody(c.req, {});

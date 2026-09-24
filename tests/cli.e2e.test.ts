@@ -112,7 +112,7 @@ describe("exit codes", () => {
   });
 
   test("commands whose machinery is not built say so and exit 69", async () => {
-    for (const argv of [["open"], ["devices"], ["apps"], ["self-update"]]) {
+    for (const argv of [["devices"], ["apps"], ["self-update"]]) {
       const r = await run(argv);
       expect(r.code).toBe(EXIT.unavailable);
       expect(r.err).toContain("not built yet");

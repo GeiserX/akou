@@ -455,7 +455,9 @@ describe("after the call", () => {
     expect([enh.status, enh.body.error]).toEqual([503, "provider_unavailable"]);
     expect(enh.body.message).toContain("enhance/context");
     expect((await rig.api("GET", "/calls/last/enhance/context")).status).toBe(200);
-    expect((await rig.api("POST", "/share", { bind: "lan" })).status).toBe(501);
+    // Sharing is built: an address that is not one is refused, and nothing is shared.
+    const share = await rig.api("POST", "/share", { call: "last", bind: "nowhere" });
+    expect([share.status, share.body.error]).toEqual([400, "bad_bind"]);
     expect((await rig.api("GET", "/share")).body).toEqual({ active: false, shares: [] });
     expect((await rig.api("POST", "/vocab/suggest", {})).status).toBe(501);
   });
@@ -533,6 +535,15 @@ describe("settings over the API", () => {
     expect(reset.body.settings["asr.segmentPause"]).toBe(0.7);
     const got = await rig.api("GET", "/config");
     expect(got.body.schema["api.port"]).toMatchObject({ type: "integer", min: 1024 });
+    // The schema says which keys are file only, so the settings pane reads it instead of a list.
+    const fileOnly = Object.entries(got.body.schema)
+      .filter(([, s]) => (s as { apiWritable: boolean }).apiWritable === false)
+      .map(([k]) => k)
+      .sort();
+    expect(fileOnly).toEqual(
+      ["capture.helper", "hooks", "provider.baseUrl", "provider.harnessPath", "webhook.url"].sort(),
+    );
+    expect(got.body.schema["api.port"].apiWritable).toBe(true);
   });
 
   test("status always answers 200 and names what is missing", async () => {
