@@ -28,6 +28,7 @@ on:
       - scripts/build-app.ts
       - scripts/build-cli.ts
       - scripts/smoke-app.ts
+      - scripts/locate-helper-probe.ts
       - scripts/smoke-cli.ts
       - scripts/stamp-version.ts
       - scripts/post-build.ts

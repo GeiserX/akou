@@ -12,7 +12,7 @@
  */
 
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   type CaptureEngine,
   type CaptureHandlers,
@@ -278,22 +278,26 @@ export const HELPER_NAME = process.platform === "win32" ? "akou-capture.exe" : "
 export interface HelperLocation {
   /** Program and leading arguments. */
   command: string[];
-  /** `config`: `capture.helper`; `bundled`: beside the app's runtime; `path`: looked up on PATH. */
+  /** `config`: `capture.helper`; `bundled`: beside the app's main module; `path`: looked up on PATH. */
   source: "config" | "bundled" | "path";
 }
 
 /**
  * Where the capture helper is. `capture.helper` from config.json wins when it is set, because it is
  * an explicit choice (the tests point it at the fake helper, a developer at a local build). Then the
- * helper bundled beside the app's runtime (the packaged app copies `native/akou-capture` there),
- * then `akou-capture` on PATH, which the spawn resolves.
+ * helper bundled beside the app's main module: the release bundles this module into
+ * `Contents/Resources/app/bun/index.js` and copies `native/akou-capture` into the same folder
+ * (`electrobun.config.ts`), where the Workers, the pages and the templates also sit. Not beside
+ * `process.execPath`: that is `Contents/MacOS/bun`, where the release puts no helper. Then
+ * `akou-capture` on PATH, which the spawn resolves. From source and from the compiled CLI (whose
+ * module folder is `/$bunfs/root`) there is no bundled helper.
  */
 export function locateHelper(
   configured: readonly string[],
-  o: { execPath?: string; exists?: (path: string) => boolean } = {},
+  o: { dir?: string; exists?: (path: string) => boolean } = {},
 ): HelperLocation {
   if (configured.length > 0) return { command: [...configured], source: "config" };
-  const bundled = join(dirname(o.execPath ?? process.execPath), HELPER_NAME);
+  const bundled = join(o.dir ?? import.meta.dir, HELPER_NAME);
   if ((o.exists ?? existsSync)(bundled)) return { command: [bundled], source: "bundled" };
   return { command: [HELPER_NAME], source: "path" };
 }

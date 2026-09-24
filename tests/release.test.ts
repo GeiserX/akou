@@ -5,16 +5,23 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import config, { builtCopies, helperCopies, MAIN_OUT, signing } from "../electrobun.config.ts";
+import config, {
+  builtCopies,
+  helperBuildPath,
+  helperCopies,
+  MAIN_OUT,
+  signing,
+} from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { hutchEnv, PINS, pairedHutch } from "../scripts/build-app.ts";
 import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
 import { drift, main, readAll, stamp, tagVersion } from "../scripts/stamp-version.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
 import { siblingModule } from "../src/main/asr/sibling.ts";
+import { HELPER_NAME } from "../src/main/capture/helper.ts";
 import { defaultLaunch, isCompiled } from "../src/main/cli/client.ts";
 import { skillSourceDir } from "../src/main/cli/commands/skill.ts";
 import { prebuiltUi } from "../src/main/window/bundle.ts";
@@ -192,6 +199,31 @@ describe("what the bundle carries beside the main process", () => {
     });
     expect(config.build?.copy?.["src/main/notes/templates"]).toBe(`${MAIN_OUT}/templates`);
     expect(config.scripts?.postBuild).toBe("./scripts/post-build.ts");
+  });
+
+  test("the app finds the helper beside its bundled main module, not beside its runtime", async () => {
+    // The release bundles the resolver into Resources/app/bun/index.js, copies the helper into the
+    // same folder (helperCopies) and runs it with Contents/MacOS/bun. Bundle it the same way, run
+    // it with a Bun that lives elsewhere, and ask it where the helper is.
+    const t = tempDir();
+    const entry = join(t.dir, "entry.ts");
+    writeFileSync(
+      entry,
+      `import { locateHelper } from ${JSON.stringify(join(ROOT, "src/main/capture/helper.ts"))};
+console.log(JSON.stringify(locateHelper([])));`,
+    );
+    const out = join(t.dir, MAIN_OUT);
+    const built = await Bun.build({ entrypoints: [entry], target: "bun", format: "esm" });
+    expect(built.success).toBe(true);
+    await Bun.write(join(out, "index.js"), built.outputs[0] as Blob);
+    const where = () =>
+      JSON.parse(Bun.spawnSync([process.execPath, join(out, "index.js")]).stdout.toString());
+
+    expect(where()).toEqual({ command: [HELPER_NAME], source: "path" });
+    const target = helperCopies(process.platform, () => true)[helperBuildPath()] as string;
+    writeFileSync(join(t.dir, target), "");
+    expect(where()).toEqual({ command: [join(realpathSync(out), HELPER_NAME)], source: "bundled" });
+    t.cleanup();
   });
 
   test("a Worker is its .ts file from source and the bundled .js file when packaged", () => {

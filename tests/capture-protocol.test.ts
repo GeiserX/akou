@@ -299,21 +299,21 @@ describe("hark dialect (stereo-s16le)", () => {
 });
 
 describe("where the capture helper is", () => {
-  const execPath = join("/opt", "akou", "bin", "bun");
-  const bundled = join("/opt", "akou", "bin", HELPER_NAME);
+  const dir = join("/opt", "akou", "app", "bun");
+  const bundled = join(dir, HELPER_NAME);
 
   test("capture.helper from config.json wins, even over a bundled helper", () => {
-    const loc = locateHelper(["/x/fake", "--wav", "a.wav"], { execPath, exists: () => true });
+    const loc = locateHelper(["/x/fake", "--wav", "a.wav"], { dir, exists: () => true });
     expect(loc).toEqual({ command: ["/x/fake", "--wav", "a.wav"], source: "config" });
   });
 
-  test("then the helper bundled beside the app's runtime", () => {
-    const loc = locateHelper([], { execPath, exists: (p) => p === bundled });
+  test("then the helper bundled beside the app's main module", () => {
+    const loc = locateHelper([], { dir, exists: (p) => p === bundled });
     expect(loc).toEqual({ command: [bundled], source: "bundled" });
   });
 
   test("then akou-capture on PATH", () => {
-    const loc = locateHelper([], { execPath, exists: () => false });
+    const loc = locateHelper([], { dir, exists: () => false });
     expect(loc).toEqual({ command: [HELPER_NAME], source: "path" });
   });
 });

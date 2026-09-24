@@ -16,6 +16,8 @@
  *   file and both libraries open from the bundle's own folder (`lsof`; the hardened runtime ignores
  *   `DYLD_PRINT_LIBRARIES`) (TRAPS "Native libraries missing from the bundle");
  * - the bundled Bun imports both Worker modules;
+ * - the app's own helper resolver, bundled into the main folder and run by the bundled Bun, finds
+ *   the helper there;
  * - the bundled helper says the version, and records a generated two-channel WAV with `--from-wav`
  *   and `AKOU_CAPTURE_FILE_ONLY=1` into an Ogg Opus file with two channels (no device is opened).
  *
@@ -23,7 +25,15 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
@@ -232,9 +242,35 @@ console.log(JSON.stringify({ bun: Bun.version, open: open.split("\\n").filter((l
     workers.stderr.toString().trim(),
   );
 
-  // The capture helper.
+  // The capture helper, where the app's own resolver looks: `locateHelper` bundled into the main
+  // folder the way the app's index.js is, and run by the bundled Bun, so a helper copied anywhere
+  // else, or a resolver that looks anywhere else, turns this red. (After the signature check: the
+  // probe is a file the seal does not cover.)
+  const locate = join(main, "locate-helper-probe.js");
+  const built = await Bun.build({
+    entrypoints: [join(ROOT, "scripts", "locate-helper-probe.ts")],
+    target: "bun",
+    format: "esm",
+  });
+  if (!check(built.success && !!built.outputs[0], "the resolver probe builds")) return;
+  await Bun.write(locate, built.outputs[0] as Blob);
+  const located = spawnSync(bun, [locate]);
+  let where: { command: string[]; source: string } = { command: [], source: "" };
+  try {
+    where = JSON.parse(located.stdout.toString());
+  } catch {}
   const helper = join(main, "akou-capture");
-  if (existsSync(helper)) await smokeHelper(helper, version, work);
+  const found = where.source === "bundled" && where.command[0] === realpathSync(helper);
+  if (existsSync(helper) || where.source === "bundled") {
+    if (
+      check(
+        found,
+        "the app's resolver finds the bundled helper",
+        `${where.source} ${where.command.join(" ")}${located.stderr.toString().trim()}`,
+      )
+    )
+      await smokeHelper(helper, version, work);
+  }
   // The flag covers a tree without native/akou-capture only: a built helper must be in the bundle.
   else if (allowMissingHelper && !existsSync(join(ROOT, "native", "akou-capture", "Cargo.toml")))
     console.log("SKIP the capture helper is not in the bundle (--allow-missing-helper)");
