@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { CallView, type FoldOptions } from "../src/core/log/fold.ts";
 import { writeVocabFile } from "../src/main/vocab/files.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -132,6 +133,28 @@ describe("read-time vocabulary through the API", () => {
       const md = readFileSync(r.body.path, "utf8");
       expect(md).toContain('Kubernetes (heard: "kubernetis")');
       expect(md).not.toContain("Globex");
+    },
+    LONG,
+  );
+
+  test(
+    "a call opened from disk reads its vocabulary files once and is corrected",
+    async () => {
+      await rig.close();
+      const seen = new Set<unknown>();
+      const original = CallView.prototype.setReadOptions;
+      CallView.prototype.setReadOptions = function (this: CallView, o: FoldOptions) {
+        if (o.vocabFiles) seen.add(o.vocabFiles);
+        original.call(this, o);
+      };
+      try {
+        rig = await appRig({ home: join(work.dir, "home") });
+        expect((await lineOf("call"))?.text).toBe("deploy to Kubernetes");
+        // One read of the files: every view set from it gets the same entries.
+        expect(seen.size).toBe(1);
+      } finally {
+        CallView.prototype.setReadOptions = original;
+      }
     },
     LONG,
   );

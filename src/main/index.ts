@@ -277,6 +277,10 @@ export class AkouApp implements ApiApp {
   private readonly vocabCache = new Map<string, VocabSource>();
   /** Workspaces whose vocabulary files could not be read; retried when the vocabulary changes. */
   private readonly vocabFailed = new Set<string>();
+  /** Reads of a workspace's vocabulary files in flight, so two readers share one. */
+  private readonly vocabLoading = new Map<string, Promise<void>>();
+  /** Bumped when the files change, so a read that started before never caches the old files. */
+  private vocabGen = 0;
   /** The read-time form of each loaded vocabulary, kept so a view can tell nothing changed. */
   private readonly foldEntries = new WeakMap<VocabSource, readonly FileVocabEntry[]>();
   /** The word lists that tell a real word from a mishearing (DESIGN 5.4), read on first use. */
@@ -1004,6 +1008,9 @@ export class AkouApp implements ApiApp {
   vocabChanged(): void {
     this.vocabCache.clear();
     this.vocabFailed.clear();
+    // A read already in flight may hold the old files; the next reader starts a fresh one.
+    this.vocabLoading.clear();
+    this.vocabGen++;
     // Every open call reads the new vocabulary, the live one included (its decode list too).
     for (const c of this.manager.opened()) void this.readyRead(c);
   }
@@ -1033,8 +1040,20 @@ export class AkouApp implements ApiApp {
     this.applyRead(c);
   }
 
-  private async loadVocab(workspace: string): Promise<void> {
-    if (this.vocabCache.has(workspace) || this.vocabFailed.has(workspace)) return;
+  private loadVocab(workspace: string): Promise<void> {
+    if (this.vocabCache.has(workspace) || this.vocabFailed.has(workspace)) return Promise.resolve();
+    let loading = this.vocabLoading.get(workspace);
+    if (!loading) {
+      loading = this.readVocab(workspace).finally(() => {
+        if (this.vocabLoading.get(workspace) === loading) this.vocabLoading.delete(workspace);
+      });
+      this.vocabLoading.set(workspace, loading);
+    }
+    return loading;
+  }
+
+  private async readVocab(workspace: string): Promise<void> {
+    const gen = this.vocabGen;
     try {
       const paths = vocabPaths({
         configDir: this.configDir,
@@ -1044,6 +1063,7 @@ export class AkouApp implements ApiApp {
       const layers = await Promise.all(
         paths.map(async (p) => ({ ...p, loaded: await readVocabFile(p.path) })),
       );
+      if (gen !== this.vocabGen) return;
       this.vocabCache.set(workspace, {
         entries: mergeVocab(
           layers.map((l) => ({ scope: l.scope, path: l.path, file: l.loaded.file })),
@@ -1053,6 +1073,7 @@ export class AkouApp implements ApiApp {
           .map((l) => ({ path: l.path, sha256: l.loaded.sha256 })),
       });
     } catch (err) {
+      if (gen !== this.vocabGen) return;
       this.vocabFailed.add(workspace);
       this.log("warn", `vocabulary for ${workspace}: ${(err as Error).message}`);
     }
