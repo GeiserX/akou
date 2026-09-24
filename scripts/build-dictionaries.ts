@@ -3,7 +3,10 @@
  * section 5.4), one per language, into `src/main/vocab/dictionaries/<lang>.txt.gz`:
  *
  *   bun scripts/build-dictionaries.ts            fetch the pinned lists and write every language
- *   bun scripts/build-dictionaries.ts --check    exit 1 unless the committed files are what this writes
+ *   bun scripts/build-dictionaries.ts --check    exit 1 unless the committed lists are what this writes
+ *
+ * `--check` compares the word lists, not the gzip bytes: another zlib build may compress the same
+ * list to other bytes. The release runs it.
  *
  * Source: the 2018 top-50,000 lists of FrequencyWords (https://github.com/hermitdave/FrequencyWords),
  * word frequencies counted over the OpenSubtitles 2018 corpus. Its content is licensed CC BY-SA 4.0,
@@ -41,6 +44,11 @@ export function pack(words: readonly string[]): Uint8Array<ArrayBuffer> {
   return Bun.gzipSync(new TextEncoder().encode(`${words.join("\n")}\n`), { level: 9 });
 }
 
+/** The text a packed list holds. */
+export function unpack(bytes: Uint8Array<ArrayBuffer>): string {
+  return new TextDecoder().decode(Bun.gunzipSync(bytes));
+}
+
 async function main(): Promise<void> {
   const check = process.argv.includes("--check");
   mkdirSync(DICTIONARIES_DIR, { recursive: true });
@@ -52,7 +60,7 @@ async function main(): Promise<void> {
     const bytes = pack(words);
     const path = join(DICTIONARIES_DIR, `${lang}.txt.gz`);
     if (check) {
-      const same = existsSync(path) && Buffer.from(readFileSync(path)).equals(Buffer.from(bytes));
+      const same = existsSync(path) && unpack(readFileSync(path)) === unpack(bytes);
       if (!same) stale++;
       console.log(`${lang}: ${same ? "up to date" : "differs"} (${words.length} words)`);
     } else {

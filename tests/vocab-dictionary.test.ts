@@ -8,8 +8,8 @@ import { describe, expect, test } from "bun:test";
 import { cpSync, existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import config, { MAIN_OUT } from "../electrobun.config.ts";
-import { pack, wordList } from "../scripts/build-dictionaries.ts";
-import { foldText, heardFormApplies } from "../src/core/vocab/correct.ts";
+import { pack, unpack, wordList } from "../scripts/build-dictionaries.ts";
+import { foldText, heardFormApplies, tokenize } from "../src/core/vocab/correct.ts";
 import {
   callLanguages,
   DICTIONARIES_DIR,
@@ -48,10 +48,50 @@ describe("the bundled word lists", () => {
     expect(en.has("tambien")).toBe(false);
   });
 
-  test("the committed files are exactly what the build script writes from a list", () => {
+  test("the build script folds, splits, deduplicates and sorts a frequency list", () => {
     expect(wordList("Don't 50\nCafé 30\ncafe 10\n\n")).toEqual(["cafe", "don", "t"]);
-    const bytes = pack(["a", "b"]);
-    expect(new TextDecoder().decode(Bun.gunzipSync(bytes))).toBe("a\nb\n");
+    expect(unpack(pack(["a", "b"]))).toBe("a\nb\n");
+  });
+
+  /**
+   * What the build script guarantees of any list it writes, checked on a packed list: one folded
+   * transcript token per line, sorted, no repeats, newline-terminated. (The release also runs
+   * `scripts/build-dictionaries.ts --check` against the pinned source, which needs the network.)
+   */
+  function listProblems(bytes: Uint8Array<ArrayBuffer>): string[] {
+    const text = unpack(bytes);
+    const words = text.split("\n").slice(0, -1);
+    const out: string[] = [];
+    if (!text.endsWith("\n")) out.push("not newline-terminated");
+    if (words.some((w) => w === "")) out.push("an empty line");
+    const bad = words.filter((w) => {
+      const t = tokenize(w);
+      return w !== foldText(w) || t.length !== 1 || t[0]?.folded !== w;
+    });
+    if (bad.length > 0) out.push(`not a folded token: ${bad.slice(0, 3).join(", ")}`);
+    for (let i = 1; i < words.length; i++) {
+      const [a, b] = [words[i - 1] as string, words[i] as string];
+      if (a === b) out.push(`repeated: ${a}`);
+      else if (a > b) out.push(`out of order: ${a} before ${b}`);
+      if (out.length > 5) break;
+    }
+    return out;
+  }
+
+  test("the committed lists hold what the build script writes: folded tokens, sorted, once each", () => {
+    for (const lang of DICTIONARY_LANGUAGES) {
+      const bytes = readFileSync(join(DICTIONARIES_DIR, `${lang}.txt.gz`));
+      expect({ lang, problems: listProblems(bytes) }).toEqual({ lang, problems: [] });
+    }
+    // Positive controls: a hand edit of each kind is caught.
+    expect(listProblems(pack(["a", "b"]))).toEqual([]);
+    expect(listProblems(pack(["b", "a"]))).toEqual(["out of order: b before a"]);
+    expect(listProblems(pack(["a", "a"]))).toEqual(["repeated: a"]);
+    expect(listProblems(pack(["Café"]))[0]).toStartWith("not a folded token");
+    expect(listProblems(pack(["don't"]))[0]).toStartWith("not a folded token");
+    expect(listProblems(Bun.gzipSync(new TextEncoder().encode("a\nb")))).toEqual([
+      "not newline-terminated",
+    ]);
   });
 });
 
