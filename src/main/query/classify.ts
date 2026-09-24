@@ -14,6 +14,9 @@
  * Checked in that order: naming is an instruction, a time window is a hard filter, and the rest
  * only weight the budget. A speaker named in the question boosts that speaker's turns and never
  * filters, because live labels can be wrong.
+ *
+ * A question about the asker ("Was my name mentioned?", the ask box preset) searches for the user's
+ * own name: the words "my name" never occur in a transcript, the name does.
  */
 
 import { foldText, tokenize } from "../../core/vocab/correct.ts";
@@ -57,6 +60,18 @@ export interface ClassifyContext {
   /** The call's speakers with their labels and names, to recognise them in the question. */
   roster: readonly SpeakerRef[];
   stopwords: ReadonlySet<string>;
+  /** The user's name (`user.name` when the call was created), for questions about "me". */
+  user?: string;
+}
+
+/** A question about the asker being named or talked about. */
+const ABOUT_ME =
+  /\b(my name|mention(?:s|ed)? me|(?:talk(?:s|ed|ing)?|ask(?:s|ed)?|said anything) about me|called me|asked me|to me)\b/i;
+const ABOUT_ME_WORDS = new Set(["name", "mention", "mentions", "mentioned", "called", "asked"]);
+
+/** The words to search for a question: the user's name first when it is about "me". */
+export function searchText(question: string, user: string | undefined): string {
+  return user && ABOUT_ME.test(question) ? `${user} ${question}` : question;
 }
 
 const MIN = 60_000;
@@ -309,6 +324,12 @@ export function classify(question: string, ctx: ClassifyContext): Classification
 
   const naming = parseNaming(question);
   if (naming) return { intent: "naming", speakers, terms, naming };
+
+  if (ctx.user && ABOUT_ME.test(question)) {
+    const me = tokenize(ctx.user).map((t) => t.folded);
+    const rest = terms.filter((t) => !ABOUT_ME_WORDS.has(t) && !me.includes(t));
+    terms.splice(0, terms.length, ...me, ...rest);
+  }
 
   const window = clampToCall(parseWindow(question, ctx), ctx);
   if (window) return { intent: "time", window, speakers, terms: withoutTimeWords(terms) };

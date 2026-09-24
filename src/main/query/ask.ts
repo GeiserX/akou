@@ -23,6 +23,7 @@ import {
   type ProviderErrorKind,
   runProvider,
 } from "../llm/provider.ts";
+import { searchText } from "./classify.ts";
 import type { CallQuery, ContextPack } from "./context.ts";
 import { formatCitation, renderLine } from "./render.ts";
 
@@ -74,7 +75,7 @@ export interface AskOptions {
 
 /** The parts of the call that match the question: BM25 hits, else the newest lines of the pack. */
 export function excerptsFor(q: CallQuery, question: string, pack: ContextPack): ExcerptBlock[] {
-  const hits = q.search(question, EXCERPT_K);
+  const hits = q.search(searchText(question, q.view.call?.user), EXCERPT_K);
   if (hits.length > 0) return hits.map((h) => ({ citation: h.citation, lines: h.rendered }));
   const recent = pack.lines.slice(-RECENT_LINES);
   const first = recent[0];

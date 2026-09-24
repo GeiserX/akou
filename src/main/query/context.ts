@@ -384,6 +384,7 @@ export class CallQuery {
       now: ref,
       roster,
       stopwords: this.index.stopwords,
+      user: this.view.call?.user,
     });
     const memo = memoStatus(this.view, this.linesIter(), ref, this.memoCoverage());
 
