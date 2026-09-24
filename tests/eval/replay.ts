@@ -9,7 +9,7 @@
 
 import type { LogEvent } from "../../src/core/log/events.ts";
 import { fold } from "../../src/core/log/fold.ts";
-import { CallQuery, type ContextOptions } from "../../src/main/query/context.ts";
+import { CallQuery, type ContextOptions, MCP_BUDGET } from "../../src/main/query/context.ts";
 
 export interface EvalQuestion {
   q: string;
@@ -24,19 +24,29 @@ export interface EvalReport {
   rate: number;
   byKind: Record<string, { total: number; hits: number }>;
   misses: { q: string; kind: string }[];
+  /** The bound the rate is measured under: a pack that includes everything scores 100 %. */
+  bound: number;
+  maxTokens: number;
+  /** Packs over the bound, or not in retrieval mode. The rate means nothing unless this is 0. */
+  overBound: number;
 }
 
 export function replay(
   events: readonly LogEvent[],
   questions: readonly EvalQuestion[],
-  opts: ContextOptions,
+  opts: ContextOptions & { bound?: number },
 ): EvalReport {
+  const bound = opts.bound ?? MCP_BUDGET;
+  let maxTokens = 0;
+  let overBound = 0;
   const engine = new CallQuery(fold(events));
   const byKind: EvalReport["byKind"] = {};
   const misses: EvalReport["misses"] = [];
   let hits = 0;
   for (const q of questions) {
     const pack = engine.context(q.q, opts);
+    maxTokens = Math.max(maxTokens, pack.tokens);
+    if (pack.tokens > bound || pack.mode !== "retrieval") overBound++;
     const ids = new Set(pack.lines.map((l) => l.id));
     const ok = q.gold.some((g) => ids.has(g));
     const k = byKind[q.kind] ?? { total: 0, hits: 0 };
@@ -55,6 +65,9 @@ export function replay(
     rate: questions.length === 0 ? 0 : hits / questions.length,
     byKind,
     misses,
+    bound,
+    maxTokens,
+    overBound,
   };
 }
 
@@ -62,5 +75,9 @@ export function formatReport(r: EvalReport): string {
   const kinds = Object.entries(r.byKind)
     .map(([k, v]) => `${k} ${v.hits}/${v.total}`)
     .join(", ");
-  return `answering segment in the pack for ${r.hits} of ${r.total} questions (${(r.rate * 100).toFixed(1)} %): ${kinds}`;
+  return (
+    `answering segment in the pack for ${r.hits} of ${r.total} questions ` +
+    `(${(r.rate * 100).toFixed(1)} %): ${kinds}; largest pack ${r.maxTokens} of ${r.bound} tokens` +
+    (r.overBound > 0 ? `, ${r.overBound} packs over the bound` : "")
+  );
 }

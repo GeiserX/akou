@@ -23,6 +23,8 @@ export interface BenchResult {
   p95: number;
   max: number;
   maxTokens: number;
+  /** Every measured build time, ascending. */
+  times: number[];
 }
 
 const MIXED = [
@@ -64,8 +66,7 @@ export function runPackBench(
     maxTokens = Math.max(maxTokens, pack.tokens);
   }
   times.sort((a, b) => a - b);
-  const at = (p: number) =>
-    times[Math.min(times.length - 1, Math.floor(times.length * p))] as number;
+  const at = (p: number) => percentile(times, p);
   return {
     questions: n,
     lines: engine.index.allLines().length,
@@ -75,7 +76,17 @@ export function runPackBench(
     p95: at(0.95),
     max: times[times.length - 1] as number,
     maxTokens,
+    times,
   };
+}
+
+/**
+ * Nearest-rank percentile of an ascending list: the value at index `floor(n * p)`, so it never
+ * reads low. On [1..100], p95 is 96 and p50 is 51.
+ */
+export function percentile(sorted: readonly number[], p: number): number {
+  if (sorted.length === 0) return Number.NaN;
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))] as number;
 }
 
 /** The latency gate, as a function so a test can prove it trips. */
