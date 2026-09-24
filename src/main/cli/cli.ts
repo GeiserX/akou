@@ -2,7 +2,7 @@
 /**
  * The `akou` command line (docs/DESIGN.md section 6.1): every command is a thin client of the
  * app's local API (`client.ts`), except the few that touch only akou's own folders (`token`,
- * `models`, `doctor`). Human output by default, the API's JSON with `--json`, and the
+ * `models`, `skill`, `doctor`). Human output by default, the API's JSON with `--json`, and the
  * design's exit codes:
  *
  *   0 ok · 3 nothing live · 64 usage · 65 a vocabulary term fails validation · 69 unavailable
@@ -24,6 +24,7 @@ import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { noteCommands } from "./commands/notes.ts";
 import { setupCommands } from "./commands/setup.ts";
+import { skillCommand } from "./commands/skill.ts";
 import { vocab } from "./commands/vocab.ts";
 import type { Command, Ctx, Io } from "./context.ts";
 
@@ -46,6 +47,7 @@ export const COMMANDS: readonly Command[] = [
   vocab,
   doctorCommand,
   ...setupCommands,
+  skillCommand,
   mcp,
 ];
 
@@ -68,6 +70,7 @@ export interface CliOptions {
   launch?: readonly string[] | null;
   launchBudgetMs?: number;
   models?: readonly ModelSpecEntry[];
+  skillSource?: string;
   version?: string;
 }
 
@@ -110,6 +113,7 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
       launchBudgetMs: o.launchBudgetMs,
     }),
     models: o.models,
+    skillSource: o.skillSource,
     version: o.version ?? APP_VERSION,
   };
   try {

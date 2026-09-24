@@ -29,7 +29,9 @@ export interface Ctx {
   client: ApiClient;
   /** Test seams: the model registry doctor and `models` check against. */
   models?: readonly ModelSpecEntry[];
-  /** The app's version. */
+  /** Where `skill install` copies from (`skills/akou` in the repository). */
+  skillSource?: string;
+  /** The app's version; the skill must carry the same one. */
   version: string;
 }
 
