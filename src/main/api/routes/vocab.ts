@@ -62,7 +62,8 @@ async function editFile<T>(
   const prev = fileLocks.get(path) ?? Promise.resolve();
   const run = prev.then(async () => {
     const loaded = await readVocabFile(path);
-    if (loaded.errors.length > 0 && loaded.exists && loaded.file.entries.length === 0) {
+    // A rewrite keeps only what parsed: an edit to a file with any error would delete the bad part.
+    if (loaded.errors.length > 0 && loaded.exists) {
       throw new HttpError(409, "vocab_file_invalid", `${path}: ${loaded.errors[0]?.message}`);
     }
     const out = edit(loaded.file, loaded);
@@ -245,6 +246,8 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       const done: string[] = [];
       const accepted: VocabEntry[] = [];
       if (b.call) {
+        // Outside `/calls`, so the server did not wait for recovery to index the calls: wait here.
+        await c.app.manager.init();
         const id = resolveRef(c.app, b.call, { allowLast: false });
         const call = await c.app.call(id);
         workspace ??= call.view.call?.workspace;

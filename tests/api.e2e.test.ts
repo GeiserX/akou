@@ -5,7 +5,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
@@ -478,6 +478,24 @@ describe("the vocabulary files", () => {
     const bad = await rig.api("POST", "/vocab", { term: "" });
     expect([bad.status, bad.body.error]).toEqual([400, "bad_term"]);
     expect((await rig.api("GET", "/vocab?workspace=..")).status).toBe(400);
+  });
+
+  test("a file with a bad entry is never rewritten: an edit is 409 and the file is untouched", async () => {
+    const path = join(rig.app.configDir, "vocabulary", "broken.yaml");
+    const text = [
+      "version: 1",
+      "entries:",
+      '  - { term: "Hetzner", heard: ["hetzna"], source: "user", confirmed: true, added_at: "2026-09-01" }',
+      '  - { term: "Anika", source: "user", confirmed: "yes", added_at: "2026-09-01" }',
+      "",
+    ].join("\n");
+    mkdirSync(join(rig.app.configDir, "vocabulary"), { recursive: true });
+    writeFileSync(path, text);
+    const add = await rig.api("POST", "/vocab", { term: "Vercel", workspace: "broken" });
+    expect([add.status, add.body.error]).toEqual([409, "vocab_file_invalid"]);
+    const del = await rig.api("DELETE", "/vocab/Hetzner?workspace=broken");
+    expect([del.status, del.body.error]).toEqual([409, "vocab_file_invalid"]);
+    expect(readFileSync(path, "utf8")).toBe(text);
   });
 });
 

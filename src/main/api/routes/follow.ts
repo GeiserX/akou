@@ -24,30 +24,37 @@ export const MAX_WAIT_SECONDS = 30;
 export const STREAM_TICK_MS = 250;
 export const KEEPALIVE_MS = 15_000;
 
-/** Resolves on the first event past `after`, at the deadline, or when the client goes away. */
-function waitForEvent(
+/**
+ * Waits for the first event past `after`, the deadline, or the client going away. It listens from
+ * the moment it is made, so an event appended while the caller reads the log is not missed: make
+ * it, read, then `wait`; `stop` it in every case.
+ */
+function eventWaiter(
   app: ApiApp,
   id: string,
   after: number,
-  ms: number,
   signal: AbortSignal,
-): Promise<void> {
-  return new Promise((resolve) => {
-    let done = false;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      clearTimeout(timer);
-      unsubscribe();
-      signal.removeEventListener("abort", finish);
-      resolve();
-    };
-    const unsubscribe = app.subscribe(id, (e) => {
-      if (e.seq > after) finish();
-    });
-    const timer = setTimeout(finish, ms);
-    signal.addEventListener("abort", finish);
+): { wait(ms: number): Promise<void>; stop(): void } {
+  let arrived = false;
+  let wake = () => {};
+  const stop = app.subscribe(id, (e) => {
+    if (e.seq <= after) return;
+    arrived = true;
+    wake();
   });
+  const wait = (ms: number) =>
+    new Promise<void>((resolve) => {
+      if (arrived || signal.aborted) return resolve();
+      const finish = () => {
+        clearTimeout(timer);
+        signal.removeEventListener("abort", finish);
+        resolve();
+      };
+      const timer = setTimeout(finish, ms);
+      signal.addEventListener("abort", finish);
+      wake = finish;
+    });
+  return { wait, stop };
 }
 
 /** Parses a time bound: epoch ms, or an ISO 8601 date-time with its zone. */
@@ -73,17 +80,29 @@ export function followRoutes(r: Router<ApiApp>): void {
     const id = callId(c);
     const after = intParam(c.url, "after", 0, 0, Number.MAX_SAFE_INTEGER) as number;
     const wait = intParam(c.url, "wait", 0, 0, MAX_WAIT_SECONDS) as number;
-    let events = await c.app.events(id, after);
-    if (events.length === 0 && wait > 0) {
-      await waitForEvent(c.app, id, after, wait * 1000, c.req.signal);
+    const waiter = wait > 0 ? eventWaiter(c.app, id, after, c.req.signal) : null;
+    let events: LogEvent[];
+    try {
       events = await c.app.events(id, after);
+      if (events.length === 0 && waiter) {
+        await waiter.wait(wait * 1000);
+        events = await c.app.events(id, after);
+      }
+    } finally {
+      waiter?.stop();
     }
     return json(200, { call: id, events, cursor: events.at(-1)?.seq ?? after });
   });
 
   r.add("GET", "/calls/:id/stream", async (c) => {
     const id = callId(c);
-    const after = intParam(c.url, "after", 0, 0, Number.MAX_SAFE_INTEGER) as number;
+    // A reconnecting client repeats the URL and names the last event it got: resume after that.
+    const last = (c.req.headers.get("last-event-id") ?? "").trim();
+    const resumed = /^\d{1,15}$/.test(last) ? Number(last) : 0;
+    const after = Math.max(
+      intParam(c.url, "after", 0, 0, Number.MAX_SAFE_INTEGER) as number,
+      resumed,
+    );
     const call = await c.app.call(id);
     const app = c.app;
     const enc = new TextEncoder();
