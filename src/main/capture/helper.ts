@@ -12,7 +12,7 @@
  */
 
 import { closeSync, existsSync, openSync, writeSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import {
   type CaptureEngine,
   type CaptureHandlers,
@@ -300,6 +300,30 @@ export function locateHelper(
   const bundled = join(o.dir ?? import.meta.dir, HELPER_NAME);
   if ((o.exists ?? existsSync)(bundled)) return { command: [bundled], source: "bundled" };
   return { command: [HELPER_NAME], source: "path" };
+}
+
+export interface HelperFound extends HelperLocation {
+  /** The program's absolute path when it is there, else null. */
+  found: string | null;
+}
+
+/**
+ * `locateHelper`, and whether its program is there: an absolute path must exist, a bare name is
+ * looked up with `which` (PATH by default, which is what the spawn does).
+ */
+export function findHelper(
+  configured: readonly string[],
+  which: (name: string) => string | null = (name) => Bun.which(name),
+  o: { dir?: string; exists?: (path: string) => boolean } = {},
+): HelperFound {
+  const loc = locateHelper(configured, o);
+  const program = loc.command[0] as string;
+  const found = isAbsolute(program)
+    ? (o.exists ?? existsSync)(program)
+      ? program
+      : null
+    : which(program);
+  return { ...loc, found };
 }
 
 /** Launch arguments for `akou-capture run` (DESIGN 2.4). */

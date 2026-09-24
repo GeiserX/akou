@@ -10,8 +10,10 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openGuard } from "../src/main/api/guard.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
+import type { HelperFound } from "../src/main/capture/helper.ts";
 import { parseArgs } from "../src/main/cli/args.ts";
 import { ApiClient, EXIT, exitFor, type RequestOptions } from "../src/main/cli/client.ts";
+import { helperCheck } from "../src/main/cli/commands/doctor.ts";
 import { followCommands } from "../src/main/cli/commands/follow.ts";
 import type { Command } from "../src/main/cli/context.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
@@ -431,6 +433,51 @@ describe("doctor and models", () => {
     },
     LONG,
   );
+
+  test(
+    "doctor: a CLI with no helper beside it asks the running app, and only warns when none runs",
+    async () => {
+      // The released CLI has no helper beside it (it ships inside the app) and none on PATH.
+      const t = tempDir();
+      const bare = { ...process.env, AKOU_HOME: t.dir, PATH: "", SHELL: "" };
+      const alone = await cli(bare, ["doctor", "--json"]);
+      const line = alone.json.checks.find((c: { name: string }) => c.name === "helper");
+      expect(line.state).toBe("warn");
+      expect(line.detail).toContain("ships inside the app");
+      t.cleanup();
+
+      // A running app answers with the helper it resolved itself.
+      const status = await rig.api("GET", "/status");
+      expect(status.body.helper).toMatchObject({ source: "config", found: process.execPath });
+      const withApp = await cli({ ...process.env, ...rig.env, PATH: "", SHELL: "" }, [
+        "doctor",
+        "--json",
+      ]);
+      const seen = withApp.json.checks.find((c: { name: string }) => c.name === "helper");
+      expect(seen.state).toBe("ok");
+      expect(seen.detail).toContain("the running app");
+    },
+    LONG,
+  );
+
+  test("doctor's helper line: the running app's answer wins, a missing config helper fails", () => {
+    const app = (found: string | null): HelperFound => ({
+      command: ["/Applications/akou.app/x/akou-capture"],
+      source: "bundled",
+      found,
+    });
+    const cliSide: HelperFound = { command: ["akou-capture"], source: "path", found: null };
+    expect(helperCheck(cliSide, app("/A/akou-capture")).state).toBe("ok");
+    // Positive control: the running app cannot find its own helper.
+    expect(helperCheck(cliSide, app(null)).state).toBe("fail");
+    expect(helperCheck(cliSide, null).state).toBe("warn");
+    expect(helperCheck({ ...cliSide, found: "/usr/local/bin/akou-capture" }, null).state).toBe(
+      "ok",
+    );
+    expect(
+      helperCheck({ command: ["/nope/helper"], source: "config", found: null }, null),
+    ).toMatchObject({ state: "fail", detail: expect.stringContaining("capture.helper") });
+  });
 
   test("doctor verifies checksums: a good file passes, a same-size wrong file fails", async () => {
     const dir = join(rig.home, ".local", "share", "akou", "models", "tiny");

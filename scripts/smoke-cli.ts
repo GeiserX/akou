@@ -4,7 +4,8 @@
  *   bun scripts/smoke-cli.ts
  *
  * - `akou --version` prints `package.json`'s version;
- * - `akou doctor --json` answers a report with the settings, token, models and helper checks;
+ * - `akou doctor --json` answers a report with the settings, token, models and helper checks, and
+ *   with no app running and no helper on PATH the helper line is not a failure;
  * - `akou models list --json` lists the models folder, without downloading anything;
  * - `akou skill install --dir DIR` installs the `SKILL.md` built into the binary, at the version;
  * - `akou start --json`, with no app running and none installed, exits 69 and says the app must be
@@ -48,8 +49,8 @@ const env = {
   AKOU_MODELS_DIR: join(home, "models"),
   AKOU_NO_DOWNLOAD: "1",
 };
-function akou(args: string[]) {
-  const r = spawnSync(exe, args, { env, encoding: "utf8", timeout: 30_000 });
+function akou(args: string[], extra: Record<string, string> = {}) {
+  const r = spawnSync(exe, args, { env: { ...env, ...extra }, encoding: "utf8", timeout: 30_000 });
   let json: unknown = null;
   try {
     json = JSON.parse(r.stdout);
@@ -61,14 +62,22 @@ try {
   const v = akou(["--version"]);
   check(v.code === 0 && v.out === version, `akou --version is ${version}`, v.out);
 
-  const doctor = akou(["doctor", "--json"]);
-  const checks = (
-    (doctor.json as { checks?: { name: string; state: string }[] })?.checks ?? []
-  ).map((c) => c.name);
+  // No helper on PATH and no login-shell lookup: the released CLI's situation on a user's Mac.
+  const doctor = akou(["doctor", "--json"], { PATH: "/usr/bin:/bin", SHELL: "" });
+  const lines =
+    (doctor.json as { checks?: { name: string; state: string; detail: string }[] })?.checks ?? [];
+  const checks = lines.map((c) => c.name);
   check(
     ["settings", "token", "api", "models", "helper"].every((n) => checks.includes(n)),
     "akou doctor --json reports settings, token, api, models and helper",
     checks.join(", ") || doctor.err,
+  );
+  // The helper ships inside the app; with no app running doctor cannot check it, so it must not fail.
+  const helper = lines.find((c) => c.name === "helper");
+  check(
+    helper !== undefined && helper.state !== "fail",
+    "akou doctor does not fail the helper it cannot see from outside the app",
+    helper ? `${helper.state}: ${helper.detail}` : "(no helper line)",
   );
 
   const models = akou(["models", "list", "--json"]);

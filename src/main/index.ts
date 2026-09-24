@@ -66,7 +66,7 @@ import { partFile } from "./call/folder.ts";
 import { CallManager, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
-import { AkouCaptureEngine, locateHelper } from "./capture/helper.ts";
+import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
 import {
   HOOK_STAGES,
   type HookStage,
@@ -1089,6 +1089,9 @@ export class AkouApp implements ApiApp {
         : null,
       asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
       models: this.models(),
+      // The helper this app spawns, resolved from inside the bundle: `akou doctor` from the
+      // standalone CLI, which has no helper beside it, reads its answer here.
+      helper: findHelper(s["capture.helper"]),
       provider: await this.providerStatus(),
       harnesses: this.discovery,
       share: { active: this.sharing.status().length > 0, shares: this.sharing.status() },
