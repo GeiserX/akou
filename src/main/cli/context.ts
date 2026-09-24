@@ -19,6 +19,8 @@ export interface Io {
   env: Record<string, string | undefined>;
   out(text: string): void;
   err(text: string): void;
+  /** Writes without a newline (a streamed answer). Absent: commands print whole lines only. */
+  write?(text: string): void;
   /** Ends `tail -f` and the MCP server. */
   signal?: AbortSignal;
 }

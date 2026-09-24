@@ -1,6 +1,6 @@
 /**
  * Setup commands (docs/DESIGN.md section 6.1): `config`, `token`, `models`, `share`, and the ones
- * whose machinery is not built yet (`devices`, `apps`, `hooks`, `import`, `self-update`), which say
+ * whose machinery is not built yet (`devices`, `apps`, `self-update`), which say
  * so and exit 69 rather than pretend.
  *
  * `token` and `models` work without the app: they touch only akou's own config and models folders.
@@ -263,19 +263,6 @@ export const setupCommands: Command[] = [
     "Apps playing audio, for --call app:ID",
     "akou apps",
     "listing apps needs the capture helper's app query, which is not built yet",
-  ),
-  unbuilt(
-    "hooks",
-    "Re-run the hand-off hooks of a call",
-    "akou hooks run CALL [--stage S]",
-    "hooks are part of the hand-off module, which is not built yet",
-    { stage: { type: "string" } },
-  ),
-  unbuilt(
-    "import",
-    "Convert predecessor call folders into event logs",
-    "akou import hark-viewer DIR…",
-    "importing hark-viewer folders is not built yet",
   ),
   unbuilt(
     "self-update",

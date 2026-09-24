@@ -391,6 +391,12 @@ export class CallManager {
     return p;
   }
 
+  /** Indexes a call folder written while the app runs (an import), so every route finds it. */
+  async adopt(dir: string, workspace: string): Promise<void> {
+    await this.init();
+    await this.reindex(dir, workspace);
+  }
+
   /** The folder and workspace of a known call, loaded or not. */
   summary(id: string): CallSummary | undefined {
     return this.index.get(id);
