@@ -334,6 +334,8 @@ export class CallView {
   private readonly finalMap = new Map<string, SpeakerMap>();
   private readonly suggestions = new Map<string, SpeakerSuggest>();
   private readonly centroids = new Map<string, string>();
+  /** Every `speaker.unmerge` pair, `from>into`: the live clusterer never merges these again. */
+  private readonly unmerges = new Set<string>();
 
   private readonly _notes = new Map<string, NoteView>();
   private readonly _remember = new Map<string, RememberView & { retracted: boolean }>();
@@ -473,6 +475,7 @@ export class CallView {
         break;
       case "speaker.unmerge":
         if (this.merges.get(e.from) === e.into) this.merges.delete(e.from);
+        this.unmerges.add(`${e.from}>${e.into}`);
         this.changeLog.push(ALL_LINES);
         break;
       case "speaker.name":
@@ -869,6 +872,26 @@ export class CallView {
 
   centroid(spk: string): string | undefined {
     return this.centroids.get(spk);
+  }
+
+  /**
+   * The live clustering state a restart restores: the latest centroid per cluster, the merges in
+   * force and every pair ever unmerged.
+   */
+  speakerState(): {
+    centroids: { spk: string; vec: string }[];
+    merges: { from: string; into: string }[];
+    unmerged: { from: string; into: string }[];
+  } {
+    const pair = (k: string) => {
+      const [from, into] = k.split(">") as [string, string];
+      return { from, into };
+    };
+    return {
+      centroids: [...this.centroids].map(([spk, vec]) => ({ spk, vec })),
+      merges: [...this.merges].map(([from, into]) => ({ from, into })),
+      unmerged: [...this.unmerges].map(pair),
+    };
   }
 
   // -------------------------------------------------------------------------

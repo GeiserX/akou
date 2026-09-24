@@ -24,6 +24,7 @@ import {
   parseVocab,
   readVocabFile,
   removeEntry,
+  renameReplacing,
   serializeVocab,
   toFoldEntries,
   upsertEntry,
@@ -227,6 +228,34 @@ describe("vocabulary files: on disk", () => {
     } finally {
       cleanup();
     }
+  });
+
+  test("a rename Windows refuses for a moment (another write holds the target) is retried", async () => {
+    const busy = (code: string) => Object.assign(new Error(code), { code });
+    let calls = 0;
+    const flaky = async () => {
+      calls++;
+      if (calls <= 2) throw busy(calls === 1 ? "EPERM" : "EBUSY");
+    };
+    await renameReplacing("a", "b", flaky);
+    expect(calls).toBe(3);
+    // Positive controls: any other error is not retried, and a target that stays busy still fails.
+    calls = 0;
+    await expect(
+      renameReplacing("a", "b", async () => {
+        calls++;
+        throw busy("ENOENT");
+      }),
+    ).rejects.toThrow("ENOENT");
+    expect(calls).toBe(1);
+    calls = 0;
+    await expect(
+      renameReplacing("a", "b", async () => {
+        calls++;
+        throw busy("EACCES");
+      }),
+    ).rejects.toThrow("EACCES");
+    expect(calls).toBeGreaterThan(3);
   });
 
   test("the writer refuses a file that would not read back", async () => {
