@@ -5,6 +5,8 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
+import { defaultModelsDir } from "../src/main/asr/models.ts";
 import {
   buildSettings,
   loadConfig,
@@ -122,6 +124,31 @@ describe("the environment", () => {
     const noise = loadConfig({ ...h.env, AKOU_PORT: "9", HARK_PORT: "9" });
     expect(noise.settings["api.port"]).toBe(8476);
     h.cleanup();
+  });
+
+  test("the default models folder follows LOCALAPPDATA on Windows and XDG_DATA_HOME on Linux", () => {
+    const t = tempDir();
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      LOCALAPPDATA: t.dir,
+      XDG_DATA_HOME: t.dir,
+      AKOU_MODELS_DIR: undefined,
+      AKOU_HOME: undefined,
+    };
+    // The default is computed when the module loads, so a fresh process reads it.
+    const schema = pathToFileURL(join(import.meta.dir, "..", "src", "main", "config", "schema.ts"));
+    const r = Bun.spawnSync(
+      [
+        process.execPath,
+        "-e",
+        `const { SETTINGS } = await import(${JSON.stringify(schema.href)}); console.log(SETTINGS["asr.modelsDir"].default);`,
+      ],
+      { env },
+    );
+    expect(r.stdout.toString().trim()).toBe(
+      defaultModelsDir({ LOCALAPPDATA: t.dir, XDG_DATA_HOME: t.dir }),
+    );
+    t.cleanup();
   });
 
   test("on Windows the config folder is under APPDATA unless AKOU_HOME is set", () => {

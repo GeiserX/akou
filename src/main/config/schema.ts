@@ -144,7 +144,11 @@ export const SETTINGS = {
   "asr.modelsDir": {
     type: "string",
     min: 1,
-    default: defaultModelsDir({}),
+    // The platform's data folder, never AKOU_MODELS_DIR, which applies as an override (`env`).
+    default: defaultModelsDir({
+      LOCALAPPDATA: process.env.LOCALAPPDATA,
+      XDG_DATA_HOME: process.env.XDG_DATA_HOME,
+    }),
     env: "AKOU_MODELS_DIR",
     doc: "Folder the speech models are downloaded into and loaded from.",
   },
