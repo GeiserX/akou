@@ -26,7 +26,9 @@ import {
   type ModelSpecEntry,
   modelFile,
   networkForbidden,
+  pruneRetiredModels,
   RECOGNIZER,
+  RETIRED_MODELS,
   verifyModels,
 } from "../src/main/asr/models.ts";
 import { SherpaRecognizer, writeBpeVocab } from "../src/main/asr/sherpa.ts";
@@ -91,6 +93,23 @@ describe("the registry", () => {
     const names = MODELS[0]?.files.map((f) => f.name);
     expect(names).toContain("tokenizer.json");
     expect(names).toContain("tokens.txt");
+  });
+
+  test("a retired model is never a current one, and pruning removes only the retired folders", () => {
+    const current = new Set(MODELS.map((m) => m.id));
+    expect(RETIRED_MODELS.length).toBeGreaterThan(0);
+    for (const id of RETIRED_MODELS) expect(current.has(id)).toBe(false);
+    const d = dir();
+    for (const id of [...RETIRED_MODELS, RECOGNIZER, "mine"]) {
+      mkdirSync(join(d, id), { recursive: true });
+      writeFileSync(join(d, id, "f.onnx"), "x");
+    }
+    expect(pruneRetiredModels(d)).toEqual([...RETIRED_MODELS]);
+    for (const id of RETIRED_MODELS) expect(existsSync(join(d, id))).toBe(false);
+    expect(existsSync(join(d, RECOGNIZER, "f.onnx"))).toBe(true);
+    expect(existsSync(join(d, "mine", "f.onnx"))).toBe(true);
+    // Nothing left to remove the second time.
+    expect(pruneRetiredModels(d)).toEqual([]);
   });
 
   test("the models folder is per user and AKOU_MODELS_DIR overrides it", () => {
@@ -218,7 +237,7 @@ describe("[spike] Hotwords to a non-transducer model kill the process: the sherp
 
   test("an empty hotword string and any hotwords to a non-transducer throw before createStream", () => {
     const a = stub();
-    const parakeet = new SherpaRecognizer("parakeet-tdt-0.6b-v3-int8", a.rec);
+    const parakeet = new SherpaRecognizer(RECOGNIZER, a.rec);
     expect(() => parakeet.decode(audio, "")).toThrow(/refusing hotwords/);
     const b = stub();
     const moonshine = new SherpaRecognizer("moonshine-base", b.rec);
@@ -229,7 +248,7 @@ describe("[spike] Hotwords to a non-transducer model kill the process: the sherp
 
   test("positive control: a transducer with hotwords, and any model without, reach createStream", () => {
     const a = stub();
-    const parakeet = new SherpaRecognizer("parakeet-tdt-0.6b-v3-int8", a.rec);
+    const parakeet = new SherpaRecognizer(RECOGNIZER, a.rec);
     expect(parakeet.decode(audio, "Hetzner").text).toBe("ok");
     expect(parakeet.decode(audio).text).toBe("ok");
     const b = stub();

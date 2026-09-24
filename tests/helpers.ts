@@ -73,7 +73,7 @@ export class LogBuilder {
       a0: 0,
       a1: 1,
       w1: w0 + 1000,
-      model: "parakeet-tdt-0.6b-v3-int8",
+      model: "parakeet-tdt-0.6b-v3-fp32",
       ...s,
       w0,
     });
