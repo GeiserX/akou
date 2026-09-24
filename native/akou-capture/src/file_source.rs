@@ -107,6 +107,7 @@ impl Frontend for FileSource {
                 rate: wav.rate,
             }),
             exclude: vec![],
+            devices: [None, None],
         })
     }
 

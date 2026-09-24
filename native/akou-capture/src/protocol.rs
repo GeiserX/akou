@@ -251,6 +251,30 @@ pub fn stopped(file_seconds: f64, reason: &str) -> String {
     .to_line()
 }
 
+/// The one stdout line of `akou-capture devices`.
+pub fn devices(list: &crate::source::Endpoints) -> String {
+    let side = |eps: &[crate::source::Endpoint]| {
+        Json::Arr(
+            eps.iter()
+                .map(|e| {
+                    Json::obj(vec![
+                        ("id", Json::str(&e.id)),
+                        ("name", Json::str(&e.name)),
+                        ("default", Json::Bool(e.default)),
+                    ])
+                })
+                .collect(),
+        )
+    };
+    Json::obj(vec![
+        ("type", Json::str("devices")),
+        ("backend", Json::str(list.backend)),
+        ("inputs", side(&list.inputs)),
+        ("outputs", side(&list.outputs)),
+    ])
+    .to_line()
+}
+
 // ---------------------------------------------------------------------------
 // stdin commands
 
