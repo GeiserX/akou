@@ -172,7 +172,18 @@ u64 capture_ns (host clock) | f64 file_seconds (position in this part's Opus fil
 u32 frames | f32 samples[frames]
 ```
 
-**stderr** carries one JSON object per line: `hello {protocol, version, caps}`, `capturing {mic:{id,name,rate}, call:{mode, rate}, exclude:[names]}` (devices opened and the Opus file created; no sample needed), `first_audio {ch, capture_ns}` once per channel, `level {mic_dbfs, call_dbfs}` four times a second, `health {ch, state, silent_for, rebuilds, detail}`, `device {ch, event, name}`, `warn {code, msg}`, `stopped {file_seconds, reason}`.
+**stderr** carries one JSON object per line: `hello {protocol, version, caps}`, `capturing {mic:{id,name,rate}, call:{mode, rate}, exclude:[names], capture_ns}` (devices opened and the Opus file created; no sample needed; `capture_ns` is the host clock of file position 0, the anchor `part.started` records), `first_audio {ch, capture_ns}` once per channel, `level {mic_dbfs, call_dbfs}` four times a second, `health {ch, state, silent_for, rebuilds, detail}`, `device {ch, event, name}`, `warn {code, msg}`, `stopped {file_seconds, reason}`. A `capture_ns` on stderr is a decimal string, because u64 nanoseconds exceed what a JSON number holds exactly. One line of each, exactly as the app parses them (a test reads this block):
+
+```jsonl
+{"type":"hello","protocol":"akou-capture/1","version":"0.1.0","caps":["tap"]}
+{"type":"capturing","mic":{"id":"default","name":"MacBook Pro Microphone","rate":48000},"call":{"mode":"system","rate":48000},"exclude":["akou Graphics and Media"],"capture_ns":"123456789012345678"}
+{"type":"first_audio","ch":"mic","capture_ns":"123456789032345678"}
+{"type":"level","mic_dbfs":-20.5,"call_dbfs":-31}
+{"type":"health","ch":"call","state":"dead","silent_for":12,"rebuilds":1,"detail":"output running, tap delivers zeros"}
+{"type":"device","ch":"mic","event":"changed","name":"USB Microphone"}
+{"type":"warn","code":"permission-suspect","msg":"open System Settings > Privacy & Security > Screen & System Audio Recording"}
+{"type":"stopped","file_seconds":12.5,"reason":"stop"}
+```
 
 **stdin** takes one command per line: `probe_call`, `rebuild_call`, `rebuild_mic`, `stop`. Closing stdin means stop. Mute and pause are app concerns: the app zeroes mic packets (mute) or tells the helper to drop (pause) and records the anchors.
 
