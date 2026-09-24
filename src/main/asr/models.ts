@@ -166,10 +166,13 @@ export interface FileState {
 export async function verifyModels(
   dir: string,
   ids: readonly string[] = MODELS.map((m) => m.id),
+  registry: readonly ModelSpecEntry[] = MODELS,
 ): Promise<FileState[]> {
   const out: FileState[] = [];
   for (const id of ids) {
-    for (const f of modelEntry(id).files) {
+    const m = registry.find((x) => x.id === id);
+    if (!m) throw new Error(`unknown model ${id}`);
+    for (const f of m.files) {
       const path = modelFile(dir, id, f.name);
       const base = { model: id, name: f.name, path };
       if (!existsSync(path)) out.push({ ...base, state: "missing" });

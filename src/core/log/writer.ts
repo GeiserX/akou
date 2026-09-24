@@ -123,7 +123,12 @@ function tryCreateLock(lockPath: string, pid: number): boolean {
   }
 }
 
-function acquireLock(
+/**
+ * Takes a pid lock file, taking over one whose holder is dead. Throws `LockError` while a live
+ * process holds it. Returns the stale holder's pid when it took one over, else null. The app's
+ * single-instance lock uses it too.
+ */
+export function acquireLock(
   lockPath: string,
   pid: number,
   isAlive: (pid: number) => boolean,

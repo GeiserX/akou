@@ -16,11 +16,14 @@
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
+    "@modelcontextprotocol/client": "2.1.0",
     "@types/bun": "1.4.2",
     "gpt-tokenizer": "4.0.0",
     "typescript": "7.0.2"
   },
   "dependencies": {
-    "sherpa-onnx-node": "1.13.8"
+    "@modelcontextprotocol/server": "2.1.0",
+    "sherpa-onnx-node": "1.13.8",
+    "zod": "4.6.5"
   }
 }
