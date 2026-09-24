@@ -6,14 +6,14 @@ This page records what the M0 gates measured on real hardware, gate by gate: wha
 
 **The setup.** akou at commit `f6cabfc` (the G5 re-run at the later commit that fixed its runner), the helper built with `cargo build --release` and, for G5, `--features simulate`, the app run as `bun src/main/index.ts` with `AKOU_HEADLESS=1`, launched by `akou start` exactly as the CLI does it. The Mac mini has no microphone and no other input device, so the mic was the BlackHole 2ch virtual device: a signal played into its output comes back on its input. The call side was the process tap listening to everything the Mac plays, with "Mac mini Speakers" as the default output.
 
-There are two rounds. The first ran G3 to G8. The second re-ran G3-lite and G8 so their raw output is on record, added a 14-minute run in which the tap is really quiet (for the first-words and muted-memory checks, which the hour run could not test), and added positive controls for the drift analysis. Where the two rounds differ, this page gives the second round's numbers.
+There are three rounds. The first ran G3 to G8. The second re-ran G3-lite and G8 so their raw output is on record, added a 14-minute run in which the tap is really quiet (for the first-words and muted-memory checks, which the hour run could not test), and added positive controls for the drift analysis. Where the two rounds differ, this page gives the second round's numbers. The third re-ran G4 at commit `331c7e6`, after the two capture fixes in [#13](https://github.com/GeiserX/akou/pull/13), on the same machine under heavier background load (load average 4 to 20); its numbers sit next to the old ones in [the G4 re-run](#the-re-run-after-the-capture-fixes).
 
 ## Summary
 
 | Gate | Verdict | Key numbers |
 |---|---|---|
 | G3 (lite) | Partial | The app-spawned helper recorded real call audio from the tap on the right channel for 10 minutes. The mic came through as digital silence over SSH, and no single session could record both (see below). |
-| G4 | Fail as run | Hour run: the call channel held the host clock to within 0.16 ms, and one 10.5 s gap at minute 52 when the tap died. Quiet-tap run: the first start after a silent tap cost a 21 ms gap, the first 20 ms of the first word, and a 33 ms misalignment that took about 40 s to settle. Left-right drift between two clocks was not measured, and cannot be on this machine. |
+| G4 | Partial | Re-run after the capture fixes. Quiet-tap run: the first start after a silent tap now costs no gap, no lost speech and no misalignment (before: a 21 ms gap, the first 20 ms of the first word, and 33 ms off for about 40 s). Hour run: no gap over 5 ms, and the call channel held the host clock to within 0.14 ms (before: one 10.5 s gap at minute 52 when the tap died). No tap died this time, so the 1 s rebuild was not seen live; simulated tests cover it. Left-right drift between two clocks was not measured, and cannot be on this machine. |
 | G5 | Pass | Re-run with a stricter runner. Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 78 ms while the teardown still hung. Crash: new part in 79 ms, 0.13 s of call audio lost. Real device helper SIGKILLed: new part in 81 ms, 1.25 s lost. The API never missed a poll. |
 | G6 | Pass (M-series half) | Real-time factor 0.081 for both channels, worst case. Committed line 1.02 s after the utterance ends (median), 1.14 s at worst. |
 | G8 | Pass | Cold `akou start` p95 193 ms (20 runs, 20 separate app processes), warm p95 159 ms. |
@@ -31,11 +31,12 @@ macOS decides microphone and system-audio access per "responsible process". For 
 | A Terminal window on the console (`open -a Terminal x.command`), `--call none` | Not opened | Real audio: the -40 dBFS pilot tone read -44.9 dBFS |
 | A Terminal window on the console, `--call system` | Blocked: macOS showed "Terminal would like access to record your system audio", and the helper gave up after its 15 s open budget (`warn open: the process tap did not open in time`) | Not reached |
 
-Four things we learned the hard way, and they belong in [TRAPS.md](../TRAPS.md) once M1 needs them:
+Five things we learned the hard way, and they belong in [TRAPS.md](../TRAPS.md) once M1 needs them:
 
 - **SIP off does not suppress the system-audio prompt.** The prompt appeared on the console for Terminal.
 - **One pending system-audio prompt blocks every process tap on the Mac.** While the Terminal prompt waited for a click, the tap also failed to open from SSH. The first G4 attempt got `503 capture_failed {stage: "open"}` after the 10 s cold budget. We cleared it by ending the user's `tccd` (SIGKILL, because it ignored SIGTERM). No decision was recorded. The dialog window is still on screen, orphaned. We did not click it, and clicking it now probably does nothing.
 - **A muted BlackHole output makes its input silent.** BlackHole's output was muted in the system's volume settings, and that zeroes the loopback. We unmuted it for the gates and muted it again afterwards.
+- **The call train must play to the default output, and a muted one is fine.** The dead-call rule reads "output running" from the default output device only. Played into another device (BlackHole, say), the call never sets that flag, the rule can never fire, and any check of it passes without being tested. The tap hears what processes play before the device's mute, so the G4 re-run played the call train to the built-in speakers, muted, and nothing was audible, while the hour run's call channel read -35.7 dBFS RMS.
 - **A missing microphone grant looks exactly like a quiet microphone.** Over SSH the mic stream opened, delivered buffers on time, sent `first_audio`, and every sample was zero. Nothing in the protocol says "denied". This is the mic-side twin of the `permission-suspect` rule in DESIGN 2.5, and akou has no mic-side rule yet.
 
 So on this box, a recording with both a real mic and a real tap needs one of two things. A person answers the system-audio prompt for Terminal at the console, or the Microphone grant exists for whatever runs over SSH. We changed neither, because both are security settings.
@@ -116,13 +117,73 @@ The global tap hears every output device, BlackHole included. So during this hou
 
 The analysis recovers an injected offset exactly, and an injected drift to 0.01 ms per hour on the call train. On the mic train it reads 2 % low: that train reaches the tap degraded (some chirps matched only at 0.5), and a poor match moves the peak. So a future two-device run should check the match scores before trusting a slope. The controls were also seen to fail: the first version asked `asetrate` for 48001.44 Hz, expecting 108 ms per hour, and got 75. `asetrate` takes whole hertz and truncates silently, which a click-train check confirmed.
 
-**Verdict: fail as run.** The call channel held the host clock within 0.16 ms for an hour, and the analysis is shown to catch a drift of 75 ms per hour. But the hour run has one 10.5 s gap, the first start after a quiet tap loses 20 ms of speech with a 21 ms gap, and the left-right drift between two clocks, the number the gate exists for, was not measured and cannot be on this machine.
+### The re-run after the capture fixes
+
+**What changed.** [#13](https://github.com/GeiserX/akou/pull/13) (commit `331c7e6`) made two claims about the gaps above:
+
+1. A call tap that stops delivering buffers while output runs is probed after 1 s instead of 10, so a dead tap is rebuilt within about a second.
+2. The silence before output starts running no longer counts, so a tap that starts with the call is not rebuilt; and a rebuilt stream is placed by its own clock at once rather than slewed back at 0.1 %.
+
+**What ran.** The same two recordings with the same arguments, at `331c7e6`, through `akou start` over SSH: the quiet-tap run (825 s, `--mic-device none`, call side from 30 to 150 s, paused until 750 s, ended at 810 s) and the hour run (3,726 s, both trains, call side from 35 s, paused from minute 35 to 45). Then `g4-controls.ts` on the new hour recording, and a short check that forces rebuilds. One thing differs from the first rounds. The app now refuses to start without the speech models, so [`record-call.ts`](../../scripts/gates/record-call.ts) passes `--without-models`, and the app ran with no recognizer, as it did in the earlier runs. The call train played to the built-in speakers, muted (see the traps above). The raw output is [g4-quiet-rerun.json](g4-quiet-rerun.json), [g4-quiet-rerun-memory.csv](g4-quiet-rerun-memory.csv), [g4-drift-rerun.json](g4-drift-rerun.json), [g4-memory-rerun.csv](g4-memory-rerun.csv), [g4-controls-rerun.json](g4-controls-rerun.json), [g4-controls-rerun-red.json](g4-controls-rerun-red.json) and [g4-rebuild.json](g4-rebuild.json).
+
+**Quiet-tap run.**
+
+| Check | Before (`f6cabfc`) | After (`331c7e6`) |
+|---|---|---|
+| Tap quiet before the call and in the pause | Exact digital zero in both windows | The same |
+| Dead-call rule at the first start | `dead` with `silent_for` 35.19 s, probe, rebuild | Nothing: no `health` or `device` line in the whole run |
+| Gaps while the call played | One of 21.3 ms at 35.19 s | None over 5 ms in the 178.5 s scanned |
+| First words after 30 s of silence | 20 ms lost; the first slice matched at 0.22 | 0 ms lost; the first slice matched at 0.97, at the expected place (lag 0 ms) |
+| First words after the 10-minute pause | 0 ms lost | 0 ms lost |
+| Call alignment after the first start | First chirp at -24.5 ms, settling to 8.35 ms over about 40 s (spread 32.8 ms) | First chirp at 8.40 ms; all 18 chirps between 8.36 and 8.43 ms (spread 0.07 ms) |
+| Mic frames while the tap is silent from the start | Mic from file position 0, tap 34.8 s later | The same |
+| Helper memory, call source muted for 10 minutes | 12.3 MB to 11.9 MB | 13.1 MB to 12.2 MB (11.3 to 13.3 MB over the run) |
+| Both channels the same length | 825.078 s each | 825.088 s each |
+
+**Hour run.**
+
+| Check | Before (`f6cabfc`) | After (`331c7e6`) |
+|---|---|---|
+| Call chirps found | 307 of 308 | 308 of 308 |
+| Call channel against the host clock | 8.29 to 8.45 ms (spread 0.16 ms), slope 0.00 ms per hour | 8.33 to 8.46 ms (spread 0.14 ms), slope 0.06 ms per hour |
+| Gaps over 20 ms on the call channel | One, 10.5 s, at minute 52 | None, and none over 5 ms in the 3,721 s scanned |
+| Tap deaths and rebuilds | One: a mic underrun, then the tap stopped; rebuilt after 10.4 s | None: no `health` or `device` line in the whole hour |
+| Mic train heard in the tap | 366 of 373 chirps | 373 of 373, spread 0.002 ms |
+| File length against wall time | 20 ms short over the hour | 37 ms short over 3,726 s |
+| Both channels the same length | 3,720.977 s each | 3,726.157 s each |
+| Helper memory | 8.4 to 13.8 MB | 11.0 to 13.0 MB; 11.1 to 11.5 MB while the call source was muted |
+| App memory, no recognizer | 144 MB, peak 400 MB at minute 16, then a sawtooth | 70 MB, peak 399 MB at minute 28, 255 to 399 MB after minute 16, fitted slope after minute 16 -64 MB per hour: a sawtooth, no upward trend |
+
+The tap was never quiet in the hour run (it hears the mic train), so its two first-word checks, both 0 ms lost, are not the after-silence check; the quiet-tap run is. The mic channel was digital silence again (-122.9 dBFS), because SSH has no Microphone grant.
+
+**Forced rebuilds.** No tap died in the hour, and a tap death cannot be forced on a real device. But the helper's `rebuild_call` command runs the same rebuild the dead-call rule does (the engine's `rebuild`, which restarts the stream on the aligner). So we started the helper directly, played the call train for 127 s, and sent that command three times, 30 s apart. Each rebuild lost 72 to 88 ms of call audio, the time a new tap takes to open. All 13 chirps sat between 8.33 and 8.40 ms (spread 0.07 ms), including the first one about 4 s after each rebuild. The aligner placed the rebuilt stream at once. Before the fix, a rebuilt tap 33 ms off, as in the first quiet-tap run, slewed back at about 1 ms per second, and would still have read about 29 ms off at that chirp.
+
+**The 1 s rule, not seen live.** With no tap death in the hour, the claim that a dead tap is rebuilt within about a second rests on the simulated tests. The Rust ones pass at `331c7e6` on this Mac (`cargo test --features simulate`), and the TypeScript table passes under `bun test`:
+
+- `faults::t0_2_a_call_side_that_stops_delivering_is_rebuilt_within_a_second` ([tests/engine.rs](../../native/akou-capture/tests/engine.rs)): the helper's call side stops delivering at 1 s; `dead` comes after 1.0 to 1.5 s of silence, the stream is rebuilt, and the next rebuild waits for the backoff. Its positive control, `t0_2_a_call_side_of_zeros_waits_the_full_10_s_before_the_probe`, shows buffers of zeros still wait the full 10 s.
+- `t0_2_a_stream_that_stops_delivering_is_rebuilt_within_a_second` and `t0_2_positive_control_buffers_of_zeros_wait_the_full_10_s` in [dead_call.rs](../../native/akou-capture/src/health/dead_call.rs), and the same table in [tests/capture-health.test.ts](../../tests/capture-health.test.ts).
+- For the second claim: `the_first_start_after_a_silent_tap_keeps_the_first_word_whole_and_aligned` and `a_rebuilt_call_stream_is_aligned_from_its_first_audio` (tests/engine.rs), and `a_restarted_source_is_placed_by_its_own_timestamps_at_once` and `a_step_in_the_first_second_re_anchors_and_a_later_one_is_slewed` in [aligner.rs](../../native/akou-capture/src/aligner.rs).
+
+From those numbers, a tap death should now cost about 1 to 1.5 s of silence plus the 72 to 88 ms a rebuild took here, against 10.5 s before.
+
+**Positive controls on the new hour recording.** We ran the same script on the hour recording, whose call channel holds both trains. The mic train reached the tap cleanly this time (matched at 0.89 or better, against 0.5 in the 10-minute recording), and the 2 % shortfall on that train is gone:
+
+| Injected | Before (10-minute recording) | After (hour recording) | Expected |
+|---|---|---|---|
+| 50 ms delay, left-right offset | -50.00 ms | -50.00 ms | -50 ms |
+| 50 ms delay, call train on the left | +50.00 ms | +50.00 ms | +50 ms |
+| 75.0 ms per hour, call train slope | -74.99 ms per hour | -75.00 ms per hour | -75 ms per hour |
+| 75.0 ms per hour, left-right slope | +73.53 ms per hour | +75.07 ms per hour | +75 ms per hour |
+| 75.0 ms per hour, mic train slope | -73.67 ms per hour | -75.09 ms per hour | -75 ms per hour |
+
+The controls were also seen to fail. A copy of the script with the drift left out (`asetrate=48000`) recovered 0.00 ms per hour on all three slopes, failed those three checks and exited 1 ([g4-controls-rerun-red.json](g4-controls-rerun-red.json)).
+
+**Verdict: partial.** On this Mac, the two fixes do what they claim wherever a real device could show it. The first start after a silent tap no longer triggers a rebuild, loses no speech and is aligned from its first chirp. An hour ran with no gap over 5 ms. A forced rebuild is placed at once and costs 72 to 88 ms. The 1 s rebuild of a dead tap was not seen live, because no tap died; only the simulated tests cover it. The gate still does not pass. Nobody measured the left-right drift between two clocks, the number the gate exists for, and this machine cannot. The macOS 14.2 or 14.3 run was not done either.
 
 **Still open.**
 
 - A two-clock run on a Mac with a real input device (a USB mic or audio interface) and a session holding both the Microphone and the system-audio grant: `drift-signal` with the mic train into that device's loopback or played acoustically into the mic, `akou start`, 62 minutes, `drift-test.ts`, then `g4-controls.ts`.
-- The dead-call rule rebuilding a tap that has just started (quiet-tap run). The rule should not rebuild when the tap delivered audio since the probe began.
-- Decide what a dead tap may cost. The 10 s rule is there so real silences are never "repaired". But a tap that dies while other audio plays, the case the probe detects, could be probed sooner. Today every tap death costs at least 10 s.
+- A real tap death under the new rule: the next one that happens on a real device should show `dead` with `silent_for` near 1 s and a gap near 1 s.
 - The macOS 14.2 or 14.3 run.
 
 ## G5: containment
@@ -195,4 +256,4 @@ The first round, without the pid checks, measured cold p95 257 ms and warm p95 1
 
 ## How to re-run
 
-Everything above can be repeated from the repository: build `akou-capture`, plus `--features simulate` for G5, build the signal source with `cargo build --release --example drift-signal`, then the scripts named in each section. Each script's header gives its arguments. On the machine: the default output is the built-in speakers, the session holds both the Microphone and the system-audio grant, and the mic is a real input device for G4's two-clock number. BlackHole 2ch (with its output unmuted) is enough for everything else, but for G4 it only bounds the tap against the host clock.
+Everything above can be repeated from the repository: build `akou-capture`, plus `--features simulate` for G5, build the signal source with `cargo build --release --example drift-signal`, then the scripts named in each section. Each script's header gives its arguments; on a machine without the speech models, `record-call.ts` needs `--without-models`. On the machine: the default output is the built-in speakers, muted so nothing is heard, and the call train plays to it; the session holds both the Microphone and the system-audio grant; and the mic is a real input device for G4's two-clock number. BlackHole 2ch (with its output unmuted) is enough for everything else, but for G4 it only bounds the tap against the host clock.
