@@ -314,20 +314,22 @@ function buildEvents(hv: HvFolder, id: string, o: ImportOptions, workspace: stri
     user: o.user,
     akou: o.version,
   });
-  const offsets = hv.parts.map((p) => ({
-    n: p.n,
-    offset: p.started !== null ? Math.max(0, p.started * 1000 - hv.startMs) / 1000 : 0,
-  }));
+  const offsets: { n: number; offset: number }[] = [];
+  let nextOffset = 0;
   let nextCluster = 0;
   const liveSegs: { part: number; spk: string; a0: number; a1: number }[] = [];
   let liveN = 0;
   let end = hv.startMs;
   for (const [i, p] of hv.parts.entries()) {
-    const offset = (offsets[i] as { offset: number }).offset;
-    const wallStart = Math.round(hv.startMs + offset * 1000);
     const lines = hv.live.get(p.n) ?? [];
     const audioPath = join(hv.dir, p.audio);
     const fileSeconds = durationOf(audioPath) ?? lines.reduce((m, l) => Math.max(m, l.end), 0);
+    // A part with no `started` is taken to follow the part before it.
+    const offset =
+      p.started !== null ? Math.max(0, p.started * 1000 - hv.startMs) / 1000 : nextOffset;
+    nextOffset = offset + fileSeconds;
+    offsets.push({ n: p.n, offset });
+    const wallStart = Math.round(hv.startMs + offset * 1000);
     add(wallStart, {
       type: "part.started",
       part: i + 1,

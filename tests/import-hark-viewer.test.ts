@@ -79,6 +79,32 @@ describe("importing a hark-viewer call", () => {
     }
   });
 
+  test("a part with no `started` follows the end of the part before it, not the call's start", async () => {
+    const { t, view } = await imported({
+      meta: {
+        parts: [
+          { n: 1, audio: "audio.opus", transcript: "transcript.json", started: HV_STARTED },
+          { n: 2, audio: "audio.part2.opus", transcript: "transcript.part2.json" },
+        ],
+      },
+    });
+    try {
+      // Part 1's audio is 290 s long, so part 2 starts where it ended.
+      expect(view.parts().map((p) => p.wallStart)).toEqual([
+        HV_STARTED * 1000,
+        (HV_STARTED + 290) * 1000,
+      ]);
+      const back = view.lines("live").find((l) => l.text === "back again after the restart");
+      expect(back).toMatchObject({ part: 2, w0: (HV_STARTED + 291) * 1000 });
+      // A final line early on the call's clock is part 1's, one past part 1's end is part 2's.
+      const fin = view.lines("final");
+      expect(fin.find((l) => l.text === "Hello team.")).toMatchObject({ part: 1, a0: 1 });
+      expect(fin.find((l) => l.text === "Second part talk.")).toMatchObject({ part: 2, a0: 13 });
+    } finally {
+      t.cleanup();
+    }
+  });
+
   test("speakers mapped: you on the mic, Speaker N per part, Others unknown, a name kept", async () => {
     const { t, view } = await imported();
     try {
