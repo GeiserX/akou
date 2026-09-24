@@ -21,4 +21,6 @@ jobs:
         with:
           bun-version: 1.4.2
       - run: bun install --frozen-lockfile
+      - if: runner.os == 'Windows'
+        run: bun scripts/acl-probe.ts
       - run: bun run check
