@@ -21,6 +21,7 @@ import {
   RECOGNIZER,
   verifyModels,
 } from "../src/main/asr/models.ts";
+import { SherpaRecognizer } from "../src/main/asr/sherpa.ts";
 import { tempDir } from "./helpers.ts";
 
 const cleanups: (() => void)[] = [];
@@ -188,5 +189,44 @@ describe("the downloader", () => {
     mkdirSync(join(real, "silero-vad"), { recursive: true });
     writeFileSync(modelFile(real, "silero-vad", "silero_vad.onnx"), "not a model");
     expect((await verifyModels(real, ["silero-vad"]))[0]?.state).toBe("size");
+  });
+});
+
+describe("[spike] Hotwords to a non-transducer model kill the process: the sherpa-onnx guard", () => {
+  // A stub in place of the native recognizer: the guard must refuse before any stream exists.
+  function stub() {
+    const calls: unknown[][] = [];
+    const rec = {
+      createStream: (...args: unknown[]) => {
+        calls.push(args);
+        return { acceptWaveform: () => {} };
+      },
+      decode: () => {},
+      getResult: () => ({ text: " ok " }),
+    };
+    return { rec, calls };
+  }
+  const audio = new Float32Array(16000);
+
+  test("an empty hotword string and any hotwords to a non-transducer throw before createStream", () => {
+    const a = stub();
+    const parakeet = new SherpaRecognizer("parakeet-tdt-0.6b-v3-int8", a.rec);
+    expect(() => parakeet.decode(audio, "")).toThrow(/refusing hotwords/);
+    const b = stub();
+    const moonshine = new SherpaRecognizer("moonshine-base", b.rec);
+    expect(moonshine.kind).not.toBe("transducer");
+    expect(() => moonshine.decode(audio, "Hetzner")).toThrow(/refusing hotwords/);
+    expect([...a.calls, ...b.calls]).toEqual([]);
+  });
+
+  test("positive control: a transducer with hotwords, and any model without, reach createStream", () => {
+    const a = stub();
+    const parakeet = new SherpaRecognizer("parakeet-tdt-0.6b-v3-int8", a.rec);
+    expect(parakeet.decode(audio, "Hetzner").text).toBe("ok");
+    expect(parakeet.decode(audio).text).toBe("ok");
+    const b = stub();
+    new SherpaRecognizer("moonshine-base", b.rec).decode(audio);
+    expect(a.calls).toEqual([["Hetzner"], []]);
+    expect(b.calls).toEqual([[]]);
   });
 });

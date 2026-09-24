@@ -48,12 +48,18 @@ function sherpa(): Sherpa {
 /** Silero keeps a copy of the open segment and re-copies it every window; bound it. */
 const VAD_RESET_AFTER_SECONDS = 15;
 
-class SherpaRecognizer implements Recognizer {
-  readonly kind = modelKind(RECOGNIZER);
+/**
+ * One recognizer. The guard in `decode` is the last line before sherpa-onnx, which exits the
+ * process on hotwords to a non-transducer or on an empty hotword string; exported for its test.
+ */
+export class SherpaRecognizer implements Recognizer {
+  readonly kind;
   constructor(
     readonly model: string,
     private readonly rec: Sherpa,
-  ) {}
+  ) {
+    this.kind = modelKind(model);
+  }
 
   decode(samples: Float32Array, hotwords?: string): Recognized {
     if (hotwords !== undefined && (this.kind !== "transducer" || hotwords === "")) {
