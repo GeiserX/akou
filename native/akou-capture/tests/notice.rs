@@ -23,6 +23,9 @@ fn linked_crates() -> BTreeSet<String> {
             .args([
                 "tree",
                 "--locked",
+                // CI sets CARGO_TERM_COLOR=always; a coloured `(*)` would survive the trim below.
+                "--color",
+                "never",
                 "--manifest-path",
                 concat!(env!("CARGO_MANIFEST_DIR"), "/Cargo.toml"),
                 "--target",
