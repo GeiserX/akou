@@ -67,13 +67,22 @@ export interface Token {
   end: number;
 }
 
-/** Lowercase and strip combining marks, so "Café" and "cafe" compare equal. */
+/**
+ * Combining marks that sit on a Latin, Greek or Cyrillic letter are accents: dropping them keeps
+ * the word. Arabic harakat and Hebrew niqqud are optional in normal writing and a recognizer
+ * usually leaves them out, so "مُحَمَّد" folds to "محمد". In other scripts a mark often is the
+ * word: Devanagari vowel signs, for example, tell "किताब" (book) from "कतब", so those marks are
+ * kept.
+ */
+const ACCENT_ON_ALPHABET =
+  /([\p{Script=Latin}\p{Script=Greek}\p{Script=Cyrillic}\p{Script=Arabic}\p{Script=Hebrew}])\p{M}+/gu;
+
+/**
+ * Lowercase and strip accents, so "Café" and "cafe" compare equal. Only marks on Latin, Greek,
+ * Cyrillic, Arabic and Hebrew letters are stripped; marks in other scripts carry meaning and stay.
+ */
 export function foldText(s: string): string {
-  return s
-    .normalize("NFD")
-    .replace(/\p{M}+/gu, "")
-    .toLowerCase()
-    .normalize("NFC");
+  return s.normalize("NFD").replace(ACCENT_ON_ALPHABET, "$1").toLowerCase().normalize("NFC");
 }
 
 /** Marks are part of a word: decomposed accents (NFD) and Indic vowel signs must not split it. */

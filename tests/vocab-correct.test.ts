@@ -18,6 +18,36 @@ describe("read-time correction (DESIGN 5.4)", () => {
   test("folding is case-insensitive and accent-free", () => {
     expect(foldText("Ánnika")).toBe("annika");
     expect(foldText("CAFÉ")).toBe("cafe");
+    expect(foldText("Ελλάδα")).toBe("ελλαδα");
+    expect(foldText("Йошкар")).toBe(foldText("Иошкар"));
+  });
+
+  test("marks that carry meaning in their script are kept: Devanagari vowel signs", () => {
+    // Positive control: the old rule, which stripped every combining mark, folds two different
+    // words to one key.
+    const stripEveryMark = (s: string) =>
+      s
+        .normalize("NFD")
+        .replace(/\p{M}+/gu, "")
+        .toLowerCase()
+        .normalize("NFC");
+    expect(stripEveryMark("किताब")).toBe(stripEveryMark("कतब"));
+    // The rule in force keeps them apart, and still folds Latin accents.
+    expect(foldText("किताब")).not.toBe(foldText("कतब"));
+    expect(foldText("किताब")).toBe("किताब".normalize("NFC"));
+    expect(foldText("Ánnika")).toBe(foldText("Annika"));
+    expect(tokenize("किताब कतब").map((t) => t.folded)).toEqual(["किताब", "कतब"]);
+    // A heard form in Devanagari corrects only its own word.
+    const r = correctText("किताब कतब", [{ term: "Kitab", heard: ["कतब"], scope: "call" }]);
+    expect(r.text).toBe("किताब Kitab");
+  });
+
+  test("Arabic harakat and Hebrew niqqud are optional: a pointed word folds to its bare form", () => {
+    expect(foldText("مُحَمَّد")).toBe(foldText("محمد"));
+    expect(foldText("שָׁלוֹם")).toBe(foldText("שלום"));
+    expect(tokenize("قال مُحَمَّد").map((t) => t.folded)).toEqual(["قال", "محمد"]);
+    const r = correctText("שָׁלוֹם", [{ term: "Shalom", heard: ["שלום"], scope: "call" }]);
+    expect(r.text).toBe("Shalom");
     expect(tokenize("we deploy on cubernetes, right?").map((t) => t.folded)).toEqual([
       "we",
       "deploy",
