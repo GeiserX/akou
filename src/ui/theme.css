@@ -40,7 +40,7 @@
 #popover[hidden],
 #banner[hidden],
 .row[hidden],
-.tools[hidden] {
+.row .tools[hidden] {
   display: none;
 }
 html,
@@ -297,8 +297,8 @@ body:not(.busy) .busy {
   margin-left: 10px;
 }
 #final,
-#confirm,
-#fatal {
+#fatal,
+.confirm-row {
   flex: none;
   padding: 6px 24px;
   font-size: 13px;
@@ -307,6 +307,12 @@ body:not(.busy) .busy {
   display: flex;
   gap: 10px;
   align-items: center;
+}
+/* One row per message, each with its own Dismiss, so a second never hides the first. */
+#confirm {
+  flex: none;
+  display: flex;
+  flex-direction: column;
 }
 #final.failed {
   color: var(--rec);
@@ -320,14 +326,22 @@ body:not(.busy) .busy {
   font-weight: 700;
 }
 
+/* The side columns are sized in rem, which + and - never move (they set --size, not the root
+   font), so a larger transcript font never squeezes the transcript itself. */
 #layout {
   flex: 1;
   display: grid;
-  grid-template-columns: 15em 1fr 24em;
+  grid-template-columns: 15rem minmax(0, 1fr) 24rem;
   min-height: 0;
 }
+/* Below 1248 px the full side columns would leave the transcript less than half the window. */
+@media (max-width: 1247px) {
+  #layout {
+    grid-template-columns: 10rem minmax(0, 1fr) 18rem;
+  }
+}
 #layout.share-layout {
-  grid-template-columns: 1fr auto;
+  grid-template-columns: minmax(0, 1fr) auto;
 }
 #sidebar {
   border-right: 1px solid var(--line);
@@ -459,16 +473,20 @@ main {
   font-size: 0.5em;
   color: var(--faint);
 }
+/* Out of sight until the row is hovered or focused, but never out of the tab order: a row that
+   continues the same speaker has no chip, so its tools are its only focusable elements. The clip
+   also keeps the hidden buttons from catching clicks. */
 .row .tools {
   position: absolute;
   right: 0;
   top: 0;
-  display: none;
+  display: inline-flex;
   gap: 4px;
+  clip-path: inset(50%);
 }
 .row:hover .tools,
 .row:focus-within .tools {
-  display: inline-flex;
+  clip-path: none;
 }
 .row .tools button {
   font-size: 11px;
@@ -762,7 +780,7 @@ dialog {
 #share-notes {
   border-left: 1px solid var(--line);
   padding: 8px 12px;
-  width: 22em;
+  width: 22rem;
   overflow-y: auto;
   font-size: 14px;
 }

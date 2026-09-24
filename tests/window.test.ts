@@ -10,7 +10,13 @@ import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { Bridge, checkPath } from "../src/main/window/bridge.ts";
 import { buildUi, nodeImport, UI_DIR } from "../src/main/window/bundle.ts";
-import { CODE_TTL_MS, CSP, PageServer } from "../src/main/window/page-server.ts";
+import {
+  CODE_TTL_MS,
+  CSP,
+  metaCsp,
+  PageServer,
+  WINDOW_CSP,
+} from "../src/main/window/page-server.ts";
 import { type AppRig, appRig, rawRequest } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 
@@ -50,6 +56,35 @@ describe("the static bundle", () => {
     ]) {
       expect(MARKUP.test(bad)).toBe(true);
     }
+  });
+});
+
+describe("the window's own Content Security Policy", () => {
+  // The ElectroBun window loads index.html from views://, where no server adds the header: the
+  // page carries the policy itself, or the window runs with none at all.
+  test("index.html carries a meta policy: scripts from the bundle only, the RPC socket allowed", () => {
+    const html = readFileSync(join(UI_DIR, "index.html"), "utf8");
+    expect(metaCsp(html)).toBe(WINDOW_CSP);
+    for (const d of [
+      "default-src 'none'",
+      "script-src 'self'",
+      "base-uri 'none'",
+      "form-action 'none'",
+    ]) {
+      expect(WINDOW_CSP).toContain(d);
+    }
+    expect(WINDOW_CSP).not.toMatch(/unsafe-inline|unsafe-eval/);
+    // The window's RPC socket is ws://127.0.0.1:<port>, which 'self' under views:// does not cover.
+    expect(WINDOW_CSP).toMatch(/connect-src [^;]*ws:\/\/127\.0\.0\.1:\*/);
+    // A meta policy cannot carry frame-ancestors; the browser would only warn about it.
+    expect(WINDOW_CSP).not.toContain("frame-ancestors");
+  });
+
+  test("positive control: a page without the meta policy is caught", () => {
+    expect(metaCsp("<html><head><title>x</title></head></html>")).toBeNull();
+    expect(metaCsp(`<meta http-equiv="Content-Security-Policy" content="script-src *">`)).not.toBe(
+      WINDOW_CSP,
+    );
   });
 });
 

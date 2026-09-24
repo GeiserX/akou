@@ -16,9 +16,11 @@ import {
   languages,
   presets,
   QUIET_AFTER_MS,
+  REOPEN_AFTER_MS,
   resolveTimeCitation,
   splitCitations,
   stateLabel,
+  suggestReopen,
   YOU_HUE,
 } from "../src/ui/model.ts";
 import type { AppStatus } from "../src/ui/protocol.ts";
@@ -83,6 +85,7 @@ describe("the state label (hark-viewer's states)", () => {
     now: T0 + 60_000,
     lastLineAt: null,
     levelAt: T0 + 59_000,
+    followedAt: T0,
     lines: 0,
   };
 
@@ -140,6 +143,53 @@ describe("the state label (hark-viewer's states)", () => {
     expect(stateLabel({ ...base, view: live(), status: null, disconnected: true }).label).toBe(
       "reconnecting",
     );
+  });
+
+  test("switching to a call already recording is no false alarm: with no level yet, the wait counts from when the page started following it", () => {
+    // The part started a minute ago; the page opened the call 400 ms ago and has no level yet.
+    const v = live();
+    const at = (followedAt: number | null) =>
+      stateLabel({ ...base, view: v, status: null, levelAt: null, followedAt }).label;
+    expect(at(T0 + 59_600)).toBe("rec");
+    // Not open yet: no verdict either.
+    expect(at(null)).toBe("rec");
+    // Positive control: still no level 6 s after the page started following: not capturing.
+    expect(at(T0 + 54_000)).toBe("not capturing");
+    // A call the page followed since before it started keeps the part-age rule.
+    expect(at(T0 - 30_000)).toBe("not capturing");
+    expect(
+      stateLabel({
+        ...base,
+        now: T0 + 3000,
+        view: v,
+        status: null,
+        levelAt: null,
+        followedAt: T0 - 30_000,
+      }).label,
+    ).toBe("rec");
+  });
+
+  test("[ElectroBun #518] the window's RPC socket taken over: a connection lost for long in the window says to reopen it", () => {
+    const lost = stateLabel({
+      ...base,
+      view: live(),
+      status: null,
+      disconnected: true,
+      reopen: true,
+    });
+    expect(lost.label).toBe("reconnecting");
+    expect(lost.meta).toContain("close this window and open it again");
+    // Positive control: without the hint the page only says it is retrying.
+    expect(
+      stateLabel({ ...base, view: live(), status: null, disconnected: true }).meta,
+    ).not.toContain("close this window");
+    // Only the window suggests it, and only once the loss outlasts a follow request's timeout.
+    const since = T0;
+    expect(suggestReopen("window", since, since + REOPEN_AFTER_MS + 1)).toBe(true);
+    expect(suggestReopen("window", since, since + 3_000)).toBe(false);
+    expect(suggestReopen("window", null, since + REOPEN_AFTER_MS + 1)).toBe(false);
+    expect(suggestReopen("browser", since, since + REOPEN_AFTER_MS + 1)).toBe(false);
+    expect(REOPEN_AFTER_MS).toBeGreaterThan(30_000);
   });
 });
 

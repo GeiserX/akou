@@ -281,6 +281,42 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
+    "Layout: the transcript keeps its room when the font grows; the side columns do not grow with it",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          // The desktop shell's own frame.
+          await page.setViewportSize({ width: 1280, height: 820 });
+          await page.waitForSelector("#lines .row >> nth=3");
+          const widths = () =>
+            page.evaluate(() => {
+              const w = (x: string) =>
+                Math.round(
+                  (document.getElementById(x) as HTMLElement).getBoundingClientRect().width,
+                );
+              return { sidebar: w("sidebar"), scroller: w("scroller"), side: w("side") };
+            });
+          const at22 = await widths();
+          await page.locator("#scroller").focus();
+          for (let i = 0; i < 20; i++) await page.keyboard.press("+");
+          const at44 = await widths();
+          expect(at44.sidebar).toBe(at22.sidebar);
+          expect(at44.side).toBe(at22.side);
+          // At the largest size the transcript still has at least half the window.
+          expect(at44.scroller).toBeGreaterThanOrEqual(640);
+          // A narrower window still gives it half.
+          await page.setViewportSize({ width: 900, height: 700 });
+          expect((await widths()).scroller).toBeGreaterThanOrEqual(450);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "Rows: wall-clock time column, speaker on change, last 3 bright, rise, pinned scroll, Back to live after 80 px, font 14 to 44 px",
     async () => {
       let id = "";

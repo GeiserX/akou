@@ -16,7 +16,7 @@ import { AskPane } from "./ask.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
-import { banner, finalNote, HueBook, languages, stateLabel } from "./model.ts";
+import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from "./model.ts";
 import { message, NotepadPane } from "./notepad.ts";
 import type { AppStatus, Levels, Transport } from "./protocol.ts";
 import { SettingsPane } from "./settings.ts";
@@ -64,6 +64,8 @@ class App {
   private hues = new HueBook();
   private disconnectedSince: number | null = null;
   private levelAt: number | null = null;
+  /** When the follow of the call on screen first opened, so a call joined late is not "dead". */
+  private followedAt: number | null = null;
   private callHeardAt: number | null = null;
   private lastLineAt: number | null = null;
   private readonly platform = platform();
@@ -96,8 +98,17 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
-    this.enhanced = new EnhancedPane({ t, call, view, cite });
-    new SettingsPane(t, () => this.view()?.call?.workspace ?? this.workspaceInput().value);
+    const settings = new SettingsPane(
+      t,
+      () => this.view()?.call?.workspace ?? this.workspaceInput().value,
+    );
+    this.enhanced = new EnhancedPane({
+      t,
+      call,
+      view,
+      cite,
+      openSettings: (key) => void settings.open(key),
+    });
   }
 
   view(): CallView | null {
@@ -147,6 +158,7 @@ class App {
     this.callId = id;
     this.hues = new HueBook();
     this.levelAt = null;
+    this.followedAt = null;
     this.disconnectedSince = null;
     this.callHeardAt = null;
     this.lastLineAt = null;
@@ -189,8 +201,10 @@ class App {
       },
       connection: (state) => {
         if (f !== this.follower) return;
-        if (state === "open") this.disconnectedSince = null;
-        else this.disconnectedSince ??= Date.now();
+        if (state === "open") {
+          this.disconnectedSince = null;
+          this.followedAt ??= Date.now();
+        } else this.disconnectedSince ??= Date.now();
         document.body.dataset.connection = state;
         this.paint();
       },
@@ -220,6 +234,8 @@ class App {
       now,
       lastLineAt: this.lastLineAt,
       levelAt: this.levelAt,
+      followedAt: this.followedAt,
+      reopen: suggestReopen(this.t.kind, this.disconnectedSince, now),
       lines: this.transcript.count,
     });
     const body = document.body;
@@ -543,11 +559,19 @@ class App {
     );
   }
 
-  /** A bar under the header with one action and a dismiss button. */
+  /**
+   * A row under the header with one action and a dismiss button. Each message gets its own row, so
+   * a second one (the share link) never hides the first (the consent reminder).
+   */
   private confirm(text: string, action: string, run: () => void): void {
     const bar = byId("confirm");
-    replace(
-      bar,
+    const close = () => {
+      row.remove();
+      bar.hidden = bar.childElementCount === 0;
+    };
+    const row = h(
+      "div",
+      { class: "confirm-row" },
       h("span", {}, text),
       h(
         "button",
@@ -556,15 +580,16 @@ class App {
           class: "go",
           on: {
             click: () => {
-              bar.hidden = true;
+              close();
               run();
             },
           },
         },
         action,
       ),
-      h("button", { type: "button", on: { click: () => (bar.hidden = true) } }, "Dismiss"),
+      h("button", { type: "button", on: { click: close } }, "Dismiss"),
     );
+    bar.append(row);
     bar.hidden = false;
   }
 

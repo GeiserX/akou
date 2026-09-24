@@ -48,6 +48,30 @@ export const CSP = [
   "frame-ancestors 'none'",
 ].join("; ");
 
+/**
+ * The ElectroBun window's policy, carried by `index.html` as a meta tag because `views://` has no
+ * server to add the header (DESIGN 6.3 rule 7). The same as `CSP` except: the `views:` scheme is
+ * named beside `'self'` in case the webview treats the custom scheme's origin as opaque, the RPC
+ * socket (`ws://127.0.0.1:<port>`) is allowed, and `frame-ancestors`, which a meta policy cannot
+ * carry, is left out. The browser page gets both this and the header; their intersection is `CSP`.
+ */
+export const WINDOW_CSP = [
+  "default-src 'none'",
+  "script-src 'self' views:",
+  "style-src 'self' views:",
+  "connect-src 'self' views: ws://127.0.0.1:*",
+  "media-src 'self' views: blob:",
+  "img-src 'self' views: data:",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join("; ");
+
+/** The policy a page's `<meta http-equiv="Content-Security-Policy">` sets, or null. */
+export function metaCsp(html: string): string | null {
+  const m = /<meta\s+http-equiv="Content-Security-Policy"\s+content="([^"]*)"\s*>/i.exec(html);
+  return m ? (m[1] as string) : null;
+}
+
 const SECURITY_HEADERS: Record<string, string> = {
   "content-security-policy": CSP,
   "referrer-policy": "no-referrer",

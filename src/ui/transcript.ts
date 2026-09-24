@@ -87,6 +87,75 @@ export function fillRow(
   }
 }
 
+/**
+ * Auto-scroll while pinned to the bottom, and "Back to live" (`#jump`) once the reader scrolled up
+ * more than 80 px. Shared by the window and the share viewer, so neither yanks a reader down.
+ */
+export class ScrollPin {
+  pinned = true;
+
+  constructor(
+    private readonly scroller: HTMLElement,
+    jump: HTMLElement,
+  ) {
+    scroller.addEventListener("scroll", () => {
+      const s = this.scroller;
+      this.pinned = s.scrollHeight - s.scrollTop - s.clientHeight < SCROLL_PIN_PX;
+      document.body.classList.toggle("scrolled", !this.pinned);
+    });
+    jump.addEventListener("click", () => this.backToLive());
+  }
+
+  /** After new content: stays at the bottom only while pinned. */
+  follow(): void {
+    if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
+  }
+
+  backToLive(): void {
+    this.pinned = true;
+    this.scroller.scrollTop = this.scroller.scrollHeight;
+    document.body.classList.remove("scrolled");
+  }
+
+  /** The page moved the reader on purpose (a citation): stop following. */
+  unpin(): void {
+    this.pinned = false;
+    document.body.classList.add("scrolled");
+  }
+
+  reset(): void {
+    this.pinned = true;
+    document.body.classList.remove("scrolled");
+  }
+}
+
+/** The transcript's font size, 14 to 44 px with `+` and `-`, kept across visits. */
+export class FontKeys {
+  private size = FONT_DEFAULT;
+
+  constructor() {
+    const saved = Number(localStorage.getItem("akou.size"));
+    if (saved >= FONT_MIN && saved <= FONT_MAX) this.set(saved);
+    document.addEventListener("keydown", (e) => {
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
+      if (e.key === "+" || e.key === "=") this.set(this.size + 2);
+      else if (e.key === "-") this.set(this.size - 2);
+    });
+  }
+
+  set(px: number): void {
+    this.size = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
+    document.documentElement.style.setProperty("--size", `${this.size}px`);
+    localStorage.setItem("akou.size", String(this.size));
+  }
+}
+
+/** "4 s into the call", the offset a row's time shows on hover (never as a bare `mm:ss`). */
+export function intoTheCall(w0: number, start: number): string {
+  return `${formatDuration((w0 - start) / 1000)} into the call`;
+}
+
 function key(el: HTMLElement): [number, number, number] {
   return [Number(el.dataset.w0), el.dataset.ch === "mic" ? 0 : 1, Number(el.dataset.seq)];
 }
@@ -101,49 +170,22 @@ export class TranscriptPane {
   private readonly scroller = byId("scroller");
   private readonly partialBox = byId("partial");
   private partialTimer: ReturnType<typeof setTimeout> | null = null;
-  pinned = true;
-  private size = FONT_DEFAULT;
+  private readonly pin = new ScrollPin(this.scroller, byId("jump"));
 
   constructor(private readonly d: TranscriptDeps) {
-    this.scroller.addEventListener("scroll", () => {
-      const s = this.scroller;
-      this.pinned = s.scrollHeight - s.scrollTop - s.clientHeight < SCROLL_PIN_PX;
-      document.body.classList.toggle("scrolled", !this.pinned);
-    });
-    byId("jump").addEventListener("click", () => this.backToLive());
     this.list.addEventListener("click", (e) => this.onClick(e));
-    const saved = Number(localStorage.getItem("akou.size"));
-    if (saved >= FONT_MIN && saved <= FONT_MAX) this.setSize(saved);
-    document.addEventListener("keydown", (e) => {
-      const t = e.target as HTMLElement | null;
-      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
-      if (e.key === "+" || e.key === "=") this.setSize(this.size + 2);
-      else if (e.key === "-") this.setSize(this.size - 2);
-    });
+    new FontKeys();
   }
 
   get count(): number {
     return this.rows.size;
   }
 
-  setSize(px: number): void {
-    this.size = Math.max(FONT_MIN, Math.min(FONT_MAX, px));
-    document.documentElement.style.setProperty("--size", `${this.size}px`);
-    localStorage.setItem("akou.size", String(this.size));
-  }
-
-  backToLive(): void {
-    this.pinned = true;
-    this.scroller.scrollTop = this.scroller.scrollHeight;
-    document.body.classList.remove("scrolled");
-  }
-
   reset(): void {
     this.rows.clear();
     this.list.replaceChildren();
     this.setPartial([]);
-    this.pinned = true;
-    document.body.classList.remove("scrolled");
+    this.pin.reset();
   }
 
   /** Redraws the lines the fold's change feed named (or every line). Returns how many were new. */
@@ -187,7 +229,7 @@ export class TranscriptPane {
       for (const p of drop) p.remove();
       this.partialBox.hidden = this.partialBox.childElementCount === 0;
     }
-    if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
+    this.pin.follow();
     return added;
   }
 
@@ -199,7 +241,7 @@ export class TranscriptPane {
       {
         id: l.id,
         time: formatWall(l.w0, tz),
-        timeTitle: `${formatDuration((l.w0 - first) / 1000)} into the call`,
+        timeTitle: intoTheCall(l.w0, first),
         spk: l.spk,
         speaker: l.speaker,
         text: l.text,
@@ -298,15 +340,14 @@ export class TranscriptPane {
     box.hidden = false;
     if (this.partialTimer) clearTimeout(this.partialTimer);
     this.partialTimer = setTimeout(() => this.setPartial([]), PROVISIONAL_TTL_MS);
-    if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
+    this.pin.follow();
   }
 
   /** Scrolls to a line and marks it for a moment (a citation, a note's time). */
   scrollTo(id: string): boolean {
     const row = this.rows.get(id);
     if (!row) return false;
-    this.pinned = false;
-    document.body.classList.add("scrolled");
+    this.pin.unpin();
     row.scrollIntoView({ block: "center" });
     row.classList.remove("flash");
     void row.offsetWidth;

@@ -51,6 +51,29 @@ const text = (page: Page, sel: string) => page.locator(sel).first().textContent(
 const rowIds = (page: Page) =>
   page.$$eval("#lines .row", (rows) => rows.map((r) => (r as HTMLElement).dataset.id ?? ""));
 
+/** A saved call of `n` lines, the speakers `c1, c1, c2` over and over, 4 s apart. */
+function longCall(b: import("../helpers.ts").LogBuilder, n: number): void {
+  b.created();
+  b.partStarted(1, T0);
+  for (let i = 1; i <= n; i++) {
+    b.seg({
+      id: `l${String(i).padStart(6, "0")}`,
+      ch: "call",
+      spk: i % 3 === 0 ? "c2" : "c1",
+      w0: T0 + i * 4000,
+      text: `line number ${i} of the call`,
+    });
+  }
+  b.partEnded(1, "stop", n * 4);
+  b.add({ type: "call.ended", reason: "stop" });
+}
+
+const gapOf = (page: Page) =>
+  page.evaluate(() => {
+    const s = document.getElementById("scroller") as HTMLElement;
+    return s.scrollHeight - s.scrollTop - s.clientHeight;
+  });
+
 async function events(rig: UiRig, id: string): Promise<LogEvent[]> {
   return (await rig.api("GET", `/calls/${id}/events`)).body.events;
 }
@@ -311,6 +334,92 @@ describe("keyboard access", () => {
   );
 });
 
+describe("keyboard access to a row's tools", () => {
+  test(
+    "Play and Fix are reachable with Tab on every row, one that continues the same speaker included",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => longCall(b, 6)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=5");
+          // Rows 2 and 5 continue the speaker before them, so they show no speaker chip.
+          expect(
+            await page.locator('#lines .row[data-id="l000002"]').getAttribute("class"),
+          ).not.toContain("turn");
+          await page.focus('#lines .row[data-id="l000001"] .who');
+          const reached = new Set<string>();
+          for (let i = 0; i < 30; i++) {
+            const at = await page.evaluate(() => {
+              const a = document.activeElement as HTMLElement | null;
+              const row = a?.closest("#lines .row") as HTMLElement | null;
+              return row && a?.classList.contains("play") ? (row.dataset.id ?? null) : null;
+            });
+            if (at) reached.add(at);
+            await page.keyboard.press("Tab");
+          }
+          expect([...reached].sort()).toEqual([
+            "l000001",
+            "l000002",
+            "l000003",
+            "l000004",
+            "l000005",
+            "l000006",
+          ]);
+          // Out of sight until the row is hovered or focused, then there to click.
+          const hit = () =>
+            page.evaluate(() => {
+              const b = document.querySelector(
+                '#lines .row[data-id="l000005"] .play',
+              ) as HTMLElement;
+              const r = b.getBoundingClientRect();
+              return document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2) === b;
+            });
+          await page.mouse.move(0, 0);
+          await page.focus("#settings-open");
+          expect(await hit()).toBe(false);
+          await page.focus('#lines .row[data-id="l000005"] .play');
+          expect(await hit()).toBe(true);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the confirm bar", () => {
+  test(
+    "Share right after Record keeps the consent reminder: each message has its own row and Dismiss",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const page = await rig.open();
+        await page.waitForSelector("#record", { state: "visible" });
+        await page.click("#record");
+        await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
+        await page.click("#share-start");
+        await page.waitForSelector("#pill-share:not([hidden])");
+        const rows = page.locator("#confirm .confirm-row");
+        await until(async () => (await rows.count()) === 2, 5000, "two messages");
+        expect(await rows.nth(0).textContent()).toContain(
+          "Remember to tell the others you are recording",
+        );
+        expect(await rows.nth(1).textContent()).toContain("Read-only link:");
+        await rows.nth(1).getByRole("button", { name: "Dismiss" }).click();
+        expect(await rows.count()).toBe(1);
+        expect(await text(page, "#confirm")).toContain("Remember to tell the others");
+        await rows.nth(0).getByRole("button", { name: "Dismiss" }).click();
+        await page.waitForSelector("#confirm", { state: "hidden" });
+        await page.click("#stop");
+        await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the notepad (DESIGN 5.1)", () => {
   test(
     "a typed line is a note by the user, timed at its first keystroke; agent lines look different",
@@ -505,7 +614,67 @@ describe("enhanced notes and templates (DESIGN 5.2)", () => {
   );
 });
 
+describe("enhanced notes with no provider", () => {
+  test(
+    "one plain sentence under the button, no toast, and a button to the provider setting",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click("#tab-enhanced");
+          await page.click("#enhance");
+          await until(
+            async () => ((await text(page, "#enhance-status")) ?? "").startsWith("No provider"),
+            5000,
+            "the status line",
+          );
+          const status = (await text(page, "#enhance-status")) ?? "";
+          expect(status).not.toContain("enhance/context");
+          expect(await page.locator("#toast").isVisible()).toBe(false);
+          await page.locator("#enhance-status button").click();
+          await page.waitForSelector("#settings[open]");
+          await until(
+            async () =>
+              (await page.evaluate(
+                () => (document.activeElement as HTMLElement | null)?.dataset.key,
+              )) === "provider.kind",
+            5000,
+            "the provider setting focused",
+          );
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("settings (driven by the registry)", () => {
+  test(
+    "every key the registry keeps file only is shown disabled, read from the schema",
+    async () => {
+      await withRig({}, async (rig) => {
+        const page = await rig.open();
+        await page.click("#settings-open");
+        await page.waitForSelector("#settings[open] .setting >> nth=5");
+        const schema = (await rig.api("GET", "/config")).body.schema as Record<
+          string,
+          { apiWritable: boolean }
+        >;
+        const fileOnly = Object.keys(schema).filter((k) => schema[k]?.apiWritable === false);
+        expect(fileOnly).toContain("provider.baseUrl");
+        expect(fileOnly).toContain("provider.harnessPath");
+        for (const k of Object.keys(schema)) {
+          const disabled = await page.locator(`#settings [data-key="${k}"]:not(div)`).isDisabled();
+          expect({ k, disabled }).toEqual({ k, disabled: fileOnly.includes(k) });
+        }
+      });
+    },
+    UI_TIMEOUT,
+  );
+
   test(
     "every registry key is shown; a change is saved; an out-of-range value is refused and shown",
     async () => {
@@ -638,6 +807,71 @@ describe("playback and Fix this word", () => {
 });
 
 describe("the share viewer (DESIGN 8.3)", () => {
+  test(
+    "the viewer stays where the reader scrolled: pinned only at the bottom, Back to live, + and -, the offset tooltip",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => longCall(b, 60)).id) },
+        async (rig) => {
+          const share = await rig.api("POST", "/share", { call: id });
+          expect(share.status).toBe(201);
+          const viewer = await (await launch()).newPage();
+          await viewer.goto(share.body.url as string);
+          await viewer.waitForSelector("#lines .row >> nth=59");
+          await until(async () => (await gapOf(viewer)) < 2, 3000, "pinned at the bottom");
+          expect(await viewer.locator("#lines .row time").first().getAttribute("title")).toBe(
+            "4 s into the call",
+          );
+          expect(await viewer.locator("#jump").isVisible()).toBe(false);
+          // The reader scrolls up: a new line and a rename leave them where they are. (Let the
+          // smooth scroll to the bottom finish first, or its last frame lands after ours.)
+          await Bun.sleep(300);
+          await viewer.evaluate(() => {
+            const s = document.getElementById("scroller") as HTMLElement;
+            s.style.scrollBehavior = "auto";
+            s.scrollTop = 0;
+          });
+          await viewer.waitForSelector("#jump", { state: "visible" });
+          const top = () =>
+            viewer.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
+          await rig.write(id, seg("l000061", "a brand new line", { w0: T0 + 61 * 4000 }));
+          await viewer.waitForSelector('#lines .row[data-id="l000061"]');
+          await Bun.sleep(300);
+          expect(await top()).toBeLessThan(10);
+          expect(
+            (await rig.api("POST", `/calls/${id}/speakers`, { spk: "c1", name: "Ben" })).status,
+          ).toBe(200);
+          await until(
+            async () =>
+              (await viewer.locator('#lines .row[data-id="l000001"] .who').textContent()) === "Ben",
+            5000,
+            "renamed in the viewer",
+          );
+          await Bun.sleep(300);
+          expect(await top()).toBeLessThan(10);
+          // Back to live, then pinned again.
+          await viewer.click("#jump");
+          await until(async () => (await gapOf(viewer)) < 2, 3000, "back at the bottom");
+          await viewer.waitForSelector("#jump", { state: "hidden" });
+          // Font size: + and -, as in the window.
+          const size = () =>
+            viewer.evaluate(() =>
+              getComputedStyle(document.documentElement).getPropertyValue("--size"),
+            );
+          await viewer.locator("#scroller").focus();
+          await viewer.keyboard.press("+");
+          expect(await size()).toBe("24px");
+          await viewer.keyboard.press("-");
+          await viewer.keyboard.press("-");
+          expect(await size()).toBe("20px");
+          await viewer.close();
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
   test(
     "the Share button starts a link; the viewer shows the call read only, inert, and counts as a viewer",
     async () => {

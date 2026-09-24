@@ -535,6 +535,15 @@ describe("settings over the API", () => {
     expect(reset.body.settings["asr.segmentPause"]).toBe(0.7);
     const got = await rig.api("GET", "/config");
     expect(got.body.schema["api.port"]).toMatchObject({ type: "integer", min: 1024 });
+    // The schema says which keys are file only, so the settings pane reads it instead of a list.
+    const fileOnly = Object.entries(got.body.schema)
+      .filter(([, s]) => (s as { apiWritable: boolean }).apiWritable === false)
+      .map(([k]) => k)
+      .sort();
+    expect(fileOnly).toEqual(
+      ["capture.helper", "hooks", "provider.baseUrl", "provider.harnessPath", "webhook.url"].sort(),
+    );
+    expect(got.body.schema["api.port"].apiWritable).toBe(true);
   });
 
   test("status always answers 200 and names what is missing", async () => {

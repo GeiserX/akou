@@ -11,7 +11,7 @@
 
 import type { CallView } from "../core/log/fold.ts";
 import { citedText } from "./ask.ts";
-import { byId, h, replace, toast } from "./dom.ts";
+import { byId, h, replace } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 
@@ -20,6 +20,8 @@ export interface EnhancedDeps {
   call(): string | null;
   view(): CallView | null;
   cite(lineId: string): void;
+  /** Opens Settings on one key. */
+  openSettings(key: string): void;
 }
 
 interface Enhanced {
@@ -161,7 +163,12 @@ export class EnhancedPane {
     this.busy = true;
     this.button.disabled = true;
     this.note.textContent = "Writing the notes…";
-    const r = await this.d.t.request<{ rev?: number; message?: string; reason?: string }>(
+    const r = await this.d.t.request<{
+      rev?: number;
+      error?: string;
+      message?: string;
+      reason?: string;
+    }>(
       "POST",
       `/calls/${call}/enhance`,
       this.template.value ? { template: this.template.value } : {},
@@ -169,8 +176,21 @@ export class EnhancedPane {
     this.busy = false;
     this.paint();
     if (r.status >= 400) {
-      this.note.textContent = message(r.body, "the notes could not be written");
-      toast(message(r.body, "the notes could not be written"));
+      // The status line under the button says it once. The API's own message is for agents (it
+      // names routes), so a missing provider gets a sentence a person can act on.
+      if (r.body.error === "provider_unavailable") {
+        replace(
+          this.note,
+          "No provider is set up, so akou cannot write the notes. ",
+          h(
+            "button",
+            { type: "button", on: { click: () => this.d.openSettings("provider.kind") } },
+            "Choose one in Settings",
+          ),
+        );
+      } else {
+        this.note.textContent = message(r.body, "the notes could not be written");
+      }
       return;
     }
     this.note.textContent = "";

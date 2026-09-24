@@ -2,7 +2,9 @@
  * The read-only viewer of a share link (docs/DESIGN.md section 8.3): `/s/<token>/` on the share
  * listener. It shows the call as the app renders it (names and vocabulary applied, echo removed),
  * the grey line still being spoken, and the notepad when the share includes it. It has no
- * controls and sends nothing but GETs.
+ * controls and sends nothing but GETs. It reads like the window: it follows new lines only while
+ * the reader is at the bottom (Back to live once scrolled up), `+` and `-` size the text, and a
+ * row's time says how far into the call it was on hover.
  *
  * It follows with `EventSource`, which reconnects by itself and names the last event it got
  * (`Last-Event-ID`); the listener then sends only what changed since. Everything is drawn as text.
@@ -10,7 +12,7 @@
 
 import { h, replace } from "./dom.ts";
 import { HueBook } from "./model.ts";
-import { fillRow, rowElement } from "./transcript.ts";
+import { FontKeys, fillRow, intoTheCall, rowElement, ScrollPin } from "./transcript.ts";
 
 interface SharedLine {
   id: string;
@@ -33,6 +35,10 @@ interface SharedNote {
 const hues = new HueBook();
 const rows = new Map<string, { el: HTMLElement; line: SharedLine }>();
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
+const pin = new ScrollPin($("scroller"), $("jump"));
+new FontKeys();
+/** When the call's first part started, for the time tooltip; null until the call has one. */
+let start: number | null = null;
 
 function order(a: SharedLine, b: SharedLine): number {
   if (a.w0 !== b.w0) return a.w0 - b.w0;
@@ -43,7 +49,11 @@ function order(a: SharedLine, b: SharedLine): number {
 function put(line: SharedLine): void {
   const cur = rows.get(line.id);
   const el = cur?.el ?? rowElement();
-  fillRow(el, { ...line }, hues.hue(line.spk));
+  fillRow(
+    el,
+    { ...line, timeTitle: start !== null ? intoTheCall(line.w0, start) : undefined },
+    hues.hue(line.spk),
+  );
   el.querySelector(".who")?.setAttribute("disabled", "");
   rows.set(line.id, { el, line });
   if (cur) return;
@@ -63,8 +73,7 @@ function relabel(): void {
     prev = el.dataset.spk;
   }
   $("empty").hidden = rows.size > 0;
-  const s = $("scroller");
-  s.scrollTop = s.scrollHeight;
+  pin.follow();
 }
 
 function notes(list: SharedNote[] | undefined): void {
@@ -89,7 +98,11 @@ function notes(list: SharedNote[] | undefined): void {
   );
 }
 
-function state(s: { state: string; live: boolean }): void {
+function state(s: { state: string; live: boolean; start?: number | null }): void {
+  if (start === null && typeof s.start === "number") {
+    start = s.start;
+    for (const { line } of [...rows.values()]) put(line);
+  }
   document.body.classList.toggle("recording", s.live);
   document.body.classList.toggle("saved", !s.live);
   $("state").textContent = s.live ? "live" : s.state === "ended" ? "ended" : s.state;
@@ -102,9 +115,11 @@ es.addEventListener("snapshot", (e) => {
     zone: string;
     state: string;
     live: boolean;
+    start?: number | null;
     lines: SharedLine[];
     notes?: SharedNote[];
   };
+  start = typeof d.start === "number" ? d.start : null;
   rows.clear();
   $("lines").replaceChildren();
   $("title").textContent = d.title;

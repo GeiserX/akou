@@ -373,6 +373,8 @@ export class LocalLink implements ShareTransport {
               zone: formatZone(tz, v.parts()[0]?.wallStart ?? app.now()),
               state: v.state,
               live: v.live,
+              // When the call's first part started, for the rows' "N s into the call" tooltip.
+              start: v.parts()[0]?.wallStart ?? null,
               lines,
               ...(include.notes ? { notes: sharedNotes(v, tz) } : {}),
             },
@@ -415,7 +417,7 @@ export class LocalLink implements ShareTransport {
               e.type,
             )
           ) {
-            send("state", { state: v.state, live: v.live });
+            send("state", { state: v.state, live: v.live, start: v.parts()[0]?.wallStart ?? null });
           }
         };
         const unsubscribe = app.subscribe(c.id, onEvent);

@@ -5,8 +5,9 @@
  * `PATCH /config`, which validates them exactly as a hand-edited file is validated; a refusal is
  * shown next to the key.
  *
- * Keys that name a program akou runs (the capture helper, hooks, the webhook) are file only: shown,
- * never editable here. A secret is never shown back; typing a new one replaces it.
+ * Keys the registry marks file only (`apiWritable: false`: a program akou runs, or an address
+ * transcripts or keys are sent to) are shown, never editable here; the schema says which. A secret
+ * is never shown back; typing a new one replaces it.
  *
  * Below the settings, the vocabulary panel: the entries in force for the workspace, where each
  * came from, and the files they live in.
@@ -22,6 +23,8 @@ interface SchemaEntry {
   max?: number;
   env?: string;
   secret?: boolean;
+  /** False: the file only (DESIGN 8.2, 6.3); `PATCH /config` refuses it. */
+  apiWritable: boolean;
   doc: string;
 }
 
@@ -32,9 +35,6 @@ interface ConfigReply {
   issues: { key: string; message: string }[];
   schema: Record<string, SchemaEntry>;
 }
-
-/** Keys that are programs or destinations: the file only (DESIGN 8.2, 6.3). */
-export const FILE_ONLY = new Set(["capture.helper", "hooks", "webhook.url"]);
 
 export class SettingsPane {
   private readonly dialog = byId<HTMLDialogElement>("settings");
@@ -56,10 +56,14 @@ export class SettingsPane {
     });
   }
 
-  async open(): Promise<void> {
+  /** Opens the pane, on one key when named (the Enhanced tab's "Choose a provider"). */
+  async open(key?: string): Promise<void> {
     await this.load();
     if (!this.dialog.open) this.dialog.showModal();
-    (this.fields.querySelector("input, select, textarea") as HTMLElement | null)?.focus();
+    const at = key
+      ? this.fields.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]:not(div)`)
+      : null;
+    (at ?? (this.fields.querySelector("input, select, textarea") as HTMLElement | null))?.focus();
   }
 
   private async load(): Promise<void> {
@@ -83,7 +87,7 @@ export class SettingsPane {
 
   private field(key: string, spec: SchemaEntry, value: unknown, issue?: string): HTMLElement {
     const id = `set-${key.replace(/[^a-z0-9]/gi, "-")}`;
-    const fileOnly = FILE_ONLY.has(key) || spec.type === "hooks";
+    const fileOnly = spec.apiWritable === false;
     let input: HTMLInputElement | HTMLTextAreaElement;
     let shown: string;
     if (spec.type === "boolean") {
@@ -119,7 +123,7 @@ export class SettingsPane {
     input.dataset.key = key;
     if (fileOnly) {
       input.disabled = true;
-      input.title = "set in the config file only: this is a program or an address akou uses";
+      input.title = "set in the config file only: a program akou runs or an address it sends to";
     }
     this.shown[key] = shown;
     return h(

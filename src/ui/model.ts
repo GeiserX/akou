@@ -79,26 +79,68 @@ export interface StateInput {
   lastLineAt: number | null;
   /** When the last audio level arrived; a live call with none for 5 s is not capturing. */
   levelAt: number | null;
+  /** When the page's follow of this call first opened (null: not yet), for a call joined late. */
+  followedAt: number | null;
+  /**
+   * The window has been reconnecting for longer than a follow request may take: its RPC socket may
+   * be gone for good (ElectroBun #518, #550), and only a new window gets a new one.
+   */
+  reopen?: boolean;
   lines: number;
 }
 
 /** Channel health states that mean nothing is being recorded on that side. */
 const DEAD_STATES = new Set(["dead", "stalled", "no-buffers"]);
 
-export function notCapturing(v: CallView, now: number, levelAt: number | null): boolean {
+/**
+ * Nothing is being recorded: both channels are proven dead, or no level for 5 s. With no level yet,
+ * the 5 s count from the later of the part's start and the page's first follow, so a call opened
+ * while it records is not declared dead before its first level can arrive.
+ */
+export function notCapturing(
+  v: CallView,
+  now: number,
+  levelAt: number | null,
+  followedAt: number | null,
+): boolean {
   if (!v.live || v.state === "paused") return false;
   const mic = v.channelHealth("mic")?.state;
   const call = v.channelHealth("call")?.state;
   if (mic && call && DEAD_STATES.has(mic) && DEAD_STATES.has(call)) return true;
+  if (levelAt !== null) return now - levelAt > 5000;
+  if (followedAt === null) return false;
   const started = v.parts().at(-1)?.wallStart ?? now;
-  return levelAt === null ? now - started > 5000 : now - levelAt > 5000;
+  return now - Math.max(started, followedAt) > 5000;
+}
+
+/** Longer than a follow request may wait for its answer (the window's RPC timeout, 30 s). */
+export const REOPEN_AFTER_MS = 40_000;
+
+/**
+ * Whether to tell the user to close and reopen the window: only the window, and only once it has
+ * been reconnecting past a follow request's timeout. A browser page reconnects over HTTP by itself.
+ */
+export function suggestReopen(
+  surface: "window" | "browser",
+  disconnectedSince: number | null,
+  now: number,
+): boolean {
+  return (
+    surface === "window" && disconnectedSince !== null && now - disconnectedSince > REOPEN_AFTER_MS
+  );
 }
 
 export function stateLabel(i: StateInput): StateLabel {
   const v = i.view;
   const liveId = i.status?.live?.call ?? null;
   if (i.disconnected) {
-    return { cls: "offline", label: "reconnecting", meta: "akou is not answering; retrying" };
+    return {
+      cls: "offline",
+      label: "reconnecting",
+      meta: i.reopen
+        ? "akou is not answering; retrying. If this stays, close this window and open it again"
+        : "akou is not answering; retrying",
+    };
   }
   if (!v?.call) {
     if (liveId) return { cls: "other", label: "another call is recording", meta: "" };
@@ -112,7 +154,7 @@ export function stateLabel(i: StateInput): StateLabel {
       bits.push(`last line ${formatDuration((i.now - i.lastLineAt) / 1000)} ago`);
     }
     if (v.state === "paused") return { cls: "paused", label: "paused", meta: bits.join("  ·  ") };
-    if (notCapturing(v, i.now, i.levelAt)) {
+    if (notCapturing(v, i.now, i.levelAt, i.followedAt)) {
       return {
         cls: "offline",
         label: "not capturing",

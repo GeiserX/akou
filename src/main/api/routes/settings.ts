@@ -34,7 +34,16 @@ export function settingsRoutes(r: Router<ApiApp>): void {
           const s: SettingSpec = SETTINGS[k];
           return [
             k,
-            { type: s.type, min: s.min, max: s.max, env: s.env, secret: s.secret, doc: s.doc },
+            {
+              type: s.type,
+              min: s.min,
+              max: s.max,
+              env: s.env,
+              secret: s.secret,
+              // File only when false: it names a program akou runs or where transcripts are sent.
+              apiWritable: s.apiWritable !== false,
+              doc: s.doc,
+            },
           ];
         }),
       ),
