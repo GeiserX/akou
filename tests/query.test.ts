@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { formatWall } from "../src/core/log/clock.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { fold } from "../src/core/log/fold.ts";
+import { excerptsFor } from "../src/main/query/ask.ts";
 import { Bm25, indexTerms, STOPWORDS, stopwordsFor } from "../src/main/query/bm25.ts";
 import { ChunkIndex, chunkBoundaries } from "../src/main/query/chunks.ts";
 import {
@@ -9,6 +10,7 @@ import {
   classify,
   localClockToEpoch,
   parseNaming,
+  searchText,
 } from "../src/main/query/classify.ts";
 import { CallQuery, MCP_BUDGET, resolveCall, WHOLE_CALL_CAP } from "../src/main/query/context.ts";
 import {
@@ -406,7 +408,8 @@ describe("memo slot (DESIGN 5.4, 5.5)", () => {
     const signal = new AbortController().signal;
     const r = await refreshMemo(view, view.lines(), T0 + 30 * MIN, updater, render, signal);
     expect(calls).toEqual([200]);
-    expect(r?.ok && r.draft).toMatchObject({ type: "memo", by: "app", model: "fake-1" });
+    // The whole result, so a refused memo fails with its reason rather than `false`.
+    expect(r).toMatchObject({ ok: true, draft: { type: "memo", by: "app", model: "fake-1" } });
     const early = await refreshMemo(view, view.lines(), T0 + 10 * S, updater, render, signal);
     expect(early).toBeNull();
   });
@@ -717,5 +720,61 @@ describe("resolving the call (DESIGN 5.4 step 0, 6.2)", () => {
     ];
     expect(resolveCall("live", withLive)).toEqual({ ok: true, id: "D" });
     expect(resolveCall("last", calls)).toEqual({ ok: true, id: "C" });
+  });
+});
+
+describe("the ask box presets (DESIGN 7)", () => {
+  /** 300 lines, 6 s apart; line 40 says the user's name, far outside the recency window. */
+  function mentioned(user: string): CallQuery {
+    const b = call(300);
+    const created = b.events[0] as Extract<LogEvent, { type: "call.created" }>;
+    created.user = user;
+    const e = b.events.find((x) => x.type === "seg" && x.id === "l000040") as Extract<
+      LogEvent,
+      { type: "seg" }
+    >;
+    e.text = "Ana will send the invoice numbers on Friday";
+    return new CallQuery(fold(b.events));
+  }
+
+  test("each preset classifies as meant", () => {
+    const c = ctx({ user: "Ana" });
+    expect(classify("Catch me up: what has been said so far?", c).intent).toBe("now");
+    expect(classify("What decisions have been made so far?", c).intent).toBe("summary");
+    expect(classify("What are the action items so far, with owners?", c).intent).toBe("summary");
+    const ben = classify("What did Ben say so far?", {
+      ...c,
+      roster: [{ spk: "c1", label: "Ben", name: "Ben" }],
+    });
+    expect(ben.speakers.map((s) => s.spk)).toEqual(["c1"]);
+  });
+
+  test("Was my name mentioned? searches for the user's name, not the words 'my name'", () => {
+    const q = mentioned("Ana");
+    const question = "Was my name mentioned? By whom and when?";
+    const pack = q.context(question, { now: T0 + 40 * MIN });
+    expect(pack.mode).toBe("retrieval");
+    expect(pack.analysis.terms[0]).toBe("ana");
+    expect(pack.lines.map((l) => l.id)).toContain("l000040");
+    expect(
+      excerptsFor(q, question, pack)
+        .flatMap((x) => x.lines)
+        .join("\n"),
+    ).toContain("Ana will send");
+    // Positive control: the same call for a user with another name does not pull the line in.
+    const other = mentioned("Zoe");
+    const miss = other.context(question, { now: T0 + 40 * MIN });
+    expect(miss.analysis.terms).not.toContain("ana");
+    expect(miss.lines.map((l) => l.id)).not.toContain("l000040");
+  });
+
+  test("a question merely phrased 'to me' is not about the user; 'talked to me' is", () => {
+    const c = ctx({ user: "Ana" });
+    const plain = "Can you explain to me what the budget is?";
+    expect(classify(plain, c).terms).not.toContain("ana");
+    expect(searchText(plain, "Ana")).toBe(plain);
+    // Positive control: a question about someone speaking to the user still searches the name.
+    expect(classify("Who talked to me about the budget?", c).terms[0]).toBe("ana");
+    expect(searchText("Did anyone speak to me?", "Ana")).toBe("Ana Did anyone speak to me?");
   });
 });

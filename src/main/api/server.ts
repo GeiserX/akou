@@ -18,6 +18,7 @@ import type { HookReport } from "../handoff/hooks.ts";
 import type { ImportResult } from "../import/hark-viewer.ts";
 import type { Provider } from "../llm/provider.ts";
 import type { Template } from "../notes/templates.ts";
+import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
 import type { ShareHandle, ShareStatus } from "../share/transport.ts";
 import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
@@ -53,6 +54,8 @@ export interface ApiApp {
   provider(): Provider;
   /** How long one provider answer may take. */
   providerTimeoutMs(): number;
+  /** Kept harness sessions for follow-up questions, when `provider.harnessResume` is on. */
+  askSessions?(): SessionStore | undefined;
   /** The shipped templates, replaced or added to by the user's folder. */
   templates(): Template[];
   /** The speech models on disk, or the download in progress (`GET /models`). */

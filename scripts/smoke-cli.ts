@@ -90,14 +90,16 @@ try {
 
   const skills = join(home, "skills");
   const skill = akou(["skill", "install", "--dir", skills, "--json"]);
-  const skillFile = join(skills, "akou", "SKILL.md");
-  check(
-    skill.code === 0 &&
-      existsSync(skillFile) &&
-      readFileSync(skillFile, "utf8").includes(`version: "${version}"`),
-    "akou skill install writes the built-in SKILL.md at the version",
-    skill.out || skill.err,
-  );
+  for (const name of ["akou", "akou-vocab"]) {
+    const skillFile = join(skills, name, "SKILL.md");
+    check(
+      skill.code === 0 &&
+        existsSync(skillFile) &&
+        readFileSync(skillFile, "utf8").includes(`version: "${version}"`),
+      `akou skill install writes the built-in ${name} SKILL.md at the version`,
+      skill.out || skill.err,
+    );
+  }
 
   // With an akou.app installed, `start` would open it; this check is for machines without one.
   const installed = ["/Applications/akou.app", join(homedir(), "Applications", "akou.app")].filter(
