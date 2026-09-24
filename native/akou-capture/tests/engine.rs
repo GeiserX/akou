@@ -1,0 +1,1000 @@
+//! The whole helper in process: the file source through the engine, with stdin, stdout and stderr
+//! as pipes, checked the way the app reads them.
+
+use std::io::{Read, Write};
+use std::path::PathBuf;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Mutex};
+use std::time::Duration;
+
+use akou_capture::clock::Now;
+use akou_capture::engine::{self, Outcome, RunConfig};
+use akou_capture::file_source::FileSource;
+use akou_capture::opus_writer;
+use akou_capture::protocol::{self, Ch, Packet};
+use akou_capture::protocol::{CallInfo, MicInfo};
+use akou_capture::simulate::Faults;
+use akou_capture::source::{
+    CallMode, Chunk, ClockKind, Event, Frontend, OpenError, Opened, Status,
+};
+use akou_capture::wav::{self, Wav};
+
+#[derive(Clone, Default)]
+struct Shared(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Shared {
+    fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(b);
+        Ok(b.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// stdin fed line by line; dropping the sender closes it.
+struct Stdin {
+    rx: Receiver<Vec<u8>>,
+    buf: Vec<u8>,
+}
+
+impl Read for Stdin {
+    fn read(&mut self, out: &mut [u8]) -> std::io::Result<usize> {
+        if self.buf.is_empty() {
+            match self.rx.recv() {
+                Ok(b) => self.buf = b,
+                Err(_) => return Ok(0),
+            }
+        }
+        let n = out.len().min(self.buf.len());
+        out[..n].copy_from_slice(&self.buf[..n]);
+        self.buf.drain(..n);
+        Ok(n)
+    }
+}
+
+fn tmp(name: &str) -> PathBuf {
+    let dir = std::env::temp_dir().join(format!("akou-capture-engine-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    dir.join(name)
+}
+
+fn tone(freq: f64, rate: u32, secs: f64, amp: f32) -> Vec<f32> {
+    (0..(rate as f64 * secs) as usize)
+        .map(|i| amp * (2.0 * std::f64::consts::PI * freq * i as f64 / rate as f64).sin() as f32)
+        .collect()
+}
+
+fn stereo(rate: u32, secs: f64) -> Wav {
+    let bytes = wav::encode_i16(
+        rate,
+        &[tone(440.0, rate, secs, 0.3), tone(1_000.0, rate, secs, 0.3)],
+    );
+    wav::parse(&bytes).unwrap()
+}
+
+struct Run {
+    handle: std::thread::JoinHandle<Outcome>,
+    stdin: Option<Sender<Vec<u8>>>,
+    out: Shared,
+    err: Shared,
+    path: PathBuf,
+}
+
+impl Run {
+    fn start(name: &str, w: Wav, speed: f64, looped: bool, call: CallMode, faults: Faults) -> Run {
+        let path = tmp(name);
+        let (tx, rx) = mpsc::channel();
+        let out = Shared::default();
+        let err = Shared::default();
+        let call_on = call != CallMode::None;
+        let fe = FileSource::new(w, "test.wav", speed, looped, true, call_on, faults.clone());
+        let cfg = RunConfig {
+            out: path.clone(),
+            mic_default: false,
+            call,
+            faults,
+        };
+        let (o, e) = (out.clone(), err.clone());
+        let handle = std::thread::spawn(move || {
+            engine::run(
+                cfg,
+                Box::new(fe),
+                Box::new(Stdin { rx, buf: vec![] }),
+                Box::new(o),
+                Box::new(e),
+            )
+        });
+        Run {
+            handle,
+            stdin: Some(tx),
+            out,
+            err,
+            path,
+        }
+    }
+
+    fn send(&self, cmd: &str) {
+        if let Some(s) = &self.stdin {
+            let _ = s.send(format!("{cmd}\n").into_bytes());
+        }
+    }
+
+    fn lines(&self) -> Vec<String> {
+        String::from_utf8(self.err.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect()
+    }
+
+    fn packets(&self) -> Vec<Packet> {
+        let bytes = self.out.0.lock().unwrap().clone();
+        let (p, used) = protocol::decode_packets(&bytes).unwrap();
+        assert_eq!(used, bytes.len(), "a torn packet on stdout");
+        p
+    }
+
+    /// Closes stdin (which means stop) and waits for the end.
+    fn finish(mut self) -> (Outcome, Self) {
+        drop(self.stdin.take());
+        self.join()
+    }
+
+    /// Waits for the run to end on its own, stdin still open.
+    fn join(mut self) -> (Outcome, Self) {
+        let h = std::mem::replace(&mut self.handle, std::thread::spawn(|| Outcome::Exit(-1)));
+        (h.join().unwrap(), self)
+    }
+}
+
+/// A driven front end whose sources the test scripts: `delivers(ch, t)` says whether a source
+/// sends its 10 ms buffer at `t` seconds, and mic buffers are stamped `mic_lag_ns` before the
+/// host clock that carries them (a high-latency input). Output is running, the mic is running.
+struct Scripted {
+    secs: f64,
+    delivers: fn(Ch, f64) -> bool,
+    mic_lag_ns: u64,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Frontend for Scripted {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Driven
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: Some(MicInfo {
+                id: "scripted".into(),
+                name: "scripted".into(),
+                rate: 16_000,
+            }),
+            call: Some(CallInfo {
+                mode: "system".into(),
+                rate: 16_000,
+            }),
+            exclude: vec![],
+        })
+    }
+    fn start(&mut self, anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        let (secs, delivers, lag) = (self.secs, self.delivers, self.mic_lag_ns);
+        std::thread::spawn(move || {
+            let steps = (secs * 100.0) as u64;
+            for i in 0..steps {
+                let t = i as f64 / 100.0;
+                let at = anchor.awake_ns + i * 10_000_000;
+                for ch in Ch::BOTH {
+                    if !delivers(ch, t) {
+                        continue;
+                    }
+                    let stamp = if ch == Ch::Mic {
+                        at.saturating_sub(lag)
+                    } else {
+                        at
+                    };
+                    let samples = tone(440.0, 16_000, 0.01, 0.3);
+                    let c = Chunk {
+                        ch,
+                        awake_ns: stamp,
+                        rate: 16_000,
+                        samples,
+                        heard: true,
+                    };
+                    if tx.send(Event::Chunk(c)).is_err() {
+                        return;
+                    }
+                }
+                let end = at + 10_000_000;
+                let tick = Now {
+                    awake_ns: end,
+                    cont_ns: anchor.cont_ns + (end - anchor.awake_ns),
+                };
+                if tx.send(Event::Tick(tick)).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {
+        if let Some(tx) = &self.tx {
+            let _ = tx.try_send(Event::Probe { heard: true });
+        }
+    }
+    fn status(&mut self) -> Status {
+        Status {
+            output_running: Some(true),
+            mic_running: true,
+            default_input: None,
+            default_output: None,
+        }
+    }
+    fn close(self: Box<Self>) {}
+}
+
+/// Runs a scripted front end to its end; returns stderr lines and packets.
+fn run_scripted(name: &str, fe: Scripted) -> (Vec<String>, Vec<Packet>) {
+    let path = tmp(name);
+    let (_tx, rx) = mpsc::channel::<Vec<u8>>();
+    let out = Shared::default();
+    let err = Shared::default();
+    let cfg = RunConfig {
+        out: path,
+        mic_default: false,
+        call: CallMode::System,
+        faults: Faults::none(),
+    };
+    let outcome = engine::run(
+        cfg,
+        Box::new(fe),
+        Box::new(Stdin { rx, buf: vec![] }),
+        Box::new(out.clone()),
+        Box::new(err.clone()),
+    );
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines: Vec<String> = String::from_utf8(err.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    let bytes = out.0.lock().unwrap().clone();
+    let (packets, _) = protocol::decode_packets(&bytes).unwrap();
+    (lines, packets)
+}
+
+/// The split of the two rules, from the mic's side: the stall rule still owns a source that
+/// clocks on its own. A mic that stops delivering while its device runs is `stalled` and
+/// rebuilt every 3 s (positive control for the dead-call tests, where the call side never is).
+#[test]
+fn a_stalled_mic_is_rebuilt_every_3_s_by_the_stall_rule() {
+    let (lines, _) = run_scripted(
+        "mic-stall.opus",
+        Scripted {
+            secs: 12.0,
+            delivers: |ch, t| ch == Ch::Call || t < 1.0,
+            mic_lag_ns: 0,
+            tx: None,
+        },
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"health","ch":"mic","state":"stalled""#)),
+        "{lines:#?}"
+    );
+    let mic_rebuilds = lines
+        .iter()
+        .filter(|l| l.contains(r#""type":"device","ch":"mic","event":"rebuilt""#))
+        .count();
+    // Last audio at 0.99 s: rebuilt at 4, 7 and 10 s.
+    assert_eq!(mic_rebuilds, 3, "{lines:#?}");
+}
+
+fn late_warns(lines: &[String]) -> Vec<&String> {
+    typed(lines, "warn")
+        .into_iter()
+        .filter(|l| l.contains(r#""code":"late-audio""#))
+        .collect()
+}
+
+/// A high-latency input (a Bluetooth headset, a virtual device): mic buffers arrive 150 ms after
+/// their timestamps, beyond the fixed emit latency. The emit latency grows to fit the source, so
+/// the mic is delivered rather than zero-filled as if the device were silent.
+#[test]
+fn a_mic_that_arrives_late_is_delivered_because_the_latency_grows_to_fit_it() {
+    let (lines, packets) = run_scripted(
+        "late-mic.opus",
+        Scripted {
+            secs: 3.0,
+            delivers: |_, _| true,
+            mic_lag_ns: 150_000_000,
+            tx: None,
+        },
+    );
+    let mic: Vec<&Packet> = packets.iter().filter(|p| p.ch == Ch::Mic).collect();
+    // The last 150 ms of the timeline has no mic audio: it was still in flight at the end.
+    let after: Vec<&&Packet> = mic
+        .iter()
+        .filter(|p| (0.2..2.8).contains(&p.file_seconds))
+        .collect();
+    assert!(after.len() > 100);
+    assert!(
+        after.iter().all(|p| !p.zero_filled),
+        "{} of {} mic packets from 0.2 to 2.8 s were zero-filled",
+        after.iter().filter(|p| p.zero_filled).count(),
+        after.len()
+    );
+    assert!(late_warns(&lines).is_empty(), "{lines:#?}");
+}
+
+/// A source later than the latency may grow to (400 ms) loses audio; that loss is reported as
+/// `warn {code: late-audio}` instead of passing for a silent device.
+#[test]
+fn a_mic_later_than_the_latency_bound_is_reported_as_late_audio() {
+    let (lines, _) = run_scripted(
+        "later-mic.opus",
+        Scripted {
+            secs: 3.0,
+            delivers: |_, _| true,
+            mic_lag_ns: 600_000_000,
+            tx: None,
+        },
+    );
+    let late = late_warns(&lines);
+    assert!(!late.is_empty(), "{lines:#?}");
+    assert!(late[0].contains(r#""msg":"mic: "#), "{}", late[0]);
+    assert!(late.iter().all(|l| !l.contains("call: ")));
+}
+
+/// Positive control: the same source on time never reports late audio.
+#[test]
+fn a_mic_on_time_never_reports_late_audio() {
+    let (lines, _) = run_scripted(
+        "ontime-mic.opus",
+        Scripted {
+            secs: 3.0,
+            delivers: |_, _| true,
+            mic_lag_ns: 0,
+            tx: None,
+        },
+    );
+    assert!(late_warns(&lines).is_empty(), "{lines:#?}");
+}
+
+/// A host-clock front end whose mic runs during `open`, as on macOS where the mic opens first
+/// and the call side's open can take seconds: a second of mic buffers is queued before the
+/// anchor. Then both sources deliver 10 ms buffers in real time.
+struct Live {
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Frontend for Live {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Host
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        let before = akou_capture::clock::now().awake_ns - 1_000_000_000;
+        for i in 0..100 {
+            let c = Chunk {
+                ch: Ch::Mic,
+                awake_ns: before + i * 10_000_000,
+                rate: 16_000,
+                samples: tone(440.0, 16_000, 0.01, 0.3),
+                heard: true,
+            };
+            tx.send(Event::Chunk(c)).unwrap();
+        }
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: Some(MicInfo {
+                id: "live".into(),
+                name: "live".into(),
+                rate: 16_000,
+            }),
+            call: Some(CallInfo {
+                mode: "system".into(),
+                rate: 16_000,
+            }),
+            exclude: vec![],
+        })
+    }
+    fn start(&mut self, anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        std::thread::spawn(move || {
+            for i in 0..300u64 {
+                let at = anchor.awake_ns + i * 10_000_000;
+                let due = at + 10_000_000;
+                let now = akou_capture::clock::now().awake_ns;
+                if due > now {
+                    std::thread::sleep(Duration::from_nanos(due - now));
+                }
+                for ch in Ch::BOTH {
+                    let c = Chunk {
+                        ch,
+                        awake_ns: at,
+                        rate: 16_000,
+                        samples: tone(440.0, 16_000, 0.01, 0.3),
+                        heard: true,
+                    };
+                    if tx.send(Event::Chunk(c)).is_err() {
+                        return;
+                    }
+                }
+            }
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {}
+    fn status(&mut self) -> Status {
+        Status {
+            output_running: Some(true),
+            mic_running: true,
+            default_input: None,
+            default_output: None,
+        }
+    }
+    fn close(self: Box<Self>) {}
+}
+
+/// Mic buffers queued before the anchor are dropped by the timeline, so they say nothing about
+/// how late a source is: they must not grow the emit latency. The part keeps the 100 ms device
+/// latency, not the 400 ms bound.
+#[test]
+fn mic_buffers_from_before_capturing_do_not_grow_the_emit_latency() {
+    let (tx, rx) = mpsc::channel::<Vec<u8>>();
+    let out = Shared::default();
+    let err = Shared::default();
+    let cfg = RunConfig {
+        out: tmp("pre-anchor.opus"),
+        mic_default: false,
+        call: CallMode::System,
+        faults: Faults::none(),
+    };
+    let (o, e) = (out.clone(), err.clone());
+    let handle = std::thread::spawn(move || {
+        engine::run(
+            cfg,
+            Box::new(Live { tx: None }),
+            Box::new(Stdin { rx, buf: vec![] }),
+            Box::new(o),
+            Box::new(e),
+        )
+    });
+    // How far the newest mic packet on stdout trails the clock; the least of many looks, so a
+    // slow runner that delays one look cannot make the part look slower than it is.
+    std::thread::sleep(Duration::from_millis(700));
+    let mut least = u64::MAX;
+    for _ in 0..40 {
+        std::thread::sleep(Duration::from_millis(25));
+        let bytes = out.0.lock().unwrap().clone();
+        let now = akou_capture::clock::now().cont_ns;
+        let (p, _) = protocol::decode_packets(&bytes).unwrap();
+        if let Some(last) = p.iter().rev().find(|x| x.ch == Ch::Mic) {
+            least = least.min(now.saturating_sub(last.capture_ns));
+        }
+    }
+    drop(tx);
+    assert_eq!(handle.join().unwrap(), Outcome::Exit(0));
+    assert!(
+        least < 250_000_000,
+        "mic packets trail the clock by {least} ns"
+    );
+}
+
+fn typed<'a>(lines: &'a [String], t: &str) -> Vec<&'a String> {
+    let tag = format!("\"type\":\"{t}\"");
+    lines.iter().filter(|l| l.contains(&tag)).collect()
+}
+
+fn num_field(line: &str, key: &str) -> f64 {
+    let k = format!("\"{key}\":");
+    let at = line.find(&k).unwrap() + k.len();
+    let rest = &line[at..];
+    let end = rest.find([',', '}']).unwrap();
+    rest[..end].trim_matches('"').parse().unwrap()
+}
+
+#[test]
+fn a_wav_runs_end_to_end_into_packets_and_a_stereo_opus_file() {
+    // 44.1 kHz in: the resampler runs on both sides.
+    let r = Run::start(
+        "e2e.opus",
+        stereo(44_100, 3.0),
+        0.0,
+        false,
+        CallMode::System,
+        Faults::none(),
+    );
+    let (outcome, r) = r.join();
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines = r.lines();
+    assert!(lines[0].starts_with(r#"{"type":"hello","protocol":"akou-capture/1""#));
+    assert!(
+        lines[1].starts_with(r#"{"type":"capturing","mic":{"id":"file","#),
+        "{}",
+        lines[1]
+    );
+    assert_eq!(typed(&lines, "first_audio").len(), 2);
+    assert!(typed(&lines, "level").len() >= 10);
+    let stopped = typed(&lines, "stopped");
+    assert_eq!(stopped.len(), 1);
+    assert!(stopped[0].contains(r#""reason":"eof""#));
+    let secs = num_field(stopped[0], "file_seconds");
+    assert!((secs - 3.0).abs() < 0.03, "{secs}");
+
+    // Packets: both channels, 20 ms each, contiguous on the file timeline, host clock stepping.
+    let p = r.packets();
+    let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
+    let call: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Call).collect();
+    assert_eq!(mic.len(), call.len());
+    let mut at = 0.0;
+    for (i, m) in mic.iter().enumerate() {
+        assert!(
+            (m.file_seconds - at).abs() < 1e-9,
+            "packet {i} at {}",
+            m.file_seconds
+        );
+        at += m.samples.len() as f64 / 16_000.0;
+        assert_eq!(m.capture_ns, call[i].capture_ns);
+        if i > 0 && m.samples.len() == 320 {
+            assert_eq!(m.capture_ns - mic[i - 1].capture_ns, 20_000_000);
+        }
+    }
+    assert!((at - secs).abs() < 1e-6);
+    // Past the first packet everything was delivered on both sides.
+    assert!(mic[1..].iter().all(|m| !m.zero_filled));
+    assert!(call[1..].iter().all(|m| !m.zero_filled));
+
+    // The file: stereo, the same length, mic left and call right.
+    let rec = opus_writer::recover(&r.path).unwrap();
+    assert!(rec.ended);
+    assert_eq!(rec.channels, 2);
+    assert!(
+        (rec.seconds() - secs).abs() < 1e-6,
+        "{} vs {secs}",
+        rec.seconds()
+    );
+}
+
+#[test]
+fn stop_on_stdin_finishes_the_file_and_says_stopped() {
+    let r = Run::start(
+        "stop.opus",
+        stereo(48_000, 1.0),
+        1.0,
+        true,
+        CallMode::System,
+        Faults::none(),
+    );
+    std::thread::sleep(Duration::from_millis(700));
+    r.send("stop");
+    let (outcome, r) = r.finish();
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines = r.lines();
+    let stopped = typed(&lines, "stopped");
+    assert!(stopped[0].contains(r#""reason":"stop""#));
+    let secs = num_field(stopped[0], "file_seconds");
+    assert!(secs > 0.5 && secs < 1.2, "{secs}");
+    assert!((opus_writer::recover(&r.path).unwrap().seconds() - secs).abs() < 1e-6);
+}
+
+#[test]
+fn pause_drops_audio_and_the_file_continues_where_it_paused() {
+    let r = Run::start(
+        "pause.opus",
+        stereo(48_000, 1.0),
+        1.0,
+        true,
+        CallMode::System,
+        Faults::none(),
+    );
+    std::thread::sleep(Duration::from_millis(400));
+    r.send("pause");
+    std::thread::sleep(Duration::from_millis(600));
+    r.send("resume");
+    std::thread::sleep(Duration::from_millis(400));
+    r.send("stop");
+    let (_, r) = r.finish();
+    let secs = num_field(typed(&r.lines(), "stopped")[0], "file_seconds");
+    // About 0.8 s written, not 1.4 s.
+    assert!(secs > 0.6 && secs < 1.0, "{secs}");
+    let mic: Vec<Packet> = r
+        .packets()
+        .into_iter()
+        .filter(|p| p.ch == Ch::Mic)
+        .collect();
+    let mut jump = 0u64;
+    for w in mic.windows(2) {
+        assert!(
+            (w[1].file_seconds - w[0].file_seconds - 0.02).abs() < 1e-9 || w[1].samples.len() < 320
+        );
+        jump = jump.max(w[1].capture_ns - w[0].capture_ns);
+    }
+    // The host clock shows the pause; the file position does not.
+    assert!(jump >= 500_000_000, "{jump}");
+}
+
+#[test]
+fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
+    let r = Run::start(
+        "mute.opus",
+        stereo(48_000, 1.0),
+        1.0,
+        true,
+        CallMode::System,
+        Faults::none(),
+    );
+    std::thread::sleep(Duration::from_millis(300));
+    r.send("mute");
+    std::thread::sleep(Duration::from_millis(400));
+    r.send("unmute");
+    std::thread::sleep(Duration::from_millis(300));
+    r.send("stop");
+    let (_, r) = r.finish();
+    let p = r.packets();
+    let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
+    let silent = mic
+        .iter()
+        .filter(|m| m.samples.iter().all(|v| *v == 0.0))
+        .count();
+    let loud = mic
+        .iter()
+        .filter(|m| m.samples.iter().any(|v| v.abs() > 0.05))
+        .count();
+    assert!(silent >= 10, "{silent}");
+    assert!(loud >= 20, "{loud}");
+    // The call side kept going throughout.
+    assert!(
+        p.iter()
+            .filter(|x| x.ch == Ch::Call)
+            .all(|c| !c.zero_filled || c.file_seconds == 0.0)
+    );
+}
+
+/// A part that ends muted on a short last slot: that tail goes to the file through
+/// `finish`, and it is muted there too.
+#[test]
+fn a_part_that_ends_muted_writes_no_mic_in_the_last_short_slot() {
+    // 1.01 s at 48 kHz: 50 full 20 ms slots and a 480-sample tail.
+    let r = Run::start(
+        "muted-tail.opus",
+        stereo(48_000, 1.01),
+        1.0,
+        false,
+        CallMode::System,
+        Faults::none(),
+    );
+    r.send("mute");
+    let (outcome, r) = r.join();
+    assert_eq!(outcome, Outcome::Exit(0));
+    let mut dec = opus::Decoder::new(48_000, opus::Channels::Stereo).unwrap();
+    let mut reader = ogg::reading::PacketReader::new(std::io::BufReader::new(
+        std::fs::File::open(&r.path).unwrap(),
+    ));
+    let mut pcm = vec![0.0f32; 5760 * 2];
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    let mut i = 0;
+    while let Some(p) = reader.read_packet().unwrap() {
+        i += 1;
+        if i <= 2 {
+            continue;
+        }
+        let n = dec.decode_float(&p.data, &mut pcm, false).unwrap();
+        for f in 0..n {
+            left.push(pcm[2 * f]);
+            right.push(pcm[2 * f + 1]);
+        }
+    }
+    let peak = |s: &[f32]| s.iter().fold(0.0f32, |m, v| m.max(v.abs()));
+    // The call side is audible to the end, so the tail is really in the file.
+    assert!(peak(&right[right.len() - 1_000..]) > 0.1);
+    assert!(
+        peak(&left) < 0.05,
+        "mic peak {} in a muted file",
+        peak(&left)
+    );
+}
+
+#[test]
+fn call_none_sends_mic_packets_only_and_leaves_the_right_channel_silent() {
+    let r = Run::start(
+        "mic-only.opus",
+        stereo(48_000, 1.0),
+        0.0,
+        false,
+        CallMode::None,
+        Faults::none(),
+    );
+    let (_, r) = r.join();
+    let lines = r.lines();
+    assert!(lines[1].contains(r#""call":null"#), "{}", lines[1]);
+    let p = r.packets();
+    assert!(!p.is_empty());
+    assert!(p.iter().all(|x| x.ch == Ch::Mic));
+}
+
+#[test]
+fn an_unknown_command_is_reported_and_ignored() {
+    let r = Run::start(
+        "unknown.opus",
+        stereo(48_000, 1.0),
+        1.0,
+        true,
+        CallMode::System,
+        Faults::none(),
+    );
+    r.send("dance");
+    std::thread::sleep(Duration::from_millis(100));
+    r.send("stop");
+    let (outcome, r) = r.finish();
+    assert_eq!(outcome, Outcome::Exit(0));
+    assert!(
+        r.lines()
+            .iter()
+            .any(|l| l.contains(r#""code":"unknown-command""#))
+    );
+}
+
+/// A byte on the command pipe that is not UTF-8 is an unknown command, not the end of input: the
+/// part keeps recording until a real `stop`.
+#[test]
+fn a_command_line_that_is_not_utf8_is_reported_and_does_not_stop_the_part() {
+    let r = Run::start(
+        "not-utf8.opus",
+        stereo(48_000, 1.0),
+        1.0,
+        true,
+        CallMode::System,
+        Faults::none(),
+    );
+    if let Some(s) = &r.stdin {
+        s.send(b"\xff\n".to_vec()).unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(typed(&r.lines(), "stopped").is_empty(), "{:#?}", r.lines());
+    r.send("stop");
+    let (outcome, r) = r.finish();
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines = r.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""code":"unknown-command""#)),
+        "{lines:#?}"
+    );
+    let secs = num_field(typed(&lines, "stopped")[0], "file_seconds");
+    assert!(secs > 0.25, "{secs}");
+}
+
+#[cfg(feature = "simulate")]
+mod faults {
+    use super::*;
+
+    fn with(specs: &[&str]) -> Faults {
+        let mut f = Faults::none();
+        for s in specs {
+            f.apply(s).unwrap();
+        }
+        f
+    }
+
+    /// The call side's health lines, as `(state, rebuilds)`.
+    fn call_health(lines: &[String]) -> Vec<(String, u32)> {
+        typed(lines, "health")
+            .iter()
+            .filter(|l| l.contains(r#""ch":"call""#))
+            .map(|l| {
+                let at = l.find(r#""state":""#).unwrap() + 9;
+                let state = l[at..at + l[at..].find('"').unwrap()].to_string();
+                (state, num_field(l, "rebuilds") as u32)
+            })
+            .collect()
+    }
+
+    fn call_rebuilds(lines: &[String]) -> usize {
+        lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#))
+            .count()
+    }
+
+    /// A command sent during a slow open is kept for the part, not dropped while the helper
+    /// checks for a stop: a `mute` before `capturing` mutes the first packet, and a line it
+    /// cannot read is still reported.
+    #[test]
+    fn commands_before_capturing_are_kept_for_the_part() {
+        let r = Run::start(
+            "early.opus",
+            stereo(48_000, 1.0),
+            1.0,
+            true,
+            CallMode::System,
+            with(&["capturing-delay=300"]),
+        );
+        r.send("mute");
+        r.send("dance");
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(
+            !typed(&r.lines(), "capturing").is_empty(),
+            "{:#?}",
+            r.lines()
+        );
+        r.send("stop");
+        let (outcome, r) = r.finish();
+        assert_eq!(outcome, Outcome::Exit(0));
+        let lines = r.lines();
+        assert!(
+            lines
+                .iter()
+                .any(|l| l.contains(r#""code":"unknown-command""#)),
+            "{lines:#?}"
+        );
+        let p = r.packets();
+        let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
+        assert!(mic.len() >= 10, "{}", mic.len());
+        assert!(
+            mic.iter().all(|m| m.samples.iter().all(|v| *v == 0.0)),
+            "a mic packet went out unmuted"
+        );
+    }
+
+    /// [T0.2] The call side dies while output keeps running (a tap-only aggregate delivers
+    /// nothing when it dies). The dead-call rule owns that symptom end to end: after 10 s of
+    /// nothing the probe hears audio, the call side is rebuilt and `health {state: dead}` goes
+    /// out, and the next rebuild waits for the backoff. The stall rule never rebuilds the call
+    /// side on its own, so there is no rebuild every 3 s and no `stalled` line.
+    #[test]
+    fn t0_2_a_dead_call_side_is_probed_rebuilt_and_reported() {
+        let r = Run::start(
+            "dead.opus",
+            stereo(16_000, 30.0),
+            20.0,
+            false,
+            CallMode::System,
+            with(&["call-dead-at=1"]),
+        );
+        let (_, r) = r.join();
+        let lines = r.lines();
+        let health = call_health(&lines);
+        assert!(health.iter().all(|(s, _)| s != "stalled"), "{health:?}");
+        // Dead at 11 s (10 s after the tap died), again at 21 s (10 s backoff); the 30 s backoff
+        // puts the third past the end of the file.
+        assert_eq!(
+            health,
+            vec![("dead".to_string(), 1), ("dead".to_string(), 2)],
+            "{health:?}"
+        );
+        assert_eq!(call_rebuilds(&lines), 2, "{lines:#?}");
+        let dead = typed(&lines, "health")
+            .into_iter()
+            .find(|l| l.contains(r#""state":"dead""#))
+            .unwrap();
+        assert!(num_field(dead, "silent_for") >= 10.0);
+    }
+
+    /// A dead call side that a rebuild brings back: the dead-call rule's rebuild heals it, and
+    /// audio returning reports `ok`.
+    #[test]
+    fn a_call_side_that_a_rebuild_heals_reports_dead_then_ok() {
+        let r = Run::start(
+            "heal.opus",
+            stereo(16_000, 20.0),
+            20.0,
+            false,
+            CallMode::System,
+            with(&["call-dead-at=1", "rebuild-heals"]),
+        );
+        let (_, r) = r.join();
+        let lines = r.lines();
+        let states: Vec<String> = call_health(&lines).into_iter().map(|h| h.0).collect();
+        assert_eq!(states, vec!["dead", "ok"], "{lines:#?}");
+        assert_eq!(call_rebuilds(&lines), 1);
+    }
+
+    #[test]
+    fn t0_16_call_silent_from_the_start_never_blocks_the_mic() {
+        let r = Run::start(
+            "silent.opus",
+            stereo(48_000, 1.0),
+            0.0,
+            false,
+            CallMode::System,
+            with(&["call-silent"]),
+        );
+        let (_, r) = r.join();
+        let p = r.packets();
+        let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
+        let call: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Call).collect();
+        assert_eq!(mic[0].file_seconds, 0.0);
+        assert_eq!(mic.len(), call.len());
+        assert!(
+            call.iter()
+                .all(|c| c.zero_filled && c.samples.iter().all(|v| *v == 0.0))
+        );
+        assert!(mic[1..].iter().all(|m| !m.zero_filled));
+        let lines = r.lines();
+        assert_eq!(typed(&lines, "first_audio").len(), 1);
+        assert!(
+            typed(&lines, "health")
+                .iter()
+                .all(|l| !l.contains("no-buffers"))
+        );
+    }
+
+    #[test]
+    fn a_crash_exits_70_without_stopped_and_leaves_a_readable_file() {
+        let r = Run::start(
+            "crash.opus",
+            stereo(48_000, 3.0),
+            0.0,
+            false,
+            CallMode::System,
+            with(&["crash-at=2.5"]),
+        );
+        let (outcome, r) = r.join();
+        assert_eq!(outcome, Outcome::Exit(70));
+        assert!(typed(&r.lines(), "stopped").is_empty());
+        let rec = opus_writer::recover(&r.path).unwrap();
+        assert!(!rec.ended);
+        // Two seconds of packets, less the encoder's lookahead that only `finish` flushes.
+        assert_eq!(rec.last_granule, 2 * 48_000);
+        assert_eq!(rec.seconds(), 2.0 - rec.pre_skip as f64 / 48_000.0);
+    }
+
+    #[test]
+    fn sleep_shows_as_a_host_clock_jump_the_file_does_not_have() {
+        let r = Run::start(
+            "sleep.opus",
+            stereo(48_000, 1.0),
+            0.0,
+            false,
+            CallMode::System,
+            with(&["sleep-at=0.5", "sleep-for=3600"]),
+        );
+        let (_, r) = r.join();
+        let mic: Vec<Packet> = r
+            .packets()
+            .into_iter()
+            .filter(|p| p.ch == Ch::Mic)
+            .collect();
+        let jumps: Vec<(f64, u64)> = mic
+            .windows(2)
+            .map(|w| (w[1].file_seconds, w[1].capture_ns - w[0].capture_ns))
+            .filter(|(_, d)| *d > 1_000_000_000)
+            .collect();
+        assert_eq!(jumps.len(), 1);
+        assert!((jumps[0].0 - 0.5).abs() < 0.03, "{:?}", jumps);
+        assert!((jumps[0].1 as f64 / 1e9 - 3600.0).abs() < 0.05);
+    }
+
+    #[test]
+    fn hang_on_stop_ignores_stop() {
+        let r = Run::start(
+            "hang.opus",
+            stereo(48_000, 1.0),
+            1.0,
+            true,
+            CallMode::System,
+            with(&["hang-on-stop"]),
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        r.send("stop");
+        let (outcome, r) = r.finish();
+        assert_eq!(outcome, Outcome::Hang);
+        assert!(typed(&r.lines(), "stopped").is_empty());
+    }
+}

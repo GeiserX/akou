@@ -1,0 +1,80 @@
+name: capture
+
+# The capture helper (native/akou-capture) on every OS: format, lint, unit and engine tests, both
+# release builds, then the app's capture trap scenarios against the real binary in file mode.
+# Nothing here opens an audio device: the e2e runs the helper with --from-wav and
+# AKOU_CAPTURE_FILE_ONLY=1. Device capture runs on hardware in the release checklist.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  helper:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      EXE: ${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust 1.97.1
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+          cargo --version
+      - name: cargo fmt --check
+        working-directory: native/akou-capture
+        run: cargo fmt --check
+      - name: cargo clippy -D warnings (shipping and test builds)
+        working-directory: native/akou-capture
+        run: |
+          cargo clippy --locked --all-targets -- -D warnings
+          cargo clippy --locked --all-targets --features simulate -- -D warnings
+      - name: cargo test (shipping and test builds)
+        working-directory: native/akou-capture
+        run: |
+          cargo test --locked
+          cargo test --locked --features simulate
+      - name: cargo build --release
+        working-directory: native/akou-capture
+        run: |
+          cargo build --locked --release
+          mkdir -p target/shipping
+          cp "target/release/akou-capture$EXE" "target/shipping/akou-capture$EXE"
+          cargo build --locked --release --features simulate
+          {
+            echo "### akou-capture on ${{ runner.os }}"
+            echo
+            echo "| build | bytes |"
+            echo "|---|---|"
+            echo "| shipping | $(wc -c < "target/shipping/akou-capture$EXE") |"
+            echo "| test (simulate) | $(wc -c < "target/release/akou-capture$EXE") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: capture traps against the built helper
+        env:
+          AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}
+          AKOU_CAPTURE_BIN_SHIPPING: ${{ github.workspace }}/native/akou-capture/target/shipping/akou-capture${{ env.EXE }}
+        run: |
+          set -euo pipefail
+          bun test tests/capture-rust.e2e.test.ts 2>&1 | tee e2e.log
+          # A skipped test is not a pass here: with both binaries set, every test must run.
+          if grep -Eq '^ *[1-9][0-9]* skip' e2e.log; then
+            echo "capture e2e tests were skipped"
+            exit 1
+          fi

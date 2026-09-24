@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { HARK_LIVE_ARGS, harkArgs, StereoS16Decoder } from "../src/main/capture/hark.ts";
-import { helperArgs } from "../src/main/capture/helper.ts";
+import { HELPER_NAME, helperArgs, locateHelper } from "../src/main/capture/helper.ts";
 import {
   encodePacket,
   LineSplitter,
@@ -295,5 +295,25 @@ describe("hark dialect (stereo-s16le)", () => {
     expect(mic?.fileSeconds).toBe(0.5);
     expect(mic?.captureNs).toBe(1_500_000_000n);
     expect(call?.captureNs).toBe(mic?.captureNs as bigint);
+  });
+});
+
+describe("where the capture helper is", () => {
+  const execPath = join("/opt", "akou", "bin", "bun");
+  const bundled = join("/opt", "akou", "bin", HELPER_NAME);
+
+  test("capture.helper from config.json wins, even over a bundled helper", () => {
+    const loc = locateHelper(["/x/fake", "--wav", "a.wav"], { execPath, exists: () => true });
+    expect(loc).toEqual({ command: ["/x/fake", "--wav", "a.wav"], source: "config" });
+  });
+
+  test("then the helper bundled beside the app's runtime", () => {
+    const loc = locateHelper([], { execPath, exists: (p) => p === bundled });
+    expect(loc).toEqual({ command: [bundled], source: "bundled" });
+  });
+
+  test("then akou-capture on PATH", () => {
+    const loc = locateHelper([], { execPath, exists: () => false });
+    expect(loc).toEqual({ command: [HELPER_NAME], source: "path" });
   });
 });
