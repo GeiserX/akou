@@ -128,6 +128,49 @@ export function buildRouter(): Router<ApiApp> {
   return r;
 }
 
+/**
+ * Runs one request that is already past the guard through the routes: the HTTP server does this
+ * for every request, and the window's bridge does it in process for the user's own window, with
+ * `by: "user"`.
+ */
+export async function routeRequest(
+  router: Router<ApiApp>,
+  app: ApiApp,
+  req: Request,
+  o: {
+    by: string;
+    timeout?: (seconds: number) => void;
+    onError?(err: unknown, req: Request): void;
+  },
+): Promise<Response> {
+  const url = new URL(req.url);
+  if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
+    return json(404, { error: "not_found", message: "the API is under /v1" });
+  }
+  const m = router.match(req.method, url.pathname.slice(API_PREFIX.length));
+  if ("status" in m) {
+    return m.status === 405
+      ? json(405, { error: "method_not_allowed", message: `${req.method} is not allowed here` })
+      : json(404, { error: "not_found", message: `no route ${url.pathname}` });
+  }
+  try {
+    // Calls are known once recovery has indexed the root; a route that names a call waits for it.
+    if (/^\/v1\/(calls|window|share)(\/|$)/.test(url.pathname)) await app.manager.init();
+    return await m.handler({
+      req,
+      url,
+      params: m.params,
+      app,
+      by: o.by,
+      timeout: o.timeout,
+    });
+  } catch (err) {
+    if (err instanceof HttpError) return errorResponse(err);
+    o.onError?.(err, req);
+    return json(500, { error: "internal", message: (err as Error).message ?? String(err) });
+  }
+}
+
 export function startApiServer(o: ServerOptions): ApiServer {
   const router = buildRouter();
   const check = o.guard ?? defaultGuard;
@@ -141,32 +184,11 @@ export function startApiServer(o: ServerOptions): ApiServer {
     fetch: async (req, srv) => {
       const refused = check(req, { port: srv.port as number, token: o.token() });
       if (refused) return refused;
-      const url = new URL(req.url);
-      if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
-        return json(404, { error: "not_found", message: "the API is under /v1" });
-      }
-      const m = router.match(req.method, url.pathname.slice(API_PREFIX.length));
-      if ("status" in m) {
-        return m.status === 405
-          ? json(405, { error: "method_not_allowed", message: `${req.method} is not allowed here` })
-          : json(404, { error: "not_found", message: `no route ${url.pathname}` });
-      }
-      try {
-        // Calls are known once recovery has indexed the root; a call route waits for it.
-        if (url.pathname.startsWith(`${API_PREFIX}/calls`)) await o.app.manager.init();
-        return await m.handler({
-          req,
-          url,
-          params: m.params,
-          app: o.app,
-          by: authorOf(req),
-          timeout: (seconds) => srv.timeout(req, seconds),
-        });
-      } catch (err) {
-        if (err instanceof HttpError) return errorResponse(err);
-        o.onError?.(err, req);
-        return json(500, { error: "internal", message: (err as Error).message ?? String(err) });
-      }
+      return routeRequest(router, o.app, req, {
+        by: authorOf(req),
+        timeout: (seconds) => srv.timeout(req, seconds),
+        onError: o.onError,
+      });
     },
   });
   const port = server.port as number;
