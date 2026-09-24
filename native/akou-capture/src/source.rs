@@ -216,8 +216,15 @@ pub trait Frontend: Send {
     /// Rebuilds one source (tap and aggregate, or mic stream). Returns the call side's
     /// re-resolved exclusion names.
     fn rebuild(&mut self, ch: Ch) -> Result<Vec<String>, String>;
-    /// Starts a probe of the call side; the verdict arrives as `Event::Probe` within 3 s.
+    /// Starts a probe of the call side; the verdict arrives as `Event::Probe` within 3 s, or at
+    /// once through `probe_answered`.
     fn probe_call(&mut self);
+    /// The verdict of the probe just started, when this front end has it at once. The file
+    /// source listens to nothing, so it knows its verdict when asked: taken here, it is timed at
+    /// the slot that asked, instead of queueing behind however much audio the source is ahead.
+    fn probe_answered(&mut self) -> Option<bool> {
+        None
+    }
     fn status(&mut self) -> Status;
     /// The permission-suspect rule applies (macOS: a missing grant gives silent zeros).
     fn permission_suspect(&self) -> bool {

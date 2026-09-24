@@ -84,12 +84,38 @@ struct Run {
 
 impl Run {
     fn start(name: &str, w: Wav, speed: f64, looped: bool, call: CallMode, faults: Faults) -> Run {
-        let path = tmp(name);
-        let (tx, rx) = mpsc::channel();
-        let out = Shared::default();
-        let err = Shared::default();
         let call_on = call != CallMode::None;
         let fe = FileSource::new(w, "test.wav", speed, looped, true, call_on, faults.clone());
+        Run::with(name, Box::new(fe), call, faults, &[])
+    }
+
+    /// The file source at `--speed 0` behind the gates at `gates` seconds of file (see `Gated`).
+    /// Returns the run and what opens the gates, one `send(())` each.
+    fn gated(name: &str, w: Wav, looped: bool, gates: &[f64]) -> (Run, Sender<()>) {
+        let fe = FileSource::new(w, "test.wav", 0.0, looped, true, true, Faults::none());
+        let (open, opened) = mpsc::channel();
+        let fe = Gated::new(Box::new(fe), gates, opened);
+        (
+            Run::with(name, Box::new(fe), CallMode::System, Faults::none(), &[]),
+            open,
+        )
+    }
+
+    /// Any front end; the `early` lines are on stdin before the helper starts.
+    fn with(
+        name: &str,
+        fe: Box<dyn Frontend>,
+        call: CallMode,
+        faults: Faults,
+        early: &[&str],
+    ) -> Run {
+        let path = tmp(name);
+        let (tx, rx) = mpsc::channel();
+        for l in early {
+            tx.send(format!("{l}\n").into_bytes()).unwrap();
+        }
+        let out = Shared::default();
+        let err = Shared::default();
         let cfg = RunConfig {
             out: path.clone(),
             mic_default: false,
@@ -100,7 +126,7 @@ impl Run {
         let handle = std::thread::spawn(move || {
             engine::run(
                 cfg,
-                Box::new(fe),
+                fe,
                 Box::new(Stdin { rx, buf: vec![] }),
                 Box::new(o),
                 Box::new(e),
@@ -136,6 +162,35 @@ impl Run {
         p
     }
 
+    /// Waits for a stderr line containing `what`. The deadline only turns a hang into a failure;
+    /// nothing here measures time.
+    fn wait_for(&self, what: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !self.lines().iter().any(|l| l.contains(what)) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no line with {what}: {:#?}",
+                self.lines()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Waits for the gate at `t` s (see `Gated`): the engine has taken the file up to `t`.
+    fn at_gate(&self, t: f64) {
+        self.wait_for(&format!(r#""code":"gate","msg":"{t:.2}""#));
+    }
+
+    /// Sends `cmds` and waits until the engine has applied them: the helper reports an unknown
+    /// line in the order it reads its input, so its report means every line before it was taken.
+    fn apply(&self, cmds: &[&str], tag: &str) {
+        for c in cmds {
+            self.send(c);
+        }
+        self.send(tag);
+        self.wait_for(&format!(r#""code":"unknown-command","msg":"{tag}""#));
+    }
+
     /// Closes stdin (which means stop) and waits for the end.
     fn finish(mut self) -> (Outcome, Self) {
         drop(self.stdin.take());
@@ -146,6 +201,96 @@ impl Run {
     fn join(mut self) -> (Outcome, Self) {
         let h = std::mem::replace(&mut self.handle, std::thread::spawn(|| Outcome::Exit(-1)));
         (h.join().unwrap(), self)
+    }
+}
+
+/// A driven front end held at gates the test opens, so a test acts at an exact point of the
+/// source's own clock rather than after a sleep on the wall clock. Events pass through until a
+/// tick reaches the next gate; then it says `warn {code: gate, msg: "<t>"}` through the engine,
+/// which prints it once it has taken everything up to that tick, and waits for the test to open
+/// the gate. A gate at 0 holds the source before its first buffer.
+struct Gated {
+    inner: Box<dyn Frontend>,
+    gates: Vec<f64>,
+    open: Option<Receiver<()>>,
+    rx: Option<Receiver<Event>>,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Gated {
+    fn new(inner: Box<dyn Frontend>, gates: &[f64], open: Receiver<()>) -> Gated {
+        Gated {
+            inner,
+            gates: gates.to_vec(),
+            open: Some(open),
+            rx: None,
+            tx: None,
+        }
+    }
+}
+
+impl Frontend for Gated {
+    fn caps(&self) -> Vec<&'static str> {
+        self.inner.caps()
+    }
+    fn clock(&self) -> ClockKind {
+        self.inner.clock()
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        let (itx, irx) = mpsc::sync_channel(engine::EVENT_QUEUE);
+        self.tx = Some(tx);
+        self.rx = Some(irx);
+        self.inner.open(itx)
+    }
+    fn start(&mut self, anchor: Now) {
+        let (Some(tx), Some(rx), Some(open)) = (self.tx.take(), self.rx.take(), self.open.take())
+        else {
+            return;
+        };
+        let mut gates = self.gates.clone().into_iter().peekable();
+        std::thread::spawn(move || {
+            let hold = |t: f64| {
+                let gate = Event::Warn {
+                    code: "gate",
+                    msg: format!("{t:.2}"),
+                };
+                tx.send(gate).is_ok() && open.recv().is_ok()
+            };
+            if gates.next_if(|g| *g <= 0.0).is_some() && !hold(0.0) {
+                return;
+            }
+            for ev in rx {
+                let t = match &ev {
+                    Event::Tick(n) => Some(n.awake_ns.saturating_sub(anchor.awake_ns) as f64 / 1e9),
+                    _ => None,
+                };
+                if tx.send(ev).is_err() {
+                    return;
+                }
+                if let Some(t) = t
+                    && let Some(g) = gates.next_if(|g| t >= *g - 1e-9)
+                    && !hold(g)
+                {
+                    return;
+                }
+            }
+        });
+        self.inner.start(anchor);
+    }
+    fn rebuild(&mut self, ch: Ch) -> Result<Vec<String>, String> {
+        self.inner.rebuild(ch)
+    }
+    fn probe_call(&mut self) {
+        self.inner.probe_call();
+    }
+    fn probe_answered(&mut self) -> Option<bool> {
+        self.inner.probe_answered()
+    }
+    fn status(&mut self) -> Status {
+        self.inner.status()
+    }
+    fn close(self: Box<Self>) {
+        self.inner.close();
     }
 }
 
@@ -893,46 +1038,34 @@ fn a_wav_runs_end_to_end_into_packets_and_a_stereo_opus_file() {
 
 #[test]
 fn stop_on_stdin_finishes_the_file_and_says_stopped() {
-    let r = Run::start(
-        "stop.opus",
-        stereo(48_000, 1.0),
-        1.0,
-        true,
-        CallMode::System,
-        Faults::none(),
-    );
-    std::thread::sleep(Duration::from_millis(700));
+    let (r, _open) = Run::gated("stop.opus", stereo(48_000, 1.0), true, &[0.7]);
+    r.at_gate(0.7);
     r.send("stop");
     let (outcome, r) = r.finish();
     assert_eq!(outcome, Outcome::Exit(0));
     let lines = r.lines();
     let stopped = typed(&lines, "stopped");
     assert!(stopped[0].contains(r#""reason":"stop""#));
+    // Stopped 0.7 s into the file: everything up to there is in it, nothing after.
     let secs = num_field(stopped[0], "file_seconds");
-    assert!(secs > 0.5 && secs < 1.2, "{secs}");
+    assert!((secs - 0.7).abs() < 1e-6, "{secs}");
     assert!((opus_writer::recover(&r.path).unwrap().seconds() - secs).abs() < 1e-6);
 }
 
 #[test]
 fn pause_drops_audio_and_the_file_continues_where_it_paused() {
-    let r = Run::start(
-        "pause.opus",
-        stereo(48_000, 1.0),
-        1.0,
-        true,
-        CallMode::System,
-        Faults::none(),
-    );
-    std::thread::sleep(Duration::from_millis(400));
-    r.send("pause");
-    std::thread::sleep(Duration::from_millis(600));
-    r.send("resume");
-    std::thread::sleep(Duration::from_millis(400));
-    r.send("stop");
-    let (_, r) = r.finish();
+    // Paused from 0.4 s to 1.0 s of a 1.4 s source.
+    let (r, open) = Run::gated("pause.opus", stereo(48_000, 1.4), false, &[0.4, 1.0]);
+    r.at_gate(0.4);
+    r.apply(&["pause"], "sync-pause");
+    open.send(()).unwrap();
+    r.at_gate(1.0);
+    r.apply(&["resume"], "sync-resume");
+    open.send(()).unwrap();
+    let (_, r) = r.join();
     let secs = num_field(typed(&r.lines(), "stopped")[0], "file_seconds");
-    // About 0.8 s written, not 1.4 s.
-    assert!(secs > 0.6 && secs < 1.0, "{secs}");
+    // 0.8 s written, not 1.4 s.
+    assert!((secs - 0.8).abs() < 1e-6, "{secs}");
     let mic: Vec<Packet> = r
         .packets()
         .into_iter()
@@ -946,26 +1079,20 @@ fn pause_drops_audio_and_the_file_continues_where_it_paused() {
         jump = jump.max(w[1].capture_ns - w[0].capture_ns);
     }
     // The host clock shows the pause; the file position does not.
-    assert!(jump >= 500_000_000, "{jump}");
+    assert_eq!(jump, 620_000_000);
 }
 
 #[test]
 fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
-    let r = Run::start(
-        "mute.opus",
-        stereo(48_000, 1.0),
-        1.0,
-        true,
-        CallMode::System,
-        Faults::none(),
-    );
-    std::thread::sleep(Duration::from_millis(300));
-    r.send("mute");
-    std::thread::sleep(Duration::from_millis(400));
-    r.send("unmute");
-    std::thread::sleep(Duration::from_millis(300));
-    r.send("stop");
-    let (_, r) = r.finish();
+    // Muted from 0.3 s to 0.7 s of a 1 s source.
+    let (r, open) = Run::gated("mute.opus", stereo(48_000, 1.0), false, &[0.3, 0.7]);
+    r.at_gate(0.3);
+    r.apply(&["mute"], "sync-mute");
+    open.send(()).unwrap();
+    r.at_gate(0.7);
+    r.apply(&["unmute"], "sync-unmute");
+    open.send(()).unwrap();
+    let (_, r) = r.join();
     let p = r.packets();
     let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
     let silent = mic
@@ -976,8 +1103,10 @@ fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
         .iter()
         .filter(|m| m.samples.iter().any(|v| v.abs() > 0.05))
         .count();
-    assert!(silent >= 10, "{silent}");
-    assert!(loud >= 20, "{loud}");
+    // Muted from the first slot not yet out at 0.3 s (0.28 s, with the 20 ms emit latency) to the
+    // last one out at 0.7 s: 20 slots. The first of them carries the decimator's tail of the audio
+    // before it, so 19 are all zeros.
+    assert_eq!((silent, loud), (19, 31));
     // The call side kept going throughout.
     assert!(
         p.iter()
@@ -990,16 +1119,11 @@ fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
 /// `finish`, and it is muted there too.
 #[test]
 fn a_part_that_ends_muted_writes_no_mic_in_the_last_short_slot() {
-    // 1.01 s at 48 kHz: 50 full 20 ms slots and a 480-sample tail.
-    let r = Run::start(
-        "muted-tail.opus",
-        stereo(48_000, 1.01),
-        1.0,
-        false,
-        CallMode::System,
-        Faults::none(),
-    );
-    r.send("mute");
+    // 1.01 s at 48 kHz: 50 full 20 ms slots and a 480-sample tail. Muted before any audio.
+    let (r, open) = Run::gated("muted-tail.opus", stereo(48_000, 1.01), false, &[0.0]);
+    r.at_gate(0.0);
+    r.apply(&["mute"], "sync-mute");
+    open.send(()).unwrap();
     let (outcome, r) = r.join();
     assert_eq!(outcome, Outcome::Exit(0));
     let mut dec = opus::Decoder::new(48_000, opus::Channels::Stereo).unwrap();
@@ -1517,24 +1641,31 @@ mod faults {
     /// cannot read is still reported.
     #[test]
     fn commands_before_capturing_are_kept_for_the_part() {
-        let r = Run::start(
-            "early.opus",
+        // The lines are on stdin before the helper starts, so it reads them while it opens; the
+        // source is held until the part has taken them.
+        let faults = with(&["capturing-delay=300"]);
+        let fe = FileSource::new(
             stereo(48_000, 1.0),
-            1.0,
+            "test.wav",
+            0.0,
+            false,
             true,
+            true,
+            faults.clone(),
+        );
+        let (open, opened) = mpsc::channel();
+        let fe = Gated::new(Box::new(fe), &[0.0], opened);
+        let r = Run::with(
+            "early.opus",
+            Box::new(fe),
             CallMode::System,
-            with(&["capturing-delay=300"]),
+            faults,
+            &["mute", "dance"],
         );
-        r.send("mute");
-        r.send("dance");
-        std::thread::sleep(Duration::from_millis(600));
-        assert!(
-            !typed(&r.lines(), "capturing").is_empty(),
-            "{:#?}",
-            r.lines()
-        );
-        r.send("stop");
-        let (outcome, r) = r.finish();
+        r.at_gate(0.0);
+        r.apply(&[], "sync");
+        open.send(()).unwrap();
+        let (outcome, r) = r.join();
         assert_eq!(outcome, Outcome::Exit(0));
         let lines = r.lines();
         assert!(
@@ -1545,7 +1676,7 @@ mod faults {
         );
         let p = r.packets();
         let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
-        assert!(mic.len() >= 10, "{}", mic.len());
+        assert_eq!(mic.len(), 50);
         assert!(
             mic.iter().all(|m| m.samples.iter().all(|v| *v == 0.0)),
             "a mic packet went out unmuted"
@@ -1620,10 +1751,7 @@ mod faults {
             "{lines:#?}"
         );
         let first = dead_silent_for(&lines)[0];
-        // The property is the lower bound: zeros wait the full 10 s, never the 1 s no-buffers
-        // path. The file plays at 20x, so 100 ms of runner scheduling lag reads as 2 s of file
-        // time; the upper bound only has to stay clear of the second probe at 20 s.
-        assert!((10.0..13.0).contains(&first), "{first}");
+        assert!((10.0..10.5).contains(&first), "{first}");
         let p = r.packets();
         let late: Vec<&Packet> = p
             .iter()

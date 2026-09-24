@@ -348,7 +348,8 @@ impl Part {
         }
     }
 
-    fn dead_actions(&mut self, fe: &mut dyn Frontend, actions: Vec<dead_call::Action>) {
+    /// Runs the dead-call rule's actions; `at` is the part time of the observation that asked.
+    fn dead_actions(&mut self, fe: &mut dyn Frontend, actions: Vec<dead_call::Action>, at: f64) {
         let mut health: Vec<(&'static str, f64, u32, String)> = vec![];
         let mut names: Option<Vec<String>> = None;
         for a in actions {
@@ -356,7 +357,7 @@ impl Part {
                 dead_call::Action::Probe => {
                     self.probe_since = Some(self.t_of(self.now.awake_ns));
                     self.probe_after_ns = Some(self.emitted_ns);
-                    fe.probe_call();
+                    self.ask_probe(fe, at);
                 }
                 dead_call::Action::Health {
                     state,
@@ -379,6 +380,54 @@ impl Part {
                 silent_for.max(0.0),
                 rebuilds,
                 &detail,
+            ));
+        }
+    }
+
+    /// Starts a probe asked at part time `at`. A verdict the front end has at once is taken now
+    /// and timed at `at`, so a driven run's probe lands on the same slot whatever the load.
+    fn ask_probe(&mut self, fe: &mut dyn Frontend, at: f64) {
+        fe.probe_call();
+        if let Some(heard) = fe.probe_answered() {
+            self.verdict(fe, heard, at);
+        }
+    }
+
+    /// A probe's verdict at part time `t`, for the dead-call rule's probe or a `probe_call`
+    /// command.
+    fn verdict(&mut self, fe: &mut dyn Frontend, heard: bool, t: f64) {
+        let by_dead = self.dead.as_ref().is_some_and(|d| d.probing());
+        if by_dead {
+            self.probe_since = None;
+            // What the stream delivered after the silence that asked for the probe answers it
+            // first: a tap that works is never rebuilt for a verdict that outran its audio.
+            let after = self.probe_after_ns.take().unwrap_or(u64::MAX);
+            let (buffer, audio) = (self.call_buffer_ns > after, self.call_audio_ns > after);
+            let actions = match self.dead.as_mut() {
+                Some(d) => {
+                    if d.stream_alive(buffer, audio) {
+                        vec![]
+                    } else {
+                        d.probe_result(t, heard)
+                    }
+                }
+                None => vec![],
+            };
+            self.dead_actions(fe, actions, t);
+        }
+        if self.probe_by_command {
+            self.probe_by_command = false;
+            let detail = if heard {
+                "probe heard audio"
+            } else {
+                "probe heard nothing"
+            };
+            self.say.line(&protocol::health(
+                Ch::Call,
+                "probe",
+                0.0,
+                self.rebuilds[1],
+                detail,
             ));
         }
     }
@@ -534,7 +583,7 @@ impl Part {
                     actions.extend(d.probe_result(st, false));
                 }
                 actions.extend(d.tick(tick));
-                self.dead_actions(fe, actions);
+                self.dead_actions(fe, actions, st);
             }
             if let Some(s) = self.suspect.as_mut()
                 && s.tick(tick)
@@ -771,41 +820,7 @@ pub fn run(
                 Event::Tick(n) => p.set_now(n),
                 Event::Probe { heard } => {
                     let t = p.t_of(p.now.awake_ns);
-                    let by_dead = p.dead.as_ref().is_some_and(|d| d.probing());
-                    if by_dead {
-                        p.probe_since = None;
-                        // What the stream delivered after the silence that asked for the probe
-                        // answers it first: a tap that works is never rebuilt for a verdict that
-                        // outran its audio.
-                        let after = p.probe_after_ns.take().unwrap_or(u64::MAX);
-                        let (buffer, audio) = (p.call_buffer_ns > after, p.call_audio_ns > after);
-                        let actions = match p.dead.as_mut() {
-                            Some(d) => {
-                                if d.stream_alive(buffer, audio) {
-                                    vec![]
-                                } else {
-                                    d.probe_result(t, heard)
-                                }
-                            }
-                            None => vec![],
-                        };
-                        p.dead_actions(fe.as_mut(), actions);
-                    }
-                    if p.probe_by_command {
-                        p.probe_by_command = false;
-                        let detail = if heard {
-                            "probe heard audio"
-                        } else {
-                            "probe heard nothing"
-                        };
-                        p.say.line(&protocol::health(
-                            Ch::Call,
-                            "probe",
-                            0.0,
-                            p.rebuilds[1],
-                            detail,
-                        ));
-                    }
+                    p.verdict(fe.as_mut(), heard, t);
                 }
                 Event::Lost { ch, detail } => {
                     p.say.line(&protocol::device(ch, "lost", &detail));
@@ -871,7 +886,8 @@ pub fn run(
                 }
                 Ok(Input::Cmd(Command::ProbeCall)) if p.on[1] => {
                     p.probe_by_command = true;
-                    fe.probe_call();
+                    let t = p.t_of(p.now.awake_ns);
+                    p.ask_probe(fe.as_mut(), t);
                 }
                 Ok(Input::Cmd(_)) => {}
                 Ok(Input::Unknown(s)) => {

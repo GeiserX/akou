@@ -33,6 +33,8 @@ pub struct FileSource {
     stop: Arc<AtomicBool>,
     healed: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    /// The verdict of the probe just asked, until the engine takes it.
+    answer: Option<bool>,
 }
 
 impl FileSource {
@@ -57,6 +59,7 @@ impl FileSource {
             stop: Arc::new(AtomicBool::new(false)),
             healed: Arc::new(AtomicBool::new(false)),
             worker: None,
+            answer: None,
         }
     }
 
@@ -201,11 +204,15 @@ impl Frontend for FileSource {
     }
 
     fn probe_call(&mut self) {
-        // The probe listens to the output: it hears audio while the simulated output plays.
-        let heard = self.output_running() == Some(true);
-        if let Some(tx) = &self.tx {
-            let _ = tx.try_send(Event::Probe { heard });
-        }
+        // The probe listens to the output: it hears audio while the simulated output plays. It
+        // answers at once, through `probe_answered`: sent as an event it would queue behind the
+        // audio this source is ahead of the engine by (seconds of file at `--speed 0`, or when
+        // the engine is slow), and be timed there, or be dropped when that queue is full.
+        self.answer = Some(self.output_running() == Some(true));
+    }
+
+    fn probe_answered(&mut self) -> Option<bool> {
+        self.answer.take()
     }
 
     fn status(&mut self) -> Status {
