@@ -134,7 +134,7 @@ export const SETTINGS = {
     type: "string[]",
     default: [],
     apiWritable: false,
-    doc: "Command that starts the capture helper, before its own arguments. Empty: the bundled akou-capture.",
+    doc: "Command that starts the capture helper, before its own arguments. Empty: the akou-capture bundled with the app, else the one on PATH.",
   },
   "capture.mic": {
     type: "string",

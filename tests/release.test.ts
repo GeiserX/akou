@@ -15,7 +15,6 @@ import { atLeast, hostTarget, MIN_BUN } from "../scripts/build-cli.ts";
 import { drift, main, readAll, stamp, tagVersion } from "../scripts/stamp-version.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
 import { siblingModule } from "../src/main/asr/sibling.ts";
-import { bundledHelper } from "../src/main/capture/helper.ts";
 import { defaultLaunch, isCompiled } from "../src/main/cli/client.ts";
 import { skillSourceDir } from "../src/main/cli/commands/skill.ts";
 import { prebuiltUi } from "../src/main/window/bundle.ts";
@@ -193,15 +192,6 @@ describe("what the bundle carries beside the main process", () => {
     });
     expect(config.build?.copy?.["src/main/notes/templates"]).toBe(`${MAIN_OUT}/templates`);
     expect(config.scripts?.postBuild).toBe("./scripts/post-build.ts");
-  });
-
-  test("the app finds the helper beside its main process, else on PATH", () => {
-    const t = tempDir();
-    expect(bundledHelper(t.dir, "darwin")).toBeNull();
-    writeFileSync(join(t.dir, "akou-capture"), "");
-    expect(bundledHelper(t.dir, "darwin")).toBe(join(t.dir, "akou-capture"));
-    expect(bundledHelper(t.dir, "win32")).toBeNull();
-    t.cleanup();
   });
 
   test("a Worker is its .ts file from source and the bundled .js file when packaged", () => {

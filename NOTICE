@@ -1,0 +1,55 @@
+akou
+Copyright (C) 2026 the akou authors. Licensed under the GNU General Public License v3.0 (LICENSE).
+
+This file credits the third-party work akou builds on. Each component keeps its own licence.
+
+Capture helper (native/akou-capture)
+------------------------------------
+
+hark (MIT), https://github.com/PhantomYdn/hark
+  Copyright (c) 2026 Ilya Naryzhnyy.
+  The capture design the helper ports to Rust: a private, unmuted Core Audio process tap read
+  through a private aggregate device with tap auto-start and drift compensation, the throwaway
+  probe tap that tells a dead tap from a quiet call, and the dead-tap rebuild rule. No hark code
+  is copied.
+
+libopus (BSD-3-Clause), https://opus-codec.org
+  Copyright (c) Xiph.Org Foundation, Skype Limited, Octasic, Jean-Marc Valin, Timothy B.
+  Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo and contributors.
+  Built from source and linked statically through opusic-sys (BSD-3-Clause).
+
+Rust crates linked into the shipping helper, on any of the macOS, Linux and Windows targets
+(build-time procedural macros are not linked and are not listed). Each crate's licence text is in
+its source package at the repository given.
+
+  audio-codec-algorithms v0.8.1  0BSD OR Apache-2.0                 https://github.com/karip/audio-codec-algorithms
+  audioadapter v5.0.0            MIT OR Apache-2.0                  https://github.com/HEnquist/audioadapter-rs
+  audioadapter-buffers v5.2.0    MIT OR Apache-2.0                  https://github.com/HEnquist/audioadapter-buffers-rs
+  audioadapter-sample v5.2.0     MIT OR Apache-2.0                  https://github.com/HEnquist/audioadapter-sample-rs
+  bitflags v2.13.2               MIT OR Apache-2.0                  https://github.com/bitflags/bitflags
+  block2 v0.6.2                  MIT                                https://github.com/madsmtm/objc2
+  byteorder v1.5.0               Unlicense OR MIT                   https://github.com/BurntSushi/byteorder
+  coreaudio-rs v0.14.2           MIT/Apache-2.0                     https://github.com/RustAudio/coreaudio-rs
+  cpal v0.18.2                   Apache-2.0                         https://github.com/RustAudio/cpal
+  dasp_sample v0.11.0            MIT OR Apache-2.0                  https://github.com/rustaudio/sample
+  dispatch2 v0.3.1               Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
+  libc v0.2.189                  MIT OR Apache-2.0                  https://github.com/rust-lang/libc
+  mach2 v0.6.0                   BSD-2-Clause OR MIT OR Apache-2.0  https://github.com/JohnTitor/mach2
+  num-integer v0.1.47            MIT OR Apache-2.0                  https://github.com/rust-num/num-integer
+  num-traits v0.2.19             MIT OR Apache-2.0                  https://github.com/rust-num/num-traits
+  objc2 v0.6.4                   MIT                                https://github.com/madsmtm/objc2
+  objc2-audio-toolbox v0.3.2     Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
+  objc2-core-audio v0.3.2        Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
+  objc2-core-audio-types v0.3.2  Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
+  objc2-core-foundation v0.3.2   Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
+  objc2-encode v4.1.0            MIT                                https://github.com/madsmtm/objc2
+  objc2-foundation v0.3.2        MIT                                https://github.com/madsmtm/objc2
+  ogg v0.9.2                     BSD-3-Clause                       https://github.com/RustAudio/ogg
+  opus v0.4.0                    MIT/Apache-2.0                     https://github.com/SpaceManiac/opus-rs
+  opusic-sys v0.7.5              BSD-3-Clause                       https://github.com/DoumanAsh/opusic-sys
+  rubato v5.0.0                  MIT OR Apache-2.0                  https://github.com/HEnquist/rubato
+  windowfunctions v0.1.1         MIT                                https://github.com/HEnquist/windowfunctions-rs
+
+Regenerate this list with, in native/akou-capture, for each shipping target triple:
+  cargo tree --locked --target <triple> -e normal,no-proc-macro --prefix none --format "{p}|{l}|{r}"
+A test (native/akou-capture/tests/notice.rs) fails when a linked crate is missing here.
