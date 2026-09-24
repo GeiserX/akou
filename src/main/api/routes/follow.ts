@@ -6,7 +6,8 @@
  *   `seq` order and each exactly once (the backlog from disk, then live events), plus the
  *   ephemeral `partial` (the provisional line, never in the log) and `level` events.
  * - `GET /calls/{id}/transcript`: the rendered transcript, names and vocabulary applied, local
- *   wall-clock times only.
+ *   wall-clock times only. The JSON form also carries the call's state and, while it is live, the
+ *   provisional line (marked `draft`), which is what `akou_read` follows a call with.
  */
 
 import { formatWall, formatZone } from "../../../core/log/clock.ts";
@@ -223,12 +224,31 @@ export function followRoutes(r: Router<ApiApp>): void {
         },
       });
     }
+    // The line still being spoken, for a reader following the live call (DESIGN 5.5): never in the
+    // log, marked as a draft, and only while it is fresh.
+    const provisional = v.live
+      ? v.provisional.current(c.app.now()).map((p) => {
+          const spk = p.ch === "mic" ? "you" : p.spk;
+          return {
+            ch: p.ch,
+            part: p.part,
+            time: formatWall(p.w0, tz),
+            w0: p.w0,
+            speaker: spk ? v.speakerLabel(spk) : "Call",
+            text: p.text,
+            draft: true,
+          };
+        })
+      : [];
     return json(200, {
       call: call.id,
+      state: v.state,
+      live: v.live,
       layer,
       tz,
       zone,
       cursor: v.lastSeq,
+      provisional,
       lines: lines.map((l) => ({
         id: l.id,
         seq: l.seq,
@@ -240,7 +260,9 @@ export function followRoutes(r: Router<ApiApp>): void {
         spk: l.spk,
         speaker: l.speaker,
         text: l.text,
-        ...(l.heard !== undefined ? { heard: l.heard } : {}),
+        // With a correction: the raw line, and the line as packs and exports show it,
+        // `Hetzner (heard: "hetzna")`.
+        ...(l.heard !== undefined ? { heard: l.heard, annotated: l.annotated } : {}),
         layer: l.layer,
       })),
     });

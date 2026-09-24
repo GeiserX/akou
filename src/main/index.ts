@@ -49,6 +49,7 @@ import {
 import { ensureToken, type Guard, TokenSource } from "./api/guard.ts";
 import { HttpError } from "./api/http.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
+import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
 import type { ModelSpec } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
@@ -69,9 +70,8 @@ import {
 import { CallQuery } from "./query/context.ts";
 import { mergeVocab, readVocabFile, vocabPaths } from "./vocab/files.ts";
 
-export const APP_VERSION = "0.0.0";
+export { APP_VERSION, RUNTIME_FILE };
 export const APP_LOCK = "akou.lock";
-export const RUNTIME_FILE = "runtime.json";
 /** A final pass still running at quit gets this long, then is left for the next start. */
 export const QUIT_FINAL_GRACE_MS = 5_000;
 

@@ -96,17 +96,26 @@ describe("the final pass without readable audio", () => {
 
 describe("[spike] Command-line arguments dropped by the launcher", () => {
   test("no code reads process.argv for mode selection; headless comes from AKOU_HEADLESS", () => {
+    // The CLI's entry point is the one reader: its arguments are its interface, not the app's
+    // mode, and nothing the app runs imports it.
+    const CLI_ENTRY = join(SRC, "main", "cli", "cli.ts");
     const hits: string[] = [];
+    const importers: string[] = [];
     const walk = (dir: string) => {
       for (const e of readdirSync(dir, { withFileTypes: true })) {
         const p = join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (p.endsWith(".ts") && readFileSync(p, "utf8").includes("process.argv"))
-          hits.push(p);
+        else if (p.endsWith(".ts")) {
+          const text = readFileSync(p, "utf8");
+          if (text.includes("process.argv") && p !== CLI_ENTRY) hits.push(p);
+          if (/from "[^"]*cli\/cli\.ts"/.test(text)) importers.push(p);
+        }
       }
     };
     walk(SRC);
     expect(hits).toEqual([]);
+    expect(importers).toEqual([]);
+    expect(readFileSync(CLI_ENTRY, "utf8")).toContain("process.argv");
     expect(readFileSync(join(SRC, "main", "index.ts"), "utf8")).toContain("AKOU_HEADLESS");
   });
 
