@@ -35,6 +35,8 @@
 /* Elements that set their own display need their own hidden rule, or [hidden] loses. */
 [hidden],
 #final[hidden],
+#models-card[hidden],
+#models-pull[hidden],
 #confirm[hidden],
 #fatal[hidden],
 #popover[hidden],
@@ -297,6 +299,7 @@ body:not(.busy) .busy {
   margin-left: 10px;
 }
 #final,
+#models-card,
 #fatal,
 .confirm-row {
   flex: none;

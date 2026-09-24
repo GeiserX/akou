@@ -12,7 +12,7 @@ const start: Command = {
   name: "start",
   summary: "Start a call; answers once audio is being written",
   usage:
-    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--json]",
+    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--without-models] [--json]",
   flags: {
     workspace: { type: "string", short: "w" },
     title: { type: "string", short: "t" },
@@ -20,6 +20,8 @@ const start: Command = {
     call: { type: "string" },
     mic: { type: "string" },
     vocab: { type: "string" },
+    // Audio only, before `akou models pull` has run: nothing is transcribed live.
+    "without-models": { type: "boolean" },
   },
   run: async (ctx, p) => {
     // `-t Weekly sync` and `-t "Weekly sync"` both work: loose words after the flags join the title.
@@ -32,6 +34,7 @@ const start: Command = {
         call: str(p, "call"),
         mic: str(p, "mic"),
         vocab: list(p, "vocab"),
+        withoutModels: bool(p, "without-models") || undefined,
       },
     });
     return finish(

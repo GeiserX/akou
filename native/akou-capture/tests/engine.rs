@@ -764,20 +764,48 @@ fn a_command_line_that_is_not_utf8_is_reported_and_does_not_stop_the_part() {
     if let Some(s) = &r.stdin {
         s.send(b"\xff\n".to_vec()).unwrap();
     }
-    std::thread::sleep(Duration::from_millis(300));
+    // Wait on what the helper says, never on the wall clock: a slow runner starts the sources late,
+    // so a fixed sleep says nothing about how much audio came after the bad line.
+    let newest = |r: &Run| {
+        r.packets()
+            .iter()
+            .map(|p| p.file_seconds)
+            .fold(0.0, f64::max)
+    };
+    let until = |r: &Run, what: &str, done: &dyn Fn(&Run) -> bool| {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        while !done(r) {
+            assert!(
+                typed(&r.lines(), "stopped").is_empty(),
+                "stopped before {what}: {:#?}",
+                r.lines()
+            );
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no {what}: {:#?}",
+                r.lines()
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    };
+    until(&r, "unknown-command", &|r| {
+        r.lines()
+            .iter()
+            .any(|l| l.contains(r#""code":"unknown-command""#))
+    });
+    let at_report = newest(&r);
+    until(&r, "audio after the report", &|r| {
+        newest(r) > at_report + 0.1
+    });
     assert!(typed(&r.lines(), "stopped").is_empty(), "{:#?}", r.lines());
     r.send("stop");
     let (outcome, r) = r.finish();
     assert_eq!(outcome, Outcome::Exit(0));
-    let lines = r.lines();
+    let secs = num_field(typed(&r.lines(), "stopped")[0], "file_seconds");
     assert!(
-        lines
-            .iter()
-            .any(|l| l.contains(r#""code":"unknown-command""#)),
-        "{lines:#?}"
+        secs > at_report + 0.1,
+        "{secs} after the report at {at_report}"
     );
-    let secs = num_field(typed(&lines, "stopped")[0], "file_seconds");
-    assert!(secs > 0.25, "{secs}");
 }
 
 #[cfg(feature = "simulate")]

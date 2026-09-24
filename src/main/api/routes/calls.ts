@@ -79,6 +79,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       call?: string;
       mic?: string;
       vocab?: string[];
+      withoutModels?: boolean;
     }>(c.req, {
       "workspace?": "string",
       "title?": "string",
@@ -86,6 +87,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       "call?": "string",
       "mic?": "string",
       "vocab?": "string[]",
+      "withoutModels?": "boolean",
     });
     const vocab = [];
     for (const term of b.vocab ?? []) {
@@ -101,6 +103,7 @@ export function callRoutes(r: Router<ApiApp>): void {
       mic: b.mic,
       vocab,
       by: c.by,
+      withoutModels: b.withoutModels,
     });
     if (!res.ok) return outcome(res);
     return json(201, {

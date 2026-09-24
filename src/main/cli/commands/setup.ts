@@ -172,6 +172,7 @@ const models: Command = {
       return EXIT.ok;
     }
     if (sub === "pull") {
+      const shown = new Map<string, number>();
       try {
         const done = await downloadModels(
           dir,
@@ -179,8 +180,18 @@ const models: Command = {
           {
             env: ctx.io.env as NodeJS.ProcessEnv,
             registry: registry(ctx),
+            // One line per file every 10 %, on stderr, so a 650 MB file never looks stuck.
             onProgress: (x) => {
-              if (!ctx.json && x.bytes === x.total) ctx.io.err(`${x.model}/${x.name}: done`);
+              if (ctx.json) return;
+              const key = `${x.model}/${x.name}`;
+              const pct = x.total > 0 ? Math.floor((10 * x.bytes) / x.total) * 10 : 100;
+              if ((shown.get(key) ?? -1) >= pct) return;
+              shown.set(key, pct);
+              ctx.io.err(
+                pct === 100
+                  ? `${key}: done, checking its SHA-256`
+                  : `${key}: ${pct} % of ${(x.total / 1e6).toFixed(0)} MB`,
+              );
             },
           },
         );
