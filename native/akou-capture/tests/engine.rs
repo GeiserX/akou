@@ -579,6 +579,37 @@ fn an_unknown_command_is_reported_and_ignored() {
     );
 }
 
+/// A byte on the command pipe that is not UTF-8 is an unknown command, not the end of input: the
+/// part keeps recording until a real `stop`.
+#[test]
+fn a_command_line_that_is_not_utf8_is_reported_and_does_not_stop_the_part() {
+    let r = Run::start(
+        "not-utf8.opus",
+        stereo(48_000, 1.0),
+        1.0,
+        true,
+        CallMode::System,
+        Faults::none(),
+    );
+    if let Some(s) = &r.stdin {
+        s.send(b"\xff\n".to_vec()).unwrap();
+    }
+    std::thread::sleep(Duration::from_millis(300));
+    assert!(typed(&r.lines(), "stopped").is_empty(), "{:#?}", r.lines());
+    r.send("stop");
+    let (outcome, r) = r.finish();
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines = r.lines();
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""code":"unknown-command""#)),
+        "{lines:#?}"
+    );
+    let secs = num_field(typed(&lines, "stopped")[0], "file_seconds");
+    assert!(secs > 0.25, "{secs}");
+}
+
 #[cfg(feature = "simulate")]
 mod faults {
     use super::*;

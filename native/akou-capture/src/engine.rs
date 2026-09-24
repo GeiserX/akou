@@ -93,16 +93,24 @@ fn spawn_stdin(r: Box<dyn Read + Send>) -> Receiver<Input> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut lines = BufReader::new(r);
-        let mut line = String::new();
+        let mut line = Vec::new();
         loop {
             line.clear();
-            match lines.read_line(&mut line) {
-                Ok(0) | Err(_) => {
+            // Bytes, not `read_line`: a line that is not UTF-8 is an unknown command, and only
+            // the real end of input (or a pipe that cannot be read) means stop.
+            match lines.read_until(b'\n', &mut line) {
+                Ok(0) => {
+                    let _ = tx.send(Input::Eof);
+                    return;
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+                Err(_) => {
                     let _ = tx.send(Input::Eof);
                     return;
                 }
                 Ok(_) => {
-                    let t = line.trim();
+                    let text = String::from_utf8_lossy(&line);
+                    let t = text.trim();
                     if t.is_empty() {
                         continue;
                     }
