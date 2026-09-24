@@ -1,0 +1,691 @@
+/**
+ * The akou app (docs/DESIGN.md sections 1.1, 1.4, 1.5, 4.5 and 6): one process that owns every call.
+ *
+ * `startApp` wires the parts together:
+ *
+ * - **Settings** from the one registry (`config/schema.ts`), validated as a hand-edited file.
+ * - **Single instance.** A pid lock in the config folder; a second app refuses to start and names
+ *   the one running. `runtime.json` (pid, port, version) is written once the API listens, mode 0600,
+ *   and removed at quit.
+ * - **Calls**: the `CallManager` with the capture engine (the `akou-capture` helper, or the command
+ *   `capture.helper` names; tests use `scripts/fake-helper.ts`).
+ * - **Speech**: the live recognizer Worker, started at once and in parallel, so a start never waits
+ *   for a model; the final pass after every ending, when the part audio can be read.
+ * - **Questions**: one `CallQuery` per call, kept so its index updates incrementally.
+ * - **The local API** on 127.0.0.1 with the guard of DESIGN 6.3.
+ *
+ * Headless mode is chosen by `AKOU_HEADLESS=1`, never by command-line arguments, which the launcher
+ * drops on Linux and on the first macOS launch (TRAPS "Command-line arguments dropped by the
+ * launcher"). The window is a seam (`WindowShell`): until the ElectroBun shell exists the app runs
+ * headless either way and says so.
+ *
+ * Quit (`POST /quit`, SIGINT, SIGTERM) is one path: stop the live call within the stop budget
+ * (the log gets `part.ended` and `call.ended`, fsynced), let a running final pass finish for a few
+ * seconds or leave it for the next start, stop the recognizer and the API, remove `runtime.json`,
+ * release the lock. Nothing is killed by process name.
+ */
+
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { join } from "node:path";
+import type { EventDraft, LogEvent } from "../core/log/events.ts";
+import { fold } from "../core/log/fold.ts";
+import { eventsAfter, readLog } from "../core/log/reader.ts";
+import {
+  acquireLock,
+  EVENTS_FILE,
+  LockError,
+  LogWriteError,
+  processAlive,
+} from "../core/log/writer.ts";
+import { ensureToken, type Guard, TokenSource } from "./api/guard.ts";
+import { HttpError } from "./api/http.ts";
+import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
+import type { ModelSpec } from "./asr/engine.ts";
+import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
+import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
+import { MODELS, modelFile } from "./asr/models.ts";
+import type { CallController, StartOk } from "./call/call.ts";
+import { partFile } from "./call/folder.ts";
+import { CallManager, type StartRequest } from "./call/manager.ts";
+import { fail, type Outcome } from "./call/state.ts";
+import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
+import { AkouCaptureEngine } from "./capture/helper.ts";
+import {
+  type LoadedConfig,
+  loadConfig,
+  type SettingKey,
+  type Settings,
+  type SettingValue,
+} from "./config/schema.ts";
+import { CallQuery } from "./query/context.ts";
+import { mergeVocab, readVocabFile, vocabPaths } from "./vocab/files.ts";
+
+export const APP_VERSION = "0.0.0";
+export const APP_LOCK = "akou.lock";
+export const RUNTIME_FILE = "runtime.json";
+/** A final pass still running at quit gets this long, then is left for the next start. */
+export const QUIT_FINAL_GRACE_MS = 5_000;
+
+/** The window, when there is one. The ElectroBun shell implements it; headless has none. */
+export interface WindowShell {
+  close(): Promise<void>;
+}
+
+export type WindowFactory = (app: AkouApp) => Promise<WindowShell>;
+
+export interface AppOptions {
+  env?: Record<string, string | undefined>;
+  platform?: string;
+  /** Force headless on or off; by default `AKOU_HEADLESS` decides. */
+  headless?: boolean;
+  /** The capture engine; by default the helper `capture.helper` names. */
+  engine?: CaptureEngine;
+  /**
+   * The recognizer's models: a spec (tests pass the fake module), null for none, or by default
+   * sherpa-onnx from `asr.modelsDir` when every model file is there.
+   */
+  models?: ModelSpec | null;
+  /** Runs the live recognizer on the main thread. Tests only. */
+  asrInThread?: boolean;
+  /**
+   * Where the final pass reads a call's audio, or null when it cannot. By default a part is read
+   * from a 16-bit WAV beside its Opus file (`part-001.wav`); the app cannot decode Opus yet.
+   */
+  finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
+  /** The window. None means headless. */
+  window?: WindowFactory;
+  clock?: Clock;
+  /** Test-only: the security suite's positive control replaces the guard. */
+  guard?: Guard;
+  version?: string;
+  onLog?(level: "info" | "warn" | "error", msg: string): void;
+}
+
+export class AlreadyRunningError extends Error {
+  constructor(
+    readonly pid: number,
+    readonly runtime: { port?: number; version?: string } | null,
+  ) {
+    super(`akou is already running (pid ${pid}${runtime?.port ? `, port ${runtime.port}` : ""})`);
+    this.name = "AlreadyRunningError";
+  }
+}
+
+function dbfs(samples: Float32Array): number {
+  let peak = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const a = Math.abs(samples[i] as number);
+    if (a > peak) peak = a;
+  }
+  return peak <= 1e-6 ? -120 : Math.max(-120, Math.round(20 * Math.log10(peak) * 10) / 10);
+}
+
+/** Writes a file atomically with mode 0600 (a private temporary file renamed over it). */
+function writePrivate(path: string, text: string): void {
+  const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
+  writeFileSync(tmp, text, { mode: 0o600, flag: "wx" });
+  try {
+    chmodSync(tmp, 0o600);
+    renameSync(tmp, path);
+  } finally {
+    if (existsSync(tmp)) rmSync(tmp, { force: true });
+  }
+}
+
+function modelsPresent(dir: string): boolean {
+  return MODELS.every((m) => m.files.every((f) => existsSync(modelFile(dir, m.id, f.name))));
+}
+
+/** The default final-pass audio: a WAV beside every part's Opus file, or nothing. */
+function wavBesideParts(call: { dir: string; parts: number[] }): FinalAudioSpec | null {
+  if (call.parts.length === 0) return null;
+  const files: Record<number, string> = {};
+  for (const p of call.parts) {
+    const wav = join(call.dir, partFile(p).replace(/\.opus$/, ".wav"));
+    if (!existsSync(wav)) return null;
+    files[p] = wav;
+  }
+  return { kind: "wav", files };
+}
+
+export class AkouApp implements ApiApp {
+  readonly version: string;
+  readonly manager: CallManager;
+  readonly configDir: string;
+  readonly headless: boolean;
+  readonly startedAt: number;
+  readonly runtimeFile: string;
+  readonly tokenPath: string;
+  /** Resolves when the app has quit. */
+  readonly closed: Promise<void>;
+  server: ApiServer | null = null;
+  window: WindowShell | null = null;
+  asr: LiveAsr | null = null;
+  asrState: { state: "loading" | "ready" | "unavailable"; reason?: string; model?: string } = {
+    state: "unavailable",
+    reason: "not started",
+  };
+
+  private cfg: LoadedConfig;
+  private readonly clock: Clock;
+  private readonly bus = new Map<string, Set<(e: LogEvent) => void>>();
+  private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
+  private readonly queries = new WeakMap<object, CallQuery>();
+  private readonly vocabCache = new Map<string, VocabSource>();
+  private readonly finals = new Map<string, Promise<unknown>>();
+  private quitting: Promise<void> | null = null;
+  private resolveClosed!: () => void;
+  private lockPath: string;
+  tokens: TokenSource;
+
+  constructor(
+    private readonly o: AppOptions,
+    cfg: LoadedConfig,
+    token: { token: string; path: string },
+    lockPath: string,
+  ) {
+    this.cfg = cfg;
+    this.version = o.version ?? APP_VERSION;
+    this.clock = o.clock ?? realClock;
+    this.configDir = cfg.paths.configDir;
+    this.headless = o.headless ?? cfg.settings["app.headless"];
+    this.startedAt = this.clock.now();
+    this.runtimeFile = join(this.configDir, RUNTIME_FILE);
+    this.tokenPath = token.path;
+    this.tokens = new TokenSource(token.path, token.token);
+    this.lockPath = lockPath;
+    this.closed = new Promise((r) => {
+      this.resolveClosed = r;
+    });
+    const s = cfg.settings;
+    const engine =
+      o.engine ??
+      new AkouCaptureEngine({
+        command: s["capture.helper"].length > 0 ? [...s["capture.helper"]] : ["akou-capture"],
+      });
+    this.manager = new CallManager({
+      root: s["recordings.root"],
+      engine,
+      clock: this.clock,
+      user: s["user.name"],
+      akouVersion: this.version,
+      capture: { mic: s["capture.mic"], call: s["capture.call"] },
+      ingest: { queueSeconds: s["capture.queueSeconds"] },
+      budgets: {
+        warmStartMs: s["capture.warmStartSeconds"] * 1000,
+        coldStartMs: s["capture.coldStartSeconds"] * 1000,
+        stopMs: s["capture.stopSeconds"] * 1000,
+        stallMs: s["capture.stallSeconds"] * 1000,
+        deadRestartMs: s["capture.deadRestartSeconds"] * 1000,
+      },
+      onEvent: (id, e) => this.onEvent(id, e),
+      onPacket: (id, part, p, ingest) => {
+        this.asr?.onPacket(id, part, p, ingest);
+        const lv = this.levelsByCall.get(id) ?? { mic: -120, call: -120, at: 0 };
+        lv[p.ch] = dbfs(p.samples);
+        lv.at = this.clock.now();
+        this.levelsByCall.set(id, lv);
+      },
+      beforeEnd: (id) => this.asr?.flush(id) ?? Promise.resolve(),
+    });
+    this.startAsr(s);
+  }
+
+  private log(level: "info" | "warn" | "error", msg: string): void {
+    if (this.o.onLog) this.o.onLog(level, msg);
+    else console.error(`akou ${level}: ${msg}`);
+  }
+
+  private startAsr(s: Settings): void {
+    let spec: ModelSpec | null;
+    if (this.o.models !== undefined) spec = this.o.models;
+    else if (modelsPresent(s["asr.modelsDir"])) {
+      spec = {
+        kind: "sherpa",
+        dir: s["asr.modelsDir"],
+        cacheDir: join(s["asr.modelsDir"], ".cache"),
+        threads: s["asr.threads"],
+      };
+    } else {
+      this.asrState = {
+        state: "unavailable",
+        reason: `the speech models are not in ${s["asr.modelsDir"]}; run \`akou models pull\``,
+      };
+      return;
+    }
+    if (!spec) {
+      this.asrState = { state: "unavailable", reason: "no recognizer configured" };
+      return;
+    }
+    const asr = new LiveAsr(
+      {
+        models: spec,
+        inThread: this.o.asrInThread,
+        live: { segmentPause: s["asr.segmentPause"], segmentWindow: s["asr.segmentWindow"] },
+        vocab: (callId) => {
+          const ws = this.manager.controller(callId)?.view.call?.workspace ?? "";
+          return this.vocabCache.get(ws) ?? { entries: [], files: [] };
+        },
+        clock: this.clock,
+        onLog: (level, msg) => this.log(level, `asr: ${msg}`),
+      },
+      (id) => this.manager.controller(id) as CallAccess | undefined,
+    );
+    this.asr = asr;
+    this.asrState = { state: "loading" };
+    asr.ready.then(
+      () => {
+        this.asrState = { state: "ready" };
+      },
+      (err: Error) => {
+        this.asrState = { state: "unavailable", reason: err.message };
+      },
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Events
+
+  private onEvent(id: string, e: LogEvent): void {
+    this.asr?.onEvent(id, e);
+    for (const fn of this.bus.get(id) ?? []) {
+      try {
+        fn(e);
+      } catch (err) {
+        this.log("error", `event subscriber failed: ${(err as Error).message}`);
+      }
+    }
+    if (e.type === "call.ended") {
+      this.levelsByCall.delete(id);
+      // After the event is out, so the pass starts from a log that has it.
+      queueMicrotask(() => void this.runFinal(id, false));
+    }
+  }
+
+  subscribe(id: string, fn: (e: LogEvent) => void): () => void {
+    let set = this.bus.get(id);
+    if (!set) {
+      set = new Set();
+      this.bus.set(id, set);
+    }
+    set.add(fn);
+    return () => {
+      set.delete(fn);
+      if (set.size === 0) this.bus.delete(id);
+    };
+  }
+
+  levels(id: string): Levels | null {
+    return this.levelsByCall.get(id) ?? null;
+  }
+
+  // -------------------------------------------------------------------------
+  // ApiApp
+
+  now(): number {
+    return this.clock.now();
+  }
+
+  config(): LoadedConfig {
+    return this.cfg;
+  }
+
+  async saveConfig(file: Partial<Record<SettingKey, SettingValue>>): Promise<LoadedConfig> {
+    mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
+    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(file, null, 2)}\n`);
+    this.cfg = loadConfig(this.o.env ?? process.env, this.o.platform);
+    return this.cfg;
+  }
+
+  vocabChanged(): void {
+    this.vocabCache.clear();
+  }
+
+  private async loadVocab(workspace: string): Promise<void> {
+    if (this.vocabCache.has(workspace)) return;
+    try {
+      const paths = vocabPaths({
+        configDir: this.configDir,
+        workspace,
+        extra: this.cfg.settings["vocab.extraFiles"],
+      });
+      const layers = await Promise.all(
+        paths.map(async (p) => ({ ...p, loaded: await readVocabFile(p.path) })),
+      );
+      this.vocabCache.set(workspace, {
+        entries: mergeVocab(
+          layers.map((l) => ({ scope: l.scope, path: l.path, file: l.loaded.file })),
+        ),
+        files: layers
+          .filter((l) => l.loaded.exists)
+          .map((l) => ({ path: l.path, sha256: l.loaded.sha256 })),
+      });
+    } catch (err) {
+      this.log("warn", `vocabulary for ${workspace}: ${(err as Error).message}`);
+    }
+  }
+
+  async start(req: StartRequest): Promise<Outcome<StartOk>> {
+    if (this.quitting) return fail(503, "quitting", "akou is quitting");
+    await this.loadVocab(req.workspace ?? "default");
+    return this.manager.start(req);
+  }
+
+  async call(id: string): Promise<CallController> {
+    const c = await this.manager.open(id);
+    if (!c) throw new HttpError(404, "not_found", `no call ${id}`);
+    return c;
+  }
+
+  async query(id: string): Promise<CallQuery> {
+    const c = await this.call(id);
+    let q = this.queries.get(c.view);
+    if (!q) {
+      q = new CallQuery(c.view);
+      this.queries.set(c.view, q);
+    }
+    return q;
+  }
+
+  async write(
+    id: string,
+    draft: EventDraft | ((c: CallController) => EventDraft),
+  ): Promise<LogEvent> {
+    const c = await this.call(id);
+    let release: () => void;
+    try {
+      release = c.holdWriter();
+    } catch (err) {
+      if (err instanceof LockError) throw new HttpError(409, "locked", err.message);
+      throw err;
+    }
+    try {
+      const e = c.record(typeof draft === "function" ? draft(c) : draft);
+      if (!e) throw new HttpError(409, "log_closed", `the log of call ${id} is closed`);
+      return e;
+    } catch (err) {
+      if (err instanceof LogWriteError) throw new HttpError(400, "refused", err.message);
+      throw err;
+    } finally {
+      release();
+    }
+  }
+
+  async events(id: string, after: number): Promise<LogEvent[]> {
+    const c = await this.call(id);
+    const { events } = await readLog(join(c.dir, EVENTS_FILE));
+    return eventsAfter(events, after);
+  }
+
+  status(): Record<string, unknown> {
+    const live = this.manager.live();
+    const last = this.manager.calls()[0];
+    const s = this.cfg.settings;
+    return {
+      app: {
+        version: this.version,
+        pid: process.pid,
+        port: this.server?.port ?? null,
+        headless: this.headless,
+        window: this.window ? "open" : this.headless ? "none (headless)" : "not built yet",
+        startedAt: this.startedAt,
+        uptimeMs: this.clock.now() - this.startedAt,
+        quitting: this.quitting !== null,
+        configDir: this.configDir,
+        recordingsRoot: s["recordings.root"],
+      },
+      live: live
+        ? {
+            call: live.id,
+            title: live.view.call?.title ?? "",
+            workspace: live.view.call?.workspace ?? "",
+            state: live.view.state,
+            status: live.status,
+            muted: live.muted,
+            parts: live.view.parts().length,
+            health: live.view.health().map((h) => ({ ch: h.ch, state: h.state, detail: h.detail })),
+            lag: live.view.asrLag?.seconds ?? 0,
+            levels: this.levels(live.id),
+          }
+        : null,
+      last: last
+        ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
+        : null,
+      asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
+      provider: { state: "unavailable", reason: "no provider in this build" },
+      share: { active: false },
+      config: { file: this.cfg.paths.configFile, issues: this.cfg.issues },
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // The final pass
+
+  async finalize(
+    id: string,
+    opts: { force?: boolean },
+  ): Promise<Outcome<{ call: string; started: boolean }>> {
+    const c = await this.call(id);
+    if (c.live || c.status === "stopping") {
+      return fail(409, "not_ended", "the call is still recording", { call: id });
+    }
+    if (this.finals.has(id))
+      return fail(409, "final_running", "the final pass is running", { call: id });
+    if (c.view.final.state === "done" && !opts.force) {
+      return fail(409, "already_final", "the final pass already ran; use force to run it again", {
+        call: id,
+      });
+    }
+    const why = this.runFinal(id, true);
+    if (why) return fail(501, "final_unavailable", why, { call: id });
+    return { ok: true, call: id, started: true };
+  }
+
+  /** The recognizer models for the final pass, or null when there are none. */
+  private finalModels(): ModelSpec | null {
+    if (this.o.models !== undefined) return this.o.models;
+    const dir = this.cfg.settings["asr.modelsDir"];
+    return modelsPresent(dir)
+      ? {
+          kind: "sherpa",
+          dir,
+          cacheDir: join(dir, ".cache"),
+          threads: this.cfg.settings["asr.threads"],
+        }
+      : null;
+  }
+
+  /** Starts the final pass in the background. Returns why it cannot run, or null once started. */
+  private runFinal(id: string, force: boolean): string | null {
+    if (this.quitting) return "akou is quitting";
+    if (this.finals.has(id)) return "the final pass is already running";
+    const c = this.manager.controller(id);
+    if (!c || c.live) return "the call is not ended";
+    if (!force && c.view.final.state === "done") return "the final pass already ran";
+    const parts = c.view.parts().map((p) => p.part);
+    const audio = (this.o.finalAudio ?? wavBesideParts)({ id, dir: c.dir, parts });
+    if (!audio)
+      return "the final pass cannot read this call's audio yet (Opus decoding is not built)";
+    const models = this.finalModels();
+    if (!models) return "the speech models are not downloaded";
+    const ws = c.view.call?.workspace ?? "";
+    const p = finalizeCall(c, {
+      models,
+      audio,
+      vocab: this.vocabCache.get(ws),
+      inThread: this.o.asrInThread,
+      clock: this.clock,
+      onLog: (level, msg) => this.log(level, `final ${id}: ${msg}`),
+    })
+      .then((r) => {
+        if (!r.ok) this.log("warn", `final pass of ${id} failed: ${r.error}`);
+      })
+      .catch((err) => this.log("error", `final pass of ${id}: ${(err as Error).message}`))
+      .finally(() => this.finals.delete(id));
+    this.finals.set(id, p);
+    return null;
+  }
+
+  /** Calls that ended while akou was not running and have no final layer yet. */
+  private async catchUpFinals(): Promise<void> {
+    for (const s of this.manager.calls()) {
+      if (this.quitting) return;
+      if (s.state !== "ended" && s.state !== "interrupted") continue;
+      try {
+        const { events } = await readLog(join(s.dir, EVENTS_FILE));
+        const v = fold(events);
+        if (v.final.state === "done") continue;
+        const parts = v.parts().map((p) => p.part);
+        if (!(this.o.finalAudio ?? wavBesideParts)({ id: s.id, dir: s.dir, parts })) continue;
+        const c = await this.manager.open(s.id);
+        if (c) this.runFinal(s.id, false);
+      } catch (err) {
+        this.log("warn", `final catch-up for ${s.id}: ${(err as Error).message}`);
+      }
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Start and quit
+
+  async listen(): Promise<void> {
+    this.server = startApiServer({
+      app: this,
+      port: this.cfg.settings["api.port"],
+      token: () => this.tokens.current(),
+      guard: this.o.guard,
+      onError: (err, req) =>
+        this.log(
+          "error",
+          `${req.method} ${new URL(req.url).pathname}: ${(err as Error).stack ?? err}`,
+        ),
+    });
+    writePrivate(
+      this.runtimeFile,
+      `${JSON.stringify(
+        {
+          pid: process.pid,
+          port: this.server.port,
+          api: this.server.url,
+          version: this.version,
+          startedAt: this.startedAt,
+          headless: this.headless,
+        },
+        null,
+        2,
+      )}\n`,
+    );
+    // Recovery and the final-pass catch-up run behind the API, never before it.
+    void this.manager
+      .init()
+      .then(() => this.catchUpFinals())
+      .catch((err) => this.log("error", `recovery: ${(err as Error).message}`));
+    if (!this.headless && this.o.window) this.window = await this.o.window(this);
+    else if (!this.headless) this.log("info", "the window is not built yet; running headless");
+  }
+
+  /** The one quit path. Safe to call twice; the second call waits for the first. */
+  quit(): Promise<void> {
+    this.quitting ??= (async () => {
+      // Let the answer to `POST /quit` go out first.
+      await new Promise((r) => setTimeout(r, 20));
+      try {
+        await this.window?.close();
+      } catch (err) {
+        this.log("warn", `window close: ${(err as Error).message}`);
+      }
+      await this.manager.quit();
+      const running = [...this.finals.values()];
+      if (running.length > 0) {
+        const r = await withDeadline(realClock, Promise.allSettled(running), QUIT_FINAL_GRACE_MS);
+        if (!r.ok)
+          this.log("info", "a final pass is still running; it runs again at the next start");
+      }
+      await this.asr?.close();
+      await this.server?.stop();
+      try {
+        const rt = JSON.parse(readFileSync(this.runtimeFile, "utf8")) as { pid?: number };
+        if (rt.pid === process.pid) unlinkSync(this.runtimeFile);
+      } catch {}
+      releaseLock(this.lockPath);
+      this.resolveClosed();
+    })();
+    return this.quitting;
+  }
+}
+
+function releaseLock(path: string): void {
+  try {
+    const pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
+    if (pid === process.pid) unlinkSync(path);
+  } catch {}
+}
+
+function readRuntime(configDir: string): { port?: number; version?: string } | null {
+  try {
+    return JSON.parse(readFileSync(join(configDir, RUNTIME_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+/** Starts the app: settings, the single-instance lock, the token, the API. */
+export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
+  const cfg = loadConfig(o.env ?? process.env, o.platform);
+  mkdirSync(cfg.paths.configDir, { recursive: true, mode: 0o700 });
+  // The folder holds the token and runtime.json: the owner's alone.
+  if (process.platform !== "win32") chmodSync(cfg.paths.configDir, 0o700);
+  const lockPath = join(cfg.paths.configDir, APP_LOCK);
+  try {
+    acquireLock(lockPath, process.pid, processAlive);
+  } catch (err) {
+    if (err instanceof LockError) {
+      throw new AlreadyRunningError(err.holderPid, readRuntime(cfg.paths.configDir));
+    }
+    throw err;
+  }
+  let app: AkouApp | null = null;
+  try {
+    const token = ensureToken(cfg.paths.configDir);
+    app = new AkouApp(o, cfg, token, lockPath);
+    await app.listen();
+    return app;
+  } catch (err) {
+    await app?.asr?.close();
+    await app?.server?.stop();
+    releaseLock(lockPath);
+    throw err;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// The entry point
+
+if (import.meta.main) {
+  let app: AkouApp;
+  try {
+    app = await startApp();
+  } catch (err) {
+    if (err instanceof AlreadyRunningError) {
+      console.error(err.message);
+      process.exit(0);
+    }
+    console.error(`akou: cannot start: ${(err as Error).message}`);
+    process.exit(70);
+  }
+  for (const i of app.config().issues) console.error(`akou: setting refused: ${i.message}`);
+  console.error(`akou ${app.version}: listening on ${app.server?.url} (pid ${process.pid})`);
+  // ElectroBun's main script swallows these; in a plain Bun process they take the same quit path.
+  for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void app.quit());
+  await app.closed;
+  process.exit(0);
+}
