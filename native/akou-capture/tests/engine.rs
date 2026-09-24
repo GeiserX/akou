@@ -1620,7 +1620,10 @@ mod faults {
             "{lines:#?}"
         );
         let first = dead_silent_for(&lines)[0];
-        assert!((10.0..10.5).contains(&first), "{first}");
+        // The property is the lower bound: zeros wait the full 10 s, never the 1 s no-buffers
+        // path. The file plays at 20x, so 100 ms of runner scheduling lag reads as 2 s of file
+        // time; the upper bound only has to stay clear of the second probe at 20 s.
+        assert!((10.0..13.0).contains(&first), "{first}");
         let p = r.packets();
         let late: Vec<&Packet> = p
             .iter()
