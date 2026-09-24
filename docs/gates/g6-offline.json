@@ -1,0 +1,176 @@
+{
+  "model": "parakeet-tdt-0.6b-v3-int8",
+  "decoding": "modified_beam_search",
+  "threads": 2,
+  "decodeList": {
+    "kept": [
+      "akou",
+      "Parakeet",
+      "Datadog",
+      "Grafana",
+      "Silero",
+      "Terraform",
+      "Kubernetes",
+      "Zendesk",
+      "TitaNet",
+      "pyannote",
+      "ElectroBun",
+      "Opus"
+    ],
+    "dropped": []
+  },
+  "loadMs": 1167,
+  "clips": 24,
+  "audioSeconds": 66.3,
+  "decodeSeconds": 2.67,
+  "rtfOneChannel": 0.04,
+  "rtfBothChannelsWorstCase": 0.081,
+  "decodeMsP50": 114,
+  "decodeMsMax": 134,
+  "rows": [
+    {
+      "clip": "s01.f32",
+      "seconds": 3.02,
+      "decodeMs": 122,
+      "text": "The ACA recorder keeps the microphone on the left channel."
+    },
+    {
+      "clip": "s02.f32",
+      "seconds": 2.58,
+      "decodeMs": 105,
+      "text": "Parakeet transcribes both sides of the call."
+    },
+    {
+      "clip": "s03.f32",
+      "seconds": 3.26,
+      "decodeMs": 127,
+      "text": "We moved the dashboards from Datadog to Grafana last week."
+    },
+    {
+      "clip": "s04.f32",
+      "seconds": 3.32,
+      "decodeMs": 125,
+      "text": "Silero decides where each segment starts and ends."
+    },
+    {
+      "clip": "s05.f32",
+      "seconds": 2.93,
+      "decodeMs": 118,
+      "text": "The Terraform plan touched three Kubernetes clusters."
+    },
+    {
+      "clip": "s06.f32",
+      "seconds": 2.73,
+      "decodeMs": 114,
+      "text": "Please open a Zendesk ticket for the billing question."
+    },
+    {
+      "clip": "s07.f32",
+      "seconds": 2.31,
+      "decodeMs": 99,
+      "text": "TitaNet gives every speaker a voice print."
+    },
+    {
+      "clip": "s08.f32",
+      "seconds": 2.84,
+      "decodeMs": 111,
+      "text": "The final pass runs pyannote over the whole call."
+    },
+    {
+      "clip": "s09.f32",
+      "seconds": 2.48,
+      "decodeMs": 103,
+      "text": "ElectroBun hosts the window and the tray item."
+    },
+    {
+      "clip": "s10.f32",
+      "seconds": 2.9,
+      "decodeMs": 117,
+      "text": "Opus files stay playable while they are being written."
+    },
+    {
+      "clip": "s11.f32",
+      "seconds": 2.28,
+      "decodeMs": 93,
+      "text": "Can you share the Grafana link with the team?"
+    },
+    {
+      "clip": "s12.f32",
+      "seconds": 3.37,
+      "decodeMs": 134,
+      "text": "Yes, the Kubernetes upgrade is scheduled for Friday."
+    },
+    {
+      "clip": "s13.f32",
+      "seconds": 2.42,
+      "decodeMs": 106,
+      "text": "I think Datadog was cheaper for us in the end."
+    },
+    {
+      "clip": "s14.f32",
+      "seconds": 3.07,
+      "decodeMs": 122,
+      "text": "Let us check what Aka heard in the last five minutes."
+    },
+    {
+      "clip": "s15.f32",
+      "seconds": 3.07,
+      "decodeMs": 126,
+      "text": "The Parakeet model runs on the CPU with two threads."
+    },
+    {
+      "clip": "s16.f32",
+      "seconds": 2.36,
+      "decodeMs": 103,
+      "text": "Zendesk and Terraform both need a new owner."
+    },
+    {
+      "clip": "s17.f32",
+      "seconds": 2.82,
+      "decodeMs": 121,
+      "text": "We should keep ElectroBun pinned until the next release."
+    },
+    {
+      "clip": "s18.f32",
+      "seconds": 2.86,
+      "decodeMs": 114,
+      "text": "Silero and TitaNet both run in the same worker."
+    },
+    {
+      "clip": "s19.f32",
+      "seconds": 2.49,
+      "decodeMs": 97,
+      "text": "Send me the Opus file after the call ends."
+    },
+    {
+      "clip": "s20.f32",
+      "seconds": 2.38,
+      "decodeMs": 98,
+      "text": "Who owns the pyannote configuration now?"
+    },
+    {
+      "clip": "s21.f32",
+      "seconds": 2.74,
+      "decodeMs": 112,
+      "text": "The demo went well and the customer asked for pricing."
+    },
+    {
+      "clip": "s22.f32",
+      "seconds": 2.99,
+      "decodeMs": 114,
+      "text": "Thanks everyone. See you all next Tuesday."
+    },
+    {
+      "clip": "s23.f32",
+      "seconds": 2.2,
+      "decodeMs": 85,
+      "text": "Could you repeat the last number, please?"
+    },
+    {
+      "clip": "s24.f32",
+      "seconds": 2.84,
+      "decodeMs": 106,
+      "text": "Okay, I will write the action items down."
+    }
+  ]
+}

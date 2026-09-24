@@ -1,0 +1,249 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 3720.9774375
+  },
+  "wallSeconds": 3720.997,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.0.0",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 27091"],
+      "capture_ns": "177611155076625"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "177611155076625"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "177611155076625"
+    },
+    {
+      "type": "device",
+      "ch": "mic",
+      "event": "lost",
+      "name": "A buffer underrun or overrun occurred."
+    },
+    {
+      "type": "device",
+      "ch": "mic",
+      "event": "rebuilt",
+      "name": "stream failed"
+    },
+    {
+      "type": "device",
+      "ch": "call",
+      "event": "rebuilt",
+      "name": "dead call side"
+    },
+    {
+      "type": "health",
+      "ch": "call",
+      "state": "dead",
+      "silent_for": 10.439428499999849,
+      "rebuilds": 1,
+      "detail": "output running, probe heard audio, rebuilding; excluding pid 27091"
+    },
+    {
+      "type": "health",
+      "ch": "call",
+      "state": "ok",
+      "silent_for": 0,
+      "rebuilds": 1,
+      "detail": "call audio is back"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 3720.9774375,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -19.6,
+  "leftSeconds": 3720.977,
+  "leftGaps": {
+    "over5ms": 1,
+    "over20ms": 1,
+    "longestMs": 3719309.1,
+    "worst": [
+      {
+        "at": 1,
+        "ms": 3719309.1
+      }
+    ]
+  },
+  "rightSeconds": 3720.977,
+  "rightGaps": {
+    "over5ms": 1,
+    "over20ms": 1,
+    "longestMs": 10509.3,
+    "worst": [
+      {
+        "at": 3120.408,
+        "ms": 10509.3
+      }
+    ]
+  },
+  "firstWords": [
+    {
+      "at": 35.881,
+      "speechOnsetMs": 140,
+      "lagMs": 0,
+      "headScore": 0.961,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.97, 0.98, 0.97, 0.94, 0.97, 0.95, 0.93, 0.85, 0.83, 0.81, 0.85, 0.79, 0, 0.74
+      ]
+    },
+    {
+      "at": 2700.878,
+      "speechOnsetMs": 140,
+      "lagMs": 0,
+      "headScore": 0.96,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.97, 0.97, 0.97, 0.97, 0.97, 0.94, 0.93, 0.83, 0.85, 0.79, 0.83, 0.76, 0.05, 0.78
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -124,
+    "right_rms_dbfs": -35.9
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 366,
+      "expected": 373,
+      "missing": [
+        {
+          "k": 0,
+          "at": 0.8
+        },
+        {
+          "k": 273,
+          "at": 2730.8
+        },
+        {
+          "k": 277,
+          "at": 2770.8
+        },
+        {
+          "k": 278,
+          "at": 2780.8
+        },
+        {
+          "k": 312,
+          "at": 3120.8
+        },
+        {
+          "k": 313,
+          "at": 3130.8
+        },
+        {
+          "k": 372,
+          "at": 3720.8
+        }
+      ],
+      "latencyMs": {
+        "n": 366,
+        "min": 11.082,
+        "median": 11.355,
+        "max": 12.159,
+        "spread": 1.077
+      },
+      "slopeMsPerHour": -0.05,
+      "minScore": 0.557
+    },
+    "call@right": {
+      "found": 307,
+      "expected": 308,
+      "missing": [
+        {
+          "k": 312,
+          "at": 3125.8
+        }
+      ],
+      "latencyMs": {
+        "n": 307,
+        "min": 8.288,
+        "median": 8.4,
+        "max": 8.446,
+        "spread": 0.15799999999999947
+      },
+      "slopeMsPerHour": 0,
+      "minScore": 0.982
+    }
+  },
+  "leftRight": {
+    "pairs": 0,
+    "note": "no mic chirps on the left channel to pair with"
+  },
+  "bothTrainsInTap": {
+    "pairs": 303,
+    "offsetMs": {
+      "n": 303,
+      "min": -3.863,
+      "median": -3.057,
+      "max": -2.676,
+      "spread": 1.1869999999999998
+    },
+    "slopeMsPerHour": -0.02
+  },
+  "memory": {
+    "helper": {
+      "samples": 115,
+      "firstKb": 13824,
+      "lastKb": 8768,
+      "minKb": 8432,
+      "maxKb": 13824,
+      "slopeKbPerHour": -2421
+    },
+    "helperMuted": {
+      "samples": 20,
+      "firstKb": 12128,
+      "lastKb": 11728,
+      "minKb": 11728,
+      "maxKb": 12128,
+      "slopeKbPerHour": -2894
+    },
+    "app": {
+      "samples": 115,
+      "firstKb": 144064,
+      "lastKb": 353536,
+      "minKb": 144064,
+      "maxKb": 400240,
+      "slopeKbPerHour": 125787
+    },
+    "appMuted": {
+      "samples": 20,
+      "firstKb": 366816,
+      "lastKb": 349312,
+      "minKb": 290944,
+      "maxKb": 371552,
+      "slopeKbPerHour": -371981
+    }
+  }
+}
