@@ -331,174 +331,178 @@ const result: Record<string, unknown> = { at: new Date().toISOString() };
 result.positiveControl = await selfCheck();
 writeFixture(fixture, 60);
 
-// Launch the app with a harmless call, so the poller has a port before the first fault.
-setFault("");
-const warm = await cli("start", "-t", "g5-warmup");
-if (warm.code !== 0) throw new Error(`warm-up start failed: ${warm.out}`);
-await sleep(2000);
-await cli("stop");
-const poller = new Poller();
-
-type Scenario = {
-  partEnded: Array<Record<string, unknown>>;
-  nextStart: { code: number; ms: number };
-  audio: { lostSeconds: number };
-  apiDuring: { failed: number };
-};
-/** The G5 criteria, per scenario. */
-function verdict(s: Scenario, parts: number) {
-  const v = {
-    everyPartEnded: s.partEnded.length === parts,
-    nextStart201Within3s: s.nextStart.code === 0 && s.nextStart.ms < 3000,
-    lostUnder2s: s.audio.lostSeconds < 2,
-    apiNeverFailed: s.apiDuring.failed === 0,
-  };
-  return { ...v, pass: Object.values(v).every(Boolean) };
-}
-
-if (!killReal) {
-  // 1. Teardown hang: the helper ignores stop; the app must kill it within its budget, and a new
-  // call must start while that teardown is still hanging.
-  setFault("--simulate hang-on-stop");
-  const t0 = Date.now();
-  const s1 = await cli("start", "-t", "g5-hang");
-  const folder1 = started(s1, "hang");
-  const call1 = JSON.parse(s1.out).call as string;
-  await sleep(15_000);
-  const stopReq = Date.now();
-  let stopDone = false;
-  const stopping = cli("stop").then((r) => {
-    stopDone = true;
-    return r;
-  });
-  // The next start must reach the app after the stop does, or it is refused as a second call.
-  while ((await status()).live?.call === call1) {
-    if (Date.now() - stopReq > 3000) throw new Error("the hang call never left the live state");
-    await sleep(20);
-  }
+// Whatever fails below, the app is quit at the end, which also stops a call left live.
+let poller: Poller | null = null;
+try {
+  // Launch the app with a harmless call, so the poller has a port before the first fault.
   setFault("");
-  const startedBeforeStopEnded = !stopDone;
-  const next1 = await cli("start", "-t", "g5-after-hang");
-  const answeredBeforeStopEnded = !stopDone;
-  const t1 = Date.now();
-  const stop1 = await stopping;
-  if (!startedBeforeStopEnded || !answeredBeforeStopEnded) {
-    throw new Error("the next start did not overlap the hanging teardown; nothing was tested");
-  }
-  await sleep(3000);
+  const warm = await cli("start", "-t", "g5-warmup");
+  if (warm.code !== 0) throw new Error(`warm-up start failed: ${warm.out}`);
+  await sleep(2000);
   await cli("stop");
-  const partEnded = events(folder1).filter((e) => e.type === "part.ended");
-  if (partEnded[0]?.reason !== "killed") {
-    throw new Error(`the hang fault did not hang: part.ended ${JSON.stringify(partEnded)}`);
-  }
-  const hang = {
-    start: { code: s1.code, ms: s1.ms },
-    stop: { code: stop1.code, ms: stop1.ms, body: body(stop1.out) },
-    nextStart: {
-      code: next1.code,
-      ms: next1.ms,
-      whileTeardownHung: startedBeforeStopEnded && answeredBeforeStopEnded,
-      body: body(next1.out),
-    },
-    partEnded,
-    audio: await audio(folder1, stopReq),
-    apiDuring: poller.between(t0, t1),
-  };
-  result.hang = {
-    ...hang,
-    verdict: verdict(hang, events(folder1).filter((e) => e.type === "part.started").length),
-  };
+  poller = new Poller();
 
-  // 2. Crash: the helper exits 70 at 20 s of audio; the app restarts it in a new part.
-  setFault("--simulate crash-at=20");
-  const t2 = Date.now();
-  const s2 = await cli("start", "-t", "g5-crash");
-  const folder2 = started(s2, "crash");
-  // The restarted helper reads the fault file again: make it a healthy one.
-  await sleep(1000);
-  setFault("");
-  await sleep(34_000);
-  const stopReq2 = Date.now();
-  const stop2 = await cli("stop");
-  const next2 = await cli("start", "-t", "g5-after-crash");
-  const t3 = Date.now();
-  await sleep(3000);
-  await cli("stop");
-  const ev2 = events(folder2);
-  if (ev2.find((e) => e.type === "part.ended")?.reason !== "helper-exit") {
-    throw new Error("the crash fault did not crash the helper");
+  type Scenario = {
+    partEnded: Array<Record<string, unknown>>;
+    nextStart: { code: number; ms: number };
+    audio: { lostSeconds: number };
+    apiDuring: { failed: number };
+  };
+  /** The G5 criteria, per scenario. */
+  function verdict(s: Scenario, parts: number) {
+    const v = {
+      everyPartEnded: s.partEnded.length === parts,
+      nextStart201Within3s: s.nextStart.code === 0 && s.nextStart.ms < 3000,
+      lostUnder2s: s.audio.lostSeconds < 2,
+      apiNeverFailed: s.apiDuring.failed === 0,
+    };
+    return { ...v, pass: Object.values(v).every(Boolean) };
   }
-  const crash = {
-    start: { code: s2.code, ms: s2.ms },
-    stop: { code: stop2.code, ms: stop2.ms },
-    nextStart: { code: next2.code, ms: next2.ms, body: body(next2.out) },
-    partEnded: ev2.filter((e) => e.type === "part.ended"),
-    events: ev2.filter((e) =>
-      ["part.started", "part.ended", "health", "call.ended"].includes(e.type as string),
-    ),
-    audio: await audio(folder2, stopReq2),
-    apiDuring: poller.between(t2, t3),
-  };
-  result.crash = {
-    ...crash,
-    verdict: verdict(crash, ev2.filter((e) => e.type === "part.started").length),
-  };
-} else {
-  // A real device capture, with the tone playing so the tap hears it, whose helper is SIGKILLed
-  // after 20 s.
-  const player = Bun.spawn(["afplay", fixture], { stdout: "ignore", stderr: "ignore" });
-  await sleep(1000);
-  const t0 = Date.now();
-  const s = await cli("start", "-t", "g5-kill-real");
-  const folder = started(s, "kill-real");
-  await sleep(20_000);
-  const pids = await helperFor(folder);
-  if (pids.length !== 1) {
+
+  if (!killReal) {
+    // 1. Teardown hang: the helper ignores stop; the app must kill it within its budget, and a new
+    // call must start while that teardown is still hanging.
+    setFault("--simulate hang-on-stop");
+    const t0 = Date.now();
+    const s1 = await cli("start", "-t", "g5-hang");
+    const folder1 = started(s1, "hang");
+    const call1 = JSON.parse(s1.out).call as string;
+    await sleep(15_000);
+    const stopReq = Date.now();
+    let stopDone = false;
+    const stopping = cli("stop").then((r) => {
+      stopDone = true;
+      return r;
+    });
+    // The next start must reach the app after the stop does, or it is refused as a second call.
+    while ((await status()).live?.call === call1) {
+      if (Date.now() - stopReq > 3000) throw new Error("the hang call never left the live state");
+      await sleep(20);
+    }
+    setFault("");
+    const startedBeforeStopEnded = !stopDone;
+    const next1 = await cli("start", "-t", "g5-after-hang");
+    const answeredBeforeStopEnded = !stopDone;
+    const t1 = Date.now();
+    const stop1 = await stopping;
+    if (!startedBeforeStopEnded || !answeredBeforeStopEnded) {
+      throw new Error("the next start did not overlap the hanging teardown; nothing was tested");
+    }
+    await sleep(3000);
+    await cli("stop");
+    const partEnded = events(folder1).filter((e) => e.type === "part.ended");
+    if (partEnded[0]?.reason !== "killed") {
+      throw new Error(`the hang fault did not hang: part.ended ${JSON.stringify(partEnded)}`);
+    }
+    const hang = {
+      start: { code: s1.code, ms: s1.ms },
+      stop: { code: stop1.code, ms: stop1.ms, body: body(stop1.out) },
+      nextStart: {
+        code: next1.code,
+        ms: next1.ms,
+        whileTeardownHung: startedBeforeStopEnded && answeredBeforeStopEnded,
+        body: body(next1.out),
+      },
+      partEnded,
+      audio: await audio(folder1, stopReq),
+      apiDuring: poller.between(t0, t1),
+    };
+    result.hang = {
+      ...hang,
+      verdict: verdict(hang, events(folder1).filter((e) => e.type === "part.started").length),
+    };
+
+    // 2. Crash: the helper exits 70 at 20 s of audio; the app restarts it in a new part.
+    setFault("--simulate crash-at=20");
+    const t2 = Date.now();
+    const s2 = await cli("start", "-t", "g5-crash");
+    const folder2 = started(s2, "crash");
+    // The restarted helper reads the fault file again: make it a healthy one.
+    await sleep(1000);
+    setFault("");
+    await sleep(34_000);
+    const stopReq2 = Date.now();
+    const stop2 = await cli("stop");
+    const next2 = await cli("start", "-t", "g5-after-crash");
+    const t3 = Date.now();
+    await sleep(3000);
+    await cli("stop");
+    const ev2 = events(folder2);
+    if (ev2.find((e) => e.type === "part.ended")?.reason !== "helper-exit") {
+      throw new Error("the crash fault did not crash the helper");
+    }
+    const crash = {
+      start: { code: s2.code, ms: s2.ms },
+      stop: { code: stop2.code, ms: stop2.ms },
+      nextStart: { code: next2.code, ms: next2.ms, body: body(next2.out) },
+      partEnded: ev2.filter((e) => e.type === "part.ended"),
+      events: ev2.filter((e) =>
+        ["part.started", "part.ended", "health", "call.ended"].includes(e.type as string),
+      ),
+      audio: await audio(folder2, stopReq2),
+      apiDuring: poller.between(t2, t3),
+    };
+    result.crash = {
+      ...crash,
+      verdict: verdict(crash, ev2.filter((e) => e.type === "part.started").length),
+    };
+  } else {
+    // A real device capture, with the tone playing so the tap hears it, whose helper is SIGKILLed
+    // after 20 s.
+    const player = Bun.spawn(["afplay", fixture], { stdout: "ignore", stderr: "ignore" });
+    await sleep(1000);
+    const t0 = Date.now();
+    const s = await cli("start", "-t", "g5-kill-real");
+    const folder = started(s, "kill-real");
+    await sleep(20_000);
+    const pids = await helperFor(folder);
+    if (pids.length !== 1) {
+      player.kill();
+      throw new Error(`expected one helper writing into this call, found ${pids.length}`);
+    }
+    const pid = pids[0] as number;
+    const killedAt = Date.now();
+    process.kill(pid, "SIGKILL");
+    await sleep(500);
+    if (alive(pid)) {
+      player.kill();
+      throw new Error(`helper ${pid} survived SIGKILL`);
+    }
+    await sleep(14_500);
+    const stopReq = Date.now();
+    const stop = await cli("stop");
+    const next = await cli("start", "-t", "g5-after-kill");
+    const t1 = Date.now();
+    await sleep(3000);
+    await cli("stop");
     player.kill();
-    throw new Error(`expected one helper writing into this call, found ${pids.length}`);
+    const ev = events(folder);
+    const ended1 = ev.find((e) => e.type === "part.ended" && e.part === 1);
+    if (!ended1 || (ended1.t as number) < killedAt) {
+      throw new Error("part 1 did not end after the kill: the killed process was not this call's");
+    }
+    const kill = {
+      killedAt,
+      helperOfThisCall: true,
+      start: { code: s.code, ms: s.ms },
+      stop: { code: stop.code, ms: stop.ms },
+      nextStart: { code: next.code, ms: next.ms, body: body(next.out) },
+      partEnded: ev.filter((e) => e.type === "part.ended"),
+      events: ev.filter((e) =>
+        ["part.started", "part.ended", "health", "call.ended"].includes(e.type as string),
+      ),
+      audio: await audio(folder, stopReq),
+      apiDuring: poller.between(t0, t1),
+    };
+    result.killReal = {
+      ...kill,
+      verdict: verdict(kill, ev.filter((e) => e.type === "part.started").length),
+    };
   }
-  const pid = pids[0] as number;
-  const killedAt = Date.now();
-  process.kill(pid, "SIGKILL");
-  await sleep(500);
-  if (alive(pid)) {
-    player.kill();
-    throw new Error(`helper ${pid} survived SIGKILL`);
-  }
-  await sleep(14_500);
-  const stopReq = Date.now();
-  const stop = await cli("stop");
-  const next = await cli("start", "-t", "g5-after-kill");
-  const t1 = Date.now();
-  await sleep(3000);
-  await cli("stop");
-  player.kill();
-  const ev = events(folder);
-  const ended1 = ev.find((e) => e.type === "part.ended" && e.part === 1);
-  if (!ended1 || (ended1.t as number) < killedAt) {
-    throw new Error("part 1 did not end after the kill: the killed process was not this call's");
-  }
-  const kill = {
-    killedAt,
-    helperOfThisCall: true,
-    start: { code: s.code, ms: s.ms },
-    stop: { code: stop.code, ms: stop.ms },
-    nextStart: { code: next.code, ms: next.ms, body: body(next.out) },
-    partEnded: ev.filter((e) => e.type === "part.ended"),
-    events: ev.filter((e) =>
-      ["part.started", "part.ended", "health", "call.ended"].includes(e.type as string),
-    ),
-    audio: await audio(folder, stopReq),
-    apiDuring: poller.between(t0, t1),
-  };
-  result.killReal = {
-    ...kill,
-    verdict: verdict(kill, ev.filter((e) => e.type === "part.started").length),
-  };
+} finally {
+  await poller?.stop();
+  await cli("quit");
 }
-
-await poller.stop();
-await cli("quit");
 const text = JSON.stringify(result, null, 2);
 const out = opt("--out");
 if (out) writeFileSync(out, `${text}\n`);
