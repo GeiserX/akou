@@ -142,6 +142,29 @@ export interface Rig {
   pids: number[];
   /** Every helper session the engine started, in order. */
   sessions: CaptureSession[];
+  /** What each session's stop did and when (`performance.now()`), in the same order. */
+  stops: StopTimes[];
+}
+
+/**
+ * The helper's side of a stop, apart from the call's own work around it: when the session was
+ * asked to stop, when the helper said `stopped`, when the session killed it, when it saw the exit
+ * and when its stop answered, and what it answered.
+ */
+export interface StopTimes {
+  asked?: number;
+  said?: number;
+  kill?: number;
+  exit?: number;
+  answered?: number;
+  outcome?: StopOutcome;
+}
+
+/** One line for a test's output, in ms after the stop was asked. */
+export function describeStop(t: StopTimes, took: number): string {
+  const at = (x?: number) =>
+    x === undefined || t.asked === undefined ? "-" : `${Math.round(x - t.asked)}`;
+  return `stop took ${Math.round(took)} ms; helper said stopped at ${at(t.said)}, killed at ${at(t.kill)}, exit seen at ${at(t.exit)}, session answered at ${at(t.answered)}`;
 }
 
 /** A call manager whose engine spawns `h` (or `command`, for a helper that is not one of them). */
@@ -156,6 +179,7 @@ export function rig(
   const packets: Rig["packets"] = [];
   const pids: number[] = [];
   const sessions: CaptureSession[] = [];
+  const stops: StopTimes[] = [];
   const engine = new AkouCaptureEngine({
     command: command ?? h.command,
     extraArgs: (o) => h.args(faults(o)),
@@ -163,9 +187,34 @@ export function rig(
   });
   const inner = engine.start.bind(engine);
   engine.start = (o, handlers) => {
-    const s = inner(o, handlers);
+    const t: StopTimes = {};
+    const s = inner(o, {
+      ...handlers,
+      message(m) {
+        if (m.type === "stopped") t.said ??= performance.now();
+        handlers.message(m);
+      },
+      exit(e) {
+        t.exit ??= performance.now();
+        handlers.exit(e);
+      },
+    });
+    const kill = s.kill.bind(s);
+    s.kill = () => {
+      t.kill ??= performance.now();
+      kill();
+    };
+    const stop = s.stop.bind(s);
+    s.stop = async (budget) => {
+      t.asked ??= performance.now();
+      const out = await stop(budget);
+      t.answered = performance.now();
+      t.outcome = out;
+      return out;
+    };
     if (s.pid) pids.push(s.pid);
     sessions.push(s);
+    stops.push(t);
     return s;
   };
   const mgr = new CallManager({
@@ -186,7 +235,7 @@ export function rig(
     }
     cleanup();
   });
-  return { root, mgr, events, packets, pids, sessions };
+  return { root, mgr, events, packets, pids, sessions, stops };
 }
 
 const has = (events: LogEvent[], f: (e: LogEvent) => boolean) => () => events.some(f);
@@ -251,26 +300,6 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         const a = await r.mgr.start({ workspace: "work", title: "Hangs" });
         expect(a.ok).toBe(true);
         await until(() => r.packets.length > 10, 3_000, "packets");
-        // When the session killed the helper, when it saw the exit and what its stop answered: the
-        // helper's side of the stop, apart from the call's own work after it.
-        const s = r.sessions[0] as CaptureSession;
-        const at: { kill?: number; exit?: number; stopped?: number } = {};
-        let outcome: StopOutcome | undefined;
-        const kill = s.kill.bind(s);
-        s.kill = () => {
-          at.kill ??= performance.now();
-          kill();
-        };
-        const sessionStop = s.stop.bind(s);
-        s.stop = async (b) => {
-          const out = await sessionStop(b);
-          at.stopped = performance.now();
-          outcome = out;
-          return out;
-        };
-        void s.exited.then(() => {
-          at.exit = performance.now();
-        });
         // The event loop keeps turning while the helper hangs.
         let ticks = 0;
         let last = performance.now();
@@ -285,20 +314,20 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         const stop = await r.mgr.stop("live");
         const took = performance.now() - t0;
         clearInterval(timer);
-        const ms = (t?: number) => (t === undefined ? null : Math.round(t - t0));
+        const at = r.stops[0] as StopTimes;
         console.log(
-          `[T0.9] stop took ${Math.round(took)} ms: kill at ${ms(at.kill)}, exit seen at ${ms(at.exit)}, session stop resolved at ${ms(at.stopped)}, longest event-loop gap ${Math.round(maxGap)} ms`,
+          `[T0.9] ${describeStop(at, took)}; longest event-loop gap ${Math.round(maxGap)} ms`,
         );
         expect(stop.ok).toBe(true);
         // The helper had the whole budget, then was killed.
         expect(at.kill).toBeDefined();
-        expect((at.kill as number) - t0).toBeGreaterThanOrEqual(budget - 20);
+        expect((at.kill as number) - (at.asked as number)).toBeGreaterThanOrEqual(budget - 20);
         // The kill worked: the session saw the helper exit within the kill grace (past it, the
         // session gives up on the exit and answers with none).
-        expect(outcome).toMatchObject({ killed: true, exit: { killedByUs: true } });
+        expect(at.outcome).toMatchObject({ killed: true, exit: { killedByUs: true } });
         // And the session answered as soon as it saw the exit: both run in the same turn of the
         // event loop, so this holds however loaded the runner is.
-        expect((at.stopped as number) - (at.exit as number)).toBeLessThan(50);
+        expect((at.answered as number) - (at.exit as number)).toBeLessThan(50);
         // Bounded. The exact budget is proven on a manual clock (call-machine.test.ts, [T0.9] and
         // [T4.31]); this is the whole stop of a real process on a shared runner, which also syncs
         // part.ended and call.ended to disk and waits whenever the runner does not schedule it. The
@@ -356,7 +385,9 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         await until(() => r.packets.length > 10, 3_000, "packets");
         const t0 = performance.now();
         await r.mgr.quit();
-        expect(performance.now() - t0).toBeLessThan(500 + KILL_GRACE_MS);
+        const took = performance.now() - t0;
+        console.log(`[T2.51] ${describeStop(r.stops[0] as StopTimes, took)}`);
+        expect(took).toBeLessThan(500 + KILL_GRACE_MS);
         expect(processAlive(r.pids[0] as number)).toBe(false);
         const log = await logOf(a.folder);
         expect(log.slice(-2).map((e) => e.type)).toEqual(["part.ended", "call.ended"]);
