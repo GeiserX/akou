@@ -1001,3 +1001,55 @@ describe("provisional lines (DESIGN 3.1 step 6)", () => {
     expect(v.lastSeq).toBe(b.events.length);
   });
 });
+
+describe("the fold: change feed for incremental readers", () => {
+  test("new lines, revisions and heard-form corrections report their ids; names report every line", () => {
+    const b = basicCall();
+    const v = fold(b.events);
+    const first = v.changesSince(0);
+    expect(first.all).toBe(true); // call.created
+    let cursor = first.cursor;
+    expect(v.changesSince(cursor)).toEqual({ cursor, all: false, ids: [] });
+
+    v.apply(b.seg({ id: "l000004", spk: "c1", w0: T0 + 4 * S, text: "on kubernetis" }));
+    v.apply(b.add({ type: "seg", id: "l000002", rev: 2, text: "hello Ana again", by: "user" }));
+    let ch = v.changesSince(cursor);
+    expect(ch.all).toBe(false);
+    expect(ch.ids.sort()).toEqual(["l000002", "l000004"]);
+    cursor = ch.cursor;
+
+    v.apply(
+      b.add({
+        type: "vocab.add",
+        id: "v1",
+        rev: 1,
+        term: "Kubernetes",
+        heard: ["kubernetis"],
+        by: "user",
+      }),
+    );
+    ch = v.changesSince(cursor);
+    expect(ch).toMatchObject({ all: false, ids: ["l000004"] });
+    cursor = ch.cursor;
+
+    v.apply(b.add({ type: "speaker.name", spk: "c1", name: "Ben", by: "user" }));
+    expect(v.changesSince(cursor).all).toBe(true);
+  });
+
+  test("visibleIn follows the view: echo, retraction and the best-view layer switch", () => {
+    const b = basicCall();
+    b.seg({ id: "l000009", spk: "c1", w0: T0 + 9 * S, text: "echo", echo: true });
+    b.seg({ id: "f000001", spk: "c1", w0: T0 + 2 * S, text: "hello Ana" });
+    const v = fold(b.events);
+    expect(v.visibleIn("l000002")).toBe(true);
+    expect(v.visibleIn("l000009")).toBe(false);
+    expect(v.visibleIn("f000001")).toBe(false);
+    v.apply(b.add({ type: "final.part.done", part: 1 }));
+    expect(v.visibleIn("l000002")).toBe(false);
+    expect(v.visibleIn("f000001")).toBe(true);
+    expect(v.visibleIn("l000002", "live")).toBe(true);
+    v.apply(b.add({ type: "seg", id: "f000001", rev: 2, text: null, by: "user" }));
+    expect(v.visibleIn("f000001")).toBe(false);
+    expect(v.visibleIn("nope")).toBe(false);
+  });
+});

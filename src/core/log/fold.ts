@@ -175,6 +175,8 @@ export interface PartView {
   clock: PartClock;
   /** The final layer is shown for this part in the `best` view. */
   finalDone: boolean;
+  /** `seq` of the `final.part.done` that switched this part to the final layer. */
+  finalDoneSeq?: number;
 }
 
 export interface SpeakerView {
@@ -295,6 +297,9 @@ export class ProvisionalBoard {
 
 const LIVE_STATES: ReadonlySet<CallState> = new Set(["recording", "paused", "restarting"]);
 
+/** Change-feed marker: every line may render differently. Never a segment id. */
+const ALL_LINES = "*";
+
 interface NameEntry {
   name: string;
   by: string;
@@ -355,6 +360,10 @@ export class CallView {
   private readonly renderCache = new Map<string, RenderCacheEntry>();
   private readonly tokenIndex = new Map<string, Set<string>>();
   private rulesCache: VocabRule[] | null = null;
+
+  // Change feed for incremental readers (the query index): segment ids whose rendering may have
+  // changed, in order, with ALL_LINES when every line may have (names, merges, a layer switch).
+  private readonly changeLog: string[] = [];
 
   constructor(options: FoldOptions = {}) {
     this.options = options;
@@ -460,9 +469,11 @@ export class CallView {
         break;
       case "speaker.merge":
         if (e.from !== e.into) this.merges.set(e.from, e.into);
+        this.changeLog.push(ALL_LINES);
         break;
       case "speaker.unmerge":
         if (this.merges.get(e.from) === e.into) this.merges.delete(e.from);
+        this.changeLog.push(ALL_LINES);
         break;
       case "speaker.name":
         this.names.set(e.spk, { name: e.name, by: e.by, seq: e.seq });
@@ -471,6 +482,7 @@ export class CallView {
       case "speaker.map":
         this.finalMap.set(e.final, e);
         this.suggestions.delete(e.final);
+        this.changeLog.push(ALL_LINES);
         break;
       case "speaker.suggest":
         if (!this.finalMap.has(e.final)) this.suggestions.set(e.final, e);
@@ -569,7 +581,11 @@ export class CallView {
       case "final.part.done": {
         if (!this._final.partsDone.includes(e.part)) this._final.partsDone.push(e.part);
         const p = this._parts.get(e.part);
-        if (p) p.finalDone = true;
+        if (p) {
+          p.finalDone = true;
+          p.finalDoneSeq = e.seq;
+        }
+        this.changeLog.push(ALL_LINES);
         break;
       }
       case "final.done":
@@ -627,6 +643,7 @@ export class CallView {
         revisions: [e],
       };
       this.segs.set(e.id, s);
+      this.changeLog.push(s.id);
       this.indexTokens(s.id, s.text);
       if (s.layer === "live") this.provisional.commit(s.ch, s.w1);
       return;
@@ -648,6 +665,7 @@ export class CallView {
     if (e.model !== undefined) cur.model = e.model;
     if (e.echo !== undefined) cur.echo = e.echo;
     if (e.by !== undefined) cur.by = e.by;
+    this.changeLog.push(cur.id);
     this.indexTokens(cur.id, cur.text);
   }
 
@@ -694,7 +712,10 @@ export class CallView {
     for (const form of forms) {
       const first = tokenize(form)[0];
       if (!first) continue;
-      for (const id of this.tokenIndex.get(first.folded) ?? []) this.renderCache.delete(id);
+      for (const id of this.tokenIndex.get(first.folded) ?? []) {
+        this.renderCache.delete(id);
+        this.changeLog.push(id);
+      }
     }
   }
 
@@ -706,6 +727,24 @@ export class CallView {
   private invalidateAll(): void {
     this.rulesCache = null;
     this.renderCache.clear();
+    this.changeLog.push(ALL_LINES);
+  }
+
+  /**
+   * What changed since a cursor from an earlier call (0 at first): the segment ids whose line may
+   * render differently, or `all: true` when every line may (a name, a merge, a layer switch, a
+   * fuzzy vocabulary term). Lets a reader such as the query index stay incremental without reading
+   * raw events itself.
+   */
+  changesSince(cursor: number): { cursor: number; all: boolean; ids: string[] } {
+    const next = this.changeLog.length;
+    const ids = new Set<string>();
+    for (let i = Math.max(0, cursor); i < next; i++) {
+      const id = this.changeLog[i] as string;
+      if (id === ALL_LINES) return { cursor: next, all: true, ids: [] };
+      ids.add(id);
+    }
+    return { cursor: next, all: false, ids: [...ids] };
   }
 
   // -------------------------------------------------------------------------
@@ -928,6 +967,12 @@ export class CallView {
       out.push(this.toLine(s));
     }
     return out.sort(compareLines);
+  }
+
+  /** Whether a segment is a line of a view: in it, not echo, not retracted. */
+  visibleIn(id: string, view: View = "best"): boolean {
+    const s = this.segs.get(id);
+    return s !== undefined && this.inView(s, view) && !s.echo && s.text !== null;
   }
 
   /** Any segment id, live or final, resolves for as long as the log exists. */
