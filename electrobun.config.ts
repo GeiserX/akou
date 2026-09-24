@@ -8,11 +8,13 @@
  *   window's view is `src/ui/window.ts` with the same `index.html` and `theme.css` the browser
  *   loads.
  * - Hutch copies sherpa-onnx's `.node` file but not the two libraries it loads, so both are listed
- *   in `build.copy`, beside the bundled main process where the addon looks for them (TRAPS "Native
- *   libraries missing from the bundle"; the release job's post-build load test proves the place).
+ *   in `build.copy`, beside the bundled main process where the addon looks for them: the addon
+ *   links both through `@rpath` with an `@loader_path` rpath (TRAPS "Native libraries missing from
+ *   the bundle"). Nothing on this branch builds the bundle yet: the ROADMAP M0 gate is what must
+ *   prove the place with a load test in the packaged app.
  * - Hutch writes `Info.plist` from a fixed table without `NSAudioCaptureUsageDescription`, so the
  *   `postWrap` hook patches both usage strings in before the bundle is signed (TRAPS "Info.plist
- *   cannot carry the system-audio usage string").
+ *   cannot carry the system-audio usage string"; the same M0 gate checks it with `plutil -p`).
  * - The bundle id is stable, so grants survive updates; the capture helper excludes every process
  *   it is responsible for, the WebKit GPU helper that plays the window's audio included.
  * - No CEF: the system webview on every OS.

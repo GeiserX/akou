@@ -101,6 +101,8 @@ Every number here comes from our vocabulary measurements: a synthetic TTS set an
 - **Hutch cannot fetch behind a proxy** [spike] (M1). Given CI with proxy variables set, the build script must unset them for Hutch. Test: CI job environment assertion.
 - **Token file readable by others** (M1). Given a fresh install, the token file must be mode 0600 (or a user-only ACL on Windows) and created atomically. Test: stat after `akou doctor`.
 
+- **The window's RPC socket taken over** [ElectroBun #518] (M1). Given a local process that opens the window's `ws://127.0.0.1:<port>/socket?webviewId=<n>` (the upgrade carries no token), the window loses its socket: the frames stay unreadable and unforgeable under the per-webview AES-GCM key, but every push and answer goes to the other socket. The page must not show a frozen transcript as if it were live: it must say it is reconnecting and, once that outlasts a follow request's timeout, tell the user to close and reopen the window. The recording is unaffected. Test: the state label with the reopen hint, and `suggestReopen` only for the window past `REOPEN_AFTER_MS`.
+
 ## Configuration and documentation
 
 - **Ranges bypassed by a hand-edited file** [T4.9] (M1). Given `segmentPause: 99` in the config file, akou must refuse the key with a message and use the default, the same way `akou config set` would. Test: a bad config file.
