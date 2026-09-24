@@ -22,6 +22,7 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { ensureToken, tokenFileAccess } from "../../api/guard.ts";
 import { MODELS, verifyModels } from "../../asr/models.ts";
+import { bundledHelper } from "../../capture/helper.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { findProgram } from "../../llm/harness.ts";
 import { bool } from "../args.ts";
@@ -133,7 +134,7 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
   );
 
   const helper = cfg.settings["capture.helper"];
-  const program = helper[0] ?? "akou-capture";
+  const program = helper[0] ?? bundledHelper() ?? "akou-capture";
   const found = isAbsolute(program)
     ? existsSync(program)
       ? program

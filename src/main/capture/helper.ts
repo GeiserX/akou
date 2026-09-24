@@ -11,7 +11,8 @@
  * configurable, which is how the tests run `scripts/fake-helper.ts` in its place.
  */
 
-import { closeSync, openSync, writeSync } from "node:fs";
+import { closeSync, existsSync, openSync, writeSync } from "node:fs";
+import { join } from "node:path";
 import {
   type CaptureEngine,
   type CaptureHandlers,
@@ -260,6 +261,18 @@ export function akouCaptureDialect(s: ChildCaptureSession): Dialect {
       child.closeStdin();
     },
   };
+}
+
+/**
+ * The helper the release puts beside the bundled main process (`electrobun.config.ts`), or null.
+ * From source and from the compiled CLI there is none, and `akou-capture` is looked up on `PATH`.
+ */
+export function bundledHelper(
+  dir: string = import.meta.dir,
+  platform: string = process.platform,
+): string | null {
+  const path = join(dir, platform === "win32" ? "akou-capture.exe" : "akou-capture");
+  return existsSync(path) ? path : null;
 }
 
 export interface HelperEngineOptions {

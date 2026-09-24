@@ -375,12 +375,22 @@ describe("the ElectroBun build", () => {
     expect(config.build?.mac?.entitlements?.["com.apple.security.device.audio-input"]).toBe(true);
   });
 
-  test("[spike] Native libraries missing from the bundle: both sherpa dylibs are in build.copy beside the main process", () => {
+  test("[spike] Native libraries missing from the bundle: sherpa-onnx-node, its .node file and both libraries are in build.copy beside the main process", () => {
     const copies = sherpaCopies("darwin", "arm64");
+    const nm = `${MAIN_OUT}/node_modules`;
     expect(copies).toEqual({
-      "node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib": `${MAIN_OUT}/libsherpa-onnx-c-api.dylib`,
-      "node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib": `${MAIN_OUT}/libonnxruntime.dylib`,
+      "node_modules/sherpa-onnx-node": `${nm}/sherpa-onnx-node`,
+      "node_modules/sherpa-onnx-darwin-arm64/package.json": `${nm}/sherpa-onnx-darwin-arm64/package.json`,
+      "node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node": `${nm}/sherpa-onnx-darwin-arm64/sherpa-onnx.node`,
+      "node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib": `${nm}/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib`,
+      "node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib": `${nm}/sherpa-onnx-darwin-arm64/libonnxruntime.dylib`,
     });
+    // The .node file finds its libraries beside itself (@loader_path), so they travel together.
+    for (const lib of SHERPA_LIBS.darwin ?? []) {
+      expect(copies[`node_modules/sherpa-onnx-darwin-arm64/${lib}`]).toBe(
+        `${nm}/sherpa-onnx-darwin-arm64/${lib}`,
+      );
+    }
     // The two names are the ones the addon links, when the package is here to ask.
     const node = join(ROOT, "node_modules", "sherpa-onnx-darwin-arm64", "sherpa-onnx.node");
     if (process.platform === "darwin" && existsSync(node)) {

@@ -4,3 +4,8 @@ target/
 .omc/
 *.log
 tests/.tmp/
+# ElectroBun and Hutch build output (scripts/build-app.ts)
+build/
+artifacts/
+.hutch/
+.cottontail-tmp/
