@@ -4,7 +4,8 @@
  * opens an audio device.
  *
  * - settings: every refused key in `config.json`;
- * - token: present, mode 0600 (created if missing, replaced if loose);
+ * - token: present, mode 0600 or on Windows an ACL for the user alone (created if missing, replaced
+ *   if loose);
  * - api: the app answers, and refuses a request that looks like a browser (403) and one without the
  *   token (401), which is the security self-test;
  * - models: every file present, the right size, and its pinned SHA-256;
@@ -20,7 +21,7 @@
 import { spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
-import { ensureToken } from "../../api/guard.ts";
+import { ensureToken, tokenFileAccess } from "../../api/guard.ts";
 import { MODELS, verifyModels } from "../../asr/models.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { bool } from "../args.ts";
@@ -108,11 +109,17 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
   );
 
   const t = ensureToken(ctx.client.configDir);
-  const mode = process.platform === "win32" ? null : statSync(t.path).mode & 0o777;
+  const access = tokenFileAccess(t.path);
+  const who =
+    process.platform !== "win32"
+      ? `mode ${(statSync(t.path).mode & 0o777).toString(8).padStart(4, "0")}`
+      : { private: "acl user-only", loose: "acl readable by others", unknown: "acl not readable" }[
+          access
+        ];
   checks.push({
     name: "token",
-    state: mode === null || mode === 0o600 ? "ok" : "fail",
-    detail: `${t.path}${mode === null ? "" : `, mode ${mode.toString(8).padStart(4, "0")}`}${t.created ? ", created now" : ""}`,
+    state: { private: "ok", loose: "fail", unknown: "warn" }[access] as Check["state"],
+    detail: `${t.path}, ${who}${t.created ? ", created now" : ""}`,
   });
 
   checks.push(...(await apiChecks(ctx)));

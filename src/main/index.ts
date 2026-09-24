@@ -46,7 +46,7 @@ import {
   LogWriteError,
   processAlive,
 } from "../core/log/writer.ts";
-import { ensureToken, type Guard, TokenSource } from "./api/guard.ts";
+import { ensureToken, type Guard, makePrivateDir, TokenSource } from "./api/guard.ts";
 import { HttpError } from "./api/http.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
@@ -641,9 +641,8 @@ function readRuntime(configDir: string): { port?: number; version?: string } | n
 /** Starts the app: settings, the single-instance lock, the token, the API. */
 export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
   const cfg = loadConfig(o.env ?? process.env, o.platform);
-  mkdirSync(cfg.paths.configDir, { recursive: true, mode: 0o700 });
   // The folder holds the token and runtime.json: the owner's alone.
-  if (process.platform !== "win32") chmodSync(cfg.paths.configDir, 0o700);
+  makePrivateDir(cfg.paths.configDir);
   const lockPath = join(cfg.paths.configDir, APP_LOCK);
   try {
     acquireLock(lockPath, process.pid, processAlive);

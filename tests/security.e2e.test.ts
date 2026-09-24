@@ -13,7 +13,15 @@ import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "no
 import { connect } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
-import { ensureToken, openGuard, rotateToken, tokenMatches } from "../src/main/api/guard.ts";
+import {
+  ensureToken,
+  openGuard,
+  othersAllowed,
+  rotateToken,
+  sddlOf,
+  tokenFileAccess,
+  tokenMatches,
+} from "../src/main/api/guard.ts";
 import { type AppRig, appRig, type RawResponse, rawRequest } from "./api-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -333,6 +341,79 @@ describe("the bearer token", () => {
       });
       expect(r2.status).toBe(200);
       guarded.token = next;
+    },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "[Token file readable by others] a live token whose file goes loose is burned at once",
+    async () => {
+      const path = guarded.app.tokenPath;
+      const old = guarded.token;
+      const status = (token: string) =>
+        rawRequest(guarded.port, {
+          method: "GET",
+          path: "/v1/status",
+          headers: { Authorization: `Bearer ${token}` },
+        });
+      expect((await status(old)).status).toBe(200);
+      // chmod changes neither mtime nor size: the running app must still notice.
+      chmodSync(path, 0o644);
+      expect((await status(old)).status).toBe(401);
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      const next = readFileSync(path, "utf8").trim();
+      expect(next).toMatch(/^[0-9a-f]{64}$/);
+      expect(next).not.toBe(old);
+      expect((await status(next)).status).toBe(200);
+      guarded.token = next;
+    },
+  );
+});
+
+describe("the token file on Windows (an ACL for the current user only)", () => {
+  const ME = "S-1-5-21-1111-2222-3333-1001";
+
+  test("[Token file readable by others] an ACL is private only when nobody but the user is allowed", () => {
+    // What a file in a fresh %APPDATA% folder inherits: SYSTEM and Administrators can read it.
+    expect(othersAllowed(`D:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;${ME})`, ME)).toBe(true);
+    // What akou writes: inheritance removed, the user alone.
+    expect(othersAllowed(`D:PAI(A;;FA;;;${ME})`, ME)).toBe(false);
+    expect(othersAllowed(`O:BAG:SYD:PAI(A;;FA;;;${ME})S:AI(AU;SA;FA;;;WD)`, ME)).toBe(false);
+    expect(othersAllowed(`D:PAI(A;;FA;;;${ME})(A;;FR;;;WD)`, ME)).toBe(true);
+    expect(othersAllowed(`D:PAI(A;;FA;;;${ME})(A;;0x1200a9;;;BU)`, ME)).toBe(true);
+    // A deny entry or an inherit-only one lets nobody in.
+    expect(othersAllowed(`D:PAI(D;;FA;;;WD)(A;;FA;;;${ME})`, ME)).toBe(false);
+    expect(othersAllowed(`D:PAI(A;OICIIO;FA;;;WD)(A;;FA;;;${ME})`, ME)).toBe(false);
+    // No DACL, or a null one, lets everyone in.
+    expect(othersAllowed("D:NO_ACCESS_CONTROL", ME)).toBe(true);
+    expect(othersAllowed("O:BAG:SY", ME)).toBe(true);
+    // An empty DACL lets nobody in.
+    expect(othersAllowed("D:P", ME)).toBe(false);
+  });
+
+  test("the SDDL is read from what `icacls /save` writes (UTF-16, a name line first)", () => {
+    const text = `token\r\nD:PAI(A;;FA;;;${ME})\r\n`;
+    const utf16 = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")]);
+    expect(sddlOf(utf16)).toBe(`D:PAI(A;;FA;;;${ME})`);
+    expect(sddlOf(Buffer.from(text, "utf16le"))).toBe(`D:PAI(A;;FA;;;${ME})`);
+    expect(sddlOf(Buffer.from("token\r\n"))).toBe(null);
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "[Token file readable by others] the token is the user's alone; one others can read is replaced",
+    () => {
+      const t = tempDir();
+      const first = ensureToken(t.dir);
+      expect(tokenFileAccess(first.path)).toBe("private");
+      // Positive control: grant Everyone read, and the check must see it and replace the file.
+      const icacls = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "icacls.exe");
+      const grant = Bun.spawnSync([icacls, first.path, "/grant", "*S-1-1-0:R"]);
+      expect(grant.exitCode).toBe(0);
+      expect(tokenFileAccess(first.path)).toBe("loose");
+      const second = ensureToken(t.dir);
+      expect(second.created).toBe(true);
+      expect(second.token).not.toBe(first.token);
+      expect(tokenFileAccess(second.path)).toBe("private");
+      t.cleanup();
     },
   );
 });

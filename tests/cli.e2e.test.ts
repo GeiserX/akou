@@ -342,7 +342,7 @@ describe("settings and the token", () => {
     expect((await run(["token", "rotate"])).code).toBe(0);
     const after = readFileSync(path.out, "utf8");
     expect(after).not.toBe(before);
-    expect(statSync(path.out).mode & 0o777).toBe(0o600);
+    if (process.platform !== "win32") expect(statSync(path.out).mode & 0o777).toBe(0o600);
     // The CLI reads the new token; a request with the old one is now refused.
     expect((await run(["status"])).code).toBe(0);
     expect((await rig.api("GET", "/status")).status).toBe(401);
@@ -371,12 +371,18 @@ describe("doctor and models", () => {
     "doctor: missing models fail with the fix; token 0600; API security self-test; harness found",
     async () => {
       const bin = tempDir();
-      writeFileSync(join(bin.dir, "claude"), "#!/bin/sh\necho 1.0\n", { mode: 0o755 });
+      // Windows finds a program through PATHEXT, so there it is `claude.cmd`.
+      if (process.platform === "win32") writeFileSync(join(bin.dir, "claude.cmd"), "@echo 1.0\r\n");
+      else writeFileSync(join(bin.dir, "claude"), "#!/bin/sh\necho 1.0\n", { mode: 0o755 });
       const env = { ...process.env, ...rig.env, PATH: bin.dir, SHELL: "" };
       const r = await cli(env, ["doctor"]);
       expect(r.code).toBe(EXIT.unavailable);
       expect(r.out).toMatch(/^fail {2}models: .*missing.*run `akou models pull`$/m);
-      expect(r.out).toMatch(/^ok {4}token: .*mode 0600/m);
+      expect(r.out).toMatch(
+        process.platform === "win32"
+          ? /^ok {4}token: .*acl user-only/m
+          : /^ok {4}token: .*mode 0600/m,
+      );
       expect(r.out).toMatch(/^ok {4}api security: a browser request is refused \(403\)/m);
       expect(r.out).toMatch(/^ok {4}helper: /m);
       expect(r.out).toContain(`claude at ${join(bin.dir, "claude")}`);
