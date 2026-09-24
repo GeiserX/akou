@@ -145,6 +145,11 @@ export default {
       "src/ui/index.html": "views/main/index.html",
       "src/ui/theme.css": "views/main/theme.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
+      "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
+      // The licence and the third-party credits, which the bundled word lists' CC BY-SA 4.0 and
+      // the linked crates want to travel with the app.
+      NOTICE: `${MAIN_OUT}/NOTICE`,
+      LICENSE: `${MAIN_OUT}/LICENSE`,
       ...sherpaCopies(process.platform, process.arch),
       ...builtCopies(),
       ...helperCopies(),

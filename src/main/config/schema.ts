@@ -22,6 +22,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { defaultModelsDir } from "../asr/models.ts";
+import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
 
 export type SettingType = "integer" | "number" | "boolean" | "string" | "string[]" | "hooks";
@@ -54,7 +55,7 @@ export interface SettingSpec {
   max?: number;
   /** A number setting may also take these values outside the range (`api.port` 0). */
   also?: readonly number[];
-  /** One of these values, for strings. */
+  /** One of these values, for a string or for each item of a list. */
   values?: readonly string[];
   default: SettingValue;
   /** The environment variable that overrides the file. */
@@ -324,6 +325,12 @@ export const SETTINGS = {
     default: [],
     doc: "Extra vocabulary files layered over the global and workspace files.",
   },
+  "vocab.languages": {
+    type: "string[]",
+    values: DICTIONARY_LANGUAGES,
+    default: [],
+    doc: `Languages whose word lists tell a real word from a mishearing, so a vocabulary file never "corrects" a real word. Empty: every list akou ships (${DICTIONARY_LANGUAGES.join(", ")}). A language the recognizer detects in a call is added.`,
+  },
 } as const satisfies Record<string, SettingSpec>;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -402,11 +409,16 @@ export function validateSetting(
       }
       return { ok: true, key, value };
     }
-    case "string[]":
+    case "string[]": {
       if (!Array.isArray(value) || !value.every((v) => typeof v === "string" && v !== "")) {
         return { ok: false, error: `${key}: must be a list of non-empty strings` };
       }
+      const bad = spec.values && value.find((v) => !spec.values?.includes(v));
+      if (bad) {
+        return { ok: false, error: `${key}: ${bad} is not one of ${spec.values?.join(", ")}` };
+      }
       return { ok: true, key, value: [...value] };
+    }
     case "hooks": {
       const h = validateHooks(value);
       return h.ok ? { ok: true, key, value: h.value } : { ok: false, error: `${key}: ${h.error}` };

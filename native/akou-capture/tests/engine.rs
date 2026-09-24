@@ -3,6 +3,7 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -83,12 +84,38 @@ struct Run {
 
 impl Run {
     fn start(name: &str, w: Wav, speed: f64, looped: bool, call: CallMode, faults: Faults) -> Run {
-        let path = tmp(name);
-        let (tx, rx) = mpsc::channel();
-        let out = Shared::default();
-        let err = Shared::default();
         let call_on = call != CallMode::None;
         let fe = FileSource::new(w, "test.wav", speed, looped, true, call_on, faults.clone());
+        Run::with(name, Box::new(fe), call, faults, &[])
+    }
+
+    /// The file source at `--speed 0` behind the gates at `gates` seconds of file (see `Gated`).
+    /// Returns the run and what opens the gates, one `send(())` each.
+    fn gated(name: &str, w: Wav, looped: bool, gates: &[f64]) -> (Run, Sender<()>) {
+        let fe = FileSource::new(w, "test.wav", 0.0, looped, true, true, Faults::none());
+        let (open, opened) = mpsc::channel();
+        let fe = Gated::new(Box::new(fe), gates, opened);
+        (
+            Run::with(name, Box::new(fe), CallMode::System, Faults::none(), &[]),
+            open,
+        )
+    }
+
+    /// Any front end; the `early` lines are on stdin before the helper starts.
+    fn with(
+        name: &str,
+        fe: Box<dyn Frontend>,
+        call: CallMode,
+        faults: Faults,
+        early: &[&str],
+    ) -> Run {
+        let path = tmp(name);
+        let (tx, rx) = mpsc::channel();
+        for l in early {
+            tx.send(format!("{l}\n").into_bytes()).unwrap();
+        }
+        let out = Shared::default();
+        let err = Shared::default();
         let cfg = RunConfig {
             out: path.clone(),
             mic_default: false,
@@ -99,7 +126,7 @@ impl Run {
         let handle = std::thread::spawn(move || {
             engine::run(
                 cfg,
-                Box::new(fe),
+                fe,
                 Box::new(Stdin { rx, buf: vec![] }),
                 Box::new(o),
                 Box::new(e),
@@ -135,6 +162,35 @@ impl Run {
         p
     }
 
+    /// Waits for a stderr line containing `what`. The deadline only turns a hang into a failure;
+    /// nothing here measures time.
+    fn wait_for(&self, what: &str) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(20);
+        while !self.lines().iter().any(|l| l.contains(what)) {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "no line with {what}: {:#?}",
+                self.lines()
+            );
+            std::thread::sleep(Duration::from_millis(2));
+        }
+    }
+
+    /// Waits for the gate at `t` s (see `Gated`): the engine has taken the file up to `t`.
+    fn at_gate(&self, t: f64) {
+        self.wait_for(&format!(r#""code":"gate","msg":"{t:.2}""#));
+    }
+
+    /// Sends `cmds` and waits until the engine has applied them: the helper reports an unknown
+    /// line in the order it reads its input, so its report means every line before it was taken.
+    fn apply(&self, cmds: &[&str], tag: &str) {
+        for c in cmds {
+            self.send(c);
+        }
+        self.send(tag);
+        self.wait_for(&format!(r#""code":"unknown-command","msg":"{tag}""#));
+    }
+
     /// Closes stdin (which means stop) and waits for the end.
     fn finish(mut self) -> (Outcome, Self) {
         drop(self.stdin.take());
@@ -145,6 +201,96 @@ impl Run {
     fn join(mut self) -> (Outcome, Self) {
         let h = std::mem::replace(&mut self.handle, std::thread::spawn(|| Outcome::Exit(-1)));
         (h.join().unwrap(), self)
+    }
+}
+
+/// A driven front end held at gates the test opens, so a test acts at an exact point of the
+/// source's own clock rather than after a sleep on the wall clock. Events pass through until a
+/// tick reaches the next gate; then it says `warn {code: gate, msg: "<t>"}` through the engine,
+/// which prints it once it has taken everything up to that tick, and waits for the test to open
+/// the gate. A gate at 0 holds the source before its first buffer.
+struct Gated {
+    inner: Box<dyn Frontend>,
+    gates: Vec<f64>,
+    open: Option<Receiver<()>>,
+    rx: Option<Receiver<Event>>,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Gated {
+    fn new(inner: Box<dyn Frontend>, gates: &[f64], open: Receiver<()>) -> Gated {
+        Gated {
+            inner,
+            gates: gates.to_vec(),
+            open: Some(open),
+            rx: None,
+            tx: None,
+        }
+    }
+}
+
+impl Frontend for Gated {
+    fn caps(&self) -> Vec<&'static str> {
+        self.inner.caps()
+    }
+    fn clock(&self) -> ClockKind {
+        self.inner.clock()
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        let (itx, irx) = mpsc::sync_channel(engine::EVENT_QUEUE);
+        self.tx = Some(tx);
+        self.rx = Some(irx);
+        self.inner.open(itx)
+    }
+    fn start(&mut self, anchor: Now) {
+        let (Some(tx), Some(rx), Some(open)) = (self.tx.take(), self.rx.take(), self.open.take())
+        else {
+            return;
+        };
+        let mut gates = self.gates.clone().into_iter().peekable();
+        std::thread::spawn(move || {
+            let hold = |t: f64| {
+                let gate = Event::Warn {
+                    code: "gate",
+                    msg: format!("{t:.2}"),
+                };
+                tx.send(gate).is_ok() && open.recv().is_ok()
+            };
+            if gates.next_if(|g| *g <= 0.0).is_some() && !hold(0.0) {
+                return;
+            }
+            for ev in rx {
+                let t = match &ev {
+                    Event::Tick(n) => Some(n.awake_ns.saturating_sub(anchor.awake_ns) as f64 / 1e9),
+                    _ => None,
+                };
+                if tx.send(ev).is_err() {
+                    return;
+                }
+                if let Some(t) = t
+                    && let Some(g) = gates.next_if(|g| t >= *g - 1e-9)
+                    && !hold(g)
+                {
+                    return;
+                }
+            }
+        });
+        self.inner.start(anchor);
+    }
+    fn rebuild(&mut self, ch: Ch) -> Result<Vec<String>, String> {
+        self.inner.rebuild(ch)
+    }
+    fn probe_call(&mut self) {
+        self.inner.probe_call();
+    }
+    fn probe_answered(&mut self) -> Option<bool> {
+        self.inner.probe_answered()
+    }
+    fn status(&mut self) -> Status {
+        self.inner.status()
+    }
+    fn close(self: Box<Self>) {
+        self.inner.close();
     }
 }
 
@@ -243,6 +389,20 @@ impl Frontend for Scripted {
 
 /// Runs a scripted front end to its end; returns stderr lines and packets.
 fn run_scripted(name: &str, fe: Scripted) -> (Vec<String>, Vec<Packet>) {
+    run_frontend(name, Box::new(fe))
+}
+
+/// Runs any driven front end to its end; returns stderr lines and packets.
+fn run_frontend(name: &str, fe: Box<dyn Frontend>) -> (Vec<String>, Vec<Packet>) {
+    run_frontend_as(name, fe, CallMode::System)
+}
+
+/// `run_frontend` with the call side captured as `call` says.
+fn run_frontend_as(
+    name: &str,
+    fe: Box<dyn Frontend>,
+    call: CallMode,
+) -> (Vec<String>, Vec<Packet>) {
     let path = tmp(name);
     let (_tx, rx) = mpsc::channel::<Vec<u8>>();
     let out = Shared::default();
@@ -250,12 +410,12 @@ fn run_scripted(name: &str, fe: Scripted) -> (Vec<String>, Vec<Packet>) {
     let cfg = RunConfig {
         out: path,
         mic_default: false,
-        call: CallMode::System,
+        call,
         faults: Faults::none(),
     };
     let outcome = engine::run(
         cfg,
-        Box::new(fe),
+        fe,
         Box::new(Stdin { rx, buf: vec![] }),
         Box::new(out.clone()),
         Box::new(err.clone()),
@@ -878,46 +1038,34 @@ fn a_wav_runs_end_to_end_into_packets_and_a_stereo_opus_file() {
 
 #[test]
 fn stop_on_stdin_finishes_the_file_and_says_stopped() {
-    let r = Run::start(
-        "stop.opus",
-        stereo(48_000, 1.0),
-        1.0,
-        true,
-        CallMode::System,
-        Faults::none(),
-    );
-    std::thread::sleep(Duration::from_millis(700));
+    let (r, _open) = Run::gated("stop.opus", stereo(48_000, 1.0), true, &[0.7]);
+    r.at_gate(0.7);
     r.send("stop");
     let (outcome, r) = r.finish();
     assert_eq!(outcome, Outcome::Exit(0));
     let lines = r.lines();
     let stopped = typed(&lines, "stopped");
     assert!(stopped[0].contains(r#""reason":"stop""#));
+    // Stopped 0.7 s into the file: everything up to there is in it, nothing after.
     let secs = num_field(stopped[0], "file_seconds");
-    assert!(secs > 0.5 && secs < 1.2, "{secs}");
+    assert!((secs - 0.7).abs() < 1e-6, "{secs}");
     assert!((opus_writer::recover(&r.path).unwrap().seconds() - secs).abs() < 1e-6);
 }
 
 #[test]
 fn pause_drops_audio_and_the_file_continues_where_it_paused() {
-    let r = Run::start(
-        "pause.opus",
-        stereo(48_000, 1.0),
-        1.0,
-        true,
-        CallMode::System,
-        Faults::none(),
-    );
-    std::thread::sleep(Duration::from_millis(400));
-    r.send("pause");
-    std::thread::sleep(Duration::from_millis(600));
-    r.send("resume");
-    std::thread::sleep(Duration::from_millis(400));
-    r.send("stop");
-    let (_, r) = r.finish();
+    // Paused from 0.4 s to 1.0 s of a 1.4 s source.
+    let (r, open) = Run::gated("pause.opus", stereo(48_000, 1.4), false, &[0.4, 1.0]);
+    r.at_gate(0.4);
+    r.apply(&["pause"], "sync-pause");
+    open.send(()).unwrap();
+    r.at_gate(1.0);
+    r.apply(&["resume"], "sync-resume");
+    open.send(()).unwrap();
+    let (_, r) = r.join();
     let secs = num_field(typed(&r.lines(), "stopped")[0], "file_seconds");
-    // About 0.8 s written, not 1.4 s.
-    assert!(secs > 0.6 && secs < 1.0, "{secs}");
+    // 0.8 s written, not 1.4 s.
+    assert!((secs - 0.8).abs() < 1e-6, "{secs}");
     let mic: Vec<Packet> = r
         .packets()
         .into_iter()
@@ -931,26 +1079,20 @@ fn pause_drops_audio_and_the_file_continues_where_it_paused() {
         jump = jump.max(w[1].capture_ns - w[0].capture_ns);
     }
     // The host clock shows the pause; the file position does not.
-    assert!(jump >= 500_000_000, "{jump}");
+    assert_eq!(jump, 620_000_000);
 }
 
 #[test]
 fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
-    let r = Run::start(
-        "mute.opus",
-        stereo(48_000, 1.0),
-        1.0,
-        true,
-        CallMode::System,
-        Faults::none(),
-    );
-    std::thread::sleep(Duration::from_millis(300));
-    r.send("mute");
-    std::thread::sleep(Duration::from_millis(400));
-    r.send("unmute");
-    std::thread::sleep(Duration::from_millis(300));
-    r.send("stop");
-    let (_, r) = r.finish();
+    // Muted from 0.3 s to 0.7 s of a 1 s source.
+    let (r, open) = Run::gated("mute.opus", stereo(48_000, 1.0), false, &[0.3, 0.7]);
+    r.at_gate(0.3);
+    r.apply(&["mute"], "sync-mute");
+    open.send(()).unwrap();
+    r.at_gate(0.7);
+    r.apply(&["unmute"], "sync-unmute");
+    open.send(()).unwrap();
+    let (_, r) = r.join();
     let p = r.packets();
     let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
     let silent = mic
@@ -961,8 +1103,10 @@ fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
         .iter()
         .filter(|m| m.samples.iter().any(|v| v.abs() > 0.05))
         .count();
-    assert!(silent >= 10, "{silent}");
-    assert!(loud >= 20, "{loud}");
+    // Muted from the first slot not yet out at 0.3 s (0.28 s, with the 20 ms emit latency) to the
+    // last one out at 0.7 s: 20 slots. The first of them carries the decimator's tail of the audio
+    // before it, so 19 are all zeros.
+    assert_eq!((silent, loud), (19, 31));
     // The call side kept going throughout.
     assert!(
         p.iter()
@@ -975,16 +1119,11 @@ fn mute_zeroes_the_mic_in_packets_and_file_and_unmute_brings_it_back() {
 /// `finish`, and it is muted there too.
 #[test]
 fn a_part_that_ends_muted_writes_no_mic_in_the_last_short_slot() {
-    // 1.01 s at 48 kHz: 50 full 20 ms slots and a 480-sample tail.
-    let r = Run::start(
-        "muted-tail.opus",
-        stereo(48_000, 1.01),
-        1.0,
-        false,
-        CallMode::System,
-        Faults::none(),
-    );
-    r.send("mute");
+    // 1.01 s at 48 kHz: 50 full 20 ms slots and a 480-sample tail. Muted before any audio.
+    let (r, open) = Run::gated("muted-tail.opus", stereo(48_000, 1.01), false, &[0.0]);
+    r.at_gate(0.0);
+    r.apply(&["mute"], "sync-mute");
+    open.send(()).unwrap();
     let (outcome, r) = r.join();
     assert_eq!(outcome, Outcome::Exit(0));
     let mut dec = opus::Decoder::new(48_000, opus::Channels::Stereo).unwrap();
@@ -1114,6 +1253,357 @@ fn a_command_line_that_is_not_utf8_is_reported_and_does_not_stop_the_part() {
     );
 }
 
+/// A call side scripted the way the G4 quiet-tap run saw a process tap (docs/gates/M0-results.md):
+/// driven, 16 kHz, 10 ms buffers. The mic always delivers. `call(t)` says what the call side
+/// sends at `t` seconds: nothing, or a 1 kHz tone of some amplitude (0: a buffer of zeros)
+/// stamped `offset_ns` from `t` on the stream's own clock. The OS reports output running from
+/// `running_from`, and says so at once (`Event::Devices`). At `lost_at` the call stream fails
+/// (`Event::Lost`), and the engine rebuilds it. A probe hears audio while output runs, and
+/// answers at once from its own thread.
+///
+/// With `probe_at` the probe answers the way the macOS probe does instead: it listens, and
+/// returns the moment it hears the app play, which here is `probe_at` s. The script waits there
+/// until the engine has asked, then sends that step's call buffer and the verdict right after it,
+/// ahead of the tick that makes the buffer's slot due: the order a real probe's verdict and the
+/// stream's own audio reach the engine in. `matches` is `probe_matches_call`.
+struct Tap {
+    secs: f64,
+    running_from: f64,
+    call: fn(f64) -> Option<(i64, f32)>,
+    lost_at: Option<f64>,
+    probe_at: Option<f64>,
+    matches: bool,
+    probe_wanted: Arc<AtomicBool>,
+    running: Arc<AtomicBool>,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Tap {
+    fn new(secs: f64, running_from: f64, call: fn(f64) -> Option<(i64, f32)>) -> Tap {
+        Tap {
+            secs,
+            running_from,
+            call,
+            lost_at: None,
+            probe_at: None,
+            matches: false,
+            probe_wanted: Arc::new(AtomicBool::new(false)),
+            running: Arc::new(AtomicBool::new(false)),
+            tx: None,
+        }
+    }
+}
+
+impl Frontend for Tap {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Driven
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: Some(MicInfo {
+                id: "tap-test".into(),
+                name: "tap-test".into(),
+                rate: 16_000,
+            }),
+            call: Some(CallInfo {
+                mode: "system".into(),
+                rate: 16_000,
+            }),
+            exclude: vec![],
+            ..Default::default()
+        })
+    }
+    fn start(&mut self, anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        let (secs, from, call, lost_at) = (self.secs, self.running_from, self.call, self.lost_at);
+        let (probe_at, wanted) = (self.probe_at, self.probe_wanted.clone());
+        let running = self.running.clone();
+        std::thread::spawn(move || {
+            let steps = (secs * 100.0).round() as u64;
+            let mut lost = false;
+            let mut answered = false;
+            for i in 0..steps {
+                let t = i as f64 / 100.0;
+                let answer_now = !answered && probe_at.is_some_and(|p| t >= p - 1e-9);
+                if answer_now {
+                    // The engine asks for the probe as it emits a slot; wait for it.
+                    let waited = std::time::Instant::now();
+                    while !wanted.load(Ordering::SeqCst) {
+                        assert!(
+                            waited.elapsed() < Duration::from_secs(10),
+                            "no probe was asked by {t} s"
+                        );
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
+                let at = anchor.awake_ns + i * 10_000_000;
+                let run = t >= from - 1e-9;
+                if run != running.swap(run, Ordering::Relaxed) && tx.send(Event::Devices).is_err() {
+                    return;
+                }
+                if !lost && lost_at.is_some_and(|l| t >= l - 1e-9) {
+                    lost = true;
+                    let _ = tx.send(Event::Lost {
+                        ch: Ch::Call,
+                        detail: "scripted".into(),
+                    });
+                }
+                let mic = Chunk {
+                    ch: Ch::Mic,
+                    awake_ns: at,
+                    rate: 16_000,
+                    samples: vec![0.01; 160],
+                    heard: true,
+                };
+                if tx.send(Event::Chunk(mic)).is_err() {
+                    return;
+                }
+                if let Some((off, amp)) = call(t) {
+                    let samples: Vec<f32> = (0..160u64)
+                        .map(|k| {
+                            let n = (i * 160 + k) as f64;
+                            amp * (2.0 * std::f64::consts::PI * 1_000.0 * n / 16_000.0).sin() as f32
+                        })
+                        .collect();
+                    let c = Chunk {
+                        ch: Ch::Call,
+                        awake_ns: (at as i64 + off) as u64,
+                        rate: 16_000,
+                        heard: amp != 0.0,
+                        samples,
+                    };
+                    if tx.send(Event::Chunk(c)).is_err() {
+                        return;
+                    }
+                }
+                if answer_now {
+                    answered = true;
+                    wanted.store(false, Ordering::SeqCst);
+                    if tx.send(Event::Probe { heard: true }).is_err() {
+                        return;
+                    }
+                }
+                let end = at + 10_000_000;
+                let tick = Now {
+                    awake_ns: end,
+                    cont_ns: anchor.cont_ns + (end - anchor.awake_ns),
+                };
+                if tx.send(Event::Tick(tick)).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {
+        if self.probe_at.is_some() {
+            // The script answers when the probe hears the app (see `Tap`).
+            self.probe_wanted.store(true, Ordering::SeqCst);
+            return;
+        }
+        // The verdict comes from the probe's own thread, as on macOS, and always arrives.
+        let heard = self.running.load(Ordering::Relaxed);
+        if let Some(tx) = self.tx.clone() {
+            std::thread::spawn(move || tx.send(Event::Probe { heard }));
+        }
+    }
+    fn status(&mut self) -> Status {
+        Status {
+            output_running: Some(self.running.load(Ordering::Relaxed)),
+            mic_running: true,
+            default_input: None,
+            default_output: None,
+        }
+    }
+    fn probe_matches_call(&self) -> bool {
+        self.matches
+    }
+    fn close(self: Box<Self>) {}
+}
+
+/// Seconds on the file timeline of the first call sample at or above `level`, from `from` s.
+fn call_onset(packets: &[Packet], from: f64, level: f32) -> f64 {
+    for p in packets
+        .iter()
+        .filter(|p| p.ch == Ch::Call && p.file_seconds >= from)
+    {
+        if let Some(i) = p.samples.iter().position(|v| v.abs() >= level) {
+            return p.file_seconds + i as f64 / 16_000.0;
+        }
+    }
+    panic!("no call audio after {from} s");
+}
+
+/// The call samples of the timeline from `from` for `secs` seconds.
+fn call_span(packets: &[Packet], from: f64, secs: f64) -> Vec<f32> {
+    let mut out = vec![];
+    for p in packets.iter().filter(|p| p.ch == Ch::Call) {
+        for (i, v) in p.samples.iter().enumerate() {
+            let t = p.file_seconds + i as f64 / 16_000.0;
+            if t >= from - 1e-9 && t < from + secs - 1e-9 {
+                out.push(*v);
+            }
+        }
+    }
+    out
+}
+
+/// [G4 quiet-tap run] The call side is silent with nothing playing (no buffers at all) for 12 s,
+/// then the call starts. The OS reports output running 300 ms before the tap's first buffer,
+/// as the status poll can. That is not 12 s of silence while output ran: no probe, no rebuild,
+/// no `dead`. The first word is whole and sits where its timestamps say from its first sample.
+#[test]
+fn the_first_start_after_a_silent_tap_keeps_the_first_word_whole_and_aligned() {
+    let (lines, packets) = run_frontend(
+        "quiet-tap.opus",
+        Box::new(Tap::new(16.0, 11.7, |t| (t >= 12.0).then_some((0, 0.3)))),
+    );
+    let call_lines: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains(r#""ch":"call""#))
+        .filter(|l| l.contains(r#""type":"health""#) || l.contains(r#""type":"device""#))
+        .collect();
+    assert!(call_lines.is_empty(), "{call_lines:#?}");
+    // Within 2 ms: the resampler and decimator add a fixed 1.4 ms to every channel alike.
+    let onset = call_onset(&packets, 11.0, 0.05);
+    assert!(
+        (onset - 12.0).abs() <= 0.002,
+        "the word starts at {onset} s, not 12 s"
+    );
+    // The first 20 ms of the word are there: a 0.3 sine has an RMS of 0.21.
+    let first = call_span(&packets, 12.0, 0.02);
+    let rms = (first.iter().map(|v| v * v).sum::<f32>() / first.len() as f32).sqrt();
+    assert!(rms > 0.18, "first 20 ms RMS {rms}");
+    assert!(
+        packets
+            .iter()
+            .filter(|p| p.ch == Ch::Call && p.file_seconds >= 12.0 && p.file_seconds < 15.5)
+            .all(|p| !p.zero_filled)
+    );
+}
+
+/// A call stream that fails and is rebuilt comes back as a new stream on its own clock (here it
+/// reads 33 ms earlier, 50 ms after the old one stopped). The engine restarts it on the
+/// timeline, so what it carries lands where its timestamps say at once, instead of 17 ms off and
+/// slewed back at 1 ms a second.
+#[test]
+fn a_rebuilt_call_stream_is_aligned_from_its_first_audio() {
+    let mut tap = Tap::new(9.0, 0.0, |t| {
+        if t < 5.0 {
+            Some((0, 0.3))
+        } else if t < 5.05 {
+            None
+        } else {
+            Some((-33_000_000, if t >= 6.0 { 0.3 } else { 0.0 }))
+        }
+    });
+    tap.lost_at = Some(5.0);
+    let (lines, packets) = run_frontend("rebuilt.opus", Box::new(tap));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    // Within 2 ms, as above; kept on the old clock it would be about 15 ms early.
+    let onset = call_onset(&packets, 5.5, 0.05);
+    assert!(
+        (onset - 5.967).abs() <= 0.002,
+        "the audio after the rebuild starts at {onset} s, not 5.967 s"
+    );
+}
+
+/// The call side's `health` and `device` lines.
+fn call_side_lines(lines: &[String]) -> Vec<&String> {
+    lines
+        .iter()
+        .filter(|l| l.contains(r#""ch":"call""#))
+        .filter(|l| l.contains(r#""type":"health""#) || l.contains(r#""type":"device""#))
+        .collect()
+}
+
+/// The `silent_for` of the first `dead` line on the call side.
+fn first_dead(lines: &[String]) -> Option<f64> {
+    lines
+        .iter()
+        .find(|l| l.contains(r#""type":"health","ch":"call","state":"dead""#))
+        .map(|l| num_field(l, "silent_for"))
+}
+
+/// [T0.2] A stream that stops for 1.5 s and comes back. The probe is asked after 1 s and hears
+/// the app the moment it plays again, which is the moment the stream's own buffers come back:
+/// the verdict reaches the engine before the slot carrying those buffers is due. The stream
+/// shows it is alive before the verdict, so the verdict is dropped: no `dead`, no rebuild, no
+/// lost first word.
+#[test]
+fn t0_2_a_probe_that_hears_the_stream_come_back_does_not_rebuild_it() {
+    let mut tap = Tap::new(6.0, 0.0, |t| (!(2.0..3.5).contains(&t)).then_some((0, 0.3)));
+    tap.probe_at = Some(3.5);
+    let (lines, _) = run_frontend("probe-race-stopped.opus", Box::new(tap));
+    assert!(call_side_lines(&lines).is_empty(), "{lines:#?}");
+}
+
+/// [T0.2] The same for a stream of zeros: 11 s of zeros while output runs, then speech. The probe
+/// hears the speech as the stream delivers it, and the verdict is dropped.
+#[test]
+fn t0_2_a_probe_that_hears_zeros_turn_into_speech_does_not_rebuild_the_stream() {
+    let mut tap = Tap::new(14.0, 0.0, |t| {
+        Some((0, if (1.0..12.0).contains(&t) { 0.0 } else { 0.3 }))
+    });
+    tap.probe_at = Some(12.0);
+    let (lines, _) = run_frontend("probe-race-zeros.opus", Box::new(tap));
+    assert!(call_side_lines(&lines).is_empty(), "{lines:#?}");
+}
+
+/// [T0.2] Positive control for the two above: the same probe, the app playing again at 3.5 s,
+/// but the stream stays dead. The verdict stands and the call side is rebuilt.
+#[test]
+fn t0_2_a_probe_that_hears_the_app_while_the_stream_stays_dead_rebuilds_it() {
+    let mut tap = Tap::new(6.0, 0.0, |t| (t < 2.0).then_some((0, 0.3)));
+    tap.probe_at = Some(3.5);
+    let (lines, _) = run_frontend("probe-race-dead.opus", Box::new(tap));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    let silent_for = first_dead(&lines).expect("a dead line");
+    assert!((1.0..2.0).contains(&silent_for), "{silent_for}");
+}
+
+/// [T0.2] With per-app capture and a probe that reads the whole output (Windows and Linux), a
+/// stream that stops delivering waits the full 10 s like zeros: the probe would hear the other
+/// apps. Where the probe listens to the same processes (macOS), the same stream is probed after
+/// 1 s (positive control).
+#[test]
+fn t0_2_per_app_capture_probes_no_buffers_after_1_s_only_when_the_probe_matches_the_call() {
+    for matches in [false, true] {
+        let mut tap = Tap::new(14.0, 0.0, |t| (t < 2.0).then_some((0, 0.3)));
+        tap.matches = matches;
+        // The app plays on: the probe answers just after the slot that should ask for it.
+        tap.probe_at = Some(if matches { 3.1 } else { 12.1 });
+        let (lines, _) = run_frontend_as(
+            &format!("apps-stopped-{matches}.opus"),
+            Box::new(tap),
+            CallMode::Apps(vec!["Meeting".into()]),
+        );
+        let silent_for = first_dead(&lines).expect("a dead line");
+        if matches {
+            assert!((1.0..2.0).contains(&silent_for), "{silent_for}");
+        } else {
+            assert!((10.0..11.0).contains(&silent_for), "{silent_for}");
+        }
+    }
+}
+
 #[cfg(feature = "simulate")]
 mod faults {
     use super::*;
@@ -1151,24 +1641,31 @@ mod faults {
     /// cannot read is still reported.
     #[test]
     fn commands_before_capturing_are_kept_for_the_part() {
-        let r = Run::start(
-            "early.opus",
+        // The lines are on stdin before the helper starts, so it reads them while it opens; the
+        // source is held until the part has taken them.
+        let faults = with(&["capturing-delay=300"]);
+        let fe = FileSource::new(
             stereo(48_000, 1.0),
-            1.0,
+            "test.wav",
+            0.0,
+            false,
             true,
+            true,
+            faults.clone(),
+        );
+        let (open, opened) = mpsc::channel();
+        let fe = Gated::new(Box::new(fe), &[0.0], opened);
+        let r = Run::with(
+            "early.opus",
+            Box::new(fe),
             CallMode::System,
-            with(&["capturing-delay=300"]),
+            faults,
+            &["mute", "dance"],
         );
-        r.send("mute");
-        r.send("dance");
-        std::thread::sleep(Duration::from_millis(600));
-        assert!(
-            !typed(&r.lines(), "capturing").is_empty(),
-            "{:#?}",
-            r.lines()
-        );
-        r.send("stop");
-        let (outcome, r) = r.finish();
+        r.at_gate(0.0);
+        r.apply(&[], "sync");
+        open.send(()).unwrap();
+        let (outcome, r) = r.join();
         assert_eq!(outcome, Outcome::Exit(0));
         let lines = r.lines();
         assert!(
@@ -1179,20 +1676,30 @@ mod faults {
         );
         let p = r.packets();
         let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
-        assert!(mic.len() >= 10, "{}", mic.len());
+        assert_eq!(mic.len(), 50);
         assert!(
             mic.iter().all(|m| m.samples.iter().all(|v| *v == 0.0)),
             "a mic packet went out unmuted"
         );
     }
 
-    /// [T0.2] The call side dies while output keeps running (a tap-only aggregate delivers
-    /// nothing when it dies). The dead-call rule owns that symptom end to end: after 10 s of
-    /// nothing the probe hears audio, the call side is rebuilt and `health {state: dead}` goes
-    /// out, and the next rebuild waits for the backoff. The stall rule never rebuilds the call
-    /// side on its own, so there is no rebuild every 3 s and no `stalled` line.
+    /// The `silent_for` of each `dead` line on the call side.
+    fn dead_silent_for(lines: &[String]) -> Vec<f64> {
+        typed(lines, "health")
+            .into_iter()
+            .filter(|l| l.contains(r#""ch":"call""#) && l.contains(r#""state":"dead""#))
+            .map(|l| num_field(l, "silent_for"))
+            .collect()
+    }
+
+    /// [T0.2] The call side stops delivering while output keeps running (a tap-only aggregate
+    /// delivers nothing when its IO callback stops: the M0 hour run's 10.5 s gap). No buffers at
+    /// all is not a quiet call: after 1 s the probe hears audio, the call side is rebuilt and
+    /// `health {state: dead}` goes out, and the next rebuild waits for the backoff. The stall rule
+    /// never rebuilds the call side on its own, so there is no rebuild every 3 s and no
+    /// `stalled` line.
     #[test]
-    fn t0_2_a_dead_call_side_is_probed_rebuilt_and_reported() {
+    fn t0_2_a_call_side_that_stops_delivering_is_rebuilt_within_a_second() {
         let r = Run::start(
             "dead.opus",
             stereo(16_000, 30.0),
@@ -1205,19 +1712,56 @@ mod faults {
         let lines = r.lines();
         let health = call_health(&lines);
         assert!(health.iter().all(|(s, _)| s != "stalled"), "{health:?}");
-        // Dead at 11 s (10 s after the tap died), again at 21 s (10 s backoff); the 30 s backoff
-        // puts the third past the end of the file.
+        // Dead at 2 s (1 s after the last buffer), again at 12 s (10 s backoff); the 30 s
+        // backoff puts the third past the end of the file.
         assert_eq!(
             health,
             vec![("dead".to_string(), 1), ("dead".to_string(), 2)],
             "{health:?}"
         );
         assert_eq!(call_rebuilds(&lines), 2, "{lines:#?}");
+        let first = dead_silent_for(&lines)[0];
+        assert!((1.0..1.5).contains(&first), "{first}");
         let dead = typed(&lines, "health")
             .into_iter()
             .find(|l| l.contains(r#""state":"dead""#))
             .unwrap();
-        assert!(num_field(dead, "silent_for") >= 10.0);
+        assert!(dead.contains("stopped delivering"), "{dead}");
+    }
+
+    /// [T0.2] Positive control for the fast path: a call side that keeps delivering buffers, all
+    /// zeros, while output runs is a stream carrying silence. It keeps the probe-first 10 s rule,
+    /// so real silences are never "repaired" early.
+    #[test]
+    fn t0_2_a_call_side_of_zeros_waits_the_full_10_s_before_the_probe() {
+        let r = Run::start(
+            "zeros.opus",
+            stereo(16_000, 30.0),
+            20.0,
+            false,
+            CallMode::System,
+            with(&["call-zeros-at=1"]),
+        );
+        let (_, r) = r.join();
+        let lines = r.lines();
+        // Dead at 11 s and 21 s; the call packets kept coming, flagged delivered, all zeros.
+        assert_eq!(
+            call_health(&lines),
+            vec![("dead".to_string(), 1), ("dead".to_string(), 2)],
+            "{lines:#?}"
+        );
+        let first = dead_silent_for(&lines)[0];
+        assert!((10.0..10.5).contains(&first), "{first}");
+        let p = r.packets();
+        let late: Vec<&Packet> = p
+            .iter()
+            .filter(|x| x.ch == Ch::Call && x.file_seconds > 1.1)
+            .collect();
+        assert!(!late.is_empty());
+        assert!(
+            late.iter()
+                .all(|c| !c.zero_filled && c.samples.iter().all(|v| *v == 0.0))
+        );
     }
 
     /// A dead call side that a rebuild brings back: the dead-call rule's rebuild heals it, and
@@ -1231,6 +1775,24 @@ mod faults {
             false,
             CallMode::System,
             with(&["call-dead-at=1", "rebuild-heals"]),
+        );
+        let (_, r) = r.join();
+        let lines = r.lines();
+        let states: Vec<String> = call_health(&lines).into_iter().map(|h| h.0).collect();
+        assert_eq!(states, vec!["dead", "ok"], "{lines:#?}");
+        assert_eq!(call_rebuilds(&lines), 1);
+    }
+
+    /// The same healing for a stream of zeros: `rebuild-heals` brings its audio back.
+    #[test]
+    fn a_call_side_of_zeros_that_a_rebuild_heals_reports_dead_then_ok() {
+        let r = Run::start(
+            "heal-zeros.opus",
+            stereo(16_000, 20.0),
+            20.0,
+            false,
+            CallMode::System,
+            with(&["call-zeros-at=1", "rebuild-heals"]),
         );
         let (_, r) = r.join();
         let lines = r.lines();

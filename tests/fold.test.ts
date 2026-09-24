@@ -853,6 +853,38 @@ describe("the fold: vocabulary at read time (DESIGN 5.4)", () => {
     );
   });
 
+  test("read options set after the fold re-render every line and tell incremental readers", () => {
+    const b = basicCall();
+    b.seg({ id: "l000004", w0: T0 + 4 * S, text: "we run it on kubernetis" });
+    const v = fold(b.events);
+    // No files and no dictionary: nothing applies.
+    expect(v.resolve("l000004")?.text).toBe("we run it on kubernetis");
+    const cursor = v.changesSince(0).cursor;
+    v.setReadOptions({ vocabFiles: files, isDictionaryWord });
+    expect(v.resolve("l000004")?.text).toBe("we run it on Kubernetes");
+    expect(v.options.vocabFiles).toBe(files);
+    const after = v.changesSince(cursor);
+    expect(after.all).toBe(true);
+    // The same options again change nothing, so a reader is not told to re-read everything.
+    const renders = v.stats.renders;
+    v.setReadOptions({ vocabFiles: files, isDictionaryWord });
+    expect(v.changesSince(after.cursor)).toEqual({ cursor: after.cursor, all: false, ids: [] });
+    v.resolve("l000004");
+    expect(v.stats.renders).toBe(renders);
+    // Taking them away again is the fail-safe state: back to the raw text.
+    v.setReadOptions({});
+    expect(v.resolve("l000004")?.text).toBe("we run it on kubernetis");
+  });
+
+  test("the view lists the languages its segments were recognized in", () => {
+    const b = basicCall();
+    expect(fold(b.events).languages()).toEqual([]);
+    b.seg({ id: "l000004", w0: T0 + 4 * S, text: "hola", lang: "es" });
+    b.seg({ id: "l000005", w0: T0 + 5 * S, text: "hello", lang: "en" });
+    b.seg({ id: "l000006", w0: T0 + 6 * S, text: "hola otra vez", lang: "es" });
+    expect(fold(b.events).languages()).toEqual(["en", "es"]);
+  });
+
   test("a proposal is inert until accepted", () => {
     const b = basicCall();
     b.seg({ id: "l000004", w0: T0 + 4 * S, text: "deploy to versal" });

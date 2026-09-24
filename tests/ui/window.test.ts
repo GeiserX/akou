@@ -903,6 +903,44 @@ describe("playback and Fix this word", () => {
   );
 
   test(
+    "[decision] File vocabulary that silently corrects nothing: a workspace file entry corrects the window's line, and a change to the files reaches the open window",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          // A file entry, not a call-scoped one: the page's own fold has no dictionary and never
+          // applies it, so only the app's reading can.
+          const add = await rig.api("POST", "/vocab", {
+            term: "Hetzner Cloud",
+            heard: ["hetzner"],
+            workspace: "work",
+            decode: false,
+          });
+          expect(add.status).toBeLessThan(300);
+          const page = await rig.open(id);
+          const line = page.locator('#lines .row[data-id="l000003"] .text');
+          await until(
+            async () => (await line.textContent()) === "deploy to Hetzner Cloud today",
+            5000,
+            "the file correction",
+          );
+          expect(await line.getAttribute("title")).toBe('heard: "deploy to hetzner today"');
+          const del = await rig.api("DELETE", "/vocab/Hetzner%20Cloud?workspace=work");
+          expect(del.status).toBe(200);
+          await until(
+            async () => (await line.textContent()) === "deploy to hetzner today",
+            5000,
+            "the entry removed",
+          );
+          expect(await line.getAttribute("title")).toBeNull();
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "Fix this word: a call-scoped correction for the line, then everywhere, then the workspace file",
     async () => {
       let id = "";

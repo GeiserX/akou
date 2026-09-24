@@ -97,3 +97,100 @@ describe("[T0.2] [T1.29] dead call side hidden behind a live mic", () => {
     expect(m.probeResult(61, true)).toEqual([]);
   });
 });
+
+/** One observation every `step` seconds; each input a function of time; probes answered at once. */
+function script(
+  m: DeadCallMonitor,
+  from: number,
+  to: number,
+  step: number,
+  s: {
+    running: (t: number) => boolean;
+    heard: (t: number) => boolean;
+    delivered: (t: number) => boolean;
+    probeHears: boolean;
+  },
+): { t: number; a: DeadCallAction }[] {
+  const out: { t: number; a: DeadCallAction }[] = [];
+  for (let i = 0; ; i++) {
+    const t = Math.round((from + i * step) * 1000) / 1000;
+    if (t > to) return out;
+    for (const a of m.tick({
+      t,
+      outputRunning: s.running(t),
+      heard: s.heard(t),
+      delivered: s.delivered(t) || s.heard(t),
+    })) {
+      out.push({ t, a });
+      if (a.kind === "probe") for (const r of m.probeResult(t, s.probeHears)) out.push({ t, a: r });
+    }
+  }
+}
+
+describe("[T0.2] no buffers at all versus buffers of zeros", () => {
+  test("a stream that stops delivering while output runs is rebuilt within a second, with the same backoff and cap", () => {
+    const log = script(new DeadCallMonitor(0), 0, 400, 0.1, {
+      running: () => true,
+      heard: (t) => t < 5,
+      delivered: (t) => t < 5,
+      probeHears: true,
+    });
+    const times = rebuildTimes(log);
+    expect(times[0]).toBeCloseTo(6, 6);
+    expect(times.slice(1).map((t, i) => Math.round(t - (times[i] as number)))).toEqual([
+      10, 30, 60, 60,
+    ]);
+    const dead = log.find((x) => x.a.kind === "health")?.a;
+    expect(dead).toMatchObject({ detail: expect.stringContaining("stopped delivering") });
+  });
+
+  test("positive control: the same silence as buffers of zeros waits the full 10 s", () => {
+    const log = script(new DeadCallMonitor(0), 0, 30, 0.1, {
+      running: () => true,
+      heard: (t) => t < 5,
+      delivered: () => true,
+      probeHears: true,
+    });
+    expect(rebuildTimes(log)[0]).toBeCloseTo(15, 6);
+  });
+
+  test("[T1.29] a quiet app that delivers nothing while others play is probed, never rebuilt", () => {
+    const log = script(new DeadCallMonitor(0), 0, 60, 0.1, {
+      running: () => true,
+      heard: (t) => t < 5,
+      delivered: (t) => t < 5,
+      probeHears: false,
+    });
+    expect(rebuildTimes(log)).toEqual([]);
+    expect(log.filter((x) => x.a.kind === "probe").length).toBeGreaterThanOrEqual(5);
+  });
+
+  test("[T0.16] a tap that starts with the call is not probed for the silence before it", () => {
+    const log = script(new DeadCallMonitor(0), 0, 60, 0.02, {
+      running: (t) => t >= 34.9,
+      heard: (t) => t >= 35.2,
+      delivered: (t) => t >= 35.2,
+      probeHears: true,
+    });
+    expect(log).toEqual([]);
+    // Positive control: 10 s of silence while output runs still probes and rebuilds.
+    const control = script(new DeadCallMonitor(0), 0, 60, 0.02, {
+      running: (t) => t >= 34.9,
+      heard: (t) => t >= 45,
+      delivered: (t) => t >= 45,
+      probeHears: true,
+    });
+    expect(rebuildTimes(control).length).toBeGreaterThan(0);
+  });
+
+  test("audio that arrives while the probe runs drops its verdict", () => {
+    const m = new DeadCallMonitor(0);
+    const tick = (t: number, heard: boolean, delivered: boolean) =>
+      m.tick({ t, outputRunning: true, heard, delivered });
+    expect(tick(5, false, true)).toEqual([]);
+    expect(tick(10, false, true)).toEqual([{ kind: "probe" }]);
+    expect(tick(10.5, true, true)).toEqual([]);
+    expect(m.probeResult(11, true)).toEqual([]);
+    expect(m.rebuilds).toBe(0);
+  });
+});

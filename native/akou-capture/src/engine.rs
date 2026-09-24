@@ -224,6 +224,15 @@ struct Part {
     probe_by_command: bool,
     /// When the dead-call monitor's probe started; a verdict that never comes counts as silence.
     probe_since: Option<f64>,
+    /// Awake-clock end of the slot whose silence asked for the probe. A verdict can arrive before
+    /// the slot carrying the stream's next audio is due (the macOS probe returns the moment it
+    /// hears), so the stream's own buffers are checked against this at the verdict.
+    probe_after_ns: Option<u64>,
+    /// Awake-clock end of the last slot emitted.
+    emitted_ns: u64,
+    /// Awake-clock end of the latest call buffer received, and of the latest audible one.
+    call_buffer_ns: u64,
+    call_audio_ns: u64,
     /// `cont - awake` offsets and the awake time each took effect: a sleep changes it, and a slot
     /// captured before the sleep keeps the old one even if it is emitted after.
     offsets: Vec<(u64, u64)>,
@@ -315,6 +324,8 @@ impl Part {
         self.rebuilds[ch.index()] += 1;
         match fe.rebuild(ch) {
             Ok(names) => {
+                // A new stream on its own clock: its next buffer anchors it on the timeline.
+                self.aligner.restart(ch);
                 if ch == Ch::Mic {
                     self.mic_fails = 0;
                     self.mic_retry = None;
@@ -337,14 +348,16 @@ impl Part {
         }
     }
 
-    fn dead_actions(&mut self, fe: &mut dyn Frontend, actions: Vec<dead_call::Action>) {
+    /// Runs the dead-call rule's actions; `at` is the part time of the observation that asked.
+    fn dead_actions(&mut self, fe: &mut dyn Frontend, actions: Vec<dead_call::Action>, at: f64) {
         let mut health: Vec<(&'static str, f64, u32, String)> = vec![];
         let mut names: Option<Vec<String>> = None;
         for a in actions {
             match a {
                 dead_call::Action::Probe => {
                     self.probe_since = Some(self.t_of(self.now.awake_ns));
-                    fe.probe_call();
+                    self.probe_after_ns = Some(self.emitted_ns);
+                    self.ask_probe(fe, at);
                 }
                 dead_call::Action::Health {
                     state,
@@ -367,6 +380,54 @@ impl Part {
                 silent_for.max(0.0),
                 rebuilds,
                 &detail,
+            ));
+        }
+    }
+
+    /// Starts a probe asked at part time `at`. A verdict the front end has at once is taken now
+    /// and timed at `at`, so a driven run's probe lands on the same slot whatever the load.
+    fn ask_probe(&mut self, fe: &mut dyn Frontend, at: f64) {
+        fe.probe_call();
+        if let Some(heard) = fe.probe_answered() {
+            self.verdict(fe, heard, at);
+        }
+    }
+
+    /// A probe's verdict at part time `t`, for the dead-call rule's probe or a `probe_call`
+    /// command.
+    fn verdict(&mut self, fe: &mut dyn Frontend, heard: bool, t: f64) {
+        let by_dead = self.dead.as_ref().is_some_and(|d| d.probing());
+        if by_dead {
+            self.probe_since = None;
+            // What the stream delivered after the silence that asked for the probe answers it
+            // first: a tap that works is never rebuilt for a verdict that outran its audio.
+            let after = self.probe_after_ns.take().unwrap_or(u64::MAX);
+            let (buffer, audio) = (self.call_buffer_ns > after, self.call_audio_ns > after);
+            let actions = match self.dead.as_mut() {
+                Some(d) => {
+                    if d.stream_alive(buffer, audio) {
+                        vec![]
+                    } else {
+                        d.probe_result(t, heard)
+                    }
+                }
+                None => vec![],
+            };
+            self.dead_actions(fe, actions, t);
+        }
+        if self.probe_by_command {
+            self.probe_by_command = false;
+            let detail = if heard {
+                "probe heard audio"
+            } else {
+                "probe heard nothing"
+            };
+            self.say.line(&protocol::health(
+                Ch::Call,
+                "probe",
+                0.0,
+                self.rebuilds[1],
+                detail,
             ));
         }
     }
@@ -457,6 +518,7 @@ impl Part {
         }
 
         // Monitors, on the slot's own time.
+        self.emitted_ns = self.aligner.awake_of(slot.frame + slot.len() as i64);
         let on = self.on;
         let st = self.t_of(slot.awake_ns);
         let any = (self.on[0] && slot.ch[0].delivered) || (self.on[1] && slot.ch[1].delivered);
@@ -504,6 +566,7 @@ impl Part {
                 t: st,
                 output_running: self.status.output_running.unwrap_or(false),
                 heard: slot.ch[1].heard,
+                delivered: slot.ch[1].delivered,
                 paused: false,
             };
             if let Some(d) = self.dead.as_mut() {
@@ -516,10 +579,11 @@ impl Part {
                         .is_some_and(|s| st - s > dead_call::PROBE_S + 2.0)
                 {
                     self.probe_since = None;
+                    self.probe_after_ns = None;
                     actions.extend(d.probe_result(st, false));
                 }
                 actions.extend(d.tick(tick));
-                self.dead_actions(fe, actions);
+                self.dead_actions(fe, actions, st);
             }
             if let Some(s) = self.suspect.as_mut()
                 && s.tick(tick)
@@ -541,6 +605,7 @@ impl Part {
                 t,
                 output_running: false,
                 heard: false,
+                delivered: false,
                 paused: true,
             });
         }
@@ -684,7 +749,11 @@ pub fn run(
         first: [false; 2],
         level_sum: [0.0; 2],
         level_n: 0,
-        dead: on[1].then(|| DeadCallMonitor::new(0.0)),
+        dead: on[1].then(|| {
+            let mut d = DeadCallMonitor::new(0.0);
+            d.stopped_rule = cfg.call == CallMode::System || fe.probe_matches_call();
+            d
+        }),
         suspect: (on[1] && fe.permission_suspect()).then(PermissionSuspect::new),
         stall: StallMonitor::new(),
         no_buffers: NoBuffers::default(),
@@ -695,6 +764,10 @@ pub fn run(
         stalled: false,
         probe_by_command: false,
         probe_since: None,
+        probe_after_ns: None,
+        emitted_ns: anchor.awake_ns,
+        call_buffer_ns: 0,
+        call_audio_ns: 0,
         offsets: vec![(0, anchor.cont_ns.wrapping_sub(anchor.awake_ns))],
         rebuilds: [0; 2],
         mic_fails: 0,
@@ -732,6 +805,14 @@ pub fn run(
                             let now = if driven { p.now } else { clock::now() };
                             p.fit_latency(now.awake_ns.saturating_sub(c.awake_ns));
                         }
+                        if c.ch == Ch::Call && c.rate > 0 {
+                            let end = c.awake_ns
+                                + c.samples.len() as u64 * 1_000_000_000 / u64::from(c.rate);
+                            p.call_buffer_ns = p.call_buffer_ns.max(end);
+                            if c.heard {
+                                p.call_audio_ns = p.call_audio_ns.max(end);
+                            }
+                        }
                         p.aligner
                             .push(c.ch, c.awake_ns, c.rate, &c.samples, c.heard);
                     }
@@ -739,31 +820,7 @@ pub fn run(
                 Event::Tick(n) => p.set_now(n),
                 Event::Probe { heard } => {
                     let t = p.t_of(p.now.awake_ns);
-                    let by_dead = p.dead.as_ref().is_some_and(|d| d.probing());
-                    if by_dead {
-                        p.probe_since = None;
-                        let actions = p
-                            .dead
-                            .as_mut()
-                            .map(|d| d.probe_result(t, heard))
-                            .unwrap_or_default();
-                        p.dead_actions(fe.as_mut(), actions);
-                    }
-                    if p.probe_by_command {
-                        p.probe_by_command = false;
-                        let detail = if heard {
-                            "probe heard audio"
-                        } else {
-                            "probe heard nothing"
-                        };
-                        p.say.line(&protocol::health(
-                            Ch::Call,
-                            "probe",
-                            0.0,
-                            p.rebuilds[1],
-                            detail,
-                        ));
-                    }
+                    p.verdict(fe.as_mut(), heard, t);
                 }
                 Event::Lost { ch, detail } => {
                     p.say.line(&protocol::device(ch, "lost", &detail));
@@ -829,7 +886,8 @@ pub fn run(
                 }
                 Ok(Input::Cmd(Command::ProbeCall)) if p.on[1] => {
                     p.probe_by_command = true;
-                    fe.probe_call();
+                    let t = p.t_of(p.now.awake_ns);
+                    p.ask_probe(fe.as_mut(), t);
                 }
                 Ok(Input::Cmd(_)) => {}
                 Ok(Input::Unknown(s)) => {

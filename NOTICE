@@ -180,3 +180,18 @@ is in its source package at the repository given.
 Regenerate this list with, in native/akou-diarize, for each shipping target triple:
   cargo tree --locked --target <triple> -e normal,no-proc-macro --prefix none --format "{p}|{l}|{r}"
 A test (native/akou-diarize/tests/notice.rs) fails when a linked crate is missing here.
+
+App (src/main)
+--------------
+
+FrequencyWords (content CC BY-SA 4.0, code MIT), https://github.com/hermitdave/FrequencyWords
+  Copyright (c) 2016 Hermit Dave.
+  The word lists in src/main/vocab/dictionaries (en.txt.gz, es.txt.gz), which tell a real word
+  from a mishearing when vocabulary corrections are applied, are adapted from its 2018 top-50,000
+  frequency lists (built from the OpenSubtitles 2018 corpus, https://opus.nlpl.eu) at commit
+  525f9b560de45753a5ea01069454e72e9aa541c6: the counts are dropped and each word is lowercased,
+  stripped of accents, split into words, deduplicated and sorted (scripts/build-dictionaries.ts).
+  The content is licensed under the Creative Commons Attribution-ShareAlike 4.0 International
+  licence, https://creativecommons.org/licenses/by-sa/4.0/, which Creative Commons declared
+  compatible with GPLv3 (https://creativecommons.org/share-your-work/licensing-considerations/compatible-licenses/);
+  the adapted lists are distributed under GPLv3 with the rest of akou.

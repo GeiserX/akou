@@ -86,6 +86,7 @@ class App {
     const call = () => this.callId;
     this.transcript = new TranscriptPane({
       view,
+      read: (id) => this.follower?.read.get(id),
       hue: (spk) => this.hues.hue(spk),
       play: (id) => void this.play(id),
       speakerMenu: (spk, anchor) => this.speakerMenu(spk, anchor),

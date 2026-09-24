@@ -37,7 +37,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
-import { fold } from "../core/log/fold.ts";
+import { type FileVocabEntry, fold } from "../core/log/fold.ts";
 import { eventsAfter, readLog } from "../core/log/reader.ts";
 import {
   acquireLock,
@@ -118,7 +118,8 @@ import {
 import { renderLine } from "./query/render.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
-import { mergeVocab, readVocabFile, vocabPaths } from "./vocab/files.ts";
+import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
+import { mergeVocab, readVocabFile, toFoldEntries, vocabPaths } from "./vocab/files.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
 import { PageServer, type SettingsPane } from "./window/page-server.ts";
@@ -291,6 +292,16 @@ export class AkouApp implements ApiApp {
   private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
   private readonly queries = new WeakMap<object, CallQuery>();
   private readonly vocabCache = new Map<string, VocabSource>();
+  /** Workspaces whose vocabulary files could not be read; retried when the vocabulary changes. */
+  private readonly vocabFailed = new Set<string>();
+  /** Reads of a workspace's vocabulary files in flight, so two readers share one. */
+  private readonly vocabLoading = new Map<string, Promise<void>>();
+  /** Bumped when the files change, so a read that started before never caches the old files. */
+  private vocabGen = 0;
+  /** The read-time form of each loaded vocabulary, kept so a view can tell nothing changed. */
+  private readonly foldEntries = new WeakMap<VocabSource, readonly FileVocabEntry[]>();
+  /** The word lists that tell a real word from a mishearing (DESIGN 5.4), read on first use. */
+  private readonly dictionaries: Dictionaries;
   private readonly finals = new Map<string, Promise<unknown>>();
   /** Per call, the hand-off work in order: one export or hook round at a time. */
   private readonly handoffs = new Map<string, Promise<unknown>>();
@@ -326,6 +337,7 @@ export class AkouApp implements ApiApp {
       this.resolveClosed = r;
     });
     const s = cfg.settings;
+    this.dictionaries = new Dictionaries(undefined, (msg) => this.log("warn", msg));
     const engine =
       o.engine ??
       new AkouCaptureEngine({
@@ -359,6 +371,7 @@ export class AkouApp implements ApiApp {
         this.levelsByCall.set(id, lv);
       },
       beforeEnd: (id) => this.asr?.flush(id) ?? Promise.resolve(),
+      onOpen: (c) => void this.readyRead(c),
     });
     this.sharing = new LocalLink({
       app: this,
@@ -625,6 +638,11 @@ export class AkouApp implements ApiApp {
 
   private onEvent(id: string, e: LogEvent): void {
     this.asr?.onEvent(id, e);
+    // A language the recognizer just detected may bring its word list.
+    if (e.type === "seg" && e.lang) {
+      const c = this.manager.controller(id);
+      if (c) this.applyRead(c);
+    }
     const deliver = (fn: () => void) => {
       try {
         fn();
@@ -1123,16 +1141,65 @@ export class AkouApp implements ApiApp {
   async saveConfig(file: Partial<Record<SettingKey, SettingValue>>): Promise<LoadedConfig> {
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     writePrivate(this.cfg.paths.configFile, `${JSON.stringify(file, null, 2)}\n`);
+    const before = this.cfg.settings;
     this.cfg = loadConfig(this.o.env ?? process.env, this.o.platform);
+    const after = this.cfg.settings;
+    const same = (k: "vocab.extraFiles" | "vocab.languages") =>
+      before[k].join("\n") === after[k].join("\n");
+    // Other files or other word lists: every open call reads its vocabulary again.
+    if (!same("vocab.extraFiles") || !same("vocab.languages")) this.vocabChanged();
     return this.cfg;
   }
 
   vocabChanged(): void {
     this.vocabCache.clear();
+    this.vocabFailed.clear();
+    // A read already in flight may hold the old files; the next reader starts a fresh one.
+    this.vocabLoading.clear();
+    this.vocabGen++;
+    // Every open call reads the new vocabulary, the live one included (its decode list too).
+    for (const c of this.manager.opened()) void this.readyRead(c);
   }
 
-  private async loadVocab(workspace: string): Promise<void> {
-    if (this.vocabCache.has(workspace)) return;
+  /**
+   * Sets a call's read-time vocabulary (DESIGN 5.4) from what is loaded: the vocabulary files of
+   * its workspace and the word lists of its languages. Without the files loaded yet, the view keeps
+   * the entries it has.
+   */
+  private applyRead(c: CallController): void {
+    const vocab = this.vocabCache.get(c.view.call?.workspace ?? "default");
+    let vocabFiles = c.view.options.vocabFiles;
+    if (vocab) {
+      vocabFiles = this.foldEntries.get(vocab);
+      if (!vocabFiles) {
+        vocabFiles = toFoldEntries(vocab.entries);
+        this.foldEntries.set(vocab, vocabFiles);
+      }
+    }
+    const langs = callLanguages(this.cfg.settings["vocab.languages"], c.view.languages());
+    c.view.setReadOptions({ vocabFiles, isDictionaryWord: this.dictionaries.predicate(langs) });
+  }
+
+  /** Loads the call's vocabulary files if needed, then sets its read-time vocabulary. */
+  private async readyRead(c: CallController): Promise<void> {
+    await this.loadVocab(c.view.call?.workspace ?? "default");
+    this.applyRead(c);
+  }
+
+  private loadVocab(workspace: string): Promise<void> {
+    if (this.vocabCache.has(workspace) || this.vocabFailed.has(workspace)) return Promise.resolve();
+    let loading = this.vocabLoading.get(workspace);
+    if (!loading) {
+      loading = this.readVocab(workspace).finally(() => {
+        if (this.vocabLoading.get(workspace) === loading) this.vocabLoading.delete(workspace);
+      });
+      this.vocabLoading.set(workspace, loading);
+    }
+    return loading;
+  }
+
+  private async readVocab(workspace: string): Promise<void> {
+    const gen = this.vocabGen;
     try {
       const paths = vocabPaths({
         configDir: this.configDir,
@@ -1142,6 +1209,7 @@ export class AkouApp implements ApiApp {
       const layers = await Promise.all(
         paths.map(async (p) => ({ ...p, loaded: await readVocabFile(p.path) })),
       );
+      if (gen !== this.vocabGen) return;
       this.vocabCache.set(workspace, {
         entries: mergeVocab(
           layers.map((l) => ({ scope: l.scope, path: l.path, file: l.loaded.file })),
@@ -1151,6 +1219,8 @@ export class AkouApp implements ApiApp {
           .map((l) => ({ path: l.path, sha256: l.loaded.sha256 })),
       });
     } catch (err) {
+      if (gen !== this.vocabGen) return;
+      this.vocabFailed.add(workspace);
       this.log("warn", `vocabulary for ${workspace}: ${(err as Error).message}`);
     }
   }
@@ -1166,13 +1236,17 @@ export class AkouApp implements ApiApp {
         "the speech models are not downloaded yet: run `akou models pull` (or download them from the akou window), or start with --without-models to record audio only",
       );
     }
-    await this.loadVocab(req.workspace ?? "default");
+    const ws = req.workspace ?? "default";
+    // A start reads the files again when they could not be read before.
+    this.vocabFailed.delete(ws);
+    await this.loadVocab(ws);
     return this.manager.start(req);
   }
 
   async call(id: string): Promise<CallController> {
     const c = await this.manager.open(id);
     if (!c) throw new HttpError(404, "not_found", `no call ${id}`);
+    await this.readyRead(c);
     return c;
   }
 
