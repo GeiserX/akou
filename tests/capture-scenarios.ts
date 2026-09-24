@@ -379,15 +379,23 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
     test(
       "[T2.51] quit stops the live helper within the stop budget and leaves the log ended",
       async () => {
-        const r = rig(h, () => ({}), { stopMs: 500 });
+        // The helper's own stop (finish the file, say stopped, exit) takes 10 to 50 ms on every
+        // runner; the budget leaves room for a runner that stalls for a second or so.
+        const budget = 2_000;
+        const r = rig(h, () => ({}), { stopMs: budget });
         const a = await r.mgr.start({ workspace: "work" });
         if (!a.ok) throw new Error(a.error);
         await until(() => r.packets.length > 10, 3_000, "packets");
         const t0 = performance.now();
         await r.mgr.quit();
         const took = performance.now() - t0;
-        console.log(`[T2.51] ${describeStop(r.stops[0] as StopTimes, took)}`);
-        expect(took).toBeLessThan(500 + KILL_GRACE_MS);
+        const at = r.stops[0] as StopTimes;
+        console.log(`[T2.51] ${describeStop(at, took)}`);
+        // The helper stopped by itself: it said `stopped` and exited 0 within the budget, and was
+        // never killed.
+        expect(at.said).toBeDefined();
+        expect(at.outcome).toMatchObject({ killed: false, exit: { code: 0, killedByUs: false } });
+        expect(took).toBeLessThan(budget);
         expect(processAlive(r.pids[0] as number)).toBe(false);
         const log = await logOf(a.folder);
         expect(log.slice(-2).map((e) => e.type)).toEqual(["part.ended", "call.ended"]);
