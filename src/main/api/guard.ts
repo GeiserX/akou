@@ -120,12 +120,15 @@ function writeTokenFile(path: string, token: string, replace: boolean): boolean 
   const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", 0o600);
   try {
-    if (process.platform === "win32") restrictToUser(tmp);
-    writeSync(fd, `${token}\n`);
-  } finally {
-    closeSync(fd);
-  }
-  try {
+    try {
+      // An ACL that could not be set is not the user's alone: no token is written under it.
+      if (process.platform === "win32" && !restrictToUser(tmp)) {
+        throw new Error(`could not restrict ${tmp} to the current user`);
+      }
+      writeSync(fd, `${token}\n`);
+    } finally {
+      closeSync(fd);
+    }
     chmodSync(tmp, 0o600);
     if (replace) {
       renameSync(tmp, path);
@@ -179,8 +182,8 @@ export function ensureToken(configDir: string): { token: string; path: string; c
 
 /**
  * Who may read the token file: `private` (the owner alone: mode 0600, or on Windows an ACL that
- * allows nobody but the current user), `loose` (anyone else), or `unknown` (Windows, when the ACL
- * could not be read).
+ * allows nobody but the current user, SYSTEM and the administrators), `loose` (anyone else), or
+ * `unknown` (Windows, when the ACL could not be read).
  */
 export function tokenFileAccess(path: string): "private" | "loose" | "unknown" {
   if (process.platform !== "win32") {
@@ -265,8 +268,18 @@ export function sddlOf(bytes: Uint8Array): string | null {
 }
 
 /**
- * Does the DACL in `sddl` allow anyone but `sid`? Deny entries and inherit-only ones (which do not
- * apply to the file itself) allow nobody; a missing or null DACL allows everyone.
+ * Who may hold an entry besides the user: SYSTEM (`SY`), the Administrators group (`BA`) and the
+ * built-in Administrator account (`LA`, RID 500). Each can read every file on the machine through
+ * its privileges anyway, so an entry for them lets nobody new in. A file an administrator creates
+ * can carry them as explicit entries, which `/inheritance:r` does not remove (GitHub's Windows
+ * runners do), and SDDL writes the RID 500 account as `LA` even when it is the current user.
+ */
+const PRIVILEGED = new Set(["SY", "BA", "LA", "S-1-5-18", "S-1-5-32-544"]);
+
+/**
+ * Does the DACL in `sddl` allow anyone but `sid` and the privileged accounts above? Deny entries
+ * and inherit-only ones (which do not apply to the file itself) allow nobody; a missing or null
+ * DACL allows everyone.
  */
 export function othersAllowed(sddl: string, sid: string): boolean {
   // Section markers (`O:`, `G:`, `D:`, `S:`) only ever appear outside the parenthesised entries.
@@ -280,7 +293,8 @@ export function othersAllowed(sddl: string, sid: string): boolean {
     const [type = "", flags = "", , , , who = ""] = (ace as string).split(";");
     if (!["A", "OA", "XA", "ZA"].includes(type)) continue;
     if (flags.includes("IO")) continue;
-    if (who.toUpperCase() !== sid.toUpperCase()) return true;
+    const trustee = who.toUpperCase();
+    if (trustee !== sid.toUpperCase() && !PRIVILEGED.has(trustee)) return true;
   }
   return false;
 }

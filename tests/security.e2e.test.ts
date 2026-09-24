@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { networkInterfaces } from "node:os";
 import { join } from "node:path";
@@ -373,8 +373,15 @@ describe("the token file on Windows (an ACL for the current user only)", () => {
   const ME = "S-1-5-21-1111-2222-3333-1001";
 
   test("[Token file readable by others] an ACL is private only when nobody but the user is allowed", () => {
-    // What a file in a fresh %APPDATA% folder inherits: SYSTEM and Administrators can read it.
-    expect(othersAllowed(`D:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;${ME})`, ME)).toBe(true);
+    // SYSTEM and the administrators can read any file anyway: an entry for them lets nobody in.
+    expect(othersAllowed(`D:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;FA;;;${ME})`, ME)).toBe(false);
+    // What a file on a data drive inherits: every signed-in user can read it.
+    expect(
+      othersAllowed(`D:AI(A;ID;FA;;;SY)(A;ID;FA;;;BA)(A;ID;0x1301bf;;;AU)(A;ID;FA;;;${ME})`, ME),
+    ).toBe(true);
+    expect(othersAllowed(`D:PAI(A;;FA;;;${ME})(A;;FA;;;S-1-5-21-1111-2222-3333-1002)`, ME)).toBe(
+      true,
+    );
     // What akou writes: inheritance removed, the user alone.
     expect(othersAllowed(`D:PAI(A;;FA;;;${ME})`, ME)).toBe(false);
     expect(othersAllowed(`O:BAG:SYD:PAI(A;;FA;;;${ME})S:AI(AU;SA;FA;;;WD)`, ME)).toBe(false);
@@ -397,6 +404,48 @@ describe("the token file on Windows (an ACL for the current user only)", () => {
     expect(sddlOf(Buffer.from(text, "utf16le"))).toBe(`D:PAI(A;;FA;;;${ME})`);
     expect(sddlOf(Buffer.from("token\r\n"))).toBe(null);
   });
+
+  // Captured from `icacls /save` and `whoami /user` on GitHub's windows-latest runner, whose user is
+  // the built-in Administrator (RID 500): SDDL names it `LA`, never by its SID, and the entries an
+  // administrator's new file gets are explicit, so `/inheritance:r` leaves SYSTEM and BA in place.
+  const RUNNER = "S-1-5-21-3699639565-2515463329-295617607-500";
+  const RUNNER_SAVE =
+    "74006f006b0065006e000d000a0044003a00500041004900280041003b003b00460041003b003b003b0053005900" +
+    "2900280041003b003b00460041003b003b003b00420041002900280041003b003b00460041003b003b003b004c00" +
+    "410029000d000a00";
+
+  test("[Token file readable by others] the runner's real ACL: the RID 500 user is `LA`, and private", () => {
+    const sddl = sddlOf(Buffer.from(RUNNER_SAVE, "hex"));
+    expect(sddl).toBe("D:PAI(A;;FA;;;SY)(A;;FA;;;BA)(A;;FA;;;LA)");
+    expect(othersAllowed(sddl as string, RUNNER)).toBe(false);
+    // The folder akou creates there, before any restriction: the same three, inheritable.
+    expect(othersAllowed("D:(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)(A;OICI;FA;;;LA)", RUNNER)).toBe(false);
+    // Positive controls: the same file once Everyone, Users or another account can read it.
+    expect(othersAllowed(`${sddl}(A;;0x1200a9;;;WD)`, RUNNER)).toBe(true);
+    expect(othersAllowed(`${sddl}(A;;0x1200a9;;;BU)`, RUNNER)).toBe(true);
+    expect(
+      othersAllowed(`${sddl}(A;;FA;;;S-1-5-21-3699639565-2515463329-295617607-1001)`, RUNNER),
+    ).toBe(true);
+  });
+
+  test.skipIf(process.platform !== "win32")(
+    "[Token file readable by others] a token whose ACL cannot be set is never written",
+    () => {
+      const t = tempDir();
+      const first = ensureToken(t.dir);
+      const root = process.env.SystemRoot;
+      // No icacls.exe under this folder: the restriction fails.
+      process.env.SystemRoot = t.dir;
+      try {
+        expect(() => rotateToken(t.dir)).toThrow("could not restrict");
+      } finally {
+        process.env.SystemRoot = root;
+      }
+      expect(readFileSync(first.path, "utf8").trim()).toBe(first.token);
+      expect(readdirSync(t.dir)).toEqual(["token"]);
+      t.cleanup();
+    },
+  );
 
   test.skipIf(process.platform !== "win32")(
     "[Token file readable by others] the token is the user's alone; one others can read is replaced",
