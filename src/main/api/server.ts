@@ -1,0 +1,153 @@
+/**
+ * The local HTTP API (docs/DESIGN.md sections 6.2 and 6.3): `http://127.0.0.1:<port>/v1`, bound to
+ * IPv4 loopback only, every request through the guard before any route, no CORS header ever.
+ *
+ * The CLI and the MCP server are thin clients of it; the window never uses it (it talks to the main
+ * process over ElectroBun's typed RPC). The routes live in `routes/*.ts` and see the app only
+ * through `ApiApp`, so they can be driven by the real app or by a test double.
+ */
+
+import type { EventDraft, LogEvent } from "../../core/log/events.ts";
+import type { CallController, StartOk } from "../call/call.ts";
+import type { CallManager, StartRequest } from "../call/manager.ts";
+import type { Outcome } from "../call/state.ts";
+import type { LoadedConfig, SettingKey, SettingValue } from "../config/schema.ts";
+import type { CallQuery } from "../query/context.ts";
+import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
+import { authorOf, errorResponse, HttpError, json, Router } from "./http.ts";
+import { callRoutes } from "./routes/calls.ts";
+import { followRoutes } from "./routes/follow.ts";
+import { notesRoutes } from "./routes/notes.ts";
+import { postCallRoutes } from "./routes/post-call.ts";
+import { queryRoutes } from "./routes/query.ts";
+import { settingsRoutes } from "./routes/settings.ts";
+import { vocabRoutes } from "./routes/vocab.ts";
+
+export const API_PREFIX = "/v1";
+export const DEFAULT_PORT = 8476;
+
+/** Levels of the live call, dBFS, from the last packets. */
+export interface Levels {
+  mic: number;
+  call: number;
+  at: number;
+}
+
+/** What the routes need of the app. `index.ts` implements it. */
+export interface ApiApp {
+  readonly version: string;
+  readonly manager: CallManager;
+  readonly configDir: string;
+  now(): number;
+  status(): Record<string, unknown>;
+  /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */
+  start(req: StartRequest): Promise<Outcome<StartOk>>;
+  /** The controller of a known call id (loaded from disk if needed). Throws 404 otherwise. */
+  call(id: string): Promise<CallController>;
+  /** The query engine over a call's view, kept per call so its index updates incrementally. */
+  query(id: string): Promise<CallQuery>;
+  /**
+   * Appends an event through the call's one writer, reopening a finished call's log for it. A
+   * function draft is built from the call's view at the moment of the append, with nothing in
+   * between, so ids and revisions computed from the view cannot race another write.
+   */
+  write(id: string, draft: EventDraft | ((c: CallController) => EventDraft)): Promise<LogEvent>;
+  /** Raw events after `after`, from the log on disk. */
+  events(id: string, after: number): Promise<LogEvent[]>;
+  /** Every event appended to a call from now on. Returns the unsubscribe function. */
+  subscribe(id: string, fn: (e: LogEvent) => void): () => void;
+  levels(id: string): Levels | null;
+  config(): LoadedConfig;
+  /** Writes `config.json` and applies it; the running parts pick up what they can. */
+  saveConfig(file: Partial<Record<SettingKey, SettingValue>>): Promise<LoadedConfig>;
+  /** Vocabulary files changed on disk: forget what was read. */
+  vocabChanged(): void;
+  /** Runs the final pass for an ended call. */
+  finalize(
+    id: string,
+    opts: { force?: boolean },
+  ): Promise<Outcome<{ call: string; started: boolean }>>;
+  /** The clean shutdown, after the answer is sent. */
+  quit(): void;
+}
+
+export interface ServerOptions {
+  app: ApiApp;
+  /** 0 picks a free port. */
+  port: number;
+  /** The token as of this request (it follows `akou token rotate`). */
+  token: () => string;
+  /**
+   * The guard. Only the security tests pass another one (`openGuard`, their positive control);
+   * no setting, variable or argument reaches this.
+   */
+  guard?: Guard;
+  onError?(err: unknown, req: Request): void;
+}
+
+export interface ApiServer {
+  readonly port: number;
+  readonly url: string;
+  /** The address the listener is bound to, as the server reports it. */
+  readonly hostname: string;
+  routes(): { method: string; path: string }[];
+  stop(): Promise<void>;
+}
+
+export function buildRouter(): Router<ApiApp> {
+  const r = new Router<ApiApp>();
+  settingsRoutes(r);
+  callRoutes(r);
+  followRoutes(r);
+  queryRoutes(r);
+  notesRoutes(r);
+  vocabRoutes(r);
+  postCallRoutes(r);
+  return r;
+}
+
+export function startApiServer(o: ServerOptions): ApiServer {
+  const router = buildRouter();
+  const check = o.guard ?? defaultGuard;
+  const server = Bun.serve({
+    // IPv4 loopback only, by address, so no name is resolved at bind (DESIGN 6.3 rule 1).
+    hostname: "127.0.0.1",
+    port: o.port,
+    maxRequestBodySize: MAX_BODY_BYTES,
+    // Long polls wait up to 30 s; streams send a keep-alive every 15 s.
+    idleTimeout: 60,
+    fetch: async (req, srv) => {
+      const refused = check(req, { port: srv.port as number, token: o.token() });
+      if (refused) return refused;
+      const url = new URL(req.url);
+      if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
+        return json(404, { error: "not_found", message: "the API is under /v1" });
+      }
+      const m = router.match(req.method, url.pathname.slice(API_PREFIX.length));
+      if ("status" in m) {
+        return m.status === 405
+          ? json(405, { error: "method_not_allowed", message: `${req.method} is not allowed here` })
+          : json(404, { error: "not_found", message: `no route ${url.pathname}` });
+      }
+      try {
+        // Calls are known once recovery has indexed the root; a call route waits for it.
+        if (url.pathname.startsWith(`${API_PREFIX}/calls`)) await o.app.manager.init();
+        return await m.handler({ req, url, params: m.params, app: o.app, by: authorOf(req) });
+      } catch (err) {
+        if (err instanceof HttpError) return errorResponse(err);
+        o.onError?.(err, req);
+        return json(500, { error: "internal", message: (err as Error).message ?? String(err) });
+      }
+    },
+  });
+  const port = server.port as number;
+  return {
+    port,
+    url: `http://127.0.0.1:${port}${API_PREFIX}`,
+    hostname: server.hostname ?? "",
+    routes: () => router.list(),
+    stop: async () => {
+      await server.stop(true);
+    },
+  };
+}

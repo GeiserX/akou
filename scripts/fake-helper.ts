@@ -270,7 +270,9 @@ async function runAkou(): Promise<void> {
   }
 }
 
-if (argv[0] !== "run" && dialect === "akou-capture/1") {
+// Switches may come before `run` too, so a configured command prefix (`capture.helper`) can carry
+// them: `bun fake-helper.ts --wav x.wav run --out ...`.
+if (!argv.includes("run") && dialect === "akou-capture/1") {
   process.stderr.write("usage: fake-helper.ts run --out FILE --mic M --call C [switches]\n");
   process.exit(EXIT.usage);
 }

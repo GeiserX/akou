@@ -523,7 +523,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 
 `http://127.0.0.1:<port>/v1`, default port 8476, written to `runtime.json`.
 
-`{id}` on every route accepts a call ULID or `live`. `last` is accepted only on GET routes and on the post-call actions `restart`, `finalize`, `export` and `enhance`; on `stop`, `pause`, `resume`, `mute` and `unmute` it is refused with 400, so a control can never land on a finished call.
+`{id}` on every route accepts a call ULID or `live`. `last` is accepted only on GET routes, on the questions `context` and `ask` (they read the call, they do not change it) and on the post-call actions `restart`, `finalize`, `export` and `enhance`; on `stop`, `pause`, `resume`, `mute` and `unmute` it is refused with 400, so a control can never land on a finished call.
 
 | Method and path | Purpose |
 |---|---|
