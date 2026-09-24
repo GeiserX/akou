@@ -85,8 +85,23 @@ async function run(
       stderr: "ignore",
     });
     const timer = setTimeout(() => p.kill(), timeoutMs);
-    const [out, code] = await Promise.all([new Response(p.stdout).text(), p.exited]);
+    let out = "";
+    const dec = new TextDecoder();
+    const reader = p.stdout.getReader();
+    const read = (async () => {
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) return;
+        out += dec.decode(value, { stream: true });
+      }
+    })().catch(() => {});
+    const code = await p.exited;
     clearTimeout(timer);
+    // A descendant that inherited stdout (a login profile's background job) can hold it open after
+    // the program is gone: what arrived within a short grace is the answer.
+    const grace = new Promise<void>((r) => setTimeout(r, PIPE_GRACE_MS).unref?.());
+    await Promise.race([read, grace]);
+    reader.cancel().catch(() => {});
     return { code, out };
   } catch {
     return null;
@@ -301,6 +316,8 @@ export function codexParser(): StreamParser {
         }
         case "turn.completed":
           r.finished = true;
+          // The turn succeeded; an earlier `error` was a transient one (a reconnect notice).
+          delete r.errorText;
           return [];
         default:
           return [];

@@ -134,6 +134,24 @@ describe("Codex exec --json", () => {
     expect(classifyRun("codex", 0, p.report(), "")).toBeNull();
   });
 
+  test("a Codex reconnect `error` followed by `turn.completed` is a success", () => {
+    const p = codexParser();
+    p.feed({ type: "thread.started", thread_id: "t" });
+    p.feed({ type: "turn.started" });
+    p.feed({
+      type: "error",
+      message: "Reconnecting... 1/5 (stream disconnected before completion)",
+    });
+    p.feed({ type: "item.completed", item: { id: "i0", type: "agent_message", text: "ok" } });
+    p.feed({ type: "turn.completed", usage: {} });
+    expect(p.report().text).toBe("ok");
+    expect(classifyRun("codex", 0, p.report(), "")).toBeNull();
+    // Positive control: an `error` the turn never recovered from is still a failure.
+    const q = codexParser();
+    q.feed({ type: "error", message: "stream disconnected" });
+    expect(classifyRun("codex", 1, q.report(), "")?.kind).toBe("other");
+  });
+
   test("the recorded refresh-token failure (codex 0.151.0) is auth, from the JSON and stderr", () => {
     const p = codexParser();
     replay(p, "codex-auth-error.jsonl");
@@ -248,6 +266,38 @@ describe("invocation and discovery", () => {
         t.cleanup();
       }
     },
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "discovery ends when the login shell leaves a background process holding its stdout",
+    async () => {
+      const t = tempDir();
+      const pidFile = join(t.dir, "sleeper.pid");
+      try {
+        const bin = join(t.dir, "bin");
+        mkdirSync(bin);
+        const fake = join(bin, "claude");
+        writeFileSync(fake, '#!/bin/sh\necho "9.8.7 (Claude Code)"\n');
+        chmodSync(fake, 0o755);
+        // A profile that starts something long-lived with the shell's stdout inherited.
+        writeFileSync(
+          join(t.dir, ".profile"),
+          `PATH="${bin}:$PATH"; export PATH\nsleep 60 & echo $! > "${pidFile}"\n`,
+        );
+        const t0 = performance.now();
+        const d = await discoverHarnesses({ HOME: t.dir, SHELL: "/bin/sh", PATH: "/nonexistent" });
+        expect(performance.now() - t0).toBeLessThan(8000);
+        expect(d.claude).toEqual({ kind: "claude", path: fake, version: "9.8.7" });
+        // Positive control: the background process really was still holding the pipe.
+        expect(() => process.kill(Number(readFileSync(pidFile, "utf8")), 0)).not.toThrow();
+      } finally {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {}
+        t.cleanup();
+      }
+    },
+    20_000,
   );
 });
 
