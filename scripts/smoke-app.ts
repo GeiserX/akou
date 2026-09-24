@@ -7,7 +7,8 @@
  * files in `dist/release/`, unpacks the inner app into a temporary folder, and fails on the first
  * of these that does not hold:
  *
- * - both `Info.plist` files carry both usage strings, the bundle id and the version;
+ * - both `Info.plist` files carry both usage strings, the bundle id, the version (as
+ *   `CFBundleVersion` and `CFBundleShortVersionString`) and the macOS 14.4 floor;
  * - both bundles pass `codesign --verify --deep --strict` (ad-hoc when unsigned);
  * - the inner app runs ElectroBun 2.0.1 with its bundled Bun 1.4.0 and says the version;
  * - every file the app loads by path is beside its main process: the Workers, the browser pages,
@@ -38,7 +39,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { parseStderrLine } from "../src/main/capture/protocol.ts";
-import { PINS, RELEASE_DIR, releaseName, WRAPPER_APP } from "./build-app.ts";
+import { MIN_MACOS, PINS, RELEASE_DIR, releaseName, WRAPPER_APP } from "./build-app.ts";
 import { sourceVersion } from "./stamp-version.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -64,8 +65,12 @@ function checkPlist(app: string, label: string, version: string): void {
     check(!!plistValue(plist, key)?.startsWith("akou records"), `${label} Info.plist ${key}`);
   }
   check(plistValue(plist, "CFBundleIdentifier") === BUNDLE_ID, `${label} bundle id ${BUNDLE_ID}`);
-  const v = plistValue(plist, "CFBundleVersion");
-  check(v === version, `${label} CFBundleVersion is ${version}`, `found ${v}`);
+  for (const key of ["CFBundleVersion", "CFBundleShortVersionString"]) {
+    const v = plistValue(plist, key);
+    check(v === version, `${label} ${key} is ${version}`, `found ${v}`);
+  }
+  const min = plistValue(plist, "LSMinimumSystemVersion");
+  check(min === MIN_MACOS, `${label} LSMinimumSystemVersion is ${MIN_MACOS}`, `found ${min}`);
 }
 
 function checkSignature(app: string, label: string): void {

@@ -40,6 +40,13 @@ export const PINS = {
   appBun: "1.4.0",
 } as const;
 
+/**
+ * The oldest macOS the app runs on (DESIGN section 9, "Targets": the process tap the helper records
+ * the call with, tested from 14.4). `patch-plist.sh` writes it as `LSMinimumSystemVersion`, so an older Mac refuses
+ * the app with its own dialog instead of opening it and failing at the first recording.
+ */
+export const MIN_MACOS = "14.4";
+
 export const ROOT = join(import.meta.dir, "..");
 export const PLATFORM = "macos-arm64";
 export const WRAPPER_APP = join(ROOT, "build", `stable-${PLATFORM}`, "akou.app");
