@@ -344,15 +344,20 @@ export async function runFinalPass(
       for (const ch of CHANNELS) energy.set(`${p}:${ch}`, hasEnergy(audio, p, ch, chunk, floor));
     const any = [...energy.values()].some(Boolean);
 
-    // Earlier final lines are retracted: a re-run replaces the whole final layer.
+    // A re-run replaces the whole final layer: earlier final lines are retracted. The retractions
+    // and the new layer are held until every part is decoded, so a pass that fails or is stopped
+    // leaves the previous layer whole.
     let nextFinal = 1;
+    const layer: EventDraft[] = [];
     for (const l of view.lines("final", { includeEcho: true, includeRetracted: true })) {
       const n = Number(/^f(\d+)$/.exec(l.id)?.[1] ?? 0);
       if (n >= nextFinal) nextFinal = n + 1;
-      if (!l.retracted) emit({ type: "seg", id: l.id, rev: l.rev + 1, text: null, by: "app" });
+      if (!l.retracted)
+        layer.push({ type: "seg", id: l.id, rev: l.rev + 1, text: null, by: "app" });
     }
 
     if (!any) {
+      for (const d of layer) emit(d);
       for (const p of parts) emit({ type: "final.part.done", part: p });
       emit({ type: "final.done", parts, skipped: [] });
       return { ok: true, parts, skipped };
@@ -450,11 +455,12 @@ export async function runFinalPass(
       }
       lines.sort((a, b) => (a.w0 as number) - (b.w0 as number) || (a.ch === "mic" ? -1 : 1));
       for (const l of lines) {
-        emit({ ...l, id: `f${String(nextFinal).padStart(6, "0")}` } as EventDraft);
+        layer.push({ ...l, id: `f${String(nextFinal).padStart(6, "0")}` } as EventDraft);
         nextFinal++;
       }
-      emit({ type: "final.part.done", part: p });
+      layer.push({ type: "final.part.done", part: p });
     }
+    for (const d of layer) emit(d);
 
     // 4 (names). Final clusters to live clusters, jointly.
     step = "map";

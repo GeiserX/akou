@@ -292,6 +292,40 @@ describe("refused spans and re-runs", () => {
     expect(r.segs.map((s) => s.id)).toEqual(["f000002"]);
   });
 
+  test("a re-run that fails keeps the previous final layer whole: no retraction, no partial layer", async () => {
+    const mic = concat(silence(0.3), speak(["hello", "world"]), silence(0.5));
+    const call = silence(mic.length / RATE);
+    const events = callLog([1, 2], (b) => {
+      for (const part of [1, 2]) {
+        b.seg({ id: `f00000${part}`, part, layer: "final", ch: "mic", spk: "you", text: "old" });
+        b.add({ type: "final.part.done", part });
+      }
+    });
+    // Fails after part 1 is decoded: the VAD for part 2 cannot load.
+    class FailOnPart2 extends FakeModels {
+      private vads = 0;
+      override vad() {
+        if (++this.vads > 1) throw new Error("vad load failed");
+        return super.vad();
+      }
+    }
+    const out: EventDraft[] = [];
+    const result = await runFinalPass(
+      { events, audio: new MemoryAudio({ 1: { mic, call }, 2: { mic, call } }), decode: null },
+      new FailOnPart2(),
+      (d) => out.push(d),
+    );
+    expect(result.ok).toBe(false);
+    expect(out.filter((d) => d.type === "seg")).toEqual([]);
+    expect(out.filter((d) => d.type === "final.part.done")).toEqual([]);
+    expect(out.at(-1)).toMatchObject({ type: "final.failed", step: "decode" });
+    // Positive control: the same re-run that succeeds retracts both old lines and writes new ones.
+    const ok = await run(events, { 1: { mic, call }, 2: { mic, call } });
+    const retracted = ok.out.filter((d) => d.type === "seg" && d.text === null);
+    expect(retracted.map((d) => (d as { id: string }).id)).toEqual(["f000001", "f000002"]);
+    expect(ok.segs.map((s) => s.id)).toEqual(["f000003", "f000004"]);
+  });
+
   test("the decode list in force is recorded as vocab.used and biases the final pass", async () => {
     const mic = concat(silence(0.3), speak(["deploy", "to", "hetzner"]), silence(0.5));
     const decode = buildDecodeList({
