@@ -4,7 +4,7 @@ This page records what the M0 gates measured on real hardware, gate by gate: wha
 
 **The machine.** The reference Mac mini: Apple M4, 10 cores, 16 GB, macOS 26.6, with System Integrity Protection (SIP) turned off. It was running other work during every measurement (a virtual machine and compile jobs, load average 5 to 9 on 10 cores). So every speed figure here is a figure under background load.
 
-**The setup.** akou at commit `f6cabfc`, the helper built with `cargo build --release` and, for G5, `--features simulate`, the app run as `bun src/main/index.ts` with `AKOU_HEADLESS=1`, launched by `akou start` exactly as the CLI does it. The Mac mini has no microphone and no other input device, so the mic was the BlackHole 2ch virtual device: a signal played into its output comes back on its input. The call side was the process tap listening to everything the Mac plays, with "Mac mini Speakers" as the default output.
+**The setup.** akou at commit `f6cabfc` (the G5 re-run at the later commit that fixed its runner), the helper built with `cargo build --release` and, for G5, `--features simulate`, the app run as `bun src/main/index.ts` with `AKOU_HEADLESS=1`, launched by `akou start` exactly as the CLI does it. The Mac mini has no microphone and no other input device, so the mic was the BlackHole 2ch virtual device: a signal played into its output comes back on its input. The call side was the process tap listening to everything the Mac plays, with "Mac mini Speakers" as the default output.
 
 There are two rounds. The first ran G3 to G8. The second re-ran G3-lite and G8 so their raw output is on record, added a 14-minute run in which the tap is really quiet (for the first-words and muted-memory checks, which the hour run could not test), and added positive controls for the drift analysis. Where the two rounds differ, this page gives the second round's numbers.
 
@@ -14,7 +14,7 @@ There are two rounds. The first ran G3 to G8. The second re-ran G3-lite and G8 s
 |---|---|---|
 | G3 (lite) | Partial | The app-spawned helper recorded real call audio from the tap on the right channel for 10 minutes. The mic came through as digital silence over SSH, and no single session could record both (see below). |
 | G4 | Fail as run | Hour run: the call channel held the host clock to within 0.16 ms, and one 10.5 s gap at minute 52 when the tap died. Quiet-tap run: the first start after a silent tap cost a 21 ms gap, the first 20 ms of the first word, and a 33 ms misalignment that took about 40 s to settle. Left-right drift between two clocks was not measured, and cannot be on this machine. |
-| G5 | Pass | Hang: killed at the 5 s budget, `part.ended {reason: killed}`, next start 102 ms. Crash: new part in 69 ms, 0.11 s lost. Real device helper SIGKILLed: new part in 96 ms, 1.13 s lost. The API never missed a poll. |
+| G5 | Pass | Re-run with a stricter runner. Hang: killed at the 5 s budget, `part.ended {reason: killed}`, and a new call started in 78 ms while the teardown still hung. Crash: new part in 79 ms, 0.13 s of call audio lost. Real device helper SIGKILLed: new part in 81 ms, 1.25 s lost. The API never missed a poll. |
 | G6 | Pass (M-series half) | Real-time factor 0.081 for both channels, worst case. Committed line 1.02 s after the utterance ends (median), 1.14 s at worst. |
 | G8 | Pass | Cold `akou start` p95 193 ms (20 runs, 20 separate app processes), warm p95 159 ms. |
 
@@ -129,15 +129,27 @@ The analysis recovers an injected offset exactly, and an injected drift to 0.01 
 
 **What ran.** [`scripts/gates/g5-containment.ts`](../../scripts/gates/g5-containment.ts) against the real app, polling `GET /v1/status` every 100 ms the whole time. It ran two ways. First, the `simulate` build of the helper in file mode, switched per start between `--simulate hang-on-stop` and `--simulate crash-at=20` ([g5-simulated.json](g5-simulated.json)). Second, the shipping helper on real devices, killed with SIGKILL 20 s into a call ([g5-kill-real.json](g5-kill-real.json)).
 
+**Re-run.** The first run passed, but a review of its runner found three ways it could have passed without testing the behaviour, so the numbers below come from a second run with a stricter runner, on the same machine and setup:
+
+- **Audio lost was measured on file length, not content.** A part holding encoded silence where the call should be counted as captured. The runner now puts a known tone on the call side (900 Hz at -30 dBFS: the right channel of the file in simulate mode, and played through the speakers with `afplay` so the tap hears it in the real-device run), and counts a 20 ms slice as captured only when the tone is in it. Before any call, a positive control runs the same measure on Opus files it writes: an intact one reads 0 s lost, one with a 1.5 s hole in the call tone reads 1.5 s, and one whose call channel is silent throughout reads 6 s. The run stops if any of the three is off by more than 0.06 s. A copy of the runner that counted every slice was seen to stop there.
+- **The next start came after the hanging teardown had finished.** The first run waited for `akou stop` (5.1 s) before it started the next call, so an app that refuses starts during a teardown would still have passed. The runner now sends the stop, waits until the call has left the live state, starts the next call, and fails unless that start both began and answered while the stop was still pending.
+- **The helper it killed was found by name only.** The first match of `akou-capture … run` could have been another capture, and if none matched the kill was skipped silently. The runner now picks the one helper whose `--out` is inside this call's folder, fails if there is not exactly one or if it survives the SIGKILL, and fails if the call's first part did not end after the kill.
+
+The runner also checks that each fault really fired (`part.ended {reason: killed}` for the hang, `helper-exit` for the crash) and writes a verdict per scenario against the four criteria.
+
 **Numbers.**
 
-| Case | `part.ended` | Next part or next start | Audio lost | API during it |
+| Case | `part.ended` | Next part or next start | Call audio lost | API during it |
 |---|---|---|---|---|
-| Hang on stop | `killed`, 5,079 ms after the stop was asked (the 5 s budget, then the kill) | Next `akou start`: 201 in 102 ms | 0.01 s | 195 polls, 0 failed, slowest 5.7 ms |
-| Crash at 20 s (exit 70) | `helper-exit` | Automatic new part 69 ms later; next `akou start` 201 in 74 ms | 0.11 s | 339 polls, 0 failed, slowest 6.6 ms |
-| Real device helper, SIGKILL | `helper-exit` | Automatic new part 96 ms later; next `akou start` 201 in 105 ms | 1.13 s: the unflushed last Opus page (0.93 s) plus the restart | 344 polls, 0 failed, slowest 4.2 ms |
+| Hang on stop | `killed`, 5,067 ms after the stop was asked (the 5 s budget, then the kill) | Next `akou start`: 201 in 78 ms, sent and answered while the teardown still hung | 0.03 s | 194 polls through the whole hang, 0 failed, slowest 20.1 ms |
+| Crash at 20 s (exit 70) | `helper-exit` | Automatic new part 79 ms later; next `akou start` 201 in 73 ms | 0.13 s | 338 polls, 0 failed, slowest 7.3 ms |
+| Real device helper, SIGKILL | `helper-exit` | Automatic new part 81 ms later; next `akou start` 201 in 102 ms | 1.25 s: the killed part logged 19.94 s but holds 18.98 s of tone, so its unflushed last Opus page (about 0.96 s) is gone, plus the restart | 340 polls, 0 failed, slowest 5.0 ms |
 
-**Verdict: pass.** The app stayed responsive, every part got its `part.ended`, the next start answered 201 well within 3 s, and at most 1.13 s of audio was lost, under the 2 s limit. One detail for M1: a SIGKILLed helper is logged as `helper-exit`, the same reason as a helper that exits on its own. The schema has a `crashed` reason that nothing wrote here.
+In the real-device run the tone was in 948 of 949 slices of the killed part and 748 of 749 of the new part: the one miss in each is the part's first 20 ms.
+
+The first run measured the same picture on file length: 0.01 s, 0.11 s and 1.13 s lost, next start 102 ms after the hang's stop had returned.
+
+**Verdict: pass.** The app stayed responsive, every part got its `part.ended`, a new call started 78 ms into a hanging teardown and the next start always answered 201 well within 3 s, and at most 1.25 s of call audio was lost, under the 2 s limit. The real-device kill is the closest to the limit, and almost all of it is the Opus page the helper had not yet written. One detail for M1: a SIGKILLed helper is logged as `helper-exit`, the same reason as a helper that exits on its own. The schema has a `crashed` reason that nothing wrote here.
 
 ## G6: recognizer speed
 
