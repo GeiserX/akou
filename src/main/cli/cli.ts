@@ -27,6 +27,18 @@ import { setupCommands } from "./commands/setup.ts";
 import { vocab } from "./commands/vocab.ts";
 import type { Command, Ctx, Io } from "./context.ts";
 
+const mcp: Command = {
+  name: "mcp",
+  summary: "Serve MCP on stdin and stdout for an agent (a thin client of the local API)",
+  usage: "akou mcp",
+  run: async (ctx) => {
+    // Loaded only here, so the SDK never slows down the other commands.
+    const { runMcpStdio } = await import("../mcp/server.ts");
+    await runMcpStdio({ client: ctx.client, version: ctx.version });
+    return EXIT.ok;
+  },
+};
+
 export const COMMANDS: readonly Command[] = [
   ...callCommands,
   ...followCommands,
@@ -34,6 +46,7 @@ export const COMMANDS: readonly Command[] = [
   vocab,
   doctorCommand,
   ...setupCommands,
+  mcp,
 ];
 
 function help(): string {

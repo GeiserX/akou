@@ -88,7 +88,7 @@ describe("exit codes", () => {
     expect((await run(["tail", "--last", "soon"])).code).toBe(EXIT.usage);
     const help = await run(["--help"]);
     expect(help.code).toBe(0);
-    for (const name of ["start", "tail", "context", "vocab", "doctor", "quit"]) {
+    for (const name of ["start", "tail", "context", "vocab", "doctor", "mcp", "quit"]) {
       expect(help.out).toContain(`  ${name} `);
     }
   });
