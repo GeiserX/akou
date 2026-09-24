@@ -134,6 +134,7 @@ export default {
       "src/ui/index.html": "views/main/index.html",
       "src/ui/theme.css": "views/main/theme.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
+      "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
       ...sherpaCopies(process.platform, process.arch),
       ...builtCopies(),
       ...helperCopies(),
