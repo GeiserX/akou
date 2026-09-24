@@ -161,6 +161,11 @@ export interface AppOptions {
   openExternal?: (url: string) => Promise<boolean>;
   /** The machine's network interfaces, for choosing a share address. Tests pass their own. */
   interfaces?: () => ReturnType<typeof import("node:os").networkInterfaces>;
+  /**
+   * What the capture helper excludes from the call channel as akou's own audio: the bundle id on
+   * macOS, the app's process on Windows (DESIGN 2.3). The desktop entry sets it; headless has none.
+   */
+  excludeResponsible?: string;
   /** Test-only: the security suite's positive control replaces the guard. */
   guard?: Guard;
   version?: string;
@@ -289,7 +294,11 @@ export class AkouApp implements ApiApp {
       clock: this.clock,
       user: s["user.name"],
       akouVersion: this.version,
-      capture: { mic: s["capture.mic"], call: s["capture.call"] },
+      capture: {
+        mic: s["capture.mic"],
+        call: s["capture.call"],
+        excludeResponsible: o.excludeResponsible,
+      },
       ingest: { queueSeconds: s["capture.queueSeconds"] },
       budgets: {
         warmStartMs: s["capture.warmStartSeconds"] * 1000,

@@ -104,6 +104,17 @@ export const SETTINGS = {
     env: "AKOU_HEADLESS",
     doc: "Run with no window. Selected by the environment, never by command-line arguments.",
   },
+  "app.hotkey": {
+    type: "string",
+    max: 60,
+    default: "",
+    doc: "Global shortcut that starts and stops a call, in accelerator form (`Control+Alt+R`). Empty: `Option+Command+R` on macOS, `Control+Alt+R` elsewhere.",
+  },
+  "app.openAtLogin": {
+    type: "boolean",
+    default: false,
+    doc: "Start akou, with no window, when you log in, so the hotkey and the tray are always there.",
+  },
   "share.bind": {
     type: "string",
     min: 1,
