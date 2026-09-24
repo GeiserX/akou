@@ -18,7 +18,7 @@ import type { CallView } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
 import { EVENTS_FILE, type WriterOptions } from "../../core/log/writer.ts";
 import { type CaptureEngine, type Clock, realClock } from "../capture/engine.ts";
-import type { IngestOptions } from "../capture/ingest.ts";
+import type { IngestOptions, PartIngest } from "../capture/ingest.ts";
 import type { Packet } from "../capture/protocol.ts";
 import { CallController, type CaptureChoice, type StartOk } from "./call.ts";
 import { checkWorkspace, createCallFolder, ulid } from "./folder.ts";
@@ -47,7 +47,9 @@ export interface CallManagerOptions {
   ingest?: Omit<IngestOptions, "onGap" | "onFirstAudio">;
   writer?: WriterOptions;
   onEvent?(callId: string, e: LogEvent): void;
-  onPacket?(callId: string, part: number, p: Packet): void;
+  onPacket?(callId: string, part: number, p: Packet, ingest: PartIngest): void;
+  /** See `ControllerDeps.beforeEnd`: the live recognizer's flush before `call.ended`. */
+  beforeEnd?(callId: string): Promise<void>;
 }
 
 export interface StartRequest {
@@ -126,6 +128,7 @@ export class CallManager {
         this.o.onEvent?.(id, e);
       },
       onPacket: this.o.onPacket,
+      beforeEnd: this.o.beforeEnd,
     };
   }
 

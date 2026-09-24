@@ -70,6 +70,8 @@ export interface CallBudgets {
   staleRestartMs: number;
   /** An interrupted call with no resume for this long is closed as abandoned. */
   abandonAfterMs: number;
+  /** Before `call.ended`, the live recognizer may take this long to write its open segments. */
+  flushMs: number;
 }
 
 export const DEFAULT_BUDGETS: CallBudgets = {
@@ -82,6 +84,7 @@ export const DEFAULT_BUDGETS: CallBudgets = {
   autoRestartWindowMs: 10 * 60_000,
   staleRestartMs: 60 * 60_000,
   abandonAfterMs: 24 * 60 * 60_000,
+  flushMs: 5_000,
 };
 
 /** An answer the API layer maps one to one onto HTTP (DESIGN 6.2). */

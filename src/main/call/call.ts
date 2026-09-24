@@ -113,8 +113,16 @@ export interface ControllerDeps {
   isWarm(): boolean;
   markWarm(): void;
   onEvent?(callId: string, e: LogEvent): void;
-  /** Every packet, after pause and mute are applied to the ingest. For the recognizer and tests. */
-  onPacket?(callId: string, part: number, p: Packet): void;
+  /**
+   * Every packet, after pause and mute are applied to the ingest. The recognizer takes its audio
+   * from `ingest` (aligned, muted, bounded); tests look at `p`.
+   */
+  onPacket?(callId: string, part: number, p: Packet, ingest: PartIngest): void;
+  /**
+   * Runs before `call.ended` is written, within `budgets.flushMs`: the live recognizer writes the
+   * segments still open. A call never waits on it past the budget.
+   */
+  beforeEnd?(callId: string): Promise<void>;
 }
 
 export type StartOk = { call: string; folder: string; part: number; startMs: number };
@@ -133,6 +141,8 @@ export class CallController {
   /** A part whose helper is starting and has not captured yet. */
   launching: PartRun | null = null;
   private writer: LogWriter | null;
+  /** Holders of the writer beyond the call's own capture (the final pass). */
+  private holds = 0;
   private lastPart: number;
   private readonly pending = new Set<Promise<unknown>>();
   private readonly autoRestarts: number[] = [];
@@ -219,8 +229,43 @@ export class CallController {
   }
 
   private closeWriter(): void {
+    if (this.holds > 0) return;
     this.writer?.close();
     this.writer = null;
+  }
+
+  /**
+   * Appends an event from another part of the app (the recognizers). The log has one writer per
+   * call, and this is it. Returns null when the log is closed (the call ended and nothing holds
+   * it); the event is then dropped, and the final pass covers what it would have said.
+   */
+  record(draft: EventDraft): LogEvent | null {
+    if (!this.writer) return null;
+    return this.append(draft);
+  }
+
+  /**
+   * Keeps the log open for writing after the call ends (the final pass), reopening it if needed.
+   * Returns the release function; the writer closes when the last holder releases and the call is
+   * not live.
+   */
+  holdWriter(): () => void {
+    this.writer ??= LogWriter.open(this.dir, this.deps.writer);
+    this.holds++;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.holds--;
+      if (this.holds === 0 && !this.live && this.status !== "stopping") this.closeWriter();
+    };
+  }
+
+  /** Gives the live recognizer its budget to write the open segments before the call ends. */
+  private async flushBeforeEnd(): Promise<void> {
+    const hook = this.deps.beforeEnd;
+    if (!hook) return;
+    await withDeadline(this.deps.clock, hook(this.id), this.deps.budgets.flushMs);
   }
 
   private track<T>(p: Promise<T>): Promise<T> {
@@ -365,7 +410,7 @@ export class CallController {
       appMono: this.deps.clock.mono(),
     };
     run.ingest.push(p);
-    this.deps.onPacket?.(this.id, run.part, p);
+    this.deps.onPacket?.(this.id, run.part, p, run.ingest);
   }
 
   private onMessage(run: PartRun, m: HelperMessage): void {
@@ -611,7 +656,7 @@ export class CallController {
 
   private async reopen(): Promise<Outcome<{ part: number }>> {
     const before = this.status;
-    this.writer = LogWriter.open(this.dir, this.deps.writer);
+    this.writer ??= LogWriter.open(this.dir, this.deps.writer);
     this.setStatus("starting");
     const r = await this.launch();
     if (r.ok) {
@@ -661,6 +706,7 @@ export class CallController {
     if (launching) this.cancelLaunch(launching);
     if (this.current && !this.current.ended) void this.retire(this.current, "stop");
     await this.drain();
+    await this.flushBeforeEnd();
     this.append({ type: "call.ended", reason: "interrupted" });
     this.closeWriter();
   }
@@ -699,6 +745,7 @@ export class CallController {
     const run = this.current;
     if (run && !run.ended) void this.retire(run, "stop");
     await this.drain();
+    await this.flushBeforeEnd();
     this.append({ type: "call.ended", reason: "stop" });
     this.setStatus("ended");
     this.closeWriter();

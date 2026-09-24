@@ -147,6 +147,40 @@ export class ScriptedSession implements CaptureSession {
     this.fileFrames += n;
   }
 
+  /**
+   * Given audio for both channels, sent as 20 ms packets at the current file position, with the
+   * host clock moving by the packet length each time (the clock itself is not advanced).
+   */
+  play(mic: Float32Array, call: Float32Array, packetSeconds = 0.02): void {
+    const n = Math.round(packetSeconds * CAPTURE_RATE);
+    const total = Math.max(mic.length, call.length);
+    const anchorNs = this.clock.mono();
+    for (let at = 0; at < total; at += n) {
+      const fileSeconds = this.fileFrames / CAPTURE_RATE;
+      const captureNs = anchorNs + BigInt(Math.round((at / CAPTURE_RATE) * 1e9));
+      const cut = (x: Float32Array) => {
+        const out = new Float32Array(Math.min(n, total - at));
+        out.set(x.subarray(at, Math.min(x.length, at + out.length)));
+        return out;
+      };
+      this.handlers.packet({
+        ch: "mic",
+        zeroFilled: false,
+        captureNs,
+        fileSeconds,
+        samples: cut(mic),
+      });
+      this.handlers.packet({
+        ch: "call",
+        zeroFilled: false,
+        captureNs,
+        fileSeconds,
+        samples: cut(call),
+      });
+      this.fileFrames += Math.min(n, total - at);
+    }
+  }
+
   health(ch: HealthMsg["ch"], state: string, rebuilds = 0): void {
     this.handlers.message({
       type: "health",

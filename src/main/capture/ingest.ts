@@ -63,6 +63,38 @@ export class PcmQueue {
     this.peak = Math.max(this.peak, this.size);
   }
 
+  /**
+   * Takes at most `max` samples from the front, splitting a chunk if needed. The recognizer pulls
+   * this way, so audio it has not taken stays under this queue's cap instead of piling up in a
+   * Worker's message queue.
+   */
+  take(max: number): PcmChunk[] {
+    const out: PcmChunk[] = [];
+    let left = Math.max(0, Math.floor(max));
+    while (left > 0 && this.head < this.chunks.length) {
+      const first = this.chunks[this.head] as PcmChunk;
+      if (first.samples.length <= left) {
+        out.push(first);
+        this.head++;
+        left -= first.samples.length;
+        this.size -= first.samples.length;
+      } else {
+        out.push({ start: first.start, samples: first.samples.subarray(0, left) });
+        this.chunks[this.head] = {
+          start: first.start + left,
+          samples: first.samples.subarray(left),
+        };
+        this.size -= left;
+        left = 0;
+      }
+    }
+    if (this.head === this.chunks.length) {
+      this.chunks = [];
+      this.head = 0;
+    }
+    return out;
+  }
+
   /** Takes everything queued. */
   drain(): PcmChunk[] {
     const out = this.chunks.slice(this.head);
