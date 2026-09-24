@@ -9,3 +9,4 @@ One line per document, in the order to read them.
 - [REQUIREMENTS.md](REQUIREMENTS.md): every predecessor feature and interface, and whether akou carried, changed or dropped it, plus the new vocabulary requirements.
 - [TRAPS.md](TRAPS.md): failures that already happened once, each rewritten as an invariant with a named test and a milestone.
 - [ROADMAP.md](ROADMAP.md): M0 gates with pass criteria, then M1 to M4 with checkable exit criteria, and what waits for demand.
+- [gates/M0-results.md](gates/M0-results.md): what each M0 gate measured on the reference Mac mini, with the raw outputs beside it.

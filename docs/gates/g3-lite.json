@@ -1,0 +1,189 @@
+{
+  "what": "akou start over SSH with the app not running; the app spawned the helper; the signal source played its mic train into BlackHole and its call train into the speakers for 600 s",
+  "recording": {
+    "start": {
+      "code": 0,
+      "ms": 179,
+      "firstAudioMs": 92,
+      "appWasRunning": false
+    },
+    "stop": {
+      "code": 0,
+      "ms": 111
+    },
+    "partEnded": true,
+    "recordedSeconds": 612
+  },
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 612.0870625
+  },
+  "wallSeconds": 612.112,
+  "fileMinusWallMs": -24.9,
+  "levels": {
+    "left_rms_dbfs": -105.1,
+    "left_peak_dbfs": -50.8,
+    "right_rms_dbfs": -35.7,
+    "right_peak_dbfs": -4.2
+  },
+  "leftGaps": {
+    "scannedSeconds": 601.1,
+    "over5ms": 1,
+    "over20ms": 1,
+    "longestMs": 601097,
+    "worst": [
+      {
+        "at": 3.228,
+        "ms": 601097
+      }
+    ]
+  },
+  "rightGaps": {
+    "scannedSeconds": 601.1,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "chirps": {
+    "mic@right": {
+      "found": 61,
+      "expected": 61,
+      "missing": [],
+      "latencyMs": {
+        "n": 61,
+        "min": 11.644,
+        "median": 11.911,
+        "max": 11.916,
+        "spread": 0.27200000000000024
+      },
+      "slopeMsPerHour": 0.2,
+      "minScore": 0.524,
+      "firstRows": [
+        {
+          "k": 0,
+          "t": 4.82,
+          "ms": 11.909
+        },
+        {
+          "k": 1,
+          "t": 14.82,
+          "ms": 11.911
+        },
+        {
+          "k": 2,
+          "t": 24.82,
+          "ms": 11.911
+        },
+        {
+          "k": 3,
+          "t": 34.82,
+          "ms": 11.91
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 59,
+          "t": 594.82,
+          "ms": 11.913
+        },
+        {
+          "k": 60,
+          "t": 604.82,
+          "ms": 11.909
+        }
+      ]
+    },
+    "call@right": {
+      "found": 59,
+      "expected": 59,
+      "missing": [],
+      "latencyMs": {
+        "n": 59,
+        "min": 8.38,
+        "median": 8.411,
+        "max": 8.424,
+        "spread": 0.04399999999999871
+      },
+      "slopeMsPerHour": 0.26,
+      "minScore": 0.973,
+      "firstRows": [
+        {
+          "k": 1,
+          "t": 19.82,
+          "ms": 8.382
+        },
+        {
+          "k": 2,
+          "t": 29.82,
+          "ms": 8.389
+        },
+        {
+          "k": 3,
+          "t": 39.82,
+          "ms": 8.384
+        },
+        {
+          "k": 4,
+          "t": 49.82,
+          "ms": 8.385
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 58,
+          "t": 589.82,
+          "ms": 8.423
+        },
+        {
+          "k": 59,
+          "t": 599.82,
+          "ms": 8.422
+        }
+      ]
+    },
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    }
+  },
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.0.0",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 31787"],
+      "capture_ns": "184064768631875"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "184064768631875"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "184067648631875"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 612.0870625,
+      "reason": "stop"
+    }
+  ]
+}
