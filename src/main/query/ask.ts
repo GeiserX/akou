@@ -85,11 +85,23 @@ export interface SessionStore {
   get(call: string): AskSession | undefined;
   set(call: string, s: AskSession): void;
   delete(call: string): void;
+  /** Takes the call's session for one question; false while another question holds it. */
+  claim(call: string): boolean;
+  release(call: string): void;
 }
 
 export class MemorySessions implements SessionStore {
   private readonly m = new Map<string, AskSession>();
+  private readonly held = new Set<string>();
   constructor(private readonly onEnd?: (id: string) => void) {}
+  claim(call: string) {
+    if (this.held.has(call)) return false;
+    this.held.add(call);
+    return true;
+  }
+  release(call: string) {
+    this.held.delete(call);
+  }
   get(call: string) {
     return this.m.get(call);
   }
@@ -238,8 +250,11 @@ export async function ask(o: AskOptions): Promise<AskResult> {
   };
   const avail = await o.provider.available();
   if (!avail.ok) return fallback(new ProviderError(avail.kind, avail.reason));
-  const sessions = o.sessions && o.provider.sessions?.() && pack.whole ? o.sessions : undefined;
+  const pool = o.sessions && o.provider.sessions?.() && pack.whole ? o.sessions : undefined;
   const key = o.q.view.call?.id ?? "";
+  // One question at a time in a call's session. A question asked while another runs is sent
+  // whole, without a session, so it neither replaces the session nor resumes it concurrently.
+  const sessions = pool?.claim(key) ? pool : undefined;
   const prev = sessions?.get(key);
   const follow = prev ? followUpPrompt(pack, prev, o.question) : null;
   const req: CompleteRequest = {
@@ -301,5 +316,7 @@ export async function ask(o: AskOptions): Promise<AskResult> {
     const e = err instanceof ProviderError ? err : new ProviderError("other", String(err));
     if (e.kind === "cancelled") throw e;
     return fallback(e);
+  } finally {
+    sessions?.release(key);
   }
 }

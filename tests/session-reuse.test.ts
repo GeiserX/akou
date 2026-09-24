@@ -17,6 +17,7 @@ import type { CompleteRequest, CompleteResult, Provider, Usage } from "../src/ma
 import { REUSE_MIN_CUT, reuseVerdict } from "../src/main/llm/reuse.ts";
 import { ask, followUpPrompt, MemorySessions } from "../src/main/query/ask.ts";
 import { CallQuery } from "../src/main/query/context.ts";
+import { until } from "./capture-helpers.ts";
 import { LogBuilder, T0, tempDir } from "./helpers.ts";
 
 const FIX = join(import.meta.dir, "fixtures", "harness");
@@ -220,6 +221,37 @@ describe("follow-ups in a kept session", () => {
   test("a retrieval pack never continues a session", () => {
     const pack = { mode: "retrieval" } as Parameters<typeof followUpPrompt>[0];
     expect(followUpPrompt(pack, { id: "x", head: "", transcript: [], turns: 1 }, "q")).toBeNull();
+  });
+
+  test("a question asked while another runs on the same call neither replaces nor resumes its session", async () => {
+    const c = liveCall();
+    const p = new SessionProvider();
+    let release = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    const complete = p.complete.bind(p);
+    p.complete = async (req) => {
+      const r = await complete(req);
+      if (p.requests.length === 1) await held;
+      return r;
+    };
+    const ended: string[] = [];
+    const sessions = new MemorySessions((id) => ended.push(id));
+    const first = ask(c.opts(p, "what about the budget?", sessions));
+    await until(async () => p.requests.length === 1, 2000, "first request");
+    await ask(c.opts(p, "who owns the contract?", sessions));
+    release();
+    await first;
+    const [a, b] = p.requests as [CompleteRequest, CompleteRequest];
+    expect(a.session?.resume).toBe(false);
+    // The second went whole and without a session, so the first's session is kept, not ended.
+    expect(b.session).toBeUndefined();
+    expect(sessions.get(c.view.call?.id ?? "")?.id).toBe(a.session?.id as string);
+    expect(ended).toEqual([]);
+    // Positive control: once the first is done, the next question continues its session.
+    await ask(c.opts(p, "and the vendor?", sessions));
+    expect(p.requests[2]?.session).toEqual({ id: a.session?.id as string, resume: true });
   });
 
   test("a session that is replaced or dropped is ended", () => {
