@@ -60,7 +60,10 @@ export type WordPredicate = (word: string) => boolean;
 
 /** The lists of one run, loaded on first use, and one shared predicate per language set. */
 export class Dictionaries {
-  private readonly lists = new Map<string, Set<string> | null>();
+  // Only successful reads are cached: a read that failed is tried again on the next call, so a
+  // passing error (a busy volume, too many open files) does not switch file vocabulary off for
+  // the rest of the run.
+  private readonly lists = new Map<string, Set<string>>();
   private readonly predicates = new Map<string, WordPredicate | undefined>();
 
   constructor(
@@ -70,40 +73,40 @@ export class Dictionaries {
 
   /** Languages whose list has been read. */
   loaded(): string[] {
-    return [...this.lists].filter(([, s]) => s !== null).map(([l]) => l);
+    return [...this.lists.keys()];
   }
 
   private list(lang: string): Set<string> | null {
-    if (this.lists.has(lang)) return this.lists.get(lang) ?? null;
-    let words: Set<string> | null = null;
+    const cached = this.lists.get(lang);
+    if (cached) return cached;
     try {
-      words = readWordList(lang, this.dir);
+      const words = readWordList(lang, this.dir);
+      this.lists.set(lang, words);
+      return words;
     } catch (err) {
       this.onError(`word list ${lang}: ${(err as Error).message}`);
+      return null;
     }
-    this.lists.set(lang, words);
-    return words;
   }
 
   /**
    * Is a folded word in any of these languages' lists? The same function for the same set, so a
-   * view can tell nothing changed. Undefined when no list could be read.
+   * view can tell nothing changed. Undefined when no list could be read. A predicate is kept only
+   * when every list of the set was read; one built around a failed read is rebuilt next time.
    */
   predicate(langs: readonly string[]): WordPredicate | undefined {
     const key = [...new Set(langs)].sort().join(",");
     if (this.predicates.has(key)) return this.predicates.get(key);
-    const sets = key
-      .split(",")
-      .filter((l) => l !== "")
-      .map((l) => this.list(l))
-      .filter((s): s is Set<string> => s !== null);
+    const wanted = key.split(",").filter((l) => l !== "");
+    const read = wanted.map((l) => this.list(l));
+    const sets = read.filter((s): s is Set<string> => s !== null);
     const p: WordPredicate | undefined =
       sets.length === 0
         ? undefined
         : sets.length === 1
           ? (w) => (sets[0] as Set<string>).has(w)
           : (w) => sets.some((s) => s.has(w));
-    this.predicates.set(key, p);
+    if (sets.length === read.length) this.predicates.set(key, p);
     return p;
   }
 }

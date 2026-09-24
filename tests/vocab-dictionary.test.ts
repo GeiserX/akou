@@ -135,6 +135,34 @@ describe("choosing the lists for a call", () => {
     expect(heardFormApplies("kubernetis", "file", new Dictionaries().predicate(["en"]))).toBe(true);
     t.cleanup();
   });
+
+  test("a failed read is not cached: the list is read again once it can be", () => {
+    const t = tempDir();
+    const d = new Dictionaries(t.dir);
+    expect(d.predicate(["en"])).toBeUndefined();
+    expect(d.loaded()).toEqual([]);
+    // The read failed for a passing reason (here the file was not there yet); it is now readable.
+    cpSync(join(DICTIONARIES_DIR, "en.txt.gz"), join(t.dir, "en.txt.gz"));
+    const en = d.predicate(["en"]);
+    expect(en?.("world")).toBe(true);
+    expect(d.loaded()).toEqual(["en"]);
+    t.cleanup();
+  });
+
+  test("a predicate built while one list was unreadable is not kept for that language set", () => {
+    const t = tempDir();
+    cpSync(join(DICTIONARIES_DIR, "en.txt.gz"), join(t.dir, "en.txt.gz"));
+    const d = new Dictionaries(t.dir);
+    const partial = d.predicate(["en", "es"]);
+    expect(partial?.("world")).toBe(true);
+    expect(partial?.("tambien")).toBe(false);
+    cpSync(join(DICTIONARIES_DIR, "es.txt.gz"), join(t.dir, "es.txt.gz"));
+    const whole = d.predicate(["en", "es"]);
+    expect(whole?.("tambien")).toBe(true);
+    // Once every list is read, the predicate is shared again.
+    expect(d.predicate(["es", "en"])).toBe(whole);
+    t.cleanup();
+  });
 });
 
 describe("the lists ship with the app", () => {
