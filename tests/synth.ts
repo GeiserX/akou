@@ -213,7 +213,7 @@ export function synthCall(opts: SynthOptions = {}): SynthCall {
           w0: w,
           w1: w + dur,
           text,
-          model: "parakeet-tdt-0.6b-v3-int8",
+          model: "parakeet-tdt-0.6b-v3-fp32",
         },
         w + dur + 400,
       );

@@ -35,7 +35,7 @@ Signing and notarization will come later. The [release workflow](../.github/work
 
 ## The speech models
 
-akou transcribes on your Mac, with speech models it does not ship. The first time the window opens it shows a card: **Download speech models**. It is one download of about 720 MB into `~/Library/Application Support/akou/models`. Every file is checked against a SHA-256 written into akou's code, and a file that does not match is thrown away. Nothing else is sent anywhere.
+akou transcribes on your Mac, with speech models it does not ship. The first time the window opens it shows a card: **Download speech models**. It is one download of about 2.6 GB into `~/Library/Application Support/akou/models`. Every file is checked against a SHA-256 written into akou's code, and a file that does not match is thrown away. Nothing else is sent anywhere.
 
 From a terminal it is the same download, with progress per file:
 

@@ -12,3 +12,4 @@ One line per document, in the order to read them.
 - [knowledge-handoff.md](knowledge-handoff.md): how a finished call leaves akou (export folder, hooks, signed webhook, pull) and how the vocabulary grows only by what you approve.
 - [ROADMAP.md](ROADMAP.md): M0 gates with pass criteria, then M1 to M4 with checkable exit criteria, and what waits for demand.
 - [gates/M0-results.md](gates/M0-results.md): what each M0 gate measured on the reference Mac mini, with the raw outputs beside it.
+- [research/asr-benchmark.md](research/asr-benchmark.md): why akou ships the fp32 Parakeet build and stays on Parakeet rather than Qwen3-ASR, with the FLEURS numbers and the method.

@@ -16,7 +16,9 @@ import {
   MODELS,
   type ModelSpecEntry,
   modelFile,
+  pruneRetiredModels,
   sha256File,
+  verifyModels,
 } from "../../asr/models.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { str } from "../args.ts";
@@ -180,7 +182,7 @@ const models: Command = {
           {
             env: ctx.io.env as NodeJS.ProcessEnv,
             registry: registry(ctx),
-            // One line per file every 10 %, on stderr, so a 650 MB file never looks stuck.
+            // One line per file every 10 %, on stderr, so a 2.4 GB file never looks stuck.
             onProgress: (x) => {
               if (ctx.json) return;
               const key = `${x.model}/${x.name}`;
@@ -195,8 +197,12 @@ const models: Command = {
             },
           },
         );
-        if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, dir, files: done.length }));
-        else ctx.io.out(`All ${done.length} model files are in ${dir} and verified`);
+        const retired = pruneRetiredModels(dir);
+        if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, dir, files: done.length, retired }));
+        else {
+          ctx.io.out(`All ${done.length} model files are in ${dir} and verified`);
+          for (const id of retired) ctx.io.out(`Removed ${id}, which this version no longer uses`);
+        }
         return EXIT.ok;
       } catch (err) {
         const msg = (err as Error).message;
@@ -208,10 +214,22 @@ const models: Command = {
     if (sub === "import") {
       if (!arg) return usage(ctx, "models import needs a folder");
       const r = await importModels(ctx, arg);
-      if (ctx.json) ctx.io.out(JSON.stringify({ dir, ...r }));
+      // A file already in place counts at its full size, so check every SHA-256 before pruning.
+      const verified =
+        r.missing.length === 0 &&
+        (
+          await verifyModels(
+            dir,
+            registry(ctx).map((m) => m.id),
+            registry(ctx),
+          )
+        ).every((f) => f.state === "ok");
+      const retired = verified ? pruneRetiredModels(dir) : [];
+      if (ctx.json) ctx.io.out(JSON.stringify({ dir, ...r, retired }));
       else {
         ctx.io.out(`Imported ${r.copied.length} file(s) into ${dir}`);
         if (r.missing.length > 0) ctx.io.err(`Still missing: ${r.missing.join(", ")}`);
+        for (const id of retired) ctx.io.out(`Removed ${id}, which this version no longer uses`);
       }
       return r.missing.length > 0 ? EXIT.unavailable : EXIT.ok;
     }

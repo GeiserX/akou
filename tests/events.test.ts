@@ -51,7 +51,7 @@ export const EXAMPLES: Record<string, Record<string, unknown>> = {
     w1: 1790170709292,
     text: "we should move the build to the new box",
     lang: "en",
-    model: "parakeet-tdt-0.6b-v3-int8",
+    model: "parakeet-tdt-0.6b-v3-fp32",
   },
   "speaker.centroid": { spk: "c2", vec: "AAAAAA==" },
   "speaker.merge": { from: "c3", into: "c2" },
@@ -92,7 +92,7 @@ export const EXAMPLES: Record<string, Record<string, unknown>> = {
     entries: ["Kubernetes"],
     files: ["~/.config/akou/vocab.yaml"],
     sha256: ["ab"],
-    model: "parakeet-tdt-0.6b-v3-int8",
+    model: "parakeet-tdt-0.6b-v3-fp32",
   },
   "vocab.add": { id: "v1", rev: 1, term: "Anika", heard: ["annika"], by: "user" },
   "vocab.propose": {
@@ -141,7 +141,7 @@ describe("schema v1 (DESIGN 4.3)", () => {
     const lines = [
       '{"seq":1,"t":1790170572000,"type":"call.created","id":"01J8Z6Q4M2VX0K7B3D4E5F6G7H","schema":1,"workspace":"work","title":"Weekly sync","tz":"America/Chicago","user":"Ana","akou":"0.1.0","template":"standup"}',
       '{"seq":2,"t":1790170572410,"type":"part.started","part":1,"file":"audio/part-001.opus","wallStart":1790170572392,"monoStart":123456789,"mic":"MacBook Pro Microphone","call":{"mode":"system","exclude":["akou Graphics and Media"]},"capture":"akou-capture 0.1.0"}',
-      '{"seq":57,"t":1790170710100,"type":"seg","id":"l000031","rev":1,"layer":"live","part":1,"ch":"call","spk":"c2","a0":131.2,"a1":136.9,"w0":1790170703592,"w1":1790170709292,"text":"we should move the build to the new box","lang":"en","model":"parakeet-tdt-0.6b-v3-int8"}',
+      '{"seq":57,"t":1790170710100,"type":"seg","id":"l000031","rev":1,"layer":"live","part":1,"ch":"call","spk":"c2","a0":131.2,"a1":136.9,"w0":1790170703592,"w1":1790170709292,"text":"we should move the build to the new box","lang":"en","model":"parakeet-tdt-0.6b-v3-fp32"}',
       '{"seq":58,"t":1790170711000,"type":"speaker.name","spk":"c2","name":"Ben","by":"agent:claude-code"}',
       '{"seq":64,"t":1790170741000,"type":"note","id":"n0004","rev":1,"text":"build -> new box?","w":1790170740800,"afterSeq":63,"by":"user"}',
       '{"seq":90,"t":1790170900000,"type":"health","part":1,"ch":"call","state":"dead","silentFor":12,"rebuilds":1,"detail":"output running, probe heard audio, rebuilding"}',

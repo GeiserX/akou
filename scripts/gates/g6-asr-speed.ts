@@ -1,5 +1,5 @@
 /**
- * ROADMAP G6, recognizer speed, offline half: Parakeet TDT v3 int8 through the app's own
+ * ROADMAP G6, recognizer speed, offline half: Parakeet TDT v3 (fp32) through the app's own
  * `SherpaModels`, in the production setting (`modified_beam_search`, a 12-word decode list at the
  * default boost, `asr.threads` threads), over a folder of speech clips.
  *

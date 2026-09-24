@@ -60,6 +60,7 @@ import {
   type ModelSpecEntry,
   type ModelsStatus,
   modelFile,
+  pruneRetiredModels,
 } from "./asr/models.ts";
 import type { CallController, StartOk } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
@@ -533,6 +534,9 @@ export class AkouApp implements ApiApp {
         pull.running = null;
         pull.file = undefined;
         this.log("info", `models: every file is in ${dir} and verified`);
+        for (const id of pruneRetiredModels(dir)) {
+          this.log("info", `models: removed ${id}, which this version no longer uses`);
+        }
         this.recognizerOnNewModels();
         for (const fn of this.statusWatchers) fn();
       },

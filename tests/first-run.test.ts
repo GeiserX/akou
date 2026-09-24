@@ -7,9 +7,9 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { ModelSpecEntry } from "../src/main/asr/models.ts";
+import { type ModelSpecEntry, RETIRED_MODELS } from "../src/main/asr/models.ts";
 import { appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { rigCli } from "./cli-helpers.ts";
@@ -130,6 +130,50 @@ describe("first run without the speech models", () => {
     // Audio only, when asked for it.
     expect((await rig.api("POST", "/calls", { withoutModels: true })).status).toBe(201);
     await rig.api("POST", "/calls/live/stop");
+    await rig.close();
+  });
+
+  test("an install from before the fp32 switch: the card offers the new build, and the old int8 folder goes only once it verifies", async () => {
+    const rig = await appRig({ modelRegistry: registry() });
+    const dir = (await rig.api("GET", "/models")).body.dir as string;
+    const [retired] = RETIRED_MODELS;
+    if (!retired) throw new Error("no retired model");
+    const old = join(dir, retired);
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "encoder.int8.onnx"), "old weights");
+    // A folder akou does not know about is never touched.
+    mkdirSync(join(dir, "mine"), { recursive: true });
+    writeFileSync(join(dir, "mine", "keep.onnx"), "someone else's");
+
+    // The old files do not count: the same first-run flow as a fresh install.
+    expect((await rig.api("GET", "/models")).body.state).toBe("missing");
+    expect((await rig.api("POST", "/calls", {})).body.error).toBe("models_missing");
+    expect(existsSync(old)).toBe(true);
+
+    expect((await rig.api("POST", "/models/pull")).status).toBe(202);
+    await until(
+      async () => (await rig.api("GET", "/models")).body.state === "ready",
+      10_000,
+      "models ready",
+    );
+    await until(async () => !existsSync(old), 10_000, "the retired folder removed");
+    expect(existsSync(join(dir, "mine", "keep.onnx"))).toBe(true);
+    await rig.close();
+  });
+
+  test("positive control: a failed pull keeps the old int8 folder", async () => {
+    const rig = await appRig({ modelRegistry: registry({ badSum: true }) });
+    const dir = (await rig.api("GET", "/models")).body.dir as string;
+    const old = join(dir, RETIRED_MODELS[0] as string);
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "encoder.int8.onnx"), "old weights");
+    expect((await rig.api("POST", "/models/pull")).status).toBe(202);
+    await until(
+      async () => (await rig.api("GET", "/models")).body.state === "failed",
+      10_000,
+      "models failed",
+    );
+    expect(existsSync(join(old, "encoder.int8.onnx"))).toBe(true);
     await rig.close();
   });
 

@@ -13,7 +13,7 @@ Download the DMG from the [releases page](https://github.com/GeiserX/akou/releas
 - On macOS 14, Control-click akou in Applications, choose Open, then Open again.
 - On macOS 15 and later, let macOS refuse it once, then go to System Settings, then Privacy & Security, and click Open Anyway.
 
-On first run the window offers the one download of the speech models (about 720 MB, each file checked against a pinned SHA-256). Recording starts once they are there. The `akou` command line is a separate download. [docs/install.md](docs/install.md) covers checksums, the models, the microphone and system-audio permissions (which macOS may ask for again after an update while builds are unsigned), the command line and uninstalling.
+On first run the window offers the one download of the speech models (about 2.6 GB, each file checked against a pinned SHA-256). Recording starts once they are there. The `akou` command line is a separate download. [docs/install.md](docs/install.md) covers checksums, the models, the microphone and system-audio permissions (which macOS may ask for again after an update while builds are unsigned), the command line and uninstalling.
 
 ## Why it is different
 
