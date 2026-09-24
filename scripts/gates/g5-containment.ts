@@ -383,8 +383,8 @@ try {
     const startedBeforeStopEnded = !stopDone;
     const next1 = await cli("start", "-t", "g5-after-hang");
     const answeredBeforeStopEnded = !stopDone;
-    const t1 = Date.now();
     const stop1 = await stopping;
+    const t1 = Date.now();
     if (!startedBeforeStopEnded || !answeredBeforeStopEnded) {
       throw new Error("the next start did not overlap the hanging teardown; nothing was tested");
     }
