@@ -175,7 +175,11 @@ export const vocab: Command = {
       }
       case "pass": {
         const target = args[0] ? enc(args[0]) : ref(p, "last");
-        const r = await api(ctx, "POST", `/calls/${target}/vocab/pass`);
+        const r = await api(ctx, "POST", `/calls/${target}/vocab/pass`, {
+          // A long call is checked batch by batch, one provider call after another.
+          timeoutMs: 60 * 60_000,
+          signal: ctx.io.signal,
+        });
         return finish(ctx, r, passText);
       }
       default:
