@@ -22,7 +22,12 @@
  *   part's anchors), and writes `seg`, `vocab.used`, `speaker.centroid`, `speaker.merge` and
  *   `asr.lag` (when the backlog crosses 10 s or 30 s, and when it recovers).
  * - Before `call.ended` it asks the Worker to close what is open (`flush`), within the call's
- *   flush budget.
+ *   flush budget. A result that arrives after `call.ended` is dropped, never written after it.
+ * - The Worker transcribes one call at a time. A call started while the last one is still
+ *   stopping takes the Worker over only after the last one's queued audio is sent and its open
+ *   lines are closed, so they land in the last call's log before its `call.ended`.
+ * - A Worker that dies is replaced (at most three times in ten minutes) and takes over the current
+ *   call from its log; a dead Worker never throws into the call's packet or event path.
  *
  * The Worker never writes the log and never prints: engine and pipeline messages come back as
  * `log` messages for the app log (TRAPS T1.45).
@@ -223,8 +228,21 @@ export class LivePipeline {
     return Math.round(n * ASR_RATE);
   }
 
-  /** A new call: clusters restored from its log. */
+  /**
+   * A new call: clusters restored from its log. What the previous call still had open is closed
+   * and emitted first, so a call started while the last one is stopping (TRAPS T0.9) never costs
+   * the last one its final words.
+   */
   beginCall(state: Parameters<LiveSpeakers["restore"]>[0] & { ids?: string[] }): void {
+    let open = false;
+    for (const ch of CHANNELS) {
+      const st = this.chans[ch];
+      if (st.part === null) continue;
+      open = true;
+      this.flushPending(st);
+      this.closeOpen(st);
+    }
+    if (open) for (const c of this.speakers.centroids(this.now(), true)) this.emit(c);
     this.speakers = new LiveSpeakers();
     this.speakers.restore(state);
     for (const id of state.ids ?? []) this.speakers.noteId(id);
@@ -286,7 +304,7 @@ export class LivePipeline {
       this.emit({
         type: "log",
         level: "warn",
-        msg: `live ${ch}: ${((start - st.pos) / ASR_RATE).toFixed(1)} s skipped (recognizer queue was full); the final pass covers it`,
+        msg: `live ${ch}: ${((start - st.pos) / ASR_RATE).toFixed(1)} s skipped (a pause, or the recognizer queue was full); the final pass covers it`,
       });
       this.resetChannel(st, part, start);
     } else if (start < st.pos) {
@@ -424,6 +442,7 @@ export class LivePipeline {
       const st = this.chans[ch];
       this.flushPending(st);
       this.closeOpen(st);
+      this.resetChannel(st, null, 0);
     }
     for (const c of this.speakers.centroids(this.now(), true)) this.emit(c);
   }
@@ -460,7 +479,8 @@ export type ToWorker =
     }
   | { type: "end-part"; part: number }
   | { type: "unmerge"; from: string; into: string }
-  | { type: "flush"; token: number };
+  /** Closes the named call's open segments if it is still the Worker's call; always answers. */
+  | { type: "flush"; token: number; call: string };
 
 export type FromWorker =
   | { type: "ready"; loads: Record<string, number> }
@@ -500,8 +520,9 @@ export class WorkerSide {
       if (!p) throw new Error(`${m.type} before init`);
       switch (m.type) {
         case "call":
-          this.callId = m.id;
+          // The previous call's closing lines are tagged with its own id.
           p.beginCall(m);
+          this.callId = m.id;
           break;
         case "decode-list":
           p.setDecodeList(m.list, m.version);
@@ -516,7 +537,7 @@ export class WorkerSide {
           p.unmerge(m.from, m.into);
           break;
         case "flush":
-          p.flush();
+          if (m.call === this.callId) p.flush();
           this.reply({ type: "loads", loads: { ...(this.models?.loads ?? {}) } });
           this.reply({ type: "flushed", token: m.token });
           break;
@@ -601,20 +622,31 @@ interface HostCall {
     }
   >;
   lagLevel: number;
+  /** A newer call took the recognizer; this one's late audio is left to the final pass. */
+  superseded: boolean;
 }
+
+/** A Worker that dies is replaced at most this many times in `RESPAWN_WINDOW_MS`. */
+const RESPAWN_LIMIT = 3;
+const RESPAWN_WINDOW_MS = 10 * 60_000;
 
 export class LiveAsr {
   readonly ready: Promise<{ loads: Record<string, number> }>;
   /** Model loads the Worker reported, by model. */
   loads: Record<string, number> = {};
-  private readonly transport: Transport;
+  private transport: Transport;
   private readonly clock: Clock;
   private readonly inflight: number;
   private readonly lagLevels: readonly number[];
-  private call: HostCall | null = null;
+  /** Calls the host writes results for, until their `call.ended`. */
+  private readonly calls = new Map<string, HostCall>();
+  /** The call the Worker is transcribing. The Worker transcribes one call at a time. */
+  private current: HostCall | null = null;
   private readonly flushes = new Map<number, () => void>();
   private flushToken = 0;
   private failed: string | null = null;
+  private closed = false;
+  private readonly respawns: number[] = [];
   private resolveReady!: (v: { loads: Record<string, number> }) => void;
   private rejectReady!: (e: Error) => void;
 
@@ -630,22 +662,80 @@ export class LiveAsr {
       this.rejectReady = rej;
     });
     this.ready.catch(() => {});
+    this.transport = this.spawn();
+  }
+
+  /** Starts a Worker (or the in-thread side) and sends it `init`. */
+  private spawn(): Transport {
     const onMessage = (m: FromWorker) => this.onWorker(m);
-    if (o.inThread) {
+    let t: Transport;
+    if (this.o.inThread) {
       const side = new WorkerSide((m) => queueMicrotask(() => onMessage(m)));
-      this.transport = { post: (m) => side.handle(m), close: () => {} };
+      t = { post: (m) => side.handle(m), close: () => {} };
     } else {
       const w = new Worker(new URL("./live-worker.ts", import.meta.url), {
         workerData: LIVE_WORKER_NAME,
       } as WorkerOptions);
-      w.onmessage = (e: MessageEvent<FromWorker>) => onMessage(e.data);
-      w.onerror = (e) => {
-        this.log("error", `live ASR worker: ${e.message}`);
-        this.fail(e.message);
+      let dead = false;
+      const died = (error: string) => {
+        if (dead) return;
+        dead = true;
+        this.crashed(t, error);
       };
-      this.transport = { post: (m, t) => w.postMessage(m, t ?? []), close: () => w.terminate() };
+      w.onmessage = (e: MessageEvent<FromWorker>) => onMessage(e.data);
+      w.onerror = (e) => died(e.message);
+      t = {
+        // A dead Worker must never throw into the call's packet or event path.
+        post: (m, tr) => {
+          if (dead) return;
+          try {
+            w.postMessage(m, tr ?? []);
+          } catch (err) {
+            died((err as Error).message);
+          }
+        },
+        close: () => {
+          dead = true;
+          w.terminate();
+        },
+      };
     }
-    this.transport.post({ type: "init", models: o.models, live: o.live ?? {} });
+    t.post({ type: "init", models: this.o.models, live: this.o.live ?? {} });
+    return t;
+  }
+
+  /**
+   * The Worker died (an uncaught error, a native crash). Audio it held is lost to the live layer
+   * (the final pass covers it); a new Worker takes over the current call from its log, so this
+   * call and every later one keep a live transcript. Too many deaths in a row give up for the run.
+   */
+  private crashed(t: Transport, error: string): void {
+    if (t !== this.transport || this.closed || this.failed) return;
+    for (const done of this.flushes.values()) done();
+    this.flushes.clear();
+    const now = this.clock.now();
+    while (this.respawns.length > 0 && now - (this.respawns[0] as number) > RESPAWN_WINDOW_MS)
+      this.respawns.shift();
+    if (this.respawns.length >= RESPAWN_LIMIT) {
+      this.log("error", `live ASR worker died again (${error}); no live transcript for this run`);
+      this.fail(error);
+      return;
+    }
+    this.respawns.push(now);
+    this.log("error", `live ASR worker died (${error}); starting a new one`);
+    // Replace it after the current call stack: the death may be noticed inside a post.
+    queueMicrotask(() => {
+      if (this.closed || this.failed || t !== this.transport) return;
+      this.transport = this.spawn();
+      const c = this.current;
+      if (!c) return;
+      for (const pr of c.parts.values()) pr.acked = { ...pr.posted };
+      this.beginCall(c);
+      for (const [part, pr] of c.parts) {
+        if (pr.ended) this.transport.post({ type: "end-part", part });
+        else this.pump(c, part, false);
+      }
+    });
   }
 
   private log(level: "info" | "warn" | "error", msg: string): void {
@@ -675,24 +765,32 @@ export class LiveAsr {
 
   /** `CallManagerOptions.onEvent`. */
   onEvent(callId: string, e: LogEvent): void {
-    const c = this.call;
-    if (!c || c.id !== callId) return;
+    const c = this.calls.get(callId);
+    if (!c) return;
+    const isCurrent = c === this.current;
     switch (e.type) {
       case "part.ended": {
         const pr = c.parts.get(e.part);
         if (pr && !pr.ended) {
           pr.ended = true;
-          this.pump(c, e.part, true);
-          this.transport.post({ type: "end-part", part: e.part });
+          if (isCurrent) {
+            this.pump(c, e.part, true);
+            this.transport.post({ type: "end-part", part: e.part });
+          }
         }
         break;
       }
       case "vocab.add":
       case "speaker.name":
-        this.sendDecodeList(c);
+        if (isCurrent) this.sendDecodeList(c);
         break;
       case "speaker.unmerge":
-        this.transport.post({ type: "unmerge", from: e.from, into: e.into });
+        if (isCurrent) this.transport.post({ type: "unmerge", from: e.from, into: e.into });
+        break;
+      case "call.ended":
+        // Its open lines were flushed before this event; anything later is dropped.
+        this.calls.delete(callId);
+        if (isCurrent) this.current = null;
         break;
       default:
         break;
@@ -701,18 +799,21 @@ export class LiveAsr {
 
   /** `CallManagerOptions.beforeEnd`: closes what is open and waits for the segments. */
   flush(callId: string): Promise<void> {
-    const c = this.call;
-    if (!c || c.id !== callId || this.failed) return Promise.resolve();
-    for (const part of c.parts.keys()) this.pump(c, part, true);
+    const c = this.calls.get(callId);
+    if (!c || this.failed) return Promise.resolve();
+    // A call that is no longer the Worker's was closed when the next call began; the answer
+    // still waits for every line the Worker sent before it.
+    if (c === this.current) for (const part of c.parts.keys()) this.pump(c, part, true);
     const token = ++this.flushToken;
     return new Promise<void>((resolve) => {
       this.flushes.set(token, resolve);
-      this.transport.post({ type: "flush", token });
+      this.transport.post({ type: "flush", token, call: callId });
     });
   }
 
   /** Stops the Worker. */
   async close(): Promise<void> {
+    this.closed = true;
     this.transport.close();
     for (const done of this.flushes.values()) done();
     this.flushes.clear();
@@ -721,7 +822,9 @@ export class LiveAsr {
   // --- internals ----------------------------------------------------------------------------
 
   private ensureCall(callId: string): HostCall | null {
-    if (this.call?.id === callId) return this.call;
+    const known = this.calls.get(callId);
+    if (known === this.current && known) return known;
+    if (known?.superseded) return null;
     const access = this.access(callId);
     if (!access) return null;
     const view = access.view;
@@ -731,10 +834,14 @@ export class LiveAsr {
       const n = Number(/^l(\d+)$/.exec(id)?.[1] ?? 0);
       if (n >= nextLive) nextLive = n + 1;
     }
-    const spks = view
-      .lines("live", { includeEcho: true, includeRetracted: true })
-      .map((l) => l.spkRaw);
-    this.call = {
+    // Hand the recognizer over: everything the previous call queued goes to the Worker first,
+    // and the Worker closes that call's open lines before it starts this one.
+    const prev = this.current;
+    if (prev) {
+      for (const part of prev.parts.keys()) this.pump(prev, part, true);
+      prev.superseded = true;
+    }
+    const c: HostCall = {
       id: callId,
       access,
       nextLive,
@@ -742,10 +849,23 @@ export class LiveAsr {
       listKey: "",
       parts: new Map(),
       lagLevel: 0,
+      superseded: false,
     };
-    this.transport.post({ type: "call", id: callId, ...view.speakerState(), ids: spks });
-    this.sendDecodeList(this.call);
-    return this.call;
+    this.calls.set(callId, c);
+    this.current = c;
+    this.beginCall(c);
+    return c;
+  }
+
+  /** Tells the Worker which call it transcribes, with the call's speakers and decode list. */
+  private beginCall(c: HostCall): void {
+    const view = c.access.view;
+    const spks = view
+      .lines("live", { includeEcho: true, includeRetracted: true })
+      .map((l) => l.spkRaw);
+    this.transport.post({ type: "call", id: c.id, ...view.speakerState(), ids: spks });
+    c.listKey = "";
+    this.sendDecodeList(c);
   }
 
   private decodeList(c: HostCall): DecodeList {
@@ -765,7 +885,8 @@ export class LiveAsr {
   /** Moves audio from the ingest queues to the Worker, keeping at most `inflight` per channel. */
   private pump(c: HostCall, part: number, all: boolean): void {
     const pr = c.parts.get(part);
-    if (!pr || this.failed) return;
+    // Audio messages carry no call id: only the Worker's own call may send any.
+    if (!pr || this.failed || c !== this.current) return;
     for (const ch of CHANNELS) {
       const q = pr.ingest.queues[ch];
       for (;;) {
@@ -803,9 +924,8 @@ export class LiveAsr {
   }
 
   private onWorker(m: FromWorker): void {
-    const current = this.call;
-    // Results for a call that is no longer the host's call are dropped.
-    const c = "call" in m && current && m.call !== current.id ? null : current;
+    // Results belong to the call they are tagged with; one whose call has ended is dropped.
+    const c = "call" in m ? this.calls.get(m.call) : undefined;
     switch (m.type) {
       case "ready":
         this.loads = m.loads;
@@ -849,6 +969,12 @@ export class LiveAsr {
       }
       case "seg":
         if (c) this.writeSeg(c, m);
+        else {
+          this.log(
+            "warn",
+            `live segment at ${m.a0.toFixed(1)} s dropped: its call has ended or is unknown`,
+          );
+        }
         return;
       case "provisional": {
         const clock = c?.access.view.part(m.part)?.clock;

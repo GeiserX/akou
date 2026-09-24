@@ -20,7 +20,15 @@ import { MIN_SPAN_SECONDS, padSpan, prepareSpan } from "../src/main/asr/pad.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { buildDecodeList, type DecodeList } from "../src/main/vocab/decode-list.ts";
 import type { MergedEntry } from "../src/main/vocab/files.ts";
-import { flush, ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
+import {
+  flush,
+  logOf,
+  ManualClock,
+  ofType,
+  ScriptedEngine,
+  types,
+  until,
+} from "./capture-helpers.ts";
 import {
   concat,
   created,
@@ -252,6 +260,7 @@ function rig(
     vocab?: VocabSource;
     root?: string;
     inThread?: boolean;
+    flushMs?: number;
   } = {},
 ): Rig {
   const root =
@@ -278,7 +287,7 @@ function rig(
     clock,
     tz: TZ,
     user: "Ana",
-    budgets: { stallMs: 1e12, flushMs: 60_000 },
+    budgets: { stallMs: 1e12, flushMs: o.flushMs ?? 60_000 },
     onEvent: (id, e) => {
       events.push(e);
       asr?.onEvent(id, e);
@@ -437,6 +446,60 @@ describe("the host writes the live layer", () => {
   });
 });
 
+describe("calls that overlap or outlive their end", () => {
+  test("[T0.9] a call started while the last one is still stopping: the last one's open line lands before its call.ended", async () => {
+    const r = rig();
+    const a = await startCall(r);
+    const said = concat(silence(0.3), speak(["deploy", "the", "build"], { voice: 1 }));
+    r.engine.last.play(silence(said.length / RATE), said);
+    // A hung teardown: A's stop takes the whole 5 s budget.
+    r.engine.last.hangOnStop = true;
+    const stopA = r.mgr.stop(a.call);
+    await r.clock.advance(1_000);
+    const b = await startCall(r);
+    const other = concat(silence(0.3), speak(["new", "box"], { voice: 2 }), silence(1));
+    r.engine.last.play(silence(other.length / RATE), other);
+    await r.clock.advance(4_000);
+    expect((await stopA).ok).toBe(true);
+    await r.mgr.stop(b.call);
+    const aLog = await logOf(a.folder);
+    const aTypes = aLog.map((e) => e.type);
+    expect(segs(aLog).map((x) => x.text)).toEqual(["deploy the build"]);
+    expect(aTypes.lastIndexOf("seg")).toBeLessThan(aTypes.indexOf("call.ended"));
+    // B is untouched: its own line, its own speaker numbering.
+    const bLog = await logOf(b.folder);
+    expect(segs(bLog).map((x) => [x.id, x.text])).toEqual([["l000001", "new box"]]);
+  });
+
+  test("a live result that arrives after call.ended is dropped, never written after the end", async () => {
+    const r = rig({ inThread: false, fake: { slowMs: 300 }, flushMs: 100 });
+    const a = await startCall(r);
+    const said = concat(silence(0.3), speak(["deploy", "the", "build"], { voice: 1 }), silence(1));
+    r.engine.last.play(silence(said.length / RATE), said);
+    // The final pass holds the writer from the moment of Stop.
+    const release = r.mgr.live()?.holdWriter();
+    const stop = r.mgr.stop();
+    // The flush budget runs out while the slow recognizer is still working.
+    await r.clock.advance(100);
+    expect((await stop).ok).toBe(true);
+    await until(
+      async () => {
+        await flush();
+        return (
+          r.logs.some((l) => /call has ended/.test(l.msg)) ||
+          r.events.findLast((e) => e.type !== "call.ended")?.type === "seg" ||
+          types(r.events).indexOf("call.ended") < types(r.events).length - 1
+        );
+      },
+      15_000,
+      "the late live result",
+    );
+    release?.();
+    const t = types(await logOf(a.folder));
+    expect(t.at(-1)).toBe("call.ended");
+  }, 30_000);
+});
+
 describe("the decode list and vocab.used", () => {
   const entry = (term: string, confirmed = true): MergedEntry => ({
     term,
@@ -558,6 +621,49 @@ describe("speakers through the log", () => {
 });
 
 describe("the real Worker thread", () => {
+  test("a live-asr Worker that dies is replaced: the call still restarts its helper and later lines are transcribed", async () => {
+    const t = tempDir();
+    cleanups.push(t.cleanup);
+    const r = rig({ inThread: false, fake: { crashOnceFile: join(t.dir, "crashed") } });
+    const a = await startCall(r);
+    const first = concat(silence(0.3), speak(["hello", "world"], { voice: 1 }), silence(1));
+    r.engine.last.play(silence(first.length / RATE), first);
+    await until(
+      async () => {
+        await flush();
+        return r.logs.some((l) => l.msg.includes("simulated worker crash"));
+      },
+      10_000,
+      "the Worker crash in the app log",
+    );
+    // Audio keeps arriving while the Worker is dead or being replaced; nothing throws into the call.
+    r.engine.last.play(silence(1), silence(1));
+    // The helper exits: the automatic restart still happens.
+    r.engine.onStart = (s) => s.capturing();
+    r.engine.last.exit(70);
+    await r.mgr.controller(a.call)?.idle();
+    expect(ofType(r.events, "part.started").map((e) => e.part)).toEqual([1, 2]);
+    expect(r.mgr.live()?.id).toBe(a.call);
+    // The replacement Worker transcribes what comes next.
+    const next = concat(silence(0.3), speak(["new", "box", "today"], { voice: 2 }), silence(1));
+    r.engine.last.play(silence(next.length / RATE), next);
+    await until(
+      async () => {
+        await flush();
+        return segs(r.events).some((x) => x.text === "new box today");
+      },
+      10_000,
+      "a line from the replacement Worker",
+    );
+    await r.mgr.stop();
+    expect(r.logs.some((l) => l.level === "error" && /live ASR worker/.test(l.msg))).toBe(true);
+    // A later call in the same app run is transcribed too.
+    const b = await startCall(r);
+    r.engine.last.play(silence(first.length / RATE), first);
+    await r.mgr.stop(b.call);
+    expect(segs(await logOf(b.folder)).map((x) => x.text)).toEqual(["hello world"]);
+  }, 40_000);
+
   test("[T1.45] Harmless engine noise on stderr goes to the app log, and segments reach the log", async () => {
     const r = rig({ inThread: false, fake: { noisy: true } });
     await startCall(r);

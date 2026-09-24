@@ -12,6 +12,7 @@
  *   stream's hotwords.
  */
 
+import { existsSync, writeFileSync } from "node:fs";
 import type { Channel } from "../../src/core/log/events.ts";
 import type {
   DiarizedSpan,
@@ -167,6 +168,12 @@ export interface FakeOptions {
   noisy?: boolean;
   /** Consecutive loud windows before the fake VAD reports speech (Silero's min speech). */
   vadMinSpeechWindows?: number;
+  /**
+   * The first decode in any thread creates this file and then throws outside any handler, which
+   * kills a Worker the way a native crash would. Later Workers find the file and run normally.
+   * Real Worker only: in-thread it would kill the test runner.
+   */
+  crashOnceFile?: string;
 }
 
 export interface DecodeCall {
@@ -197,6 +204,12 @@ export class FakeRecognizer implements Recognizer {
       throw new Error("Only transducer models support contextual biasing.");
     }
     if (this.o.noisy) console.warn("fake-engine: harmless warning from the model");
+    if (this.o.crashOnceFile && !existsSync(this.o.crashOnceFile)) {
+      writeFileSync(this.o.crashOnceFile, "");
+      setTimeout(() => {
+        throw new Error("simulated worker crash");
+      }, 0);
+    }
     if (this.o.slowMs) {
       const end = performance.now() + this.o.slowMs;
       while (performance.now() < end) {}
