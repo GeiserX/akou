@@ -9,9 +9,12 @@ import {
   cosine,
   decodeVec,
   encodeVec,
+  highestLabel,
   hungarianMax,
   LiveSpeakers,
   mapFinalToLive,
+  StreamSpeakers,
+  smoothTurns,
 } from "../src/main/asr/speakers.ts";
 
 const e = (...v: number[]) => Float32Array.from(v);
@@ -145,5 +148,98 @@ describe("final clusters to live names", () => {
 
   test("cosine of a zero vector is 0, never NaN", () => {
     expect(cosine(e(0, 0), e(1, 0))).toBe(0);
+  });
+});
+
+describe("labels from a stream diarizer", () => {
+  const R = 16000;
+  test("a span is undecided until the model has decided all of it", () => {
+    const s = new StreamSpeakers(R);
+    s.add([{ speaker: 0, start: 0, end: 2 * R }], 1 * R);
+    expect(s.speakerAt(0, 2 * R)).toBeNull();
+    s.add([], 2 * R);
+    expect(s.speakerAt(0, 2 * R)).toBe(0);
+  });
+
+  test("the speaker active longest inside the span wins; overlapping turns each count", () => {
+    const s = new StreamSpeakers(R);
+    s.add(
+      [
+        { speaker: 0, start: 0, end: 1 * R },
+        { speaker: 1, start: 0.5 * R, end: 3 * R },
+        { speaker: 0, start: 2.8 * R, end: 3 * R },
+      ],
+      4 * R,
+    );
+    expect(s.speakerAt(0, 3 * R)).toBe(1);
+    // Positive control: a span inside speaker 0's turn alone is speaker 0.
+    expect(s.speakerAt(0, 0.4 * R)).toBe(0);
+  });
+
+  test("a span nobody speaks in takes a turn within 1 s, else nobody (-1)", () => {
+    const s = new StreamSpeakers(R);
+    s.add([{ speaker: 2, start: 0, end: 1 * R }], 10 * R);
+    expect(s.speakerAt(1.5 * R, 2 * R)).toBe(2);
+    expect(s.speakerAt(5 * R, 6 * R)).toBe(-1);
+  });
+
+  test("pruned turns no longer label; kept ones do", () => {
+    const s = new StreamSpeakers(R);
+    s.add(
+      [
+        { speaker: 0, start: 0, end: 1 * R },
+        { speaker: 1, start: 5 * R, end: 6 * R },
+      ],
+      10 * R,
+    );
+    s.prune(5 * R);
+    expect(s.speakerAt(0, 1 * R)).toBe(-1);
+    expect(s.speakerAt(5 * R, 6 * R)).toBe(1);
+  });
+
+  test("the highest c<N> is what a new stream numbers after", () => {
+    expect(highestLabel(["you", "c?", "c2", "c10", "s4"])).toBe(10);
+    expect(highestLabel([])).toBe(0);
+  });
+
+  test("addTo builds a label's centroid; nearest finds it at 0.60, never an excluded one", () => {
+    const s = new LiveSpeakers();
+    s.addTo("c1", e(1, 0, 0));
+    s.addTo("c2", e(0, 1, 0));
+    expect(s.nearest(e(0.9, 0.1, 0), new Set())).toBe("c1");
+    expect(s.nearest(e(0.9, 0.1, 0), new Set(["c1"]))).toBeNull();
+    // Positive control: below the join threshold nothing matches.
+    expect(s.nearest(e(0.5, 0.5, 0.7), new Set())).toBeNull();
+    const out = s.centroids(0, true);
+    expect(out.map((c) => (c.type === "centroid" ? c.spk : ""))).toEqual(["c1", "c2"]);
+    // A fresh cluster made by addTo keeps assign's numbering after it.
+    expect(s.assign(1, 0, 2, e(0, 0, 1))).toBe("c3");
+  });
+});
+
+describe("turns made fit to cut at", () => {
+  test("one speaker's turns under 0.5 s apart join; turns under 0.2 s drop; overlaps stay", () => {
+    const got = smoothTurns([
+      { speaker: 0, start: 0, end: 1 },
+      { speaker: 0, start: 1.3, end: 2 },
+      { speaker: 1, start: 1.8, end: 3 },
+      { speaker: 1, start: 4, end: 4.1 },
+      { speaker: 0, start: 2.6, end: 3 },
+    ]);
+    expect(got).toEqual([
+      { speaker: 0, start: 0, end: 2 },
+      { speaker: 1, start: 1.8, end: 3 },
+      { speaker: 0, start: 2.6, end: 3 },
+    ]);
+  });
+
+  test("a blip that joins a neighbour survives; the same blip alone does not", () => {
+    expect(
+      smoothTurns([
+        { speaker: 0, start: 0, end: 0.1 },
+        { speaker: 0, start: 0.3, end: 0.4 },
+      ]),
+    ).toEqual([{ speaker: 0, start: 0, end: 0.4 }]);
+    expect(smoothTurns([{ speaker: 0, start: 0, end: 0.1 }])).toEqual([]);
   });
 });

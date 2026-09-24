@@ -66,12 +66,13 @@ What we deliberately did not take:
 
 ## 1. Processes
 
-### 1.1 The three processes
+### 1.1 The processes
 
 | Process | Language and runtime | Lifetime | Owns | Never does |
 |---|---|---|---|---|
 | `akou` app | TypeScript on Bun, inside ElectroBun 2.0.1 with `build.mainProcess: "bun"` (Bun 1.4.0) | From login (optional) or first use until quit. Runs with or without a window. | Call state machine, the event log (single writer), speech recognition workers, speaker clustering, query engine, LLM providers, notes and enhancement, local HTTP API, share server, export, hooks, webhook, tray, hotkey, window | Open an audio device |
 | `akou-capture` helper | Rust, one binary per OS | One per recording part, child of the app | Mic and call streams, alignment, Opus file, health monitors, keep-awake | Write the event log, talk HTTP, load a model |
+| `akou-diarize` helper | Rust, one binary per OS, ONNX Runtime linked statically | One per live transcriber and one per final pass, child of the Worker that uses it | Nemotron 3 Diarization: who speaks when on the call channel (section 3.4) | Touch audio devices, write the event log, talk HTTP |
 | `akou` CLI and `akou mcp` | TypeScript on the bundled Bun (a shim), or a compiled binary in the Linux CLI tarball | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
 
 Inside the app, work is split across threads so the user interface and the API never wait on a model:
@@ -82,7 +83,7 @@ Inside the app, work is split across threads so the user interface and the API n
 | `live-asr` Worker | VAD, live recognition, provisional lines, speaker embeddings | Write the log (it posts results to main) |
 | `finalize` Worker | Accurate pass after a call: diarization and re-transcription | Write the log |
 
-Speech models live in the app process through [sherpa-onnx-node](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0), which bundles one copy of ONNX Runtime. The helper links no machine-learning code.
+Speech recognition and voice activity live in the app process through [sherpa-onnx-node](https://github.com/k2-fsa/sherpa-onnx) (Apache-2.0), which bundles one copy of ONNX Runtime. The capture helper links no machine-learning code. Speaker diarization runs in `akou-diarize` with its own statically linked ONNX Runtime, so no second `onnxruntime` library ever shares a process with sherpa-onnx's (section 3.4).
 
 ### 1.2 Why ElectroBun with the Bun main process
 
@@ -215,7 +216,7 @@ Debug switches that inject faults (kill the tap after N seconds, hang teardown) 
 
 ## 3. Speech recognition, speaker labels and the final pass
 
-All inference runs through sherpa-onnx-node in Bun Workers. One ONNX Runtime, on the CPU in v1.
+Recognition, voice activity and embeddings run through sherpa-onnx-node in Bun Workers; speaker diarization runs in the `akou-diarize` helper those Workers start (section 3.4). Everything runs on the CPU in v1.
 
 | Job | Model | Weights licence | Notes |
 |---|---|---|---|
@@ -223,10 +224,11 @@ All inference runs through sherpa-onnx-node in Bun Workers. One ONNX Runtime, on
 | Live and final recognition, 25 European languages | Parakeet TDT 0.6B v3, int8 | CC-BY-4.0 (attributed in NOTICE) | Transcribes 25 languages with no language switch. sherpa-onnx does not report which language it heard for this model, so `lang` stays empty on Parakeet segments |
 | Live recognition on slow machines | Moonshine tiny/base | MIT | **English only.** Punctuated and cased; measured at 1 % of real time in the spike (one channel, English clip). A slow machine in a non-English workspace keeps Parakeet for live at a higher lag, or picks Whisper tiny/base (multilingual) |
 | Other languages | Whisper large-v3-turbo through sherpa-onnx | MIT | Chosen per workspace. Reports the detected language, which fills `lang` |
-| Speaker embeddings | 3D-Speaker ERes2Net (or NeMo TitaNet-small) | Apache-2.0 | Live clustering and final diarization |
-| Speaker segmentation, final pass | pyannote segmentation-3.0 (ONNX) | MIT | Final pass only |
+| Speaker labels, live and final (the default, `asr.diarizer` `nemotron`) | NVIDIA Nemotron 3 Diarization (Streaming Sortformer v3, about 100M parameters), ONNX | OpenMDW-1.1 | Up to 8 speakers, overlap-aware, one checkpoint at any latency: 2.0 s live, 30.4 s in the final pass. Runs in `akou-diarize` |
+| Speaker embeddings | NeMo TitaNet-small | CC-BY-4.0 | With `embeddings`: live clustering and the final diarization. With Nemotron: only the centroids that carry names across a stream that starts over (3.2) |
+| Speaker segmentation, final pass (`asr.diarizer` `embeddings`) | pyannote segmentation-3.0 (ONNX) | MIT | Final pass only |
 
-akou never bundles models. First run offers one explicit download, each file checked against a pinned SHA-256. `akou models import <dir>` covers air-gapped machines. After that, nothing touches the network unless the user configures sharing, a webhook or a remote provider.
+akou never bundles models. First run offers one explicit download of what the machine's `asr.diarizer` needs (the recognizer, the VAD and TitaNet always, then Nemotron or pyannote), each file checked against a pinned SHA-256. `akou models import <dir>` covers air-gapped machines. After that, nothing touches the network unless the user configures sharing, a webhook or a remote provider.
 
 **Custom vocabulary.** Rare names and product terms are the words every recognizer gets wrong, so akou carries one user-owned word list through three layers: the Parakeet recognizer is told a short per-call list to prefer while decoding (sherpa-onnx hotwords, boost 3, at most 24 entries, live and final), every view replaces known mishearings when it reads the log, and a post-call pass on the provider corrects the rest and proposes new entries. The Parakeet download includes the model's `tokenizer.json`, from which akou builds the `bpe.vocab` that biasing needs; Moonshine and Whisper get no hotwords, because sherpa-onnx exits the process when a non-transducer model receives them.
 
@@ -247,9 +249,11 @@ A lagging recognizer (more than 10 s or 30 s behind) emits `asr.lag` and an ambe
 ### 3.2 Live speaker labels
 
 - The mic channel is always `you`, rendered with the user's configured name.
-- On the call channel, each segment of at least 1 s gets an embedding (about 30 ms on the CPU). It joins the nearest call-scoped cluster if the cosine similarity is at least 0.60, otherwise a new cluster `c<N>`. Shorter segments inherit the previous call speaker if the gap is under 1 s, else `c?`.
-- Centroids are written to the log every five minutes and at each part end (`speaker.centroid`). Clustering therefore continues across parts: `c2` in part 3 is the same voice as `c2` in part 1.
-- When two clusters converge (centroid similarity over 0.8) the app writes `speaker.merge`. Segments are not rewritten; readers apply merges. `speaker.unmerge` reverses one, and the UI offers it on every merged chip, because a wrong merge that carries a name is worse than a duplicate.
+- **Nemotron (the default).** The call channel's audio also goes to Nemotron 3 Diarization at 2.0 s latency, as **one stream for the whole call**: a part end does not reset it, so a speaker keeps its index, and its label, across parts. A call segment is held until the model has decided all of its audio, then labelled with the speaker active longest inside it (overlapping speakers each count their own time); a segment nobody is active in takes a speaker within 1 s, else `c?`. Call lines therefore commit up to about 2 s later than mic lines; the provisional line is unaffected. The model's speaker `k` gets a label `c<N>` the first time one of its segments is written, and keeps it for the stream.
+- **A stream that starts over** (the app restarted mid-call, a new Worker, a helper restarted after a crash) has lost the model's speaker state. Segments of at least 1 s still get a TitaNet embedding that feeds their label's centroid, written to the log as below; the new stream's speaker takes the label of the nearest centroid it has not given out yet, at a cosine similarity of 0.60 or more, else the next free number. A label is never reused for a voice that does not match it, and the final pass joins what the live layer could not.
+- **A diarizer that fails costs labels, never lines.** A helper that dies is restarted at most three times per call; while it is down, and for a line it has not decided 30 s later, the line is written with `c?`. A part end, a Stop or a new call waits at most 3 s for the last decisions.
+- **Embeddings** (`asr.diarizer` `embeddings`). Each call segment of at least 1 s gets an embedding (about 30 ms on the CPU). It joins the nearest call-scoped cluster if the cosine similarity is at least 0.60, otherwise a new cluster `c<N>`. Shorter segments inherit the previous call speaker if the gap is under 1 s, else `c?`. When two clusters converge (centroid similarity over 0.8) the app writes `speaker.merge`. Segments are not rewritten; readers apply merges. `speaker.unmerge` reverses one, and the UI offers it on every merged chip, because a wrong merge that carries a name is worse than a duplicate.
+- Centroids are written to the log every five minutes and at each part end (`speaker.centroid`), with either engine. Labels therefore continue across parts and restarts: `c2` in part 3 is the same voice as `c2` in part 1.
 - Names are `speaker.name` events from the window, the CLI, the ask box (a plain "Speaker 2 is Ben" is recognised by a regex and written with no model) or MCP.
 
 ### 3.3 The accurate final pass
@@ -258,12 +262,42 @@ Runs after every ending: at once after Stop, after 60 s without a restart when a
 
 1. **Per part, per channel:** decode the Opus channel by index (left, right; explicit, never "channel 0"), in 10-minute chunks, no temporary WAV. Check for energy before loading any model.
 2. **Mic:** whole-timeline transcription with VAD cut points, speaker `you`.
-3. **Call:** whole-timeline transcription. Then `OfflineSpeakerDiarization` (pyannote segmentation plus embeddings) over the call channel of **all parts concatenated**, so one person has one label for the whole call. Each span is transcribed with padding. A span the engine refuses is halved down to 20 s, and only the smallest failing piece is skipped and listed. Both channels decode with the call's decode list as it stands when the pass starts (call-scoped adds plus the workspace files), recorded as `vocab.used`.
+3. **Call:** whole-timeline transcription. Then speaker diarization over the call channel of **all parts concatenated**, so one person has one label for the whole call: Nemotron at its 30.4 s latency through `akou-diarize` (the default), or sherpa-onnx's `OfflineSpeakerDiarization` (pyannote segmentation plus embeddings) with `embeddings`. Nemotron's frame-level turns are smoothed the way pyannote's are before the pass cuts at them: one speaker's turns under 0.5 s apart join, then turns under 0.2 s drop. The pieces are cut at the turn boundaries, and a piece is labelled with the speaker whose turns cover most of it. Where two people talk at once, that is one line with the speaker who covers more of it: one channel carries one transcript, so overlapping voices never become two lines. Each span is transcribed with padding. A span the engine refuses is halved down to 20 s, and only the smallest failing piece is skipped and listed. Both channels decode with the call's decode list as it stands when the pass starts (call-scoped adds plus the workspace files), recorded as `vocab.used`.
 4. **Names carry over.** Each final cluster maps to the live cluster with the largest time overlap, jointly across the call (Hungarian assignment), written as `speaker.map`. A live name applies to the final layer automatically. Below 60 % overlap the mapping is a `speaker.suggest` for the user to confirm.
 5. **Whole-timeline rule.** VAD only proposes cut points. Nothing above silence is skipped. The spike showed Silero dropping a short "Thanks." after 0.8 s of silence at every setting tried, so a VAD-gated final pass would lose words.
 6. **Output:** `seg` events with `layer: final`, a `final.part.done {part}` as each part's segments are written, then one per-call `final.done` with `parts[]`, skipped spans and stats (and the languages, when a model reported them). If the call channel had energy but produced no text, `final.done` carries a warning.
 
 The final pass runs at below-normal priority, in its own Worker, and never competes with a live recording. Target: at most 10 % of call length on Apple Silicon, 25 % on a 4-core x64.
+
+### 3.4 The diarization helper, `akou-diarize/1`
+
+Nemotron 3 Diarization runs in a Rust child process, `akou-diarize` (`native/akou-diarize`), built on [parakeet-rs](https://github.com/altunenes/parakeet-rs) and [ort](https://github.com/pykeio/ort) with ONNX Runtime 1.28 linked statically. Why a process of its own:
+
+- sherpa-onnx has no Sortformer model, so the model cannot run through the recognizer's runtime.
+- ONNX Runtime's Node addon works inside Bun, but on Windows its `onnxruntime.dll` and sherpa-onnx's have the same name, and Windows gives both addons whichever loaded first. It also needs the MSVC runtime DLLs sherpa-onnx links statically, and it opens a connection to Microsoft's telemetry service on load unless `ORT_DISABLE_TELEMETRY` is set before the process starts. The helper has none of these: one static ONNX Runtime, telemetry switched off before the first session (`ort::init().with_telemetry(false)`).
+- A model that crashes or hangs takes the helper with it, never the recording, the live transcript or the app.
+
+```
+akou-diarize run --model <nemotron3_diar_v3.onnx> --mode final|live [--threads N]
+stdin   frames: 1 byte kind, u32 little-endian length, payload
+          a  f32 little-endian samples, 16 kHz mono, appended to the stream
+          f  decide everything appended so far
+          r  forget the stream; the next audio starts a new one at sample 0
+stdout  one JSON object per line
+          {"type":"ready","protocol":"akou-diarize/1","version":"…","mode":"live","latency":2}
+          {"type":"turn","spk":0,"start":1600,"end":32000}   samples, end exclusive
+          {"type":"decided","at":26880}   every sample before `at` is decided (live)
+          {"type":"flushed","at":40000}
+          {"type":"reset"}                every later line belongs to the new stream
+          {"type":"error","message":"…"}  then a non-zero exit
+```
+
+- **Final mode** holds the audio and decides the whole stream at once with NVIDIA's 30.4 s preset, the path measured to give NeMo's own decisions (99.98 to 100 % of 10 ms frames on real calls, DER within 0.01).
+- **Live mode** decides each 1.68 s step once its 0.32 s of look-ahead has arrived: 2.0 s latency (chunk 21, right context 4, FIFO 264, cache 264, update 222 model frames). It was measured as accurate as NVIDIA's 1.04 s preset at half the compute, and as accurate as the final pass on the first 20 minutes of real calls. A flush decides the remainder with zero padding and the stream goes on.
+- The helper computes each live step's features from that step's audio alone (parakeet-rs's `feed`), where the measured path computed them over the whole stream. On 250 s of synthetic four-voice speech the two agree on 97.5 % of 10 ms frames and on the speaker of every sentence. Carrying the step's left context into its features belongs upstream in parakeet-rs.
+- parakeet-rs 0.3.8 fails ("Array has a non-contiguous layout") when a whole stream, or a live remainder, is decided as one chunk of a multiple of 8 feature frames. The helper pads such audio with up to 10 ms of silence and clips every turn back to the real audio, so no caller ever sees the padding (TRAPS).
+- The client (`src/main/asr/nemotron.ts`) starts one helper per final pass and one per live transcriber, with `asr.threads` threads each. Measured on an Apple M4 at 2 threads: live at 5.6 times real time and about 1 GB resident, the final pass at over 40 times real time. The CoreML provider cannot take the graph (dynamic cache shapes), so v1 runs on the CPU.
+- The model is the ONNX export published with parakeet-rs, pinned to a revision and a SHA-256 in `models.ts`; the weights are NVIDIA's under OpenMDW-1.1. The `diarize` CI job runs the real model through the helper for 60 s on macOS, Linux and Windows.
 
 ## 4. The event log
 
@@ -729,6 +763,7 @@ CI on GitHub-hosted runners (free on a public repo):
 | `security` | ubuntu-24.04 | The cross-origin, rebinding and proxy tests of section 6.3 with the positive control |
 | `capture-linux` | ubuntu-24.04 | The real helper against headless PipeWire (WirePlumber, `pipewire-pulse`) and, in a second leg, PulseAudio: a null call sink and a virtual mic as the defaults, tone bursts played into both (`scripts/capture-rig.sh`); asserts left = mic tone, right = call tone, and on PipeWire, where one stimulus feeds both through linked ports, skew under 20 ms |
 | `capture-macos`, `capture-windows` | macos-15, windows-2025 | Build and load the helper and the addon, enumerate devices (`akou-capture devices`). Real capture on macOS needs a grant, so it is **reported as skipped with a reason** and runs on hardware in the release checklist. The Windows job installs a virtual cable, records a player by process loopback and checks that a player inside the excluded tree is not heard; a runner where the cable gives no output endpoint fails the job |
+| `diarize` | macOS, Ubuntu, Windows | `akou-diarize`: `cargo fmt`, `clippy -D warnings`, unit tests and the NOTICE check, the release build, then the real Nemotron model (fetched by its pinned URL and SHA-256, cached by it) through the helper for 60 s in both modes |
 | `ui` | ubuntu-24.04 | Playwright against the window bundle with a fake helper: every parity row, notepad, ask box, share pill |
 | `models-nightly` | all three, model cache | Model-gated tests for real (skipped on PRs, never silently passed), the replay evaluation with its recall floor, WER and diarization error, latency percentiles, the vocabulary evaluation (synthetic set regenerated by script: a hit floor, an insertion ceiling on the control clips at boost 3, and a boost 5 positive control that must breach the ceiling), posted as a job summary |
 | `release` (tag `v*`) | one native runner per OS | Build, sign, notarize, plist patch, package, checksums, attestations, release, cask bump. ElectroBun cannot cross-compile |
@@ -748,7 +783,7 @@ akou/
       config/schema.ts        the one settings registry: keys, ranges, defaults; docs generated from it
       call/                   state machine: idle, starting, recording, paused, stopping, ended, failed, interrupted
       capture/                engine.ts (CaptureEngine interface), helper.ts (spawn + packet reader), addon.ts (fallback), hark.ts (dialect)
-      asr/                    live-worker.ts, finalize-worker.ts, speakers.ts, pad.ts, echo.ts
+      asr/                    live-worker.ts, finalize-worker.ts, speakers.ts, pad.ts, echo.ts, nemotron.ts (akou-diarize client)
       vocab/                  files.ts (YAML read/write, import), decode-list.ts (cap, priority, model-type check),
                               bpe-vocab.ts (from tokenizer.json, tokenization check), check.ts, suggest.ts, pass.ts (layer 3 prompt + apply)
       query/                  context.ts, classify.ts, bm25.ts, chunks.ts, memo.ts, render.ts, ask.ts
@@ -767,6 +802,7 @@ akou/
   native/akou-capture/        Rust: src/main.rs (helper), src/lib.rs (napi addon), protocol.rs, aligner.rs, opus_writer.rs,
                               health/{dead_call,stall,device_watch}.rs, macos/{tap,aggregate,mic,exclude}.rs,
                               windows/{loopback,app_loopback,mic,notify}.rs, linux/{pipewire,pulse}.rs
+  native/akou-diarize/        Rust: src/main.rs (the helper), src/lib.rs (akou-diarize/1 frames, step and timeline arithmetic)
   skills/akou/SKILL.md
   skills/akou-vocab/SKILL.md  the learning skill: calendar, docs, repos, exports, web, always ending in a proposal
   templates/                  general, one-on-one, standup, customer-call, interview

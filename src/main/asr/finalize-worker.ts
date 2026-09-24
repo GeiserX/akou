@@ -10,9 +10,12 @@
  *    cut at its quietest window, the pieces between cuts cover the whole timeline, and every piece
  *    above the silence floor is decoded. A short word the VAD missed sits inside a piece and is
  *    transcribed (TRAPS "VAD gating loses words").
- * 3. **Call channel:** speaker diarization (pyannote segmentation plus embeddings) over the call
- *    channel of **all parts concatenated**, so one person has one label (`s<N>`) for the whole
- *    call; the call pieces are cut at the diarization boundaries. Mic lines are `you`.
+ * 3. **Call channel:** speaker diarization over the call channel of **all parts concatenated**, so
+ *    one person has one label (`s<N>`) for the whole call: Nemotron 3 Diarization at its 30.4 s
+ *    latency through `akou-diarize` (`asr.diarizer` nemotron), or pyannote segmentation plus
+ *    embeddings (`embeddings`). The call pieces are cut at the turn boundaries; where two turns
+ *    overlap, a piece is labelled with the speaker active longest inside it (one channel carries
+ *    one transcript, so overlapping voices share a line). Mic lines are `you`.
  * 4. Every span is gained and padded by `prepareSpan` (the one rule) and decoded with the call's
  *    decode list as it stands when the pass starts, recorded as `vocab.used`. A span the engine
  *    refuses is halved down to 20 s, and only the smallest failing piece is skipped and listed.
@@ -294,20 +297,27 @@ function speechFlags(
   return { flags, window: w };
 }
 
-/** Labels a call piece with the diarization span it overlaps most, or the nearest within reach. */
+/**
+ * Labels a call piece with the speaker whose turns cover most of it (overlapping turns each count
+ * their own time), or the speaker of the nearest turn within reach.
+ */
 function labelPiece(p: Piece, spans: readonly DiarizedSpan[], reach: number): string {
   const a = p.from / ASR_RATE;
   const b = p.to / ASR_RATE;
-  let best: DiarizedSpan | null = null;
-  let bestO = 0;
+  const cover = new Map<number, number>();
   for (const s of spans) {
     const o = Math.min(b, s.end) - Math.max(a, s.start);
-    if (o > bestO) {
+    if (o > 0) cover.set(s.speaker, (cover.get(s.speaker) ?? 0) + o);
+  }
+  let best = -1;
+  let bestO = 0;
+  for (const [spk, o] of cover) {
+    if (o > bestO || (o === bestO && spk < best)) {
       bestO = o;
-      best = s;
+      best = spk;
     }
   }
-  if (best) return `s${best.speaker}`;
+  if (best >= 0) return `s${best}`;
   let near: DiarizedSpan | null = null;
   let d = reach;
   for (const s of spans) {
@@ -387,7 +397,7 @@ export async function runFinalPass(
         all.set(readAll(audio, p, "call", chunk), off);
         off += lens[i] as number;
       }
-      const spans = models.diarizer().process(all);
+      const spans = await models.diarizer().process(all);
       off = 0;
       for (const [i, p] of callParts.entries()) {
         const a = off / ASR_RATE;

@@ -79,7 +79,7 @@ Status words:
 - F1.8, F1.9, F1.10 transcribe a file, read audio from stdin, Unix piping: **changed (M1)**. `akou finalize CALL` re-runs the accurate pass on a call. Transcribing arbitrary files is not a product feature; `akou import hark-viewer` covers old folders.
 - F1.11, F1.12, I1.12, I1.13 txt, srt, json transcript formats: **changed (M1)**. The log is the format; `akou show` and the export render `md | json | txt`. SRT is dropped.
 - F1.29 offline diarization during live capture: **changed (M1)**. The final pass runs after every call automatically.
-- F1.30 batch diarization with threshold and max speakers: **carried (M1)** in the final pass with `final.speakerThreshold` in the schema.
+- F1.30 batch diarization with threshold and max speakers: **changed (M1)**. The final pass runs Nemotron 3 Diarization over the whole call, which finds up to 8 speakers itself with no threshold to tune; `asr.diarizer` `embeddings` keeps pyannote with its clustering threshold.
 - F1.31, I3.13 source attribution on a two-channel file: **carried (M1)** as the final pass's explicit per-channel decode (left = you, right = call).
 
 ## Live transcription
@@ -95,8 +95,8 @@ Status words:
 
 ## Speakers
 
-- F1.26, I1.3 speaker plan (none, source only, source diarized, single diarized): **changed (M1)**. Always source-attributed (mic = you) plus live clustering on the call channel and whole-call diarization after.
-- F1.27 streaming diarization (LS-EEND): **changed (M1)**. Embedding clustering with centroids persisted in the log. A quality risk, measured in M1.
+- F1.26, I1.3 speaker plan (none, source only, source diarized, single diarized): **changed (M1)**. Always source-attributed (mic = you) plus live speaker labels on the call channel and whole-call diarization after.
+- F1.27 streaming diarization (LS-EEND): **changed (M1)**. Nemotron 3 Diarization (Streaming Sortformer v3) at 2.0 s latency, in the `akou-diarize` helper, is the default (`asr.diarizer`); embedding clustering stays as the `embeddings` choice. Measured on eight real two-channel calls (6.6 h): Nemotron's final pass at 8.7 to 11.1 % DER against 54 to 64 % for the pyannote pass, the right speaker count on 10 of 11 files against none, and its live labels as accurate as its final pass. Centroids are still persisted in the log, to carry names across a stream that starts over.
 - F1.28 two-source live attribution with shared writer and engine: **carried (M1)**.
 - F3.4 `You` and `Speaker N`, names only when the user gives one, numbers restart per part: **changed (M1)**. `you` and `c<N>`; ids continue across parts; names persist as events and survive compaction.
 

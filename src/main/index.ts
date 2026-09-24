@@ -50,17 +50,18 @@ import { ensureToken, type Guard, makePrivateDir, TokenSource } from "./api/guar
 import { HttpError } from "./api/http.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
-import type { ModelSpec } from "./asr/engine.ts";
+import type { DiarizerKind, ModelSpec } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import {
   DownloadRefused,
   downloadModels,
-  MODELS,
   type ModelSpecEntry,
   type ModelsStatus,
   modelFile,
+  modelsFor,
 } from "./asr/models.ts";
+import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import type { CallController, StartOk } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartRequest } from "./call/manager.ts";
@@ -231,7 +232,7 @@ function writePrivate(path: string, text: string): void {
   }
 }
 
-function modelsPresent(dir: string, registry: readonly ModelSpecEntry[] = MODELS): boolean {
+function modelsPresent(dir: string, registry: readonly ModelSpecEntry[]): boolean {
   return registry.every((m) => m.files.every((f) => existsSync(modelFile(dir, m.id, f.name))));
 }
 
@@ -467,8 +468,21 @@ export class AkouApp implements ApiApp {
     return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
   }
 
+  /** The models this machine needs: the registry given (tests), else what `asr.diarizer` needs. */
   private registry(): readonly ModelSpecEntry[] {
-    return this.o.modelRegistry ?? MODELS;
+    return this.o.modelRegistry ?? modelsFor(this.cfg.settings["asr.diarizer"] as DiarizerKind);
+  }
+
+  /** The real engines on the models folder, with the speaker-label engine the settings choose. */
+  private sherpaSpec(s: Settings): ModelSpec {
+    return {
+      kind: "sherpa",
+      dir: s["asr.modelsDir"],
+      cacheDir: join(s["asr.modelsDir"], ".cache"),
+      threads: s["asr.threads"],
+      diarizer: s["asr.diarizer"] as DiarizerKind,
+      diarizeHelper: locateHelper(s["asr.diarizeHelper"], { name: DIARIZE_HELPER_NAME }).command,
+    };
   }
 
   /**
@@ -575,15 +589,7 @@ export class AkouApp implements ApiApp {
       };
       return;
     }
-    const spec: ModelSpec | null =
-      this.o.models !== undefined
-        ? this.o.models
-        : {
-            kind: "sherpa",
-            dir: s["asr.modelsDir"],
-            cacheDir: join(s["asr.modelsDir"], ".cache"),
-            threads: s["asr.threads"],
-          };
+    const spec: ModelSpec | null = this.o.models !== undefined ? this.o.models : this.sherpaSpec(s);
     if (!spec) {
       this.asrState = { state: "unavailable", reason: "no recognizer configured" };
       return;
@@ -1285,14 +1291,7 @@ export class AkouApp implements ApiApp {
   private finalModels(): ModelSpec | null {
     if (this.o.models !== undefined) return this.o.models;
     const dir = this.cfg.settings["asr.modelsDir"];
-    return modelsPresent(dir)
-      ? {
-          kind: "sherpa",
-          dir,
-          cacheDir: join(dir, ".cache"),
-          threads: this.cfg.settings["asr.threads"],
-        }
-      : null;
+    return modelsPresent(dir, this.registry()) ? this.sherpaSpec(this.cfg.settings) : null;
   }
 
   /** Starts the final pass in the background. Returns why it cannot run, or null once started. */

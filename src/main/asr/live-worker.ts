@@ -12,7 +12,11 @@
  *    A word added mid-call is in the list from the next segment. Hotwords reach only a transducer.
  * 4. **Provisional line.** While a segment is open it is re-decoded every second (bounded by the
  *    window) and published with a 3 s expiry. It is never written to the log.
- * 5. **Speakers.** The mic is `you`; call segments of 1 s or more are embedded and clustered.
+ * 5. **Speakers.** The mic is `you`. On the call channel, with a stream diarizer (`asr.diarizer`
+ *    nemotron), the channel's audio also goes to Nemotron as one stream for the whole call, and a
+ *    call segment is held until the model has decided all of it, then labelled with the speaker
+ *    active longest inside it (`StreamSpeakers`). Without one, call segments of 1 s or more are
+ *    embedded and clustered (`LiveSpeakers`).
  *
  * On the main thread (`LiveAsr`):
  * - It pulls audio from the part's bounded ingest queues (10 minutes) and keeps only a few seconds
@@ -48,12 +52,26 @@ import {
   type ModelSet,
   type ModelSpec,
   type PreparedHotwords,
+  type StreamDiarizer,
   type Vad,
 } from "./engine.ts";
 import { RECOGNIZER } from "./models.ts";
 import { prepareSpan } from "./pad.ts";
 import { siblingModule } from "./sibling.ts";
-import { LiveSpeakers, MIN_EMBED_SECONDS, type SpeakerEvent } from "./speakers.ts";
+import {
+  highestLabel,
+  LiveSpeakers,
+  MIN_EMBED_SECONDS,
+  type SpeakerEvent,
+  StreamSpeakers,
+} from "./speakers.ts";
+
+/** A stream diarizer that dies is started again at most this many times per call. */
+export const STREAM_RESTART_LIMIT = 3;
+/** A call segment the stream diarizer has not decided this far behind the stream is `c?`. */
+export const STREAM_WAIT_SECONDS = 30;
+/** How long a part end, a flush or a new call waits for the stream diarizer's last decisions. */
+export const STREAM_FLUSH_MS = 3000;
 
 export interface LiveOptions {
   /** Silence that closes a segment, seconds (0.2 to 5). */
@@ -167,6 +185,31 @@ class Span {
   }
 }
 
+/** The call channel's stream to the diarizer: one per call, parts included (DESIGN 3.2). */
+interface StreamState {
+  d: StreamDiarizer;
+  speakers: StreamSpeakers;
+  /** The label each of this stream's speakers was given. */
+  labels: Map<number, string>;
+  /** Samples pushed so far: the stream's own timeline. */
+  pos: number;
+  /** Where each run of contiguous call audio sits on the stream. */
+  runs: { part: number; from: number; to: number; at: number }[];
+  dead: boolean;
+}
+
+type SegOut = Extract<LiveOut, { type: "seg" }>;
+
+/** A call segment waiting for the diarizer to decide `[s0, s1)` of `stream`. */
+interface Pending {
+  seg: Omit<SegOut, "spk">;
+  stream: StreamState | null;
+  s0: number;
+  s1: number;
+  /** For segments of `MIN_EMBED_SECONDS` or more. */
+  emb: Float32Array | null;
+}
+
 interface ChannelState {
   ch: Channel;
   part: number | null;
@@ -197,6 +240,13 @@ export class LivePipeline {
   private embedder: Embedder | null = null;
   /** The newest audio message came in close to real time, so provisional lines are worth it. */
   private live = true;
+  /** `stream` once the model set gave a stream diarizer, `embeddings` once it gave none. */
+  private labels: "unknown" | "stream" | "embeddings" = "unknown";
+  private stream: StreamState | null = null;
+  private pending: Pending[] = [];
+  /** The highest `c<N>` the call has: a new stream numbers its speakers after it. */
+  private labelsUsed = 0;
+  private streamStarts = 0;
 
   constructor(
     private readonly models: ModelSet,
@@ -234,7 +284,9 @@ export class LivePipeline {
    * and emitted first, so a call started while the last one is stopping (TRAPS T0.9) never costs
    * the last one its final words.
    */
-  beginCall(state: Parameters<LiveSpeakers["restore"]>[0] & { ids?: string[] }): void {
+  async beginCall(
+    state: Parameters<LiveSpeakers["restore"]>[0] & { ids?: string[] },
+  ): Promise<void> {
     let open = false;
     for (const ch of CHANNELS) {
       const st = this.chans[ch];
@@ -243,11 +295,25 @@ export class LivePipeline {
       this.flushPending(st);
       this.closeOpen(st);
     }
+    if (this.stream || this.pending.length > 0) await this.settleStream();
     if (open) for (const c of this.speakers.centroids(this.now(), true)) this.emit(c);
     this.speakers = new LiveSpeakers();
     this.speakers.restore(state);
     for (const id of state.ids ?? []) this.speakers.noteId(id);
     for (const ch of CHANNELS) this.resetChannel(this.chans[ch], null, 0);
+    // The new call's stream starts afresh: its speakers take the call's labels by centroid, or
+    // the numbers after every label the call already has (a Worker that took over a call mid-way
+    // has lost the old stream's speaker state).
+    this.labelsUsed = highestLabel([...(state.ids ?? []), ...state.centroids.map((c) => c.spk)]);
+    this.streamStarts = 0;
+    const s = this.stream;
+    if (s && !s.dead) {
+      s.d.reset();
+      this.stream = { ...s, speakers: new StreamSpeakers(), labels: new Map(), pos: 0, runs: [] };
+    } else {
+      s?.d.close();
+      this.stream = null;
+    }
   }
 
   /** The call's decode list. Takes effect for the next stream; loads the recognizer now. */
@@ -314,6 +380,7 @@ export class LivePipeline {
       samples = samples.subarray(overlap);
     }
     st.audio.push(samples);
+    if (ch === "call") this.toStream(part, st.pos, samples);
     st.pos += samples.length;
 
     const w = st.vad.windowSize;
@@ -399,6 +466,34 @@ export class LivePipeline {
     if (r.text === "") return;
     const a0 = from / ASR_RATE;
     const a1 = to / ASR_RATE;
+    if (st.ch === "call" && this.labels === "stream") {
+      const seg = {
+        type: "seg" as const,
+        part: st.part,
+        ch: st.ch,
+        a0,
+        a1,
+        text: r.text,
+        model: r.model,
+        ...(r.lang ? { lang: r.lang } : {}),
+      };
+      const s = this.stream && !this.stream.dead ? this.stream : null;
+      const range = s ? streamRange(s, st.part, from, to) : null;
+      let emb: Float32Array | null = null;
+      if (a1 - a0 >= MIN_EMBED_SECONDS) {
+        this.embedder ??= this.models.embedder();
+        emb = this.embedder.embed(samples);
+      }
+      this.pending.push({
+        seg,
+        stream: range ? s : null,
+        s0: range?.[0] ?? 0,
+        s1: range?.[1] ?? 0,
+        emb,
+      });
+      this.drain(false);
+      return;
+    }
     let spk = "you";
     if (st.ch === "call") {
       let emb: Float32Array | null = null;
@@ -425,8 +520,12 @@ export class LivePipeline {
     }
   }
 
-  /** The part ended: close its open segments and write every changed centroid. */
-  endPart(part: number): void {
+  /**
+   * The part ended: close its open segments, write every changed centroid, and label every call
+   * segment still waiting. The diarizer's stream is not reset: the next part continues it, so its
+   * speakers keep their labels (TRAPS T2.48).
+   */
+  async endPart(part: number): Promise<void> {
     for (const ch of CHANNELS) {
       const st = this.chans[ch];
       if (st.part !== part) continue;
@@ -434,18 +533,174 @@ export class LivePipeline {
       this.closeOpen(st);
       this.resetChannel(st, null, 0);
     }
+    if (this.pending.length > 0) await this.settleStream();
     for (const c of this.speakers.centroids(this.now(), true)) this.emit(c);
   }
 
-  /** Closes what is open on every channel (the call is ending). */
-  flush(): void {
+  /** Closes what is open on every channel (the call is ending) and labels what is waiting. */
+  async flush(): Promise<void> {
     for (const ch of CHANNELS) {
       const st = this.chans[ch];
       this.flushPending(st);
       this.closeOpen(st);
       this.resetChannel(st, null, 0);
     }
+    if (this.pending.length > 0) await this.settleStream();
     for (const c of this.speakers.centroids(this.now(), true)) this.emit(c);
+  }
+
+  // --- the stream diarizer ------------------------------------------------------------------
+
+  /** The call channel's stream, started on its first audio; null when there is none. */
+  private ensureStream(): StreamState | null {
+    if (this.labels === "embeddings") return null;
+    if (this.stream && !this.stream.dead) return this.stream;
+    if (this.streamStarts >= (this.labels === "unknown" ? 1 : STREAM_RESTART_LIMIT)) return null;
+    this.streamStarts++;
+    const ref: { d: StreamDiarizer | null } = { d: null };
+    const current = () => (this.stream && this.stream.d === ref.d ? this.stream : null);
+    let d: StreamDiarizer | null;
+    try {
+      d = this.models.streamDiarizer({
+        turns: (turns, decided) => {
+          const s = current();
+          if (!s) return;
+          s.speakers.add(turns, decided);
+          this.drain(false);
+        },
+        dead: (error) => {
+          const s = current();
+          if (!s || s.dead) return;
+          s.dead = true;
+          this.emit({
+            type: "log",
+            level: "error",
+            msg: `live speaker labels: the diarizer stopped (${error}); call lines it had not decided are c?`,
+          });
+          this.drain(false);
+        },
+      });
+    } catch (err) {
+      this.labels = "stream";
+      this.emit({
+        type: "log",
+        level: "error",
+        msg: `live speaker labels: the diarizer did not start (${(err as Error).message}); call lines are c?`,
+      });
+      return null;
+    }
+    if (!d) {
+      this.labels = "embeddings";
+      return null;
+    }
+    ref.d = d;
+    this.labels = "stream";
+    this.stream?.d.close();
+    this.stream = {
+      d,
+      speakers: new StreamSpeakers(),
+      labels: new Map(),
+      pos: 0,
+      runs: [],
+      dead: false,
+    };
+    return this.stream;
+  }
+
+  /** Appends call audio at `pos` of `part` to the stream. */
+  private toStream(part: number, pos: number, samples: Float32Array): void {
+    if (samples.length === 0) return;
+    const s = this.ensureStream();
+    if (!s) return;
+    const last = s.runs[s.runs.length - 1];
+    if (last && last.part === part && last.to === pos) last.to += samples.length;
+    else s.runs.push({ part, from: pos, to: pos + samples.length, at: s.pos });
+    s.pos += samples.length;
+    s.d.push(samples);
+  }
+
+  /**
+   * Emits waiting call segments, oldest first, as their audio is decided. `force` labels the rest
+   * with what is decided, else `c?`. A segment the stream has left `STREAM_WAIT_SECONDS` behind
+   * undecided is `c?` too.
+   */
+  private drain(force: boolean): void {
+    while (this.pending.length > 0) {
+      const p = this.pending[0] as Pending;
+      const k = p.stream ? p.stream.speakers.speakerAt(p.s0, p.s1) : -1;
+      let spk: string | null =
+        k === null ? null : k < 0 || !p.stream ? "c?" : this.labelFor(p.stream, k, p.emb);
+      if (spk === null && p.stream) {
+        const stalled = p.stream.pos - p.s1 > STREAM_WAIT_SECONDS * ASR_RATE;
+        if (force || p.stream.dead || p.stream !== this.stream || stalled) {
+          if (stalled && !force && !p.stream.dead)
+            this.emit({
+              type: "log",
+              level: "warn",
+              msg: `live speaker labels: the diarizer is over ${STREAM_WAIT_SECONDS} s behind; a call line is c?`,
+            });
+          spk = "c?";
+        }
+      }
+      if (spk === null) break;
+      this.pending.shift();
+      if (p.emb && spk !== "c?") this.speakers.addTo(spk, p.emb);
+      this.emit({ ...p.seg, spk });
+      for (const c of this.speakers.centroids(this.now())) this.emit(c);
+    }
+    const s = this.stream;
+    const head = this.pending[0];
+    if (s && (!head || head.stream === s)) s.speakers.prune(head ? head.s0 : s.speakers.decided);
+  }
+
+  /**
+   * The label of speaker `k` of stream `s`: the one it already has, else the nearest centroid this
+   * stream has not given out (a speaker the call had before the stream started over), else the
+   * next free number.
+   */
+  private labelFor(s: StreamState, k: number, emb: Float32Array | null): string {
+    const known = s.labels.get(k);
+    if (known) return known;
+    const label =
+      (emb ? this.speakers.nearest(emb, new Set(s.labels.values())) : null) ??
+      `c${++this.labelsUsed}`;
+    this.labelsUsed = Math.max(this.labelsUsed, highestLabel([label]));
+    s.labels.set(k, label);
+    return label;
+  }
+
+  /** Waits (bounded) for the stream's decisions on everything pushed, then labels every waiting line. */
+  private async settleStream(): Promise<void> {
+    const s = this.stream;
+    if (s && !s.dead && this.pending.some((p) => p.stream === s)) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([
+          s.d.flush(),
+          new Promise<void>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`no answer in ${STREAM_FLUSH_MS} ms`)),
+              STREAM_FLUSH_MS,
+            );
+          }),
+        ]);
+      } catch (err) {
+        this.emit({
+          type: "log",
+          level: "warn",
+          msg: `live speaker labels: the diarizer's last decisions did not come (${(err as Error).message})`,
+        });
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+    this.drain(true);
+  }
+
+  /** Stops the stream diarizer (the transcriber is closing). */
+  stop(): void {
+    this.stream?.d.close();
+    this.stream = null;
   }
 
   /** The tail shorter than one VAD window counts as speech if a segment is open. */
@@ -454,6 +709,21 @@ export class LivePipeline {
     if (st.inSpeech) st.lastSpeech = st.pendingStart + st.pending.length;
     st.pending = new Float32Array(0);
   }
+}
+
+/** `[from, to)` of `part` on the stream's timeline, or null when that audio never reached it. */
+function streamRange(
+  s: StreamState,
+  part: number,
+  from: number,
+  to: number,
+): [number, number] | null {
+  for (let i = s.runs.length - 1; i >= 0; i--) {
+    const r = s.runs[i] as StreamState["runs"][number];
+    if (r.part !== part || from < r.from || from >= r.to) continue;
+    return [r.at + (from - r.from), r.at + (Math.min(to, r.to) - r.from)];
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +774,11 @@ export class WorkerSide {
     this.reply({ ...o, call: this.callId });
   }
 
+  /** Stops what the pipeline started (the in-thread transport's close; a Worker just ends). */
+  close(): void {
+    this.pipeline?.stop();
+  }
+
   /** Messages are handled one at a time, in order. */
   handle(m: ToWorker): void {
     this.queue = this.queue.then(() => this.run(m));
@@ -522,7 +797,7 @@ export class WorkerSide {
       switch (m.type) {
         case "call":
           // The previous call's closing lines are tagged with its own id.
-          p.beginCall(m);
+          await p.beginCall(m);
           this.callId = m.id;
           break;
         case "decode-list":
@@ -532,13 +807,13 @@ export class WorkerSide {
           p.audio(m.part, m.ch, m.start, m.samples, m.live);
           break;
         case "end-part":
-          p.endPart(m.part);
+          await p.endPart(m.part);
           break;
         case "unmerge":
           p.unmerge(m.from, m.into);
           break;
         case "flush":
-          if (m.call === this.callId) p.flush();
+          if (m.call === this.callId) await p.flush();
           this.reply({ type: "loads", loads: { ...(this.models?.loads ?? {}) } });
           this.reply({ type: "flushed", token: m.token });
           break;
@@ -672,7 +947,7 @@ export class LiveAsr {
     let t: Transport;
     if (this.o.inThread) {
       const side = new WorkerSide((m) => queueMicrotask(() => onMessage(m)));
-      t = { post: (m) => side.handle(m), close: () => {} };
+      t = { post: (m) => side.handle(m), close: () => side.close() };
     } else {
       const w = new Worker(siblingModule(import.meta.url, "live-worker"), {
         workerData: LIVE_WORKER_NAME,

@@ -2,8 +2,9 @@
  * Deterministic speech engines for CI (the `module` model spec). Nothing here is speech: a "word"
  * is a tone burst at the word's own frequency, and a "voice" is a quieter tone at the speaker's own
  * frequency mixed into every word that speaker says. The fake recognizer reads the word
- * frequencies back, the fake embedder and diarizer read the voice frequencies, and the fake VAD is
- * an energy detector with Silero-like hysteresis. That is enough to drive every rule of the live
+ * frequencies back, the fake embedder and diarizers read the voice frequencies, and the fake VAD is
+ * an energy detector with Silero-like hysteresis. The fake stream diarizer decides in steps with a
+ * look-ahead, as Nemotron does live, so its answers come after the audio they are about. That is enough to drive every rule of the live
  * and final pipelines and to make each trap fail when its rule is broken.
  *
  * The fake recognizer keeps two engine behaviours the traps are about:
@@ -21,6 +22,9 @@ import type {
   ModelSet,
   PreparedHotwords,
   Recognizer,
+  SpeakerTurn,
+  StreamDiarizer,
+  StreamListener,
   Vad,
 } from "../../src/main/asr/engine.ts";
 import type { FinalAudio } from "../../src/main/asr/finalize-worker.ts";
@@ -174,6 +178,15 @@ export interface FakeOptions {
    * Real Worker only: in-thread it would kill the test runner.
    */
   crashOnceFile?: string;
+  /** `nemotron`: live labels from `FakeStreamDiarizer`. Default: embedding clusters. */
+  diarizer?: "nemotron" | "embeddings";
+  /** The fake stream diarizer's step and look-ahead, seconds (Nemotron live: 1.68 and 0.32). */
+  streamStep?: number;
+  streamLookahead?: number;
+  /** The fake stream diarizer dies after this many seconds of audio. */
+  streamDiesAfter?: number;
+  /** The fake stream diarizer never decides anything and never answers a flush. */
+  streamStuck?: boolean;
 }
 
 export interface DecodeCall {
@@ -310,12 +323,102 @@ export class FakeDiarizer implements Diarizer {
   }
 }
 
+/**
+ * A stream diarizer in the shape of Nemotron live: audio is held until a step plus its look-ahead
+ * has arrived, then the step is decided (each burst's voice, numbered by first appearance in the
+ * stream) and reported. The stream carries across pushes until `reset`.
+ */
+export class FakeStreamDiarizer implements StreamDiarizer {
+  private held: Float32Array[] = [];
+  private heldStart = 0;
+  private pos = 0;
+  private decided = 0;
+  private ids = new Map<number, number>();
+  resets = 0;
+  pushed = 0;
+  closed = false;
+  private dead = false;
+
+  constructor(
+    private readonly listener: StreamListener,
+    private readonly o: FakeOptions,
+  ) {}
+
+  private get step(): number {
+    return Math.round((this.o.streamStep ?? 1.68) * RATE);
+  }
+
+  private get look(): number {
+    return Math.round((this.o.streamLookahead ?? 0.32) * RATE);
+  }
+
+  private audio(from: number, to: number): Float32Array {
+    const all = concat(...this.held);
+    return all.subarray(from - this.heldStart, to - this.heldStart);
+  }
+
+  private decide(to: number): void {
+    if (to <= this.decided) return;
+    const x = this.audio(this.decided, to);
+    const freqs = Array.from({ length: VOICES }, (_, k) => voiceFreq(k));
+    const turns: SpeakerTurn[] = [];
+    for (const [a, b] of bursts(x)) {
+      const voice = argmax(x, a, b, freqs);
+      if (!this.ids.has(voice)) this.ids.set(voice, this.ids.size);
+      turns.push({
+        speaker: this.ids.get(voice) as number,
+        start: this.decided + a,
+        end: this.decided + b,
+      });
+    }
+    this.decided = to;
+    this.held = [this.audio(to, this.pos).slice()];
+    this.heldStart = to;
+    this.listener.turns(turns, to);
+  }
+
+  push(samples: Float32Array): void {
+    if (this.dead || this.closed) return;
+    this.pushed += samples.length;
+    this.held.push(samples.slice());
+    this.pos += samples.length;
+    if (this.o.streamDiesAfter !== undefined && this.pos > this.o.streamDiesAfter * RATE) {
+      this.dead = true;
+      this.listener.dead("fake diarizer died");
+      return;
+    }
+    if (this.o.streamStuck) return;
+    while (this.pos - this.decided >= this.step + this.look) this.decide(this.decided + this.step);
+  }
+
+  flush(): Promise<void> {
+    if (this.dead) return Promise.reject(new Error("fake diarizer died"));
+    if (this.o.streamStuck) return new Promise<void>(() => {});
+    this.decide(this.pos);
+    return Promise.resolve();
+  }
+
+  reset(): void {
+    this.resets++;
+    this.held = [];
+    this.heldStart = 0;
+    this.pos = 0;
+    this.decided = 0;
+    this.ids.clear();
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+}
+
 export class FakeModels implements ModelSet {
   readonly loads: Record<string, number> = {};
   readonly recognizerModel: string;
   readonly recognizers: FakeRecognizer[] = [];
   readonly embedders: FakeEmbedder[] = [];
   readonly diarizers: FakeDiarizer[] = [];
+  readonly streams: FakeStreamDiarizer[] = [];
   private rec: FakeRecognizer | null = null;
   /** Terms the loaded recognizer's hotword file covers (sherpa-onnx fixes it at load). */
   private covered = new Set<string>();
@@ -366,6 +469,14 @@ export class FakeModels implements ModelSet {
     this.embedders.push(e);
     this.count("fake-embedding");
     return e;
+  }
+
+  streamDiarizer(listener: StreamListener): StreamDiarizer | null {
+    if (this.o.diarizer !== "nemotron") return null;
+    const d = new FakeStreamDiarizer(listener, this.o);
+    this.streams.push(d);
+    this.count("fake-nemotron");
+    return d;
   }
 
   diarizer(): Diarizer {

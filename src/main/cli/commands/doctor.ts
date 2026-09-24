@@ -8,10 +8,12 @@
  *   if loose);
  * - api: the app answers, and refuses a request that looks like a browser (403) and one without the
  *   token (401), which is the security self-test;
- * - models: every file present, the right size, and its pinned SHA-256;
+ * - models: every file `asr.diarizer` needs present, the right size, and its pinned SHA-256;
  * - helper: the capture helper program can be found. The running app's answer (`GET /status`) wins,
  *   because it spawns the helper and resolves it from inside its bundle; the standalone CLI has no
  *   helper beside it, so with no app running and none found it only warns;
+ * - diarizer: with `asr.diarizer` nemotron, the `akou-diarize` helper can be found by the same
+ *   rule (configured, else bundled, else PATH), with the same warning when only the app has it;
  * - harness: `claude` or `codex` found, first on PATH, then through the login shell the way the
  *   app looks for them;
  * - permissions: what the operating system must grant, as a hint (`--grant` is not built yet).
@@ -22,7 +24,9 @@
 
 import { statSync } from "node:fs";
 import { ensureToken, tokenFileAccess } from "../../api/guard.ts";
-import { MODELS, verifyModels } from "../../asr/models.ts";
+import type { DiarizerKind } from "../../asr/engine.ts";
+import { modelsFor, verifyModels } from "../../asr/models.ts";
+import { DIARIZE_HELPER_NAME } from "../../asr/nemotron.ts";
 import { findHelper, type HelperFound } from "../../capture/helper.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { findProgram } from "../../llm/harness.ts";
@@ -119,6 +123,28 @@ export function helperCheck(local: HelperFound, app: HelperFound | null): Check 
   };
 }
 
+/** The diarization helper, found the way the app finds it (`asr.diarizer` nemotron). */
+export function diarizeHelperCheck(local: HelperFound): Check {
+  if (local.found)
+    return {
+      name: "diarizer",
+      state: "ok",
+      detail: [local.found, ...local.command.slice(1)].join(" "),
+    };
+  if (local.source === "config")
+    return {
+      name: "diarizer",
+      state: "fail",
+      detail: `the diarization helper ${local.command[0]} was not found (asr.diarizeHelper in config.json)`,
+    };
+  return {
+    name: "diarizer",
+    state: "warn",
+    detail:
+      "akou-diarize ships inside the app, beside the capture helper; from source, build native/akou-diarize and set asr.diarizeHelper, or set asr.diarizer to embeddings",
+  };
+}
+
 function permissionHint(): string {
   switch (process.platform) {
     case "darwin":
@@ -162,7 +188,8 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
   const api = await apiChecks(ctx);
   checks.push(...api.checks);
 
-  const registry = ctx.models ?? MODELS;
+  const diarizer = cfg.settings["asr.diarizer"] as DiarizerKind;
+  const registry = ctx.models ?? modelsFor(diarizer);
   const dir = cfg.settings["asr.modelsDir"];
   const states = await verifyModels(
     dir,
@@ -190,6 +217,15 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
       api.helper,
     ),
   );
+  if (diarizer === "nemotron") {
+    checks.push(
+      diarizeHelperCheck(
+        findHelper(cfg.settings["asr.diarizeHelper"], (p) => findProgram(p, env), {
+          name: DIARIZE_HELPER_NAME,
+        }),
+      ),
+    );
+  }
 
   const harnesses = ["claude", "codex"]
     .map((h) => ({ h, path: findProgram(h, env) }))
