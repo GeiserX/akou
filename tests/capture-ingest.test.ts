@@ -96,8 +96,10 @@ describe("pause and mute", () => {
     expect(ing.droppedWhilePaused).toBe(PKT);
     ing.resume();
     ing.muted = true;
-    ing.push(packet("mic", 1));
-    ing.push(packet("call", 1));
+    // The helper kept its file running through the pause: the next packet is the one after.
+    ing.push(packet("mic", 2));
+    ing.push(packet("call", 2));
+    expect(ing.zeroFilled.mic).toBe(0);
     const mic = ing.queues.mic.drain();
     const call = ing.queues.call.drain();
     expect(mic[1]?.samples.every((s) => s === 0)).toBe(true);

@@ -1,7 +1,10 @@
 /**
  * What the app does with the packets of one part (docs/DESIGN.md sections 2.1, 2.4, 3.1 and 4.4).
  *
- * - **Pause** drops packets. **Mute** zeroes the mic copy; the timeline continues.
+ * - **Pause** drops packets. **Mute** zeroes the mic copy; the timeline continues. A helper that
+ *   keeps its file running through a pause (hark has no pause) still moves `fileSeconds`, so the
+ *   `resume` anchor is where the file really is, and the recognizer skips the paused span instead
+ *   of being fed minutes of zeros.
  * - **Alignment.** Both channels sit on the part's file timeline (`file_seconds`, 16 kHz). A
  *   channel whose packets skip ahead is filled with zeros, an overlap is trimmed so no frame is fed
  *   twice, and a channel that falls more than `maxLagSeconds` behind the other is filled with zeros
@@ -144,6 +147,9 @@ export class PartIngest {
   /** Packets seen per channel (not dropped by pause). */
   readonly packets: Record<Channel, number> = { mic: 0, call: 0 };
   droppedWhilePaused = 0;
+  /** Samples of timeline skipped at resume because the helper's file kept running. */
+  skippedWhilePaused = 0;
+  private fileAtPause = 0;
   /** Latest end of audio in the file, seconds. */
   fileSeconds = 0;
   private readonly lastEnd: Record<Channel, LastEnd | null> = { mic: null, call: null };
@@ -160,6 +166,7 @@ export class PartIngest {
 
   pause(): void {
     this.paused = true;
+    this.fileAtPause = this.fileSeconds;
   }
 
   /** Audio after a resume is not compared with audio before it for sleep gaps. */
@@ -167,12 +174,23 @@ export class PartIngest {
     this.paused = false;
     this.lastEnd.mic = null;
     this.lastEnd.call = null;
+    if (this.fileSeconds > this.fileAtPause) {
+      // The file advanced while paused: continue the timeline where the file is.
+      const to = Math.round(this.fileSeconds * CAPTURE_RATE);
+      for (const ch of ["mic", "call"] as const) {
+        if (this.pos[ch] < to) {
+          this.skippedWhilePaused += to - this.pos[ch];
+          this.pos[ch] = to;
+        }
+      }
+    }
   }
 
   push(p: Packet): void {
     const n = p.samples.length;
     if (this.paused) {
       this.droppedWhilePaused += n;
+      this.fileSeconds = Math.max(this.fileSeconds, p.fileSeconds + n / CAPTURE_RATE);
       return;
     }
     this.packets[p.ch]++;

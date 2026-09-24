@@ -308,8 +308,9 @@ export class LineSplitter {
 /**
  * DESIGN 2.4 lists `probe_call`, `rebuild_call`, `rebuild_mic` and `stop`, and says the app "tells
  * the helper to drop" audio while paused; `pause` and `resume` are those two instructions. A
- * helper that ignores them is still correct for the transcript, because the app drops packets
- * while paused as well.
+ * helper that ignores them is still correct for the transcript: the app drops packets while
+ * paused as well, and anchors the `resume` at the file position the helper really reached
+ * (ingest.ts).
  */
 export type HelperCommand =
   | "probe_call"

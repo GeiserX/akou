@@ -17,6 +17,9 @@
  * - A helper that exits on its own gives `part.ended {reason: helper-exit}` and an automatic
  *   restart; a `dead` call side for 60 s, or no packets at all for 10 s, also restart; five
  *   automatic restarts in ten minutes make the call `interrupted` (DESIGN 2.5, 4.5).
+ * - A failed restart that leaves the call without a working helper is retried against the same
+ *   limit, whoever asked for it, so a call never says recording while nothing captures.
+ * - A restart during a pause keeps the call paused: the new part starts with a `pause` at 0.
  */
 
 import { mkdirSync } from "node:fs";
@@ -25,7 +28,7 @@ import { nsToMs, PartClock } from "../../core/log/clock.ts";
 import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
 import { type CallView, fold } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
-import { EVENTS_FILE, LogWriter, type WriterOptions } from "../../core/log/writer.ts";
+import { EVENTS_FILE, LockError, LogWriter, type WriterOptions } from "../../core/log/writer.ts";
 import {
   type CaptureEngine,
   type CaptureSession,
@@ -82,6 +85,8 @@ export class PartRun {
   bridge: { helperNs: bigint; appMono: bigint } | null = null;
   readonly health = new Map<Channel, string>();
   deadTimer: unknown = null;
+  /** The dead-call timer fired and asked for a restart; cleared when the call side recovers. */
+  deadFired = false;
   noBuffersRebuilt = false;
   stallReported = false;
 
@@ -459,6 +464,20 @@ export class CallController {
       run.ingest.muted = true;
       this.append({ type: "mute", part: run.part, a: 0 });
     }
+    if (this.status === "paused") {
+      // A restart during a pause (a crash, a stall, a click) keeps the call paused: the new part
+      // takes no audio until the user resumes, exactly as the old one would not have.
+      run.ingest.pause();
+      this.append({
+        type: "pause",
+        part: run.part,
+        a: 0,
+        wall: this.deps.clock.now(),
+        mono: this.helperNowMs(run),
+      });
+      // The helper may report `capturing` from inside `start`, before its session is stored.
+      queueMicrotask(() => run.session?.send("pause"));
+    }
     this.deps.markWarm();
     run.capturing.resolve({ kind: "capturing" });
   }
@@ -500,6 +519,7 @@ export class CallController {
             run.health.get("call") === "dead" &&
             this.status === "recording"
           ) {
+            run.deadFired = true;
             this.spawnBackground(this.autoRestart("the call side stayed dead"));
           }
         }, this.deps.budgets.deadRestartMs);
@@ -516,6 +536,7 @@ export class CallController {
   }
 
   private clearDead(run: PartRun): void {
+    run.deadFired = false;
     if (run.deadTimer !== null) {
       this.deps.clock.clearTimeout(run.deadTimer);
       run.deadTimer = null;
@@ -626,9 +647,34 @@ export class CallController {
     return fail(409, "not_restartable", `the call is ${this.status}`, { call: this.id });
   }
 
+  /**
+   * The part being recorded has no working helper: it exited, it stalled, or its call side stayed
+   * dead. Only then does a failed restart try again.
+   */
+  private needsRestart(): boolean {
+    const run = this.current;
+    return !run || run.ended || run.stallReported || run.deadFired;
+  }
+
   private async restartLive(): Promise<Outcome<{ part: number }>> {
     if (this.restarting)
       return fail(409, "restart_in_progress", "a restart is already running", { call: this.id });
+    const r = await this.replaceHelper();
+    // Whoever asked for this restart, a failure that leaves the call without a working helper is
+    // retried (the automatic-restart limit still applies, so it ends in `interrupted`, never in a
+    // call that says recording and captures nothing).
+    if (
+      !r.ok &&
+      r.code !== "cancelled" &&
+      (this.status === "recording" || this.status === "paused") &&
+      this.needsRestart()
+    ) {
+      this.spawnBackground(this.autoRestart("a restart failed"));
+    }
+    return r;
+  }
+
+  private async replaceHelper(): Promise<Outcome<{ part: number }>> {
     this.restarting = true;
     try {
       const old = this.current;
@@ -646,7 +692,6 @@ export class CallController {
         return fail(409, "cancelled", "the call ended during the restart", { call: this.id });
       }
       this.current = r.run;
-      if (this.status === "paused") this.setStatus("recording");
       if (old && !old.ended) void this.retire(old, "restart");
       return { ok: true, part: r.run.part };
     } finally {
@@ -656,7 +701,16 @@ export class CallController {
 
   private async reopen(): Promise<Outcome<{ part: number }>> {
     const before = this.status;
-    this.writer ??= LogWriter.open(this.dir, this.deps.writer);
+    try {
+      this.writer ??= LogWriter.open(this.dir, this.deps.writer);
+    } catch (err) {
+      if (err instanceof LockError) {
+        return fail(409, "locked", `another writer holds the call's log (pid ${err.holderPid})`, {
+          call: this.id,
+        });
+      }
+      throw err;
+    }
     this.setStatus("starting");
     const r = await this.launch();
     if (r.ok) {
@@ -674,7 +728,9 @@ export class CallController {
     return startFailure(r, this.id);
   }
 
-  private async autoRestart(cause: string): Promise<void> {
+  private async autoRestart(_cause: string): Promise<void> {
+    // A restart already running retries on its own if it fails (see `restartLive`).
+    if (this.restarting) return;
     const now = this.deps.clock.now();
     const window = this.deps.budgets.autoRestartWindowMs;
     while (this.autoRestarts.length > 0 && now - (this.autoRestarts[0] as number) > window)
@@ -685,16 +741,7 @@ export class CallController {
     }
     this.autoRestarts.push(now);
     if (this.status !== "recording" && this.status !== "paused") return;
-    const r = await this.restartLive();
-    // The part is gone and the restart failed: try again, which counts against the same limit.
-    if (
-      !r.ok &&
-      r.code !== "cancelled" &&
-      r.code !== "restart_in_progress" &&
-      (!this.current || this.current.ended)
-    ) {
-      await this.autoRestart(cause);
-    }
+    await this.restartLive();
   }
 
   /** Too many automatic restarts: stop capturing, keep the call resumable. */

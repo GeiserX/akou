@@ -69,6 +69,8 @@ export class CallManager {
   private readonly clock: Clock;
   private readonly budgets: CallBudgets;
   private readonly controllers = new Map<string, CallController>();
+  /** Calls being read from disk for a restart, so two restarts of one call share one controller. */
+  private readonly loading = new Map<string, Promise<CallController>>();
   private readonly index = new Map<string, CallSummary>();
   private warm = false;
   private initP: Promise<RecoveryAction[]> | null = null;
@@ -137,6 +139,9 @@ export class CallManager {
     if (!c) return;
     const prev = this.index.get(id);
     const live = c.view.live || c.live;
+    // The end time moves only with an event that ends audio, as `summarize` computes it, so a name
+    // or a final-pass line written later never changes it.
+    const ends = e.type === "call.ended" || e.type === "call.failed" || e.type === "part.ended";
     this.index.set(id, {
       id,
       dir: c.dir,
@@ -144,7 +149,7 @@ export class CallManager {
       title: c.view.call?.title ?? prev?.title ?? "",
       createdAt: c.view.call?.t ?? prev?.createdAt ?? e.t,
       state: c.view.state,
-      endedAt: live ? null : e.t,
+      endedAt: live ? null : ends ? e.t : (prev?.endedAt ?? e.t),
       parts: c.view.parts().length,
     });
   }
@@ -327,13 +332,31 @@ export class CallManager {
     if (!c) {
       const s = this.index.get(r.id);
       if (!s) return fail(404, "not_found", `no call ${r.id}`);
-      const capture: CaptureChoice = {
-        mic: this.o.capture?.mic ?? "default",
-        call: this.o.capture?.call ?? "system",
-        excludeResponsible: this.o.capture?.excludeResponsible,
-      };
-      c = await CallController.load(s.dir, this.deps(s.workspace), capture);
-      this.controllers.set(c.id, c);
+      // Two restarts at once (the window and an agent) share one load and one controller; the
+      // second then finds the call starting and is refused, never a second helper.
+      let p = this.loading.get(r.id);
+      if (!p) {
+        const capture: CaptureChoice = {
+          mic: this.o.capture?.mic ?? "default",
+          call: this.o.capture?.call ?? "system",
+          excludeResponsible: this.o.capture?.excludeResponsible,
+        };
+        p = CallController.load(s.dir, this.deps(s.workspace), capture).then((loaded) => {
+          const existing = this.controllers.get(loaded.id);
+          if (existing) return existing;
+          this.controllers.set(loaded.id, loaded);
+          return loaded;
+        });
+        const id = r.id;
+        const done = () => this.loading.delete(id);
+        p.then(done, done);
+        this.loading.set(id, p);
+      }
+      c = await p;
+      const other = this.live();
+      if (other && other !== c) {
+        return fail(409, "already_recording", "another call is recording", { call: other.id });
+      }
     }
     return c.restart(opts);
   }

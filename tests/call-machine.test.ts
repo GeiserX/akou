@@ -420,6 +420,107 @@ describe("restart", () => {
     expect(stalled.map((e) => e.ch).sort()).toEqual(["call", "mic"]);
   });
 
+  test("a stall whose first restart fails is retried until a helper captures", async () => {
+    const s = setup({ stallMs: 10_000 });
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.last.audio(0.5);
+    // The first replacement never captures; the one after it does.
+    let n = 0;
+    s.engine.onStart = (x) => {
+      if (++n >= 2) x.capturing();
+    };
+    await s.clock.advance(11_000);
+    expect(s.engine.sessions.length).toBe(2);
+    await s.clock.advance(3_000);
+    await c?.idle();
+    expect(s.engine.sessions.length).toBe(3);
+    expect(c?.status).toBe("recording");
+    expect(c?.current?.part).toBe(3);
+    expect(ofType(s.events, "part.started").map((e) => e.part)).toEqual([1, 3]);
+    expect(ofType(s.events, "part.ended")).toMatchObject([{ part: 1, reason: "restart" }]);
+  });
+
+  test("a dead call side whose restart fails is retried", async () => {
+    const s = setup();
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    let n = 0;
+    s.engine.onStart = (x) => {
+      if (++n >= 2) x.capturing();
+    };
+    s.engine.last.health("call", "dead", 1);
+    await s.clock.advance(60_000);
+    expect(s.engine.sessions.length).toBe(2);
+    await s.clock.advance(3_000);
+    await c?.idle();
+    expect(s.engine.sessions.length).toBe(3);
+    expect(c?.current?.part).toBe(3);
+  });
+
+  test("a helper that exits during a user restart that then times out is restarted automatically", async () => {
+    const s = setup();
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.last.audio(0.5);
+    const p = s.mgr.restart("live");
+    await flush();
+    // The old helper dies while the new one is still opening, and the new one never captures.
+    s.engine.sessions[0]?.exit(70);
+    s.engine.onStart = (x) => x.capturing();
+    await s.clock.advance(3_000);
+    expect(await p).toMatchObject({ ok: false, status: 503, stage: "open" });
+    await c?.idle();
+    expect(s.engine.sessions.length).toBe(3);
+    expect(c?.status).toBe("recording");
+    expect(c?.current?.ended).toBe(false);
+    expect(ofType(s.events, "part.started").map((e) => e.part)).toEqual([1, 3]);
+  });
+
+  test("positive control: a failing automatic restart still ends in interrupted, never a loop", async () => {
+    const s = setup({ stallMs: 10_000 });
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.last.audio(0.5);
+    // No replacement ever captures.
+    await s.clock.advance(11_000);
+    for (let i = 0; i < 6; i++) await s.clock.advance(3_000);
+    await c?.idle();
+    expect(c?.status).toBe("interrupted");
+    expect(s.engine.sessions.length).toBe(6);
+    expect(ofType(s.events, "call.ended")).toMatchObject([{ reason: "interrupted" }]);
+  });
+
+  test("two concurrent restarts of an ended call in a fresh app run: one helper, one live call", async () => {
+    const s = setup();
+    const a = await started(s);
+    s.engine.last.audio(1);
+    await s.mgr.stop("live");
+    const mgr2 = new CallManager({
+      root: s.root,
+      engine: s.engine,
+      clock: s.clock,
+      tz: TZ,
+      budgets: { stallMs: 1e12 },
+    });
+    cleanups.push(() => void mgr2.quit());
+    s.engine.onStart = (x) => x.capturing();
+    const before = s.engine.sessions.length;
+    const rs = await Promise.allSettled([mgr2.restart(a.call), mgr2.restart(a.call)]);
+    expect(rs.map((r) => r.status)).toEqual(["fulfilled", "fulfilled"]);
+    const values = rs.map((r) => (r.status === "fulfilled" ? r.value : null));
+    expect(values.filter((v) => v?.ok).length).toBe(1);
+    expect(values.find((v) => !v?.ok)).toMatchObject({ ok: false, status: 409 });
+    expect(s.engine.sessions.length - before).toBe(1);
+    expect(mgr2.live()?.id).toBe(a.call);
+    expect(await mgr2.start({ workspace: "work" })).toMatchObject({
+      ok: false,
+      code: "already_recording",
+    });
+    expect((await mgr2.stop("live")).ok).toBe(true);
+    expect(mgr2.live()).toBeNull();
+  });
+
   test("restarting a finished call over an hour old needs force", async () => {
     const s = setup();
     const a = await started(s);
@@ -466,6 +567,75 @@ describe("pause, resume, mute", () => {
       1,
     ) as PartClock;
     expect(resumeWall + 50 - noResume.wallFromAudio(10.05)).toBeCloseTo(5 * 60_000, 0);
+  });
+
+  test("[T2.52] a helper that keeps streaming through a pause: the line after it is still dated right", async () => {
+    const s = setup();
+    const a = await started(s);
+    const sess = s.engine.last;
+    for (let i = 0; i < 10; i++) {
+      sess.audio(1);
+      await s.clock.advance(1_000);
+    }
+    expect((await s.mgr.pause("live")).ok).toBe(true);
+    // This helper ignores `pause`: its file keeps advancing for the whole five minutes.
+    for (let i = 0; i < 30; i++) {
+      sess.audio(10);
+      await s.clock.advance(10_000);
+    }
+    expect((await s.mgr.resume("live")).ok).toBe(true);
+    const resumeWall = s.clock.now();
+    await s.clock.advance(50);
+    const a0 = sess.fileSeconds;
+    sess.audio(0.1);
+    const log = await logOf(a.folder);
+    const clock = PartClock.fromEvents(log, 1) as PartClock;
+    expect(a0).toBe(310);
+    expect(clock.wallFromAudio(a0)).toBeCloseTo(resumeWall, 0);
+    // No five minutes of zeros are queued for the recognizer either.
+    const ingest = s.mgr.controller(a.call)?.current?.ingest;
+    expect(ingest?.zeroFilled.mic).toBe(0);
+    expect(ingest?.zeroFilled.call).toBe(0);
+  });
+
+  test("a pause survives a helper crash: the next part starts paused and takes no audio until resume", async () => {
+    const s = setup();
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    s.engine.last.audio(1);
+    expect((await s.mgr.pause("live")).ok).toBe(true);
+    s.engine.onStart = (x) => x.capturing();
+    s.engine.last.exit(70);
+    await c?.idle();
+    expect(c?.status).toBe("paused");
+    expect(s.mgr.view(a.call)?.state).toBe("paused");
+    expect(c?.current?.part).toBe(2);
+    expect(c?.current?.ingest.paused).toBe(true);
+    expect(s.engine.last.sent).toContain("pause");
+    s.engine.last.audio(1);
+    expect(c?.current?.ingest.queues.mic.size).toBe(0);
+    expect(ofType(s.events, "pause").map((e) => [e.part, e.a])).toEqual([
+      [1, 1],
+      [2, 0],
+    ]);
+    expect(ofType(s.events, "resume")).toEqual([]);
+    expect((await s.mgr.resume("live")).ok).toBe(true);
+    s.engine.last.audio(0.5);
+    expect(c?.current?.ingest.queues.mic.size).toBeGreaterThan(0);
+    expect(ofType(s.events, "resume").map((e) => e.part)).toEqual([2]);
+  });
+
+  test("a user restart while paused keeps the call paused", async () => {
+    const s = setup();
+    const a = await started(s);
+    const c = s.mgr.controller(a.call);
+    expect((await s.mgr.pause("live")).ok).toBe(true);
+    s.engine.onStart = (x) => x.capturing();
+    expect(await s.mgr.restart("live")).toMatchObject({ ok: true, part: 2 });
+    expect(c?.status).toBe("paused");
+    expect(c?.current?.ingest.paused).toBe(true);
+    expect(s.mgr.view(a.call)?.state).toBe("paused");
+    expect(ofType(s.events, "pause").map((e) => e.part)).toEqual([1, 2]);
   });
 
   test("controls answer 409 in the wrong state", async () => {
@@ -549,6 +719,25 @@ describe("[T3.14] `live` and `last`", () => {
     expect(s.mgr.resolve("last")).toEqual({ ok: true, id: a.call });
     s.engine.onStart = (x) => x.capturing();
     expect(await s.mgr.restart("last")).toMatchObject({ ok: true, part: 2 });
+  });
+
+  test("events written after the call ended never move the last call's end time", async () => {
+    const s = setup();
+    const a = await started(s, "Standup");
+    await s.mgr.stop("live");
+    const before = s.mgr.resolve("live");
+    if (before.ok) throw new Error("unreachable");
+    const endedAt = before.last?.endedAt;
+    expect(typeof endedAt).toBe("number");
+    await s.clock.advance(60 * 60_000);
+    const c = s.mgr.controller(a.call);
+    const release = c?.holdWriter();
+    c?.record({ type: "speaker.name", spk: "c1", name: "Ben", by: "user" });
+    release?.();
+    const after = s.mgr.resolve("live");
+    if (after.ok) throw new Error("unreachable");
+    expect(after.last?.endedAt).toBe(endedAt);
+    expect(s.mgr.calls()[0]?.endedAt).toBe(endedAt);
   });
 
   test("a control on a named finished call is 409 not_live, never a write into it", async () => {
