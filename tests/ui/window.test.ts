@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
@@ -609,6 +609,62 @@ describe("enhanced notes and templates (DESIGN 5.2)", () => {
         );
       });
       t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the words to review (DESIGN 5.4, 7)", () => {
+  test(
+    "Find misheard words runs the pass; the review screen shows each proposal with its line; Approve writes the workspace file",
+    async () => {
+      let id = "";
+      let home = "";
+      const provider = new FakeProvider();
+      provider.answer = () =>
+        JSON.stringify({
+          corrections: [{ line: "#l000001", heard: "hetzner", term: "Hetzner" }],
+          proposals: [
+            { term: "Hetzner", heard: ["hetzner"], lines: ["#l000003"], why: "a vendor" },
+          ],
+        });
+      await withRig(
+        {
+          provider,
+          seed: (h) => {
+            home = h;
+            id = seedCall(h, (b) => standardCall(b)).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click("#tab-enhanced");
+          await page.click("#vocab-pass");
+          await page.waitForSelector("#review[open] .review-item[data-term=Hetzner]");
+          // The bad span (hetzner is not in l000001) was dropped; the proposal carries its line.
+          expect(await text(page, "#review-status")).toContain("corrected 0 words and proposed 1");
+          expect(await text(page, ".review-item[data-term=Hetzner] .review-lines li")).toContain(
+            "deploy to hetzner today",
+          );
+          expect(await page.isVisible("#pill-review")).toBe(true);
+          expect(await text(page, "#pill-review")).toBe("1 word to review");
+          await page.click(".review-item[data-term=Hetzner] button.go");
+          await until(
+            async () =>
+              (await text(page, "#review-status"))?.includes("in the vocabulary") ?? false,
+            5000,
+            "approved",
+          );
+          const file = readFileSync(
+            join(home, ".config", "akou", "vocabulary", "work.yaml"),
+            "utf8",
+          );
+          expect(file).toContain(`source: "call:${id}"`);
+          await page.click("#review-close");
+          await until(async () => !(await page.isVisible("#pill-review")), 5000, "pill hidden");
+        },
+      );
     },
     UI_TIMEOUT,
   );

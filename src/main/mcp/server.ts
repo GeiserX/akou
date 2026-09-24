@@ -486,7 +486,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_vocab_list",
     {
       description:
-        "The vocabulary in force: a call's own words and proposals (with `call`), or the files for a workspace.",
+        "The vocabulary in force: a call's own words and proposals (with `call`), or the files for a workspace. With `call` and `unconfirmed`, the words to review: the call's open proposals with the lines they rest on, and the workspace's unconfirmed entries. Ask the user before approving any.",
       inputSchema: z.object({
         workspace: z.string().optional(),
         call: z.string().optional(),
@@ -499,6 +499,9 @@ export function createMcpServer(o: McpOptions): McpServer {
         : await req("GET", "/vocab", {
             query: { workspace: a.workspace, unconfirmed: a.unconfirmed || undefined },
           });
+      if (a.call && a.unconfirmed && r.status === 200) {
+        return text(JSON.stringify({ call: r.body.call, review: r.body.review }));
+      }
       return asResult(r, compact);
     },
   );

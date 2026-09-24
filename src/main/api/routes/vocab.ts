@@ -8,11 +8,22 @@
  *   entries and a call's proposals. A proposal is inert until approved; approving it writes the
  *   entry, confirmed, into the workspace file. akou never grows the files on its own.
  *
- * Not built yet, answered `501`: the post-call pass (`/calls/{id}/vocab/pass`, M2), `suggest` (M2)
- * and `check` (it needs the model's tokenizer on disk).
+ * - The post-call pass (`POST /calls/{id}/vocab/pass`, layer 3): the configured provider corrects
+ *   known terms and proposes new ones, every item through the pass's span check (`vocab/pass.ts`).
+ *   Only on request, like Enhance, and only on a call that has ended.
+ * - The words to review: `GET /calls/{id}/vocab` carries `review`, the call's open proposals with
+ *   the lines they rest on, and the workspace's unconfirmed entries.
+ * - `POST /vocab/suggest`: ranked candidate words from a call or a text (`vocab/suggest.ts`).
+ *
+ * Not built yet, answered `501`: `check` (it needs the model's tokenizer on disk).
  */
 
+import { formatWall } from "../../../core/log/clock.ts";
 import { isAgentAuthor } from "../../../core/log/events.ts";
+import type { CallView } from "../../../core/log/fold.ts";
+import { ProviderError } from "../../llm/provider.ts";
+import { reasonText } from "../../query/ask.ts";
+import { STOPWORDS } from "../../query/bm25.ts";
 import {
   emptyVocab,
   importGlossary,
@@ -29,6 +40,8 @@ import {
   vocabPaths,
   writeVocabFile,
 } from "../../vocab/files.ts";
+import { type KnownTerm, type PassInput, runPass } from "../../vocab/pass.ts";
+import { suggestTerms } from "../../vocab/suggest.ts";
 import { HttpError, json, type Router, readBody } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { callId, callOf, nextItemId, resolveRef } from "./common.ts";
@@ -52,6 +65,9 @@ function checkWorkspace(ws: string | undefined | null): string | undefined {
 function today(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
 }
+
+/** Calls with a vocabulary pass running: one at a time per call. */
+const passing = new Set<string>();
 
 /** Edits of one file run one at a time, so two requests never lose each other's change. */
 const fileLocks = new Map<string, Promise<unknown>>();
@@ -101,6 +117,56 @@ async function mergedFor(app: ApiApp, workspace: string | undefined) {
       warnings: l.loaded.warnings,
     })),
     entries: mergeVocab(layers.map((l) => ({ scope: l.scope, path: l.path, file: l.loaded.file }))),
+    rejected: [...new Set(layers.flatMap((l) => l.loaded.file.rejected))],
+  };
+}
+
+/**
+ * What a call's pass and suggestions treat as known (confirmed file entries, the call's own words,
+ * accepted proposals, speaker names, the user's name) and what the user rejected.
+ */
+async function vocabState(app: ApiApp, view: CallView) {
+  const files = await mergedFor(app, view.call?.workspace);
+  const known = new Map<string, KnownTerm & { heard: string[] }>();
+  const put = (term: string, heard: readonly string[]) => {
+    const key = termKey(term);
+    if (key === "") return;
+    const cur = known.get(key) ?? { term, heard: [] };
+    for (const h of heard) if (!cur.heard.some((x) => termKey(x) === termKey(h))) cur.heard.push(h);
+    known.set(key, cur);
+  };
+  for (const e of files.entries) if (e.confirmed) put(e.term, e.heard);
+  for (const v of view.callVocabulary()) put(v.term, v.heard);
+  for (const p of view.proposals("accepted")) put(p.term, p.heard);
+  for (const r of view.roster()) if (r.name) put(r.name, []);
+  if (view.call?.user) put(view.call.user, []);
+  const rejected = new Set(files.rejected);
+  for (const p of view.proposals("rejected")) rejected.add(p.term);
+  const input: PassInput = { known: [...known.values()], rejected: [...rejected] };
+  return { input, files };
+}
+
+/** The words to review for a call: its open proposals with the lines they rest on. */
+function reviewList(view: CallView, unconfirmed: readonly VocabEntry[]) {
+  const tz = view.call?.tz ?? "UTC";
+  return {
+    proposals: view.proposals("proposed").map((p) => {
+      const ev = (p.evidence ?? {}) as { lines?: unknown; why?: unknown };
+      const ids = Array.isArray(ev.lines) ? ev.lines.filter((x) => typeof x === "string") : [];
+      return {
+        id: p.id,
+        term: p.term,
+        heard: p.heard,
+        by: p.by,
+        why: typeof ev.why === "string" ? ev.why : undefined,
+        lines: (ids as string[]).flatMap((id) => {
+          const l = view.resolve(id);
+          if (!l || l.retracted) return [];
+          return [{ id, time: formatWall(l.w0, tz), speaker: l.speaker, text: l.raw ?? l.text }];
+        }),
+      };
+    }),
+    unconfirmed: unconfirmed.map((e) => ({ term: e.term, heard: e.heard, source: e.source })),
   };
 }
 
@@ -118,6 +184,10 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         ? { entries: v.vocabUsed.entries, files: v.vocabUsed.files, model: v.vocabUsed.model }
         : null,
       proposals: v.proposals(),
+      review: reviewList(
+        v,
+        files.entries.filter((e) => !e.confirmed),
+      ),
       files: files.files,
       entries: files.entries,
     });
@@ -158,8 +228,82 @@ export function vocabRoutes(r: Router<ApiApp>): void {
 
   r.add("POST", "/calls/:id/vocab/pass", async (c) => {
     await readBody(c.req, {});
-    resolveRef(c.app, c.params.id as string, { allowLast: false });
-    notBuilt("the post-call vocabulary pass", "M2");
+    const id = callId(c, { allowLast: true });
+    const q = await c.app.query(id);
+    const view = q.view;
+    if (view.live) {
+      throw new HttpError(
+        409,
+        "not_ended",
+        "the vocabulary pass reads a finished call; run it after the call ends",
+      );
+    }
+    const provider = c.app.provider();
+    const avail = await provider.available();
+    if (!avail.ok) {
+      return json(503, {
+        error: "provider_unavailable",
+        message: `no provider can run the vocabulary pass (${avail.reason}); an agent can propose words with akou_vocab_propose`,
+        reason: avail.reason,
+        kind: avail.kind,
+      });
+    }
+    if (passing.has(id)) {
+      throw new HttpError(409, "pass_running", "the vocabulary pass of this call is running");
+    }
+    passing.add(id);
+    c.timeout?.(0);
+    try {
+      const { input } = await vocabState(c.app, view);
+      let r: Awaited<ReturnType<typeof runPass>>;
+      try {
+        r = await runPass({
+          view,
+          tz: q.tz,
+          input,
+          provider,
+          signal: c.req.signal,
+          timeoutMs: c.app.providerTimeoutMs(),
+        });
+      } catch (err) {
+        if (!(err instanceof ProviderError)) throw err;
+        if (err.kind === "cancelled") {
+          return json(499, { error: "cancelled", message: "the vocabulary pass was cancelled" });
+        }
+        const reason = reasonText(err, q.tz);
+        return json(503, {
+          error: "provider_unavailable",
+          message: `the provider could not run the vocabulary pass (${reason})`,
+          reason,
+          kind: err.kind,
+          resetsAt: err.resetsAt,
+        });
+      }
+      const written: unknown[] = [];
+      for (const d of r.drafts) {
+        const prefix = d.type === "vocab.add" ? "v" : "p";
+        // Ids come from the seq each event gets, so they never collide with another writer's.
+        written.push(
+          await c.app.write(id, (call) => ({
+            ...d,
+            id: nextItemId(prefix, call.view.lastSeq),
+          })),
+        );
+      }
+      return json(200, {
+        ok: true,
+        call: id,
+        model: r.model,
+        calls: r.calls,
+        lines: r.lines,
+        corrections: r.corrections,
+        proposals: r.proposals,
+        dropped: r.dropped,
+        written: written.length,
+      });
+    } finally {
+      passing.delete(id);
+    }
   });
 
   // --- the files ----------------------------------------------------------------------------------
@@ -278,7 +422,13 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       const path = targetPath(c.app, workspace);
       await editFile(path, (file) => {
         let next: VocabFile = file;
-        for (const e of accepted) next = upsertEntry(next, e);
+        for (const e of accepted) {
+          // A proposal for a term the file has adds its heard forms; it never drops the old ones.
+          const cur = next.entries.find((x) => termKey(x.term) === termKey(e.term));
+          const heard = [...(cur?.heard ?? [])];
+          for (const h of e.heard) if (!heard.some((x) => termKey(x) === termKey(h))) heard.push(h);
+          next = upsertEntry(next, cur ? { ...cur, heard, confirmed: true } : e);
+        }
         for (const e of file.entries) {
           if (!keys.has(termKey(e.term)) || e.confirmed) continue;
           next =
@@ -319,8 +469,39 @@ export function vocabRoutes(r: Router<ApiApp>): void {
   });
 
   r.add("POST", "/vocab/suggest", async (c) => {
-    await readBody(c.req, { "text?": "string", "call?": "string", "k?": "integer" });
-    notBuilt("vocabulary suggestions", "M2");
+    const b = await readBody<{ text?: string; call?: string; k?: number }>(c.req, {
+      "text?": "string",
+      "call?": "string",
+      "k?": "integer",
+    });
+    const k = b.k ?? 20;
+    if (k < 1 || k > 200) throw new HttpError(400, "bad_field", "k must be 1 to 200");
+    if (b.text === undefined && b.call === undefined) {
+      throw new HttpError(400, "bad_field", "suggest needs `text` or `call`");
+    }
+    const stopwords = new Set(Object.values(STOPWORDS).flatMap((set) => [...set]));
+    const sources: { text: string; id?: string }[] = [];
+    let known: string[];
+    let rejected: string[];
+    let call: string | undefined;
+    if (b.call !== undefined) {
+      await c.app.manager.init();
+      call = resolveRef(c.app, b.call, { allowLast: true });
+      const view = (await c.app.call(call)).view;
+      for (const l of view.lines("best")) sources.push({ text: l.raw ?? l.text, id: l.id });
+      const st = await vocabState(c.app, view);
+      known = st.input.known.map((x) => x.term);
+      rejected = [...st.input.rejected];
+      for (const e of st.files.entries) if (!e.confirmed) known.push(e.term);
+      for (const p of view.proposals("proposed")) known.push(p.term);
+    } else {
+      const files = await mergedFor(c.app, undefined);
+      known = files.entries.map((e) => e.term);
+      rejected = files.rejected;
+    }
+    if (b.text !== undefined) sources.push({ text: b.text });
+    const suggestions = suggestTerms(sources, { known, rejected, stopwords, k });
+    return json(200, { call: call ?? null, suggestions });
   });
 
   r.add("POST", "/vocab/check", async (c) => {
