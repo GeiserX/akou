@@ -282,7 +282,7 @@ describe("invocation and discovery", () => {
         // A profile that starts something long-lived with the shell's stdout inherited.
         writeFileSync(
           join(t.dir, ".profile"),
-          `PATH="${bin}:$PATH"; export PATH\nsleep 60 & echo $! > "${pidFile}"\n`,
+          `PATH="${bin}:$PATH"; export PATH\n/bin/sleep 60 & echo $! > "${pidFile}"\n`,
         );
         const t0 = performance.now();
         const d = await discoverHarnesses({ HOME: t.dir, SHELL: "/bin/sh", PATH: "/nonexistent" });
