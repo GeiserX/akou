@@ -115,6 +115,20 @@ describe("the memo check", () => {
     ]);
   });
 
+  test("the check does not depend on where the shared anchor pattern last matched", () => {
+    // `toMatch`, `test` and `exec` on the exported global pattern leave its lastIndex set, and
+    // `matchAll` starts from there: the anchor early in the line was missed.
+    expect("- an earlier memo item [15:36 Ben]").toMatch(MEMO_ANCHOR);
+    try {
+      expect(MEMO_ANCHOR.lastIndex).toBeGreaterThan(3);
+      const r = checkMemoAnchors("- [15:40] a topic", new Set(["15:40"]));
+      expect(r.dropped).toEqual([]);
+      expect(r.body).toBe("- [15:40] a topic");
+    } finally {
+      MEMO_ANCHOR.lastIndex = 0;
+    }
+  });
+
   test("the cap cuts on a line boundary and never leaves a heading alone at the end", () => {
     const long = [
       "Topics:",

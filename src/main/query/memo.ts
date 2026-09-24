@@ -275,7 +275,11 @@ export function checkMemoAnchors(body: string, minutes: ReadonlySet<string>): Me
       kept.push(line);
       continue;
     }
-    const anchors = [...line.matchAll(MEMO_ANCHOR)].map((m) => (m[1] as string).padStart(5, "0"));
+    // A fresh copy: matchAll starts at the pattern's lastIndex, which any `test` or `exec` on
+    // the exported one leaves set.
+    const anchors = [...line.matchAll(new RegExp(MEMO_ANCHOR))].map((m) =>
+      (m[1] as string).padStart(5, "0"),
+    );
     if (anchors.length === 0) {
       dropped.push({ text: line, reason: "no [HH:MM] anchor" });
       continue;
