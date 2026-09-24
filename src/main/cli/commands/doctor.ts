@@ -23,6 +23,7 @@ import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { ensureToken, tokenFileAccess } from "../../api/guard.ts";
 import { MODELS, verifyModels } from "../../asr/models.ts";
+import { locateHelper } from "../../capture/helper.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { bool } from "../args.ts";
 import { EXIT } from "../client.ts";
@@ -146,8 +147,8 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
         },
   );
 
-  const helper = cfg.settings["capture.helper"];
-  const program = helper[0] ?? "akou-capture";
+  const helper = locateHelper(cfg.settings["capture.helper"]);
+  const program = helper.command[0] as string;
   const found = isAbsolute(program)
     ? existsSync(program)
       ? program
@@ -155,11 +156,11 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
     : findProgram(program, env);
   checks.push(
     found
-      ? { name: "helper", state: "ok", detail: [found, ...helper.slice(1)].join(" ") }
+      ? { name: "helper", state: "ok", detail: [found, ...helper.command.slice(1)].join(" ") }
       : {
           name: "helper",
           state: "fail",
-          detail: `the capture helper ${program} was not found${helper.length === 0 ? " (it ships inside the app)" : " (capture.helper in config.json)"}`,
+          detail: `the capture helper ${program} was not found${helper.source === "config" ? " (capture.helper in config.json)" : " (it ships inside the app)"}`,
         },
   );
 

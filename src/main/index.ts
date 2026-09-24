@@ -7,8 +7,8 @@
  * - **Single instance.** A pid lock in the config folder; a second app refuses to start and names
  *   the one running. `runtime.json` (pid, port, version) is written once the API listens, mode 0600,
  *   and removed at quit.
- * - **Calls**: the `CallManager` with the capture engine (the `akou-capture` helper, or the command
- *   `capture.helper` names; tests use `scripts/fake-helper.ts`).
+ * - **Calls**: the `CallManager` with the capture engine: the command `capture.helper` names (tests
+ *   use `scripts/fake-helper.ts`), else the bundled `akou-capture`, else the one on PATH.
  * - **Speech**: the live recognizer Worker, started at once and in parallel, so a start never waits
  *   for a model; the final pass after every ending, when the part audio can be read.
  * - **Questions**: one `CallQuery` per call, kept so its index updates incrementally.
@@ -59,7 +59,7 @@ import { partFile } from "./call/folder.ts";
 import { CallManager, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
-import { AkouCaptureEngine } from "./capture/helper.ts";
+import { AkouCaptureEngine, locateHelper } from "./capture/helper.ts";
 import {
   type LoadedConfig,
   loadConfig,
@@ -210,7 +210,7 @@ export class AkouApp implements ApiApp {
     const engine =
       o.engine ??
       new AkouCaptureEngine({
-        command: s["capture.helper"].length > 0 ? [...s["capture.helper"]] : ["akou-capture"],
+        command: locateHelper(s["capture.helper"]).command,
       });
     this.manager = new CallManager({
       root: s["recordings.root"],
