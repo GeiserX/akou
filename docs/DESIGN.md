@@ -406,14 +406,14 @@ interface Provider {
 **HarnessProvider**, how it works:
 
 - **Discovery.** At start, akou resolves `claude` and `codex` through the user's login shell (`$SHELL -lc 'command -v claude codex'` on Unix, `where` on Windows), because an app bundle gets a minimal environment. Results and versions are cached in `runtime.json` and shown in `akou status` and Settings. The user can pin a path.
-- **Invocation.** Claude Code: `claude -p --output-format stream-json --verbose` with the prompt on stdin, run in an empty scratch directory so no project instructions load, with tools disallowed. Codex: `codex exec --json --sandbox read-only -` (the trailing `-` makes Codex read the prompt from stdin), same scratch directory. `--json` is flagged experimental in the Codex CLI reference, so the parser checks the Codex version first. Tokens are parsed from the streamed JSON and forwarded over RPC to the ask box as they arrive.
+- **Invocation.** Claude Code: `claude -p --output-format stream-json --verbose --include-partial-messages --tools "" --strict-mcp-config --no-session-persistence --system-prompt …` with the prompt on stdin, run in an empty scratch directory so no project instructions load, with no tools. `--include-partial-messages` is what makes the answer stream token by token; `--strict-mcp-config` with no MCP config keeps the user's MCP servers out, which cut the context of a one-word prompt from about 17k tokens to about 3k. Codex: `codex exec --json --sandbox read-only -` (the trailing `-` makes Codex read the prompt from stdin), same scratch directory. It also needs `--skip-git-repo-check` (the scratch directory is not a repository) and runs `--ephemeral`. `--json` is flagged experimental in the Codex CLI reference, so the parser checks the Codex version first. Tokens are parsed from the streamed JSON and forwarded over RPC to the ask box as they arrive.
 - **Session reuse.** For repeated questions on one call, Claude Code's `--resume` keeps the transcript prefix in the harness's own context so the stable pack prefix is not re-sent. Measured in M2; off if it costs more than it saves.
 - **Latency and cost.** Expect 2 to 5 s to first token (harness start-up plus model), 6 to 15 s for a full answer; these are estimates. Each spawn also loads the harness's own global context (the user-level instruction file, memory and skills), even in a scratch directory; gate G7 measures that cost, and `--resume` (M2) exists to amortise it. Each question spends roughly the pack size (4 to 8k tokens) plus the answer from the user's subscription window. The rolling memo through the harness is **off by default**, because it would run unattended every few minutes; ask and enhance run only on an explicit request.
 - **When it cannot run.** No harness found, a non-zero exit, a rate-limit or "usage limit" message, or no answer within 60 s: the ask box shows the retrieved excerpts (already visible after 300 ms) and a "Copy context for my agent" button, with the reason stated ("Claude Code reported its usage limit is reached until 18:00"). `akou status` shows `provider: unavailable (reason)`. Nothing is queued or retried silently.
 - **Provenance.** Every `answer`, `memo` and `enhanced` event carries `model: claude-code/<version>` or `codex/<version>` and `by`. Agent-authored notes and names carry `by: agent:<client>`.
 - **Terms of service.** A third-party app driving a user's own locally installed harness on their own machine, on their explicit request, is not obviously covered or forbidden by the consumer terms of either vendor. We state this in `docs/providers.md` as a risk to verify before release, not as settled. akou never automates login, never touches credentials, never runs the harness unattended by default, and always leaves the raw-API and local-model providers available under the same interface.
 
-Other providers: `openai-compatible` (Ollama, LM Studio, llama.cpp server, vLLM, OpenAI) and `anthropic` (the user's own key, with prompt caching). Keys go in the OS keychain. `none` shows excerpts only. Each workspace can use a different provider, because work and personal calls have different data rules.
+Other providers: `openai-compatible` (Ollama, LM Studio, llama.cpp server, vLLM, OpenAI) and `anthropic` (the user's own key, with prompt caching). Keys go in the OS keychain; until that store exists, `provider.apiKey` lives in the config file, which is the owner's alone, and is never shown back over the API or logged. `none` shows excerpts only. Each workspace can use a different provider, because work and personal calls have different data rules.
 
 ### 5.4 The live query engine
 
@@ -539,7 +539,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /calls/{id}/ask` `{question, stream}` | Needs a provider. Streams tokens when `stream` |
 | `GET /calls/{id}/search?q=&k=` | Hits |
 | `POST /calls/{id}/speakers` `{spk, name}` · `POST …/speakers/merge` · `POST …/speakers/unmerge` | Speakers |
-| `POST /calls/{id}/notes` · `PATCH /calls/{id}/notes/{nid}` · `POST /calls/{id}/remember` · `DELETE /calls/{id}/remember/{rid}` | Notes, memory |
+| `POST /calls/{id}/notes` · `PATCH /calls/{id}/notes/{nid}` · `DELETE /calls/{id}/notes/{nid}` · `POST /calls/{id}/remember` · `DELETE /calls/{id}/remember/{rid}` | Notes, memory |
 | `GET /calls/{id}/memo` · `PUT /calls/{id}/memo` `{text, coversSeq}` | Memo |
 | `GET /calls/{id}/vocab` · `POST /calls/{id}/vocab` `{term, heard[], segs?, decode?}` · `DELETE /calls/{id}/vocab/{vid}` · `POST /calls/{id}/vocab/pass` | The list in force for the call, a call-scoped add (`vocab.add`), its retraction, the post-call pass |
 | `GET /vocab` · `POST /vocab` · `DELETE /vocab/{term}` · `POST /vocab/{approve,reject,suggest,check,import}` | The vocabulary files |
@@ -740,9 +740,9 @@ akou/
       asr/                    live-worker.ts, finalize-worker.ts, speakers.ts, pad.ts, echo.ts
       vocab/                  files.ts (YAML read/write, import), decode-list.ts (cap, priority, model-type check),
                               bpe-vocab.ts (from tokenizer.json, tokenization check), check.ts, suggest.ts, pass.ts (layer 3 prompt + apply)
-      query/                  context.ts, classify.ts, bm25.ts, chunks.ts, memo.ts, render.ts
-      notes/                  notepad.ts, enhance.ts, templates.ts, cite-check.ts
-      llm/                    provider.ts, harness.ts, openai-compatible.ts, anthropic.ts
+      query/                  context.ts, classify.ts, bm25.ts, chunks.ts, memo.ts, render.ts, ask.ts
+      notes/                  notepad.ts, enhance.ts, templates.ts, cite-check.ts, templates/*.md (the five shipped)
+      llm/                    provider.ts, harness.ts, openai-compatible.ts, anthropic.ts, none.ts (excerpts-only replies)
       api/                    server.ts, guard.ts, routes/*.ts
       mcp/                    server.ts
       share/                  transport.ts, local-link.ts

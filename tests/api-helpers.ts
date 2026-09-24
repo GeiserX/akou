@@ -11,6 +11,8 @@ import type { Guard } from "../src/main/api/guard.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import type { FinalAudioSpec } from "../src/main/asr/finalize-worker.ts";
 import { type AkouApp, startApp } from "../src/main/index.ts";
+import type { Discovery } from "../src/main/llm/harness.ts";
+import type { Provider } from "../src/main/llm/provider.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { stereoWav } from "./fixtures/audio.ts";
@@ -56,6 +58,8 @@ export interface RigOptions {
   models?: ModelSpec | null;
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   home?: string;
+  provider?: Provider;
+  discover?: (env: Record<string, string | undefined>) => Promise<Discovery>;
 }
 
 /** A WAV the fake recognizer reads as words: "hello world" on the mic, "ok great" on the call. */
@@ -84,6 +88,8 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     "capture.coldStartSeconds": 10,
     "capture.stopSeconds": 3,
     "user.name": "Ana",
+    // No test runs the user's real harness; harness tests pass a fake provider or discovery.
+    "provider.kind": "none",
     ...o.settings,
   });
   const logs: AppRig["logs"] = [];
@@ -96,6 +102,8 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     asrInThread: true,
     finalAudio: o.finalAudio,
     guard: o.guard,
+    provider: o.provider,
+    discover: o.discover,
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

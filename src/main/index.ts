@@ -67,6 +67,18 @@ import {
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
+import { AnthropicProvider } from "./llm/anthropic.ts";
+import {
+  type Discovery,
+  discoverHarnesses,
+  HarnessProvider,
+  type HarnessTarget,
+  pickHarness,
+} from "./llm/harness.ts";
+import { NoneProvider } from "./llm/none.ts";
+import { OpenAiCompatibleProvider } from "./llm/openai-compatible.ts";
+import type { Provider } from "./llm/provider.ts";
+import { listTemplates, type Template } from "./notes/templates.ts";
 import { CallQuery } from "./query/context.ts";
 import { mergeVocab, readVocabFile, vocabPaths } from "./vocab/files.ts";
 
@@ -103,6 +115,10 @@ export interface AppOptions {
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   /** The window. None means headless. */
   window?: WindowFactory;
+  /** The provider, replacing the one the settings name. Tests pass a fake. */
+  provider?: Provider;
+  /** Looks for Claude Code and Codex. Tests pass a fake; nothing else does. */
+  discover?: (env: Record<string, string | undefined>) => Promise<Discovery>;
   clock?: Clock;
   /** Test-only: the security suite's positive control replaces the guard. */
   guard?: Guard;
@@ -183,6 +199,9 @@ export class AkouApp implements ApiApp {
   private readonly vocabCache = new Map<string, VocabSource>();
   private readonly finals = new Map<string, Promise<unknown>>();
   private quitting: Promise<void> | null = null;
+  /** Claude Code and Codex as found at start; null while still looking. */
+  discovery: Discovery | null = null;
+  private discovering = false;
   private resolveClosed!: () => void;
   private lockPath: string;
   tokens: TokenSource;
@@ -238,6 +257,92 @@ export class AkouApp implements ApiApp {
       beforeEnd: (id) => this.asr?.flush(id) ?? Promise.resolve(),
     });
     this.startAsr(s);
+    if (s["provider.kind"] === "harness") this.discoverHarnesses();
+  }
+
+  // -------------------------------------------------------------------------
+  // The provider
+
+  /**
+   * Looks for the harnesses in the background, once, so a start never waits for a login shell.
+   * Runs at start when the provider is the harness, else the first time the harness is asked for.
+   */
+  private discoverHarnesses(): void {
+    if (this.discovering) return;
+    this.discovering = true;
+    const env = this.o.env ?? process.env;
+    const find = this.o.discover ?? ((e) => discoverHarnesses(e, this.o.platform));
+    void find(env)
+      .then((d) => {
+        this.discovery = d;
+        if (this.server) this.writeRuntime();
+      })
+      .catch((err) => {
+        this.discovery = { claude: null, codex: null };
+        this.log("warn", `harness discovery: ${(err as Error).message}`);
+      });
+  }
+
+  private harnessTarget(): HarnessTarget | { none: string } {
+    const s = this.cfg.settings;
+    if (s["provider.harnessPath"] === "") this.discoverHarnesses();
+    return pickHarness(
+      s["provider.harness"] as "auto" | "claude" | "codex",
+      s["provider.harnessPath"],
+      this.discovery,
+    );
+  }
+
+  /** The provider the settings name, built fresh so a settings change applies at once. */
+  provider(): Provider {
+    if (this.o.provider) return this.o.provider;
+    const s = this.cfg.settings;
+    switch (s["provider.kind"]) {
+      case "harness":
+        return new HarnessProvider({
+          target: () => this.harnessTarget(),
+          env: this.o.env ?? process.env,
+          onLog: (level, msg) => this.log(level, msg),
+        });
+      case "openai-compatible":
+        return new OpenAiCompatibleProvider({
+          baseUrl: s["provider.baseUrl"],
+          model: s["provider.model"],
+          apiKey: s["provider.apiKey"],
+        });
+      case "anthropic":
+        return new AnthropicProvider({
+          apiKey: s["provider.apiKey"],
+          model: s["provider.model"],
+          baseUrl: s["provider.baseUrl"],
+        });
+      default:
+        return new NoneProvider();
+    }
+  }
+
+  providerTimeoutMs(): number {
+    return this.cfg.settings["provider.timeoutSeconds"] * 1000;
+  }
+
+  /** What `status` and `akou_ask`'s visibility read: `{state, id, harness?, detail | reason}`. */
+  async providerStatus(): Promise<Record<string, unknown>> {
+    const p = this.provider();
+    const a = await p.available();
+    const harness = p instanceof HarnessProvider ? p.label() : undefined;
+    const checking =
+      p.id === "harness" &&
+      !this.o.provider &&
+      this.discovery === null &&
+      this.cfg.settings["provider.harnessPath"] === "";
+    if (a.ok) return { state: "available", id: p.id, harness, detail: a.detail };
+    return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
+  }
+
+  templates(): Template[] {
+    return listTemplates(this.configDir, {
+      onError: (msg) => this.log("warn", `template: ${msg}`),
+    });
   }
 
   private log(level: "info" | "warn" | "error", msg: string): void {
@@ -426,7 +531,7 @@ export class AkouApp implements ApiApp {
     return eventsAfter(events, after);
   }
 
-  status(): Record<string, unknown> {
+  async status(): Promise<Record<string, unknown>> {
     const live = this.manager.live();
     const last = this.manager.calls()[0];
     const s = this.cfg.settings;
@@ -461,7 +566,8 @@ export class AkouApp implements ApiApp {
         ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
         : null,
       asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
-      provider: { state: "unavailable", reason: "no provider in this build" },
+      provider: await this.providerStatus(),
+      harnesses: this.discovery,
       share: { active: false },
       config: { file: this.cfg.paths.configFile, issues: this.cfg.issues },
     };
@@ -569,6 +675,19 @@ export class AkouApp implements ApiApp {
           `${req.method} ${new URL(req.url).pathname}: ${(err as Error).stack ?? err}`,
         ),
     });
+    this.writeRuntime();
+    // Recovery and the final-pass catch-up run behind the API, never before it.
+    void this.manager
+      .init()
+      .then(() => this.catchUpFinals())
+      .catch((err) => this.log("error", `recovery: ${(err as Error).message}`));
+    if (!this.headless && this.o.window) this.window = await this.o.window(this);
+    else if (!this.headless) this.log("info", "the window is not built yet; running headless");
+  }
+
+  /** `runtime.json`: pid, port, version, and the harnesses found (DESIGN 5.3), mode 0600. */
+  private writeRuntime(): void {
+    if (!this.server || this.quitting) return;
     writePrivate(
       this.runtimeFile,
       `${JSON.stringify(
@@ -579,18 +698,12 @@ export class AkouApp implements ApiApp {
           version: this.version,
           startedAt: this.startedAt,
           headless: this.headless,
+          harnesses: this.discovery,
         },
         null,
         2,
       )}\n`,
     );
-    // Recovery and the final-pass catch-up run behind the API, never before it.
-    void this.manager
-      .init()
-      .then(() => this.catchUpFinals())
-      .catch((err) => this.log("error", `recovery: ${(err as Error).message}`));
-    if (!this.headless && this.o.window) this.window = await this.o.window(this);
-    else if (!this.headless) this.log("info", "the window is not built yet; running headless");
   }
 
   /** The one quit path. Safe to call twice; the second call waits for the first. */

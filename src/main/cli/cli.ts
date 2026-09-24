@@ -145,6 +145,7 @@ if (import.meta.main) {
     env: process.env,
     out: (t) => process.stdout.write(`${t}\n`),
     err: (t) => process.stderr.write(`${t}\n`),
+    write: (t) => process.stdout.write(t),
     signal: ac.signal,
   });
   process.exit(code);

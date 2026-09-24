@@ -202,14 +202,27 @@ const finalize: Command = {
 
 const enhance: Command = {
   name: "enhance",
-  summary: "Enhanced notes with the configured provider",
+  summary: "Write enhanced notes with the configured provider (on a live call: so far)",
   usage: "akou enhance [--template T] [--call ID] [--json]",
   flags: { template: { type: "string" }, call: { type: "string" } },
   run: async (ctx, p) => {
     const r = await api(ctx, "POST", `/calls/${ref(p, "last")}/enhance`, {
       body: { template: str(p, "template") },
+      // A long call is summarised stretch by stretch before the notes are written.
+      timeoutMs: 60 * 60_000,
+      signal: ctx.io.signal,
     });
-    return finish(ctx, r, (b) => JSON.stringify(b, null, 2));
+    return finish(ctx, r, (b) => {
+      const dropped = (b.dropped as Body[]).length;
+      const note = [
+        `rev ${b.rev}, template ${b.template ?? ""}`.trim(),
+        `by ${b.model}`,
+        b.live ? "so far (the call is still live)" : "",
+        dropped > 0 ? `${dropped} uncited line${dropped === 1 ? "" : "s"} dropped` : "",
+        `saved to ${b.file}`,
+      ].filter((x) => x !== "");
+      return `${b.markdown}\n\n(${note.join(" · ")})`;
+    });
   },
 };
 

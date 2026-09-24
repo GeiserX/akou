@@ -260,8 +260,12 @@ export function createMcpServer(o: McpOptions): McpServer {
       inputSchema: z.object({ question: z.string().min(1), call: CALL }),
     },
     async (a) => {
-      const r = await req("POST", `/calls/${id(a.call)}/ask`, { body: { question: a.question } });
-      return asResult(r, (b) => b.text ?? b.answer ?? compact(b));
+      const r = await req("POST", `/calls/${id(a.call)}/ask`, {
+        body: { question: a.question },
+        timeoutMs: 15 * 60_000,
+      });
+      // No model answered: the excerpts, labelled, are still the reply.
+      return asResult(r, (b) => b.text ?? compact(b));
     },
   );
   ask.disable();
@@ -547,7 +551,8 @@ export function createMcpServer(o: McpOptions): McpServer {
   server.registerTool(
     "akou_enhanced_put",
     {
-      description: "Save the enhanced notes you wrote for the latest call.",
+      description:
+        "Save the enhanced notes you wrote for the latest call. Every bullet must end with the segment ids it rests on, like [#l000031]; a bullet without a real citation is dropped. Place the user's own notes by id (`- {n0004}`); they are kept word for word.",
       inputSchema: z.object({ markdown: z.string().min(1), coversSeq: z.number().int().min(0) }),
     },
     async (a) => {
@@ -566,8 +571,12 @@ export function createMcpServer(o: McpOptions): McpServer {
       inputSchema: z.object({ template: z.string().optional() }),
     },
     async (a) => {
-      const r = await req("POST", "/calls/last/enhance", { body: a });
-      return asResult(r, compact);
+      const r = await req("POST", "/calls/last/enhance", { body: a, timeoutMs: 60 * 60_000 });
+      return asResult(
+        r,
+        (b) =>
+          `${b.markdown}\n\n(rev ${b.rev}, template ${b.template}, by ${b.model}; ${b.dropped.length} uncited lines dropped)`,
+      );
     },
   );
 

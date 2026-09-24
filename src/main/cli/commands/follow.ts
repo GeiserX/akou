@@ -3,8 +3,9 @@
  * `ask`, `search`. Every time printed is local wall-clock time from the API, never an offset.
  */
 
+import { readSse } from "../../llm/provider.ts";
 import { bool, duration, int, str } from "../args.ts";
-import { EXIT, exitFor } from "../client.ts";
+import { EXIT } from "../client.ts";
 import { api, type Body, type Command, type Ctx, finish, ref } from "../context.ts";
 import { usage } from "./calls.ts";
 
@@ -115,22 +116,75 @@ const context: Command = {
   },
 };
 
+/** A question may wait on a model: the provider's own deadline applies first. */
+export const ASK_TIMEOUT_MS = 15 * 60_000;
+
+/** Prints an ask reply. An excerpts-only reply goes to stdout, its reason to stderr, exit 69. */
+function askDone(ctx: Ctx, q: string, b: Body, streamed: boolean): number {
+  if (b.answered) {
+    if (streamed) ctx.io.write?.("\n");
+    else ctx.io.out(b.text);
+    return EXIT.ok;
+  }
+  ctx.io.out(b.text);
+  ctx.io.err(
+    `akou: no model answered (${b.reason}); \`akou context "${q}"\` prints what an agent answers from`,
+  );
+  return EXIT.unavailable;
+}
+
 const ask: Command = {
   name: "ask",
-  summary: "Answer a question with akou's configured provider",
+  summary: "Answer a question with akou's configured provider (excerpts when it cannot)",
   usage: 'akou ask "QUESTION" [--call ID] [--json]',
   flags: { call: { type: "string" } },
   run: async (ctx, p) => {
     const q = question(p.positional);
     if (!q) return usage(ctx, "ask needs a question");
-    const r = await api(ctx, "POST", `/calls/${ref(p)}/ask`, { body: { question: q } });
-    if (!ctx.json && r.body?.error === "provider_unavailable") {
-      ctx.io.err(
-        `akou: no provider can answer (${r.body.reason}); \`akou context "${q}"\` prints what an agent answers from`,
-      );
-      return exitFor(r.status, r.body.error);
+    const path = `/calls/${ref(p)}/ask`;
+    const write = ctx.io.write;
+    if (ctx.json || !write) {
+      const r = await api(ctx, "POST", path, {
+        body: { question: q },
+        timeoutMs: ASK_TIMEOUT_MS,
+        signal: ctx.io.signal,
+      });
+      if (r.status !== 200) return finish(ctx, r, () => "");
+      if (ctx.json) {
+        ctx.io.out(JSON.stringify(r.body));
+        return r.body.answered ? EXIT.ok : EXIT.unavailable;
+      }
+      return askDone(ctx, q, r.body, false);
     }
-    return finish(ctx, r, (b) => b.text ?? b.answer ?? JSON.stringify(b, null, 2));
+    // A terminal: print the answer as it streams.
+    const res = await ctx.client.stream("POST", path, {
+      body: { question: q, stream: true },
+      timeoutMs: ASK_TIMEOUT_MS,
+      signal: ctx.io.signal,
+    });
+    if (!res.ok || !res.body) {
+      const text = await res.text();
+      let body: Body = null;
+      try {
+        body = JSON.parse(text);
+      } catch {}
+      return finish(ctx, { status: res.status, body, text, contentType: "" }, () => "");
+    }
+    let streamed = false;
+    for await (const ev of readSse(res.body)) {
+      const data = JSON.parse(ev.data) as Body;
+      if (ev.event === "token") {
+        write(data.t);
+        streamed = true;
+      } else if (ev.event === "answer") {
+        return askDone(ctx, q, data, streamed);
+      } else if (ev.event === "error") {
+        ctx.io.err(`akou: ${data.message}`);
+        return EXIT.software;
+      }
+    }
+    ctx.io.err("akou: the answer stream ended early");
+    return EXIT.software;
   },
 };
 

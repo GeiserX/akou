@@ -2,9 +2,12 @@
  * Speakers, the notepad, agent memory and the memo (docs/DESIGN.md sections 5.1, 5.4, 5.5 and
  * 6.2). Every write is an event through the call's one writer; agent-authored notes and names carry
  * `by: agent:<client>` (TRAPS "Agent-authored notes indistinguishable from the user's"). A write on
- * a finished call reopens its log for the one event; `last` is refused on writes.
+ * a finished call reopens its log for the one event; `last` is refused on writes. Notepad lines
+ * are built by `notes/notepad.ts`: an edit is `rev + 1`, a delete a `note.del`.
  */
 
+import type { EventDraft } from "../../../core/log/events.ts";
+import { NoteError, noteDeleteDraft, noteDraft, noteEditDraft } from "../../notes/notepad.ts";
 import { memoDraft } from "../../query/memo.ts";
 import { HttpError, json, type Router, readBody } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -16,6 +19,18 @@ const MAX_TEXT = 4000;
 function checkSpeaker(spk: string): void {
   if (!SPEAKER.test(spk)) {
     throw new HttpError(400, "bad_speaker", `"${spk}" is not a speaker id (you, c2, ...)`);
+  }
+}
+
+/** A notepad draft, with its refusals as HTTP errors. */
+function notes(build: () => EventDraft): EventDraft {
+  try {
+    return build();
+  } catch (err) {
+    if (err instanceof NoteError) {
+      throw new HttpError(err.code === "not_found" ? 404 : 400, err.code, err.message);
+    }
+    throw err;
   }
 }
 
@@ -77,38 +92,29 @@ export function notesRoutes(r: Router<ApiApp>): void {
 
   r.add("POST", "/calls/:id/notes", async (c) => {
     const b = await readBody<{ text: string }>(c.req, { text: "string" });
-    const text = checkText(b.text);
     const id = callId(c);
-    const e = await c.app.write(id, (call) => ({
-      type: "note",
-      id: nextItemId("n", call.view.lastSeq),
-      rev: 1,
-      text,
-      w: c.app.now(),
-      afterSeq: call.view.lastSeq,
-      by: c.by,
-    }));
+    const e = await c.app.write(id, (call) =>
+      notes(() => noteDraft(call.view, { text: b.text, by: c.by, now: c.app.now() })),
+    );
     return json(201, { ok: true, call: id, note: e });
   });
 
   r.add("PATCH", "/calls/:id/notes/:nid", async (c) => {
     const b = await readBody<{ text: string }>(c.req, { text: "string" });
-    const text = checkText(b.text);
     const id = callId(c);
-    const e = await c.app.write(id, (call) => {
-      const n = call.view.notes().find((x) => x.id === c.params.nid);
-      if (!n) throw new HttpError(404, "not_found", `no note ${c.params.nid}`);
-      return {
-        type: "note",
-        id: n.id,
-        rev: n.rev + 1,
-        text,
-        w: n.w,
-        afterSeq: n.afterSeq,
-        by: c.by,
-      };
-    });
+    const e = await c.app.write(id, (call) =>
+      notes(() => noteEditDraft(call.view, c.params.nid as string, b.text, c.by)),
+    );
     return json(200, { ok: true, call: id, note: e });
+  });
+
+  r.add("DELETE", "/calls/:id/notes/:nid", async (c) => {
+    await readBody(c.req, {});
+    const id = callId(c);
+    const e = await c.app.write(id, (call) =>
+      notes(() => noteDeleteDraft(call.view, c.params.nid as string, c.by)),
+    );
+    return json(200, { ok: true, call: id, deleted: e });
   });
 
   r.add("POST", "/calls/:id/remember", async (c) => {
