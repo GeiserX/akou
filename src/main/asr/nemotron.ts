@@ -126,9 +126,9 @@ export class DiarizeHelper {
       { stdin: "pipe", stdout: "pipe", stderr: "pipe" },
     );
     this.stdin = this.proc.stdin;
-    void this.read();
-    void this.readErr();
-    void this.proc.exited.then((code) => {
+    // The exit is judged once stdout and stderr are drained: an error line or a stderr tail still
+    // in the pipe when the process is reaped would otherwise be lost from the reason.
+    void Promise.all([this.proc.exited, this.read(), this.readErr()]).then(([code]) => {
       const tail = this.stderrTail.trim().split("\n").slice(-3).join("; ");
       this.finish(
         this.closing && code === 0

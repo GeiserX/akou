@@ -112,6 +112,11 @@ describe("the final pass's diarizer", () => {
     await expect(d.process(tone(1, 0.1))).rejects.toThrow(/cannot load/);
   });
 
+  test("the helper's own words are read to the end of its output, even when its exit is seen first", async () => {
+    const d = new NemotronDiarizer(spec(["--late-error"], join("/nonexistent", "model.onnx")));
+    await expect(d.process(tone(1, 0.1))).rejects.toThrow(/cannot load/);
+  });
+
   test("a helper that crashes mid-pass rejects; it never hangs the pass", async () => {
     const d = new NemotronDiarizer(spec(["--die-after", "1"]));
     await expect(d.process(tone(3, 0.1))).rejects.toThrow(/exited with code 70/);

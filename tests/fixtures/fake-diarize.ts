@@ -6,11 +6,13 @@
  *
  *   bun tests/fixtures/fake-diarize.ts run --model FILE --mode live|final [--threads N]
  *     [--step S] [--look S] [--die-after S] [--garbage] [--no-ready] [--protocol P] [--hang]
+ *     [--late-error]
  *
  * `--die-after S` exits 70 once S seconds of audio have arrived; `--garbage` writes a line that is
  * not the protocol after the first audio; `--no-ready` never says ready; `--protocol P` says ready
  * in protocol P; `--hang` never answers a flush. A model path that does not exist exits 66 with an
- * error line, as the real helper does.
+ * error line, as the real helper does; with `--late-error` the process has exited before the line
+ * arrives (a child of its own writes it 0.3 s later on the same stdout and stderr).
  */
 
 import { existsSync } from "node:fs";
@@ -34,6 +36,18 @@ if (!argv.includes("run") || (mode !== "live" && mode !== "final")) {
   process.exit(64);
 }
 if (!existsSync(model)) {
+  if (argv.includes("--late-error")) {
+    const line = JSON.stringify({ type: "error", message: `cannot load ${model}: no such file` });
+    Bun.spawn(
+      [
+        process.execPath,
+        "-e",
+        `await Bun.sleep(300); console.log(${JSON.stringify(line)}); console.error("akou-diarize: cannot load")`,
+      ],
+      { stdout: "inherit", stderr: "inherit" },
+    ).unref();
+    process.exit(66);
+  }
   out({ type: "error", message: `cannot load ${model}: no such file` });
   process.stderr.write(`akou-diarize: cannot load ${model}: no such file\n`);
   process.exit(66);
