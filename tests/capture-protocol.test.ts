@@ -1,4 +1,6 @@
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { HARK_LIVE_ARGS, harkArgs, StereoS16Decoder } from "../src/main/capture/hark.ts";
 import { helperArgs } from "../src/main/capture/helper.ts";
 import {
@@ -139,6 +141,28 @@ describe("akou-capture/1 stderr and stdin", () => {
       const r = parseStderrLine(JSON.stringify(l));
       expect(r.kind).toBe("msg");
     }
+  });
+
+  test("the example lines printed in DESIGN 2.4 parse exactly as written", () => {
+    const design = readFileSync(join(import.meta.dir, "..", "docs", "DESIGN.md"), "utf8");
+    const section = design.slice(design.indexOf("### 2.4"), design.indexOf("### 2.5"));
+    const block = /```jsonl\n([\s\S]*?)```/.exec(section)?.[1] ?? "";
+    const lines = block.split("\n").filter((l) => l.trim() !== "");
+    const parsed = lines.map((l) => parseStderrLine(l));
+    expect(parsed.map((p) => (p.kind === "msg" ? p.msg.type : p.line))).toEqual([
+      "hello",
+      "capturing",
+      "first_audio",
+      "level",
+      "health",
+      "device",
+      "warn",
+      "stopped",
+    ]);
+    // Positive control: the design's `capturing` without its anchor is not a capturing message.
+    const capturing = JSON.parse(lines[1] as string) as Record<string, unknown>;
+    delete capturing.capture_ns;
+    expect(parseStderrLine(JSON.stringify(capturing)).kind).toBe("text");
   });
 
   test("text, malformed JSON and unknown types go to the log only", () => {
