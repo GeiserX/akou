@@ -8,7 +8,7 @@
 
 import { byId, toast } from "./dom.ts";
 import { modelsCardText } from "./models-text.ts";
-import type { ModelsInfo, Transport } from "./protocol.ts";
+import type { ModelsInfo, Reply, Transport } from "./protocol.ts";
 
 export class ModelsCard {
   private polling: ReturnType<typeof setInterval> | null = null;
@@ -36,7 +36,13 @@ export class ModelsCard {
   }
 
   private async pull(): Promise<void> {
-    const r = await this.t.request<ModelsInfo & { message?: string }>("POST", "/models/pull");
+    let r: Reply<ModelsInfo & { message?: string }>;
+    try {
+      r = await this.t.request("POST", "/models/pull");
+    } catch (err) {
+      toast(`The download could not start: ${(err as Error).message}`);
+      return;
+    }
     if (r.status >= 400) {
       toast(r.body.message ?? "The download could not start");
       return;
@@ -44,10 +50,20 @@ export class ModelsCard {
     this.update(r.body);
   }
 
+  /** One poll a second; a tick is skipped while the last is unanswered, and a failed one is dropped. */
   private startPolling(): void {
+    let inFlight = false;
     this.polling ??= setInterval(async () => {
-      const r = await this.t.request<ModelsInfo>("GET", "/models");
-      if (r.status === 200) this.update(r.body);
+      if (inFlight) return;
+      inFlight = true;
+      try {
+        const r = await this.t.request<ModelsInfo>("GET", "/models");
+        if (r.status === 200) this.update(r.body);
+      } catch {
+        // The next tick asks again; the status push also carries the models' state.
+      } finally {
+        inFlight = false;
+      }
     }, 1000);
   }
 
