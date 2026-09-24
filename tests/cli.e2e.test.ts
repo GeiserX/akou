@@ -10,7 +10,10 @@ import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openGuard } from "../src/main/api/guard.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
-import { EXIT, exitFor } from "../src/main/cli/client.ts";
+import { parseArgs } from "../src/main/cli/args.ts";
+import { ApiClient, EXIT, exitFor, type RequestOptions } from "../src/main/cli/client.ts";
+import { followCommands } from "../src/main/cli/commands/follow.ts";
+import type { Command } from "../src/main/cli/context.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli, rigCli } from "./cli-helpers.ts";
@@ -91,6 +94,21 @@ describe("exit codes", () => {
     for (const name of ["start", "tail", "context", "vocab", "doctor", "skill", "mcp", "quit"]) {
       expect(help.out).toContain(`  ${name} `);
     }
+  });
+
+  test("a flag never takes another flag as its value; --name=value still can", () => {
+    const spec = {
+      title: { type: "string", short: "t" },
+      follow: { type: "boolean", short: "f" },
+    } as const;
+    expect(() => parseArgs(["-t", "--json"], spec)).toThrow("--title needs a value");
+    expect(() => parseArgs(["--title", "-f"], spec)).toThrow("--title needs a value");
+    expect(() => parseArgs(["--title", "--"], spec)).toThrow("--title needs a value");
+    expect(parseArgs(["--title=--json"], spec).flags.title).toBe("--json");
+    // A word that is not a flag, dash or not, is still a value.
+    expect(parseArgs(["-t", "-", "--json"], spec).flags).toEqual({ title: "-", json: true });
+    expect(parseArgs(["-t", "-5"], spec).flags.title).toBe("-5");
+    expect(parseArgs(["-t", "-not sure"], spec).flags.title).toBe("-not sure");
   });
 
   test("commands whose machinery is not built say so and exit 69", async () => {
@@ -426,6 +444,20 @@ describe("doctor and models", () => {
     expect(bad.code).toBe(EXIT.unavailable);
   });
 
+  test("models import reports a truncated file it could not replace as missing", async () => {
+    const t = tempDir();
+    const models = join(t.dir, "models");
+    const env = { ...process.env, AKOU_HOME: t.dir, AKOU_MODELS_DIR: models };
+    mkdirSync(join(models, "tiny"), { recursive: true });
+    writeFileSync(join(models, "tiny", "tiny.bin"), tiny.slice(0, 3));
+    const empty = tempDir();
+    const imp = await cli(env, ["models", "import", empty.dir, "--json"], { models: [tinyModel] });
+    expect(imp.json.missing).toEqual(["tiny/tiny.bin"]);
+    expect(imp.code).toBe(EXIT.unavailable);
+    empty.cleanup();
+    t.cleanup();
+  });
+
   test("models list and import; pull is refused under test", async () => {
     const env = { ...process.env, ...rig.env };
     const src = tempDir();
@@ -439,6 +471,110 @@ describe("doctor and models", () => {
     expect(pull.code).toBe(EXIT.unavailable);
     expect(pull.err).toContain("downloads are off in tests and CI");
     src.cleanup();
+  });
+});
+
+describe("tail -f against a scripted API", () => {
+  test("a line committed between the events answer and the transcript read prints once", async () => {
+    // Lines at seq 6 and 7, then the end at 8. Each event is answered before the next one is
+    // committed, so line 7 is in the transcript while the events cursor is still at 6.
+    const events = [6, 7, 8].map((seq) => ({ seq, type: seq === 8 ? "call.ended" : "segment" }));
+    let committed = 5;
+    const client = {
+      request: async (_m: string, path: string, o: RequestOptions = {}) => {
+        const q = o.query ?? {};
+        if (path.endsWith("/events")) {
+          const next = events.find((e) => e.seq > Number(q.after));
+          if (!next) throw new Error("followed past the end");
+          committed = Math.max(committed, next.seq + 1);
+          return { status: 200, body: { events: [next], cursor: next.seq } };
+        }
+        const since = Number(q.since ?? 0);
+        const lines = [6, 7]
+          .filter((seq) => seq > since && seq <= committed)
+          .map((seq) => ({ seq, time: "10:00:00", speaker: "you", text: `line ${seq}` }));
+        return { status: 200, body: { call: "c1", cursor: committed, lines } };
+      },
+    };
+    const out: string[] = [];
+    const tail = followCommands.find((c) => c.name === "tail") as Command;
+    const code = await tail.run(
+      {
+        io: { env: {}, out: (t) => out.push(t), err: () => {} },
+        json: false,
+        client: client as unknown as ApiClient,
+        version: "0",
+      },
+      { flags: { follow: true }, positional: [] },
+    );
+    expect(code).toBe(EXIT.ok);
+    expect(out).toEqual(["10:00:00 you: line 6", "10:00:00 you: line 7"]);
+  });
+});
+
+describe("a connection that breaks after the request went out", () => {
+  /** An app that answers /status and drops every other request unanswered, logging each one. */
+  function droppingApp() {
+    const t = tempDir();
+    const seen: string[] = [];
+    const server = Bun.listen({
+      hostname: "127.0.0.1",
+      port: 0,
+      socket: {
+        data(sock, data) {
+          const head = data.toString().split("\r\n")[0] as string;
+          seen.push(head.replace(/ HTTP.*$/, ""));
+          if (!head.startsWith("GET /v1/status")) return void sock.end();
+          const body = "{}";
+          sock.end(
+            `HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: ${body.length}\r\nconnection: close\r\n\r\n${body}`,
+          );
+        },
+      },
+    });
+    const dir = join(t.dir, ".config", "akou");
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(
+      join(dir, "runtime.json"),
+      JSON.stringify({ pid: process.pid, port: server.port, version: "0" }),
+    );
+    const client = new ApiClient({
+      env: { AKOU_HOME: t.dir },
+      client: "test",
+      // A launch that starts nothing: the "running" app above answers /status.
+      launch: [process.execPath, "-e", "0"],
+      launchBudgetMs: 2000,
+    });
+    return {
+      seen,
+      client,
+      close: () => {
+        server.stop(true);
+        t.cleanup();
+      },
+    };
+  }
+
+  test("a write is not sent a second time: it may have been applied", async () => {
+    const a = droppingApp();
+    try {
+      await expect(
+        a.client.request("POST", "/calls/live/notes", { body: { text: "x" } }),
+      ).rejects.toThrow();
+      expect(a.seen).toEqual(["POST /v1/calls/live/notes"]);
+    } finally {
+      a.close();
+    }
+  });
+
+  test("positive control: a read is retried once the app answers", async () => {
+    const a = droppingApp();
+    try {
+      await expect(a.client.request("GET", "/calls")).rejects.toThrow();
+      expect(a.seen.filter((l) => l === "GET /v1/calls")).toHaveLength(2);
+    } finally {
+      a.close();
+    }
   });
 });
 

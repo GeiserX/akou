@@ -129,7 +129,10 @@ async function importModels(
         (s) => existsSync(s) && statSync(s).size === f.size,
       );
       if (!source || (await sha256File(source)) !== f.sha256) {
-        if (!existsSync(target)) missing.push(`${m.id}/${f.name}`);
+        // A file already there counts only at its full size, as `models list` reads it.
+        if (!existsSync(target) || statSync(target).size !== f.size) {
+          missing.push(`${m.id}/${f.name}`);
+        }
         continue;
       }
       mkdirSync(join(dir, m.id), { recursive: true });

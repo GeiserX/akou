@@ -160,7 +160,8 @@ export class ApiClient {
 
   /**
    * One API request. A refused connection (the app is gone) launches the app once, when allowed,
-   * and retries. Throws `Unreachable` when there is no app to talk to.
+   * and retries; a read is retried on a broken connection too, a write never. Throws
+   * `Unreachable` when there is no app to talk to.
    */
   async request(method: string, path: string, o: RequestOptions = {}): Promise<ApiResponse> {
     const allowLaunch = o.launch ?? true;
@@ -169,7 +170,7 @@ export class ApiClient {
       try {
         return await this.send(rt, method, path, o);
       } catch (err) {
-        if (!isConnectionError(err)) throw err;
+        if (!isConnectionError(err, method === "GET" || method === "HEAD")) throw err;
       }
     }
     if (!allowLaunch || !this.launchCmd) {
@@ -238,14 +239,17 @@ export class ApiClient {
   }
 }
 
-function isConnectionError(err: unknown): boolean {
+/**
+ * Is the app gone, so a relaunch and a resend are safe? Only a refused connection proves a request
+ * never arrived; a reset or a closed socket may come after the app applied it, so a write
+ * (`idempotent` false) is never sent again on one.
+ */
+function isConnectionError(err: unknown, idempotent: boolean): boolean {
   const e = err as { code?: string; name?: string; message?: string };
   if (e?.name === "TimeoutError" || e?.name === "AbortError") return false;
+  if (e?.code === "ConnectionRefused" || e?.code === "ECONNREFUSED") return true;
   return (
-    e?.code === "ConnectionRefused" ||
-    e?.code === "ECONNREFUSED" ||
-    e?.code === "ECONNRESET" ||
-    /connect|refused|socket/i.test(e?.message ?? "")
+    idempotent && (e?.code === "ECONNRESET" || /connect|refused|socket/i.test(e?.message ?? ""))
   );
 }
 

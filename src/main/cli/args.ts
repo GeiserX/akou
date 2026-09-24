@@ -32,6 +32,11 @@ const COMMON: FlagSpecs = {
   help: { type: "boolean", short: "h" },
 };
 
+/** A word the parser reads as a flag or as `--`, never as a value. */
+function isFlag(a: string): boolean {
+  return a.startsWith("--") || /^-[a-zA-Z]$/.test(a);
+}
+
 export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
   const all: Record<string, FlagSpec> = { ...COMMON, ...spec };
   const byShort = new Map<string, string>();
@@ -64,8 +69,14 @@ export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
       flags[name] = true;
       continue;
     }
-    const value = inline ?? argv[++i];
-    if (value === undefined) throw new UsageError(`--${name} needs a value`);
+    let value = inline;
+    if (value === undefined) {
+      // The next word, unless it is itself a flag (`-t --json`); `--title=--json` still works.
+      const next = argv[i + 1];
+      if (next === undefined || isFlag(next)) throw new UsageError(`--${name} needs a value`);
+      value = next;
+      i++;
+    }
     flags[name] = value;
   }
   return { flags, positional };

@@ -56,12 +56,14 @@ const tail: Command = {
     const id = first.body.call as string;
     for (const l of first.body.lines) ctx.io.out(lineText(l, format));
     if (!bool(p, "follow")) return EXIT.ok;
-    // Follow by id, so `live` cannot move to another call under us.
-    let cursor = first.body.cursor as number;
+    // Follow by id, so `live` cannot move to another call under us. Two cursors: the transcript
+    // read can already hold lines committed after the events answer, and must not print them twice.
+    let eventCursor = first.body.cursor as number;
+    let lineCursor = eventCursor;
     while (!ctx.io.signal?.aborted) {
       let ev: Body;
       try {
-        ev = await nextEvents(ctx, id, cursor);
+        ev = await nextEvents(ctx, id, eventCursor);
       } catch (err) {
         const r = (err as { response?: Body }).response;
         if (r) return finish(ctx, r, () => "");
@@ -70,11 +72,12 @@ const tail: Command = {
       }
       if (ev.events.length === 0) continue;
       const r = await api(ctx, "GET", `/calls/${id}/transcript`, {
-        query: { format: "json", since: cursor },
+        query: { format: "json", since: lineCursor },
       });
       if (r.status !== 200) return finish(ctx, r, () => "");
       for (const l of r.body.lines) ctx.io.out(lineText(l, format));
-      cursor = ev.cursor;
+      lineCursor = r.body.cursor;
+      eventCursor = ev.cursor;
       const ended = (ev.events as Body[]).some(
         (e) => e.type === "call.ended" || e.type === "call.failed",
       );
