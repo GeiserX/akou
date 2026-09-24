@@ -686,6 +686,121 @@ fn a_default_that_changed_during_the_open_is_followed_at_once() {
     );
 }
 
+/// A pinned mic whose stream is lost, and whose rebuild fails `fails` times (the sound server
+/// restarting, the device not back yet). Nothing else would ever look at it again: no default
+/// to watch, and the stall rule waits for a running device.
+struct Flaky {
+    fails: u32,
+    attempts: Arc<Mutex<Vec<std::time::Instant>>>,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Frontend for Flaky {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Host
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: Some(MicInfo {
+                id: "usb-headset".into(),
+                name: "usb-headset".into(),
+                rate: 16_000,
+            }),
+            ..Default::default()
+        })
+    }
+    fn start(&mut self, _anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(100));
+            let _ = tx.send(Event::Lost {
+                ch: Ch::Mic,
+                detail: "the sound server connection closed".into(),
+            });
+            std::thread::sleep(Duration::from_millis(2_500));
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        let mut a = self.attempts.lock().unwrap();
+        a.push(std::time::Instant::now());
+        if a.len() as u32 <= self.fails {
+            return Err("no sound server answered".into());
+        }
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {}
+    fn status(&mut self) -> Status {
+        Status::default()
+    }
+    fn close(self: Box<Self>) {}
+}
+
+fn run_flaky(name: &str, fails: u32) -> (Vec<String>, usize) {
+    let (_tx, rx) = mpsc::channel::<Vec<u8>>();
+    let err = Shared::default();
+    let attempts = Arc::new(Mutex::new(vec![]));
+    let fe = Flaky {
+        fails,
+        attempts: attempts.clone(),
+        tx: None,
+    };
+    let cfg = RunConfig {
+        out: tmp(name),
+        mic_default: false,
+        call: CallMode::None,
+        faults: Faults::none(),
+    };
+    let outcome = engine::run(
+        cfg,
+        Box::new(fe),
+        Box::new(Stdin { rx, buf: vec![] }),
+        Box::new(Shared::default()),
+        Box::new(err.clone()),
+    );
+    assert_eq!(outcome, Outcome::Exit(0));
+    let lines = String::from_utf8(err.0.lock().unwrap().clone())
+        .unwrap()
+        .lines()
+        .map(String::from)
+        .collect();
+    let n = attempts.lock().unwrap().len();
+    (lines, n)
+}
+
+/// A pinned mic lost while its rebuild could not succeed is tried again on a timer, so it comes
+/// back once the device or the sound server does, instead of staying silent for the rest of the
+/// part.
+#[test]
+fn a_mic_whose_rebuild_failed_is_tried_again_until_it_comes_back() {
+    let (lines, attempts) = run_flaky("flaky-mic.opus", 1);
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"warn","code":"rebuild-failed""#)),
+        "{lines:#?}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"device","ch":"mic","event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    assert_eq!(attempts, 2);
+    // Positive control: a mic that never comes back is never reported rebuilt, and the retries
+    // back off (1 s, then 2 s) rather than running at every status poll.
+    let (lines, attempts) = run_flaky("dead-mic.opus", u32::MAX);
+    assert!(
+        !lines.iter().any(|l| l.contains(r#""event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    assert!((2..=3).contains(&attempts), "{attempts} attempts in 2.6 s");
+}
+
 fn typed<'a>(lines: &'a [String], t: &str) -> Vec<&'a String> {
     let tag = format!("\"type\":\"{t}\"");
     lines.iter().filter(|l| l.contains(&tag)).collect()

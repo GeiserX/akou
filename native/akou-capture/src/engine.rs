@@ -46,6 +46,8 @@ const WRITER_DRAIN_BUDGET: Duration = Duration::from_secs(1);
 /// Level lines: four a second.
 const LEVEL_FRAMES: usize = TIMELINE_RATE as usize / 4;
 const STATUS_EVERY: Duration = Duration::from_secs(1);
+/// A mic rebuild that failed is tried again after 1 s, doubling up to this.
+const MIC_RETRY_MAX: Duration = Duration::from_secs(30);
 
 pub struct RunConfig {
     pub out: PathBuf,
@@ -226,6 +228,11 @@ struct Part {
     /// captured before the sleep keeps the old one even if it is emitted after.
     offsets: Vec<(u64, u64)>,
     rebuilds: [u32; 2],
+    /// Mic rebuilds failed in a row, and when to try again. Nothing else would look at a lost
+    /// mic whose rebuild failed: a pinned mic has no default to watch, and the stall rule waits
+    /// for a running device.
+    mic_fails: u32,
+    mic_retry: Option<Instant>,
     /// How long after slot time a slot goes out; grows to fit a slow source.
     latency: u64,
     /// Late frames per channel already reported, and when.
@@ -308,10 +315,19 @@ impl Part {
         self.rebuilds[ch.index()] += 1;
         match fe.rebuild(ch) {
             Ok(names) => {
+                if ch == Ch::Mic {
+                    self.mic_fails = 0;
+                    self.mic_retry = None;
+                }
                 self.say.line(&protocol::device(ch, "rebuilt", why));
                 Some(names)
             }
             Err(e) => {
+                if ch == Ch::Mic {
+                    let wait = Duration::from_secs(1 << self.mic_fails.min(5)).min(MIC_RETRY_MAX);
+                    self.mic_fails += 1;
+                    self.mic_retry = Some(Instant::now() + wait);
+                }
                 self.say.line(&protocol::warn(
                     "rebuild-failed",
                     &format!("{}: {e}", ch.name()),
@@ -533,6 +549,10 @@ impl Part {
 
     fn poll_status(&mut self, fe: &mut dyn Frontend, call: &CallMode, mic_default: bool) {
         self.status = fe.status();
+        if self.on[0] && self.mic_retry.is_some_and(|at| Instant::now() >= at) {
+            self.mic_retry = None;
+            self.rebuild(fe, Ch::Mic, "retrying a failed rebuild");
+        }
         if self.on[0] && mic_default {
             match self.watch_in.observe(self.status.default_input.as_ref()) {
                 Some(Change::Changed(d)) => {
@@ -677,6 +697,8 @@ pub fn run(
         probe_since: None,
         offsets: vec![(0, anchor.cont_ns.wrapping_sub(anchor.awake_ns))],
         rebuilds: [0; 2],
+        mic_fails: 0,
+        mic_retry: None,
         latency,
         late_reported: [0; 2],
         late_warned_at: [None; 2],
