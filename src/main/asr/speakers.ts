@@ -21,7 +21,9 @@
  * helper), which loses the model's speaker state: segments of 1 s or more still add to the
  * label's centroid, the centroids go to the log as above, and a new stream's speaker takes the
  * label of the nearest centroid the new stream has not given out yet, at 0.60 or more, else the
- * next free number.
+ * next free number. Its lines too short to embed are `c?` until one can be matched, while any
+ * centroid is left to match against. A stream keeps the model's turns back to the start of the
+ * oldest call segment not yet labelled, the open one included.
  *
  * Final, in the `finalize` Worker: each final cluster maps to the live cluster it overlaps most,
  * jointly across the call (Hungarian assignment). At 60 % overlap or more that is a `speaker.map`;
@@ -136,6 +138,11 @@ export class LiveSpeakers {
       }
     }
     return best;
+  }
+
+  /** Whether an active cluster is left outside `exclude`. */
+  hasOther(exclude: ReadonlySet<string>): boolean {
+    return this.active().some((c) => !exclude.has(c.id));
   }
 
   /** Speaker id numbers in use continue after the highest one seen (restored or in segments). */

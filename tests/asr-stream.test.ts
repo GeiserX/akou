@@ -78,6 +78,29 @@ describe("labels from the stream", () => {
     expect(segs().map((s) => s.a0)).toEqual([...segs().map((s) => s.a0)].sort((a, b) => a - b));
   });
 
+  test("a line longer than one model step is labelled by all of it, not by its last seconds", async () => {
+    // One line: voice 1 for ten words (3.7 s), a breath under the pause, voice 5 for three words
+    // (1.1 s). Then voice 1 alone. The model decides the first line in three steps (1.68 s each).
+    const long = ["we", "should", "move", "the", "build", "to", "new", "box", "thanks", "meeting"];
+    const audio = concat(
+      silence(0.3),
+      speak(long, { voice: 1 }),
+      silence(0.3),
+      speak(["yes", "no", "ok"], { voice: 5 }),
+      silence(1.5),
+      says(1, ["hello", "world", "today", "deploy"]),
+    );
+    const { p, segs } = pipeline();
+    feed(p, 1, "call", audio);
+    await p.endPart(1);
+    const [first] = segs();
+    // Positive control for the setup: the first line spans more than one step and its look-ahead,
+    // so turns were reported (and could be forgotten) before it closed.
+    expect((first as SegOut).a1 - (first as SegOut).a0).toBeGreaterThan(1.68 + 0.32 + 1);
+    expect(first?.text).toContain("meeting yes");
+    expect(segs().map((s) => s.spk)).toEqual(["c1", "c1"]);
+  });
+
   test("[T2.48] a new part continues the stream: a voice keeps its label across parts", async () => {
     const { p, spk, models } = pipeline();
     feed(p, 1, "call", concat(silence(0.3), says(1), says(5)));
@@ -111,6 +134,31 @@ describe("labels from the stream", () => {
     feed(next.p, 2, "call", concat(silence(0.3), says(5), says(1), says(3)));
     await next.p.endPart(2);
     expect(next.spk()).toEqual(["call:c2", "call:c1", "call:c3"]);
+
+    // A known voice whose first line after the restart is too short to embed is not renumbered:
+    // that line is c?, and the voice takes its label back on its first line long enough to match.
+    const short = pipeline();
+    await short.p.beginCall({ centroids, ids: ["c1", "c2"] });
+    feed(
+      short.p,
+      2,
+      "call",
+      concat(silence(0.3), speak(["yes"], { voice: 5 }), silence(1), says(5), says(1)),
+    );
+    await short.p.endPart(2);
+    expect(short.spk()).toEqual(["call:c?", "call:c2", "call:c1"]);
+    // Control: with nothing to match against (no centroids), a short first line takes the next
+    // number at once, as before.
+    const none = pipeline();
+    await none.p.beginCall({ centroids: [], ids: [] });
+    feed(
+      none.p,
+      2,
+      "call",
+      concat(silence(0.3), speak(["yes"], { voice: 5 }), silence(1), says(5)),
+    );
+    await none.p.endPart(2);
+    expect(none.spk()).toEqual(["call:c1", "call:c1"]);
 
     // Positive control: without the centroids the same voices get new numbers, never old ones.
     const blind = pipeline();

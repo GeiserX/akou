@@ -650,20 +650,31 @@ export class LivePipeline {
     }
     const s = this.stream;
     const head = this.pending[0];
-    if (s && (!head || head.stream === s)) s.speakers.prune(head ? head.s0 : s.speakers.decided);
+    if (s && (!head || head.stream === s)) {
+      // Keep the turns of the call segment still open too: it is labelled by all of it.
+      let keep = head ? head.s0 : s.speakers.decided;
+      const call = this.chans.call;
+      const open =
+        call.inSpeech && call.part !== null
+          ? streamRange(s, call.part, call.segStart, call.segStart + 1)
+          : null;
+      if (open) keep = Math.min(keep, open[0]);
+      s.speakers.prune(keep);
+    }
   }
 
   /**
    * The label of speaker `k` of stream `s`: the one it already has, else the nearest centroid this
    * stream has not given out (a speaker the call had before the stream started over), else the
-   * next free number.
+   * next free number. A line too short to embed while such centroids remain is `c?` and binds
+   * nothing, so a known voice is never renumbered for want of an embedding.
    */
   private labelFor(s: StreamState, k: number, emb: Float32Array | null): string {
     const known = s.labels.get(k);
     if (known) return known;
-    const label =
-      (emb ? this.speakers.nearest(emb, new Set(s.labels.values())) : null) ??
-      `c${++this.labelsUsed}`;
+    const given = new Set(s.labels.values());
+    if (!emb && this.speakers.hasOther(given)) return "c?";
+    const label = (emb ? this.speakers.nearest(emb, given) : null) ?? `c${++this.labelsUsed}`;
     this.labelsUsed = Math.max(this.labelsUsed, highestLabel([label]));
     s.labels.set(k, label);
     return label;
