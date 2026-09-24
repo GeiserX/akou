@@ -18,6 +18,7 @@ import {
   modelFile,
   pruneRetiredModels,
   sha256File,
+  verifyModels,
 } from "../../asr/models.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { str } from "../args.ts";
@@ -213,7 +214,17 @@ const models: Command = {
     if (sub === "import") {
       if (!arg) return usage(ctx, "models import needs a folder");
       const r = await importModels(ctx, arg);
-      const retired = r.missing.length === 0 ? pruneRetiredModels(dir) : [];
+      // A file already in place counts at its full size, so check every SHA-256 before pruning.
+      const verified =
+        r.missing.length === 0 &&
+        (
+          await verifyModels(
+            dir,
+            registry(ctx).map((m) => m.id),
+            registry(ctx),
+          )
+        ).every((f) => f.state === "ok");
+      const retired = verified ? pruneRetiredModels(dir) : [];
       if (ctx.json) ctx.io.out(JSON.stringify({ dir, ...r, retired }));
       else {
         ctx.io.out(`Imported ${r.copied.length} file(s) into ${dir}`);

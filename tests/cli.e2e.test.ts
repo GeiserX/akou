@@ -531,6 +531,23 @@ describe("doctor and models", () => {
     for (const x of [empty, src, t]) x.cleanup();
   });
 
+  test("models import keeps the retired int8 folder when a current file has the right size but the wrong SHA-256", async () => {
+    const t = tempDir();
+    const models = join(t.dir, "models");
+    const env = { ...process.env, AKOU_HOME: t.dir, AKOU_MODELS_DIR: models };
+    const old = join(models, RETIRED_MODELS[0] as string);
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "encoder.int8.onnx"), "old weights");
+    // Already in place at full size, so the import does not list it as missing, but it is corrupt.
+    mkdirSync(join(models, "tiny"), { recursive: true });
+    writeFileSync(join(models, "tiny", "tiny.bin"), new Uint8Array(tiny.length));
+    const empty = tempDir();
+    const imp = await cli(env, ["models", "import", empty.dir, "--json"], { models: [tinyModel] });
+    expect(imp.json.retired).toEqual([]);
+    expect(existsSync(join(old, "encoder.int8.onnx"))).toBe(true);
+    for (const x of [empty, t]) x.cleanup();
+  });
+
   test("models list and import; pull is refused under test", async () => {
     const env = { ...process.env, ...rig.env };
     const src = tempDir();
