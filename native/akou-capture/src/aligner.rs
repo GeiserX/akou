@@ -217,7 +217,9 @@ impl Aligner {
             return;
         };
         let step = (expected - t.nominal).abs();
-        let settling = expected < t.settle_until && step > STEP_FRAMES;
+        // An anchoring push always opens a fresh window: a restart inside the old one must not
+        // use it up.
+        let settling = t.synced && expected < t.settle_until && step > STEP_FRAMES;
         if !t.synced || step > RESYNC_FRAMES || settling {
             if t.synced {
                 t.stats.resyncs += 1;
@@ -772,6 +774,66 @@ mod tests {
                 assert_eq!(al.stats(Ch::Call).resyncs, 0);
             }
         }
+    }
+
+    /// A source restarted inside the first second after its anchor gets a settle window of its
+    /// own: the new stream's late-stamped first buffer re-anchors on the next one, as it would
+    /// for a restart later on (positive control), instead of being slewed at 1 ms a second.
+    #[test]
+    fn a_restart_inside_the_settle_window_opens_a_window_for_the_new_stream() {
+        for restart_ms in [1_500u64, 500] {
+            let mut al = Aligner::new(T0);
+            let mut out = Vec::new();
+            let end = T0 + restart_ms * MS;
+            call_stream(&mut al, &mut out, T0, end, 0.25);
+            al.restart(Ch::Call);
+            let new_at = end + 50 * MS;
+            // The new stream's first buffer is stamped 20 ms late, the next ones on time.
+            al.push(Ch::Call, new_at + 20 * MS, 48_000, &[0.25; 480], true);
+            call_stream(
+                &mut al,
+                &mut out,
+                new_at + 10 * MS,
+                new_at + 1_500 * MS,
+                0.25,
+            );
+            call_stream(
+                &mut al,
+                &mut out,
+                new_at + 1_500 * MS,
+                new_at + 3_000 * MS,
+                0.75,
+            );
+            let expected = (new_at + 1_500 * MS - T0) as i64 * 48 / 1_000_000;
+            let got = first_at(&out, (expected - 24_000) as usize, 0.5);
+            assert!(
+                (got - expected).abs() <= 48,
+                "restart at {restart_ms} ms: {got} vs {expected}"
+            );
+            assert_eq!(al.stats(Ch::Call).resyncs, 1, "restart at {restart_ms} ms");
+        }
+    }
+
+    /// The settle window lasts a second after the anchor, not one buffer: a first buffer stamped
+    /// early makes the next one a step later than the anchor, and that step re-anchors too.
+    #[test]
+    fn a_first_buffer_stamped_early_re_anchors_on_the_next_one() {
+        let mut al = Aligner::new(T0);
+        let mut out = Vec::new();
+        let start = T0 + 100 * MS;
+        al.push(Ch::Call, start - 15 * MS, 48_000, &[0.25; 480], true);
+        call_stream(&mut al, &mut out, start + 10 * MS, start + 1_500 * MS, 0.25);
+        call_stream(
+            &mut al,
+            &mut out,
+            start + 1_500 * MS,
+            start + 3_000 * MS,
+            0.75,
+        );
+        let expected = (start + 1_500 * MS - T0) as i64 * 48 / 1_000_000;
+        let got = first_at(&out, (expected - 24_000) as usize, 0.5);
+        assert!((got - expected).abs() <= 48, "{got} vs {expected}");
+        assert_eq!(al.stats(Ch::Call).resyncs, 1);
     }
 
     #[test]
