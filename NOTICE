@@ -1,0 +1,30 @@
+akou
+Copyright (C) 2026 the akou authors. Licensed under the GNU General Public License v3.0 (LICENSE).
+
+This file credits the third-party work akou builds on. Each component keeps its own licence.
+
+Capture helper (native/akou-capture)
+------------------------------------
+
+hark (MIT), https://github.com/PhantomYdn/hark
+  Copyright (c) 2026 Ilya Naryzhnyy.
+  The capture design the helper ports to Rust: a private, unmuted Core Audio process tap read
+  through a private aggregate device with tap auto-start and drift compensation, the throwaway
+  probe tap that tells a dead tap from a quiet call, and the dead-tap rebuild rule. No hark code
+  is copied.
+
+libopus (BSD-3-Clause), https://opus-codec.org
+  Copyright (c) Xiph.Org Foundation, Skype Limited, Octasic, Jean-Marc Valin, Timothy B.
+  Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo and contributors.
+  Built from source and linked statically through opusic-sys (BSD-3-Clause).
+
+opus crate (MIT or Apache-2.0), https://crates.io/crates/opus
+ogg crate (BSD-3-Clause), https://crates.io/crates/ogg
+rubato (MIT or Apache-2.0), https://crates.io/crates/rubato
+cpal (Apache-2.0), https://crates.io/crates/cpal
+objc2, objc2-foundation (MIT); objc2-core-audio, objc2-core-audio-types,
+  objc2-core-foundation (Zlib, Apache-2.0 or MIT), https://github.com/madsmtm/objc2
+libc (MIT or Apache-2.0), https://crates.io/crates/libc
+
+The full dependency list with each licence: `cargo tree -e normal --format "{p} {l}"` in
+native/akou-capture.

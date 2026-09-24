@@ -131,7 +131,7 @@ This is a deliberate change from hark, which mixed the mic into the tap's aggreg
 
 | | macOS 14.4+ (Apple Silicon) | Windows 10 21H2+ and 11 (x64) | Linux (x64, arm64) with PipeWire |
 |---|---|---|---|
-| Call channel, default | Core Audio **process tap**: global, stereo, private, unmuted, excluding akou's own audio processes, read through a tap-only private aggregate device with `tap_auto_start` on. A port of hark's `ProcessTap` design to Rust through [cidre](https://github.com/yury/cidre) (MIT, pinned git revision) | WASAPI **process loopback** in exclude mode on akou's own process tree (build 20348+). Endpoint loopback on the default render device on older builds. Follows default-device changes through `IMMNotificationClient` | PipeWire capture stream on the default sink's monitor (`stream.capture.sink=true`, no fixed target, so it follows the default sink). Fallback: a PulseAudio monitor source through the pure-Rust `pulseaudio` crate |
+| Call channel, default | Core Audio **process tap**: global, stereo, private, unmuted, excluding akou's own audio processes, read through a tap-only private aggregate device with `tap_auto_start` on. A port of hark's `ProcessTap` design to Rust through [objc2-core-audio](https://crates.io/crates/objc2-core-audio) (Zlib, Apache-2.0 or MIT), the bindings cpal is built on, so the helper carries one binding stack | WASAPI **process loopback** in exclude mode on akou's own process tree (build 20348+). Endpoint loopback on the default render device on older builds. Follows default-device changes through `IMMNotificationClient` | PipeWire capture stream on the default sink's monitor (`stream.capture.sink=true`, no fixed target, so it follows the default sink). Fallback: a PulseAudio monitor source through the pure-Rust `pulseaudio` crate |
 | Call channel, one app only | Tap over that app's processes (stereo mixdown), bundle id matched case-insensitively including helper processes | Process loopback in include mode on that app's tree | Not in v1 |
 | Mic | Default input or a chosen device, through [cpal](https://github.com/RustAudio/cpal) 0.18 (Apache-2.0). Follows a changed default; a vanished pinned device falls back to the default and emits `health` | cpal (WASAPI host), default communications device or chosen | PipeWire default source |
 | Silence behaviour | The tap delivers nothing while nothing plays. The aligner writes zeros | Loopback delivers no packets, or packets flagged silent. Silent packets are zeroed, gaps are zeros | The monitor delivers continuous zeros |
@@ -139,7 +139,7 @@ This is a deliberate change from hark, which mixed the mic into the tap's aggreg
 | Real-time priority | Core Audio IO thread | `AvSetMmThreadCharacteristics("Pro Audio")` | PipeWire data loop (rtkit) |
 | Keep-awake while recording | `IOPMAssertionCreateWithName` (no idle sleep) | `SetThreadExecutionState` | logind inhibitor over D-Bus |
 | Permissions | Microphone and System Audio Recording, both prompted because the app bundle declares `NSMicrophoneUsageDescription` and `NSAudioCaptureUsageDescription` | "Let desktop apps access your microphone" | None. ALSA-only systems get mic-only with a clear warning |
-| Libraries (licence) | cidre (MIT), cpal (Apache-2.0), objc2 | [wasapi](https://github.com/HEnquist/wasapi-rs) 0.24 (MIT), windows crate | [pipewire](https://crates.io/crates/pipewire) 0.10 (MIT), [pulseaudio](https://crates.io/crates/pulseaudio) 0.3 (MIT) |
+| Libraries (licence) | objc2-core-audio (Zlib/Apache-2.0/MIT), cpal (Apache-2.0), objc2 (MIT) | [wasapi](https://github.com/HEnquist/wasapi-rs) 0.24 (MIT), windows crate | [pipewire](https://crates.io/crates/pipewire) 0.10 (MIT), [pulseaudio](https://crates.io/crates/pulseaudio) 0.3 (MIT) |
 
 Common to all: the [opus](https://crates.io/crates/opus) crate (MIT/Apache-2.0) over libopus (BSD-3), and the [ogg](https://crates.io/crates/ogg) crate (BSD-3-Clause) for the file. Devices always open at their own native rate; akou never forces a rate on a device (a device that only runs at 48 kHz once recorded garbage at 44.1 kHz). One cpal host and one PipeWire context stay alive for the helper's lifetime (re-initialising PipeWire in one process crashes).
 
@@ -185,7 +185,9 @@ u32 frames | f32 samples[frames]
 {"type":"stopped","file_seconds":12.5,"reason":"stop"}
 ```
 
-**stdin** takes one command per line: `probe_call`, `rebuild_call`, `rebuild_mic`, `stop`. Closing stdin means stop. Mute and pause are app concerns: the app zeroes mic packets (mute) or tells the helper to drop (pause) and records the anchors.
+**stdin** takes one command per line: `probe_call`, `rebuild_call`, `rebuild_mic`, `stop`, `pause`, `resume`, `mute`, `unmute`. Closing stdin means stop. Mute and pause are app concerns: the app zeroes mic packets (mute) or tells the helper to drop (pause) and records the anchors. The helper drops audio while paused, so the file does not grow; `mute` also zeroes the mic in the file.
+
+**File mode.** `--from-wav <stereo.wav>` replaces both devices with a WAV (left mic, right call) on any OS and runs the same aligner, Opus writer and protocol; `--speed` paces it and `--loop` repeats it. `AKOU_CAPTURE_FILE_ONLY=1` refuses device capture, so a test environment can never open a device or ask for a permission. A build with the `simulate` feature also takes `--simulate <fault>`, the fault list of the fake helper, which the trap tests run against the real helper.
 
 Exit codes follow sysexits, as hark did: 0 ok, 64 usage, 66 device not found, 69 unavailable, 70 software, 74 I/O, 77 permission.
 
