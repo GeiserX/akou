@@ -35,7 +35,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { FileVocabEntry } from "../../core/log/fold.ts";
@@ -45,6 +45,15 @@ export const VOCAB_VERSION = 1;
 /** Per-entry boosts are capped here; the global boost is a constant, not a setting. */
 export const MAX_ENTRY_BOOST = 5;
 export const MAX_TERM_LENGTH = 100;
+/**
+ * Size limits. Every heard form is matched against every line on each render, so a file is
+ * bounded: the bytes read, the entries, the heard forms per entry and their length (a heard form
+ * is at most as long as a term), and a note. Anything over a limit is an error, never a silent cut.
+ */
+export const MAX_FILE_BYTES = 4 * 1024 * 1024;
+export const MAX_ENTRIES = 10_000;
+export const MAX_HEARD = 50;
+export const MAX_NOTE_LENGTH = 1000;
 
 export type Decode = boolean | number;
 export type VocabScope = "global" | "workspace" | "extra";
@@ -139,6 +148,12 @@ function checkEntry(raw: unknown, i: number, errors: VocabIssue[], warnings: Voc
     if (!Array.isArray(e.heard) || e.heard.some((h) => typeof h !== "string")) {
       return fail(`"heard" must be a list of quoted strings (term "${term}")`);
     }
+    if (e.heard.length > MAX_HEARD) {
+      return fail(`at most ${MAX_HEARD} heard forms per entry (term "${term}")`);
+    }
+    if ((e.heard as string[]).some((h) => [...h].length > MAX_TERM_LENGTH)) {
+      return fail(`a heard form is at most ${MAX_TERM_LENGTH} characters (term "${term}")`);
+    }
     heard = (e.heard as string[]).map((h) => h.trim()).filter((h) => h !== "");
     const key = termKey(term);
     const same = heard.filter((h) => termKey(h) === key);
@@ -175,6 +190,9 @@ function checkEntry(raw: unknown, i: number, errors: VocabIssue[], warnings: Voc
   }
   if (e.note !== undefined) {
     if (typeof e.note !== "string") return fail(`"note" must be a quoted string (term "${term}")`);
+    if ([...e.note].length > MAX_NOTE_LENGTH) {
+      return fail(`a note is at most ${MAX_NOTE_LENGTH} characters (term "${term}")`);
+    }
     entry.note = e.note;
   }
   return entry;
@@ -185,6 +203,10 @@ export function parseVocab(text: string): ParsedVocab {
   const errors: VocabIssue[] = [];
   const warnings: VocabIssue[] = [];
   const file = emptyVocab();
+  if (Buffer.byteLength(text, "utf8") > MAX_FILE_BYTES) {
+    errors.push({ message: `the file is too large; the limit is ${MAX_FILE_BYTES} bytes` });
+    return { file, errors, warnings };
+  }
   if (text.trim() === "") return { file, errors, warnings };
   let doc: unknown;
   try {
@@ -213,8 +235,13 @@ export function parseVocab(text: string): ParsedVocab {
     errors.push({ message: '"entries" must be a list' });
     return { file, errors, warnings };
   }
+  if (entries.length > MAX_ENTRIES) {
+    errors.push({
+      message: `the file has ${entries.length} entries; only the first ${MAX_ENTRIES} entries are read`,
+    });
+  }
   const seen = new Map<string, number>();
-  entries.forEach((raw, i) => {
+  entries.slice(0, MAX_ENTRIES).forEach((raw, i) => {
     const entry = checkEntry(raw, i, errors, warnings);
     if (!entry) return;
     const key = termKey(entry.term);
@@ -229,6 +256,13 @@ export function parseVocab(text: string): ParsedVocab {
   if (d.rejected !== undefined && d.rejected !== null) {
     if (!Array.isArray(d.rejected) || d.rejected.some((r) => typeof r !== "string")) {
       errors.push({ message: '"rejected" must be a list of quoted strings' });
+    } else if (
+      d.rejected.length > MAX_ENTRIES ||
+      (d.rejected as string[]).some((r) => [...r].length > MAX_TERM_LENGTH)
+    ) {
+      errors.push({
+        message: `"rejected" is at most ${MAX_ENTRIES} terms of at most ${MAX_TERM_LENGTH} characters`,
+      });
     } else {
       file.rejected = d.rejected as string[];
     }
@@ -277,6 +311,18 @@ export interface LoadedVocab extends ParsedVocab {
 export async function readVocabFile(path: string): Promise<LoadedVocab> {
   let text: string;
   try {
+    // The size is checked before the bytes are read.
+    const size = (await stat(path)).size;
+    if (size > MAX_FILE_BYTES) {
+      return {
+        path,
+        exists: true,
+        sha256: "",
+        file: emptyVocab(),
+        errors: [{ message: `the file is too large; the limit is ${MAX_FILE_BYTES} bytes` }],
+        warnings: [],
+      };
+    }
     text = await readFile(path, "utf8");
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === "ENOENT") {
@@ -289,13 +335,18 @@ export async function readVocabFile(path: string): Promise<LoadedVocab> {
 
 /**
  * Writes a vocabulary file atomically (a temporary file renamed over the old one). Refuses a file
- * whose serialized form would not read back identically.
+ * whose serialized form would not read back identically: one the reader would reject, or one it
+ * would read as something else (a heard form equal to the term, a padded form).
  */
 export async function writeVocabFile(path: string, file: VocabFile): Promise<string> {
   const text = serializeVocab(file);
   const back = parseVocab(text);
   if (back.errors.length > 0) {
     throw new Error(`refusing to write ${basename(path)}: ${back.errors[0]?.message}`);
+  }
+  if (serializeVocab(back.file) !== text) {
+    const why = back.warnings[0]?.message ?? "it would read back differently";
+    throw new Error(`refusing to write ${basename(path)}: ${why}`);
   }
   await mkdir(dirname(path), { recursive: true });
   const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
@@ -314,10 +365,19 @@ export function defaultConfigDir(
   return join(home, ".config", "akou");
 }
 
-/** Workspace names become file names; anything that could leave the folder is refused. */
+/**
+ * Workspace names become file names; anything that could leave the folder is refused, and so is a
+ * Windows device name (`con.yaml` is the console there, whatever follows the first dot).
+ */
 export function validWorkspace(name: string): boolean {
-  return /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,63}$/u.test(name) && !name.includes("..");
+  return (
+    /^[\p{L}\p{N}][\p{L}\p{N} ._-]{0,63}$/u.test(name) &&
+    !name.includes("..") &&
+    !WINDOWS_DEVICE.test(name)
+  );
 }
+
+const WINDOWS_DEVICE = /^(con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(\.|$)/i;
 
 export interface VocabPath {
   scope: VocabScope;
@@ -433,9 +493,10 @@ export function importGlossary(
   text.split(/\r?\n/).forEach((rawLine, i) => {
     const line = rawLine.trim();
     if (line === "" || line.startsWith("#")) return;
-    const hash = line.indexOf("#");
+    // A comment is a `#` after whitespace, so a term such as `C#` keeps its `#`.
+    const hash = line.search(/\s#/);
     const body = (hash >= 0 ? line.slice(0, hash) : line).trim();
-    const comment = hash >= 0 ? line.slice(hash + 1).trim() : "";
+    const comment = hash >= 0 ? line.slice(hash).trim().slice(1).trim() : "";
     const caution = CAUTION.test(line);
     const [left, right] = body.includes("<=") ? body.split("<=", 2) : [body, undefined];
     const term = (left ?? "").trim();

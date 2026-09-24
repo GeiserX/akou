@@ -14,6 +14,11 @@ import {
   defaultConfigDir,
   emptyVocab,
   importGlossary,
+  MAX_ENTRIES,
+  MAX_FILE_BYTES,
+  MAX_HEARD,
+  MAX_NOTE_LENGTH,
+  MAX_TERM_LENGTH,
   type MergedEntry,
   mergeVocab,
   parseVocab,
@@ -25,6 +30,7 @@ import {
   type VocabEntry,
   type VocabFile,
   validateTerm,
+  validWorkspace,
   vocabPaths,
   writeVocabFile,
 } from "../src/main/vocab/files.ts";
@@ -161,6 +167,16 @@ describe("vocabulary files: on disk", () => {
       expect(() => vocabPaths({ configDir: "/c", workspace: bad })).toThrow();
   });
 
+  test("a workspace named after a Windows device (CON, NUL, COM1, ...) is refused on every platform", () => {
+    for (const bad of ["con", "CON", "nul", "Aux", "prn", "com1", "COM9", "lpt3", "con.notes"]) {
+      expect(validWorkspace(bad)).toBe(false);
+    }
+    // Positive control: names that only start like a device are fine.
+    for (const ok of ["console", "conference", "com", "com10", "lpt", "nullable", "work"]) {
+      expect(validWorkspace(ok)).toBe(true);
+    }
+  });
+
   test("write is atomic and reads back; a missing file is an empty list; the hash is of the bytes", async () => {
     const { dir, cleanup } = tempDir();
     try {
@@ -197,6 +213,75 @@ describe("vocabulary files: on disk", () => {
     } finally {
       cleanup();
     }
+  });
+
+  test("the writer refuses a file that reads back as something else, not only one with errors", async () => {
+    const { dir, cleanup } = tempDir();
+    try {
+      const path = join(dir, "v.yaml");
+      // A heard form equal to the term is dropped on read, with only a warning.
+      const selfHeard = file(entry("Kubernetes", { heard: ["Kubernetes", "kubernetis"] }));
+      await expect(writeVocabFile(path, selfHeard)).rejects.toThrow("refusing");
+      const padded = file(entry("Vercel", { heard: [" versal"] }));
+      await expect(writeVocabFile(path, padded)).rejects.toThrow("refusing");
+      // Positive control: the same entries without the difference are written.
+      await writeVocabFile(path, file(entry("Kubernetes", { heard: ["kubernetis"] })));
+      expect((await readVocabFile(path)).file.entries[0]?.heard).toEqual(["kubernetis"]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("size limits: the file, heard forms, notes and the entry count are capped with an error", async () => {
+    const long = "k".repeat(MAX_TERM_LENGTH + 1);
+    const heard = parseVocab(serializeVocab(file(entry("Kubernetes", { heard: [long] }))));
+    expect(heard.file.entries).toEqual([]);
+    expect(heard.errors[0]?.message).toContain("heard form");
+    const note = parseVocab(
+      serializeVocab(file(entry("Kubernetes", { note: "n".repeat(MAX_NOTE_LENGTH + 1) }))),
+    );
+    expect(note.file.entries).toEqual([]);
+    expect(note.errors[0]?.message).toContain("note");
+    const many = file(...Array.from({ length: MAX_ENTRIES + 5 }, (_, i) => entry(`term${i}`)));
+    const capped = parseVocab(serializeVocab(many));
+    expect(capped.file.entries).toHaveLength(MAX_ENTRIES);
+    expect(capped.errors.some((e) => e.message.includes(`${MAX_ENTRIES} entries`))).toBe(true);
+    const forms = parseVocab(
+      serializeVocab(
+        file(
+          entry("Kubernetes", { heard: Array.from({ length: MAX_HEARD + 1 }, (_, i) => `k${i}`) }),
+        ),
+      ),
+    );
+    expect(forms.file.entries).toEqual([]);
+    expect(forms.errors[0]?.message).toContain("heard forms");
+    const big = parseVocab(`# ${"x".repeat(MAX_FILE_BYTES)}\nversion: 1\nentries: []\n`);
+    expect(big.errors[0]?.message).toContain("too large");
+    // The reader checks the size before reading the file.
+    const { dir, cleanup } = tempDir();
+    try {
+      const path = join(dir, "big.yaml");
+      writeFileSync(path, `# ${"x".repeat(MAX_FILE_BYTES)}\n`);
+      const r = await readVocabFile(path);
+      expect(r.exists).toBe(true);
+      expect(r.errors[0]?.message).toContain("too large");
+      expect(r.file.entries).toEqual([]);
+    } finally {
+      cleanup();
+    }
+    // Positive control: at the limits everything loads.
+    const edge = parseVocab(
+      serializeVocab(
+        file(
+          entry("Kubernetes", {
+            heard: ["k".repeat(MAX_TERM_LENGTH)],
+            note: "n".repeat(MAX_NOTE_LENGTH),
+          }),
+        ),
+      ),
+    );
+    expect(edge.errors).toEqual([]);
+    expect(edge.file.entries).toHaveLength(1);
   });
 });
 
@@ -275,6 +360,16 @@ describe("importing the older list formats", () => {
     expect(
       importGlossary("X <= y # do not auto", { source: "import:f", date: "2026-09-24" }).entries[0],
     ).toMatchObject({ heard: [], decode: false });
+    // A `#` inside a term is part of it; only a `#` after whitespace starts a comment.
+    const sharp = importGlossary("C# <= see sharp | c sharp\nF# <= f sharp  # a language", {
+      source: "import:f",
+      date: "2026-09-24",
+    });
+    expect(sharp.entries.map((e) => [e.term, e.heard, e.note])).toEqual([
+      ["C#", ["see sharp", "c sharp"], undefined],
+      ["F#", ["f sharp"], "a language"],
+    ]);
+    expect(sharp.skipped).toEqual([]);
     // The result is a valid file.
     expect(parseVocab(serializeVocab(file(...r.entries))).errors).toEqual([]);
   });
@@ -350,7 +445,13 @@ describe("the per-call decode list (DESIGN 3)", () => {
 
   test("[spike] Hotwords to a non-transducer model kill the process: Moonshine and Whisper get no list", () => {
     const files = merged("workspace", entry("Kubernetes"));
-    for (const model of ["moonshine-base", "whisper-large-v3-turbo"]) {
+    for (const model of [
+      "moonshine-base",
+      "whisper-large-v3-turbo",
+      // NeMo's CTC Parakeet variants are not transducers.
+      "sherpa-onnx-nemo-parakeet-ctc-0.6b",
+      "nemo-parakeet_tdt_ctc-110m",
+    ]) {
       expect(modelKind(model)).toBe("other");
       const list = buildDecodeList({
         model,
@@ -363,7 +464,8 @@ describe("the per-call decode list (DESIGN 3)", () => {
       expect(hotwordsArg(list)).toBe("");
       expect(list.warnings[0]).toContain("read time only");
     }
-    // Positive control: Parakeet gets the words.
+    // Positive control: Parakeet TDT and zipformer transducers get the words.
+    expect(modelKind("sherpa-onnx-zipformer-en-2023-06-26")).toBe("transducer");
     expect(hotwordsArg(buildDecodeList({ model: PARAKEET, callVocab: [], names: [], files }))).toBe(
       "Kubernetes",
     );

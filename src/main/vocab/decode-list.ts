@@ -31,8 +31,13 @@ export const DEFAULT_BOOST = 3;
 
 export type ModelKind = "transducer" | "other";
 
-/** Parakeet TDT (and any zipformer or transducer) takes hotwords; Moonshine and Whisper do not. */
+/**
+ * Parakeet TDT (and any zipformer or transducer) takes hotwords; Moonshine, Whisper and CTC models
+ * (NeMo's parakeet-ctc and the tdt_ctc hybrids exported as CTC) do not. A CTC name wins, because a
+ * list given to a model that takes none ends the process.
+ */
 export function modelKind(model: string): ModelKind {
+  if (/(^|[^a-z])ctc([^a-z]|$)/i.test(model)) return "other";
   return /parakeet|zipformer|transducer|\btdt\b/i.test(model) ? "transducer" : "other";
 }
 
