@@ -133,6 +133,22 @@ describe("the tool list", () => {
     await c.close();
   });
 
+  test("with no app running (the harness starts `akou mcp` first), akou_ask is not listed", async () => {
+    const home = tempDir();
+    const offline = new ApiClient({
+      env: { ...process.env, AKOU_HOME: home.dir },
+      client: "mcp",
+      launch: null,
+    });
+    const c = await connect("codex-mcp-client", offline);
+    await new Promise((r) => setTimeout(r, 50));
+    const names = (await c.client.listTools()).tools.map((t) => t.name);
+    expect(names).toContain("akou_context");
+    expect(names).not.toContain("akou_ask");
+    await c.close();
+    home.cleanup();
+  });
+
   test("askListed: only with an available provider, never the client's own harness", () => {
     const harness = (h: string) => ({ state: "available", id: "harness", harness: h });
     expect(askListed({ state: "unavailable" }, "claude-code")).toBe(false);

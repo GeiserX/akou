@@ -11,7 +11,7 @@ import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { APP_VERSION } from "../src/main/app-info.ts";
 import { COMMANDS } from "../src/main/cli/cli.ts";
-import type { ApiClient } from "../src/main/cli/client.ts";
+import type { ApiClient, ApiResponse } from "../src/main/cli/client.ts";
 import {
   harnessSkillsDir,
   installSkill,
@@ -26,21 +26,26 @@ import { tempDir } from "./helpers.ts";
 const SKILL = readFileSync(join(SKILL_SOURCE, "SKILL.md"), "utf8");
 const PKG = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"));
 
+/** Every tool the server can list: its app reports a provider, so akou_ask is listed too. */
 async function mcpToolNames(): Promise<string[]> {
-  const offline = {
-    request: async () => {
-      throw new Error("offline");
-    },
+  const withProvider = {
+    request: async (_m: string, path: string): Promise<ApiResponse> => ({
+      status: 200,
+      body: path === "/status" ? { provider: { state: "available", id: "anthropic" } } : {},
+      text: "",
+      contentType: "application/json",
+    }),
   } as unknown as ApiClient;
-  const server = createMcpServer({ client: offline });
+  const server = createMcpServer({ client: withProvider });
   const [a, b] = InMemoryTransport.createLinkedPair();
   await server.connect(b);
   const client = new Client({ name: "test", version: "1" });
   await client.connect(a);
+  // The provider is read from the app's status right after initialize.
+  await new Promise((r) => setTimeout(r, 50));
   const names = (await client.listTools()).tools.map((t) => t.name);
   await client.close();
-  // akou_ask is registered but listed only with a provider.
-  return [...names, "akou_ask"];
+  return names;
 }
 
 describe("the skill text", () => {
@@ -134,8 +139,10 @@ describe("akou skill install", () => {
     const env = { HOME: t.dir };
     expect(harnessSkillsDir("claude", env)).toBe(join(t.dir, ".claude", "skills"));
     expect(harnessSkillsDir("codex", env)).toBe(join(t.dir, ".codex", "skills"));
-    expect(harnessSkillsDir("claude", { ...env, CLAUDE_CONFIG_DIR: "/x/c" })).toBe("/x/c/skills");
-    expect(harnessSkillsDir("codex", { ...env, CODEX_HOME: "/x/o" })).toBe("/x/o/skills");
+    expect(harnessSkillsDir("claude", { ...env, CLAUDE_CONFIG_DIR: "/x/c" })).toBe(
+      join("/x/c", "skills"),
+    );
+    expect(harnessSkillsDir("codex", { ...env, CODEX_HOME: "/x/o" })).toBe(join("/x/o", "skills"));
     // Neither harness is here: say so rather than guess.
     const none = await cli(env, ["skill", "install"]);
     expect(none.code).toBe(69);
