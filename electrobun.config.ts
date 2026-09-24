@@ -29,8 +29,10 @@
  *   `codesign --verify --deep --strict` holds and macOS offers "Open Anyway" rather than calling
  *   the app damaged. Notarization needs a real Developer ID and Apple credentials; adding them as
  *   release secrets is the whole switch (docs/install.md, scripts/release-checklist.md).
- * - The bundle id is stable, so grants survive updates; the capture helper excludes every process
- *   it is responsible for, the WebKit GPU helper that plays the window's audio included.
+ * - The bundle id is stable, so grants survive updates once the app is signed with a Developer ID
+ *   (ad-hoc signed, each release may ask again: docs/install.md, "Permissions"); the capture helper
+ *   excludes every process it is responsible for, the WebKit GPU helper that plays the window's
+ *   audio included.
  * - No CEF: the system webview on every OS.
  */
 
