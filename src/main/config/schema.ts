@@ -266,6 +266,12 @@ export const SETTINGS = {
     default: 60,
     doc: "How long an answer may take before akou shows the excerpts instead and says why.",
   },
+  "memo.provider": {
+    type: "string",
+    values: ["auto", "on", "off"],
+    default: "auto",
+    doc: "Whether the configured provider keeps the rolling memo during a call, every few minutes of new speech. `auto`: on for `openai-compatible` and `anthropic`, off for `harness`, because it would run your subscription unattended; `on`: the harness too; `off`: never. An agent can always write it with `akou_memo_put`.",
+  },
   "export.dir": {
     type: "string",
     default: "",

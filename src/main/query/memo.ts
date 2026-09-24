@@ -7,12 +7,21 @@
  * rendering it into a pack, and checking a new one before it is written, whoever wrote it.
  *
  * Who writes it is pluggable. In agent mode the agent writes it with `akou_memo_put` when a pack
- * says `memoStale`; with a provider configured, a `MemoUpdater` does (the provider-driven updater
- * itself is M2). Chunk summaries (`chunk.summary`) are never read as the memo.
+ * says `memoStale`; with a provider configured, `ProviderMemoUpdater` does, incrementally (the
+ * previous memo plus the new lines). With the harness it is opt-in (`memo.provider`), because it
+ * would run the user's subscription unattended every few minutes. Chunk summaries
+ * (`chunk.summary`) are never read as the memo.
+ *
+ * A memo a provider wrote is checked before it is stored: every item must carry `[HH:MM]` anchors
+ * that are minutes of the call with a line in them, or it is dropped, and the memo is trimmed to its
+ * cap on a line boundary, so a model that writes too much or invents a time cannot put either in
+ * the pack.
  */
 
+import { formatWall } from "../../core/log/clock.ts";
 import type { EventDraft } from "../../core/log/events.ts";
 import type { CallView, Line } from "../../core/log/fold.ts";
+import { type Provider, runProvider } from "../llm/provider.ts";
 import { estimateTokens } from "./render.ts";
 
 /** A memo is refreshed after at least this much new committed speech... */
@@ -175,10 +184,128 @@ export interface MemoUpdateInput {
   maxTokens: number;
 }
 
-/** Writes the next memo from the previous one plus the new lines. The M2 provider implements it. */
+/** Writes the next memo from the previous one plus the new lines. */
 export interface MemoUpdater {
   readonly id: string;
   update(input: MemoUpdateInput, signal: AbortSignal): Promise<{ text: string; model: string }>;
+}
+
+/**
+ * Whether the configured provider writes the memo on its own (`memo.provider`). `auto` leaves the
+ * harness out (TRAPS "Unattended harness use"): the memo runs every few minutes without a request,
+ * and would spend the user's subscription unattended.
+ */
+export function memoByProvider(kind: string, setting: string): boolean {
+  if (kind === "none" || setting === "off") return false;
+  if (setting === "on") return true;
+  return kind !== "harness";
+}
+
+export const MEMO_SYSTEM = [
+  "You keep a short running memo of a call that is still going on.",
+  "You get the memo so far and the lines said since. Return the whole new memo, and nothing else.",
+  "Sections, in this order, each only if it has items: Topics, Decisions, Action items (owner: task), Open questions, People.",
+  "Every item is one bullet that ends with the local time it rests on, like [15:41] or [15:41 Ben], taken from the lines. An item with no such time is left out.",
+  "Merge and shorten old items rather than adding new ones for the same thing. Stay under the token limit you are given.",
+].join("\n");
+
+export function memoPrompt(input: MemoUpdateInput): string {
+  return [
+    `Token limit: ${input.maxTokens}.`,
+    "",
+    "Memo so far:",
+    input.previous ?? "(none yet)",
+    "",
+    "New lines:",
+    ...(input.newLines.length > 0 ? input.newLines : ["(none)"]),
+  ].join("\n");
+}
+
+/** The memo written by the configured provider (openai-compatible, anthropic, or the harness). */
+export class ProviderMemoUpdater implements MemoUpdater {
+  readonly id: string;
+  constructor(
+    private readonly provider: Provider,
+    private readonly timeoutMs?: number,
+  ) {
+    this.id = provider.id;
+  }
+
+  async update(input: MemoUpdateInput, signal: AbortSignal) {
+    const r = await runProvider(
+      this.provider,
+      { system: MEMO_SYSTEM, prompt: memoPrompt(input), maxTokens: input.maxTokens },
+      () => {},
+      { signal, timeoutMs: this.timeoutMs },
+    );
+    return { text: r.text, model: r.model };
+  }
+}
+
+/** `[15:41]`, `[15:41:07]`, `[15:41 Ben]`: the minute is group 1. */
+export const MEMO_ANCHOR = /\[(\d{1,2}:\d{2})(?::\d{2})?(?:\s[^\]]*)?\]/g;
+
+const MEMO_ITEM = /^\s*(?:[-*+]|\d+[.)])\s+/;
+
+/** The local minutes (`15:41`) that have a line in them: where a memo anchor may point. */
+export function anchorMinutes(lines: Iterable<Line>, tz: string): Set<string> {
+  const out = new Set<string>();
+  for (const l of lines) {
+    out.add(formatWall(l.w0, tz, { seconds: false }));
+    out.add(formatWall(l.w1, tz, { seconds: false }));
+  }
+  return out;
+}
+
+export interface MemoAnchorCheck {
+  body: string;
+  dropped: { text: string; reason: string }[];
+}
+
+/**
+ * Keeps the memo's items whose anchors all point at a minute of the call with a line in it, and
+ * drops the rest: an item with no anchor, or with one the call does not have. Headings stay.
+ */
+export function checkMemoAnchors(body: string, minutes: ReadonlySet<string>): MemoAnchorCheck {
+  const kept: string[] = [];
+  const dropped: MemoAnchorCheck["dropped"] = [];
+  for (const raw of body.replace(/\r\n/g, "\n").split("\n")) {
+    const line = raw.trimEnd();
+    if (!MEMO_ITEM.test(line)) {
+      kept.push(line);
+      continue;
+    }
+    const anchors = [...line.matchAll(MEMO_ANCHOR)].map((m) => (m[1] as string).padStart(5, "0"));
+    if (anchors.length === 0) {
+      dropped.push({ text: line, reason: "no [HH:MM] anchor" });
+      continue;
+    }
+    const bad = anchors.find((a) => !minutes.has(a));
+    if (bad) {
+      dropped.push({
+        text: line,
+        reason: `[${bad}] is not a minute of the call with a line in it`,
+      });
+      continue;
+    }
+    kept.push(line);
+  }
+  return {
+    body: kept
+      .join("\n")
+      .replace(/\n{3,}/g, "\n\n")
+      .trim(),
+    dropped,
+  };
+}
+
+/** The memo cut to its cap on a line boundary; a heading left with nothing under it goes too. */
+export function capMemo(body: string, maxTokens = MEMO_MAX_TOKENS): string {
+  if (estimateTokens(body) <= maxTokens) return body;
+  const lines = body.split("\n");
+  while (lines.length > 0 && estimateTokens(lines.join("\n")) > maxTokens) lines.pop();
+  while (lines.length > 0 && !MEMO_ITEM.test(lines.at(-1) as string)) lines.pop();
+  return lines.join("\n").trim();
 }
 
 /**
@@ -199,15 +326,17 @@ export async function refreshMemo(
   const fresh = lines
     .filter((l) => !memoCovers(l, status.coversSeq, status.coveredUntil))
     .map(render);
+  const tz = view.call?.tz ?? "UTC";
   const out = await updater.update(
-    {
-      previous: status.body,
-      newLines: fresh,
-      coversSeq,
-      tz: view.call?.tz ?? "UTC",
-      maxTokens: MEMO_MAX_TOKENS,
-    },
+    { previous: status.body, newLines: fresh, coversSeq, tz, maxTokens: MEMO_MAX_TOKENS },
     signal,
   );
-  return memoDraft(view, { text: out.text, coversSeq, by: "app", model: out.model || updater.id });
+  const checked = checkMemoAnchors(out.text, anchorMinutes(lines, tz));
+  const body = capMemo(checked.body);
+  if (!MEMO_ITEM_IN.test(body)) {
+    return { ok: false, error: "the provider's memo had no item with a valid anchor" };
+  }
+  return memoDraft(view, { text: body, coversSeq, by: "app", model: out.model || updater.id });
 }
+
+const MEMO_ITEM_IN = /^\s*(?:[-*+]|\d+[.)])\s+/m;
