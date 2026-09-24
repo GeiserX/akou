@@ -13,7 +13,12 @@ import { processAlive } from "../src/core/log/writer.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import type { CallBudgets } from "../src/main/call/state.ts";
 import type { CaptureStartOptions } from "../src/main/capture/engine.ts";
-import { AkouCaptureEngine, KILL_GRACE_MS } from "../src/main/capture/helper.ts";
+import {
+  AkouCaptureEngine,
+  akouCaptureDialect,
+  ChildCaptureSession,
+  KILL_GRACE_MS,
+} from "../src/main/capture/helper.ts";
 import type { Packet } from "../src/main/capture/protocol.ts";
 import { logOf, ofType, until } from "./capture-helpers.ts";
 import { writeCallWav } from "./fixtures/audio.ts";
@@ -392,6 +397,50 @@ describe("real child process: while recording", () => {
       // Half a second of pause is not in the file: resume continues within a packet or two of the pause.
       expect(Math.abs((resume?.a ?? 0) - (pause?.a ?? 0))).toBeLessThan(0.1);
       expect((resume?.wall ?? 0) - (pause?.wall ?? 0)).toBeGreaterThanOrEqual(450);
+    },
+    LONG,
+  );
+});
+
+describe("a helper's last stderr line", () => {
+  /**
+   * A helper that exits at once while a process it started still holds its stderr and writes the
+   * `stopped` line `delayMs` later: the exit is noticed before the pipe has drained.
+   */
+  function lateStopped(delayMs: number) {
+    const line = JSON.stringify({ type: "stopped", file_seconds: 7.5, reason: "stop" });
+    const grandchild = `setTimeout(() => process.stderr.write(${JSON.stringify(`${line}\n`)}), ${delayMs})`;
+    const child = [
+      'const { spawn } = require("node:child_process");',
+      `const g = spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: ["ignore", "ignore", "inherit"], detached: true });`,
+      "g.unref();",
+      "process.exit(0);",
+    ].join("\n");
+    const session = new ChildCaptureSession(
+      { argv: [process.execPath, "-e", child] },
+      { packet: () => {}, message: () => {}, exit: () => {} },
+      akouCaptureDialect,
+    );
+    const t0 = performance.now();
+    return session.exited.then((exit) => ({ exit, ms: performance.now() - t0 }));
+  }
+
+  test(
+    "a `stopped` line written just after the helper exits is still read",
+    async () => {
+      const { exit } = await lateStopped(100);
+      expect(exit.code).toBe(0);
+      expect(exit.stopped).toEqual({ fileSeconds: 7.5, reason: "stop" });
+    },
+    LONG,
+  );
+
+  test(
+    "positive control: a pipe held open for long never delays the exit past the drain grace",
+    async () => {
+      const { exit, ms } = await lateStopped(5_000);
+      expect(exit.stopped).toBeUndefined();
+      expect(ms).toBeLessThan(3_000);
     },
     LONG,
   );
