@@ -14,6 +14,7 @@ import {
   buildPayload,
   EXIT_TIMEOUT,
   HOOK_LOG,
+  HOOK_OUTPUT_CAP,
   hookName,
   hooksFor,
   runHook,
@@ -86,6 +87,17 @@ beforeAll(() => {
   );
   writeFileSync(join(scripts, "sleep.ts"), "await Bun.sleep(30_000);\n");
   writeFileSync(join(scripts, "deaf.ts"), 'console.log("never read stdin");\n');
+  // Writes its pid to argv[2], then sleeps; with argv[3] = "stubborn" it ignores SIGTERM.
+  writeFileSync(
+    join(scripts, "pidsleep.ts"),
+    [
+      'import { writeFileSync } from "node:fs";',
+      'if (process.argv[3] === "stubborn") process.on("SIGTERM", () => {});',
+      "writeFileSync(process.argv[2], String(process.pid));",
+      "await Bun.sleep(30_000);",
+    ].join("\n"),
+  );
+  writeFileSync(join(scripts, "loud.ts"), 'process.stdout.write("x".repeat(600 * 1024));\n');
 });
 
 afterAll(() => cleanup());
@@ -190,6 +202,63 @@ describe("hooks (DESIGN 8.2)", () => {
     expect(readFileSync(join(dir, HOOK_LOG), "utf8")).toContain("(timed out)");
   });
 
+  const alive = (pid: number) => {
+    try {
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  for (const mode of ["", "stubborn"]) {
+    test.skipIf(process.platform === "win32")(
+      `past its timeout the whole group is killed, not just the shell${mode ? " (SIGTERM ignored)" : ""}`,
+      async () => {
+        const pidFile = join(scripts, `pid-${mode || "plain"}.txt`);
+        const q = (x: string) => JSON.stringify(x);
+        const run = await runHook({
+          hook: {
+            stage: "call.ended",
+            // A string hook: the work is a grandchild of the shell.
+            command: `${q(BUN)} ${q(join(scripts, "pidsleep.ts"))} ${q(pidFile)} ${mode}; echo done`,
+            timeoutSec: 1,
+          },
+          stage: "call.ended",
+          payload: "{}",
+          callId: "c",
+          callDir: dir,
+        });
+        expect(run).toMatchObject({ exit: EXIT_TIMEOUT, timedOut: true });
+        const pid = Number(readFileSync(pidFile, "utf8"));
+        const t0 = performance.now();
+        while (alive(pid) && performance.now() - t0 < 5000) await Bun.sleep(100);
+        const survived = alive(pid);
+        if (survived) process.kill(pid, "SIGKILL");
+        expect(survived).toBe(false);
+      },
+      15_000,
+    );
+  }
+
+  test("a hook's output past the cap is dropped, and the log says so", async () => {
+    const logPath = join(dir, HOOK_LOG);
+    const before = readFileSync(logPath, "utf8").length;
+    const run = await runHook({
+      hook: { stage: "call.ended", command: [BUN, join(scripts, "loud.ts")], name: "loud" },
+      stage: "call.ended",
+      payload: "{}",
+      callId: "c",
+      callDir: dir,
+    });
+    expect(run.exit).toBe(0);
+    const added = readFileSync(logPath, "utf8").slice(before);
+    expect(added).toContain(`[output past ${HOOK_OUTPUT_CAP} bytes dropped]`);
+    expect(added.length).toBeLessThan(HOOK_OUTPUT_CAP + 4096);
+    // Positive control: the hook did print more than the cap.
+    expect(600 * 1024).toBeGreaterThan(HOOK_OUTPUT_CAP);
+  });
+
   test("a hook that never reads stdin, or cannot start, is a result, never a crash", async () => {
     const deaf = await runHook({
       hook: { stage: "call.ended", command: [BUN, join(scripts, "deaf.ts")] },
@@ -252,7 +321,12 @@ describe("the webhook (DESIGN 8.2)", () => {
           delivery: req.headers.get("x-akou-delivery"),
           body: await req.text(),
         });
-        return new Response("ok", { status: answers.shift() ?? 200 });
+        const status = answers.shift() ?? 200;
+        const headers: Record<string, string> =
+          status >= 300 && status < 400
+            ? { location: `http://127.0.0.1:${server.port}/moved` }
+            : {};
+        return new Response("ok", { status, headers });
       },
     });
   });
@@ -299,6 +373,20 @@ describe("the webhook (DESIGN 8.2)", () => {
       status: 400,
       attempts: 1,
     });
+  });
+
+  test("a redirect is final: the signed body is never posted on to where it points", async () => {
+    got.length = 0;
+    answers = [307];
+    const r = await sendWebhook({
+      url: url(),
+      secret: "s",
+      stage: "enhanced",
+      body: "{}",
+      ...noWait,
+    });
+    expect(r).toEqual({ status: 307, attempts: 1 });
+    expect(got).toHaveLength(1);
   });
 
   test("three retries, then status 0 when nothing answers", async () => {

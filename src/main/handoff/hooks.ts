@@ -250,12 +250,15 @@ export function runHook(o: RunHookOptions): Promise<HookRun> {
       timedOut = true;
       killGroup(child, "SIGTERM", platform);
       killTimer = setTimeout(() => killGroup(child, "SIGKILL", platform), KILL_GRACE_MS);
+      killTimer.unref?.();
     }, timeoutMs);
     const done = (exit: number, note?: string) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
-      if (killTimer) clearTimeout(killTimer);
+      // A timed-out hook's SIGKILL still goes to the group: the shell may be gone while a
+      // grandchild that ignored SIGTERM holds on.
+      if (killTimer && !timedOut) clearTimeout(killTimer);
       resolve(finish(timedOut ? EXIT_TIMEOUT : exit, timedOut, note));
     };
     child.stdout?.on("data", keep);
