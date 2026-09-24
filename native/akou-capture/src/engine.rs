@@ -32,6 +32,11 @@ use crate::source::{CallMode, ClockKind, Event, Frontend, Status};
 const DEVICE_LATENCY_NS: u64 = 100_000_000;
 /// Emission latency with the file source: only the resampler lookahead.
 const DRIVEN_LATENCY_NS: u64 = 20_000_000;
+/// The emit latency grows to fit a source whose buffers arrive later than that (a Bluetooth or
+/// virtual input), up to this bound: how late a buffer arrived, plus the resampler lookahead.
+const MAX_LATENCY_NS: u64 = 400_000_000;
+/// Late audio is reported when it starts, then at most once a minute, and in total at stop.
+const LATE_WARN_EVERY: Duration = Duration::from_secs(60);
 /// Packets waiting for stdout: 5 s of both channels.
 const STDOUT_QUEUE: usize = 500;
 /// Source events waiting for the loop.
@@ -213,6 +218,11 @@ struct Part {
     /// captured before the sleep keeps the old one even if it is emitted after.
     offsets: Vec<(u64, u64)>,
     rebuilds: [u32; 2],
+    /// How long after slot time a slot goes out; grows to fit a slow source.
+    latency: u64,
+    /// Late frames per channel already reported, and when.
+    late_reported: [u64; 2],
+    late_warned_at: [Option<Instant>; 2],
     pkt: Vec<u8>,
     out16: Vec<f32>,
 }
@@ -244,6 +254,42 @@ impl Part {
             .find(|(from, _)| awake_ns >= *from)
             .or(self.offsets.first())
             .map_or(0, |o| o.1)
+    }
+
+    /// A buffer that arrived `lag_ns` after its first sample: the emit latency must cover it.
+    fn fit_latency(&mut self, lag_ns: u64) {
+        let need = lag_ns.saturating_add(DRIVEN_LATENCY_NS).min(MAX_LATENCY_NS);
+        if need > self.latency {
+            self.latency = need;
+        }
+    }
+
+    /// Audio that arrived after its slot went out is dropped and that slot is zero-filled, which
+    /// the app cannot tell from a silent device; so it is said on stderr.
+    fn report_late(&mut self, at_stop: bool) {
+        for ch in Ch::BOTH {
+            let i = ch.index();
+            let late = self.aligner.stats(ch).late;
+            if late <= self.late_reported[i] {
+                continue;
+            }
+            let due =
+                at_stop || self.late_warned_at[i].is_none_or(|w| w.elapsed() >= LATE_WARN_EVERY);
+            if !due {
+                continue;
+            }
+            self.late_reported[i] = late;
+            self.late_warned_at[i] = Some(Instant::now());
+            self.say.line(&protocol::warn(
+                "late-audio",
+                &format!(
+                    "{}: {late} frames ({:.0} ms) arrived after their slot went out and were dropped; emit latency now {} ms",
+                    ch.name(),
+                    late as f64 * 1000.0 / TIMELINE_RATE as f64,
+                    self.latency / 1_000_000
+                ),
+            ));
+        }
     }
 
     fn t_of(&self, awake_ns: u64) -> f64 {
@@ -621,6 +667,9 @@ pub fn run(
         probe_since: None,
         offsets: vec![(0, anchor.cont_ns.wrapping_sub(anchor.awake_ns))],
         rebuilds: [0; 2],
+        latency,
+        late_reported: [0; 2],
+        late_warned_at: [None; 2],
         pkt: Vec::new(),
         out16: Vec::new(),
     };
@@ -644,6 +693,8 @@ pub fn run(
             match ev {
                 Event::Chunk(c) => {
                     if p.on[c.ch.index()] {
+                        let now = if driven { p.now } else { clock::now() };
+                        p.fit_latency(now.awake_ns.saturating_sub(c.awake_ns));
                         p.aligner
                             .push(c.ch, c.awake_ns, c.rate, &c.samples, c.heard);
                     }
@@ -712,7 +763,7 @@ pub fn run(
                 Ok(Input::Cmd(Command::Pause)) => {
                     let now = if driven { p.now } else { clock::now() };
                     p.now = now;
-                    while let Some(s) = p.aligner.pop_due(now.awake_ns, latency) {
+                    while let Some(s) = p.aligner.pop_due(now.awake_ns, p.latency) {
                         match p.emit(fe.as_mut(), s, false) {
                             Flow::Continue => {}
                             Flow::Stop(r) => break 'run r,
@@ -770,13 +821,14 @@ pub fn run(
             last_status = Instant::now();
             p.poll_status(fe.as_mut(), &cfg.call, mic_default);
         }
-        while let Some(s) = p.aligner.pop_due(p.now.awake_ns, latency) {
+        while let Some(s) = p.aligner.pop_due(p.now.awake_ns, p.latency) {
             match p.emit(fe.as_mut(), s, false) {
                 Flow::Continue => {}
                 Flow::Stop(r) => break 'run r,
                 Flow::Crash => return Outcome::Exit(exit::SOFTWARE),
             }
         }
+        p.report_late(false);
     };
 
     // Finish: the rest of the timeline, the file, the packets, `stopped`, then teardown.
@@ -795,6 +847,7 @@ pub fn run(
             }
         }
     }
+    p.report_late(true);
     let (tl, tr) = tail
         .as_ref()
         .map(|s| (s.ch[0].samples.as_slice(), s.ch[1].samples.as_slice()))

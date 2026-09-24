@@ -298,6 +298,77 @@ fn a_stalled_mic_is_rebuilt_every_3_s_by_the_stall_rule() {
     assert_eq!(mic_rebuilds, 3, "{lines:#?}");
 }
 
+fn late_warns(lines: &[String]) -> Vec<&String> {
+    typed(lines, "warn")
+        .into_iter()
+        .filter(|l| l.contains(r#""code":"late-audio""#))
+        .collect()
+}
+
+/// A high-latency input (a Bluetooth headset, a virtual device): mic buffers arrive 150 ms after
+/// their timestamps, beyond the fixed emit latency. The emit latency grows to fit the source, so
+/// the mic is delivered rather than zero-filled as if the device were silent.
+#[test]
+fn a_mic_that_arrives_late_is_delivered_because_the_latency_grows_to_fit_it() {
+    let (lines, packets) = run_scripted(
+        "late-mic.opus",
+        Scripted {
+            secs: 3.0,
+            delivers: |_, _| true,
+            mic_lag_ns: 150_000_000,
+            tx: None,
+        },
+    );
+    let mic: Vec<&Packet> = packets.iter().filter(|p| p.ch == Ch::Mic).collect();
+    // The last 150 ms of the timeline has no mic audio: it was still in flight at the end.
+    let after: Vec<&&Packet> = mic
+        .iter()
+        .filter(|p| (0.2..2.8).contains(&p.file_seconds))
+        .collect();
+    assert!(after.len() > 100);
+    assert!(
+        after.iter().all(|p| !p.zero_filled),
+        "{} of {} mic packets from 0.2 to 2.8 s were zero-filled",
+        after.iter().filter(|p| p.zero_filled).count(),
+        after.len()
+    );
+    assert!(late_warns(&lines).is_empty(), "{lines:#?}");
+}
+
+/// A source later than the latency may grow to (400 ms) loses audio; that loss is reported as
+/// `warn {code: late-audio}` instead of passing for a silent device.
+#[test]
+fn a_mic_later_than_the_latency_bound_is_reported_as_late_audio() {
+    let (lines, _) = run_scripted(
+        "later-mic.opus",
+        Scripted {
+            secs: 3.0,
+            delivers: |_, _| true,
+            mic_lag_ns: 600_000_000,
+            tx: None,
+        },
+    );
+    let late = late_warns(&lines);
+    assert!(!late.is_empty(), "{lines:#?}");
+    assert!(late[0].contains(r#""msg":"mic: "#), "{}", late[0]);
+    assert!(late.iter().all(|l| !l.contains("call: ")));
+}
+
+/// Positive control: the same source on time never reports late audio.
+#[test]
+fn a_mic_on_time_never_reports_late_audio() {
+    let (lines, _) = run_scripted(
+        "ontime-mic.opus",
+        Scripted {
+            secs: 3.0,
+            delivers: |_, _| true,
+            mic_lag_ns: 0,
+            tx: None,
+        },
+    );
+    assert!(late_warns(&lines).is_empty(), "{lines:#?}");
+}
+
 fn typed<'a>(lines: &'a [String], t: &str) -> Vec<&'a String> {
     let tag = format!("\"type\":\"{t}\"");
     lines.iter().filter(|l| l.contains(&tag)).collect()

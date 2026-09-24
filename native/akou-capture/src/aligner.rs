@@ -32,8 +32,11 @@ const ERR_SMOOTHING: f64 = 0.05;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct TrackStats {
-    /// Frames that arrived after their slot was emitted.
+    /// Frames that arrived after their slot was emitted: a source slower than the emit latency.
     pub late: u64,
+    /// Frames from before the timeline (captured before `capturing` or while paused): expected
+    /// from a device opened early, and dropped without counting as late.
+    pub before: u64,
     /// Frames beyond the cap ahead of the cursor.
     pub ahead: u64,
     /// Times the source was re-anchored after a discontinuity.
@@ -123,6 +126,9 @@ pub struct Aligner {
     paused_at: Option<u64>,
     /// First frame of the next slot to emit.
     emitted: i64,
+    /// Frames placed before this (before the anchor, or captured while paused) are not audio of
+    /// the timeline.
+    start: i64,
     tracks: [Track; 2],
 }
 
@@ -134,6 +140,7 @@ impl Aligner {
             paused_ns: 0,
             paused_at: None,
             emitted: 0,
+            start: 0,
             tracks: [Track::new(), Track::new()],
         }
     }
@@ -179,6 +186,7 @@ impl Aligner {
         }
         let expected = self.frame_f(awake_ns);
         let emitted = self.emitted;
+        let start = self.start;
         let t = &mut self.tracks[ch.index()];
         t.stats.chunks += 1;
         if t.resampler.as_ref().map(|r| r.in_rate()) != Some(rate) {
@@ -222,7 +230,9 @@ impl Aligner {
             }
             let frame = t.next;
             t.next += 1;
-            if frame < emitted {
+            if frame < start {
+                t.stats.before += 1;
+            } else if frame < emitted {
                 t.stats.late += 1;
             } else if frame >= emitted + CAP as i64 {
                 t.stats.ahead += 1;
@@ -274,6 +284,7 @@ impl Aligner {
     /// the last real frame and is never emitted as audio: `flush` stops at the host clock.
     fn drain_resamplers(&mut self) {
         let emitted = self.emitted;
+        let first = emitted.max(self.start);
         for t in &mut self.tracks {
             let Some(rs) = t.resampler.as_mut() else {
                 continue;
@@ -297,7 +308,7 @@ impl Aligner {
                 if frame >= end {
                     break;
                 }
-                if frame >= emitted && frame < emitted + CAP as i64 {
+                if frame >= first && frame < emitted + CAP as i64 {
                     let at = frame.rem_euclid(CAP as i64) as usize;
                     t.ring[at] = t.scratch[i];
                     t.loud[at] = t.last_heard;
@@ -356,6 +367,7 @@ impl Aligner {
     pub fn resume(&mut self, now_awake_ns: u64) {
         if let Some(at) = self.paused_at.take() {
             self.paused_ns += now_awake_ns.saturating_sub(at);
+            self.start = self.frame_f(now_awake_ns).floor() as i64;
             for t in &mut self.tracks {
                 t.synced = false;
             }
@@ -607,9 +619,33 @@ mod tests {
     }
 
     #[test]
-    fn audio_before_the_anchor_or_behind_the_cursor_is_dropped_and_counted() {
+    fn audio_before_the_anchor_is_dropped_but_is_not_late() {
         let mut al = Aligner::new(T0);
         al.push(Ch::Mic, T0 - 100 * MS, 48_000, &vec![0.5; 480], true);
+        // A device opened before `capturing` delivers audio from before the timeline: expected,
+        // not a sign of a slow source.
+        assert_eq!(al.stats(Ch::Mic).late, 0);
+        assert!(al.stats(Ch::Mic).before > 0);
+    }
+
+    #[test]
+    fn audio_behind_the_emit_cursor_is_dropped_and_counted_late() {
+        let mut al = Aligner::new(T0);
+        // One second of the timeline goes out with nothing from the mic.
+        while al.pop_due(T0 + 1_000 * MS, LAT).is_some() {}
+        al.push(Ch::Mic, T0 + 500 * MS, 48_000, &vec![0.5; 480], true);
         assert!(al.stats(Ch::Mic).late > 0);
+        assert_eq!(al.stats(Ch::Mic).before, 0);
+    }
+
+    #[test]
+    fn audio_captured_while_paused_is_not_late_after_resume() {
+        let mut al = Aligner::new(T0);
+        while al.pop_due(T0 + 500 * MS, LAT).is_some() {}
+        al.pause(T0 + 500 * MS);
+        al.resume(T0 + 2_000 * MS);
+        // A buffer captured during the pause that the device hands over after the resume.
+        al.push(Ch::Mic, T0 + 1_950 * MS, 48_000, &vec![0.5; 480], true);
+        assert_eq!(al.stats(Ch::Mic).late, 0);
     }
 }
