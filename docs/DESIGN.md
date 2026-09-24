@@ -220,7 +220,7 @@ All inference runs through sherpa-onnx-node in Bun Workers. One ONNX Runtime, on
 | Job | Model | Weights licence | Notes |
 |---|---|---|---|
 | Voice activity | Silero VAD v5 | MIT | Chooses cut points only. Never decides what is recorded or what the final pass transcribes |
-| Live and final recognition, 25 European languages | Parakeet TDT 0.6B v3, int8 | CC-BY-4.0 (attributed in NOTICE) | Transcribes 25 languages with no language switch. sherpa-onnx does not report which language it heard for this model, so `lang` stays empty on Parakeet segments |
+| Live and final recognition, 25 European languages | Parakeet TDT 0.6B v3, full precision (fp32) | CC-BY-4.0 (attributed in NOTICE) | Transcribes 25 languages with no language switch. fp32 makes a third fewer word errors in English and a fifth fewer in Spanish than the int8 build, and finds more names under decode biasing, so akou ships it ([research/asr-benchmark.md](research/asr-benchmark.md)). sherpa-onnx does not report which language it heard for this model, so `lang` stays empty on Parakeet segments |
 | Live recognition on slow machines | Moonshine tiny/base | MIT | **English only.** Punctuated and cased; measured at 1 % of real time in the spike (one channel, English clip). A slow machine in a non-English workspace keeps Parakeet for live at a higher lag, or picks Whisper tiny/base (multilingual) |
 | Other languages | Whisper large-v3-turbo through sherpa-onnx | MIT | Chosen per workspace. Reports the detected language, which fills `lang` |
 | Speaker embeddings | 3D-Speaker ERes2Net (or NeMo TitaNet-small) | Apache-2.0 | Live clustering and final diarization |
@@ -299,7 +299,7 @@ Folder names are unique by construction. akou never writes into an existing call
 ```json
 {"seq":1,"t":1790170572000,"type":"call.created","id":"01J8Z6Q4M2VX0K7B3D4E5F6G7H","schema":1,"workspace":"work","title":"Weekly sync","tz":"America/Chicago","user":"Ana","akou":"0.1.0","template":"standup"}
 {"seq":2,"t":1790170572410,"type":"part.started","part":1,"file":"audio/part-001.opus","wallStart":1790170572392,"monoStart":123456789,"mic":"MacBook Pro Microphone","call":{"mode":"system","exclude":["akou Graphics and Media"]},"capture":"akou-capture 0.1.0"}
-{"seq":57,"t":1790170710100,"type":"seg","id":"l000031","rev":1,"layer":"live","part":1,"ch":"call","spk":"c2","a0":131.2,"a1":136.9,"w0":1790170703592,"w1":1790170709292,"text":"we should move the build to the new box","lang":"en","model":"parakeet-tdt-0.6b-v3-int8"}
+{"seq":57,"t":1790170710100,"type":"seg","id":"l000031","rev":1,"layer":"live","part":1,"ch":"call","spk":"c2","a0":131.2,"a1":136.9,"w0":1790170703592,"w1":1790170709292,"text":"we should move the build to the new box","lang":"en","model":"parakeet-tdt-0.6b-v3-fp32"}
 {"seq":58,"t":1790170711000,"type":"speaker.name","spk":"c2","name":"Ben","by":"agent:claude-code"}
 {"seq":64,"t":1790170741000,"type":"note","id":"n0004","rev":1,"text":"build -> new box?","w":1790170740800,"afterSeq":63,"by":"user"}
 {"seq":90,"t":1790170900000,"type":"health","part":1,"ch":"call","state":"dead","silentFor":12,"rebuilds":1,"detail":"output running, probe heard audio, rebuilding"}

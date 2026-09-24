@@ -37,7 +37,7 @@ import {
 } from "../src/main/vocab/files.ts";
 import { isDictionaryWord, LogBuilder, T0, tempDir } from "./helpers.ts";
 
-const PARAKEET = "parakeet-tdt-0.6b-v3-int8";
+const PARAKEET = "parakeet-tdt-0.6b-v3-fp32";
 const entry = (term: string, extra: Partial<VocabEntry> = {}): VocabEntry => ({
   term,
   heard: [],

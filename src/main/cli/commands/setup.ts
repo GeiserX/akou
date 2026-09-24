@@ -16,6 +16,7 @@ import {
   MODELS,
   type ModelSpecEntry,
   modelFile,
+  pruneRetiredModels,
   sha256File,
 } from "../../asr/models.ts";
 import { loadConfig } from "../../config/schema.ts";
@@ -180,7 +181,7 @@ const models: Command = {
           {
             env: ctx.io.env as NodeJS.ProcessEnv,
             registry: registry(ctx),
-            // One line per file every 10 %, on stderr, so a 650 MB file never looks stuck.
+            // One line per file every 10 %, on stderr, so a 2.4 GB file never looks stuck.
             onProgress: (x) => {
               if (ctx.json) return;
               const key = `${x.model}/${x.name}`;
@@ -195,8 +196,12 @@ const models: Command = {
             },
           },
         );
-        if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, dir, files: done.length }));
-        else ctx.io.out(`All ${done.length} model files are in ${dir} and verified`);
+        const retired = pruneRetiredModels(dir);
+        if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, dir, files: done.length, retired }));
+        else {
+          ctx.io.out(`All ${done.length} model files are in ${dir} and verified`);
+          for (const id of retired) ctx.io.out(`Removed ${id}, which this version no longer uses`);
+        }
         return EXIT.ok;
       } catch (err) {
         const msg = (err as Error).message;
@@ -208,10 +213,12 @@ const models: Command = {
     if (sub === "import") {
       if (!arg) return usage(ctx, "models import needs a folder");
       const r = await importModels(ctx, arg);
-      if (ctx.json) ctx.io.out(JSON.stringify({ dir, ...r }));
+      const retired = r.missing.length === 0 ? pruneRetiredModels(dir) : [];
+      if (ctx.json) ctx.io.out(JSON.stringify({ dir, ...r, retired }));
       else {
         ctx.io.out(`Imported ${r.copied.length} file(s) into ${dir}`);
         if (r.missing.length > 0) ctx.io.err(`Still missing: ${r.missing.join(", ")}`);
+        for (const id of retired) ctx.io.out(`Removed ${id}, which this version no longer uses`);
       }
       return r.missing.length > 0 ? EXIT.unavailable : EXIT.ok;
     }

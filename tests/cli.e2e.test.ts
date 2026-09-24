@@ -6,10 +6,10 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { openGuard } from "../src/main/api/guard.ts";
-import type { ModelSpecEntry } from "../src/main/asr/models.ts";
+import { type ModelSpecEntry, RETIRED_MODELS } from "../src/main/asr/models.ts";
 import type { HelperFound } from "../src/main/capture/helper.ts";
 import { parseArgs } from "../src/main/cli/args.ts";
 import { ApiClient, EXIT, exitFor, type RequestOptions } from "../src/main/cli/client.ts";
@@ -506,6 +506,29 @@ describe("doctor and models", () => {
     expect(imp.code).toBe(EXIT.unavailable);
     empty.cleanup();
     t.cleanup();
+  });
+
+  test("models import removes the retired int8 folder once nothing is missing, and only then", async () => {
+    const t = tempDir();
+    const models = join(t.dir, "models");
+    const env = { ...process.env, AKOU_HOME: t.dir, AKOU_MODELS_DIR: models };
+    const old = join(models, RETIRED_MODELS[0] as string);
+    mkdirSync(old, { recursive: true });
+    writeFileSync(join(old, "encoder.int8.onnx"), "old weights");
+    const empty = tempDir();
+    // Positive control: an import that leaves a file missing keeps the old folder.
+    const partial = await cli(env, ["models", "import", empty.dir, "--json"], {
+      models: [tinyModel],
+    });
+    expect(partial.json.retired).toEqual([]);
+    expect(existsSync(old)).toBe(true);
+    const src = tempDir();
+    writeFileSync(join(src.dir, "tiny.bin"), tiny);
+    const imp = await cli(env, ["models", "import", src.dir, "--json"], { models: [tinyModel] });
+    expect(imp.code).toBe(0);
+    expect(imp.json.retired).toEqual([RETIRED_MODELS[0]]);
+    expect(existsSync(old)).toBe(false);
+    for (const x of [empty, src, t]) x.cleanup();
   });
 
   test("models list and import; pull is refused under test", async () => {
