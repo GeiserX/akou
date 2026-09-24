@@ -20,5 +20,17 @@
   },
   "assist": {
     "enabled": true
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["src/ui/theme.css"],
+      "linter": {
+        "rules": {
+          "style": {
+            "noDescendingSpecificity": "off"
+          }
+        }
+      }
+    }
+  ]
 }

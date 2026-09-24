@@ -15,5 +15,6 @@
     "noEmit": true,
     "skipLibCheck": true
   },
-  "include": ["src", "tests", "scripts"]
+  "include": ["src", "tests", "scripts", "electrobun.config.ts"],
+  "exclude": ["src/ui", "tests/ui"]
 }

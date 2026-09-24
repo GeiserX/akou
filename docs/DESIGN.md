@@ -549,6 +549,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /import/hark-viewer` `{dirs[], workspace?}` | Imports predecessor call folders (absolute paths); `422 not_imported` with the reasons when none could be |
 | `POST /share` · `DELETE /share` · `GET /share` | Sharing |
 | `GET /templates` · `GET /config` · `PATCH /config` | Settings |
+| `POST /window` `{call?}` | Shows the window on a call (`akou open`). With no window (headless), answers `{url}`: the window in a browser, with a one-time code (section 6.3 rule 8) |
 | `POST /quit` | Clean shutdown |
 
 `POST /calls` answers `201` only after `capturing`. A failed start never leaves a call that looks live.
@@ -563,7 +564,8 @@ hark's remote-control agent accepted a cross-origin `POST /stop` from any web pa
 4. Any request carrying `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Mode` is refused with 403. Our clients never send them; browsers always do cross-origin.
 5. No CORS headers, ever. Mutations require `Content-Type: application/json`. Bodies are capped at 64 KB. Unknown fields are refused with 400.
 6. Loopback clients (CLI, MCP, the app's own main process) disable any HTTP proxy for `127.0.0.1`. Bun's `fetch` honours `HTTP_PROXY`, and a proxy on loopback traffic broke both predecessors.
-7. The window does not use HTTP at all. It talks to the main process over ElectroBun's typed RPC.
+7. The window does not use HTTP at all. It talks to the main process over ElectroBun's typed RPC. That RPC runs over a WebSocket on `127.0.0.1` whose upgrade ElectroBun does not authenticate (ElectroBun #518): any local process that guesses the webview's number can take the socket over. Every frame is encrypted with a per-webview AES-GCM key, so the taker cannot read the window's traffic or send it requests; what it can do is detach the window, after which the page's requests and pushes go nowhere. The recording is not affected. The page treats that like any lost connection: its follower reconnects after 35 s of silence, and when it has been reconnecting past a follow request's timeout the window says to close it and open it again, which gets a new socket and key. The window's `index.html` carries its own Content Security Policy as a meta tag, because `views://` has no server to add the header: the page server's policy, plus the RPC socket's `ws://127.0.0.1:*` and the `views:` scheme. When ElectroBun ships an authenticated upgrade, pin that release and check the client code (`/socket?webviewId=`), not the changelog.
+8. A headless app shows the same page in a browser through a second loopback listener, the page server, which runs the page's requests through the same routes in process, as the user. The browser never gets the API token: `POST /window` puts a one-time code in the URL fragment (never sent to a server, never in a `Referer`), valid once for one minute; the page trades it for a session it keeps in memory and sends as `Authorization`, so there is no cookie for another site to ride on. The same `Host` rule applies, a request the browser marks cross-site is refused, no CORS header is sent, and every page carries a strict Content Security Policy (scripts from its own origin only) and `Referrer-Policy: no-referrer`.
 
 The CI security job starts the app headless with a fake helper, loads a page on another origin in a headless browser, fires `fetch('http://127.0.0.1:PORT/v1/calls/live/stop', {method: 'POST'})`, a form POST, a `no-cors` fetch and a request with a foreign `Host`, and asserts 403 for each with the fake call still recording. A positive control runs the same requests against a build with the guards compiled out and must see them succeed, which proves the test can fail.
 
@@ -606,6 +608,8 @@ Tool descriptions carry the rules: cite wall time, never quote a draft line as f
 ## 7. The window
 
 One webview (WKWebView, WebView2, WebKitGTK), plain TypeScript with CSS variables, no framework. Updates arrive as RPC pushes from the main process, not polling. A read-only share viewer is built from the same bundle.
+
+The page keeps its own fold of the call it shows. It reads the log once, as the backlog of its stream, applies each event after that once and in `seq` order, and redraws only the lines the fold's change feed names. It recovers from a dropped stream, sleep or a frozen webview by following again from the last `seq` it applied, never by trusting the old connection. Every text from a transcript, note, name or answer is drawn as text, never as markup. The same page runs in a browser over the page server (section 6.3 rule 8), which is how the headless app and the UI tests show it.
 
 Everything hark-viewer did is kept:
 

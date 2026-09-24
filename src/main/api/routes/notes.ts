@@ -91,10 +91,31 @@ export function notesRoutes(r: Router<ApiApp>): void {
   });
 
   r.add("POST", "/calls/:id/notes", async (c) => {
-    const b = await readBody<{ text: string }>(c.req, { text: "string" });
+    const b = await readBody<{ text: string; w?: number; afterSeq?: number }>(c.req, {
+      text: "string",
+      "w?": "integer",
+      "afterSeq?": "integer",
+    });
+    const now = c.app.now();
+    // The window sends the time of the first keystroke and the last line visible then: never in
+    // the future, never before the call.
+    if (b.w !== undefined && (b.w > now + 1000 || b.w < now - 24 * 3_600_000)) {
+      throw new HttpError(400, "bad_field", "w must be the time the line was begun, before now");
+    }
+    if (b.afterSeq !== undefined && b.afterSeq < 0) {
+      throw new HttpError(400, "bad_field", "afterSeq must be a log position");
+    }
     const id = callId(c);
     const e = await c.app.write(id, (call) =>
-      notes(() => noteDraft(call.view, { text: b.text, by: c.by, now: c.app.now() })),
+      notes(() =>
+        noteDraft(call.view, {
+          text: b.text,
+          by: c.by,
+          now,
+          w: b.w === undefined ? undefined : Math.min(b.w, now),
+          afterSeq: b.afterSeq,
+        }),
+      ),
     );
     return json(201, { ok: true, call: id, note: e });
   });

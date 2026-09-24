@@ -92,7 +92,12 @@ import { OpenAiCompatibleProvider } from "./llm/openai-compatible.ts";
 import type { Provider } from "./llm/provider.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
 import { CallQuery } from "./query/context.ts";
+import { LocalLink } from "./share/local-link.ts";
+import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { mergeVocab, readVocabFile, vocabPaths } from "./vocab/files.ts";
+import { Bridge } from "./window/bridge.ts";
+import { buildUi } from "./window/bundle.ts";
+import { PageServer, type SettingsPane } from "./window/page-server.ts";
 
 export { APP_VERSION, RUNTIME_FILE };
 export const APP_LOCK = "akou.lock";
@@ -114,6 +119,8 @@ const REEXPORT_ON: ReadonlySet<string> = new Set([
 
 /** The window, when there is one. The ElectroBun shell implements it; headless has none. */
 export interface WindowShell {
+  /** Brings the window forward, on a call when one is named (`akou open CALL`). */
+  show(call?: string): void | Promise<void>;
   close(): Promise<void>;
 }
 
@@ -147,6 +154,18 @@ export interface AppOptions {
   /** Looks for Claude Code and Codex. Tests pass a fake; nothing else does. */
   discover?: (env: Record<string, string | undefined>) => Promise<Discovery>;
   clock?: Clock;
+  /**
+   * Opens a URL with the system (the permission banner's System Settings pane). Tests pass a fake;
+   * by default macOS `open` and Windows `start` are used, and elsewhere nothing opens.
+   */
+  openExternal?: (url: string) => Promise<boolean>;
+  /** The machine's network interfaces, for choosing a share address. Tests pass their own. */
+  interfaces?: () => ReturnType<typeof import("node:os").networkInterfaces>;
+  /**
+   * What the capture helper excludes from the call channel as akou's own audio: the bundle id on
+   * macOS, the app's process on Windows (DESIGN 2.3). The desktop entry sets it; headless has none.
+   */
+  excludeResponsible?: string;
   /** Test-only: the security suite's positive control replaces the guard. */
   guard?: Guard;
   version?: string;
@@ -221,6 +240,14 @@ export class AkouApp implements ApiApp {
   private cfg: LoadedConfig;
   private readonly clock: Clock;
   private readonly bus = new Map<string, Set<(e: LogEvent) => void>>();
+  private readonly watchers = new Set<(call: string, e: LogEvent) => void>();
+  /** Told when the status changes without a log event (a share viewer came or went). */
+  private readonly statusWatchers = new Set<() => void>();
+  /** The window in a browser, started the first time a headless app is asked to show it. */
+  page: PageServer | null = null;
+  /** Read-only live links (DESIGN 8.3); in memory only, so a share never survives a restart. */
+  readonly sharing: LocalLink;
+  private pageStarting: Promise<PageServer> | null = null;
   private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
   private readonly queries = new WeakMap<object, CallQuery>();
   private readonly vocabCache = new Map<string, VocabSource>();
@@ -267,7 +294,11 @@ export class AkouApp implements ApiApp {
       clock: this.clock,
       user: s["user.name"],
       akouVersion: this.version,
-      capture: { mic: s["capture.mic"], call: s["capture.call"] },
+      capture: {
+        mic: s["capture.mic"],
+        call: s["capture.call"],
+        excludeResponsible: o.excludeResponsible,
+      },
       ingest: { queueSeconds: s["capture.queueSeconds"] },
       budgets: {
         warmStartMs: s["capture.warmStartSeconds"] * 1000,
@@ -285,6 +316,16 @@ export class AkouApp implements ApiApp {
         this.levelsByCall.set(id, lv);
       },
       beforeEnd: (id) => this.asr?.flush(id) ?? Promise.resolve(),
+    });
+    this.sharing = new LocalLink({
+      app: this,
+      bundle: buildUi,
+      port: s["share.port"],
+      interfaces: o.interfaces,
+      onViewers: () => {
+        for (const fn of this.statusWatchers) fn();
+      },
+      onError: (err) => this.log("warn", `share: ${(err as Error).message}`),
     });
     this.startAsr(s);
     if (s["provider.kind"] === "harness") this.discoverHarnesses();
@@ -432,13 +473,15 @@ export class AkouApp implements ApiApp {
 
   private onEvent(id: string, e: LogEvent): void {
     this.asr?.onEvent(id, e);
-    for (const fn of this.bus.get(id) ?? []) {
+    const deliver = (fn: () => void) => {
       try {
-        fn(e);
+        fn();
       } catch (err) {
         this.log("error", `event subscriber failed: ${(err as Error).message}`);
       }
-    }
+    };
+    for (const fn of this.bus.get(id) ?? []) deliver(() => fn(e));
+    for (const fn of this.watchers) deliver(() => fn(id, e));
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
       // After the event is out, so the pass starts from a log that has it.
@@ -689,6 +732,125 @@ export class AkouApp implements ApiApp {
     return this.levelsByCall.get(id) ?? null;
   }
 
+  /** Every event appended to any call, with the call's id. Returns the unsubscribe function. */
+  watch(fn: (call: string, e: LogEvent) => void): () => void {
+    this.watchers.add(fn);
+    return () => {
+      this.watchers.delete(fn);
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Sharing (DESIGN 8.3)
+
+  shares(): ShareStatus[] {
+    return this.sharing.status();
+  }
+
+  /** `POST /share`: a read-only live link to a call. Starting it again answers the same link. */
+  async startShare(
+    call: string,
+    o: { bind?: string; notes?: boolean; expires?: string },
+  ): Promise<ShareStatus> {
+    if (this.quitting) throw new HttpError(503, "quitting", "akou is quitting");
+    const expires = parseExpiry(o.expires);
+    if (!expires) {
+      throw new HttpError(400, "bad_expires", "expires must be call-end, call-end+2h, 90m or 3h");
+    }
+    const h = await this.sharing.start(call, {
+      include: {
+        transcript: true,
+        names: true,
+        notes: o.notes === true,
+        enhanced: false,
+        audio: false,
+      },
+      expires,
+      bind: o.bind ?? this.cfg.settings["share.bind"],
+    });
+    return this.sharing.of(h.call) as ShareStatus;
+  }
+
+  /** `DELETE /share`: stops the share of one call, or every share. */
+  async stopShare(call?: string): Promise<ShareHandle[]> {
+    const stopped: ShareHandle[] = [];
+    for (const s of this.sharing.status()) {
+      if (call !== undefined && s.call !== call) continue;
+      await this.sharing.stop(s);
+      stopped.push({ id: s.id, call: s.call, url: s.url, expiresAt: s.expiresAt });
+    }
+    return stopped;
+  }
+
+  /** Called when the status changes without a log event. Returns the unsubscribe function. */
+  onStatusChange(fn: () => void): () => void {
+    this.statusWatchers.add(fn);
+    return () => {
+      this.statusWatchers.delete(fn);
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // The window
+
+  /**
+   * `POST /window`, `akou open [CALL]`: brings the window forward on a call, opening it if the app
+   * started headless under the desktop shell. An app with no window at all (the CLI's headless
+   * launch, the Linux tarball) answers with the address of the window in a browser instead: the
+   * page server, started the first time, with a one-time code in the fragment.
+   */
+  async openWindow(call?: string): Promise<{ shown: true } | { url: string }> {
+    if (this.quitting) throw new HttpError(503, "quitting", "akou is quitting");
+    if (call !== undefined) await this.call(call);
+    // A headless start (the login item) has the window factory but opened no window: open it now.
+    if (!this.window && this.o.window) this.window = await this.o.window(this);
+    if (this.window) {
+      await this.window.show(call);
+      return { shown: true };
+    }
+    const page = await this.pageServer();
+    return { url: page.openUrl(call) };
+  }
+
+  private pageServer(): Promise<PageServer> {
+    this.pageStarting ??= buildUi().then((bundle) => {
+      this.page = new PageServer({
+        bridge: new Bridge(this, (err) =>
+          this.log("error", `window request: ${(err as Error).stack ?? err}`),
+        ),
+        bundle,
+        now: () => this.clock.now(),
+        openSettings: (pane) => this.openSettingsPane(pane),
+        onError: (err) => this.log("error", `page server: ${(err as Error).stack ?? err}`),
+      });
+      return this.page;
+    });
+    this.pageStarting.catch(() => {
+      this.pageStarting = null;
+    });
+    return this.pageStarting;
+  }
+
+  /** The permission banner's button: the privacy pane that holds akou's grant. */
+  async openSettingsPane(pane: SettingsPane): Promise<boolean> {
+    const platform = this.o.platform ?? process.platform;
+    const url =
+      platform === "darwin"
+        ? `x-apple.systempreferences:com.apple.preference.security?${pane === "microphone" ? "Privacy_Microphone" : "Privacy_AudioCapture"}`
+        : platform === "win32" && pane === "microphone"
+          ? "ms-settings:privacy-microphone"
+          : null;
+    if (!url) return false;
+    if (this.o.openExternal) return this.o.openExternal(url);
+    const cmd = platform === "darwin" ? ["open", url] : ["cmd", "/c", "start", "", url];
+    try {
+      const p = Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
+      return (await p.exited) === 0;
+    } catch {
+      return false;
+    }
+  }
+
   // -------------------------------------------------------------------------
   // ApiApp
 
@@ -798,6 +960,7 @@ export class AkouApp implements ApiApp {
         port: this.server?.port ?? null,
         headless: this.headless,
         window: this.window ? "open" : this.headless ? "none (headless)" : "not built yet",
+        page: this.page ? this.page.origin : null,
         startedAt: this.startedAt,
         uptimeMs: this.clock.now() - this.startedAt,
         quitting: this.quitting !== null,
@@ -824,7 +987,7 @@ export class AkouApp implements ApiApp {
       asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
       provider: await this.providerStatus(),
       harnesses: this.discovery,
-      share: { active: false },
+      share: { active: this.sharing.status().length > 0, shares: this.sharing.status() },
       config: { file: this.cfg.paths.configFile, issues: this.cfg.issues },
     };
   }
@@ -972,6 +1135,7 @@ export class AkouApp implements ApiApp {
       } catch (err) {
         this.log("warn", `window close: ${(err as Error).message}`);
       }
+      await this.sharing.stopAll();
       for (const t of this.reexports.values()) clearTimeout(t);
       this.reexports.clear();
       await this.manager.quit();
@@ -982,6 +1146,7 @@ export class AkouApp implements ApiApp {
           this.log("info", "a final pass is still running; it runs again at the next start");
       }
       await this.asr?.close();
+      await this.page?.stop();
       await this.server?.stop();
       try {
         const rt = JSON.parse(readFileSync(this.runtimeFile, "utf8")) as { pid?: number };

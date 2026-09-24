@@ -28,7 +28,7 @@ import {
 import { chooseTemplate, type Template, TemplateError } from "../../notes/templates.ts";
 import { reasonText } from "../../query/ask.ts";
 import type { CallQuery } from "../../query/context.ts";
-import { HttpError, json, outcome, type Router, readBody } from "../http.ts";
+import { HttpError, intParam, json, outcome, type Router, readBody } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { callId, callOf } from "./common.ts";
 
@@ -237,6 +237,34 @@ export function postCallRoutes(r: Router<ApiApp>): void {
         dropped: composed.check.dropped,
         appended: composed.appended,
       });
+    });
+  });
+
+  r.add("GET", "/calls/:id/enhanced", async (c) => {
+    const call = await callOf(c);
+    const all = call.view.enhanced();
+    const want = intParam(c.url, "rev", undefined, 1, 1_000_000);
+    const e = want === undefined ? call.view.latestEnhanced() : all.find((x) => x.rev === want);
+    if (!e) {
+      if (want === undefined) return json(200, { call: call.id, enhanced: null, revisions: [] });
+      throw new HttpError(404, "not_found", `call ${call.id} has no enhanced notes rev ${want}`);
+    }
+    const path = normalize(join(call.dir, e.file));
+    if (!path.startsWith(normalize(call.dir) + sep) || !existsSync(path)) {
+      throw new HttpError(404, "not_found", `the file of enhanced notes rev ${e.rev} is missing`);
+    }
+    return json(200, {
+      call: call.id,
+      enhanced: {
+        rev: e.rev,
+        template: e.template,
+        coversSeq: e.coversSeq,
+        by: e.by,
+        model: e.model,
+        cites: e.cites,
+        markdown: await Bun.file(path).text(),
+      },
+      revisions: all.map((x) => ({ rev: x.rev, template: x.template, by: x.by, model: x.model })),
     });
   });
 

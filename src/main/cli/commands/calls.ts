@@ -6,17 +6,7 @@
 
 import { bool, int, list, str } from "../args.ts";
 import { EXIT, Unreachable } from "../client.ts";
-import {
-  api,
-  type Body,
-  type Command,
-  type Ctx,
-  enc,
-  finish,
-  notBuilt,
-  ref,
-  wall,
-} from "../context.ts";
+import { api, type Body, type Command, type Ctx, enc, finish, ref, wall } from "../context.ts";
 
 const start: Command = {
   name: "start",
@@ -125,10 +115,18 @@ const status: Command = {
 
 const open: Command = {
   name: "open",
-  summary: "Show the window on a call",
-  usage: "akou open [CALL]",
-  run: async (ctx) =>
-    notBuilt(ctx, "the window is not built yet; follow a call with `akou tail -f`"),
+  summary: "Show the window on a call; headless, print the address of the window in a browser",
+  usage: "akou open [CALL] [--json]",
+  run: async (ctx, p) => {
+    const call = p.positional[0];
+    const r = await api(ctx, "POST", "/window", { body: call ? { call } : {} });
+    // The address carries a one-time code that works once, for one minute: open it, do not keep it.
+    return finish(ctx, r, (b) =>
+      b.url
+        ? `Open this in a browser within a minute (it works once):\n${b.url}`
+        : "The window is open.",
+    );
+  },
 };
 
 function minutes(from: number, to: number | null): string {

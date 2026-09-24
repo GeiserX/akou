@@ -23,6 +23,8 @@ export const MAX_WAIT_SECONDS = 30;
 /** How often a stream looks at the provisional line and the levels, ms. */
 export const STREAM_TICK_MS = 250;
 export const KEEPALIVE_MS = 15_000;
+/** A steady level is repeated this often. */
+export const LEVEL_REPEAT_MS = 1000;
 
 /**
  * Waits for the first event past `after`, the deadline, or the client going away. It listens from
@@ -75,6 +77,166 @@ function timeParam(url: URL, name: string): number | undefined {
   return n;
 }
 
+/** One line still being spoken, as a follower receives it: never in the log, always a draft. */
+export interface PartialLine {
+  ch: "mic" | "call";
+  part: number;
+  spk?: string;
+  text: string;
+  w0: number;
+  time: string;
+  draft: true;
+}
+
+/** What a follower of a call receives, in order: every log event once, and the ephemeral parts. */
+export interface FollowSink {
+  event(e: LogEvent): void;
+  partial(lines: PartialLine[]): void;
+  level(l: { mic: number; call: number }): void;
+  /** Every `KEEPALIVE_MS`, so a reader can tell a quiet call from a dead connection. */
+  keepalive(): void;
+}
+
+/** `Last-Event-ID` as a cursor, or 0 when absent or not a sequence number. */
+export function lastEventId(req: Request): number {
+  const last = (req.headers.get("last-event-id") ?? "").trim();
+  return /^\d{1,15}$/.test(last) ? Number(last) : 0;
+}
+
+/**
+ * Follows a call from a cursor: every log event after `after`, in `seq` order and each exactly
+ * once (the backlog from disk, then live events), plus the provisional line and the levels when
+ * they change. The window's RPC, the page server and the SSE route all follow a call through this
+ * one function. Returns the function that stops it.
+ */
+export async function openFollow(
+  app: ApiApp,
+  id: string,
+  after: number,
+  sink: FollowSink,
+): Promise<() => void> {
+  const call = await app.call(id);
+  let sent = after;
+  let stopped = false;
+  const sendEvent = (e: LogEvent) => {
+    if (stopped || e.seq <= sent) return;
+    sent = e.seq;
+    sink.event(e);
+  };
+  // Subscribe first and hold live events until the backlog is out, so none is lost or doubled.
+  let held: LogEvent[] | null = [];
+  const unsubscribe = app.subscribe(id, (e) => {
+    if (held) held.push(e);
+    else sendEvent(e);
+  });
+  let lastPartial = "";
+  let lastLevel = "";
+  let levelSentAt = 0;
+  const tick = setInterval(() => {
+    const tz = call.view.call?.tz ?? "UTC";
+    const lines: PartialLine[] = call.view.provisional.current(app.now()).map((x) => ({
+      ch: x.ch,
+      part: x.part,
+      ...(x.spk ? { spk: x.spk } : {}),
+      text: x.text,
+      w0: x.w0,
+      time: formatWall(x.w0, tz),
+      draft: true,
+    }));
+    const partial = JSON.stringify(lines);
+    if (partial !== lastPartial) {
+      lastPartial = partial;
+      sink.partial(lines);
+    }
+    const lv = app.levels(id);
+    if (lv) {
+      // A level that has not changed is sent again once a second while packets still arrive, so a
+      // reader can tell a steady (or silent) channel from a capture that stopped sending.
+      const level = JSON.stringify({ mic: lv.mic, call: lv.call });
+      const now = app.now();
+      const fresh = now - lv.at < LEVEL_REPEAT_MS * 2;
+      if (level !== lastLevel || (fresh && now - levelSentAt >= LEVEL_REPEAT_MS)) {
+        lastLevel = level;
+        levelSentAt = now;
+        sink.level({ mic: lv.mic, call: lv.call });
+      }
+    }
+  }, STREAM_TICK_MS);
+  const keepalive = setInterval(() => {
+    if (!stopped) sink.keepalive();
+  }, KEEPALIVE_MS);
+  const stop = () => {
+    if (stopped) return;
+    stopped = true;
+    clearInterval(tick);
+    clearInterval(keepalive);
+    unsubscribe();
+  };
+  try {
+    for (const e of await app.events(id, after)) sendEvent(e);
+  } catch (err) {
+    stop();
+    throw err;
+  }
+  const pending = held;
+  held = null;
+  for (const e of pending) sendEvent(e);
+  return stop;
+}
+
+/** A follower as Server-Sent Events: `event` (id = seq), `partial`, `level`, keep-alive comments. */
+export function sseFollow(app: ApiApp, id: string, after: number, signal: AbortSignal): Response {
+  const enc = new TextEncoder();
+  let cleanup = () => {};
+  const stream = new ReadableStream<Uint8Array>({
+    start: async (ctl) => {
+      let closed = false;
+      let stopFollow = () => {};
+      const stop = () => {
+        if (closed) return;
+        closed = true;
+        stopFollow();
+        signal.removeEventListener("abort", stop);
+        try {
+          ctl.close();
+        } catch {}
+      };
+      const send = (text: string) => {
+        if (closed) return;
+        try {
+          ctl.enqueue(enc.encode(text));
+        } catch {
+          stop();
+        }
+      };
+      cleanup = stop;
+      signal.addEventListener("abort", stop);
+      send("retry: 1000\n\n");
+      try {
+        stopFollow = await openFollow(app, id, after, {
+          event: (e) => send(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`),
+          partial: (p) => send(`event: partial\ndata: ${JSON.stringify(p)}\n\n`),
+          level: (l) => send(`event: level\ndata: ${JSON.stringify(l)}\n\n`),
+          keepalive: () => send(": keep-alive\n\n"),
+        });
+      } catch {
+        stop();
+        return;
+      }
+      if (closed) stopFollow();
+    },
+    cancel: () => cleanup(),
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      "x-accel-buffering": "no",
+    },
+  });
+}
+
 export function followRoutes(r: Router<ApiApp>): void {
   r.add("GET", "/calls/:id/events", async (c) => {
     const id = callId(c);
@@ -97,97 +259,12 @@ export function followRoutes(r: Router<ApiApp>): void {
   r.add("GET", "/calls/:id/stream", async (c) => {
     const id = callId(c);
     // A reconnecting client repeats the URL and names the last event it got: resume after that.
-    const last = (c.req.headers.get("last-event-id") ?? "").trim();
-    const resumed = /^\d{1,15}$/.test(last) ? Number(last) : 0;
     const after = Math.max(
       intParam(c.url, "after", 0, 0, Number.MAX_SAFE_INTEGER) as number,
-      resumed,
+      lastEventId(c.req),
     );
-    const call = await c.app.call(id);
-    const app = c.app;
-    const enc = new TextEncoder();
-    let cleanup = () => {};
-    const stream = new ReadableStream<Uint8Array>({
-      start: async (ctl) => {
-        let closed = false;
-        const send = (text: string) => {
-          if (closed) return;
-          try {
-            ctl.enqueue(enc.encode(text));
-          } catch {
-            stop();
-          }
-        };
-        const sendEvent = (e: LogEvent) => {
-          if (e.seq <= sent) return;
-          sent = e.seq;
-          send(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`);
-        };
-        let sent = after;
-        // Subscribe first and hold live events until the backlog is out, so none is lost or doubled.
-        let held: LogEvent[] | null = [];
-        const unsubscribe = app.subscribe(id, (e) => {
-          if (held) held.push(e);
-          else sendEvent(e);
-        });
-        let lastPartial = "";
-        let lastLevel = "";
-        const tick = setInterval(() => {
-          const now = app.now();
-          const p = call.view.provisional.current(now);
-          const partial = JSON.stringify(
-            p.map((x) => ({
-              ch: x.ch,
-              part: x.part,
-              text: x.text,
-              w0: x.w0,
-              time: formatWall(x.w0, call.view.call?.tz ?? "UTC"),
-              draft: true,
-            })),
-          );
-          if (partial !== lastPartial) {
-            lastPartial = partial;
-            send(`event: partial\ndata: ${partial}\n\n`);
-          }
-          const lv = app.levels(id);
-          if (lv) {
-            const level = JSON.stringify({ mic: lv.mic, call: lv.call });
-            if (level !== lastLevel) {
-              lastLevel = level;
-              send(`event: level\ndata: ${level}\n\n`);
-            }
-          }
-        }, STREAM_TICK_MS);
-        const keepalive = setInterval(() => send(": keep-alive\n\n"), KEEPALIVE_MS);
-        const stop = () => {
-          if (closed) return;
-          closed = true;
-          clearInterval(tick);
-          clearInterval(keepalive);
-          unsubscribe();
-          c.req.signal.removeEventListener("abort", stop);
-          try {
-            ctl.close();
-          } catch {}
-        };
-        cleanup = stop;
-        c.req.signal.addEventListener("abort", stop);
-        send(`retry: 1000\n\n`);
-        for (const e of await app.events(id, after)) sendEvent(e);
-        const pending = held;
-        held = null;
-        for (const e of pending) sendEvent(e);
-      },
-      cancel: () => cleanup(),
-    });
-    return new Response(stream, {
-      status: 200,
-      headers: {
-        "content-type": "text/event-stream; charset=utf-8",
-        "cache-control": "no-store",
-        "x-accel-buffering": "no",
-      },
-    });
+    await c.app.call(id);
+    return sseFollow(c.app, id, after, c.req.signal);
   });
 
   r.add("GET", "/calls/:id/transcript", async (c) => {

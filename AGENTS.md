@@ -16,6 +16,8 @@ One package. Follow the layout in DESIGN section 10 exactly.
 - `bun install --frozen-lockfile`
 - `bun run check`: Biome, `tsc --noEmit`, then `bun test`. CI runs exactly this on macOS, Windows and Linux.
 - `bun run format`: apply Biome's fixes.
+- `bun run test:ui`: the window in a headless browser (Playwright's Chromium headless shell, installed with `bunx playwright-core install --only-shell chromium`). `bun run check` leaves `tests/ui/` out; the `ui` workflow runs it.
+- `bun run build:ui`: the window's static bundle into `dist/ui`.
 
 ## Rules
 
