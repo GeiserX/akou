@@ -22,6 +22,7 @@ import {
   exportCall,
   frontmatterId,
   isoLocal,
+  renderEnhanced,
   safeFileTitle,
   yamlScalar,
 } from "../src/main/handoff/export.ts";
@@ -195,6 +196,14 @@ describe("the export Markdown (DESIGN 8.2)", () => {
     } finally {
       r.cleanup();
     }
+  });
+
+  test("a user's own line is exported exactly as stored, even one that reads like a citation", () => {
+    const v = fold(standup().events);
+    const mine = "- see #l000002 [#l000003] _(your note, 15:37)_";
+    expect(renderEnhanced(mine, v, TZ)).toBe(mine);
+    // Positive control: the same text as a model's bullet is rendered.
+    expect(renderEnhanced("- see #l000002", v, TZ)).toBe("- see [15:37:17 Ben]");
   });
 
   test("[T3.11] Answers from uncorrected recognition: the export shows the corrected word and what was heard", () => {

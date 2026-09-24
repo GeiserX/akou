@@ -184,6 +184,27 @@ describe("the hand-off after a call ends (DESIGN 8.2)", () => {
   );
 
   test(
+    "hand-off work on one call runs one piece at a time: an export waits for the hooks",
+    async () => {
+      const order: string[] = [];
+      const hooks = rig.api("POST", `/calls/${id}/hooks`, { stage: "call.ended" }).then((r) => {
+        order.push("hooks");
+        return r;
+      });
+      await Bun.sleep(200);
+      const exp = rig.api("POST", `/calls/${id}/export`).then((r) => {
+        order.push("export");
+        return r;
+      });
+      const [h, e] = await Promise.all([hooks, exp]);
+      expect([h.status, e.status]).toEqual([200, 200]);
+      // The slow hook takes its 2 s timeout; an export not queued behind it would finish first.
+      expect(order).toEqual(["hooks", "export"]);
+    },
+    LONG,
+  );
+
+  test(
     "the CLI: export --to a folder, hooks run, and a live call refused",
     async () => {
       const to = join(work.dir, "elsewhere");
