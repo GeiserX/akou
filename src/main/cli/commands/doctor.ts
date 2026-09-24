@@ -13,7 +13,7 @@
  *   because it spawns the helper and resolves it from inside its bundle; the standalone CLI has no
  *   helper beside it, so with no app running and none found it only warns;
  * - diarizer: with `asr.diarizer` nemotron, the `akou-diarize` helper can be found by the same
- *   rule (configured, else bundled, else PATH), with the same warning when only the app has it;
+ *   rule (configured, else bundled, else PATH), the running app's answer winning the same way;
  * - harness: `claude` or `codex` found, first on PATH, then through the login shell the way the
  *   app looks for them;
  * - permissions: what the operating system must grant, as a hint (`--grant` is not built yet).
@@ -43,7 +43,9 @@ export interface Check {
 
 export { findProgram };
 
-async function apiChecks(ctx: Ctx): Promise<{ checks: Check[]; helper: HelperFound | null }> {
+async function apiChecks(
+  ctx: Ctx,
+): Promise<{ checks: Check[]; helper: HelperFound | null; diarizeHelper: HelperFound | null }> {
   const rt = await ctx.client.running();
   if (!rt) {
     return {
@@ -55,6 +57,7 @@ async function apiChecks(ctx: Ctx): Promise<{ checks: Check[]; helper: HelperFou
         },
       ],
       helper: null,
+      diarizeHelper: null,
     };
   }
   const out: Check[] = [
@@ -75,11 +78,13 @@ async function apiChecks(ctx: Ctx): Promise<{ checks: Check[]; helper: HelperFou
       : `a browser request answered ${asBrowser.status} and one without the token ${noToken.status}; expected 403 and 401`,
   });
   let helper: HelperFound | null = null;
+  let diarizeHelper: HelperFound | null = null;
   try {
     const st = await ctx.client.request("GET", "/status", { launch: false, timeoutMs: 2000 });
     helper = st.status === 200 ? (st.body?.helper ?? null) : null;
+    diarizeHelper = st.status === 200 ? (st.body?.diarizeHelper ?? null) : null;
   } catch {}
-  return { checks: out, helper };
+  return { checks: out, helper, diarizeHelper };
 }
 
 /**
@@ -123,8 +128,25 @@ export function helperCheck(local: HelperFound, app: HelperFound | null): Check 
   };
 }
 
-/** The diarization helper, found the way the app finds it (`asr.diarizer` nemotron). */
-export function diarizeHelperCheck(local: HelperFound): Check {
+/**
+ * The diarization helper (`asr.diarizer` nemotron). As with the capture helper, the running app's
+ * lookup wins, because the app runs it. A missing one costs speaker labels only, so it warns unless
+ * `asr.diarizeHelper` names a program that does not exist.
+ */
+export function diarizeHelperCheck(local: HelperFound, app: HelperFound | null): Check {
+  if (app) {
+    return app.found
+      ? {
+          name: "diarizer",
+          state: "ok",
+          detail: `${[app.found, ...app.command.slice(1)].join(" ")} (the running app's)`,
+        }
+      : {
+          name: "diarizer",
+          state: app.source === "config" ? "fail" : "warn",
+          detail: `the running app cannot find its diarization helper ${app.command[0]}${app.source === "config" ? " (asr.diarizeHelper in config.json)" : "; reinstall akou, or set asr.diarizer to embeddings"}`,
+        };
+  }
   if (local.found)
     return {
       name: "diarizer",
@@ -223,6 +245,7 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
         findHelper(cfg.settings["asr.diarizeHelper"], (p) => findProgram(p, env), {
           name: DIARIZE_HELPER_NAME,
         }),
+        api.diarizeHelper,
       ),
     );
   }
