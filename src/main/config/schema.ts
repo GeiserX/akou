@@ -266,6 +266,11 @@ export const SETTINGS = {
     default: 60,
     doc: "How long an answer may take before akou shows the excerpts instead and says why.",
   },
+  "provider.harnessResume": {
+    type: "boolean",
+    default: false,
+    doc: "Reuse one Claude Code session for follow-up questions on a call (`--resume`), sending only what is new since the last question. Off until measured to cut the tokens per follow-up by at least 40 % (docs/providers.md). With it on, Claude Code keeps those sessions in its own history.",
+  },
   "memo.provider": {
     type: "string",
     values: ["auto", "on", "off"],

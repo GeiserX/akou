@@ -212,6 +212,11 @@ export interface ContextPack {
   lines: Line[];
   blocks: PackBlock[];
   tz: string;
+  /**
+   * Whole-call mode only: the pack in its three parts, so a provider that keeps a session can be
+   * sent only the transcript lines it has not seen plus the tail (`followUpPrompt` in `ask.ts`).
+   */
+  whole?: { head: string; transcript: string[]; tail: string };
 }
 
 export interface ReadResult {
@@ -999,15 +1004,15 @@ export class CallQuery {
 
     // Stable prefix: nothing here changes when a speaker is named or time passes.
     const status = this.status(o.now, true);
-    const prefix = [
+    const head = [
       status,
       ...this.headerLines(o.now, o.ref, true),
       this.rules(),
       "Speaker ids are used below; the roster after the transcript gives their names.",
       "",
       "Transcript:",
-      ...transcript,
     ];
+    const prefix = [...head, ...transcript];
 
     // Dynamic tail.
     const prov = cls.intent === "now" ? this.provisionalLine(o.now) : null;
@@ -1047,6 +1052,7 @@ export class CallQuery {
         { name: "tail", tokens: estimateTokens(tail.join("\n")) },
       ],
       tz,
+      whole: { head: head.join("\n"), transcript, tail: tail.join("\n") },
     };
   }
 }

@@ -106,6 +106,7 @@ import {
   storeEnhanced,
 } from "./notes/enhance.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
+import { MemorySessions, type SessionStore } from "./query/ask.ts";
 import { CallQuery } from "./query/context.ts";
 import {
   MEMO_MIN_INTERVAL_MS,
@@ -435,6 +436,21 @@ export class AkouApp implements ApiApp {
 
   providerTimeoutMs(): number {
     return this.cfg.settings["provider.timeoutSeconds"] * 1000;
+  }
+
+  private sessions: MemorySessions | null = null;
+
+  /**
+   * Kept harness sessions for follow-up questions (`provider.harnessResume`, off by default until
+   * measured, docs/providers.md). Turning it off forgets them.
+   */
+  askSessions(): SessionStore | undefined {
+    if (!this.cfg.settings["provider.harnessResume"]) {
+      this.sessions = null;
+      return undefined;
+    }
+    this.sessions ??= new MemorySessions((id) => HarnessProvider.endSession(id));
+    return this.sessions;
   }
 
   /** What `status` and `akou_ask`'s visibility read: `{state, id, harness?, detail | reason}`. */

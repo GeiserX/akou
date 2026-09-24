@@ -11,6 +11,11 @@
  *    pack's size. When the provider cannot answer (missing, a usage limit, not logged in, no
  *    answer within the deadline), the reply is the excerpts, labelled, with the reason; nothing is
  *    queued or retried, and no `answer` is logged, because no model answered.
+ *
+ * Session reuse (`provider.harnessResume`, off by default, DESIGN 5.3): with a provider that keeps
+ * sessions and a whole-call pack, the first question starts a session with the whole pack and each
+ * follow-up sends only the transcript lines added since, the tail and the question. Any change to
+ * what the session already holds (a revised line, a correction, the call ending) starts a new one.
  */
 
 import { formatWall } from "../../core/log/clock.ts";
@@ -18,14 +23,16 @@ import type { EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { CallView, Line } from "../../core/log/fold.ts";
 import { type ExcerptBlock, excerptsText } from "../llm/none.ts";
 import {
+  type CompleteRequest,
   type Provider,
   ProviderError,
   type ProviderErrorKind,
   runProvider,
+  type Usage,
 } from "../llm/provider.ts";
 import { searchText } from "./classify.ts";
 import type { CallQuery, ContextPack } from "./context.ts";
-import { formatCitation, renderLine } from "./render.ts";
+import { estimateTokens, formatCitation, renderLine } from "./render.ts";
 
 export const ASK_MAX_TOKENS = 1024;
 const EXCERPT_K = 4;
@@ -58,6 +65,72 @@ export interface AskResult {
   pack: { mode: string; tokens: number };
   state: string;
   cursor: number;
+  /** Tokens of the prompt akou sent (the whole pack, or a follow-up's new part). */
+  sent?: number;
+  /** A follow-up in a kept session. */
+  resumed?: boolean;
+  /** What the run spent, when the provider reports it. */
+  usage?: Usage;
+}
+
+/** One call's kept session: its id and what it has already been sent. */
+export interface AskSession {
+  id: string;
+  head: string;
+  transcript: readonly string[];
+  turns: number;
+}
+
+export interface SessionStore {
+  get(call: string): AskSession | undefined;
+  set(call: string, s: AskSession): void;
+  delete(call: string): void;
+}
+
+export class MemorySessions implements SessionStore {
+  private readonly m = new Map<string, AskSession>();
+  constructor(private readonly onEnd?: (id: string) => void) {}
+  get(call: string) {
+    return this.m.get(call);
+  }
+  set(call: string, s: AskSession) {
+    const old = this.m.get(call);
+    if (old && old.id !== s.id) this.onEnd?.(old.id);
+    this.m.set(call, s);
+  }
+  delete(call: string) {
+    const old = this.m.get(call);
+    if (old) this.onEnd?.(old.id);
+    this.m.delete(call);
+  }
+}
+
+/**
+ * The prompt of a follow-up in a kept session: the transcript lines the session has not seen, the
+ * pack's tail and the question. Null when the session cannot continue: not a whole-call pack, or
+ * anything it was sent has changed since.
+ */
+export function followUpPrompt(
+  pack: ContextPack,
+  prev: AskSession,
+  question: string,
+): string | null {
+  const w = pack.whole;
+  if (pack.mode !== "whole" || !w || w.head !== prev.head) return null;
+  if (w.transcript.length < prev.transcript.length) return null;
+  for (let i = 0; i < prev.transcript.length; i++) {
+    if (w.transcript[i] !== prev.transcript[i]) return null;
+  }
+  const fresh = w.transcript.slice(prev.transcript.length);
+  return [
+    fresh.length > 0
+      ? "Transcript lines since your last question:"
+      : "No new transcript lines since your last question.",
+    ...fresh,
+    w.tail,
+    "",
+    `Question: ${question}`,
+  ].join("\n");
 }
 
 export interface AskOptions {
@@ -71,6 +144,8 @@ export interface AskOptions {
   timeoutMs?: number;
   onExcerpts?: (blocks: ExcerptBlock[]) => void;
   onToken?: (t: string) => void;
+  /** Kept sessions, when session reuse is on. */
+  sessions?: SessionStore;
 }
 
 /** The parts of the call that match the question: BM25 hits, else the newest lines of the pack. */
@@ -163,17 +238,43 @@ export async function ask(o: AskOptions): Promise<AskResult> {
   };
   const avail = await o.provider.available();
   if (!avail.ok) return fallback(new ProviderError(avail.kind, avail.reason));
+  const sessions = o.sessions && o.provider.sessions?.() && pack.whole ? o.sessions : undefined;
+  const key = o.q.view.call?.id ?? "";
+  const prev = sessions?.get(key);
+  const follow = prev ? followUpPrompt(pack, prev, o.question) : null;
+  const req: CompleteRequest = {
+    system: ASK_SYSTEM,
+    prompt: follow ?? `${pack.text}\n\nQuestion: ${o.question}`,
+    maxTokens: ASK_MAX_TOKENS,
+    ...(sessions
+      ? {
+          session:
+            prev && follow !== null
+              ? { id: prev.id, resume: true }
+              : { id: crypto.randomUUID(), resume: false },
+        }
+      : {}),
+  };
   try {
-    const r = await runProvider(
-      o.provider,
-      {
-        system: ASK_SYSTEM,
-        prompt: `${pack.text}\n\nQuestion: ${o.question}`,
-        maxTokens: ASK_MAX_TOKENS,
-      },
-      (t) => o.onToken?.(t),
-      { signal: o.signal, timeoutMs: o.timeoutMs },
-    );
+    let r: Awaited<ReturnType<typeof runProvider>>;
+    try {
+      r = await runProvider(o.provider, req, (t) => o.onToken?.(t), {
+        signal: o.signal,
+        timeoutMs: o.timeoutMs,
+      });
+    } catch (err) {
+      // A session that failed is not continued: the next question starts afresh.
+      sessions?.delete(key);
+      throw err;
+    }
+    if (sessions && req.session && pack.whole) {
+      sessions.set(key, {
+        id: req.session.id,
+        head: pack.whole.head,
+        transcript: pack.whole.transcript,
+        turns: (req.session.resume ? (prev?.turns ?? 0) : 0) + 1,
+      });
+    }
     const cites = answerCites(r.text, pack, o.q.view);
     await o.write({
       type: "answer",
@@ -192,6 +293,9 @@ export async function ask(o: AskOptions): Promise<AskResult> {
       model: r.model,
       cites,
       excerpts,
+      sent: estimateTokens(req.prompt),
+      resumed: req.session?.resume ?? false,
+      ...(r.usage ? { usage: r.usage } : {}),
     };
   } catch (err) {
     const e = err instanceof ProviderError ? err : new ProviderError("other", String(err));
