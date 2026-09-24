@@ -400,6 +400,25 @@ export function harnessStdin(kind: HarnessKind, req: CompleteRequest): string {
 }
 
 const KILL_GRACE_MS = 2000;
+/** How long the pipes may stay open after the harness exits. */
+const PIPE_GRACE_MS = 1000;
+
+/** Signals the harness's process group (POSIX) or its whole tree (Windows). */
+function killTree(proc: { pid: number; kill(s?: NodeJS.Signals): void }, signal: NodeJS.Signals) {
+  try {
+    if (process.platform === "win32") {
+      Bun.spawn(["taskkill", "/pid", String(proc.pid), "/T", "/F"], {
+        stdio: ["ignore", "ignore", "ignore"],
+      });
+    } else {
+      process.kill(-proc.pid, signal);
+    }
+  } catch {
+    try {
+      proc.kill(signal);
+    } catch {}
+  }
+}
 const STDERR_KEEP = 16_384;
 
 export class HarnessProvider implements Provider {
@@ -445,6 +464,8 @@ export class HarnessProvider implements Provider {
         stdin: "pipe",
         stdout: "pipe",
         stderr: "pipe",
+        // Its own process group, so cancelling reaches anything it started.
+        detached: process.platform !== "win32",
       });
     } catch (err) {
       rmSync(scratch, { recursive: true, force: true });
@@ -458,8 +479,8 @@ export class HarnessProvider implements Provider {
     }
     let killTimer: ReturnType<typeof setTimeout> | undefined;
     const onAbort = () => {
-      proc.kill("SIGTERM");
-      killTimer = setTimeout(() => proc.kill("SIGKILL"), KILL_GRACE_MS);
+      killTree(proc, "SIGTERM");
+      killTimer = setTimeout(() => killTree(proc, "SIGKILL"), KILL_GRACE_MS);
     };
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
@@ -477,18 +498,23 @@ export class HarnessProvider implements Provider {
           if (stderr.length < STDERR_KEEP) stderr += `${line}\n`;
         }
       })();
-      for await (const line of readLines(proc.stdout as ReadableStream<Uint8Array>)) {
-        if (line.trim() === "") continue;
-        let event: unknown;
-        try {
-          event = JSON.parse(line);
-        } catch {
-          continue;
+      const outDone = (async () => {
+        for await (const line of readLines(proc.stdout as ReadableStream<Uint8Array>)) {
+          if (line.trim() === "") continue;
+          let event: unknown;
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          for (const tok of parser.feed(event)) if (!signal.aborted) onToken(tok);
         }
-        for (const tok of parser.feed(event)) if (!signal.aborted) onToken(tok);
-      }
+      })();
+      // A descendant that inherited the pipes (and left the group) can hold them open after the
+      // harness is gone; once it has exited, the pipes get a short grace and are then abandoned.
       const code = await proc.exited;
-      await errDone;
+      const grace = new Promise<void>((r) => setTimeout(r, PIPE_GRACE_MS).unref?.());
+      await Promise.race([Promise.all([outDone, errDone]), grace]);
       if (signal.aborted) throw new ProviderError("cancelled", "cancelled");
       const report = parser.report();
       const failure = classifyRun(t.kind, code, report, stderr);

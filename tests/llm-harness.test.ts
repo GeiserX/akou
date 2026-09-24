@@ -313,6 +313,78 @@ describe("the provider against a fake harness", () => {
     expect(err.kind).toBe("cancelled");
   });
 
+  describe.skipIf(process.platform === "win32")("a descendant holding the harness's stdout", () => {
+    const alive = (pid: number) => {
+      try {
+        process.kill(pid, 0);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+    async function withGrandchild(
+      mode: "group" | "escape",
+      env: Record<string, string>,
+      run: (p: HarnessProvider, pidFile: string) => Promise<void>,
+    ) {
+      const t = tempDir();
+      const pidFile = join(t.dir, "grandchild.pid");
+      try {
+        await run(
+          provider("claude-ok.jsonl", {
+            ...env,
+            FAKE_GRANDCHILD: mode,
+            FAKE_GRANDCHILD_PID: pidFile,
+          }),
+          pidFile,
+        );
+      } finally {
+        try {
+          process.kill(Number(readFileSync(pidFile, "utf8")), "SIGKILL");
+        } catch {}
+        t.cleanup();
+      }
+    }
+
+    test("cancel stops the harness's whole process group and answers `cancelled`", async () => {
+      await withGrandchild("group", { FAKE_DELAY_MS: "5000" }, async (p, pidFile) => {
+        const ac = new AbortController();
+        setTimeout(() => ac.abort(), 300);
+        const t0 = performance.now();
+        const err = await runProvider(p, { system: "S", prompt: "P", maxTokens: 10 }, () => {}, {
+          signal: ac.signal,
+        }).catch((e) => e);
+        expect(err.kind).toBe("cancelled");
+        expect(performance.now() - t0).toBeLessThan(4000);
+        const pid = Number(readFileSync(pidFile, "utf8"));
+        await Bun.sleep(200);
+        expect(alive(pid)).toBe(false);
+      });
+    }, 10_000);
+
+    test("the deadline still fires when an escaped descendant keeps the pipe open", async () => {
+      await withGrandchild("escape", { FAKE_DELAY_MS: "5000" }, async (p) => {
+        const t0 = performance.now();
+        const err = await runProvider(p, { system: "S", prompt: "P", maxTokens: 10 }, () => {}, {
+          timeoutMs: 300,
+        }).catch((e) => e);
+        expect(err.message).toBe("no answer within 300 ms");
+        expect(performance.now() - t0).toBeLessThan(5000);
+      });
+    }, 10_000);
+
+    test("a harness that answered and exited is done, even with the pipe still held", async () => {
+      await withGrandchild("escape", {}, async (p, pidFile) => {
+        const t0 = performance.now();
+        const r = await runProvider(p, { system: "S", prompt: "P", maxTokens: 10 }, () => {});
+        expect(r.text).toBe("ok");
+        expect(performance.now() - t0).toBeLessThan(5000);
+        // The escaped descendant is not ours to kill; it is still running.
+        expect(alive(Number(readFileSync(pidFile, "utf8")))).toBe(true);
+      });
+    }, 10_000);
+  });
+
   test("a program that is not there is `missing`", async () => {
     const p = new HarnessProvider({
       target: () => ({ kind: "claude", command: ["/nonexistent/claude"], version: null }),
