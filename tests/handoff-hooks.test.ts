@@ -10,6 +10,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { fold } from "../src/core/log/fold.ts";
 import { validateHooks, validateSetting } from "../src/main/config/schema.ts";
+import { exportBaseName, exportCall } from "../src/main/handoff/export.ts";
 import {
   buildPayload,
   EXIT_TIMEOUT,
@@ -129,7 +130,12 @@ describe("hooks (DESIGN 8.2)", () => {
       participants: ["Ana (you)", "Ben"],
       dir,
     });
-    expect(p.paths).toEqual({ events: join(dir, "events.jsonl"), audio: [], exportMd: "/x.md" });
+    expect(p.paths).toEqual({
+      events: join(dir, "events.jsonl"),
+      audio: [],
+      exportMd: "/x.md",
+      exportAttachments: join("/", "attachments", exportBaseName(call())),
+    });
     expect(p.transcript[1]).toEqual({
       id: "l000002",
       w0: T0 + 2 * S,
@@ -418,5 +424,66 @@ describe("the webhook (DESIGN 8.2)", () => {
     expect(webhookProblem(url(), "")).toContain("never sends an unsigned webhook");
     expect(webhookProblem("ftp://x", "s")).toContain("http or https");
     expect(webhookProblem(url(), "s")).toBeNull();
+  });
+});
+
+describe.skipIf(process.platform === "win32")("examples/hooks/git-commit.sh", () => {
+  const HOOK = join(import.meta.dir, "..", "examples", "hooks", "git-commit.sh");
+  const git = (cwd: string, ...args: string[]) => {
+    const r = Bun.spawnSync(["git", "-C", cwd, ...args], { stderr: "pipe" });
+    if (r.exitCode !== 0) throw new Error(`git ${args.join(" ")}: ${r.stderr.toString()}`);
+    return r.stdout.toString();
+  };
+
+  test("an export that took a `(2).md` name is committed with its own attachments only", () => {
+    const t = tempDir("akou-git-hook-");
+    try {
+      const repo = join(t.dir, "notes");
+      mkdirSync(repo);
+      git(repo, "init", "-q");
+      git(repo, "config", "user.name", "Test");
+      git(repo, "config", "user.email", "test@example.invalid");
+      git(repo, "config", "commit.gpgsign", "false");
+      // No Git hooks from the machine running the tests.
+      mkdirSync(join(t.dir, "no-hooks"));
+      git(repo, "config", "core.hooksPath", join(t.dir, "no-hooks"));
+      const callDir = join(t.dir, "call");
+      mkdirSync(callDir);
+      writeFileSync(join(callDir, "events.jsonl"), "{}\n");
+      const view = call();
+      const root = join(repo, "export");
+      const folder = join(root, "work");
+      const base = exportBaseName(view);
+      // Someone else's file holds the plain name, and another export has its own attachments.
+      mkdirSync(join(folder, "attachments", "Another call"), { recursive: true });
+      writeFileSync(join(folder, `${base}.md`), "not this call\n");
+      writeFileSync(join(folder, "attachments", "Another call", "events.jsonl"), "{}\n");
+      const r = exportCall({ view, dir: callDir, root, audio: "none", version: "0.1.0" });
+      expect(basename(r.path)).toBe(`${base} (2).md`);
+      const payload = buildPayload({
+        stage: "final.done",
+        view,
+        dir: callDir,
+        version: "0.1.0",
+        exportMd: r.path,
+      });
+      expect(payload.paths.exportAttachments).toBe(r.attachments);
+      const run = Bun.spawnSync(["sh", HOOK], {
+        stdin: Buffer.from(JSON.stringify(payload)),
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      expect({ exit: run.exitCode, stderr: run.stderr.toString() }).toEqual({
+        exit: 0,
+        stderr: "",
+      });
+      const committed = git(repo, "ls-files").trim().split("\n").sort();
+      expect(committed).toEqual([
+        `export/work/${base} (2).md`,
+        `export/work/attachments/${base}/events.jsonl`,
+      ]);
+    } finally {
+      t.cleanup();
+    }
   });
 });

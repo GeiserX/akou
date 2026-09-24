@@ -5,12 +5,14 @@
 #   "hooks": [{"stage": "final.done", "command": "/path/to/git-commit.sh"},
 #             {"stage": "enhanced", "command": "/path/to/git-commit.sh"}]
 #
-# akou gives the call as JSON on stdin. This reads `paths.exportMd` from it, so `export.dir` must
-# be inside a Git repository. Needs `jq`. Set AKOU_GIT_PUSH=1 to push after committing.
+# akou gives the call as JSON on stdin. This reads `paths.exportMd` and `paths.exportAttachments`
+# from it, so `export.dir` must be inside a Git repository. Needs `jq`. Set AKOU_GIT_PUSH=1 to push
+# after committing.
 set -eu
 
 payload=$(cat)
 md=$(printf '%s' "$payload" | jq -r '.paths.exportMd // empty')
+attachments=$(printf '%s' "$payload" | jq -r '.paths.exportAttachments // empty')
 title=$(printf '%s' "$payload" | jq -r '.call.title')
 stage=${AKOU_STAGE:-$(printf '%s' "$payload" | jq -r '.stage')}
 
@@ -21,9 +23,11 @@ fi
 
 dir=$(dirname "$md")
 repo=$(git -C "$dir" rev-parse --show-toplevel)
-name=$(basename "$md" .md)
 
-git -C "$repo" add -- "$md" "$dir/attachments/$name"
+git -C "$repo" add -- "$md"
+if [ -n "$attachments" ] && [ -e "$attachments" ]; then
+  git -C "$repo" add -- "$attachments"
+fi
 if git -C "$repo" diff --cached --quiet; then
   echo "nothing changed"
   exit 0

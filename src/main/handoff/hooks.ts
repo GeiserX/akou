@@ -2,7 +2,8 @@
  * Post-call hooks (docs/DESIGN.md section 8.2, item 2): commands the user configured, run at a
  * hand-off stage with the call as one JSON document on stdin.
  *
- *   {version: 1, stage, call: {…frontmatter, dir}, paths: {events, audio[], exportMd},
+ *   {version: 1, stage, call: {…frontmatter, dir},
+ *    paths: {events, audio[], exportMd, exportAttachments},
  *    transcript: [{id, w0, w1, clock, speaker, name, ch, text, heard?}], notes: [], remember: [],
  *    enhancedMd}
  *
@@ -17,13 +18,13 @@
 import { type ChildProcess, spawn } from "node:child_process";
 import { appendFileSync, existsSync, mkdirSync, readFileSync } from "node:fs";
 import { constants as osConstants } from "node:os";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { formatWall } from "../../core/log/clock.ts";
 import type { EventDraft } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { EVENTS_FILE } from "../../core/log/writer.ts";
 import { HOOK_TIMEOUT_DEFAULT, type HookConfig, type HookStage } from "../config/schema.ts";
-import { type CallMeta, callMeta } from "./export.ts";
+import { type CallMeta, callMeta, exportBaseName } from "./export.ts";
 
 export const HOOK_LOG = "logs/hooks.log";
 /** Output kept per run; the rest is dropped with a marker. */
@@ -39,7 +40,13 @@ export interface HandoffPayload {
   version: 1;
   stage: HookStage;
   call: CallMeta & { dir: string };
-  paths: { events: string; audio: string[]; exportMd: string | null };
+  paths: {
+    events: string;
+    audio: string[];
+    exportMd: string | null;
+    /** The export's own `attachments/<name>/` folder, whatever name the Markdown file took. */
+    exportAttachments: string | null;
+  };
   transcript: {
     id: string;
     w0: number;
@@ -85,6 +92,8 @@ export function buildPayload(o: {
         .map((p) => join(o.dir, p.file))
         .filter((p) => existsSync(p)),
       exportMd: o.exportMd,
+      exportAttachments:
+        o.exportMd === null ? null : join(dirname(o.exportMd), "attachments", exportBaseName(v)),
     },
     transcript: v.lines("best").map((l) => ({
       id: l.id,
