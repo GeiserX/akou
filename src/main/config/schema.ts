@@ -24,7 +24,28 @@ import { join } from "node:path";
 import { defaultModelsDir } from "../asr/models.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
 
-export type SettingType = "integer" | "number" | "boolean" | "string" | "string[]";
+export type SettingType = "integer" | "number" | "boolean" | "string" | "string[]" | "hooks";
+
+/** The stages a hand-off hook or the webhook runs at: the event type names (DESIGN 8.2). */
+export const HOOK_STAGES = ["call.ended", "final.done", "enhanced"] as const;
+export type HookStage = (typeof HOOK_STAGES)[number];
+
+/**
+ * One post-call hook: a command run with the call as JSON on stdin. A string runs through the
+ * shell (`/bin/sh -c`, `cmd /c` on Windows); a list is the program and its arguments, no shell.
+ */
+export interface HookConfig {
+  stage: HookStage;
+  command: string | readonly string[];
+  /** Killed after this long. Default 600. */
+  timeoutSec?: number;
+  /** Only calls in this workspace. Absent: every workspace. */
+  workspace?: string;
+  /** The name `hook.done` and the log carry. Default: the command. */
+  name?: string;
+}
+
+export const HOOK_TIMEOUT_DEFAULT = 600;
 
 export interface SettingSpec {
   type: SettingType;
@@ -48,7 +69,7 @@ export interface SettingSpec {
   doc: string;
 }
 
-export type SettingValue = number | boolean | string | readonly string[];
+export type SettingValue = number | boolean | string | readonly string[] | readonly HookConfig[];
 
 const home = homedir();
 
@@ -219,6 +240,36 @@ export const SETTINGS = {
     default: 60,
     doc: "How long an answer may take before akou shows the excerpts instead and says why.",
   },
+  "export.dir": {
+    type: "string",
+    default: "",
+    doc: "Folder finished calls are exported into, one subfolder per workspace: Markdown with frontmatter, the event log and the audio. Empty: no export until you set it.",
+  },
+  "export.audio": {
+    type: "string",
+    values: ["link", "copy", "none"],
+    default: "link",
+    doc: "How the export carries the audio: a link to the call's file, a copy, or nothing.",
+  },
+  hooks: {
+    type: "hooks",
+    default: [],
+    apiWritable: false,
+    doc: 'Commands run after a call, each given the call as JSON on stdin: `[{"stage": "call.ended" | "final.done" | "enhanced", "command": "…", "timeoutSec": 600, "workspace": "work"}]`. File only: they are programs akou runs.',
+  },
+  "webhook.url": {
+    type: "string",
+    default: "",
+    apiWritable: false,
+    doc: "Address the call is POSTed to at every hand-off stage, signed with `webhook.secret`. Empty: off. File only: it decides where your transcripts are sent.",
+  },
+  "webhook.secret": {
+    type: "string",
+    max: 400,
+    default: "",
+    secret: true,
+    doc: "Secret for the webhook's HMAC-SHA256 signature (`X-Akou-Signature`). The webhook stays off until it is set. Never shown back or logged.",
+  },
   "vocab.extraFiles": {
     type: "string[]",
     default: [],
@@ -228,15 +279,17 @@ export const SETTINGS = {
 
 export type SettingKey = keyof typeof SETTINGS;
 
-type Widen<T> = T extends number
+type ValueOf<T extends SettingType> = T extends "integer" | "number"
   ? number
-  : T extends boolean
+  : T extends "boolean"
     ? boolean
-    : T extends string
+    : T extends "string"
       ? string
-      : readonly string[];
+      : T extends "hooks"
+        ? readonly HookConfig[]
+        : readonly string[];
 
-export type Settings = { -readonly [K in SettingKey]: Widen<(typeof SETTINGS)[K]["default"]> };
+export type Settings = { -readonly [K in SettingKey]: ValueOf<(typeof SETTINGS)[K]["type"]> };
 
 /** Keys refused with a reason of their own, beyond "unknown key". */
 const FORBIDDEN: Readonly<Record<string, string>> = {
@@ -305,7 +358,61 @@ export function validateSetting(
         return { ok: false, error: `${key}: must be a list of non-empty strings` };
       }
       return { ok: true, key, value: [...value] };
+    case "hooks": {
+      const h = validateHooks(value);
+      return h.ok ? { ok: true, key, value: h.value } : { ok: false, error: `${key}: ${h.error}` };
+    }
   }
+}
+
+const HOOK_FIELDS = new Set(["stage", "command", "timeoutSec", "workspace", "name"]);
+
+/** Checks the `hooks` list: every entry a known stage and a command, nothing else. */
+export function validateHooks(
+  value: unknown,
+): { ok: true; value: HookConfig[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) return { ok: false, error: "must be a list of hooks" };
+  const out: HookConfig[] = [];
+  for (const [i, h] of value.entries()) {
+    const at = `hook ${i + 1}`;
+    if (typeof h !== "object" || h === null || Array.isArray(h)) {
+      return { ok: false, error: `${at} must be an object` };
+    }
+    const o = h as Record<string, unknown>;
+    const unknown = Object.keys(o).find((k) => !HOOK_FIELDS.has(k));
+    if (unknown) return { ok: false, error: `${at}: unknown field "${unknown}"` };
+    if (!HOOK_STAGES.includes(o.stage as HookStage)) {
+      return { ok: false, error: `${at}: stage must be one of ${HOOK_STAGES.join(", ")}` };
+    }
+    const cmd = o.command;
+    const okCmd =
+      (typeof cmd === "string" && cmd.trim() !== "") ||
+      (Array.isArray(cmd) &&
+        cmd.length > 0 &&
+        cmd.every((c) => typeof c === "string") &&
+        cmd[0] !== "");
+    if (!okCmd) {
+      return { ok: false, error: `${at}: command must be a string or a list of strings` };
+    }
+    const t = o.timeoutSec;
+    if (t !== undefined && (typeof t !== "number" || !Number.isInteger(t) || t < 1 || t > 3600)) {
+      return { ok: false, error: `${at}: timeoutSec must be a whole number from 1 to 3600` };
+    }
+    if (o.workspace !== undefined && typeof o.workspace !== "string") {
+      return { ok: false, error: `${at}: workspace must be a string` };
+    }
+    if (o.name !== undefined && (typeof o.name !== "string" || o.name.trim() === "")) {
+      return { ok: false, error: `${at}: name must be a non-empty string` };
+    }
+    out.push({
+      stage: o.stage as HookStage,
+      command: Array.isArray(cmd) ? [...(cmd as string[])] : (cmd as string),
+      ...(t !== undefined ? { timeoutSec: t as number } : {}),
+      ...(o.workspace !== undefined ? { workspace: o.workspace as string } : {}),
+      ...(o.name !== undefined ? { name: o.name as string } : {}),
+    });
+  }
+  return { ok: true, value: out };
 }
 
 /** Parses an environment value by the setting's type (`1`/`true` and `0`/`false` for booleans). */
@@ -321,6 +428,7 @@ function fromEnv(spec: SettingSpec, raw: string): unknown {
     case "string[]":
       return raw.split(",").filter((s) => s !== "");
     case "string":
+    case "hooks":
       return raw;
   }
 }
@@ -505,7 +613,11 @@ export function settingsReference(): string {
       s.type === "integer" || s.type === "number"
         ? `${s.min} to ${s.max}${s.also ? ` or ${s.also.join(", ")}` : ""}`
         : "";
-    const d = Array.isArray(s.default) ? `[${s.default.join(", ")}]` : String(s.default);
+    const d = Array.isArray(s.default)
+      ? s.type === "hooks"
+        ? "[]"
+        : `[${(s.default as readonly string[]).join(", ")}]`
+      : String(s.default);
     return `| \`${k}\` | ${s.type} | ${range} | ${k.includes("Dir") || k.includes("root") ? "per OS" : `\`${d}\``} | ${s.env ? `\`${s.env}\`` : ""} | ${s.doc} |`;
   });
   return [

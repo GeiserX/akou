@@ -631,7 +631,8 @@ export function createMcpServer(o: McpOptions): McpServer {
   server.registerTool(
     "akou_export",
     {
-      description: "Hand a finished call off to the export folder.",
+      description:
+        "Hand a finished call off to the export folder: Markdown with frontmatter (enhanced notes, your raw notes, the transcript), the event log and the audio. Needs export.dir set.",
       inputSchema: z.object({ call: z.string() }),
     },
     async (a) => {

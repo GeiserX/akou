@@ -447,7 +447,9 @@ describe("after the call", () => {
   );
 
   test("what is not built answers plainly: 501 or 503, never a fake success", async () => {
-    expect((await rig.api("POST", "/calls/last/export")).status).toBe(501);
+    // Export is built; with no export folder set it says what to set instead of pretending.
+    const exp = await rig.api("POST", "/calls/last/export");
+    expect([exp.status, exp.body.error]).toEqual([409, "export_not_configured"]);
     // No provider: enhancement by akou is unavailable, and says how an agent can do it instead.
     const enh = await rig.api("POST", "/calls/last/enhance");
     expect([enh.status, enh.body.error]).toEqual([503, "provider_unavailable"]);

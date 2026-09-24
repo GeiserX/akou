@@ -8,7 +8,7 @@
  *   success.
  * - `GET /calls/{id}/enhance/context?template=` and `PUT /calls/{id}/enhanced {markdown,
  *   coversSeq}`: an agent writes the notes itself; the same citation check and verbatim rule apply.
- * - Export is the hand-off module and answers `501` until it is built.
+ * - Export and hooks are the hand-off, in `handoff.ts`.
  */
 
 import { existsSync, statSync } from "node:fs";
@@ -103,12 +103,6 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     const b = await readBody<{ force?: boolean }>(c.req, { "force?": "boolean" });
     const id = callId(c, { allowLast: true });
     return outcome(await c.app.finalize(id, { force: b.force }), 202);
-  });
-
-  r.add("POST", "/calls/:id/export", async (c) => {
-    await readBody(c.req, { "to?": "string" });
-    callId(c, { allowLast: true });
-    throw new HttpError(501, "not_implemented", "export is not built yet (the hand-off module)");
   });
 
   r.add("POST", "/calls/:id/enhance", async (c) => {

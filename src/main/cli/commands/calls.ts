@@ -1,7 +1,7 @@
 /**
  * Starting, controlling and listing calls, and the app itself (docs/DESIGN.md sections 1.5 and 6.1):
  * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls`,
- * `show`, `finalize`, `enhance`, `export`, `quit`.
+ * `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
 import { bool, int, list, str } from "../args.ts";
@@ -226,18 +226,6 @@ const enhance: Command = {
   },
 };
 
-const exportCmd: Command = {
-  name: "export",
-  summary: "Hand a finished call off to the export folder",
-  usage: "akou export [CALL] [--to DIR] [--json]",
-  flags: { to: { type: "string" } },
-  run: async (ctx, p) => {
-    const call = p.positional[0] ?? "last";
-    const r = await api(ctx, "POST", `/calls/${enc(call)}/export`, { body: { to: str(p, "to") } });
-    return finish(ctx, r, (b) => JSON.stringify(b, null, 2));
-  },
-};
-
 const quit: Command = {
   name: "quit",
   summary: "Stop the app cleanly (the live call is stopped and its log ended first)",
@@ -286,6 +274,5 @@ export const callCommands: Command[] = [
   show,
   finalize,
   enhance,
-  exportCmd,
   quit,
 ];

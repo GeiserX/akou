@@ -11,7 +11,10 @@ import type { EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { CallController, StartOk } from "../call/call.ts";
 import type { CallManager, StartRequest } from "../call/manager.ts";
 import type { Outcome } from "../call/state.ts";
-import type { LoadedConfig, SettingKey, SettingValue } from "../config/schema.ts";
+import type { HookStage, LoadedConfig, SettingKey, SettingValue } from "../config/schema.ts";
+import type { ExportResult } from "../handoff/export.ts";
+import type { HookReport } from "../handoff/hooks.ts";
+import type { ImportResult } from "../import/hark-viewer.ts";
 import type { Provider } from "../llm/provider.ts";
 import type { Template } from "../notes/templates.ts";
 import type { CallQuery } from "../query/context.ts";
@@ -19,6 +22,7 @@ import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
 import { authorOf, errorResponse, HttpError, json, Router } from "./http.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { followRoutes } from "./routes/follow.ts";
+import { handoffRoutes } from "./routes/handoff.ts";
 import { notesRoutes } from "./routes/notes.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
 import { queryRoutes } from "./routes/query.ts";
@@ -75,6 +79,15 @@ export interface ApiApp {
     id: string,
     opts: { force?: boolean },
   ): Promise<Outcome<{ call: string; started: boolean }>>;
+  /** `POST /calls/{id}/export`: the export folder, or the folder `to` names. */
+  exportCall(id: string, o: { to?: string }): Promise<Outcome<ExportResult>>;
+  /** `POST /calls/{id}/hooks`: the hooks of the stages named (default: every stage reached). */
+  runHooks(id: string, stages?: readonly HookStage[]): Promise<Outcome<{ runs: HookReport[] }>>;
+  /** `POST /import/hark-viewer`: predecessor call folders into calls. */
+  importHarkViewer(
+    dirs: readonly string[],
+    o: { workspace?: string },
+  ): Promise<{ imported: ImportResult[]; skipped: { source: string; reason: string }[] }>;
   /** The clean shutdown, after the answer is sent. */
   quit(): void;
 }
@@ -111,6 +124,7 @@ export function buildRouter(): Router<ApiApp> {
   notesRoutes(r);
   vocabRoutes(r);
   postCallRoutes(r);
+  handoffRoutes(r);
   return r;
 }
 

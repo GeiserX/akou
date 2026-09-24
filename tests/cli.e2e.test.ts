@@ -112,7 +112,7 @@ describe("exit codes", () => {
   });
 
   test("commands whose machinery is not built say so and exit 69", async () => {
-    for (const argv of [["open"], ["devices"], ["apps"], ["hooks", "run", "x"], ["self-update"]]) {
+    for (const argv of [["open"], ["devices"], ["apps"], ["self-update"]]) {
       const r = await run(argv);
       expect(r.code).toBe(EXIT.unavailable);
       expect(r.err).toContain("not built yet");
@@ -331,7 +331,10 @@ describe("following and questioning", () => {
     const fin = await run(["finalize"]);
     expect(fin.code).toBe(EXIT.unavailable);
     expect(fin.err).toContain("Opus decoding is not built");
-    expect((await run(["export"])).code).toBe(EXIT.unavailable);
+    // No export folder is set: a usage problem, with what to set or pass.
+    const exp = await run(["export"]);
+    expect(exp.code).toBe(EXIT.usage);
+    expect(exp.err).toContain("--to DIR");
     expect((await run(["enhance"])).code).toBe(EXIT.unavailable);
   });
 });
