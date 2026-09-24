@@ -40,6 +40,15 @@ const list: DecodeList = {
   warnings: [],
 };
 
+const clips = readdirSync(clipsDir)
+  .filter((f) => f.endsWith(".f32"))
+  .sort()
+  .map((f) => {
+    const b = readFileSync(join(clipsDir, f));
+    return { name: f, samples: new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4) };
+  });
+if (clips.length === 0) throw new Error(`no .f32 clips in ${clipsDir}: nothing to measure`);
+
 const tLoad = performance.now();
 const models = new SherpaModels({
   dir: modelsDir,
@@ -48,14 +57,6 @@ const models = new SherpaModels({
 });
 const prepared = models.prepare(list);
 const loadMs = performance.now() - tLoad;
-
-const clips = readdirSync(clipsDir)
-  .filter((f) => f.endsWith(".f32"))
-  .sort()
-  .map((f) => {
-    const b = readFileSync(join(clipsDir, f));
-    return { name: f, samples: new Float32Array(b.buffer, b.byteOffset, b.byteLength / 4) };
-  });
 
 for (const c of clips) prepared.recognizer.decode(prepareSpan(c.samples), prepared.arg);
 

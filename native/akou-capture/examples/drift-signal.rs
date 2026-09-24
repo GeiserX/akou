@@ -123,7 +123,10 @@ mod imp {
                 let at = base + k as u64 * period;
                 if k > self.last_k && at < end_ns {
                     self.last_k = k;
-                    start_frame = ((at - playback_ns) as f64 / ns_per_frame).round() as usize;
+                    // Floor, not round: rounding a marker in the last half frame gives `frames`,
+                    // which never plays while the event still says it did.
+                    start_frame = (((at - playback_ns) as f64 / ns_per_frame).floor() as usize)
+                        .min(frames.saturating_sub(1));
                     let _ = self.tx.try_send(Ev::Chirp {
                         ch: self.name,
                         k,
