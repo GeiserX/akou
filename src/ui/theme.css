@@ -1,0 +1,786 @@
+/* akou's window and share viewer. Dark and light follow the system (prefers-color-scheme), with a
+   22 px base that + and - move between 14 and 44 px. Speaker hues come from --h on each row. */
+
+:root {
+  color-scheme: dark light;
+  --bg: #0d0e10;
+  --panel: #15171a;
+  --fg: #f2f3f5;
+  --dim: #8b9099;
+  --faint: #565b64;
+  --line: #1f2226;
+  --rec: #ff453a;
+  --ok: #32d74b;
+  --warn: #ffb340;
+  --accent: #6aa8ff;
+  --agent: #c792ea;
+  --size: 22px;
+}
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #fbfbfa;
+    --panel: #f1f1ef;
+    --fg: #15171a;
+    --dim: #6b7079;
+    --faint: #a3a7ae;
+    --line: #e4e4e1;
+    --accent: #1f5fd6;
+    --agent: #7b3fb0;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+/* Elements that set their own display need their own hidden rule, or [hidden] loses. */
+[hidden],
+#final[hidden],
+#confirm[hidden],
+#fatal[hidden],
+#popover[hidden],
+#banner[hidden],
+.row[hidden],
+.row .tools[hidden] {
+  display: none;
+}
+html,
+body {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    var(--size) / 1.5 -apple-system,
+    "SF Pro Text",
+    "Inter",
+    system-ui,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+}
+
+header {
+  flex: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  min-height: 54px;
+  padding: 8px 20px 8px 24px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--dim);
+}
+#dot {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: var(--faint);
+  flex: none;
+}
+.recording #dot {
+  background: var(--rec);
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.paused #dot {
+  background: var(--warn);
+}
+.saved #dot {
+  background: var(--ok);
+}
+.offline #dot,
+.failed #dot {
+  background: var(--warn);
+}
+.failed #dot {
+  background: var(--rec);
+}
+@keyframes pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+#state {
+  color: var(--fg);
+  font-weight: 700;
+  text-transform: uppercase;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+}
+#title {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 30em;
+}
+#meta {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.pill {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 2px 10px;
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pill.warn {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+.pill.shared {
+  background: var(--rec);
+  border-color: var(--rec);
+  color: #fff;
+  font-weight: 700;
+}
+.pill.shared button {
+  padding: 2px 8px;
+  font-size: 11px;
+  color: #fff;
+  background: transparent;
+  border-color: #fff;
+}
+#controls {
+  margin-left: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+
+button,
+input,
+select,
+textarea {
+  font:
+    600 13px / 1.2 -apple-system,
+    "SF Pro Text",
+    system-ui,
+    sans-serif;
+  color: var(--fg);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+}
+input,
+textarea {
+  font-weight: 400;
+}
+button {
+  cursor: pointer;
+  white-space: nowrap;
+}
+button:hover {
+  border-color: var(--faint);
+}
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+button.on {
+  background: var(--warn);
+  border-color: var(--warn);
+  color: #1a1300;
+}
+button.stop {
+  background: var(--rec);
+  border-color: var(--rec);
+  color: #fff;
+}
+button.go {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+#newtitle {
+  width: 14em;
+}
+#workspace {
+  width: 9em;
+}
+
+/* Idle controls show when nothing on screen is recording; busy ones while something is. */
+body.busy .idle,
+body:not(.busy) .busy {
+  display: none;
+}
+
+#meters legend {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+}
+#meters {
+  border: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.meter {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+.meter meter {
+  width: 70px;
+  height: 8px;
+}
+.health {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--faint);
+  display: inline-block;
+}
+.health[data-state="ok"] {
+  background: var(--ok);
+}
+.health[data-state="dead"],
+.health[data-state="stalled"] {
+  background: var(--rec);
+}
+.health[data-state="no-buffers"],
+.health[data-state="permission-suspect"] {
+  background: var(--warn);
+}
+
+/* What the capture is doing, under the header: red is proven, amber a guess or a lag, grey quiet,
+   green recovered. */
+#banner {
+  flex: none;
+  padding: 7px 24px;
+  font-size: 13px;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+}
+#banner.recovered {
+  color: var(--ok);
+}
+#banner.guess,
+#banner.lag,
+#banner.permission {
+  background: var(--warn);
+  color: #1a1300;
+  font-weight: 600;
+}
+#banner.dead {
+  background: var(--rec);
+  color: #fff;
+  font-weight: 700;
+  font-size: 16px;
+  padding: 14px 24px;
+}
+#banner.dead #banner-text {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+#banner button {
+  margin-left: 10px;
+}
+#final,
+#fatal,
+.confirm-row {
+  flex: none;
+  padding: 6px 24px;
+  font-size: 13px;
+  color: var(--dim);
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+/* One row per message, each with its own Dismiss, so a second never hides the first. */
+#confirm {
+  flex: none;
+  display: flex;
+  flex-direction: column;
+}
+#final.failed {
+  color: var(--rec);
+}
+#final.done {
+  color: var(--ok);
+}
+#fatal {
+  background: var(--rec);
+  color: #fff;
+  font-weight: 700;
+}
+
+/* The side columns are sized in rem, which + and - never move (they set --size, not the root
+   font), so a larger transcript font never squeezes the transcript itself. */
+#layout {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 15rem minmax(0, 1fr) 24rem;
+  min-height: 0;
+}
+/* Below 1248 px the full side columns would leave the transcript less than half the window. */
+@media (max-width: 1247px) {
+  #layout {
+    grid-template-columns: 10rem minmax(0, 1fr) 18rem;
+  }
+}
+#layout.share-layout {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+#sidebar {
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  font-size: 13px;
+  padding: 8px;
+}
+#sidebar h2 {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--dim);
+  margin: 6px 4px;
+}
+#calls {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+#calls button {
+  display: grid;
+  width: 100%;
+  text-align: left;
+  margin: 2px 0;
+  background: transparent;
+  border-color: transparent;
+  font-weight: 400;
+}
+#calls button[aria-current="true"] {
+  background: var(--panel);
+  border-color: var(--line);
+}
+#calls .when {
+  color: var(--dim);
+  font-size: 11px;
+}
+#calls .what {
+  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#calls .ws {
+  color: var(--faint);
+  font-size: 11px;
+}
+#calls li.live .when::before {
+  content: "● ";
+  color: var(--rec);
+}
+
+main {
+  overflow-y: auto;
+  scroll-behavior: smooth;
+  padding: 20px 24px 40vh;
+}
+#lines,
+#partial {
+  max-width: 46em;
+  margin: 0 auto;
+}
+.row {
+  display: grid;
+  grid-template-columns: 4.2em 1fr;
+  gap: 0 18px;
+  padding: 0.2em 0;
+  color: var(--dim);
+  transition: color 0.6s;
+  --c: var(--faint);
+}
+.row[data-h] {
+  --c: hsl(var(--h) 85% 70%);
+}
+@media (prefers-color-scheme: light) {
+  .row[data-h] {
+    --c: hsl(var(--h) 70% 36%);
+  }
+}
+.row.turn {
+  padding-top: 0.75em;
+}
+.row time {
+  font-size: 0.6em;
+  color: var(--faint);
+  font-variant-numeric: tabular-nums;
+  padding-top: 0.62em;
+  text-align: right;
+}
+.row.turn time {
+  padding-top: 1.75em;
+}
+.row .body {
+  border-left: 3px solid var(--c);
+  padding-left: 16px;
+  position: relative;
+}
+.row .who {
+  display: block;
+  color: var(--c);
+  font-size: 0.55em;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  margin-bottom: 0.1em;
+  background: none;
+  border: none;
+  padding: 0;
+}
+.row:not(.turn) .who {
+  display: none;
+}
+#lines > .row.new,
+#lines > .row:nth-last-child(-n + 3) {
+  color: var(--fg);
+}
+.row.new {
+  animation: rise 0.35s ease-out;
+}
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+}
+.row .text.corrected {
+  text-decoration: underline dotted var(--faint);
+}
+.row.edited .text::after {
+  content: " (edited)";
+  font-size: 0.5em;
+  color: var(--faint);
+}
+/* Out of sight until the row is hovered or focused, but never out of the tab order: a row that
+   continues the same speaker has no chip, so its tools are its only focusable elements. The clip
+   also keeps the hidden buttons from catching clicks. */
+.row .tools {
+  position: absolute;
+  right: 0;
+  top: 0;
+  display: inline-flex;
+  gap: 4px;
+  clip-path: inset(50%);
+}
+.row:hover .tools,
+.row:focus-within .tools {
+  clip-path: none;
+}
+.row .tools button {
+  font-size: 11px;
+  padding: 2px 8px;
+}
+.row.flash .body {
+  animation: flash 1.6s ease-out;
+}
+@keyframes flash {
+  from {
+    background: color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+}
+/* The line still being spoken: grey, dashed, never a row of the transcript. */
+#partial .row {
+  color: var(--dim);
+}
+#partial .row .body {
+  border-left-style: dashed;
+}
+#empty {
+  max-width: 46em;
+  margin: 18vh auto 0;
+  color: var(--faint);
+  text-align: center;
+  font-size: 0.8em;
+}
+
+#side {
+  border-left: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  font-size: 14px;
+}
+[role="tablist"] {
+  display: flex;
+  gap: 4px;
+  padding: 8px;
+  border-bottom: 1px solid var(--line);
+}
+[role="tab"][aria-selected="true"] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}
+[role="tabpanel"] {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+#notes {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+}
+.note {
+  display: flex;
+  gap: 8px;
+  align-items: baseline;
+  padding: 3px 0;
+}
+.note .gutter {
+  font-size: 11px;
+  color: var(--faint);
+  background: none;
+  border: none;
+  padding: 0;
+  font-variant-numeric: tabular-nums;
+}
+.note.agent {
+  color: var(--agent);
+}
+.note .author {
+  font-size: 11px;
+  border: 1px solid var(--agent);
+  border-radius: 999px;
+  padding: 0 6px;
+}
+.note.action .note-text::before {
+  content: "☐ ";
+}
+.note.question {
+  font-style: italic;
+}
+.note.section {
+  font-weight: 700;
+}
+.note .edit,
+.note .del {
+  font-size: 11px;
+  padding: 1px 6px;
+  margin-left: auto;
+  opacity: 0.6;
+}
+.note .del {
+  margin-left: 0;
+}
+#note-input,
+#ask-input {
+  width: 100%;
+}
+#ask-form {
+  display: flex;
+  gap: 6px;
+}
+#ask-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.preset {
+  font-size: 12px;
+  padding: 4px 8px;
+}
+.qa {
+  border-top: 1px solid var(--line);
+  padding-top: 6px;
+}
+.qa .question {
+  font-weight: 700;
+  margin: 0;
+}
+.evidence {
+  display: grid;
+  gap: 4px;
+}
+.card {
+  background: var(--panel);
+  border-radius: 8px;
+  padding: 4px 8px;
+  font-size: 12px;
+  color: var(--dim);
+}
+.card p {
+  margin: 2px 0;
+}
+.ask-status {
+  font-size: 12px;
+  color: var(--dim);
+}
+.answer {
+  white-space: pre-wrap;
+}
+.answer.streaming::after {
+  content: "▍";
+  animation: pulse 1s infinite;
+}
+button.cite {
+  padding: 0 4px;
+  font-size: 0.9em;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  border-color: var(--accent);
+}
+.cite.missing {
+  color: var(--faint);
+}
+#enhanced-body li.mine {
+  color: var(--fg);
+  font-weight: 600;
+}
+#enhanced-body li.ai {
+  color: var(--dim);
+}
+#enhanced-body .who-note {
+  font-size: 11px;
+  color: var(--accent);
+}
+.enhanced-meta,
+.hint {
+  font-size: 12px;
+  color: var(--faint);
+}
+.bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+#player-bar {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding: 6px 12px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  color: var(--dim);
+}
+
+#toast {
+  position: fixed;
+  left: 50%;
+  top: 66px;
+  transform: translateX(-50%);
+  background: var(--rec);
+  color: #fff;
+  font-size: 13px;
+  padding: 9px 16px;
+  border-radius: 8px;
+  max-width: 80vw;
+  z-index: 10;
+}
+#toast.info {
+  background: var(--accent);
+}
+#jump {
+  position: fixed;
+  left: 50%;
+  bottom: 26px;
+  transform: translateX(-50%);
+  border-radius: 999px;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.35);
+  display: none;
+}
+.scrolled #jump {
+  display: block;
+}
+#popover {
+  position: fixed;
+  z-index: 20;
+  width: 330px;
+  background: var(--panel);
+  border: 1px solid var(--faint);
+  border-radius: 10px;
+  padding: 10px;
+  font-size: 13px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+  display: grid;
+  gap: 8px;
+}
+#popover h3 {
+  margin: 0;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--dim);
+}
+.pop-row {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.pop-col {
+  display: grid;
+  gap: 6px;
+}
+dialog {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid var(--faint);
+  border-radius: 12px;
+  max-width: 760px;
+  width: 90vw;
+  max-height: 85vh;
+  font-size: 13px;
+}
+.setting {
+  display: grid;
+  gap: 2px;
+  margin: 8px 0;
+}
+.setting label {
+  font-weight: 700;
+  font-family: ui-monospace, monospace;
+}
+.setting small {
+  color: var(--dim);
+}
+.setting.refused input,
+.setting.refused textarea {
+  border-color: var(--rec);
+}
+.setting .issue {
+  color: var(--rec);
+}
+.vocab-entries {
+  border-collapse: collapse;
+  width: 100%;
+}
+.vocab-entries td,
+.vocab-entries th {
+  border-bottom: 1px solid var(--line);
+  padding: 2px 6px;
+  text-align: left;
+}
+#share-notes {
+  border-left: 1px solid var(--line);
+  padding: 8px 12px;
+  width: 22rem;
+  overflow-y: auto;
+  font-size: 14px;
+}
