@@ -28,7 +28,7 @@ import {
 export const ANTHROPIC_URL = "https://api.anthropic.com";
 export const ANTHROPIC_VERSION = "2023-06-01";
 /** Used when `provider.model` is empty. */
-export const ANTHROPIC_DEFAULT_MODEL = "claude-opus-5";
+export const ANTHROPIC_DEFAULT_MODEL = "claude-opus-5-5";
 
 export interface AnthropicOptions {
   apiKey: string;

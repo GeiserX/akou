@@ -61,7 +61,7 @@ beforeAll(() => {
       if (url.pathname === "/v1/messages") {
         const start = {
           event: "message_start",
-          data: { type: "message_start", message: { model: "claude-opus-5" } },
+          data: { type: "message_start", message: { model: "claude-opus-5-5" } },
         };
         if (mode === "stream-error") {
           return sse([
@@ -176,14 +176,14 @@ describe("anthropic", () => {
     const p = new AnthropicProvider({ apiKey: KEY, baseUrl: base });
     const tokens: string[] = [];
     const r = await runProvider(p, REQ, (t) => tokens.push(t));
-    expect(r).toEqual({ text: "Ben said yes [15:41 Ben].", model: "claude-opus-5" });
+    expect(r).toEqual({ text: "Ben said yes [15:41 Ben].", model: "claude-opus-5-5" });
     expect(tokens).toEqual(["Ben said ", "yes [15:41 Ben]."]);
     const s = seen.at(-1) as Seen;
     expect(s.path).toBe("/v1/messages");
     expect(s.headers["x-api-key"]).toBe(KEY);
     expect(s.headers["anthropic-version"]).toBe("2023-06-01");
     expect(s.body).toMatchObject({
-      model: "claude-opus-5",
+      model: "claude-opus-5-5",
       stream: true,
       max_tokens: 50,
       system: [{ type: "text", text: "SYS", cache_control: { type: "ephemeral" } }],
