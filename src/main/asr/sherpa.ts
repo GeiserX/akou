@@ -11,8 +11,8 @@
  * never passed to a model that is not a transducer: sherpa-onnx exits the process on that call.
  */
 
-import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createHash, randomUUID } from "node:crypto";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { join } from "node:path";
 import {
@@ -129,6 +129,30 @@ export interface SherpaSpec {
   threads?: number;
 }
 
+/**
+ * Writes `bpe-<hash>.vocab` under `dir` and returns its path. The live and the final-pass Workers
+ * can write the same file while the other creates a recognizer from it, and sherpa-onnx exits the
+ * process on a torn file. So a file that already holds these bytes is left alone, and any other
+ * write goes to a unique temporary file renamed into place.
+ */
+export function writeBpeVocab(dir: string, text: string): string {
+  mkdirSync(dir, { recursive: true });
+  const hash = createHash("sha256").update(text).digest("hex").slice(0, 16);
+  const path = join(dir, `bpe-${hash}.vocab`);
+  const holds = () => existsSync(path) && readFileSync(path, "utf8") === text;
+  if (holds()) return path;
+  const tmp = join(dir, `.bpe-${hash}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(tmp, text, { flag: "wx" });
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    // Windows refuses a rename over a file another Worker has open; that writer's bytes are ours.
+    if (!holds()) throw err;
+  }
+  return path;
+}
+
 export class SherpaModels implements ModelSet {
   readonly recognizerModel = RECOGNIZER;
   readonly loads: Record<string, number> = {};
@@ -162,10 +186,7 @@ export class SherpaModels implements ModelSet {
   private loadRecognizer(terms: readonly string[]): { r: SherpaRecognizer; vocab: ScoreVocab } {
     const { tok } = this.tokenizer();
     const built = buildBpeVocab(tok, terms);
-    mkdirSync(this.spec.cacheDir, { recursive: true });
-    const hash = createHash("sha256").update(built.text).digest("hex").slice(0, 16);
-    const vocabPath = join(this.spec.cacheDir, `bpe-${hash}.vocab`);
-    writeFileSync(vocabPath, built.text);
+    const vocabPath = writeBpeVocab(this.spec.cacheDir, built.text);
     // Drop the previous recognizer before creating the next, so two never sit in memory at once.
     this.rec = null;
     Bun.gc(true);

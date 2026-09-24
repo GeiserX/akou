@@ -6,7 +6,15 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  statSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   ChecksumError,
@@ -21,7 +29,7 @@ import {
   RECOGNIZER,
   verifyModels,
 } from "../src/main/asr/models.ts";
-import { SherpaRecognizer } from "../src/main/asr/sherpa.ts";
+import { SherpaRecognizer, writeBpeVocab } from "../src/main/asr/sherpa.ts";
 import { tempDir } from "./helpers.ts";
 
 const cleanups: (() => void)[] = [];
@@ -228,5 +236,28 @@ describe("[spike] Hotwords to a non-transducer model kill the process: the sherp
     new SherpaRecognizer("moonshine-base", b.rec).decode(audio);
     expect(a.calls).toEqual([["Hetzner"], []]);
     expect(b.calls).toEqual([[]]);
+  });
+});
+
+describe("the hotword vocabulary file two Workers share", () => {
+  // The live Worker and the final-pass Worker can each write the same content-addressed file while
+  // the other is creating its recognizer from it; sherpa-onnx exits the process on a torn file.
+  test("a complete file already in place is never rewritten, so a reader never sees it truncated", () => {
+    const d = dir();
+    const path = writeBpeVocab(d, "\u2581Het -1\nzner -1\n");
+    const past = new Date(Date.UTC(2020, 0, 1));
+    utimesSync(path, past, past);
+    expect(writeBpeVocab(d, "\u2581Het -1\nzner -1\n")).toBe(path);
+    expect(statSync(path).mtimeMs).toBe(past.getTime());
+    expect(readdirSync(d)).toEqual([path.slice(d.length + 1)]);
+  });
+
+  test("a file under the right name with the wrong bytes is replaced whole, leaving no temporary", () => {
+    const d = dir();
+    const path = writeBpeVocab(d, "\u2581Het -1\nzner -1\n");
+    writeFileSync(path, "\u2581He");
+    expect(writeBpeVocab(d, "\u2581Het -1\nzner -1\n")).toBe(path);
+    expect(readFileSync(path, "utf8")).toBe("\u2581Het -1\nzner -1\n");
+    expect(readdirSync(d)).toEqual([path.slice(d.length + 1)]);
   });
 });
