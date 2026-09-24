@@ -8,4 +8,6 @@ One line per document, in the order to read them.
 - [DESIGN.md](DESIGN.md): the architecture, covering processes, capture per OS, recognition, the event log, the query engine, agent surfaces, the window, hand-off, packaging, milestones and risks.
 - [REQUIREMENTS.md](REQUIREMENTS.md): every predecessor feature and interface, and whether akou carried, changed or dropped it, plus the new vocabulary requirements.
 - [TRAPS.md](TRAPS.md): failures that already happened once, each rewritten as an invariant with a named test and a milestone.
+- [providers.md](providers.md): what answers questions and writes notes (your own Claude Code or Codex, an API, a local model), when each runs on its own, session reuse and how it is measured, and the open terms-of-service risk.
+- [knowledge-handoff.md](knowledge-handoff.md): how a finished call leaves akou (export folder, hooks, signed webhook, pull) and how the vocabulary grows only by what you approve.
 - [ROADMAP.md](ROADMAP.md): M0 gates with pass criteria, then M1 to M4 with checkable exit criteria, and what waits for demand.

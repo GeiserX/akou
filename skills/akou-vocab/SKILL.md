@@ -13,7 +13,7 @@ akou keeps one vocabulary the user owns: plain YAML files of names and product t
 
 Everything you find is a proposal. Use `akou_vocab_propose`, never `akou_vocab_add` with `scope: "workspace"` or `"global"`, and never `akou_vocab_approve` until the user has said yes to those exact words in this conversation. A proposal does nothing until it is approved. If the user says "add them all", that is a yes for the list you just showed, not for words you find later.
 
-The only exception is a word the user states themselves ("it's Vercel, not versal"): that one goes in at once with `akou_vocab_add {scope: "call"}`, as the `akou` skill says.
+The only exception is a word the user states themselves, like "it's Vercel, not versal". That one goes in at once with `akou_vocab_add {scope: "call"}`, as the `akou` skill says.
 
 ## 1. Before a call: the invite
 
@@ -25,7 +25,7 @@ When the user shares a calendar invite, or asks you to read one:
 
 ## 2. The user's own sources
 
-Only sources the user points you to: a folder of documents, a repository, notes, exported calls (the export folder holds one Markdown file per call, with `(heard: "…")` wherever akou corrected a word). Never go looking in other folders.
+Use only sources the user points you to, such as a folder of documents, a repository, notes, exported calls (the export folder holds one Markdown file per call, with `(heard: "…")` wherever akou corrected a word). Never go looking in other folders.
 
 - Collect candidate words: names of people, products, projects, companies, repositories, tools.
 - Rank them by frequency times rarity: a word that appears often and does not look like an everyday word comes first. `akou_vocab_suggest {text}` (or `akou vocab suggest --text "…"`) ranks a text for you; `akou_vocab_suggest {call}` ranks a recorded call. Terms already in the vocabulary and terms the user rejected are left out.
