@@ -10,7 +10,7 @@
  *   `codesign --verify --strict`; either failing fails the build.
  * - The binary must then run: `akou --version` prints `package.json`'s version.
  * - Out: `dist/release/akou-cli-<version>-<target>.tar.gz` (`.zip` on Windows), holding
- *   `akou-cli-<version>-<target>/akou[.exe]`, `LICENSE` and `README.md`.
+ *   `akou-cli-<version>-<target>/akou[.exe]`, `LICENSE`, `NOTICE` and `README.md`.
  *
  * Built on the target's own runner, so the binary it checks is the one it ships.
  */
@@ -98,6 +98,7 @@ function main(): void {
   run([exe, "help"]);
 
   copyFileSync(join(ROOT, "LICENSE"), join(dir, "LICENSE"));
+  copyFileSync(join(ROOT, "NOTICE"), join(dir, "NOTICE"));
   copyFileSync(join(ROOT, "README.md"), join(dir, "README.md"));
   const release = join(ROOT, "dist", "release");
   mkdirSync(release, { recursive: true });

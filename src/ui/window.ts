@@ -16,6 +16,7 @@ import type {
   Levels,
   Method,
   PartialLine,
+  ReadLines,
   Reply,
   Transport,
 } from "./protocol.ts";
@@ -39,6 +40,7 @@ const rpc = Electroview.defineRPC<AkouRpc>({
         else if (m.kind === "event") sink.event(m.data as LogEvent);
         else if (m.kind === "partial") sink.partial(m.data as PartialLine[]);
         else if (m.kind === "level") sink.level(m.data as Levels);
+        else if (m.kind === "read") sink.read(m.data as ReadLines);
         else if (m.kind === "alive") sink.alive();
         else {
           followers.delete(m.stream);

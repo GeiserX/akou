@@ -12,7 +12,8 @@
  * - both bundles pass `codesign --verify --deep --strict` (ad-hoc when unsigned);
  * - the inner app runs ElectroBun 2.0.1 with its bundled Bun 1.4.0 and says the version;
  * - every file the app loads by path is beside its main process: the Workers, the browser pages,
- *   the templates, sherpa-onnx-node with its `.node` file and both libraries, the capture helper;
+ *   the templates, the word lists, sherpa-onnx-node with its `.node` file and both libraries, the capture helper;
+ * - NOTICE and LICENSE are there too: the word lists' CC BY-SA 4.0 wants its credit to travel;
  * - the bundled Bun loads sherpa-onnx-node from inside the bundle, and the process has the `.node`
  *   file and both libraries open from the bundle's own folder (`lsof`; the hardened runtime ignores
  *   `DYLD_PRINT_LIBRARIES`) (TRAPS "Native libraries missing from the bundle");
@@ -39,6 +40,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { parseStderrLine } from "../src/main/capture/protocol.ts";
+import { DICTIONARY_LANGUAGES } from "../src/main/vocab/dictionary.ts";
 import { MIN_MACOS, PINS, RELEASE_DIR, releaseName, WRAPPER_APP } from "./build-app.ts";
 import { sourceVersion } from "./stamp-version.ts";
 
@@ -193,6 +195,8 @@ async function checkInner(
   const main = join(app, "Contents", "Resources", "app", "bun");
   const bun = join(app, "Contents", "MacOS", "bun");
   const need = [
+    "NOTICE",
+    "LICENSE",
     "index.js",
     "live-worker.js",
     "finalize-worker.js",
@@ -200,6 +204,7 @@ async function checkInner(
     ...["general", "one-on-one", "standup", "customer-call", "interview"].map(
       (t) => `templates/${t}.md`,
     ),
+    ...DICTIONARY_LANGUAGES.map((l) => `dictionaries/${l}.txt.gz`),
     "node_modules/sherpa-onnx-node/addon.js",
     `node_modules/${SHERPA_PLATFORM}/sherpa-onnx.node`,
     ...SHERPA_LIBS.map((l) => `node_modules/${SHERPA_PLATFORM}/${l}`),

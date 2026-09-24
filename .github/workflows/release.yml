@@ -31,6 +31,8 @@ on:
       - scripts/locate-helper-probe.ts
       - scripts/smoke-cli.ts
       - scripts/stamp-version.ts
+      - scripts/build-dictionaries.ts
+      - src/main/vocab/dictionaries/**
       - scripts/post-build.ts
       - scripts/post-wrap.ts
       - scripts/patch-plist.sh
@@ -72,6 +74,8 @@ jobs:
           else
             bun scripts/stamp-version.ts --check
           fi
+      - name: the bundled word lists are what the build script makes from its pinned source
+        run: bun scripts/build-dictionaries.ts --check
       - run: bun run check
 
   app:

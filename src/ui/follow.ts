@@ -15,7 +15,7 @@
 
 import type { LogEvent } from "../core/log/events.ts";
 import { type CallView, fold } from "../core/log/fold.ts";
-import type { Levels, PartialLine, Transport } from "./protocol.ts";
+import type { Levels, PartialLine, ReadLine, ReadLines, Transport } from "./protocol.ts";
 
 export const STALE_MS = 35_000;
 export const WAKE_JUMP_MS = 10_000;
@@ -32,6 +32,12 @@ export interface FollowEvents {
 
 export class Follower {
   readonly view: CallView = fold([]);
+  /**
+   * The app's text for the lines its vocabulary corrects, by line id. The page's fold has no
+   * vocabulary files or word lists, so it renders call-scoped pairs only; a line here shows the
+   * app's text while its `rev` matches the fold's.
+   */
+  readonly read = new Map<string, ReadLine>();
   /** How the follow went, for the window's own diagnostics (and the UI tests). */
   readonly stats = { opens: 0, reconnects: 0, duplicates: 0, gaps: 0, applied: 0 };
   private feed = 0;
@@ -134,6 +140,11 @@ export class Follower {
         this.lastAlive = Date.now();
         this.on.level(l);
       },
+      read: (r) => {
+        if (closed) return;
+        this.lastAlive = Date.now();
+        this.applyRead(r);
+      },
       alive: () => {
         this.lastAlive = Date.now();
       },
@@ -153,6 +164,20 @@ export class Follower {
       },
     };
     this.handle = wrapped;
+  }
+
+  /** Takes the app's rendering and redraws the lines it changes. */
+  private applyRead(r: ReadLines): void {
+    const ids = new Set(r.lines.map((l) => l.id));
+    if (r.all) {
+      for (const id of this.read.keys()) ids.add(id);
+      this.read.clear();
+    }
+    for (const l of r.lines) {
+      if (l.heard !== undefined) this.read.set(l.id, l);
+      else this.read.delete(l.id);
+    }
+    if (ids.size > 0) this.on.changed({ all: false, ids: [...ids], events: [] });
   }
 
   private accept(e: LogEvent): void {

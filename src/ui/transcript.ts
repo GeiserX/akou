@@ -18,7 +18,7 @@ import { formatWall } from "../core/log/clock.ts";
 import { type CallView, type Line, PROVISIONAL_TTL_MS } from "../core/log/fold.ts";
 import { byId, h, replace } from "./dom.ts";
 import { formatDuration } from "./model.ts";
-import type { PartialLine } from "./protocol.ts";
+import type { PartialLine, ReadLine } from "./protocol.ts";
 
 export const SCROLL_PIN_PX = 80;
 export const FONT_MIN = 14;
@@ -28,6 +28,8 @@ const NEW_FOR_MS = 4000;
 
 export interface TranscriptDeps {
   view(): CallView | null;
+  /** The app's text for a line its vocabulary corrects (the page's fold has no word lists). */
+  read?(lineId: string): ReadLine | undefined;
   hue(spk: string): number;
   play(lineId: string): void;
   speakerMenu(spk: string, anchor: HTMLElement): void;
@@ -235,6 +237,9 @@ export class TranscriptPane {
 
   private fill(row: HTMLElement, l: Line, v: CallView): void {
     const tz = v.call?.tz ?? "UTC";
+    // The app's rendering of this revision, when it has one; else the page's own.
+    const app = this.d.read?.(l.id);
+    const shown = app && app.rev === l.rev ? app : l;
     const first = v.parts()[0]?.wallStart ?? l.w0;
     fillRow(
       row,
@@ -244,8 +249,8 @@ export class TranscriptPane {
         timeTitle: intoTheCall(l.w0, first),
         spk: l.spk,
         speaker: l.speaker,
-        text: l.text,
-        heard: l.heard,
+        text: shown.text,
+        heard: shown.heard,
         ch: l.ch,
       },
       this.d.hue(l.spk),

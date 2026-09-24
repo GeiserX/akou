@@ -50,6 +50,11 @@ export interface CallManagerOptions {
   onPacket?(callId: string, part: number, p: Packet, ingest: PartIngest): void;
   /** See `ControllerDeps.beforeEnd`: the live recognizer's flush before `call.ended`. */
   beforeEnd?(callId: string): Promise<void>;
+  /**
+   * Every controller once it exists, created or read from disk, before anyone reads its view: the
+   * app sets the view's read-time vocabulary here.
+   */
+  onOpen?(c: CallController): void;
 }
 
 export interface StartRequest {
@@ -219,6 +224,11 @@ export class CallManager {
     return this.controllers.get(r.id)?.view ?? null;
   }
 
+  /** Every controller in memory: the live call and the calls opened this run. */
+  opened(): CallController[] {
+    return [...this.controllers.values()];
+  }
+
   controller(id: string): CallController | undefined {
     return this.controllers.get(id);
   }
@@ -280,6 +290,7 @@ export class CallManager {
       );
     }
     this.controllers.set(id, c);
+    this.o.onOpen?.(c);
     this.onEvent(id, workspace, c.view.call as LogEvent);
     (req.vocab ?? []).forEach((v, i) => {
       c.record({
@@ -387,6 +398,7 @@ export class CallManager {
         const existing = this.controllers.get(loaded.id);
         if (existing) return existing;
         this.controllers.set(loaded.id, loaded);
+        this.o.onOpen?.(loaded);
         return loaded;
       });
       const done = () => this.loading.delete(id);

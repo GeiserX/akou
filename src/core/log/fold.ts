@@ -312,7 +312,7 @@ interface RenderCacheEntry {
 }
 
 export class CallView {
-  readonly options: FoldOptions;
+  private _options: FoldOptions;
   /** Problems found while folding (a revision for an unknown segment, for example). */
   readonly issues: string[] = [];
   /** Counts `correctText` runs, to prove rendering stays incremental. */
@@ -327,6 +327,8 @@ export class CallView {
   private _endedReason: "stop" | "interrupted" | "abandoned" | null = null;
 
   private readonly segs = new Map<string, SegState>();
+  /** Languages the recognizer reported on any segment. */
+  private readonly langs = new Set<string>();
   private readonly _parts = new Map<number, PartView>();
 
   private readonly names = new Map<string, NameEntry>();
@@ -368,7 +370,34 @@ export class CallView {
   private readonly changeLog: string[] = [];
 
   constructor(options: FoldOptions = {}) {
-    this.options = options;
+    this._options = options;
+  }
+
+  get options(): FoldOptions {
+    return this._options;
+  }
+
+  /**
+   * Replaces the read-time vocabulary: the file entries and the dictionary. The app sets them once
+   * the files and word lists are loaded, and again when either changes. Every line may render
+   * differently, so incremental readers are told to re-read all; the same options again change
+   * nothing.
+   */
+  setReadOptions(options: FoldOptions): void {
+    const cur = this._options;
+    if (
+      cur.vocabFiles === options.vocabFiles &&
+      cur.isDictionaryWord === options.isDictionaryWord
+    ) {
+      return;
+    }
+    this._options = options;
+    this.invalidateAll();
+  }
+
+  /** Languages the recognizer reported in this call, sorted. Empty for models that report none. */
+  languages(): string[] {
+    return [...this.langs].sort();
   }
 
   // -------------------------------------------------------------------------
@@ -646,6 +675,7 @@ export class CallView {
         revisions: [e],
       };
       this.segs.set(e.id, s);
+      if (e.lang) this.langs.add(e.lang);
       this.changeLog.push(s.id);
       this.indexTokens(s.id, s.text);
       if (s.layer === "live") this.provisional.commit(s.ch, s.w1);
@@ -665,6 +695,7 @@ export class CallView {
     if (e.w1 !== undefined) cur.w1 = e.w1;
     if (e.text !== undefined) cur.text = e.text;
     if (e.lang !== undefined) cur.lang = e.lang;
+    if (e.lang) this.langs.add(e.lang);
     if (e.model !== undefined) cur.model = e.model;
     if (e.echo !== undefined) cur.echo = e.echo;
     if (e.by !== undefined) cur.by = e.by;

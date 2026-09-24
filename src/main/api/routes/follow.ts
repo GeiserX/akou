@@ -4,7 +4,10 @@
  * - `GET /calls/{id}/events?after=SEQ&wait=25`: the raw log after a cursor, long-polled.
  * - `GET /calls/{id}/stream?after=SEQ`: Server-Sent Events. Every log event after the cursor, in
  *   `seq` order and each exactly once (the backlog from disk, then live events), plus the
- *   ephemeral `partial` (the provisional line, never in the log) and `level` events.
+ *   ephemeral `partial` (the provisional line, never in the log), `level` and `read` events.
+ *   `read` is the app's own rendering of the lines its vocabulary corrects (section 5.4): a
+ *   follower that folds the raw events has neither the vocabulary files nor the word lists, so it
+ *   shows these texts instead of its own for the lines they name.
  * - `GET /calls/{id}/transcript`: the rendered transcript, names and vocabulary applied, local
  *   wall-clock times only. The JSON form also carries the call's state and, while it is live, the
  *   provisional line (marked `draft`), which is what `akou_read` follows a call with.
@@ -88,11 +91,32 @@ export interface PartialLine {
   draft: true;
 }
 
+/** One line as the app renders it: `rev` is the revision the text belongs to. */
+export interface ReadLine {
+  id: string;
+  rev: number;
+  text: string;
+  /** The raw text, present when a correction changed it. */
+  heard?: string;
+}
+
+/**
+ * The app's rendering of lines. `all`: these are every line a correction changes, and any line
+ * not named has none. Otherwise an update for the lines named, the ones that no longer have a
+ * correction included (without `heard`).
+ */
+export interface ReadLines {
+  all: boolean;
+  lines: ReadLine[];
+}
+
 /** What a follower of a call receives, in order: every log event once, and the ephemeral parts. */
 export interface FollowSink {
   event(e: LogEvent): void;
   partial(lines: PartialLine[]): void;
   level(l: { mic: number; call: number }): void;
+  /** The app's rendering of corrected lines, after the backlog and whenever it changes. */
+  read?(r: ReadLines): void;
   /** Every `KEEPALIVE_MS`, so a reader can tell a quiet call from a dead connection. */
   keepalive(): void;
 }
@@ -132,7 +156,41 @@ export async function openFollow(
   let lastPartial = "";
   let lastLevel = "";
   let levelSentAt = 0;
+  // The view's change feed, read once the backlog is out: which lines may render differently.
+  let feed: number | null = null;
+  const corrected = new Set<string>();
+  const readLine = (l: Line): ReadLine => ({
+    id: l.id,
+    rev: l.rev,
+    text: l.text,
+    ...(l.heard !== undefined ? { heard: l.heard } : {}),
+  });
+  const sendAll = () => {
+    corrected.clear();
+    const lines = call.view
+      .lines("best")
+      .filter((l) => l.heard !== undefined)
+      .map(readLine);
+    for (const l of lines) corrected.add(l.id);
+    sink.read?.({ all: true, lines });
+  };
+  const sendRead = () => {
+    if (!sink.read || feed === null) return;
+    const ch = call.view.changesSince(feed);
+    feed = ch.cursor;
+    if (ch.all) return sendAll();
+    const lines: ReadLine[] = [];
+    for (const id of ch.ids) {
+      const l = call.view.resolve(id);
+      if (!l) continue;
+      if (l.heard !== undefined) corrected.add(id);
+      else if (!corrected.delete(id)) continue;
+      lines.push(readLine(l));
+    }
+    if (lines.length > 0) sink.read({ all: false, lines });
+  };
   const tick = setInterval(() => {
+    sendRead();
     const tz = call.view.call?.tz ?? "UTC";
     const lines: PartialLine[] = call.view.provisional.current(app.now()).map((x) => ({
       ch: x.ch,
@@ -181,6 +239,11 @@ export async function openFollow(
   const pending = held;
   held = null;
   for (const e of pending) sendEvent(e);
+  // Every corrected line once, then only what changes.
+  if (sink.read) {
+    feed = call.view.changesSince(0).cursor;
+    sendAll();
+  }
   return stop;
 }
 
@@ -217,6 +280,7 @@ export function sseFollow(app: ApiApp, id: string, after: number, signal: AbortS
           event: (e) => send(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`),
           partial: (p) => send(`event: partial\ndata: ${JSON.stringify(p)}\n\n`),
           level: (l) => send(`event: level\ndata: ${JSON.stringify(l)}\n\n`),
+          read: (r) => send(`event: read\ndata: ${JSON.stringify(r)}\n\n`),
           keepalive: () => send(": keep-alive\n\n"),
         });
       } catch {

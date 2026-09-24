@@ -19,6 +19,7 @@ import type {
   FollowSink,
   Method,
   PartialLine,
+  ReadLines,
   Reply,
   Transport,
 } from "./protocol.ts";
@@ -87,6 +88,7 @@ class HttpTransport implements Transport {
           if (f.event === "event") sink.event(JSON.parse(f.data) as LogEvent);
           else if (f.event === "partial") sink.partial(JSON.parse(f.data) as PartialLine[]);
           else if (f.event === "level") sink.level(JSON.parse(f.data));
+          else if (f.event === "read") sink.read(JSON.parse(f.data) as ReadLines);
           else sink.alive();
         }
       } catch (err) {

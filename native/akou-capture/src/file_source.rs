@@ -6,8 +6,8 @@
 //! engine emits up to that tick. `--speed 1` paces it in real time, `--speed 20` twenty times
 //! faster, `--speed 0` (the default) as fast as the engine takes it. `--loop` repeats the file.
 //!
-//! The fault switches that concern sources (`call-silent`, `call-dead-at`, `rebuild-heals`,
-//! `sleep-at`) act here.
+//! The fault switches that concern sources (`call-silent`, `call-dead-at`, `call-zeros-at`,
+//! `rebuild-heals`, `sleep-at`) act here.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -33,6 +33,8 @@ pub struct FileSource {
     stop: Arc<AtomicBool>,
     healed: Arc<AtomicBool>,
     worker: Option<JoinHandle<()>>,
+    /// The verdict of the probe just asked, until the engine takes it.
+    answer: Option<bool>,
 }
 
 impl FileSource {
@@ -57,6 +59,7 @@ impl FileSource {
             stop: Arc::new(AtomicBool::new(false)),
             healed: Arc::new(AtomicBool::new(false)),
             worker: None,
+            answer: None,
         }
     }
 
@@ -122,6 +125,7 @@ impl Frontend for FileSource {
         let (mic_on, call_on) = (self.mic_on, self.call_on);
         let call_silent = self.faults.call_silent();
         let dead_at = self.faults.call_dead_at();
+        let zeros_at = self.faults.call_zeros_at();
         let sleep = self.faults.sleep();
         self.worker = Some(std::thread::spawn(move || {
             let step = (wav.rate as usize / 100).max(1);
@@ -144,7 +148,9 @@ impl Frontend for FileSource {
                     slept_ns = (sleep_for * 1e9) as u64;
                 }
                 let awake = anchor.awake_ns + (t * 1e9) as u64;
-                let dead = dead_at.is_some_and(|d| t >= d) && !healed.load(Ordering::Relaxed);
+                let healthy = !healed.load(Ordering::Relaxed);
+                let dead = dead_at.is_some_and(|d| t >= d) && healthy;
+                let zeros = zeros_at.is_some_and(|z| t >= z) && healthy;
                 let chunks = [
                     (Ch::Mic, mic_on, &wav.data[0]),
                     (Ch::Call, call_on && !call_silent && !dead, &wav.data[1]),
@@ -153,7 +159,11 @@ impl Frontend for FileSource {
                     if !on {
                         continue;
                     }
-                    let samples = data[at..at + n].to_vec();
+                    let samples = if ch == Ch::Call && zeros {
+                        vec![0.0; n]
+                    } else {
+                        data[at..at + n].to_vec()
+                    };
                     let c = crate::source::Chunk {
                         ch,
                         awake_ns: awake,
@@ -194,11 +204,15 @@ impl Frontend for FileSource {
     }
 
     fn probe_call(&mut self) {
-        // The probe listens to the output: it hears audio while the simulated output plays.
-        let heard = self.output_running() == Some(true);
-        if let Some(tx) = &self.tx {
-            let _ = tx.try_send(Event::Probe { heard });
-        }
+        // The probe listens to the output: it hears audio while the simulated output plays. It
+        // answers at once, through `probe_answered`: sent as an event it would queue behind the
+        // audio this source is ahead of the engine by (seconds of file at `--speed 0`, or when
+        // the engine is slow), and be timed there, or be dropped when that queue is full.
+        self.answer = Some(self.output_running() == Some(true));
+    }
+
+    fn probe_answered(&mut self) -> Option<bool> {
+        self.answer.take()
     }
 
     fn status(&mut self) -> Status {

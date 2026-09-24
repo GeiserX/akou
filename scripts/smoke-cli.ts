@@ -3,6 +3,7 @@
  *
  *   bun scripts/smoke-cli.ts
  *
+ * - `LICENSE` and `NOTICE` sit beside the binary, as the archive ships them;
  * - `akou --version` prints `package.json`'s version;
  * - `akou doctor --json` answers a report with the settings, token, models and helper checks, and
  *   with no app running and no helper on PATH the helper line is not a failure;
@@ -40,6 +41,10 @@ const exe = join(
 if (!existsSync(exe)) {
   console.error(`smoke-cli: no binary at ${exe}; run bun scripts/build-cli.ts first`);
   process.exit(1);
+}
+
+for (const f of ["LICENSE", "NOTICE"]) {
+  check(existsSync(join(exe, "..", f)), `${f} beside the binary`);
 }
 
 const home = mkdtempSync(join(tmpdir(), "akou-cli-smoke-"));
