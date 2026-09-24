@@ -353,12 +353,38 @@ export async function writeVocabFile(path: string, file: VocabFile): Promise<str
   const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
   try {
     await writeFile(tmp, text, { encoding: "utf8", flag: "wx" });
-    await rename(tmp, path);
+    await renameReplacing(tmp, path);
   } catch (err) {
     await rm(tmp, { force: true });
     throw err;
   }
   return sha256(text);
+}
+
+/** Error codes Windows gives for a moment while another rename or a reader holds the target. */
+const RENAME_BUSY = new Set(["EPERM", "EACCES", "EBUSY"]);
+
+/**
+ * `rename` over an existing file. On Windows a replace fails briefly while another write to the
+ * same path is replacing it or a reader has it open; that is retried for under a second, as
+ * graceful-fs does. Any other error is thrown at once.
+ */
+export async function renameReplacing(
+  from: string,
+  to: string,
+  op: (from: string, to: string) => Promise<void> = rename,
+  tries = 12,
+): Promise<void> {
+  for (let i = 0; ; i++) {
+    try {
+      await op(from, to);
+      return;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code ?? "";
+      if (i >= tries - 1 || !RENAME_BUSY.has(code)) throw err;
+      await new Promise((r) => setTimeout(r, Math.min(100, 5 * 2 ** i)));
+    }
+  }
 }
 
 /** `~/.config/akou` on macOS and Linux, `%APPDATA%\akou` on Windows. */
