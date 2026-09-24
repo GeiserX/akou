@@ -2,7 +2,8 @@
  * Re-enhance after the final layer (docs/DESIGN.md section 5.2, ROADMAP M2): notes a provider wrote
  * from the live layer are written again when the final layer lands, unless a person or an agent
  * wrote them or the provider is the harness, in which case the window offers a button. The rule is
- * unit-tested here; the automatic run end to end is in the second half, with a fake provider.
+ * unit-tested here; the automatic run end to end is in the second half, with a fake provider,
+ * together with the two cases it must leave to the button.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -10,7 +11,12 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { fold } from "../src/core/log/fold.ts";
-import type { CompleteRequest, CompleteResult, Provider } from "../src/main/llm/provider.ts";
+import type {
+  CompleteRequest,
+  CompleteResult,
+  Provider,
+  ProviderId,
+} from "../src/main/llm/provider.ts";
 import { reEnhanceState } from "../src/main/notes/enhance.ts";
 import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -78,7 +84,8 @@ describe("reEnhanceState", () => {
 });
 
 class NotesProvider implements Provider {
-  readonly id = "openai-compatible" as const;
+  /** A test switches it to `harness` to check the harness is never run on its own. */
+  id: ProviderId = "openai-compatible";
   readonly prompts: string[] = [];
   async available() {
     return { ok: true as const, detail: "fake" };
@@ -169,5 +176,73 @@ describe("the automatic re-enhance, end to end", () => {
     await Bun.sleep(300);
     const after: LogEvent[] = (await rig.api("GET", `/calls/${id}/events`)).body.events;
     expect(after.filter((e) => e.type === "enhanced")).toHaveLength(2);
+  }, 30_000);
+
+  /** Starts a call, waits for its line, runs `notes`, stops it and waits for the final layer. */
+  async function callWithNotes(notes: (id: string, line: string) => Promise<void>) {
+    const id = await rig.startCall({ title: "Daily standup" });
+    let line = "";
+    await until(
+      async () => {
+        const lines = (await rig.api("GET", `/calls/${id}/transcript`)).body.lines;
+        line = lines.find((l: { text: string }) => l.text.includes("great"))?.id ?? "";
+        return line !== "";
+      },
+      10_000,
+      "a line",
+    );
+    await notes(id, line);
+    const before = provider.prompts.length;
+    expect((await rig.api("POST", `/calls/${id}/stop`)).status).toBe(200);
+    await until(
+      async () =>
+        ((await rig.api("GET", `/calls/${id}/events`)).body.events as LogEvent[]).some(
+          (e) => e.type === "final.done",
+        ),
+      15_000,
+      "the final layer",
+    );
+    // Time for an automatic run to start, had one been allowed to.
+    await Bun.sleep(500);
+    const events: LogEvent[] = (await rig.api("GET", `/calls/${id}/events`)).body.events;
+    return {
+      enhanced: events.filter((e) => e.type === "enhanced"),
+      runsAfter: provider.prompts.length - before,
+      state: (await rig.api("GET", `/calls/${id}/enhanced`)).body.reEnhance,
+    };
+  }
+
+  test("notes an agent put are never written over: the button is offered instead", async () => {
+    const r = await callWithNotes(async (id, line) => {
+      const put = await rig.api("PUT", `/calls/${id}/enhanced`, {
+        markdown: `## Summary\n- they agreed [#${line}]`,
+        coversSeq: (await rig.api("GET", `/calls/${id}`)).body.cursor,
+        template: "standup",
+      });
+      expect(put.status).toBe(200);
+    });
+    expect(r.enhanced).toHaveLength(1);
+    expect(r.enhanced[0]).toMatchObject({ by: "agent:test", model: "agent:test" });
+    expect(r.runsAfter).toBe(0);
+    expect(r.state).toMatchObject({ due: true, auto: false });
+  }, 30_000);
+
+  test("with the harness as provider the final layer never runs it on its own", async () => {
+    provider.id = "harness";
+    try {
+      const r = await callWithNotes(async (id) => {
+        const soFar = await rig.api("POST", `/calls/${id}/enhance`, { template: "standup" });
+        expect(soFar.status).toBe(200);
+      });
+      expect(r.enhanced).toHaveLength(1);
+      expect(r.runsAfter).toBe(0);
+      expect(r.state).toMatchObject({
+        due: true,
+        auto: false,
+        reason: "the harness runs only when you ask",
+      });
+    } finally {
+      provider.id = "openai-compatible";
+    }
   }, 30_000);
 });

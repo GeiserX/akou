@@ -8,8 +8,10 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { fold } from "../src/core/log/fold.ts";
+import { realClock } from "../src/main/capture/engine.ts";
 import { SETTINGS } from "../src/main/config/schema.ts";
 import { OpenAiCompatibleProvider } from "../src/main/llm/openai-compatible.ts";
+import type { CompleteRequest, CompleteResult, Provider } from "../src/main/llm/provider.ts";
 import {
   anchorMinutes,
   capMemo,
@@ -22,6 +24,8 @@ import {
   refreshMemo,
 } from "../src/main/query/memo.ts";
 import { estimateTokens, renderLine } from "../src/main/query/render.ts";
+import { type AppRig, appRig } from "./api-helpers.ts";
+import { until } from "./capture-helpers.ts";
 import { LogBuilder, T0, TZ } from "./helpers.ts";
 import { SYNTH_TZ, synthCall } from "./synth.ts";
 
@@ -178,4 +182,80 @@ describe("the rolling memo through an OpenAI-compatible local model", () => {
     // Incremental: each run was given the memo in force, not the whole call again.
     expect(view.memo?.rev).toBe(memos.length);
   }, 60_000);
+});
+
+/** A stand-in for the user's harness: it records every run and answers with an anchored memo. */
+class FakeHarness implements Provider {
+  readonly id = "harness" as const;
+  readonly runs: CompleteRequest[] = [];
+  async available() {
+    return { ok: true as const, detail: "fake harness" };
+  }
+  async complete(req: CompleteRequest): Promise<CompleteResult> {
+    this.runs.push(req);
+    const at = /(\d\d:\d\d):\d\d/.exec(req.prompt)?.[1] ?? "00:00";
+    return { text: `## Topics\n- the build moves to the new box [${at}]`, model: "fake-harness/1" };
+  }
+}
+
+describe("the rolling memo in the app, with the harness as provider", () => {
+  const harness = new FakeHarness();
+  let skew = 0;
+  let rig: AppRig;
+  let id: string;
+  let n = 0;
+  const say = (text: string) => {
+    n++;
+    const w0 = Date.now() + skew;
+    return rig.app.write(id, {
+      type: "seg",
+      id: `l${String(900_000 + n)}`,
+      rev: 1,
+      layer: "live",
+      part: 1,
+      ch: "call",
+      spk: "c2",
+      a0: n,
+      a1: n + 1,
+      w0,
+      w1: w0 + 900,
+      text,
+      model: "fake",
+    } as never);
+  };
+  const memos = async () =>
+    ((await rig.api("GET", `/calls/${id}/events`)).body.events as LogEvent[]).filter(
+      (e) => e.type === "memo",
+    );
+
+  beforeAll(async () => {
+    rig = await appRig({
+      provider: harness,
+      clock: { ...realClock, now: () => Date.now() + skew },
+    });
+    id = await rig.startCall({ title: "Build sync" });
+  });
+
+  afterAll(() => rig?.close());
+
+  test("memo.provider auto never runs the harness on its own; `on` does", async () => {
+    expect(rig.app.config().settings["memo.provider"]).toBe("auto");
+    // Four minutes and about 2,000 tokens of new speech: a memo is due by every other rule.
+    skew = 4 * MIN;
+    const long = "we move the build to the new box and check the numbers after ".repeat(32);
+    for (let i = 0; i < 4; i++) await say(long);
+    await Bun.sleep(400);
+    expect(harness.runs).toHaveLength(0);
+    expect(await memos()).toHaveLength(0);
+
+    // Positive control: the same call once the user turns the memo on for the harness.
+    const set = await rig.api("PATCH", "/config", { "memo.provider": "on" });
+    expect(set.status).toBe(200);
+    await say(long);
+    await until(async () => (await memos()).length > 0, 5000, "a memo");
+    expect(harness.runs.length).toBeGreaterThan(0);
+    const [memo] = (await memos()) as (LogEvent & { body: string; by: string })[];
+    expect(memo?.body).toMatch(MEMO_ANCHOR);
+    expect(memo?.by).toBe("app");
+  }, 20_000);
 });
