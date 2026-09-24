@@ -13,7 +13,11 @@ import type { LogEvent } from "../src/core/log/events.ts";
 import { processAlive } from "../src/core/log/writer.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import type { CallBudgets } from "../src/main/call/state.ts";
-import type { CaptureStartOptions } from "../src/main/capture/engine.ts";
+import type {
+  CaptureSession,
+  CaptureStartOptions,
+  StopOutcome,
+} from "../src/main/capture/engine.ts";
 import { AkouCaptureEngine, KILL_GRACE_MS } from "../src/main/capture/helper.ts";
 import type { Packet } from "../src/main/capture/protocol.ts";
 import { logOf, ofType, until } from "./capture-helpers.ts";
@@ -21,6 +25,8 @@ import { writeCallWav } from "./fixtures/audio.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 export const LONG = 20_000;
+/** What a wall-clock bound here allows for the runner: disk syncs and scheduling, not the app. */
+const RUNNER_MS = 1_000;
 
 /** The traps' fault list; times are seconds of audio on the file timeline. */
 export interface Faults {
@@ -134,6 +140,8 @@ export interface Rig {
   events: LogEvent[];
   packets: { part: number; p: Packet; at: number }[];
   pids: number[];
+  /** Every helper session the engine started, in order. */
+  sessions: CaptureSession[];
 }
 
 /** A call manager whose engine spawns `h` (or `command`, for a helper that is not one of them). */
@@ -147,6 +155,7 @@ export function rig(
   const events: LogEvent[] = [];
   const packets: Rig["packets"] = [];
   const pids: number[] = [];
+  const sessions: CaptureSession[] = [];
   const engine = new AkouCaptureEngine({
     command: command ?? h.command,
     extraArgs: (o) => h.args(faults(o)),
@@ -156,6 +165,7 @@ export function rig(
   engine.start = (o, handlers) => {
     const s = inner(o, handlers);
     if (s.pid) pids.push(s.pid);
+    sessions.push(s);
     return s;
   };
   const mgr = new CallManager({
@@ -176,7 +186,7 @@ export function rig(
     }
     cleanup();
   });
-  return { root, mgr, events, packets, pids };
+  return { root, mgr, events, packets, pids, sessions };
 }
 
 const has = (events: LogEvent[], f: (e: LogEvent) => boolean) => () => events.some(f);
@@ -241,16 +251,60 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         const a = await r.mgr.start({ workspace: "work", title: "Hangs" });
         expect(a.ok).toBe(true);
         await until(() => r.packets.length > 10, 3_000, "packets");
+        // When the session killed the helper, when it saw the exit and what its stop answered: the
+        // helper's side of the stop, apart from the call's own work after it.
+        const s = r.sessions[0] as CaptureSession;
+        const at: { kill?: number; exit?: number; stopped?: number } = {};
+        let outcome: StopOutcome | undefined;
+        const kill = s.kill.bind(s);
+        s.kill = () => {
+          at.kill ??= performance.now();
+          kill();
+        };
+        const sessionStop = s.stop.bind(s);
+        s.stop = async (b) => {
+          const out = await sessionStop(b);
+          at.stopped = performance.now();
+          outcome = out;
+          return out;
+        };
+        void s.exited.then(() => {
+          at.exit = performance.now();
+        });
         // The event loop keeps turning while the helper hangs.
         let ticks = 0;
-        const timer = setInterval(() => ticks++, 10);
+        let last = performance.now();
+        let maxGap = 0;
+        const timer = setInterval(() => {
+          const now = performance.now();
+          maxGap = Math.max(maxGap, now - last);
+          last = now;
+          ticks++;
+        }, 10);
         const t0 = performance.now();
         const stop = await r.mgr.stop("live");
         const took = performance.now() - t0;
         clearInterval(timer);
+        const ms = (t?: number) => (t === undefined ? null : Math.round(t - t0));
+        console.log(
+          `[T0.9] stop took ${Math.round(took)} ms: kill at ${ms(at.kill)}, exit seen at ${ms(at.exit)}, session stop resolved at ${ms(at.stopped)}, longest event-loop gap ${Math.round(maxGap)} ms`,
+        );
         expect(stop.ok).toBe(true);
-        expect(took).toBeGreaterThanOrEqual(budget - 20);
-        expect(took).toBeLessThan(budget + KILL_GRACE_MS);
+        // The helper had the whole budget, then was killed.
+        expect(at.kill).toBeDefined();
+        expect((at.kill as number) - t0).toBeGreaterThanOrEqual(budget - 20);
+        // The kill worked: the session saw the helper exit within the kill grace (past it, the
+        // session gives up on the exit and answers with none).
+        expect(outcome).toMatchObject({ killed: true, exit: { killedByUs: true } });
+        // And the session answered as soon as it saw the exit: both run in the same turn of the
+        // event loop, so this holds however loaded the runner is.
+        expect((at.stopped as number) - (at.exit as number)).toBeLessThan(50);
+        // Bounded. The exact budget is proven on a manual clock (call-machine.test.ts, [T0.9] and
+        // [T4.31]); this is the whole stop of a real process on a shared runner, which also syncs
+        // part.ended and call.ended to disk and waits whenever the runner does not schedule it. The
+        // bound is budget plus kill grace plus one second for that; a stop that waited on the hung
+        // helper without a deadline never answers, and fails on the test's timeout.
+        expect(took).toBeLessThan(budget + KILL_GRACE_MS + RUNNER_MS);
         expect(ticks).toBeGreaterThan(took / 10 / 4);
         expect(ofType(r.events, "part.ended")[0]).toMatchObject({ reason: "killed" });
         expect(processAlive(r.pids[0] as number)).toBe(false);
