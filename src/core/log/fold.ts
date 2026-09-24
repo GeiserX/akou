@@ -175,6 +175,8 @@ export interface PartView {
   clock: PartClock;
   /** The final layer is shown for this part in the `best` view. */
   finalDone: boolean;
+  /** `seq` of the `final.part.done` that switched this part to the final layer. */
+  finalDoneSeq?: number;
 }
 
 export interface SpeakerView {
@@ -579,7 +581,10 @@ export class CallView {
       case "final.part.done": {
         if (!this._final.partsDone.includes(e.part)) this._final.partsDone.push(e.part);
         const p = this._parts.get(e.part);
-        if (p) p.finalDone = true;
+        if (p) {
+          p.finalDone = true;
+          p.finalDoneSeq = e.seq;
+        }
         this.changeLog.push(ALL_LINES);
         break;
       }

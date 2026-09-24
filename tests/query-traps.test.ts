@@ -4,10 +4,17 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { isBareOffset } from "../src/core/log/clock.ts";
+import { encode } from "gpt-tokenizer/encoding/cl100k_base";
+import { formatWall, isBareOffset } from "../src/core/log/clock.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { fold } from "../src/core/log/fold.ts";
-import { CallQuery, type ContextPack, MCP_BUDGET, resolveCall } from "../src/main/query/context.ts";
+import {
+  CallQuery,
+  type ContextPack,
+  MCP_BUDGET,
+  MIN_BUDGET,
+  resolveCall,
+} from "../src/main/query/context.ts";
 import {
   auditTimes,
   checkCitations,
@@ -217,6 +224,125 @@ describe("[T3.12] Whole transcript re-read per question", () => {
     expect(small.tokens).toBeLessThanOrEqual(3000);
   });
 
+  test("a small budget is honoured even when the memo, earlier Q&A and notes alone would fill it", () => {
+    const b = twoPartCall(200, 100);
+    const memo = Array.from(
+      { length: 40 },
+      (_, i) =>
+        `- [15:${String(37 + (i % 20)).padStart(2, "0")}] decision ${i} about the rollout plan`,
+    ).join("\n");
+    b.add({ type: "memo", rev: 1, body: memo, coversSeq: 60, by: "user", model: "none" });
+    for (let i = 1; i <= 3; i++) {
+      b.add({ type: "ask", id: `a${i}`, q: `question ${i} about the plan?`, by: "user" });
+      b.add({
+        type: "answer",
+        ask: `a${i}`,
+        text: "a long answer ".repeat(60),
+        cites: [],
+        model: "m",
+        pack: { mode: "recall", tokens: 900 },
+      });
+    }
+    b.add({ type: "remember", id: "r1", rev: 1, text: "the customer is Acme", by: "user" });
+    const q = new CallQuery(fold(b.events));
+    const now = T0 + 21 * MIN;
+    for (const budget of [MIN_BUDGET, 1000, 1500, 2000, 3000]) {
+      const pack = q.context("what about topic150?", { now, budget });
+      expect(pack.budget).toBe(budget);
+      expect(pack.tokens).toBeLessThanOrEqual(budget);
+      expect(pack.text.split("\n")[0]).toBe("LIVE, recording now");
+      expect(pack.text).toContain("Rules:");
+      // Transcript lines are not starved to zero by the fixed blocks.
+      if (budget >= 1000) expect(pack.lines.length).toBeGreaterThan(0);
+    }
+    // A budget below the floor is raised to it, and the pack says so in `budget`.
+    const tiny = q.context("what about topic150?", { now, budget: 100 });
+    expect(tiny.budget).toBe(MIN_BUDGET);
+    expect(tiny.tokens).toBeLessThanOrEqual(MIN_BUDGET);
+  });
+
+  /** A 3-hour call of plain English lines, every 6 s: the realistic case for the estimate. */
+  const ENGLISH = [
+    "we should move the build to the new box next week",
+    "okay so the budget for the launch is 450 dollars",
+    "I think Ben owns the migration and Carla reviews it",
+    "can you send me the ticket after the meeting",
+    "the customer wants the contract signed by Friday",
+    "right, let's ship the fix and test it tomorrow",
+    "what did the vendor quote for the license again",
+    "yeah the deadline moved to the twenty third",
+  ];
+  function englishCall(): LogBuilder {
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    for (let i = 1; i <= 1800; i++) {
+      b.seg({
+        id: `l${String(i).padStart(6, "0")}`,
+        spk: `c${1 + (i % 3)}`,
+        w0: T0 + i * 6 * S,
+        text: ENGLISH[i % ENGLISH.length] as string,
+      });
+    }
+    return b;
+  }
+
+  test("at the smallest budget a long header squeezes the memo out instead of breaking the budget", () => {
+    const b = twoPartCall(40, 20);
+    // Many pauses make a long "Recording:" line in the header, which every pack carries.
+    for (let i = 0; i < 12; i++) {
+      b.add({ type: "pause", part: 2, a: 200 + i, wall: T0 + (5 + i) * MIN, mono: 1 });
+      b.add({ type: "resume", part: 2, a: 200 + i, wall: T0 + (5 + i) * MIN + 20 * S, mono: 2 });
+    }
+    b.add({
+      type: "memo",
+      rev: 1,
+      body: "- [15:37] the plan",
+      coversSeq: 30,
+      by: "user",
+      model: "none",
+    });
+    const pack = new CallQuery(fold(b.events)).context("catch me up", {
+      now: T0 + 20 * MIN,
+      budget: MIN_BUDGET,
+    });
+    expect(pack.tokens).toBeLessThanOrEqual(MIN_BUDGET);
+    expect(pack.text).toContain("paused");
+    expect(pack.blocks.find((x) => x.name === "memo")?.tokens ?? 0).toBeLessThan(20);
+  });
+
+  test("the budget holds under an independent tokenizer, not only under our estimate", () => {
+    // cl100k is not the tokenizer of every model a pack goes to, but it is a real BPE count that
+    // `estimateTokens` shares no code with.
+    const english = new CallQuery(fold(englishCall().events));
+    const now = T0 + 1801 * 6 * S;
+    for (const question of ["what did the vendor quote?", "catch me up", "action items so far"]) {
+      const pack = english.context(question, { now });
+      expect(pack.tokens).toBeGreaterThan(MCP_BUDGET * 0.9);
+      // On English the estimate errs high, so the real count is inside the budget with room.
+      expect(estimateTokens(pack.text)).toBeGreaterThanOrEqual(encode(pack.text).length);
+      expect(encode(pack.text).length).toBeLessThanOrEqual(MCP_BUDGET);
+    }
+    // Made-up words are the worst case for a character estimate; the pack still fits.
+    const q = new CallQuery(fold(syn.events));
+    for (const question of ["what did we agree about the budget?", "catch me up"]) {
+      expect(encode(q.context(question, { now: syn.end }).text).length).toBeLessThanOrEqual(
+        MCP_BUDGET,
+      );
+    }
+  });
+
+  test("positive control: a four-characters-per-token estimate under-counts the same lines", () => {
+    const quarter = (s: string) => Math.ceil(s.length / 4);
+    const lines = fold(englishCall().events)
+      .lines()
+      .slice(0, 300)
+      .map((l) => renderLine(l, { tz: TZ }))
+      .join("\n");
+    expect(quarter(lines)).toBeLessThan(encode(lines).length);
+    expect(estimateTokens(lines)).toBeGreaterThanOrEqual(encode(lines).length);
+  });
+
   test("positive control: the whole transcript is far over the budget, so the check would catch a re-read", () => {
     const view = fold(syn.events);
     const whole = view
@@ -384,5 +510,172 @@ describe("[judging] Memo and recency window leave a gap", () => {
     const ids = pack.lines.map((l) => l.id);
     expect(ids).toContain("l000026");
     expect(ids).not.toContain("l000011");
+  });
+});
+
+describe("[design] A time window is a hard filter", () => {
+  const call = synthCall({ hours: 3, seed: 42 });
+  const q = new CallQuery(fold(call.events));
+  const now = call.end;
+  const inWindow = (pack: ContextPack, w: { from: number; to: number }) =>
+    pack.lines.every((l) => l.w0 >= w.from && l.w0 <= w.to);
+  /** "what did we say about <codename> before HH:MM?", the window ending just before the fact. */
+  const probes = call.facts.map((f) => ({
+    f,
+    q: `what did we say about ${f.codename} before ${formatWall(f.w0 - 15_000, TZ, { seconds: false })}?`,
+  }));
+
+  test("no line of a time pack falls outside the window, even when the matching turn straddles its edge", () => {
+    let checked = 0;
+    for (const p of probes) {
+      const pack = q.context(p.q, { now });
+      const w = pack.analysis.window;
+      expect(pack.analysis.intent).toBe("time");
+      if (!w) throw new Error("no window");
+      expect(pack.lines.length).toBeGreaterThan(0);
+      expect(inWindow(pack, w)).toBe(true);
+      // The fact itself is after the window, so it is never in the pack.
+      expect(pack.lines.map((l) => l.id)).not.toContain(p.f.id);
+      checked++;
+    }
+    expect(checked).toBeGreaterThanOrEqual(40);
+  });
+
+  test("positive control: the same assertion fails on a recall pack for the same term", () => {
+    const p = probes[10] as (typeof probes)[number];
+    const timed = q.context(p.q, { now });
+    const recall = q.context(`what did we say about ${p.f.codename}?`, { now });
+    expect(recall.analysis.intent).toBe("recall");
+    expect(inWindow(recall, timed.analysis.window as { from: number; to: number })).toBe(false);
+  });
+});
+
+describe("[judging] Memo and recency window leave a gap: across the switch to the final layer", () => {
+  /** A 2-hour call, a memo covering all of it written `memoAge` before the end, then a final layer. */
+  function ended(memoAge: number, finalLayer: boolean, coverLines = 600) {
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    const n = 600;
+    for (let i = 1; i <= n; i++) {
+      b.seg({
+        id: `l${String(i).padStart(6, "0")}`,
+        spk: i % 2 ? "c1" : "c2",
+        w0: T0 + i * 12 * S,
+        text: `live words ${i} about the plan and the rollout today`,
+      });
+    }
+    const end = T0 + (n * 12 + 1) * S;
+    b.add(
+      {
+        type: "memo",
+        rev: 1,
+        body: "- [15:40] the plan",
+        coversSeq: b.events[coverLines + 1]?.seq ?? 0,
+        by: "agent:claude-code",
+        model: "none",
+      },
+      end - memoAge,
+    );
+    b.partEnded(1, "stop", n * 12 + 1);
+    b.add({ type: "call.ended", reason: "stop" }, end);
+    if (finalLayer) {
+      b.add({ type: "final.started", pid: 1 });
+      for (let i = 1; i <= n; i++) {
+        b.seg({
+          id: `f${String(i).padStart(6, "0")}`,
+          layer: "final",
+          spk: i % 2 ? "s0" : "s1",
+          w0: T0 + i * 12 * S + 200,
+          text: `final words ${i} about the plan and the rollout today`,
+        });
+      }
+      b.add({ type: "final.part.done", part: 1 });
+      b.add({ type: "final.done", parts: [1], skipped: [] });
+    }
+    return { q: new CallQuery(fold(b.events)), end };
+  }
+
+  test("a memo covering the call still covers it after the final pass: not stale, window at the last 5 minutes", () => {
+    const { q, end } = ended(4 * MIN, true);
+    const pack = q.context("catch me up", { now: end + 30 * MIN });
+    expect(pack.memo.uncovered.lines).toBe(0);
+    expect(pack.memoStale).toBe(false);
+    expect(pack.text).toMatch(/Memo \(covers the call up to \d\d:\d\d:\d\d\):/);
+    expect(pack.text).not.toContain("did not fit");
+    const first = pack.lines.find((l) => l.layer === "final" && pack.text.includes(`#${l.id} `));
+    expect(first).toBeDefined();
+    const recent = pack.lines.filter((l) => l.w0 >= end - 5 * MIN - 12 * S);
+    expect(recent.length).toBeGreaterThan(0);
+    expect(Math.min(...pack.lines.map((l) => l.w0))).toBeGreaterThanOrEqual(end - 6 * MIN);
+  });
+
+  test("positive control: a memo covering only the first hour leaves the second hour uncovered after the pass", () => {
+    const { q, end } = ended(4 * MIN, true, 300);
+    const pack = q.context("catch me up", { now: end + 30 * MIN });
+    expect(pack.memo.uncovered.lines).toBeGreaterThanOrEqual(299);
+    expect(pack.memoStale).toBe(true);
+  });
+});
+
+describe("[design risk] Layer switch confuses a live reader: `read` reports the switch", () => {
+  function call(final: boolean) {
+    const b = twoPartCall(40, 20);
+    b.partEnded(2, "stop", 120);
+    b.add({ type: "call.ended", reason: "stop" });
+    const view = fold(b.events);
+    const q = new CallQuery(view);
+    const cursor = q.read(0, T0 + 10 * MIN).cursor;
+    view.apply(b.add({ type: "final.started", pid: 1 }));
+    for (let i = 1; i <= 20; i++) {
+      view.apply(
+        b.seg({
+          id: `f${String(i).padStart(6, "0")}`,
+          layer: "final",
+          part: 1,
+          spk: "s0",
+          w0: T0 + i * 6 * S,
+          text: `final line ${i}`,
+        }),
+      );
+    }
+    if (final) view.apply(b.add({ type: "final.part.done", part: 1 }));
+    return { q, cursor };
+  }
+
+  test("a reader across final.part.done is told which live lines the final ones replace", () => {
+    const { q, cursor } = call(true);
+    const r = q.read(cursor, T0 + 10 * MIN);
+    expect(r.lines.map((l) => l.id)).toEqual(
+      Array.from({ length: 20 }, (_, i) => `f${String(i + 1).padStart(6, "0")}`),
+    );
+    // Part 1's live lines are superseded; part 2's are still the best view.
+    expect(r.superseded).toEqual(
+      Array.from({ length: 20 }, (_, i) => `l${String(i + 1).padStart(6, "0")}`),
+    );
+    expect(r.retracted).toEqual([]);
+    // A reader that drops the superseded ids and keeps the rest holds exactly the best view.
+    const held = new Set(
+      q.view
+        .lines("live")
+        .map((l) => l.id)
+        .filter((id) => !r.superseded.includes(id)),
+    );
+    for (const l of r.lines) held.add(l.id);
+    expect([...held].sort()).toEqual(
+      q.view
+        .lines()
+        .map((l) => l.id)
+        .sort(),
+    );
+    // The next read, from the new cursor, reports nothing again.
+    expect(q.read(r.cursor, T0 + 10 * MIN).superseded).toEqual([]);
+  });
+
+  test("positive control: before final.part.done nothing is superseded and no final line is read", () => {
+    const { q, cursor } = call(false);
+    const r = q.read(cursor, T0 + 10 * MIN);
+    expect(r.superseded).toEqual([]);
+    expect(r.lines).toEqual([]);
   });
 });

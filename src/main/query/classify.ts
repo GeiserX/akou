@@ -33,6 +33,8 @@ export interface TimeWindow {
   said: string;
   /** For "around 15:40" and "ten minutes ago": the moment asked about, filled outward from. */
   anchor?: number;
+  /** The window asked for lies wholly outside the call: `from` and `to` are the nearer edge. */
+  empty?: true;
 }
 
 export interface Classification {
@@ -234,7 +236,8 @@ export function parseWindow(question: string, ctx: ClassifyContext): TimeWindow 
   }
   m = new RegExp(`\\bbetween ${CLOCK} and ${CLOCK}`).exec(q);
   if (m) {
-    const a = at(m[1] as string, m[2], m[3]);
+    // "between 3 and 4pm": each clock takes the other's am or pm when it has none.
+    const a = at(m[1] as string, m[2], m[3] ?? m[6]);
     const b = at(m[4] as string, m[5], m[6] ?? m[3]);
     if (a !== undefined && b !== undefined && b > a) return { from: a, to: b, said: m[0] };
   }
@@ -324,12 +327,19 @@ export function classify(question: string, ctx: ClassifyContext): Classification
   return { intent: "recall", speakers, terms };
 }
 
-/** A window reaching past the call is cut to the call, so the pack never names a time outside it. */
+/**
+ * A window reaching past the call is cut to the call, so the pack never names a time outside it.
+ * A window wholly outside the call becomes an empty one at the nearer edge, marked `empty`.
+ */
 function clampToCall(w: TimeWindow | undefined, ctx: ClassifyContext): TimeWindow | undefined {
   if (!w) return w;
-  const from = Math.max(w.from, ctx.start ?? w.from);
+  const start = ctx.start ?? w.from;
+  const from = Math.max(w.from, start);
   const to = Math.min(w.to, ctx.now);
-  return from < to ? { ...w, from, to } : w;
+  if (from < to) return { ...w, from, to };
+  const edge = w.from >= ctx.now ? ctx.now : start;
+  const { anchor: _a, ...rest } = w;
+  return { ...rest, from: edge, to: edge, empty: true };
 }
 
 const TIME_WORDS = new Set([

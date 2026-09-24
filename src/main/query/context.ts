@@ -31,7 +31,13 @@ import { foldText, tokenize } from "../../core/vocab/correct.ts";
 import type { QueryTerm } from "./bm25.ts";
 import { type Chunk, ChunkIndex, type ChunkIndexOptions } from "./chunks.ts";
 import { type Classification, classify, type Intent, type SpeakerRef } from "./classify.ts";
-import { MEMO_MAX_TOKENS, type MemoStatus, memoStatus, renderMemo } from "./memo.ts";
+import {
+  MEMO_MAX_TOKENS,
+  type MemoStatus,
+  memoCoveredUntil,
+  memoStatus,
+  renderMemo,
+} from "./memo.ts";
 import {
   estimateTokens,
   formatAgo,
@@ -50,6 +56,11 @@ import {
 
 export const MCP_BUDGET = 6000;
 export const APP_BUDGET = 8000;
+/**
+ * The smallest budget a pack is built for. The status line, the header and the rules are in every
+ * pack; a smaller budget is raised to this, and the pack's `budget` says so.
+ */
+export const MIN_BUDGET = 500;
 export const WHOLE_CALL_FITS = 12_000;
 export const WHOLE_CALL_CAP = 14_000;
 export const RECENCY_MS = 5 * 60_000;
@@ -60,10 +71,18 @@ export const BLOCK_CAPS = {
   qa: 400,
   vocab: 300,
   memo: MEMO_MAX_TOKENS,
+  remember: 200,
   recency: 2000,
   retrieved: 1800,
   provisional: 100,
 } as const;
+
+/**
+ * Under a small budget the optional blocks shrink with it: at most these shares of what the
+ * header leaves, so the transcript is never starved by them. At the 6k default every cap above
+ * is in force unchanged.
+ */
+const BLOCK_SHARE = { memo: 0.25, qa: 0.1, vocab: 0.06, remember: 0.1 } as const;
 
 /** Share of the line budget given to the recency window; the rest goes to retrieval. */
 const RECENCY_SHARE: Record<Intent, number> = {
@@ -161,7 +180,10 @@ export interface EngineOptions extends ChunkIndexOptions {}
 export interface ContextOptions {
   /** Current wall time, epoch ms. */
   now: number;
-  /** Token budget; defaults to 6k for MCP and 8k in the app. */
+  /**
+   * Token budget; defaults to 6k for MCP and 8k in the app. A budget below `MIN_BUDGET` is raised
+   * to it. In the app, whole-call mode may use up to 14k unless a budget is given here.
+   */
   budget?: number;
   /** Who asks: an agent over MCP (the default) or the in-app ask box. */
   surface?: "mcp" | "app";
@@ -198,6 +220,12 @@ export interface ReadResult {
   rendered: string[];
   /** Segment ids retracted since the cursor. */
   retracted: string[];
+  /**
+   * Live segment ids the final layer replaced since the cursor: a part switched to the final
+   * layer (`final.part.done`), so its final lines are in `lines` and the live copies a reader
+   * holds for that part should be dropped. They still resolve by id.
+   */
+  superseded: string[];
   provisional: { text: string; w0: number; speaker: string; rendered: string } | null;
   cursor: number;
   state: PackState;
@@ -281,9 +309,23 @@ export class CallQuery {
     this.index.sync();
     const lines: Line[] = [];
     const retracted: string[] = [];
+    const switched = new Set(
+      this.view
+        .parts()
+        .filter((p) => p.finalDoneSeq !== undefined && p.finalDoneSeq > since)
+        .map((p) => p.part),
+    );
+    const superseded =
+      switched.size === 0
+        ? []
+        : this.view
+            .lines("live", { includeEcho: true, includeRetracted: true })
+            .filter((l) => switched.has(l.part))
+            .map((l) => l.id);
     for (const l of this.view.lines("best", { includeRetracted: true })) {
       const seg = this.view.segment(l.id);
-      if (!seg || seg.lastSeq <= since) continue;
+      // A part that switched layers since the cursor is new to the reader in full.
+      if (!seg || (seg.lastSeq <= since && !switched.has(l.part))) continue;
       if (l.retracted) retracted.push(l.id);
       else lines.push(l);
     }
@@ -292,6 +334,7 @@ export class CallQuery {
       lines,
       rendered: lines.map((l) => renderLine(l, { tz: this.tz })),
       retracted,
+      superseded,
       provisional: p,
       cursor: this.view.lastSeq,
       state: packState(this.view.state),
@@ -327,7 +370,10 @@ export class CallQuery {
   context(question: string, opts: ContextOptions): ContextPack {
     this.index.sync();
     const surface = opts.surface ?? "mcp";
-    const budget = opts.budget ?? (surface === "app" ? APP_BUDGET : MCP_BUDGET);
+    const budget = Math.max(
+      MIN_BUDGET,
+      opts.budget ?? (surface === "app" ? APP_BUDGET : MCP_BUDGET),
+    );
     const now = opts.now;
     const ref = this.reference(now);
     const tz = this.tz;
@@ -339,14 +385,32 @@ export class CallQuery {
       roster,
       stopwords: this.index.stopwords,
     });
-    const memo = memoStatus(this.view, this.linesIter(), ref);
+    const memo = memoStatus(this.view, this.linesIter(), ref, this.memoCoverage());
 
-    const whole = this.wholeCall(question, cls, memo, { now, ref, budget, surface });
+    const whole = this.wholeCall(question, cls, memo, {
+      now,
+      ref,
+      budget,
+      surface,
+      explicit: opts.budget !== undefined,
+    });
     if (whole) return whole;
     return this.retrieval(cls, memo, { now, ref, budget });
   }
 
   // -------------------------------------------------------------------------
+
+  private coverage: { key: string; until: number | undefined } | null = null;
+
+  /** `memoCoveredUntil`, cached per memo revision: it walks both layers once. */
+  private memoCoverage(): number | undefined {
+    const memo = this.view.memo;
+    const key = memo ? `${memo.rev}:${memo.coversSeq}` : "";
+    if (this.coverage?.key !== key) {
+      this.coverage = { key, until: memoCoveredUntil(this.view, memo?.coversSeq ?? 0) };
+    }
+    return this.coverage.until;
+  }
 
   private *linesIter(): Iterable<Line> {
     for (const c of this.index.allLines()) yield c.line;
@@ -474,10 +538,12 @@ export class CallQuery {
     const items = this.view.remembered();
     const out: string[] = [];
     let used = 0;
+    // One long note is trimmed to a third of the cap, so it can never crowd out the rest.
+    const perNote = Math.max(20, Math.floor(cap / 3));
     // Newest first when trimming; shown oldest first.
     for (let i = items.length - 1; i >= 0; i--) {
       const r = items[i] as (typeof items)[number];
-      const line = `- (${r.id}) ${r.text}`;
+      const line = trimTokens(`- (${r.id}) ${r.text}`, perNote);
       const t = estimateTokens(line) + 1;
       if (used + t > cap) break;
       out.unshift(line);
@@ -639,17 +705,24 @@ export class CallQuery {
     const lines = this.index.allLines();
     const status = this.status(o.now);
     const header = [status, ...this.headerLines(o.now, o.ref, false)];
+    // What the header and rules leave: the optional blocks shrink with a small budget.
+    const avail = Math.max(0, o.budget - cost([...header, this.rules()]) - BLOCK_CAPS.analysis);
+    const capOf = (name: keyof typeof BLOCK_SHARE) =>
+      Math.min(BLOCK_CAPS[name], Math.floor(avail * BLOCK_SHARE[name]));
     const remember = this.rememberLines(
       // Remembered lines are in every pack; they keep at least 150 tokens of the header.
-      Math.max(150, BLOCK_CAPS.header - estimateTokens(header.join("\n")) - 90),
+      Math.min(
+        capOf("remember"),
+        Math.max(150, BLOCK_CAPS.header - estimateTokens(header.join("\n")) - 90),
+      ),
     );
     header.push(...remember, this.rules());
 
-    const qa = this.qaLines(BLOCK_CAPS.qa);
-    const memoText = renderMemo(memo, BLOCK_CAPS.memo);
+    const qa = this.qaLines(capOf("qa"));
+    const memoText = renderMemo(memo, capOf("memo"));
     const memoBlock: string[] = [];
     if (memoText) {
-      const covered = this.coveredUntil(memo.coversSeq);
+      const covered = memo.coveredUntil;
       memoBlock.push(
         `Memo${covered ? ` (covers the call up to ${formatWall(covered, tz)})` : ""}:`,
         memoText,
@@ -682,7 +755,7 @@ export class CallQuery {
       cost(qa) +
       cost(memoBlock) +
       cost(provBlock) +
-      BLOCK_CAPS.vocab +
+      capOf("vocab") +
       20;
     const lineBudget = Math.max(0, o.budget - fixed);
     let recencyBudget = Math.floor(lineBudget * RECENCY_SHARE[cls.intent]);
@@ -702,7 +775,10 @@ export class CallQuery {
       return used + t;
     };
 
-    if (cls.intent === "time" && cls.window) {
+    if (cls.intent === "time" && cls.window?.empty) {
+      // Nothing of the call is in the window asked for.
+      recencyBudget = 0;
+    } else if (cls.intent === "time" && cls.window) {
       // Hard time filter, then recall inside it.
       const win = cls.window;
       const from = this.index.firstAtOrAfter(win.from);
@@ -805,27 +881,37 @@ export class CallQuery {
     // The analysis names where the recent lines actually start.
     analysis = this.analysisLine(cls, "retrieval", recency[0]?.w0);
     const all = [...retrieved, ...recency].sort(byTime);
-    const vocab = this.vocabHits(joinTerms(cls), all, BLOCK_CAPS.vocab);
+    const vocab = this.vocabHits(joinTerms(cls), all, capOf("vocab"));
 
-    const out: string[] = [...header, "", analysis];
-    const blocks: PackBlock[] = [
-      { name: "header", tokens: cost(header) },
-      { name: "analysis", tokens: cost([analysis]) },
+    const sections: { name: string; rows: string[] }[] = [
+      { name: "header", rows: header },
+      { name: "analysis", rows: [analysis] },
     ];
     const push = (name: string, block: string[]) => {
-      if (block.length === 0) return;
-      out.push("", ...block);
-      blocks.push({ name, tokens: cost(block) });
+      if (block.length > 0) sections.push({ name, rows: [...block] });
     };
     push("qa", qa);
     push("vocab", vocab);
     push("memo", memoBlock);
+    const win = cls.intent === "time" ? cls.window : undefined;
     if (retrieved.length > 0) {
-      const title =
-        cls.intent === "time" && cls.window
-          ? `Lines from ${formatWall(cls.window.from, tz)} to ${formatWall(cls.window.to, tz)}${recencyOmitted ? " (not all fit; ask a narrower window for the rest)" : ""}:`
-          : "Retrieved earlier lines:";
+      const title = win
+        ? `Lines from ${formatWall(win.from, tz)} to ${formatWall(win.to, tz)}${recencyOmitted ? " (not all fit; ask a narrower window for the rest)" : ""}:`
+        : "Retrieved earlier lines:";
       push("retrieved", [title, ...renderRuns(retrieved, this.index, tz)]);
+    } else if (win?.empty) {
+      const start = this.start;
+      const span =
+        start !== undefined
+          ? `, which ran ${formatWall(start, tz)} to ${formatWall(o.ref, tz)}`
+          : "";
+      push("retrieved", [
+        `Lines in the window asked for: nothing recorded; it falls outside the call${span}.`,
+      ]);
+    } else if (win) {
+      push("retrieved", [
+        `Lines from ${formatWall(win.from, tz)} to ${formatWall(win.to, tz)}: nothing recorded in this window.`,
+      ]);
     }
     if (recency.length > 0) {
       const first = recency[0] as Line;
@@ -841,17 +927,32 @@ export class CallQuery {
     }
     push("provisional", provBlock);
 
-    let text = out.join("\n");
+    const join = () => sections.map((x) => x.rows.join("\n")).join("\n\n");
+    let text = join();
     let tokens = estimateTokens(text);
-    // The estimate of the parts can differ from the whole by a few tokens; trim the oldest
-    // retrieved line until the pack fits.
-    while (tokens > o.budget && (retrieved.length > 0 || recency.length > 0)) {
-      const victim = retrieved.length > 0 ? retrieved.shift() : recency.shift();
-      if (!victim) break;
-      const r = renderLine(victim, { tz });
-      text = text.replace(`${r}\n`, "").replace(r, "");
+    // The estimate of the parts can differ from the whole; trim until the pack fits: the oldest
+    // retrieved line, then the oldest recent line, then the Q&A, the vocabulary and the memo.
+    while (tokens > o.budget) {
+      const victim = retrieved.shift() ?? recency.shift();
+      if (victim) {
+        const r = renderLine(victim, { tz });
+        for (const x of sections) {
+          const i = x.rows.indexOf(r);
+          if (i >= 0) x.rows.splice(i, 1);
+        }
+      } else {
+        const drop = ["qa", "vocab", "memo"].map((n) => sections.findIndex((x) => x.name === n));
+        const at = drop.find((i) => i >= 0);
+        if (at === undefined) break;
+        const x = sections[at] as (typeof sections)[number];
+        // The memo first shrinks to a pointer, then goes.
+        if (x.name === "memo" && x.rows[0] !== MEMO_OMITTED) x.rows = [MEMO_OMITTED];
+        else sections.splice(at, 1);
+      }
+      text = join();
       tokens = estimateTokens(text);
     }
+    const blocks: PackBlock[] = sections.map((x) => ({ name: x.name, tokens: cost(x.rows) }));
 
     return {
       text,
@@ -871,15 +972,6 @@ export class CallQuery {
     };
   }
 
-  private coveredUntil(seq: number): number | undefined {
-    if (seq <= 0) return undefined;
-    let w: number | undefined;
-    for (const c of this.index.allLines()) {
-      if (c.line.seq <= seq && (w === undefined || c.line.w1 > w)) w = c.line.w1;
-    }
-    return w;
-  }
-
   // -------------------------------------------------------------------------
   // Whole-call mode
 
@@ -887,7 +979,7 @@ export class CallQuery {
     question: string,
     cls: Classification,
     memo: MemoStatus,
-    o: { now: number; ref: number; budget: number; surface: "mcp" | "app" },
+    o: { now: number; ref: number; budget: number; surface: "mcp" | "app"; explicit: boolean },
   ): ContextPack | null {
     if (o.surface === "mcp" && o.budget < WHOLE_CALL_FITS) return null;
     const tz = this.tz;
@@ -900,7 +992,9 @@ export class CallQuery {
       if (used > WHOLE_CALL_FITS) return null;
       transcript.push(r);
     }
-    const cap = o.surface === "app" ? WHOLE_CALL_CAP : Math.min(o.budget, WHOLE_CALL_CAP);
+    // The app overrides its 8k default with the whole-call cap, never a budget it was given.
+    const cap =
+      o.surface === "app" && !o.explicit ? WHOLE_CALL_CAP : Math.min(o.budget, WHOLE_CALL_CAP);
 
     // Stable prefix: nothing here changes when a speaker is named or time passes.
     const status = this.status(o.now, true);
@@ -923,7 +1017,7 @@ export class CallQuery {
       "",
       ...(this.status(o.now) !== status ? [`Status now: ${this.status(o.now)}.`] : []),
       ...this.dynamicHeader(o.now, o.ref),
-      ...this.rememberLines(200),
+      ...this.rememberLines(BLOCK_CAPS.remember),
       ...this.vocabHits(question, all, BLOCK_CAPS.vocab),
       ...(memoText ? ["Memo:", memoText] : []),
       ...(memo.stale ? ["The memo is stale. Write one with akou_memo_put."] : []),
@@ -955,6 +1049,8 @@ export class CallQuery {
     };
   }
 }
+
+const MEMO_OMITTED = "Memo: not shown, over the budget; read it with akou_memo_get.";
 
 const HEALTHY = new Set(["ok", "alive", "healthy", "recovered", "running"]);
 

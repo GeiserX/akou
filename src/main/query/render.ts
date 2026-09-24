@@ -16,16 +16,30 @@ import type { CallState, Line, Provisional } from "../../core/log/fold.ts";
 // ---------------------------------------------------------------------------
 // Token estimate
 
+const ASCII_COST: number[] = Array.from({ length: 0x80 }, (_, c) => {
+  if ((c >= 0x41 && c <= 0x5a) || (c >= 0x61 && c <= 0x7a)) return 0.3;
+  if (c >= 0x30 && c <= 0x39) return 0.6;
+  if (c === 0x20) return 0.2;
+  if (c === 0x0a) return 1;
+  return 0.8;
+});
+
 /**
- * A conservative token estimate with no tokenizer: about four ASCII characters per token, two for
- * other alphabetic scripts, one per character elsewhere (CJK, Devanagari and the like). Budgets are
- * enforced with this number, so it errs on the high side.
+ * A conservative token estimate with no tokenizer, charged per character class: a letter 0.3, a
+ * space 0.2, a digit 0.6 (BPE vocabularies split numbers one to three digits at a time), other
+ * ASCII punctuation 0.8, a newline 1, other alphabetic scripts 0.5 and one per character
+ * elsewhere (CJK, Devanagari and the like). A line prefix such as `#l000123 16:09:16 ` is 11
+ * tokens for a real BPE tokenizer, so it cannot be charged like prose. Budgets are enforced with
+ * this number, so it errs on the high side where it matters: against cl100k it reads about 1.2
+ * times the real count on English lines. Made-up words are its worst case, at about 0.95 of the
+ * real count (the T3.12 tests measure both).
  */
 export function estimateTokens(text: string): number {
   let n = 0;
   for (const ch of text) {
     const c = ch.codePointAt(0) as number;
-    n += c < 0x80 ? 0.25 : c < 0x0530 ? 0.5 : 1;
+    if (c < 0x80) n += ASCII_COST[c] as number;
+    else n += c < 0x0530 ? 0.5 : 1;
   }
   return Math.ceil(n);
 }

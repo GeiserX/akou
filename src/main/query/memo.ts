@@ -33,22 +33,55 @@ export interface MemoStatus {
   stale: boolean;
   /** The committed speech the memo does not cover yet. */
   uncovered: { fromSeq: number; toSeq: number; lines: number; tokens: number; w0?: number };
+  /** Wall time the memo covers the call up to: the end of the last line it was written over. */
+  coveredUntil?: number;
+}
+
+/**
+ * Wall time a memo covering `seq` 1 to `coversSeq` covers the call up to: the latest end of a
+ * line, in any layer, logged at or before `coversSeq`. Coverage is a span of the call, so the
+ * final pass re-transcribing that span does not uncover it.
+ */
+export function memoCoveredUntil(view: CallView, coversSeq: number): number | undefined {
+  if (coversSeq <= 0) return undefined;
+  let w: number | undefined;
+  for (const layer of ["live", "final"] as const) {
+    for (const l of view.lines(layer, { includeEcho: true, includeRetracted: true })) {
+      if (l.seq <= coversSeq && (w === undefined || l.w1 > w)) w = l.w1;
+    }
+  }
+  return w;
+}
+
+/**
+ * Whether the memo covers a line. A line logged at or before `coversSeq` is covered. A live line
+ * logged after it is new speech. A final-layer line logged after it re-transcribes time the memo
+ * may already cover, so it is covered when it starts inside that span.
+ */
+export function memoCovers(l: Line, coversSeq: number, coveredUntil: number | undefined): boolean {
+  if (l.seq <= coversSeq) return true;
+  return l.layer === "final" && coveredUntil !== undefined && l.w0 < coveredUntil;
 }
 
 /**
  * The memo slot for a call. `lines` is the `best` view in order; `now` is the reference time
- * (the current time while live, the end of the call once it ended).
+ * (the current time while live, the end of the call once it ended). A caller that caches
+ * `memoCoveredUntil` passes it in.
  */
-export function memoStatus(view: CallView, lines: Iterable<Line>, now: number): MemoStatus {
+export function memoStatus(
+  view: CallView,
+  lines: Iterable<Line>,
+  now: number,
+  coveredUntil: number | undefined = memoCoveredUntil(view, view.memo?.coversSeq ?? 0),
+): MemoStatus {
   const memo = view.memo;
   const coversSeq = memo?.coversSeq ?? 0;
   let tokens = 0;
   let count = 0;
   let w0: number | undefined;
-  // Every line logged after coversSeq is uncovered, wherever it sits in time: a final-layer line
-  // written after the call is new to the memo too. A length-based count is enough for a threshold.
+  // A length-based count is enough for a threshold.
   for (const l of lines) {
-    if (l.seq <= coversSeq) continue;
+    if (memoCovers(l, coversSeq, coveredUntil)) continue;
     tokens += Math.ceil(l.text.length / 4);
     count++;
     if (w0 === undefined || l.w0 < w0) w0 = l.w0;
@@ -63,6 +96,7 @@ export function memoStatus(view: CallView, lines: Iterable<Line>, now: number): 
     model: memo?.model,
     stale,
     uncovered: { fromSeq: coversSeq + 1, toSeq: view.lastSeq, lines: count, tokens, w0 },
+    coveredUntil,
   };
 }
 
@@ -162,7 +196,9 @@ export async function refreshMemo(
   const status = memoStatus(view, lines, now);
   if (!status.stale) return null;
   const coversSeq = view.lastSeq;
-  const fresh = lines.filter((l) => l.seq > status.coversSeq).map(render);
+  const fresh = lines
+    .filter((l) => !memoCovers(l, status.coversSeq, status.coveredUntil))
+    .map(render);
   const out = await updater.update(
     {
       previous: status.body,

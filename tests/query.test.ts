@@ -115,6 +115,24 @@ describe("classify (DESIGN 5.4 step 2)", () => {
     expect(classify("what were the 3 options?", c).window).toBeUndefined();
   });
 
+  test("between A and B: the first clock takes the second's am or pm", () => {
+    const c = ctx({ now: T0 + 3 * 60 * MIN });
+    const w = classify("what did Ben say between 3 and 4pm?", c).window;
+    // The call started at 15:36:12, so the window is cut to it.
+    expect(w && [formatWall(w.from, TZ), formatWall(w.to, TZ)]).toEqual(["15:36:12", "16:00:00"]);
+  });
+
+  test("a window entirely outside the call is empty at the nearer edge, never inverted", () => {
+    const c = ctx({ now: T0 + 12 * MIN });
+    const after = classify("what was said since 23:00?", c);
+    expect(after.intent).toBe("time");
+    expect(after.window).toMatchObject({ from: c.now, to: c.now, empty: true });
+    const before = classify("what was said before 9:00 am?", c).window;
+    expect(before).toMatchObject({ from: T0, to: T0, empty: true });
+    // Positive control: a window inside the call is not marked empty.
+    expect(classify("what was said since 15:40?", c).window?.empty).toBeUndefined();
+  });
+
   test("a local time on a call that crossed midnight lands on the right day", () => {
     const start = Date.UTC(2026, 8, 24, 4, 30); // 23:30 in Chicago
     const w = localClockToEpoch(0, 10, TZ, { from: start, to: start + 2 * 60 * MIN });
@@ -151,6 +169,31 @@ describe("BM25 (DESIGN 5.4)", () => {
     // Stopword lists are folded like the tokens they are compared with.
     expect(STOPWORDS.es?.has("mas")).toBe(true);
     expect(STOPWORDS.fr?.has("etait")).toBe(true);
+  });
+
+  test("idf: at equal tf and length, a doc holding the rare term outranks one holding a common term", () => {
+    const bm = new Bm25();
+    bm.add(1, ["box", "alpha"]);
+    bm.add(2, ["build", "beta"]);
+    bm.add(3, ["build", "gamma"]);
+    bm.add(4, ["build", "delta"]);
+    expect(bm.idf("box")).toBeGreaterThan(bm.idf("build"));
+    const hits = bm.search([
+      { term: "box", weight: 1 },
+      { term: "build", weight: 1 },
+    ]);
+    expect(hits[0]?.doc).toBe(1);
+    expect(hits[0]?.score ?? 0).toBeGreaterThan(hits[1]?.score ?? 0);
+  });
+
+  test("length normalisation: at equal tf a shorter document scores higher", () => {
+    const bm = new Bm25();
+    bm.add(1, ["deploy", "a"]);
+    bm.add(2, ["deploy", "a", "b", "c", "d", "e", "f", "g"]);
+    bm.add(3, ["other"]);
+    const hits = bm.search([{ term: "deploy", weight: 1 }]);
+    expect(hits.map((h) => h.doc)).toEqual([1, 2]);
+    expect(hits[0]?.score ?? 0).toBeGreaterThan(hits[1]?.score ?? 0);
   });
 
   test("a boost multiplies a document's score", () => {
@@ -281,9 +324,12 @@ describe("rendering (DESIGN 4.4, 5.4)", () => {
     expect(formatCitation(T0, "Ben", TZ)).toBe("[15:36 Ben]");
   });
 
-  test("estimateTokens errs high on scripts without spaces", () => {
-    expect(estimateTokens("abcd")).toBe(1);
+  test("estimateTokens errs high on scripts without spaces, digits and punctuation", () => {
+    expect(estimateTokens("")).toBe(0);
     expect(estimateTokens("किताब")).toBe(5);
+    // A line prefix is 11 cl100k tokens: digits and punctuation tokenise one to three characters
+    // at a time, so they cannot be charged like letters.
+    expect(estimateTokens("#l000123 16:09:16 ")).toBeGreaterThanOrEqual(11);
   });
 
   test("auditTimes passes wall times and labelled elapsed times, and catches an offset", () => {
@@ -454,6 +500,169 @@ describe("the pack (DESIGN 5.4 step 3)", () => {
     expect(pack.text).toContain("Q 15:38:12: who owns the rollout?\nA: Ana [15:37 Ana]");
     expect(pack.text).toContain("Health: call audio dead 15:39:00 to 15:40:12, nothing heard.");
     expect(pack.text).toContain("paused 15:40:12 to 15:41:12, nothing recorded");
+  });
+
+  test("one oversized remembered note never hides the others: it is trimmed, and older notes stay", () => {
+    const b = call(300);
+    b.add({ type: "remember", id: "r1", rev: 1, text: "the customer is Acme", by: "user" });
+    b.add({ type: "remember", id: "r2", rev: 1, text: "Ben owns the migration", by: "user" });
+    b.add({
+      type: "remember",
+      id: "r3",
+      rev: 1,
+      text: Array.from({ length: 200 }, (_, i) => `word${i}`).join(" "),
+      by: "user",
+    });
+    const q = new CallQuery(fold(b.events));
+    const now = T0 + 31 * MIN;
+    const pack = q.context("who owns the migration?", { now });
+    expect(pack.mode).toBe("retrieval");
+    expect(pack.text).toContain("Notes from your earlier turns:");
+    expect(pack.text).toContain("- (r1) the customer is Acme");
+    expect(pack.text).toContain("- (r2) Ben owns the migration");
+    expect(pack.text).toMatch(/- \(r3\) word0 word1 .* …/);
+    expect(pack.text).not.toContain("word199");
+    const whole = new CallQuery(fold(b.events.filter((e) => e.type !== "seg" || e.seq < 40)));
+    const w = whole.context("who owns the migration?", { now: T0 + 4 * MIN, surface: "app" });
+    expect(w.mode).toBe("whole");
+    expect(w.text).toContain("- (r1) the customer is Acme");
+    expect(w.text).toContain("- (r2) Ben owns the migration");
+  });
+
+  test("positive control: with many notes the oldest are counted as not shown", () => {
+    const b = call(300);
+    for (let i = 1; i <= 40; i++) {
+      b.add({
+        type: "remember",
+        id: `r${i}`,
+        rev: 1,
+        text: `note number ${i} about things`,
+        by: "user",
+      });
+    }
+    const pack = new CallQuery(fold(b.events)).context("catch me up", { now: T0 + 31 * MIN });
+    expect(pack.text).toMatch(/\(\d+ older notes not shown\)/);
+    expect(pack.text).toContain("- (r40) note number 40 about things");
+    expect(pack.text).not.toContain("- (r1) note number 1 about things");
+  });
+
+  test("an explicit budget caps whole-call mode on the app surface too", () => {
+    const b = call(100);
+    const q = new CallQuery(fold(b.events));
+    const now = T0 + 11 * MIN;
+    const small = q.context("what was w3 about?", { now, surface: "app", budget: 2000 });
+    expect(small.budget).toBe(2000);
+    expect(small.tokens).toBeLessThanOrEqual(2000);
+    // Positive control: without a budget the app gets the whole-call cap.
+    const dflt = q.context("what was w3 about?", { now, surface: "app" });
+    expect(dflt.mode).toBe("whole");
+    expect(dflt.budget).toBe(WHOLE_CALL_CAP);
+  });
+
+  test("a time window with nothing recorded in it says so, and names no time outside the call", () => {
+    const b = call(100);
+    b.partEnded(1, "stop", 601);
+    b.add({ type: "call.ended", reason: "stop" });
+    const q = new CallQuery(fold(b.events));
+    const end = q.endedAt() as number;
+    const pack = q.context("what was said since 23:00?", { now: end + 5 * MIN });
+    expect(pack.analysis.intent).toBe("time");
+    expect(pack.lines).toEqual([]);
+    expect(pack.text).toContain("nothing recorded; it falls outside the call, which ran 15:36:12");
+    expect(pack.text).not.toContain("23:00");
+    // A window inside the call with no speech in it says so too.
+    const gap = call(20);
+    gap.seg({ id: "l000500", spk: "c1", w0: T0 + 10 * MIN, text: "back again" });
+    const quiet = new CallQuery(fold(gap.events)).context(
+      "what was said between 15:40 and 15:42?",
+      {
+        now: T0 + 11 * MIN,
+      },
+    );
+    expect(quiet.lines).toEqual([]);
+    expect(quiet.text).toContain(": nothing recorded in this window.");
+    expect(auditTimes(pack.text, { tz: TZ, from: T0, to: end + 5 * MIN })).toEqual([]);
+  });
+
+  test("a hit carries one neighbouring line either side of its turn", () => {
+    const b = call(300);
+    b.seg({
+      id: "l000900",
+      spk: "c1",
+      w0: T0 + 100 * 6 * S + 1,
+      text: "the zorvanth quote is ready",
+    });
+    const q = new CallQuery(fold(b.events));
+    const pack = q.context("what about zorvanth?", { now: T0 + 301 * 6 * S });
+    const ids = q.index.allLines().map((c) => c.line.id);
+    const hit = q.search("zorvanth")[0];
+    if (!hit) throw new Error("no hit");
+    const first = ids.indexOf(hit.lines[0]?.id as string);
+    const last = ids.indexOf(hit.lines.at(-1)?.id as string);
+    const got = pack.lines.map((l) => l.id);
+    expect(got).toContain("l000900");
+    expect(got).toContain(ids[first - 1] as string);
+    expect(got).toContain(ids[last + 1] as string);
+  });
+
+  test("hits within 30 s of each other are one moment; hits further apart are two", () => {
+    // Long lines, speakers alternating: every turn is its own chunk of two lines, 5 s apart.
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    const words = (i: number) => Array.from({ length: 65 }, (_, k) => `w${(i + k) % 90}`);
+    for (let i = 0; i < 40; i++) {
+      const text = [1, 4, 30].includes(i)
+        ? ["zorvanth", ...words(i)].join(" ")
+        : words(i).join(" ");
+      b.seg({
+        id: `l${String(i + 1).padStart(6, "0")}`,
+        spk: i % 2 ? "c2" : "c1",
+        w0: T0 + i * 5 * S,
+        text,
+      });
+    }
+    const q = new CallQuery(fold(b.events));
+    const hits = q.search("zorvanth");
+    // Lines 1 and 4 are 15 s apart in chunks that do not overlap: one moment. Line 30 is another.
+    expect(hits).toHaveLength(2);
+    const ids = hits.flatMap((h) => h.lines.map((l) => l.id));
+    expect(ids).toContain("l000031");
+  });
+
+  test("a speaker named in the question ranks that speaker's turn into the top k", () => {
+    // Speaker 1 talks throughout, so no turn of theirs holds Ben.
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    for (let i = 1; i <= 600; i++) {
+      const words = Array.from({ length: 8 }, (_, k) => `w${(i * 7 + k) % 50}`);
+      b.seg({
+        id: `l${String(i).padStart(6, "0")}`,
+        spk: "c1",
+        w0: T0 + i * 6 * S,
+        text: words.join(" "),
+      });
+    }
+    b.add({ type: "speaker.name", spk: "c2", name: "Ben", by: "user" });
+    // The term twice in each of ten of Speaker 1's turns and once in Ben's, minutes apart.
+    // Unboosted, Ben's turn scores lowest and falls outside k = 6; the 1.5 boost for a speaker
+    // named in the question lifts it above the others.
+    for (let i = 1; i <= 10; i++) {
+      b.seg({
+        id: `l0009${String(i).padStart(2, "0")}`,
+        spk: "c1",
+        w0: T0 + i * 40 * 6 * S + 1,
+        text: "zorvanth budget zorvanth",
+      });
+    }
+    b.seg({ id: "l000999", spk: "c2", w0: T0 + 460 * 6 * S + 1, text: "the zorvanth budget" });
+    const q = new CallQuery(fold(b.events));
+    const now = T0 + 601 * 6 * S;
+    const ids = (question: string) => q.context(question, { now }).lines.map((l) => l.id);
+    expect(ids("what did Ben say about zorvanth?")).toContain("l000999");
+    // Positive control: the same question naming no one leaves Ben's turn out.
+    expect(ids("what did we say about zorvanth?")).not.toContain("l000999");
   });
 
   test("a naming question is reported for the caller to write, with no model", () => {
