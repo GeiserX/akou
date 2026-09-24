@@ -22,6 +22,8 @@ describe("[T4.11] Login agent does not start mid-session / [T3.6] Minutes to sta
       writeSettings(t.dir, {
         "api.port": 0,
         "capture.helper": [process.execPath, FAKE_HELPER],
+        // No test runs the user's real harness, not even for its version.
+        "provider.kind": "none",
       });
       const env = { ...process.env, AKOU_HOME: t.dir, AKOU_HEADLESS: undefined };
       const rtPath = join(t.dir, ".config", "akou", "runtime.json");

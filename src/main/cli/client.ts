@@ -127,13 +127,18 @@ export class ApiClient {
     }
   }
 
-  private async send(rt: Runtime, method: string, path: string, o: RequestOptions) {
+  private async fetchRaw(
+    rt: Runtime,
+    method: string,
+    path: string,
+    o: RequestOptions,
+  ): Promise<Response> {
     const url = new URL(`http://127.0.0.1:${rt.port}/v1${path}`);
     for (const [k, v] of Object.entries(o.query ?? {})) {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
     const hasBody = method !== "GET" && method !== "HEAD";
-    const res = await fetch(url, {
+    return fetch(url, {
       method,
       headers: {
         authorization: `Bearer ${this.token()}`,
@@ -145,6 +150,10 @@ export class ApiClient {
         ? AbortSignal.any([o.signal, AbortSignal.timeout(o.timeoutMs ?? 60_000)])
         : AbortSignal.timeout(o.timeoutMs ?? 60_000),
     });
+  }
+
+  private async send(rt: Runtime, method: string, path: string, o: RequestOptions) {
+    const res = await this.fetchRaw(rt, method, path, o);
     const text = await res.text();
     let body: unknown = null;
     try {
@@ -178,6 +187,26 @@ export class ApiClient {
     }
     rt = await this.launch();
     return this.send(rt, method, path, o);
+  }
+
+  /**
+   * One request whose answer is read as it arrives (Server-Sent Events): the raw response. Launches
+   * the app like `request` when nothing answers. The caller reads and closes the body.
+   */
+  async stream(method: string, path: string, o: RequestOptions = {}): Promise<Response> {
+    let rt = this.runtime();
+    if (rt) {
+      try {
+        return await this.fetchRaw(rt, method, path, o);
+      } catch (err) {
+        if (!isConnectionError(err, false)) throw err;
+      }
+    }
+    if ((o.launch ?? true) === false || !this.launchCmd) {
+      throw new Unreachable("akou is not running");
+    }
+    rt = await this.launch();
+    return this.fetchRaw(rt, method, path, o);
   }
 
   /** Is an app answering? Never launches one. */

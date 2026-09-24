@@ -22,6 +22,7 @@ import { ApiClient, EXIT, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
+import { handoffCommands } from "./commands/handoff.ts";
 import { noteCommands } from "./commands/notes.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
@@ -44,6 +45,7 @@ export const COMMANDS: readonly Command[] = [
   ...callCommands,
   ...followCommands,
   ...noteCommands,
+  ...handoffCommands,
   vocab,
   doctorCommand,
   ...setupCommands,
@@ -145,6 +147,7 @@ if (import.meta.main) {
     env: process.env,
     out: (t) => process.stdout.write(`${t}\n`),
     err: (t) => process.stderr.write(`${t}\n`),
+    write: (t) => process.stdout.write(t),
     signal: ac.signal,
   });
   process.exit(code);

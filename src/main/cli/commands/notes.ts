@@ -41,12 +41,24 @@ const name: Command = {
 
 const note: Command = {
   name: "note",
-  summary: "Add a line to the call's notepad",
-  usage: 'akou note "TEXT" [--call ID] [--json]',
-  flags: { call: { type: "string" } },
+  summary: "Add a line to the call's notepad, or edit or delete one",
+  usage:
+    'akou note "TEXT" | akou note --edit ID "TEXT" | akou note --del ID   [--call ID] [--json]',
+  flags: { call: { type: "string" }, edit: { type: "string" }, del: { type: "string" } },
   run: async (ctx, p) => {
     const text = p.positional.join(" ").trim();
+    const del = str(p, "del");
+    const edit = str(p, "edit");
+    if (del !== undefined) {
+      if (text !== "" || edit !== undefined) return usage(ctx, "note --del takes only the id");
+      const r = await api(ctx, "DELETE", `/calls/${ref(p)}/notes/${enc(del)}`);
+      return finish(ctx, r, () => `Deleted ${del}`);
+    }
     if (text === "") return usage(ctx, "note needs text");
+    if (edit !== undefined) {
+      const r = await api(ctx, "PATCH", `/calls/${ref(p)}/notes/${enc(edit)}`, { body: { text } });
+      return finish(ctx, r, (x) => `Edited ${x.note.id} (rev ${x.note.rev})`);
+    }
     const r = await api(ctx, "POST", `/calls/${ref(p)}/notes`, { body: { text } });
     return finish(ctx, r, (x) => `Noted (${x.note.id})`);
   },

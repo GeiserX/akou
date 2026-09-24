@@ -61,12 +61,36 @@ import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, locateHelper } from "./capture/helper.ts";
 import {
+  HOOK_STAGES,
+  type HookStage,
   type LoadedConfig,
   loadConfig,
   type SettingKey,
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
+import { type ExportResult, exportCall } from "./handoff/export.ts";
+import {
+  buildPayload,
+  type HookReport,
+  hookDoneDraft,
+  hooksFor,
+  runHook,
+} from "./handoff/hooks.ts";
+import { sendWebhook, webhookDoneDraft, webhookProblem } from "./handoff/webhook.ts";
+import { ImportError, type ImportResult, importHarkViewer } from "./import/hark-viewer.ts";
+import { AnthropicProvider } from "./llm/anthropic.ts";
+import {
+  type Discovery,
+  discoverHarnesses,
+  HarnessProvider,
+  type HarnessTarget,
+  pickHarness,
+} from "./llm/harness.ts";
+import { NoneProvider } from "./llm/none.ts";
+import { OpenAiCompatibleProvider } from "./llm/openai-compatible.ts";
+import type { Provider } from "./llm/provider.ts";
+import { listTemplates, type Template } from "./notes/templates.ts";
 import { CallQuery } from "./query/context.ts";
 import { mergeVocab, readVocabFile, vocabPaths } from "./vocab/files.ts";
 
@@ -74,6 +98,19 @@ export { APP_VERSION, RUNTIME_FILE };
 export const APP_LOCK = "akou.lock";
 /** A final pass still running at quit gets this long, then is left for the next start. */
 export const QUIT_FINAL_GRACE_MS = 5_000;
+/** Names, merges and vocabulary change in bursts; a re-export waits this long for the last one. */
+export const REEXPORT_DEBOUNCE_MS = 1_500;
+
+/** Events after which an exported call is exported again (DESIGN 8.2): names and corrections. */
+const REEXPORT_ON: ReadonlySet<string> = new Set([
+  "speaker.name",
+  "speaker.merge",
+  "speaker.unmerge",
+  "vocab.add",
+  "vocab.propose",
+  "note",
+  "note.del",
+]);
 
 /** The window, when there is one. The ElectroBun shell implements it; headless has none. */
 export interface WindowShell {
@@ -103,6 +140,12 @@ export interface AppOptions {
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   /** The window. None means headless. */
   window?: WindowFactory;
+  /** The provider, replacing the one the settings name. Tests pass a fake. */
+  provider?: Provider;
+  /** The webhook's HTTP client and backoff. Tests pass a local one; nothing else does. */
+  webhook?: { fetch?: typeof fetch; backoffMs?: readonly number[] };
+  /** Looks for Claude Code and Codex. Tests pass a fake; nothing else does. */
+  discover?: (env: Record<string, string | undefined>) => Promise<Discovery>;
   clock?: Clock;
   /** Test-only: the security suite's positive control replaces the guard. */
   guard?: Guard;
@@ -182,7 +225,13 @@ export class AkouApp implements ApiApp {
   private readonly queries = new WeakMap<object, CallQuery>();
   private readonly vocabCache = new Map<string, VocabSource>();
   private readonly finals = new Map<string, Promise<unknown>>();
+  /** Per call, the hand-off work in order: one export or hook round at a time. */
+  private readonly handoffs = new Map<string, Promise<unknown>>();
+  private readonly reexports = new Map<string, ReturnType<typeof setTimeout>>();
   private quitting: Promise<void> | null = null;
+  /** Claude Code and Codex as found at start; null while still looking. */
+  discovery: Discovery | null = null;
+  private discovering = false;
   private resolveClosed!: () => void;
   private lockPath: string;
   tokens: TokenSource;
@@ -238,6 +287,92 @@ export class AkouApp implements ApiApp {
       beforeEnd: (id) => this.asr?.flush(id) ?? Promise.resolve(),
     });
     this.startAsr(s);
+    if (s["provider.kind"] === "harness") this.discoverHarnesses();
+  }
+
+  // -------------------------------------------------------------------------
+  // The provider
+
+  /**
+   * Looks for the harnesses in the background, once, so a start never waits for a login shell.
+   * Runs at start when the provider is the harness, else the first time the harness is asked for.
+   */
+  private discoverHarnesses(): void {
+    if (this.discovering) return;
+    this.discovering = true;
+    const env = this.o.env ?? process.env;
+    const find = this.o.discover ?? ((e) => discoverHarnesses(e, this.o.platform));
+    void find(env)
+      .then((d) => {
+        this.discovery = d;
+        if (this.server) this.writeRuntime();
+      })
+      .catch((err) => {
+        this.discovery = { claude: null, codex: null };
+        this.log("warn", `harness discovery: ${(err as Error).message}`);
+      });
+  }
+
+  private harnessTarget(): HarnessTarget | { none: string } {
+    const s = this.cfg.settings;
+    if (s["provider.harnessPath"] === "") this.discoverHarnesses();
+    return pickHarness(
+      s["provider.harness"] as "auto" | "claude" | "codex",
+      s["provider.harnessPath"],
+      this.discovery,
+    );
+  }
+
+  /** The provider the settings name, built fresh so a settings change applies at once. */
+  provider(): Provider {
+    if (this.o.provider) return this.o.provider;
+    const s = this.cfg.settings;
+    switch (s["provider.kind"]) {
+      case "harness":
+        return new HarnessProvider({
+          target: () => this.harnessTarget(),
+          env: this.o.env ?? process.env,
+          onLog: (level, msg) => this.log(level, msg),
+        });
+      case "openai-compatible":
+        return new OpenAiCompatibleProvider({
+          baseUrl: s["provider.baseUrl"],
+          model: s["provider.model"],
+          apiKey: s["provider.apiKey"],
+        });
+      case "anthropic":
+        return new AnthropicProvider({
+          apiKey: s["provider.apiKey"],
+          model: s["provider.model"],
+          baseUrl: s["provider.baseUrl"],
+        });
+      default:
+        return new NoneProvider();
+    }
+  }
+
+  providerTimeoutMs(): number {
+    return this.cfg.settings["provider.timeoutSeconds"] * 1000;
+  }
+
+  /** What `status` and `akou_ask`'s visibility read: `{state, id, harness?, detail | reason}`. */
+  async providerStatus(): Promise<Record<string, unknown>> {
+    const p = this.provider();
+    const a = await p.available();
+    const harness = p instanceof HarnessProvider ? p.label() : undefined;
+    const checking =
+      p.id === "harness" &&
+      !this.o.provider &&
+      this.discovery === null &&
+      this.cfg.settings["provider.harnessPath"] === "";
+    if (a.ok) return { state: "available", id: p.id, harness, detail: a.detail };
+    return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
+  }
+
+  templates(): Template[] {
+    return listTemplates(this.configDir, {
+      onError: (msg) => this.log("warn", `template: ${msg}`),
+    });
   }
 
   private log(level: "info" | "warn" | "error", msg: string): void {
@@ -309,6 +444,232 @@ export class AkouApp implements ApiApp {
       // After the event is out, so the pass starts from a log that has it.
       queueMicrotask(() => void this.runFinal(id, false));
     }
+    if ((HOOK_STAGES as readonly string[]).includes(e.type)) {
+      const stage = e.type as HookStage;
+      queueMicrotask(() => void this.handoff(id, stage));
+    } else if (REEXPORT_ON.has(e.type) || (e.type === "seg" && e.by !== undefined)) {
+      this.scheduleReexport(id);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // The hand-off (DESIGN 8.2): export, hooks, webhook
+
+  /** Runs `fn` after the call's earlier hand-off work, never at the same time. */
+  private serial<T>(id: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.handoffs.get(id) ?? Promise.resolve();
+    const next = prev.catch(() => {}).then(fn);
+    const tail = next.catch(() => {});
+    this.handoffs.set(id, tail);
+    void tail.then(() => {
+      if (this.handoffs.get(id) === tail) this.handoffs.delete(id);
+    });
+    return next;
+  }
+
+  /** A finished call whose export is out of date is exported again, once the burst is over. */
+  private scheduleReexport(id: string): void {
+    const c = this.manager.controller(id);
+    if (!c || !this.ended(c) || c.view.handoff().exports.length === 0) return;
+    if (this.cfg.settings["export.dir"] === "") return;
+    const t = this.reexports.get(id);
+    if (t) clearTimeout(t);
+    const timer = setTimeout(() => {
+      this.reexports.delete(id);
+      if (this.quitting || this.finals.has(id)) return;
+      void this.serial(id, async () => {
+        await this.exportTo(id, this.cfg.settings["export.dir"]);
+      }).catch((err) => this.log("warn", `re-export of ${id}: ${(err as Error).message}`));
+    }, REEXPORT_DEBOUNCE_MS);
+    timer.unref?.();
+    this.reexports.set(id, timer);
+  }
+
+  private ended(c: CallController): boolean {
+    const s = c.view.state;
+    return !c.live && (s === "ended" || s === "interrupted");
+  }
+
+  /** Exports a call into `root`, recording `export.done` when something was written. */
+  private async exportTo(id: string, root: string): Promise<ExportResult> {
+    const c = await this.call(id);
+    const r = exportCall({
+      view: c.view,
+      dir: c.dir,
+      root,
+      audio: this.cfg.settings["export.audio"] as "link" | "copy" | "none",
+      version: this.version,
+      onWarn: (msg) => this.log("warn", `export ${id}: ${msg}`),
+    });
+    if (r.draft) await this.write(id, r.draft);
+    return r;
+  }
+
+  /** `POST /calls/{id}/export`: into `export.dir`, or the folder the caller names. */
+  exportCall(id: string, o: { to?: string } = {}): Promise<Outcome<ExportResult>> {
+    return this.serial(id, async () => {
+      const c = await this.call(id);
+      if (!this.ended(c)) {
+        return fail(409, "not_ended", "export needs a call that has ended", { call: id });
+      }
+      const root = o.to ?? this.cfg.settings["export.dir"];
+      if (root === "") {
+        return fail(
+          409,
+          "export_not_configured",
+          "no export folder: set export.dir (akou config set export.dir DIR) or pass --to DIR",
+        );
+      }
+      return { ok: true, ...(await this.exportTo(id, root)) };
+    });
+  }
+
+  /** The hooks of one stage, in order, each recorded as `hook.done`. */
+  private async runStageHooks(
+    id: string,
+    stage: HookStage,
+    exportMd: string | null,
+  ): Promise<HookReport[]> {
+    const c = await this.call(id);
+    const hooks = hooksFor(this.cfg.settings.hooks, stage, c.view.call?.workspace ?? "");
+    if (hooks.length === 0) return [];
+    const payload = JSON.stringify(
+      buildPayload({ stage, view: c.view, dir: c.dir, version: this.version, exportMd }),
+    );
+    const out: HookReport[] = [];
+    for (const hook of hooks) {
+      if (this.quitting) break;
+      const run = await runHook({
+        hook,
+        stage,
+        payload,
+        callId: id,
+        callDir: c.dir,
+        env: this.o.env ?? process.env,
+        platform: this.o.platform,
+      });
+      if (run.exit !== 0) {
+        this.log(
+          "warn",
+          `hook ${run.name} (${stage}) of ${id} exited ${run.exit}; see logs/hooks.log`,
+        );
+      }
+      try {
+        await this.write(id, hookDoneDraft(run));
+      } catch (err) {
+        this.log("warn", `hook.done for ${id}: ${(err as Error).message}`);
+      }
+      out.push({ stage, ...run });
+    }
+    return out;
+  }
+
+  private async sendStageWebhook(id: string, stage: HookStage, exportMd: string | null) {
+    const s = this.cfg.settings;
+    if (s["webhook.url"] === "" || this.quitting) return;
+    const problem = webhookProblem(s["webhook.url"], s["webhook.secret"]);
+    if (problem) {
+      this.log("warn", `webhook not sent for ${id}: ${problem}`);
+      return;
+    }
+    const c = await this.call(id);
+    const body = JSON.stringify(
+      buildPayload({ stage, view: c.view, dir: c.dir, version: this.version, exportMd }),
+    );
+    const r = await sendWebhook({
+      url: s["webhook.url"],
+      secret: s["webhook.secret"],
+      stage,
+      body,
+      version: this.version,
+      fetch: this.o.webhook?.fetch,
+      backoffMs: this.o.webhook?.backoffMs,
+    });
+    if (r.status < 200 || r.status >= 300) {
+      this.log(
+        "warn",
+        `webhook for ${id} (${stage}) failed after ${r.attempts} attempts: ${r.error ?? `HTTP ${r.status}`}`,
+      );
+    }
+    await this.write(id, webhookDoneDraft(s["webhook.url"], r));
+  }
+
+  /**
+   * One hand-off stage of a finished call: the export (when `export.dir` is set), then the hooks,
+   * then the webhook. Runs in the background after the stage's event; never blocks the app, and a
+   * failure is logged, never thrown into the event path.
+   */
+  handoff(id: string, stage: HookStage): Promise<void> {
+    return this.serial(id, async () => {
+      if (this.quitting) return;
+      const c = this.manager.controller(id);
+      // `enhanced` on a live call ("enhance so far") waits for the call's end, which exports it.
+      if (!c || !this.ended(c)) return;
+      let exportMd: string | null = null;
+      const root = this.cfg.settings["export.dir"];
+      if (root !== "") {
+        try {
+          exportMd = (await this.exportTo(id, root)).path;
+        } catch (err) {
+          this.log("warn", `export of ${id}: ${(err as Error).message}`);
+        }
+      }
+      await this.runStageHooks(id, stage, exportMd);
+      await this.sendStageWebhook(id, stage, exportMd);
+    }).catch((err) => this.log("error", `hand-off of ${id} (${stage}): ${(err as Error).message}`));
+  }
+
+  /** `akou hooks run CALL [--stage S]`: the hooks again, without the export or the webhook. */
+  runHooks(id: string, stages?: readonly HookStage[]): Promise<Outcome<{ runs: HookReport[] }>> {
+    return this.serial(id, async () => {
+      const c = await this.call(id);
+      if (!this.ended(c)) {
+        return fail(409, "not_ended", "hooks run on a call that has ended", { call: id });
+      }
+      const v = c.view;
+      const reached: HookStage[] = [
+        "call.ended",
+        ...(v.final.state === "done" ? (["final.done"] as const) : []),
+        ...(v.latestEnhanced() ? (["enhanced"] as const) : []),
+      ];
+      const exportMd = v.handoff().exports.at(-1)?.path ?? null;
+      const runs: HookReport[] = [];
+      for (const stage of stages ?? reached)
+        runs.push(...(await this.runStageHooks(id, stage, exportMd)));
+      return { ok: true, runs };
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // Import
+
+  /** `akou import hark-viewer DIR…`: each folder becomes a call under the recordings root. */
+  async importHarkViewer(
+    dirs: readonly string[],
+    o: { workspace?: string } = {},
+  ): Promise<{ imported: ImportResult[]; skipped: { source: string; reason: string }[] }> {
+    await this.manager.init();
+    const imported: ImportResult[] = [];
+    const skipped: { source: string; reason: string }[] = [];
+    for (const dir of dirs) {
+      try {
+        const r = importHarkViewer(dir, {
+          root: this.cfg.settings["recordings.root"],
+          workspace: o.workspace,
+          user: this.cfg.settings["user.name"],
+          tz: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          version: this.version,
+          exists: (id) => this.manager.summary(id) !== undefined,
+        });
+        await this.manager.adopt(r.folder, r.workspace);
+        imported.push(r);
+      } catch (err) {
+        if (!(err instanceof ImportError))
+          this.log("warn", `import ${dir}: ${(err as Error).stack}`);
+        skipped.push({ source: dir, reason: (err as Error).message });
+      }
+    }
+    return { imported, skipped };
   }
 
   subscribe(id: string, fn: (e: LogEvent) => void): () => void {
@@ -426,7 +787,7 @@ export class AkouApp implements ApiApp {
     return eventsAfter(events, after);
   }
 
-  status(): Record<string, unknown> {
+  async status(): Promise<Record<string, unknown>> {
     const live = this.manager.live();
     const last = this.manager.calls()[0];
     const s = this.cfg.settings;
@@ -461,7 +822,8 @@ export class AkouApp implements ApiApp {
         ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
         : null,
       asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
-      provider: { state: "unavailable", reason: "no provider in this build" },
+      provider: await this.providerStatus(),
+      harnesses: this.discovery,
       share: { active: false },
       config: { file: this.cfg.paths.configFile, issues: this.cfg.issues },
     };
@@ -569,6 +931,19 @@ export class AkouApp implements ApiApp {
           `${req.method} ${new URL(req.url).pathname}: ${(err as Error).stack ?? err}`,
         ),
     });
+    this.writeRuntime();
+    // Recovery and the final-pass catch-up run behind the API, never before it.
+    void this.manager
+      .init()
+      .then(() => this.catchUpFinals())
+      .catch((err) => this.log("error", `recovery: ${(err as Error).message}`));
+    if (!this.headless && this.o.window) this.window = await this.o.window(this);
+    else if (!this.headless) this.log("info", "the window is not built yet; running headless");
+  }
+
+  /** `runtime.json`: pid, port, version, and the harnesses found (DESIGN 5.3), mode 0600. */
+  private writeRuntime(): void {
+    if (!this.server || this.quitting) return;
     writePrivate(
       this.runtimeFile,
       `${JSON.stringify(
@@ -579,18 +954,12 @@ export class AkouApp implements ApiApp {
           version: this.version,
           startedAt: this.startedAt,
           headless: this.headless,
+          harnesses: this.discovery,
         },
         null,
         2,
       )}\n`,
     );
-    // Recovery and the final-pass catch-up run behind the API, never before it.
-    void this.manager
-      .init()
-      .then(() => this.catchUpFinals())
-      .catch((err) => this.log("error", `recovery: ${(err as Error).message}`));
-    if (!this.headless && this.o.window) this.window = await this.o.window(this);
-    else if (!this.headless) this.log("info", "the window is not built yet; running headless");
   }
 
   /** The one quit path. Safe to call twice; the second call waits for the first. */
@@ -603,6 +972,8 @@ export class AkouApp implements ApiApp {
       } catch (err) {
         this.log("warn", `window close: ${(err as Error).message}`);
       }
+      for (const t of this.reexports.values()) clearTimeout(t);
+      this.reexports.clear();
       await this.manager.quit();
       const running = [...this.finals.values()];
       if (running.length > 0) {

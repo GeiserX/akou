@@ -4,17 +4,27 @@
  * - `POST /calls/{id}/context {question, budget}`: the pack, with `cursor`, `state`, `memoStale`
  *   and `provisional`. No model is called; this is what an agent answers from.
  * - `GET /calls/{id}/search?q=&k=`: BM25 hits with wall-time citations.
- * - `POST /calls/{id}/ask {question, stream}`: needs a provider. This build has none, so it answers
- *   `503 provider_unavailable` with the reason and the pack, which is what the ask box shows then:
- *   the excerpts, never nothing (TRAPS "Provider unavailable answered with nothing").
+ * - `POST /calls/{id}/ask {question, stream}`: the configured provider answers over the pack. The
+ *   question and the answer are logged (`ask`, `answer`). When no provider can answer, the reply is
+ *   still 200: the matching excerpts, labelled, with the reason, `answered: false`, and the pack
+ *   for "Copy context for my agent", never nothing (TRAPS "Provider unavailable answered with
+ *   nothing"). With `stream`, Server-Sent Events: `excerpts` at once, a `token` per piece of the
+ *   answer, then `answer` with the same body as the plain reply. A client that goes away cancels
+ *   the provider run.
  */
 
+import type { EventDraft } from "../../../core/log/events.ts";
+import type { CallView } from "../../../core/log/fold.ts";
+import { ProviderError } from "../../llm/provider.ts";
+import { type AskOptions, ask } from "../../query/ask.ts";
 import { MCP_BUDGET, SEARCH_K } from "../../query/context.ts";
 import { HttpError, intParam, json, type Router, readBody } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { callId } from "./common.ts";
+import { KEEPALIVE_MS } from "./follow.ts";
 
 export const MAX_BUDGET = 32_000;
+export const MAX_QUESTION = 2000;
 
 export function queryRoutes(r: Router<ApiApp>): void {
   // A question is read, not a change, so `last` is accepted like on GET routes.
@@ -70,15 +80,101 @@ export function queryRoutes(r: Router<ApiApp>): void {
       question: "string",
       "stream?": "boolean",
     });
-    const q = await c.app.query(callId(c, { allowLast: true }));
-    const pack = q.context(b.question, { now: c.app.now(), surface: "app" });
-    return json(503, {
-      error: "provider_unavailable",
-      message: "no provider is configured; answer from the context pack, or use POST /context",
-      reason: "no provider in this build",
-      context: pack.text,
-      cursor: pack.cursor,
-      state: pack.state,
-    });
+    const question = b.question.trim();
+    if (question === "") throw new HttpError(400, "bad_field", "question is empty");
+    if (question.length > MAX_QUESTION) {
+      throw new HttpError(400, "bad_field", `question is over ${MAX_QUESTION} characters`);
+    }
+    const id = callId(c, { allowLast: true });
+    const q = await c.app.query(id);
+    // A model may take longer than the server's idle limit; the deadline is the provider's.
+    c.timeout?.(0);
+    const opts = {
+      q,
+      question,
+      now: c.app.now(),
+      provider: c.app.provider(),
+      by: c.by,
+      write: (d: EventDraft | ((view: CallView) => EventDraft)) =>
+        c.app.write(id, typeof d === "function" ? (call) => d(call.view) : d),
+      timeoutMs: c.app.providerTimeoutMs(),
+    };
+    if (!b.stream) {
+      try {
+        const r = await ask({ ...opts, signal: c.req.signal });
+        return json(200, { call: id, ...r });
+      } catch (err) {
+        if (err instanceof ProviderError && err.kind === "cancelled") {
+          return json(499, { error: "cancelled", message: "the question was cancelled" });
+        }
+        throw err;
+      }
+    }
+    return sseAnswer(id, opts, c.req.signal);
+  });
+}
+
+/** Server-Sent Events: `excerpts` at once, `token` as the answer streams, then `answer`. */
+function sseAnswer(
+  id: string,
+  opts: Omit<AskOptions, "signal" | "onToken" | "onExcerpts">,
+  reqSignal: AbortSignal,
+): Response {
+  const enc = new TextEncoder();
+  const ac = new AbortController();
+  const onReqAbort = () => ac.abort();
+  reqSignal.addEventListener("abort", onReqAbort, { once: true });
+  let keepAlive: ReturnType<typeof setInterval> | undefined;
+  const stream = new ReadableStream<Uint8Array>({
+    start: async (ctl) => {
+      let open = true;
+      const send = (event: string, data: unknown) => {
+        if (!open) return;
+        try {
+          ctl.enqueue(enc.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+        } catch {
+          open = false;
+        }
+      };
+      keepAlive = setInterval(() => {
+        if (!open) return;
+        try {
+          ctl.enqueue(enc.encode(": keep-alive\n\n"));
+        } catch {
+          open = false;
+        }
+      }, KEEPALIVE_MS);
+      try {
+        const r = await ask({
+          ...opts,
+          signal: ac.signal,
+          onExcerpts: (excerpts) => send("excerpts", { call: id, excerpts }),
+          onToken: (t) => send("token", { t }),
+        });
+        send("answer", { call: id, ...r });
+      } catch (err) {
+        if (!(err instanceof ProviderError && err.kind === "cancelled")) {
+          send("error", { error: "internal", message: (err as Error).message });
+        }
+      } finally {
+        clearInterval(keepAlive);
+        reqSignal.removeEventListener("abort", onReqAbort);
+        open = false;
+        try {
+          ctl.close();
+        } catch {}
+      }
+    },
+    cancel: () => {
+      clearInterval(keepAlive);
+      ac.abort();
+    },
+  });
+  return new Response(stream, {
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      "x-accel-buffering": "no",
+    },
   });
 }
