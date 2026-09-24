@@ -88,6 +88,8 @@ describe("classify (DESIGN 5.4 step 2)", () => {
     expect(parseNaming("Speaker 2 is Ben")).toEqual({ spk: "c2", name: "Ben" });
     expect(parseNaming("c3 = Ana Ruiz")).toEqual({ spk: "c3", name: "Ana Ruiz" });
     expect(parseNaming("Carla is speaker 4.")).toEqual({ spk: "c4", name: "Carla" });
+    expect(parseNaming("Speaker 2 is called Ben")).toEqual({ spk: "c2", name: "Ben" });
+    expect(parseNaming("c3 is named Ana Ruiz.")).toEqual({ spk: "c3", name: "Ana Ruiz" });
     expect(parseNaming("speaker 2 is talking about the budget and the plan today?")).toBeNull();
     expect(parseNaming("what did speaker 2 say?")).toBeNull();
   });

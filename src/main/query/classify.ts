@@ -69,7 +69,7 @@ const FOLLOW_UP_START = /^\s*(and|then|so|but|what about|how about|why|and then|
 const PRONOUN = /\b(he|she|they|him|her|them|it|that|this|those|these|his|their)\b/i;
 
 const NAMING = [
-  /^\s*(?:speaker\s*(\d+)|c(\d+))\s*(?:is|=|:|is called|is named)\s*(.+?)\s*[.!]?\s*$/i,
+  /^\s*(?:speaker\s*(\d+)|c(\d+))\s*(?:is called|is named|is|=|:)\s*(.+?)\s*[.!]?\s*$/i,
   /^\s*(.+?)\s+is\s+(?:speaker\s*(\d+)|c(\d+))\s*[.!]?\s*$/i,
 ];
 
