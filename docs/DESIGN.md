@@ -406,14 +406,14 @@ interface Provider {
 **HarnessProvider**, how it works:
 
 - **Discovery.** At start, akou resolves `claude` and `codex` through the user's login shell (`$SHELL -lc 'command -v claude codex'` on Unix, `where` on Windows), because an app bundle gets a minimal environment. Results and versions are cached in `runtime.json` and shown in `akou status` and Settings. The user can pin a path.
-- **Invocation.** Claude Code: `claude -p --output-format stream-json --verbose` with the prompt on stdin, run in an empty scratch directory so no project instructions load, with tools disallowed. Codex: `codex exec --json --sandbox read-only -` (the trailing `-` makes Codex read the prompt from stdin), same scratch directory. `--json` is flagged experimental in the Codex CLI reference, so the parser checks the Codex version first. Tokens are parsed from the streamed JSON and forwarded over RPC to the ask box as they arrive.
+- **Invocation.** Claude Code: `claude -p --output-format stream-json --verbose --include-partial-messages --tools "" --strict-mcp-config --no-session-persistence --system-prompt …` with the prompt on stdin, run in an empty scratch directory so no project instructions load, with no tools. `--include-partial-messages` is what makes the answer stream token by token; `--strict-mcp-config` with no MCP config keeps the user's MCP servers out, which cut the context of a one-word prompt from about 17k tokens to about 3k. Codex: `codex exec --json --sandbox read-only -` (the trailing `-` makes Codex read the prompt from stdin), same scratch directory. It also needs `--skip-git-repo-check` (the scratch directory is not a repository) and runs `--ephemeral`. `--json` is flagged experimental in the Codex CLI reference, so the parser checks the Codex version first. Tokens are parsed from the streamed JSON and forwarded over RPC to the ask box as they arrive.
 - **Session reuse.** For repeated questions on one call, Claude Code's `--resume` keeps the transcript prefix in the harness's own context so the stable pack prefix is not re-sent. Measured in M2; off if it costs more than it saves.
 - **Latency and cost.** Expect 2 to 5 s to first token (harness start-up plus model), 6 to 15 s for a full answer; these are estimates. Each spawn also loads the harness's own global context (the user-level instruction file, memory and skills), even in a scratch directory; gate G7 measures that cost, and `--resume` (M2) exists to amortise it. Each question spends roughly the pack size (4 to 8k tokens) plus the answer from the user's subscription window. The rolling memo through the harness is **off by default**, because it would run unattended every few minutes; ask and enhance run only on an explicit request.
 - **When it cannot run.** No harness found, a non-zero exit, a rate-limit or "usage limit" message, or no answer within 60 s: the ask box shows the retrieved excerpts (already visible after 300 ms) and a "Copy context for my agent" button, with the reason stated ("Claude Code reported its usage limit is reached until 18:00"). `akou status` shows `provider: unavailable (reason)`. Nothing is queued or retried silently.
 - **Provenance.** Every `answer`, `memo` and `enhanced` event carries `model: claude-code/<version>` or `codex/<version>` and `by`. Agent-authored notes and names carry `by: agent:<client>`.
 - **Terms of service.** A third-party app driving a user's own locally installed harness on their own machine, on their explicit request, is not obviously covered or forbidden by the consumer terms of either vendor. We state this in `docs/providers.md` as a risk to verify before release, not as settled. akou never automates login, never touches credentials, never runs the harness unattended by default, and always leaves the raw-API and local-model providers available under the same interface.
 
-Other providers: `openai-compatible` (Ollama, LM Studio, llama.cpp server, vLLM, OpenAI) and `anthropic` (the user's own key, with prompt caching). Keys go in the OS keychain. `none` shows excerpts only. Each workspace can use a different provider, because work and personal calls have different data rules.
+Other providers: `openai-compatible` (Ollama, LM Studio, llama.cpp server, vLLM, OpenAI) and `anthropic` (the user's own key, with prompt caching). Keys go in the OS keychain; until that store exists, `provider.apiKey` lives in the config file, which is the owner's alone, and is never shown back over the API or logged. `none` shows excerpts only. Each workspace can use a different provider, because work and personal calls have different data rules.
 
 ### 5.4 The live query engine
 
@@ -512,7 +512,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 | `akou share on\|off\|status [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | Read-only live link |
 | `akou doctor [--grant]` | Permissions, models, devices, a 3 s capture test, API security self-test, harness discovery |
 | `akou devices` · `akou apps` · `akou models list\|pull\|import` · `akou config show\|set\|unset` · `akou token path\|rotate` | Setup |
-| `akou import hark-viewer DIR…` | Converts predecessor call folders (all parts) into event logs |
+| `akou import hark-viewer DIR… [-w WORKSPACE]` | Converts predecessor call folders (all parts) into event logs |
 | `akou skill install [--harness claude\|codex] [--dir DIR]` | Installs `SKILL.md` into the harness's skills folder; refuses a skill whose version differs from the app's |
 | `akou quit` · `akou mcp` | Stops the app cleanly; stdio MCP server |
 | `akou self-update` | CLI tarball only (M4): replaces the binary after verifying its cosign signature |
@@ -539,13 +539,14 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /calls/{id}/ask` `{question, stream}` | Needs a provider. Streams tokens when `stream` |
 | `GET /calls/{id}/search?q=&k=` | Hits |
 | `POST /calls/{id}/speakers` `{spk, name}` · `POST …/speakers/merge` · `POST …/speakers/unmerge` | Speakers |
-| `POST /calls/{id}/notes` · `PATCH /calls/{id}/notes/{nid}` · `POST /calls/{id}/remember` · `DELETE /calls/{id}/remember/{rid}` | Notes, memory |
+| `POST /calls/{id}/notes` · `PATCH /calls/{id}/notes/{nid}` · `DELETE /calls/{id}/notes/{nid}` · `POST /calls/{id}/remember` · `DELETE /calls/{id}/remember/{rid}` | Notes, memory |
 | `GET /calls/{id}/memo` · `PUT /calls/{id}/memo` `{text, coversSeq}` | Memo |
 | `GET /calls/{id}/vocab` · `POST /calls/{id}/vocab` `{term, heard[], segs?, decode?}` · `DELETE /calls/{id}/vocab/{vid}` · `POST /calls/{id}/vocab/pass` | The list in force for the call, a call-scoped add (`vocab.add`), its retraction, the post-call pass |
 | `GET /vocab` · `POST /vocab` · `DELETE /vocab/{term}` · `POST /vocab/{approve,reject,suggest,check,import}` | The vocabulary files |
 | `POST /calls/{id}/enhance` `{template}` · `GET …/enhance/context?template=` · `PUT …/enhanced` `{markdown, coversSeq}` | Enhancement, with or without a provider |
 | `GET /calls/{id}/audio/{part}` | Range requests |
-| `POST /calls/{id}/export` · `POST /calls/{id}/finalize` | Hand-off, re-run |
+| `POST /calls/{id}/export` `{to?}` · `POST /calls/{id}/hooks` `{stage?}` · `POST /calls/{id}/finalize` | Hand-off, re-run. `to` is an absolute folder in place of `export.dir`; `409 export_not_configured` when neither is set, `409 not_ended` on a live call. `hooks` waits for the hooks and answers each run |
+| `POST /import/hark-viewer` `{dirs[], workspace?}` | Imports predecessor call folders (absolute paths); `422 not_imported` with the reasons when none could be |
 | `POST /share` · `DELETE /share` · `GET /share` | Sharing |
 | `GET /templates` · `GET /config` · `PATCH /config` | Settings |
 | `POST /quit` | Clean shutdown |
@@ -636,7 +637,7 @@ akou keeps no cross-meeting library, no search across meetings, no knowledge gra
 
 ### 8.2 Hand-off
 
-After `final.done`, and again whenever the enhanced notes, names or vocabulary corrections change:
+When a call ends, again after `final.done` and after every enhancement, and again whenever the notes, names or vocabulary corrections of an exported call change (after a 1.5 s pause, so a burst of renames is one re-export). Each stage runs in the background, one at a time per call: the export, then the hooks, then the webhook. An enhancement made during the call ("enhance so far") waits for the end, which carries it.
 
 1. **Export folder** per workspace (`export.dir`, off until set; onboarding asks). `<export.dir>/<workspace>/2026-09-23 1536 Weekly sync.md`:
 
@@ -664,11 +665,11 @@ akou_rev: 3
 we should move the build to the new box
 ```
 
-   A sibling `attachments/<name>/` holds `events.jsonl` and the audio (`copy | link | none`, default `link`). Writes are atomic. Re-export finds the file by `akou_id` in the frontmatter, so a renamed file is still found. If the user edited the body (sha256 recorded in `export.done` differs), akou writes `… (akou update).md` beside it instead of overwriting. This works unchanged with Obsidian, Logseq and any folder-watching indexer.
+   The three sections are `## Notes` (the latest enhanced notes, their headings one level down, each segment citation shown as `[15:41:07 Ben]`, since a bare `#l000031` would be a tag in Obsidian), `## Your raw notes` (every notepad line with its wall time, an agent's marked as such) and `## Transcript` (a speaker and wall time at every change of speaker and at least once a minute; vocabulary-corrected text with what was heard kept, as in `Kubernetes (heard: "kubernetis")`). A sibling `attachments/<name>/` holds `events.jsonl` and the audio (`export.audio`: `copy | link | none`, default `link`; a link that the system refuses becomes a copy). Writes are atomic. A re-export renders with the revision last written and writes nothing, and records no `export.done`, when that is already the file; otherwise `akou_rev` goes up by one. Re-export finds the file by `akou_id` in the frontmatter, so a renamed file is still found. If the user edited the body (sha256 recorded in `export.done` differs), akou writes `… (akou update).md` beside it instead of overwriting; a file of the same name that is not this call's is never touched (the export becomes `… (2).md`). File names drop `<>:"/\|?*` and control characters, never end in a dot or space, and cap the title at 80 characters, so they are valid on Windows. This works unchanged with Obsidian, Logseq and any folder-watching indexer.
 
-2. **Hooks** per workspace: `hooks: [{stage: call.ended | final.done | enhanced, command, timeoutSec: 600}]`. Each command receives one JSON document on stdin: `{version: 1, stage, call: {…frontmatter, dir}, paths: {events, audio[], exportMd}, transcript: [{id, w0, w1, clock, speaker, name, ch, text, heard?}], notes: [], remember: [], enhancedMd}` (`text` is corrected, `heard` is the raw text when it differs), plus `AKOU_CALL_ID`, `AKOU_CALL_DIR`, `AKOU_STAGE` in the environment. Exit code and duration become `hook.done`; failures toast. `akou hooks run CALL --stage S` re-runs. Two examples ship in `examples/hooks/`: commit the export into a Git repository; post the enhanced notes to a chat webhook.
+2. **Hooks** per workspace: `hooks: [{stage: call.ended | final.done | enhanced, command, timeoutSec: 600}]`. Each command receives one JSON document on stdin: `{version: 1, stage, call: {…frontmatter, dir}, paths: {events, audio[], exportMd, exportAttachments}, transcript: [{id, w0, w1, clock, speaker, name, ch, text, heard?}], notes: [], remember: [], enhancedMd}` (`text` is corrected, `heard` is the raw text when it differs), plus `AKOU_CALL_ID`, `AKOU_CALL_DIR`, `AKOU_STAGE` in the environment. A `command` string runs through the shell; a list is the program and its arguments. A hook may name a `workspace` and then runs for that workspace only. Hooks live in `config.json` only, never set over the API, because they are programs akou runs. Each runs in the call folder, in its own process group; stdout and stderr go to `logs/hooks.log`, and past `timeoutSec` the group is killed. Exit code and duration become `hook.done` (124 for a timeout, 127 when the command could not start); failures toast. `akou hooks run CALL [--stage S]` re-runs the hooks of every stage the call has reached, or of one. Two examples ship in `examples/hooks/`: commit the export into a Git repository; post the enhanced notes to a chat webhook.
 
-3. **Webhook**, off by default: `POST` of the same JSON, `X-Akou-Event` (the same stage names as hooks, which are the event type names), `X-Akou-Signature: sha256=<HMAC-SHA256>` with a secret in the keychain, three retries with backoff, recorded as `webhook.done`.
+3. **Webhook**, off by default: `POST` of the same JSON, `X-Akou-Event` (the same stage names as hooks, which are the event type names), `X-Akou-Signature: sha256=<HMAC-SHA256>` of the exact body with `webhook.secret` (in the keychain once that store exists; until then in the config file, never shown back), and `X-Akou-Delivery`, one id kept across retries. It stays off until both `webhook.url` and the secret are set, so no unsigned delivery is ever sent. Three retries with backoff (2, 10 and 30 s) on no answer, 408, 429 or 5xx, recorded as `webhook.done` with the address cut to its origin, because chat services keep their secret in the path.
 
 4. **Pull**: `GET /v1/calls`, `GET /v1/calls/{id}/transcript`, MCP `akou_list_calls` and `akou_get_call`.
 
@@ -740,9 +741,9 @@ akou/
       asr/                    live-worker.ts, finalize-worker.ts, speakers.ts, pad.ts, echo.ts
       vocab/                  files.ts (YAML read/write, import), decode-list.ts (cap, priority, model-type check),
                               bpe-vocab.ts (from tokenizer.json, tokenization check), check.ts, suggest.ts, pass.ts (layer 3 prompt + apply)
-      query/                  context.ts, classify.ts, bm25.ts, chunks.ts, memo.ts, render.ts
-      notes/                  notepad.ts, enhance.ts, templates.ts, cite-check.ts
-      llm/                    provider.ts, harness.ts, openai-compatible.ts, anthropic.ts
+      query/                  context.ts, classify.ts, bm25.ts, chunks.ts, memo.ts, render.ts, ask.ts
+      notes/                  notepad.ts, enhance.ts, templates.ts, cite-check.ts, templates/*.md (the five shipped)
+      llm/                    provider.ts, harness.ts, openai-compatible.ts, anthropic.ts, none.ts (excerpts-only replies)
       api/                    server.ts, guard.ts, routes/*.ts
       mcp/                    server.ts
       share/                  transport.ts, local-link.ts

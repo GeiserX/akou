@@ -5,26 +5,34 @@
  * same way a hand-edited file is validated (TRAPS T4.9). Sharing is M4 and answers 501 on changes.
  */
 
-import { existsSync, readdirSync } from "node:fs";
 import { join } from "node:path";
-import { patchConfig, SETTING_KEYS, SETTINGS, type SettingSpec } from "../../config/schema.ts";
+import {
+  patchConfig,
+  redactSettings,
+  SETTING_KEYS,
+  SETTINGS,
+  type SettingSpec,
+} from "../../config/schema.ts";
 import { HttpError, json, type Router, readBody } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 
 export function settingsRoutes(r: Router<ApiApp>): void {
-  r.add("GET", "/status", (c) => json(200, c.app.status()));
+  r.add("GET", "/status", async (c) => json(200, await c.app.status()));
 
   r.add("GET", "/config", (c) => {
     const cfg = c.app.config();
     return json(200, {
       file: cfg.paths.configFile,
-      settings: cfg.settings,
-      set: cfg.file,
+      settings: redactSettings(cfg.settings),
+      set: redactSettings(cfg.file),
       issues: cfg.issues,
       schema: Object.fromEntries(
         SETTING_KEYS.map((k) => {
           const s: SettingSpec = SETTINGS[k];
-          return [k, { type: s.type, min: s.min, max: s.max, env: s.env, doc: s.doc }];
+          return [
+            k,
+            { type: s.type, min: s.min, max: s.max, env: s.env, secret: s.secret, doc: s.doc },
+          ];
         }),
       ),
     });
@@ -40,22 +48,25 @@ export function settingsRoutes(r: Router<ApiApp>): void {
     const next = await c.app.saveConfig(res.file);
     return json(200, {
       ok: true,
-      settings: next.settings,
-      set: next.file,
+      settings: redactSettings(next.settings),
+      set: redactSettings(next.file),
       issues: next.issues,
       note: "capture, speech and API settings take effect at the next start of akou",
     });
   });
 
   r.add("GET", "/templates", (c) => {
-    const dir = join(c.app.configDir, "templates");
-    const names = existsSync(dir)
-      ? readdirSync(dir)
-          .filter((f) => f.endsWith(".md"))
-          .map((f) => f.slice(0, -3))
-          .sort()
-      : [];
-    return json(200, { dir, templates: names });
+    const all = c.app.templates();
+    return json(200, {
+      dir: join(c.app.configDir, "templates"),
+      templates: all.map((t) => t.name),
+      details: all.map((t) => ({
+        name: t.name,
+        match: t.match,
+        sections: t.sections.map((s) => s.heading),
+        bundled: t.bundled,
+      })),
+    });
   });
 
   r.add("GET", "/share", () => json(200, { active: false, shares: [] }));

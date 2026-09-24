@@ -187,6 +187,11 @@ export interface RouteContext<A> {
   app: A;
   /** `agent:<client>` from `X-Akou-Client`, or `agent:api`. */
   by: string;
+  /**
+   * Sets this request's idle timeout, seconds; 0 turns it off. A route that waits on a model
+   * (ask, enhance) turns it off, so a slow answer is not cut at the server's idle limit.
+   */
+  timeout?: (seconds: number) => void;
 }
 
 export type Handler<A> = (c: RouteContext<A>) => Response | Promise<Response>;

@@ -382,11 +382,20 @@ describe("following and asking about a live call", () => {
     LONG,
   );
 
-  test("ask without a provider: 503 with the reason and the excerpts, never nothing", async () => {
-    const r = await rig.api("POST", "/calls/live/ask", { question: "what was said?" });
-    expect(r.status).toBe(503);
-    expect(r.body.error).toBe("provider_unavailable");
+  test("[decision] Provider unavailable answered with nothing: the excerpts, labelled, with the reason", async () => {
+    const r = await rig.api("POST", "/calls/live/ask", { question: "what about deploy?" });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ answered: false, kind: "excerpts", errorKind: "missing" });
+    expect(r.body.reason).toContain("provider.kind is none");
+    expect(r.body.text).toStartWith("No model answered (");
+    expect(r.body.text).toContain("hetzna");
     expect(r.body.context).toMatch(/^LIVE/);
+    // The question is in the log; no answer is, because no model answered.
+    const events = (await rig.api("GET", "/calls/live/events")).body.events;
+    expect(
+      events.some((e: { type: string; id?: string }) => e.type === "ask" && e.id === r.body.ask),
+    ).toBe(true);
+    expect(events.some((e: { type: string }) => e.type === "answer")).toBe(false);
   });
 
   test("the call's header: parts, roster, health, final state", async () => {
@@ -438,9 +447,14 @@ describe("after the call", () => {
   );
 
   test("what is not built answers plainly: 501 or 503, never a fake success", async () => {
-    expect((await rig.api("POST", "/calls/last/export")).status).toBe(501);
-    expect((await rig.api("POST", "/calls/last/enhance")).status).toBe(503);
-    expect((await rig.api("GET", "/calls/last/enhance/context")).status).toBe(501);
+    // Export is built; with no export folder set it says what to set instead of pretending.
+    const exp = await rig.api("POST", "/calls/last/export");
+    expect([exp.status, exp.body.error]).toEqual([409, "export_not_configured"]);
+    // No provider: enhancement by akou is unavailable, and says how an agent can do it instead.
+    const enh = await rig.api("POST", "/calls/last/enhance");
+    expect([enh.status, enh.body.error]).toEqual([503, "provider_unavailable"]);
+    expect(enh.body.message).toContain("enhance/context");
+    expect((await rig.api("GET", "/calls/last/enhance/context")).status).toBe(200);
     expect((await rig.api("POST", "/share", { bind: "lan" })).status).toBe(501);
     expect((await rig.api("GET", "/share")).body).toEqual({ active: false, shares: [] });
     expect((await rig.api("POST", "/vocab/suggest", {})).status).toBe(501);
@@ -526,7 +540,13 @@ describe("settings over the API", () => {
     expect(r.status).toBe(200);
     expect(r.body.app).toMatchObject({ headless: true, port: rig.port, pid: process.pid });
     expect(r.body.asr.state).toBe("ready");
-    expect(r.body.provider.state).toBe("unavailable");
-    expect((await rig.api("GET", "/templates")).body.templates).toEqual([]);
+    expect(r.body.provider).toMatchObject({ state: "unavailable", id: "none" });
+    expect((await rig.api("GET", "/templates")).body.templates).toEqual([
+      "customer-call",
+      "general",
+      "interview",
+      "one-on-one",
+      "standup",
+    ]);
   });
 });

@@ -7,6 +7,9 @@
 import { describe, expect, test } from "bun:test";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server.ts";
+import type { ApiClient, RequestOptions } from "../src/main/cli/client.ts";
+import { handoffCommands } from "../src/main/cli/commands/handoff.ts";
+import type { Ctx } from "../src/main/cli/context.ts";
 
 const EV = (seq: number) => ({ seq, t: seq, type: "note" }) as unknown as LogEvent;
 
@@ -146,5 +149,57 @@ describe("a request during recovery", () => {
     } finally {
       await server.stop();
     }
+  });
+});
+
+describe("an export queued behind the call's hand-off work", () => {
+  test("the route lifts the server's idle timeout before it waits", async () => {
+    const seen: string[] = [];
+    const app = {
+      manager: { resolve: (ref: string) => ({ ok: true, id: ref }) },
+      exportCall: async () => {
+        seen.push("export");
+        return { ok: true, path: "/x.md", written: false, draft: null };
+      },
+    } as unknown as ApiApp;
+    const url = new URL("http://127.0.0.1/v1/calls/c1/export");
+    const m = buildRouter().match("POST", "/calls/c1/export");
+    if ("status" in m) throw new Error("no export route");
+    const req = new Request(url.href, { method: "POST", body: "{}" });
+    const res = await m.handler({
+      req,
+      url,
+      params: m.params,
+      app,
+      by: "agent:test",
+      timeout: (seconds) => seen.push(`timeout ${seconds}`),
+    });
+    expect(res.status).toBe(200);
+    expect(seen).toEqual(["timeout 0", "export"]);
+  });
+
+  test("`akou export` waits as long as `akou hooks run`, and Ctrl-C still stops it", async () => {
+    const asked: Record<string, RequestOptions | undefined> = {};
+    const ac = new AbortController();
+    const client = {
+      request: async (_method: string, path: string, o?: RequestOptions) => {
+        asked[path.split("/").at(-1) as string] = o;
+        return { status: 200, body: { path: "/x.md", attachments: "/a", runs: [] }, text: "" };
+      },
+    } as unknown as ApiClient;
+    const ctx: Ctx = {
+      io: { env: {}, out: () => {}, err: () => {}, signal: ac.signal },
+      json: false,
+      client,
+      version: "0.0.0",
+    };
+    const cmd = (name: string) =>
+      handoffCommands.find((c) => c.name === name) as (typeof handoffCommands)[number];
+    await cmd("export").run(ctx, { positional: ["c1"], flags: {} });
+    await cmd("hooks").run(ctx, { positional: ["run", "c1"], flags: {} });
+    expect(asked.export?.signal).toBe(ac.signal);
+    expect(asked.export?.timeoutMs).toBeGreaterThanOrEqual(asked.hooks?.timeoutMs as number);
+    // Positive control: the client's default is a minute, shorter than one hook may run.
+    expect(asked.hooks?.timeoutMs).toBeGreaterThan(60_000);
   });
 });
