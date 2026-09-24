@@ -328,6 +328,25 @@ describe("re-export", () => {
     }
   });
 
+  test("an export to another folder in between does not make the first one rewrite itself", () => {
+    const r = rig();
+    try {
+      const first = r.run();
+      const before = readFileSync(first.path, "utf8");
+      const elsewhere = r.run({ root: join(r.root, "..", "export-elsewhere") });
+      expect(elsewhere).toMatchObject({ written: true });
+      const again = r.run();
+      expect(again).toMatchObject({ written: false, draft: null, path: first.path, rev: 1 });
+      expect(readFileSync(first.path, "utf8")).toBe(before);
+      expect(r.events.filter((e) => e.type === "export.done")).toHaveLength(2);
+      // Positive control: a real change still goes up by one from the file's own revision.
+      r.append({ seq: 0, t: T0, type: "speaker.name", spk: "c2", name: "Cleo", by: "user" });
+      expect(r.run()).toMatchObject({ written: true, rev: 2, path: first.path });
+    } finally {
+      r.cleanup();
+    }
+  });
+
   test("a file the user renamed is found by its akou_id", () => {
     const r = rig();
     try {

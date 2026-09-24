@@ -494,8 +494,10 @@ export function exportCall(o: ExportOptions): ExportResult {
   const latest = view.latestEnhanced();
   const enhanced = latest ? readText(join(o.dir, latest.file)) : null;
   const render = (rev: number) => renderExport({ view, version: o.version, enhanced, audio, rev });
-  const lastRev = known.length;
   const current = readText(target.path);
+  // The revision this file was last written with; exports to other folders count elsewhere.
+  const onDisk = current ? /^akou_rev:\s*(\d+)\s*$/m.exec(current.split(/\n---/)[0] ?? "") : null;
+  const lastRev = onDisk ? Number(onDisk[1]) : known.length;
   const same = render(lastRev);
   let written = false;
   let text = same;
