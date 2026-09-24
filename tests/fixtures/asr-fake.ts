@@ -393,8 +393,13 @@ export function createModels(options: FakeOptions = {}, model?: string): ModelSe
 
 /** In-memory parts for the final pass: `parts[part] = { mic, call }`. */
 export class MemoryAudio implements FinalAudio {
-  constructor(readonly parts: Record<number, { mic: Float32Array; call: Float32Array }>) {}
+  constructor(
+    readonly parts: Record<number, { mic: Float32Array; call: Float32Array }>,
+    /** `length` blocks the thread this long, as a read stuck in a native call would. */
+    private readonly hangMs = 0,
+  ) {}
   length(part: number): number {
+    if (this.hangMs > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, this.hangMs);
     const p = this.parts[part];
     return p ? Math.max(p.mic.length, p.call.length) : 0;
   }
@@ -411,6 +416,7 @@ export class MemoryAudio implements FinalAudio {
 /** The `module` audio spec entry point. */
 export function createAudio(o: {
   parts: Record<number, { mic: Float32Array; call: Float32Array }>;
+  hangMs?: number;
 }) {
-  return new MemoryAudio(o.parts);
+  return new MemoryAudio(o.parts, o.hangMs);
 }

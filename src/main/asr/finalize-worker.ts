@@ -30,7 +30,7 @@ import type { Channel, EventDraft, LogEvent } from "../../core/log/events.ts";
 import { fold } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
 import { EVENTS_FILE } from "../../core/log/writer.ts";
-import { CHANNELS } from "../capture/engine.ts";
+import { CHANNELS, type Clock, realClock } from "../capture/engine.ts";
 import type { DecodeList } from "../vocab/decode-list.ts";
 import {
   ASR_RATE,
@@ -593,11 +593,30 @@ export interface FinalizeOptions {
   onLog?(level: "info" | "warn" | "error", msg: string): void;
   /** Runs the pass on this thread. Tests only. */
   inThread?: boolean;
+  /** The pass's deadline; defaults to `finalBudgetMs` of the call. */
+  budgetMs?: number;
+  clock?: Clock;
+}
+
+/** Least time a final pass gets, however short the call. */
+export const FINAL_MIN_BUDGET_MS = 60_000;
+
+/**
+ * How long a final pass may take: half the call's recorded length (DESIGN 3.3 targets 10 to 25 %),
+ * and never under a minute. A pass past it is stuck, not slow.
+ */
+export function finalBudgetMs(events: readonly LogEvent[]): number {
+  let seconds = 0;
+  for (const e of events) if (e.type === "part.ended") seconds += e.fileSeconds;
+  return Math.max(FINAL_MIN_BUDGET_MS, Math.round(seconds * 500));
 }
 
 /**
  * Runs the final pass for a call that has ended and appends what it produces. The call's writer is
- * held for the whole pass, so a pass that runs after Stop still writes through the one writer.
+ * held for the whole pass, so a pass that runs after Stop still writes through the one writer. A
+ * pass that outlives its budget (a Worker stuck in a native call answers nothing) is terminated,
+ * recorded as `final.failed {step: timeout}`, and the writer released: nothing waits on the
+ * Worker without a deadline.
  */
 export async function finalizeCall(
   call: FinalCall,
@@ -616,28 +635,44 @@ export async function finalizeCall(
       files: [...(o.vocab?.files ?? [])],
       options: o.options,
     };
-    return await new Promise((resolve) => {
+    const clock = o.clock ?? realClock;
+    const budget = o.budgetMs ?? finalBudgetMs(events);
+    type Out = FinalResult & { loads: Record<string, number> };
+    return await new Promise<Out>((resolve) => {
+      let settled = false;
+      let w: Worker | null = null;
+      const finish = (r: Out) => {
+        if (settled) return;
+        settled = true;
+        clock.clearTimeout(timer);
+        w?.terminate();
+        resolve(r);
+      };
+      const failWith = (step: string, error: string) => {
+        if (settled) return;
+        call.record({ type: "final.failed", step, error });
+        finish({ ok: false, parts: [], skipped: [], error, loads: {} });
+      };
+      const timer = clock.setTimeout(
+        () => failWith("timeout", `the final pass did not finish within ${budget} ms`),
+        budget,
+      );
+      // Nothing the pass sends after its end (a timeout) reaches the log.
       const onReply = (r: FromFinal) => {
+        if (settled) return;
         if (r.type === "event") call.record(r.draft);
         else if (r.type === "log") o.onLog?.(r.level, r.msg);
-        else resolve({ ...r.result, loads: r.loads });
+        else finish({ ...r.result, loads: r.loads });
       };
       if (o.inThread) {
         void runInWorker(msg, onReply);
         return;
       }
-      const w = new Worker(new URL("./finalize-worker.ts", import.meta.url), {
+      w = new Worker(new URL("./finalize-worker.ts", import.meta.url), {
         workerData: FINALIZE_WORKER_NAME,
       } as WorkerOptions);
-      w.onmessage = (e: MessageEvent<FromFinal>) => {
-        onReply(e.data);
-        if (e.data.type === "done") w.terminate();
-      };
-      w.onerror = (e) => {
-        call.record({ type: "final.failed", step: "worker", error: e.message });
-        w.terminate();
-        resolve({ ok: false, parts: [], skipped: [], error: e.message, loads: {} });
-      };
+      w.onmessage = (e: MessageEvent<FromFinal>) => onReply(e.data);
+      w.onerror = (e) => failWith("worker", e.message);
       w.postMessage(msg);
     });
   } finally {

@@ -5,17 +5,18 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { existsSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { EventDraft, LogEvent, Seg } from "../src/core/log/events.ts";
 import { fold } from "../src/core/log/fold.ts";
+import { LOCK_FILE } from "../src/core/log/writer.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
-import { finalizeCall, runFinalPass } from "../src/main/asr/finalize-worker.ts";
+import { finalBudgetMs, finalizeCall, runFinalPass } from "../src/main/asr/finalize-worker.ts";
 import { type LiveOut, LivePipeline } from "../src/main/asr/live-worker.ts";
 import { MIN_SPAN_SECONDS } from "../src/main/asr/pad.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { buildDecodeList } from "../src/main/vocab/decode-list.ts";
-import { logOf, ManualClock, ofType, ScriptedEngine } from "./capture-helpers.ts";
+import { logOf, ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
 import { concat, FakeModels, MemoryAudio, RATE, silence, speak } from "./fixtures/asr-fake.ts";
 import { stereoWav } from "./fixtures/audio.ts";
 import { LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
@@ -361,6 +362,55 @@ describe("after Stop, through the call's writer", () => {
     const ended = ofType(e, "call.ended")[0]?.seq as number;
     expect((ofType(e, "final.done")[0]?.seq as number) > ended).toBe(true);
   }, 20_000);
+
+  test("a pass stuck in a native call is stopped at its budget: final.failed, the writer released", async () => {
+    const r = callRig();
+    r.engine.onStart = (s) => s.capturing();
+    const res = await r.mgr.start({ workspace: "work" });
+    if (!res.ok) throw new Error(res.error);
+    r.engine.last.audio(2);
+    await r.mgr.stop();
+    const c = r.mgr.controller(res.call);
+    if (!c) throw new Error("no controller");
+    let settled = false;
+    const p = finalizeCall(c, {
+      models: spec(),
+      audio: {
+        kind: "module",
+        path: FAKE,
+        options: { parts: { 1: { mic: silence(2), call: silence(2) } }, hangMs: 20_000 },
+      },
+      clock: r.clock,
+      budgetMs: 60_000,
+    }).then((x) => {
+      settled = true;
+      return x;
+    });
+    await until(() => existsSync(join(res.folder, LOCK_FILE)), 5_000, "the held writer");
+    await r.clock.advance(59_999);
+    expect(settled).toBe(false);
+    await r.clock.advance(1);
+    const out = await p;
+    expect(out).toMatchObject({ ok: false });
+    expect(c.view.final.state).toBe("failed");
+    const failed = ofType(await logOf(res.folder), "final.failed");
+    expect(failed).toMatchObject([{ step: "timeout" }]);
+    expect(existsSync(join(res.folder, LOCK_FILE))).toBe(false);
+  }, 20_000);
+
+  test("the default budget is half the call's length, never under a minute", () => {
+    const events = (seconds: number[]) => {
+      const b = new LogBuilder();
+      b.created({ id: "01J8Z6Q4M2VX0K7B3D4E5F6G7Q" });
+      seconds.forEach((s, i) => {
+        b.partStarted(i + 1, T0 + i * 3_600_000);
+        b.partEnded(i + 1, "stop", s);
+      });
+      return b.events;
+    };
+    expect(finalBudgetMs(events([30]))).toBe(60_000);
+    expect(finalBudgetMs(events([3600, 1800]))).toBe(2_700_000);
+  });
 
   test("a pass that cannot start writes final.failed and never throws", async () => {
     const r = callRig();
