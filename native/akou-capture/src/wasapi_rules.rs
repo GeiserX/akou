@@ -2,14 +2,20 @@
 //! functions, so every OS runs their tests.
 //!
 //! - The call side is process loopback in exclude mode on akou's process tree from build 20348
-//!   on, and loopback of the default render device before it. Endpoint loopback cannot exclude
-//!   anything, so the part says so with a warning instead of passing off akou's own sounds as
-//!   the call.
-//! - The app passes its own process id with `--exclude-responsible`; the tree under it holds the
-//!   WebView2 processes that play the window's audio, and this helper.
+//!   on, and loopback of the default communications render device before it. Endpoint loopback
+//!   cannot exclude anything, so the part says so with a warning instead of passing off akou's
+//!   own sounds as the call.
+//! - The app passes its own process id with `--exclude-responsible`; the tree under it is meant
+//!   to hold the WebView2 processes that play the window's audio, and this helper (unverified
+//!   until the M3 real call records the app's tree, DESIGN 2.3).
 //! - `--call app:<id>` takes a process id or an executable name and captures that process tree
 //!   in include mode. It needs process loopback, so it refuses older builds.
+//! - Windows keeps two default outputs: the console one and the communications one, which call
+//!   apps play to. A machine may set them apart (a headset for calls, speakers for the rest), so
+//!   the output-running signal and the probe hear both, endpoint loopback records the
+//!   communications one, and the device watch follows both.
 
+use crate::health::device_watch::DeviceId;
 use crate::source::{CallMode, OpenError};
 
 /// The first Windows build with `AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`.
@@ -30,7 +36,8 @@ pub enum CallSource {
     ExcludeTree(u32),
     /// Only this process and its descendants.
     IncludeTree(u32),
-    /// The default render device's loopback: everything, akou's own sounds included.
+    /// The default communications render device's loopback: everything, akou's own sounds
+    /// included.
     Endpoint,
 }
 
@@ -101,7 +108,7 @@ pub fn endpoint_plan(why: &str) -> CallPlan {
         exclude: vec![],
         tapped: vec![],
         warn: Some(format!(
-            "{why}; the call side records the default output as a whole, akou's own sounds included"
+            "{why}; the call side records the default communications output as a whole, akou's own sounds included"
         )),
     }
 }
@@ -172,6 +179,28 @@ pub fn plan(
                 warn,
             })
         }
+    }
+}
+
+/// Whether anything plays, from the peak meters of the default outputs (console and
+/// communications): the loudest wins. `None` when no meter could be read.
+pub fn output_heard(peaks: &[Option<f32>]) -> Option<bool> {
+    peaks
+        .iter()
+        .flatten()
+        .fold(None, |acc, p| Some(acc.unwrap_or(false) || *p > 0.0))
+}
+
+/// The call side's device watch: the communications default, joined by the console default
+/// when the two differ, so a change to either reads as a change.
+pub fn render_watch(console: Option<DeviceId>, comms: Option<DeviceId>) -> Option<DeviceId> {
+    match (comms, console) {
+        (Some(c), Some(o)) if c.id != o.id => Some(DeviceId {
+            id: format!("{}|{}", c.id, o.id),
+            name: format!("{} (calls) and {}", c.name, o.name),
+        }),
+        (Some(c), _) => Some(c),
+        (None, o) => o,
     }
 }
 
@@ -289,5 +318,52 @@ mod tests {
         let procs = vec![p(1, 2, "a.exe"), p(2, 1, "b.exe")];
         let t: Vec<u32> = tree(&procs, 1).iter().map(|p| p.pid).collect();
         assert_eq!(t, vec![1, 2]);
+    }
+
+    fn dev(id: &str) -> DeviceId {
+        DeviceId {
+            id: id.into(),
+            name: id.into(),
+        }
+    }
+
+    /// TRAPS "Dead call side hidden behind a live mic": a call app plays to the communications
+    /// output (a headset) while the console output (speakers) is silent. The output still reads
+    /// as running, so a dead call side is probed and rebuilt.
+    #[test]
+    fn dead_call_side_output_running_hears_the_communications_output_when_it_is_split() {
+        let console = Some(0.0);
+        let comms = Some(0.3);
+        assert_eq!(output_heard(&[console, comms]), Some(true));
+        assert_eq!(output_heard(&[comms, console]), Some(true));
+        // Positive control: the console meter alone hears nothing during the call.
+        assert_eq!(output_heard(&[console]), Some(false));
+        assert_eq!(output_heard(&[None, Some(0.0)]), Some(false));
+        assert_eq!(output_heard(&[None, None]), None);
+    }
+
+    #[test]
+    fn the_device_watch_follows_both_default_outputs_when_they_differ() {
+        let split = render_watch(Some(dev("speakers")), Some(dev("headset"))).unwrap();
+        assert_eq!(split.id, "headset|speakers");
+        // A change to either default changes what the watch sees.
+        let console_moved = render_watch(Some(dev("hdmi")), Some(dev("headset"))).unwrap();
+        let comms_moved = render_watch(Some(dev("speakers")), Some(dev("usb"))).unwrap();
+        assert_ne!(console_moved.id, split.id);
+        assert_ne!(comms_moved.id, split.id);
+        // Not split: the one device, as before.
+        assert_eq!(
+            render_watch(Some(dev("speakers")), Some(dev("speakers"))),
+            Some(dev("speakers"))
+        );
+        assert_eq!(
+            render_watch(None, Some(dev("headset"))),
+            Some(dev("headset"))
+        );
+        assert_eq!(
+            render_watch(Some(dev("speakers")), None),
+            Some(dev("speakers"))
+        );
+        assert_eq!(render_watch(None, None), None);
     }
 }

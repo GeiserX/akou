@@ -2,8 +2,8 @@
 //!
 //! - The call side is process loopback in exclude mode on the process tree the app names with
 //!   `--exclude-responsible <pid>` (the app, its WebView2 processes and this helper), from build
-//!   20348 on; loopback of the default render device before that, with a warning that akou's own
-//!   sounds are not left out. `--call app:<id>` is process loopback in include mode on that app's
+//!   20348 on; loopback of the default communications render device (the one call apps play to)
+//!   before that, with a warning that names it and says akou's own sounds are not left out. `--call app:<id>` is process loopback in include mode on that app's
 //!   tree. `wasapi_rules` makes these choices.
 //! - The mic is the default communications capture device, the one call apps use, or the device
 //!   `--mic <id>` names, falling back to the default when it is gone.
@@ -15,7 +15,9 @@
 //! - Device notifications (`IMMNotificationClient`) make the engine poll the defaults at once, so
 //!   a changed default is rebuilt without waiting for the next second.
 //! - `SetThreadExecutionState` keeps the machine from idle sleep while recording.
-//! - The output-running signal and the probe are the default render device's peak meter.
+//! - The output-running signal and the probe are the peak meters of both default render devices,
+//!   console and communications, which a machine may set apart (`wasapi_rules::output_heard`);
+//!   the device watch follows both (`wasapi_rules::render_watch`).
 //!
 //! Every WASAPI object lives on the thread that made it, and the engine reaches the threads
 //! through messages with deadlines, so a call that hangs never stalls capture and a stop always
@@ -53,7 +55,7 @@ use crate::source::{
     CallMode, Chunk, ClockKind, DeviceConfig, Endpoint, Endpoints, Event, Frontend, OpenError,
     Opened, Status,
 };
-use crate::wasapi_rules::{CallSource, Proc, endpoint_plan, plan};
+use crate::wasapi_rules::{CallSource, Proc, endpoint_plan, output_heard, plan, render_watch};
 
 const OPEN_BUDGET: Duration = Duration::from_secs(10);
 const REBUILD_BUDGET: Duration = Duration::from_secs(3);
@@ -449,13 +451,32 @@ struct CallOpen {
     device: Option<DeviceId>,
 }
 
-fn default_render() -> Result<Device, WasapiError> {
-    DeviceEnumerator::new()?.get_default_device_for_role(&Direction::Render, &Role::Console)
+/// The default render devices for the console and communications roles, in that order. They are
+/// one device unless the machine sets them apart.
+fn default_renders(en: &DeviceEnumerator) -> [Option<Device>; 2] {
+    [Role::Console, Role::Communications].map(|role| {
+        en.get_default_device_for_role(&Direction::Render, &role)
+            .ok()
+    })
 }
 
-fn open_endpoint() -> Result<(Stream, u32), OpenError> {
-    let device =
-        default_render().map_err(|e| OpenError::no_device(format!("no output device: {e}")))?;
+/// What the call side's device watch follows (see `wasapi_rules::render_watch`).
+fn render_device(en: &DeviceEnumerator) -> Option<DeviceId> {
+    let [console, comms] = default_renders(en);
+    render_watch(
+        console.as_ref().and_then(device_id),
+        comms.as_ref().and_then(device_id),
+    )
+}
+
+/// Loopback of the default communications output, the one call apps play to, with its name.
+fn open_endpoint() -> Result<(Stream, u32, String), OpenError> {
+    let device = DeviceEnumerator::new()
+        .and_then(|en| en.get_default_device_for_role(&Direction::Render, &Role::Communications))
+        .map_err(|e| OpenError::no_device(format!("no output device: {e}")))?;
+    let name = device
+        .get_friendlyname()
+        .unwrap_or_else(|_| "the default output".into());
     let client = device
         .get_iaudioclient()
         .map_err(|e| err("the default output", e))?;
@@ -465,7 +486,7 @@ fn open_endpoint() -> Result<(Stream, u32), OpenError> {
     let rate = mix.get_samplespersec();
     let stream = Stream::start(client, rate, mix.get_nchannels().max(1) as usize)
         .map_err(|e| err("loopback of the default output", e))?;
-    Ok((stream, rate))
+    Ok((stream, rate, name))
 }
 
 fn open_call(
@@ -486,23 +507,31 @@ fn open_call(
         CallSource::IncludeTree(pid) => Some((pid, true)),
         CallSource::Endpoint => None,
     };
-    let (stream, rate) = match loopback {
+    let (stream, rate, recorded) = match loopback {
         Some((pid, include)) => {
             let started = AudioClient::new_application_loopback_client(pid, include)
                 .and_then(|c| Stream::start(c, LOOPBACK_RATE, LOOPBACK_CHANNELS));
             match started {
-                Ok(s) => (s, LOOPBACK_RATE),
+                Ok(s) => (s, LOOPBACK_RATE, None),
                 Err(e) if !include => {
                     // A build that should have process loopback refused it: record the whole
                     // output rather than nothing, and say what that costs.
                     p = endpoint_plan(&format!("process loopback failed ({e})"));
-                    open_endpoint()?
+                    let (s, rate, name) = open_endpoint()?;
+                    (s, rate, Some(name))
                 }
                 Err(e) => return Err(err("process loopback of the app", e)),
             }
         }
-        None => open_endpoint()?,
+        None => {
+            let (s, rate, name) = open_endpoint()?;
+            (s, rate, Some(name))
+        }
     };
+    // Endpoint loopback records one device: say which.
+    if let (Some(w), Some(name)) = (p.warn.as_mut(), recorded) {
+        w.push_str(&format!("; recording {name}"));
+    }
     if let Some(w) = p.warn.as_ref().filter(|_| !*warned) {
         *warned = true;
         let _ = events.try_send(Event::Warn {
@@ -510,7 +539,9 @@ fn open_call(
             msg: w.clone(),
         });
     }
-    let device = default_render().ok().and_then(|d| device_id(&d));
+    let device = DeviceEnumerator::new()
+        .ok()
+        .and_then(|en| render_device(&en));
     Ok((
         stream,
         CallOpen {
@@ -525,12 +556,21 @@ fn open_call(
     ))
 }
 
-/// The peak meter of the default render device, sampled for up to `for_s`: did anything play?
+/// The peak meters of the default render devices (console and communications), read once.
+fn output_peaks(en: &DeviceEnumerator) -> [Option<f32>; 2] {
+    default_renders(en).map(|d| {
+        d.and_then(|d| d.get_audiometerinformation().ok())
+            .and_then(|m| m.get_peak_value().ok())
+    })
+}
+
+/// The default render devices' peak meters, sampled for up to `for_s`: did anything play?
 fn meter_heard(for_s: f64) -> Option<bool> {
-    let meter = default_render().ok()?.get_audiometerinformation().ok()?;
+    let en = DeviceEnumerator::new().ok()?;
     let end = Instant::now() + Duration::from_secs_f64(for_s);
     loop {
-        if meter.get_peak_value().ok()? > 0.0 {
+        let heard = output_heard(&output_peaks(&en))?;
+        if heard {
             return Some(true);
         }
         if Instant::now() >= end {
@@ -589,16 +629,8 @@ impl Control {
                     CtlMsg::Status(reply) => {
                         let mut st = Status::default();
                         if let Some(en) = en.as_ref() {
-                            if let Ok(out) =
-                                en.get_default_device_for_role(&Direction::Render, &Role::Console)
-                            {
-                                st.output_running = out
-                                    .get_audiometerinformation()
-                                    .and_then(|m| m.get_peak_value())
-                                    .ok()
-                                    .map(|p| p > 0.0);
-                                st.default_output = device_id(&out);
-                            }
+                            st.output_running = output_heard(&output_peaks(en));
+                            st.default_output = render_device(en);
                             st.default_input = en
                                 .get_default_device_for_role(
                                     &Direction::Capture,
@@ -799,8 +831,8 @@ impl Frontend for WindowsFrontend {
     }
 }
 
-/// Every active capture and render endpoint, with the defaults the helper uses (communications
-/// for the mic, console for the output). Reads properties only.
+/// Every active capture and render endpoint, with the defaults (communications for the mic,
+/// console for the output). Reads properties only.
 pub fn list_devices() -> Result<Endpoints, OpenError> {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
