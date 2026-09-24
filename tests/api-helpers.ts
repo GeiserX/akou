@@ -10,6 +10,7 @@ import { join } from "node:path";
 import type { Guard } from "../src/main/api/guard.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import type { FinalAudioSpec } from "../src/main/asr/finalize-worker.ts";
+import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import { type AkouApp, startApp } from "../src/main/index.ts";
 import type { Discovery } from "../src/main/llm/harness.ts";
 import type { Provider } from "../src/main/llm/provider.ts";
@@ -56,6 +57,8 @@ export interface RigOptions {
   helperArgs?: string[];
   settings?: Record<string, unknown>;
   models?: ModelSpec | null;
+  /** The model files a start requires; with it, no recognizer is faked (tests/first-run). */
+  modelRegistry?: readonly ModelSpecEntry[];
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   home?: string;
   provider?: Provider;
@@ -97,9 +100,10 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
   const app = await startApp({
     env,
     models:
-      o.models !== undefined
+      o.models !== undefined || o.modelRegistry
         ? o.models
         : { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
+    modelRegistry: o.modelRegistry,
     asrInThread: true,
     finalAudio: o.finalAudio,
     guard: o.guard,

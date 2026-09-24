@@ -30,7 +30,8 @@ describe("[T4.11] Login agent does not start mid-session / [T3.6] Minutes to sta
       expect(existsSync(rtPath)).toBe(false);
       let pid = 0;
       try {
-        const start = await cliChild(env, ["start", "-t", "Cold", "--json"]);
+        // No models in this home: audio only, which is what a cold start has to prove.
+        const start = await cliChild(env, ["start", "-t", "Cold", "--without-models", "--json"]);
         console.log(`akou start (app cold, as a child process): ${start.ms.toFixed(0)} ms`);
         expect(start.code).toBe(0);
         const body = JSON.parse(start.out);

@@ -493,7 +493,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 
 | Command | Does |
 |---|---|
-| `akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab TERM,…] [--json]` | Starts a call. Prints `{call, folder, url}` once audio is being written. `--vocab` writes call-scoped `vocab.add` events right after `call.created` (attendees, title terms). Exit 75 if a call is already recording |
+| `akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab TERM,…] [--without-models] [--json]` | Starts a call. Prints `{call, folder, url}` once audio is being written. `--vocab` writes call-scoped `vocab.add` events right after `call.created` (attendees, title terms). Exit 75 if a call is already recording. Exit 69 (`models_missing`) until the speech models are downloaded; `--without-models` records audio only |
 | `akou stop` · `pause` · `resume` · `mute` · `unmute` | Controls the live call. Exit 3 if nothing is live |
 | `akou restart [--force] [--call ID]` | New part in the same call, make before break |
 | `akou status [--json]` | App, live call, health, recognizer lag, models in use, provider state, share state |
@@ -528,7 +528,8 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | Method and path | Purpose |
 |---|---|
 | `GET /status` | As `akou status`. Always 200 |
-| `POST /calls` `{workspace, title, template, call, mic}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call}` · `403 permission` · `503 capture_failed {stage, error}` |
+| `POST /calls` `{workspace, title, template, call, mic, withoutModels}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call}` · `403 permission` · `503 capture_failed {stage, error}` · `503 models_missing` until the speech models are there, unless `withoutModels` |
+| `GET /models` · `POST /models/pull` | The speech models on disk (`missing`, `downloading` with bytes, `ready`, `failed`); the first-run download, answered at once (`202`) and followed with `GET /models` |
 | `GET /calls?workspace&limit&failed` | Metadata list |
 | `GET /calls/{id\|live\|last}` | Header, parts, roster, health, final state. `live` gives 404 `no_live_call {last}` when nothing is recording |
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |

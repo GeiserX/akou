@@ -137,19 +137,27 @@ describe("[spike] Command-line arguments dropped by the launcher", () => {
       const rt = JSON.parse(readFileSync(rtPath, "utf8"));
       expect(rt).toMatchObject({ pid: proc.pid, headless: true });
       const token = readFileSync(join(t.dir, ".config", "akou", "token"), "utf8").trim();
-      const call = (method: string, path: string) =>
+      const call = (method: string, path: string, body = "{}") =>
         fetch(`http://127.0.0.1:${rt.port}/v1${path}`, {
           method,
           headers: {
             authorization: `Bearer ${token}`,
             ...(method === "GET" ? {} : { "content-type": "application/json" }),
           },
-          body: method === "GET" ? undefined : "{}",
+          body: method === "GET" ? undefined : body,
         });
-      const status = (await (await call("GET", "/status")).json()) as { asr: { state: string } };
-      // No models in this home: the recognizer says why, and capture still works.
+      const status = (await (await call("GET", "/status")).json()) as {
+        asr: { state: string };
+        models: { state: string };
+      };
+      // No models in this home: the recognizer says why, a start is refused with what to do, and
+      // capture still works when asked for audio only.
       expect(status.asr.state).toBe("unavailable");
-      expect((await call("POST", "/calls")).status).toBe(201);
+      expect(status.models.state).toBe("missing");
+      const refused = await call("POST", "/calls");
+      expect(refused.status).toBe(503);
+      expect(((await refused.json()) as { error: string }).error).toBe("models_missing");
+      expect((await call("POST", "/calls", '{"withoutModels":true}')).status).toBe(201);
       expect((await call("POST", "/quit")).status).toBe(202);
       expect(await proc.exited).toBe(0);
       expect(existsSync(rtPath)).toBe(false);

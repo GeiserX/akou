@@ -53,13 +53,20 @@ import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
 import type { ModelSpec } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
-import { MODELS, modelFile } from "./asr/models.ts";
+import {
+  DownloadRefused,
+  downloadModels,
+  MODELS,
+  type ModelSpecEntry,
+  type ModelsStatus,
+  modelFile,
+} from "./asr/models.ts";
 import type { CallController, StartOk } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
-import { AkouCaptureEngine } from "./capture/helper.ts";
+import { AkouCaptureEngine, bundledHelper } from "./capture/helper.ts";
 import {
   HOOK_STAGES,
   type HookStage,
@@ -141,6 +148,11 @@ export interface AppOptions {
   /** Runs the live recognizer on the main thread. Tests only. */
   asrInThread?: boolean;
   /**
+   * The model files `POST /models/pull` fetches and a start requires. Tests pass tiny files on a
+   * loopback server; the recognizer is then not restarted after a pull, because they are not models.
+   */
+  modelRegistry?: readonly ModelSpecEntry[];
+  /**
    * Where the final pass reads a call's audio, or null when it cannot. By default a part is read
    * from a 16-bit WAV beside its Opus file (`part-001.wav`); the app cannot decode Opus yet.
    */
@@ -203,8 +215,16 @@ function writePrivate(path: string, text: string): void {
   }
 }
 
-function modelsPresent(dir: string): boolean {
-  return MODELS.every((m) => m.files.every((f) => existsSync(modelFile(dir, m.id, f.name))));
+function modelsPresent(dir: string, registry: readonly ModelSpecEntry[] = MODELS): boolean {
+  return registry.every((m) => m.files.every((f) => existsSync(modelFile(dir, m.id, f.name))));
+}
+
+/** One run of `pullModels`: bytes per file so far, the file in flight, how it failed. */
+interface ModelsPull {
+  running: Promise<void> | null;
+  done: Map<string, number>;
+  file?: string;
+  error?: string;
 }
 
 /** The default final-pass audio: a WAV beside every part's Opus file, or nothing. */
@@ -236,6 +256,7 @@ export class AkouApp implements ApiApp {
     state: "unavailable",
     reason: "not started",
   };
+  private modelsPull: ModelsPull = { running: null, done: new Map() };
 
   private cfg: LoadedConfig;
   private readonly clock: Clock;
@@ -286,7 +307,10 @@ export class AkouApp implements ApiApp {
     const engine =
       o.engine ??
       new AkouCaptureEngine({
-        command: s["capture.helper"].length > 0 ? [...s["capture.helper"]] : ["akou-capture"],
+        command:
+          s["capture.helper"].length > 0
+            ? [...s["capture.helper"]]
+            : [bundledHelper() ?? "akou-capture"],
       });
     this.manager = new CallManager({
       root: s["recordings.root"],
@@ -408,6 +432,80 @@ export class AkouApp implements ApiApp {
       this.cfg.settings["provider.harnessPath"] === "";
     if (a.ok) return { state: "available", id: p.id, harness, detail: a.detail };
     return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
+  }
+
+  private registry(): readonly ModelSpecEntry[] {
+    return this.o.modelRegistry ?? MODELS;
+  }
+
+  /**
+   * The speech models on disk. `ready` when a recognizer spec is given (tests, or none on purpose)
+   * or every file is present; the checksums were checked when each file was written.
+   */
+  models(): ModelsStatus {
+    const dir = this.cfg.settings["asr.modelsDir"];
+    const files = this.registry().flatMap((m) => m.files.map((f) => ({ m: m.id, f })));
+    const total = files.reduce((n, x) => n + x.f.size, 0);
+    const pull = this.modelsPull;
+    let bytes = 0;
+    for (const { m, f } of files) {
+      const path = modelFile(dir, m, f.name);
+      bytes += existsSync(path) ? f.size : (pull.done.get(`${m}/${f.name}`) ?? 0);
+    }
+    const base = { dir, bytes: Math.min(bytes, total), total };
+    if (this.o.models !== undefined && !this.o.modelRegistry) return { state: "ready", ...base };
+    if (pull.running) return { state: "downloading", ...base, file: pull.file };
+    if (modelsPresent(dir, this.registry())) return { state: "ready", ...base, bytes: total };
+    if (pull.error) return { state: "failed", ...base, error: pull.error };
+    return { state: "missing", ...base };
+  }
+
+  /**
+   * Starts the one download of every missing model file, each checked against its pinned SHA-256
+   * (`asr/models.ts`), and answers at once; `models()` reports the progress. When it finishes the
+   * recognizer starts on the new files.
+   */
+  pullModels(): ModelsStatus {
+    const now = this.models();
+    if (now.state === "ready" || now.state === "downloading") return now;
+    const dir = now.dir;
+    const pull: ModelsPull = { running: null, done: new Map() };
+    this.modelsPull = pull;
+    pull.running = downloadModels(
+      dir,
+      this.registry().map((m) => m.id),
+      {
+        registry: this.registry(),
+        env: (this.o.env ?? process.env) as NodeJS.ProcessEnv,
+        onProgress: (p) => {
+          pull.file = `${p.model}/${p.name}`;
+          pull.done.set(pull.file, p.bytes);
+        },
+      },
+    ).then(
+      () => {
+        pull.running = null;
+        pull.file = undefined;
+        this.log("info", `models: every file is in ${dir} and verified`);
+        if (!this.o.modelRegistry && this.o.models === undefined) {
+          void this.asr?.close();
+          this.asr = null;
+          this.startAsr(this.cfg.settings);
+        }
+        for (const fn of this.statusWatchers) fn();
+      },
+      (err: Error) => {
+        pull.running = null;
+        pull.file = undefined;
+        pull.error =
+          err instanceof DownloadRefused
+            ? err.message
+            : `the model download failed: ${err.message}`;
+        this.log("warn", `models: ${pull.error}`);
+        for (const fn of this.statusWatchers) fn();
+      },
+    );
+    return this.models();
   }
 
   templates(): Template[] {
@@ -899,6 +997,14 @@ export class AkouApp implements ApiApp {
 
   async start(req: StartRequest): Promise<Outcome<StartOk>> {
     if (this.quitting) return fail(503, "quitting", "akou is quitting");
+    // Without the speech models a call records audio that nothing transcribes: only when asked.
+    if (!req.withoutModels && this.models().state !== "ready") {
+      return fail(
+        503,
+        "models_missing",
+        "the speech models are not downloaded yet: run `akou models pull` (or download them from the akou window), or start with --without-models to record audio only",
+      );
+    }
     await this.loadVocab(req.workspace ?? "default");
     return this.manager.start(req);
   }
@@ -985,6 +1091,7 @@ export class AkouApp implements ApiApp {
         ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
         : null,
       asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
+      models: this.models(),
       provider: await this.providerStatus(),
       harnesses: this.discovery,
       share: { active: this.sharing.status().length > 0, shares: this.sharing.status() },
