@@ -51,6 +51,7 @@ const clips = readdirSync(clipsDir)
       x: new Float32Array(b.buffer.slice(b.byteOffset, b.byteOffset + b.byteLength)),
     };
   });
+if (clips.length === 0) throw new Error(`no .f32 clips in ${clipsDir}: nothing to measure`);
 const cursor = { mic: 1.0, call: 2.5 };
 const utterances: Array<{ ch: "mic" | "call"; clip: string; start: number; end: number }> = [];
 clips.forEach((c, i) => {
@@ -106,7 +107,8 @@ const started = await cli("start", "-t", "g6-live", "--vocab", words);
 if (started.code !== 0) throw new Error(`start failed: ${started.out}`);
 const folder = JSON.parse(started.out).folder as string;
 await sleep((total + 8) * 1000);
-await cli("stop");
+const stopped = await cli("stop");
+if (stopped.code !== 0) throw new Error(`stop failed, the call may still be live: ${stopped.out}`);
 
 const events = readFileSync(join(folder, "events.jsonl"), "utf8")
   .split("\n")

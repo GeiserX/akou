@@ -1,34 +1,40 @@
 {
-  "at": "2026-09-24T08:30:31.105Z",
+  "at": "2026-09-24T13:41:34.516Z",
+  "positiveControl": {
+    "intact": 0,
+    "hole": 1.5,
+    "silent": 6
+  },
   "hang": {
     "start": {
       "code": 0,
-      "ms": 71
+      "ms": 73
     },
     "stop": {
       "code": 0,
-      "ms": 5079,
+      "ms": 5067,
       "body": {
         "ok": true,
-        "call": "01M398KBAWGHJK92TJFQ8SX7Y6",
+        "call": "01M39TCXP9KZWPAKKJ8PG2C087",
         "state": "ended"
       }
     },
     "nextStart": {
       "code": 0,
-      "ms": 102,
+      "ms": 78,
+      "whileTeardownHung": true,
       "body": {
-        "call": "01M398KZ19EX6BH5MW9PXMC13C",
-        "folder": "2026-09-24_103053_g5-after-hang",
+        "call": "01M39TDCFP18PHHHVP8RBQAXHM",
+        "folder": "2026-09-24_154152_g5-after-hang",
         "part": 1,
-        "firstAudioMs": 49,
-        "url": "akou://call/01M398KZ19EX6BH5MW9PXMC13C"
+        "firstAudioMs": 44,
+        "url": "akou://call/01M39TDCFP18PHHHVP8RBQAXHM"
       }
     },
     "partEnded": [
       {
-        "seq": 3,
-        "t": 1790238653418,
+        "seq": 4,
+        "t": 1790257317204,
         "type": "part.ended",
         "part": 1,
         "reason": "killed",
@@ -39,91 +45,118 @@
       "parts": [
         {
           "part": 1,
-          "wallStart": 1790238633349,
+          "wallStart": 1790257297140,
           "endReason": "killed",
           "loggedFileSeconds": 15.04,
-          "decodableSeconds": 14.994
+          "slices": 749,
+          "tonedSlices": 749
         }
       ],
-      "wallSeconds": 15.004,
-      "lostSeconds": 0.01
+      "wallSeconds": 15.005,
+      "capturedSeconds": 14.98,
+      "lostSeconds": 0.025
     },
     "apiDuring": {
-      "requests": 195,
+      "requests": 194,
       "failed": 0,
-      "p50Ms": 1.8,
-      "p99Ms": 4.5,
-      "maxMs": 5.7
+      "p50Ms": 2.1,
+      "p99Ms": 5.8,
+      "maxMs": 20.1
+    },
+    "verdict": {
+      "everyPartEnded": true,
+      "nextStart201Within3s": true,
+      "lostUnder2s": true,
+      "apiNeverFailed": true,
+      "pass": true
     }
   },
   "crash": {
     "start": {
       "code": 0,
-      "ms": 75
+      "ms": 69
     },
     "stop": {
       "code": 0,
-      "ms": 65
+      "ms": 70
     },
     "nextStart": {
       "code": 0,
-      "ms": 74,
+      "ms": 73,
       "body": {
-        "call": "01M398N4GHSE657FQMT7T7Y5SA",
-        "folder": "2026-09-24_103131_g5-after-crash",
+        "call": "01M39TEPR3JXKXW70CTT6RV8YW",
+        "folder": "2026-09-24_154235_g5-after-crash",
         "part": 1,
-        "firstAudioMs": 47,
-        "url": "akou://call/01M398N4GHSE657FQMT7T7Y5SA"
+        "firstAudioMs": 42,
+        "url": "akou://call/01M39TEPR3JXKXW70CTT6RV8YW"
       }
     },
-    "events": [
+    "partEnded": [
       {
-        "seq": 2,
-        "t": 1790238656760,
-        "type": "part.started",
-        "part": 1,
-        "file": "audio/part-001.opus",
-        "wallStart": 1790238656760,
-        "monoStart": 177986073.430416,
-        "mic": "g5-stereo.wav (left)",
-        "call": {
-          "mode": "file"
-        },
-        "capture": "akou-capture 0.0.0"
-      },
-      {
-        "seq": 3,
-        "t": 1790238676794,
+        "seq": 4,
+        "t": 1790257340462,
         "type": "part.ended",
         "part": 1,
         "reason": "helper-exit",
         "fileSeconds": 20
       },
       {
-        "seq": 4,
-        "t": 1790238676863,
-        "type": "part.started",
+        "seq": 6,
+        "t": 1790257355492,
+        "type": "part.ended",
         "part": 2,
-        "file": "audio/part-002.opus",
-        "wallStart": 1790238676863,
-        "monoStart": 178006176.504125,
-        "mic": "g5-stereo.wav (left)",
+        "reason": "stop",
+        "fileSeconds": 14.95
+      }
+    ],
+    "events": [
+      {
+        "seq": 2,
+        "t": 1790257320432,
+        "type": "part.started",
+        "part": 1,
+        "file": "audio/part-001.opus",
+        "wallStart": 1790257320432,
+        "monoStart": 196649682.104666,
+        "mic": "fixture.wav (left)",
         "call": {
           "mode": "file"
         },
         "capture": "akou-capture 0.0.0"
       },
       {
-        "seq": 5,
-        "t": 1790238691829,
+        "seq": 4,
+        "t": 1790257340462,
         "type": "part.ended",
+        "part": 1,
+        "reason": "helper-exit",
+        "fileSeconds": 20
+      },
+      {
+        "seq": 5,
+        "t": 1790257340541,
+        "type": "part.started",
         "part": 2,
-        "reason": "stop",
-        "fileSeconds": 14.96
+        "file": "audio/part-002.opus",
+        "wallStart": 1790257340541,
+        "monoStart": 196669798.728333,
+        "mic": "fixture.wav (left)",
+        "call": {
+          "mode": "file"
+        },
+        "capture": "akou-capture 0.0.0"
       },
       {
         "seq": 6,
-        "t": 1790238691830,
+        "t": 1790257355492,
+        "type": "part.ended",
+        "part": 2,
+        "reason": "stop",
+        "fileSeconds": 14.95
+      },
+      {
+        "seq": 7,
+        "t": 1790257355493,
         "type": "call.ended",
         "reason": "stop"
       }
@@ -132,28 +165,38 @@
       "parts": [
         {
           "part": 1,
-          "wallStart": 1790238656760,
+          "wallStart": 1790257320432,
           "endReason": "helper-exit",
           "loggedFileSeconds": 20,
-          "decodableSeconds": 19.994
+          "slices": 999,
+          "tonedSlices": 999
         },
         {
           "part": 2,
-          "wallStart": 1790238676863,
+          "wallStart": 1790257340541,
           "endReason": "stop",
-          "loggedFileSeconds": 14.96,
-          "decodableSeconds": 14.96
+          "loggedFileSeconds": 14.95,
+          "slices": 747,
+          "tonedSlices": 747
         }
       ],
-      "wallSeconds": 35.009,
-      "lostSeconds": 0.109
+      "wallSeconds": 34.994,
+      "capturedSeconds": 34.865,
+      "lostSeconds": 0.129
     },
     "apiDuring": {
-      "requests": 339,
+      "requests": 338,
       "failed": 0,
-      "p50Ms": 1.7,
-      "p99Ms": 4.1,
-      "maxMs": 6.6
+      "p50Ms": 1.9,
+      "p99Ms": 3.6,
+      "maxMs": 7.3
+    },
+    "verdict": {
+      "everyPartEnded": true,
+      "nextStart201Within3s": true,
+      "lostUnder2s": true,
+      "apiNeverFailed": true,
+      "pass": true
     }
   }
 }
