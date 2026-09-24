@@ -43,7 +43,8 @@ use crate::health::dead_call::PROBE_S;
 use crate::health::device_watch::DeviceId;
 use crate::protocol::{CallInfo, Ch};
 use crate::source::{
-    CallMode, ClockKind, DeviceConfig, Event, Frontend, OpenError, Opened, Status,
+    CallMode, ClockKind, DeviceConfig, Endpoint, Endpoints, Event, Frontend, OpenError, Opened,
+    Status,
 };
 
 const OPEN_BUDGET: Duration = Duration::from_secs(15);
@@ -270,6 +271,40 @@ mod keep_awake {
         // SAFETY: an assertion this process created.
         unsafe { IOPMAssertionRelease(id) };
     }
+}
+
+/// Every input and output Core Audio lists, through the same cpal host the mic uses. Reads
+/// device properties only: no stream opens and no permission is asked.
+pub fn list_devices() -> Result<Endpoints, OpenError> {
+    use cpal::traits::HostTrait;
+    let host = cpal::default_host();
+    let list = |devices: Option<Vec<cpal::Device>>, default: Option<String>| {
+        devices
+            .unwrap_or_default()
+            .iter()
+            .map(|d| {
+                let id = mic::device_id(d);
+                Endpoint {
+                    default: default.as_deref() == Some(id.as_str()),
+                    name: mic::device_name(d),
+                    id,
+                }
+            })
+            .collect::<Vec<_>>()
+    };
+    let inputs = list(
+        host.input_devices().ok().map(|d| d.collect()),
+        host.default_input_device().map(|d| mic::device_id(&d)),
+    );
+    let outputs = list(
+        host.output_devices().ok().map(|d| d.collect()),
+        host.default_output_device().map(|d| mic::device_id(&d)),
+    );
+    Ok(Endpoints {
+        backend: "coreaudio",
+        inputs,
+        outputs,
+    })
 }
 
 static TAP_SERIAL: AtomicU32 = AtomicU32::new(0);

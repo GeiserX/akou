@@ -6,8 +6,10 @@
 //! `akou-capture/1` packets (`protocol`). The health monitors (`health`) watch the sources and ask
 //! the front end to rebuild them.
 //!
-//! The front ends differ per OS (`macos`, `linux`, `windows`). A file front end (`file_source`)
-//! feeds the same pipeline from a stereo WAV, so the whole helper runs end to end without devices.
+//! The front ends differ per OS (`macos`, `linux`, `windows`); what the Linux and Windows ones
+//! decide before calling the OS lives in `pulse_rules` and `wasapi_rules`, which every OS tests.
+//! A file front end (`file_source`) feeds the same pipeline from a stereo WAV, so the whole
+//! helper runs end to end without devices.
 //!
 //! DESIGN 1.3 plans a napi addon entry point in this file as a fallback to the child process; it
 //! is not built yet, so this is a plain library the binary and the tests share.
@@ -21,9 +23,11 @@ pub mod health;
 pub mod json;
 pub mod opus_writer;
 pub mod protocol;
+pub mod pulse_rules;
 pub mod resample;
 pub mod simulate;
 pub mod source;
+pub mod wasapi_rules;
 pub mod wav;
 
 #[cfg(target_os = "linux")]
@@ -52,6 +56,26 @@ pub fn device_frontend(
     #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
     {
         let _ = cfg;
+        Err(source::OpenError::unsupported("this operating system"))
+    }
+}
+
+/// Every input and output this OS reports, for `akou-capture devices`. Opens no stream.
+pub fn list_devices() -> Result<source::Endpoints, source::OpenError> {
+    #[cfg(target_os = "macos")]
+    {
+        macos::list_devices()
+    }
+    #[cfg(target_os = "linux")]
+    {
+        linux::list_devices()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        windows::list_devices()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "linux", target_os = "windows")))]
+    {
         Err(source::OpenError::unsupported("this operating system"))
     }
 }

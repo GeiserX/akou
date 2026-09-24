@@ -5,8 +5,13 @@
 //!   --call system|none|app:<id>[,<id>] [--exclude-responsible <bundle-id|pid>]
 //! akou-capture run --out <part.opus> --mic default --call system \
 //!   --from-wav <stereo.wav> [--speed X | --realtime] [--loop]
+//! akou-capture devices
 //! akou-capture --version
 //! ```
+//!
+//! `devices` prints one JSON line on stdout, `{"type":"devices","backend",…,"inputs":[{id,name,
+//! default}],"outputs":[…]}`: what the OS lists, read without opening a stream or asking for a
+//! permission. The ids are what `--mic <id>` takes.
 //!
 //! With `--from-wav` no device is opened on any OS: the WAV's left channel is the mic and its right
 //! channel the call. Setting `AKOU_CAPTURE_FILE_ONLY=1` refuses device capture altogether, which
@@ -21,7 +26,7 @@ use akou_capture::simulate::Faults;
 use akou_capture::source::{CallMode, DeviceConfig, Frontend};
 
 const USAGE: &str = "usage: akou-capture run --out FILE --mic default|<id>|none --call system|none|app:<id>[,<id>] \
-[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]";
+[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]\n       akou-capture devices";
 
 /// The slowest `--speed` other than 0: a hundred times slower than real time. Below it the pacing
 /// wait of a long file no longer fits a `Duration`.
@@ -138,6 +143,29 @@ fn main() {
     ) {
         println!("{USAGE}");
         return;
+    }
+    if matches!(argv.first().map(String::as_str), Some("devices")) {
+        if argv.len() > 1 {
+            fail(
+                "usage",
+                &format!("devices takes no arguments\n{USAGE}"),
+                exit::USAGE,
+            );
+        }
+        if std::env::var_os("AKOU_CAPTURE_FILE_ONLY").is_some_and(|v| v == "1") {
+            fail(
+                "file-only",
+                "AKOU_CAPTURE_FILE_ONLY=1 refuses device access",
+                exit::UNAVAILABLE,
+            );
+        }
+        match akou_capture::list_devices() {
+            Ok(list) => {
+                println!("{}", protocol::devices(&list));
+                return;
+            }
+            Err(e) => fail(e.code, &e.msg, e.exit),
+        }
     }
     let args = match parse(&argv) {
         Ok(a) => a,

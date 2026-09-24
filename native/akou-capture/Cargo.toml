@@ -26,7 +26,25 @@ objc2-core-foundation = "0.3"
 objc2-foundation = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+# The PulseAudio native protocol in pure Rust: PipeWire (pipewire-pulse) and PulseAudio both
+# serve it, and nothing links a C audio library, so the helper starts on any Linux.
+futures = { version = "0.3", default-features = false, features = ["executor"] }
 libc = "0.2"
+pulseaudio = "0.3"
+
+[target.'cfg(target_os = "windows")'.dependencies]
+wasapi = "0.24"
+# The same `windows` release wasapi is built on, for the few calls it does not wrap.
+windows = { version = "0.62", features = [
+  "Wdk_System_SystemServices",
+  "Win32_Foundation",
+  "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_Performance",
+  "Win32_System_Power",
+  "Win32_System_SystemInformation",
+  "Win32_System_Threading",
+  "Win32_System_WindowsProgramming",
+] }
 
 [profile.release]
 lto = "thin"

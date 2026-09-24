@@ -33,8 +33,19 @@ its source package at the repository given.
   cpal v0.18.2                   Apache-2.0                         https://github.com/RustAudio/cpal
   dasp_sample v0.11.0            MIT OR Apache-2.0                  https://github.com/rustaudio/sample
   dispatch2 v0.3.1               Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
+  futures v0.3.34                MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
+  futures-channel v0.3.34        MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
+  futures-core v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
+  futures-executor v0.3.34       MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
+  futures-io v0.3.34             MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
+  futures-sink v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
+  futures-task v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
+  futures-util v0.3.34           MIT OR Apache-2.0                  https://github.com/rust-lang/futures-rs
   libc v0.2.189                  MIT OR Apache-2.0                  https://github.com/rust-lang/libc
+  log v0.4.34                    MIT OR Apache-2.0                  https://github.com/rust-lang/log
   mach2 v0.6.0                   BSD-2-Clause OR MIT OR Apache-2.0  https://github.com/JohnTitor/mach2
+  memchr v2.8.3                  Unlicense OR MIT                   https://github.com/BurntSushi/memchr
+  mio v1.2.3                     MIT                                https://github.com/tokio-rs/mio
   num-integer v0.1.47            MIT OR Apache-2.0                  https://github.com/rust-num/num-integer
   num-traits v0.2.19             MIT OR Apache-2.0                  https://github.com/rust-num/num-traits
   objc2 v0.6.4                   MIT                                https://github.com/madsmtm/objc2
@@ -47,8 +58,23 @@ its source package at the repository given.
   ogg v0.9.2                     BSD-3-Clause                       https://github.com/RustAudio/ogg
   opus v0.4.0                    MIT/Apache-2.0                     https://github.com/SpaceManiac/opus-rs
   opusic-sys v0.7.5              BSD-3-Clause                       https://github.com/DoumanAsh/opusic-sys
+  pin-project-lite v0.2.17       Apache-2.0 OR MIT                  https://github.com/taiki-e/pin-project-lite
+  pulseaudio v0.3.1              MIT                                https://github.com/colinmarc/pulseaudio-rs
   rubato v5.0.0                  MIT OR Apache-2.0                  https://github.com/HEnquist/rubato
+  slab v0.4.12                   MIT                                https://github.com/tokio-rs/slab
+  thiserror v1.0.69              MIT OR Apache-2.0                  https://github.com/dtolnay/thiserror
+  thiserror v2.0.21              MIT OR Apache-2.0                  https://github.com/dtolnay/thiserror
+  wasapi v0.24.0                 MIT                                https://github.com/HEnquist/wasapi-rs
   windowfunctions v0.1.1         MIT                                https://github.com/HEnquist/windowfunctions-rs
+  windows v0.62.2                MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-collections v0.3.2     MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-core v0.62.2           MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-future v0.3.2          MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-link v0.2.1            MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-numerics v0.3.1        MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-result v0.4.1          MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-strings v0.5.1         MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
+  windows-threading v0.2.1       MIT OR Apache-2.0                  https://github.com/microsoft/windows-rs
 
 Regenerate this list with, in native/akou-capture, for each shipping target triple:
   cargo tree --locked --target <triple> -e normal,no-proc-macro --prefix none --format "{p}|{l}|{r}"

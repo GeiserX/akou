@@ -29,6 +29,15 @@ impl DeviceWatch {
         Self::default()
     }
 
+    /// A watch whose baseline is the device a source actually opened; with none, the first
+    /// reading is the baseline.
+    pub fn starting_at(opened: Option<&DeviceId>) -> Self {
+        DeviceWatch {
+            seen: opened.is_some(),
+            last: opened.map(|d| d.id.clone()),
+        }
+    }
+
     /// One reading of the current default. The first reading is the baseline.
     pub fn observe(&mut self, current: Option<&DeviceId>) -> Option<Change> {
         let id = current.map(|d| d.id.clone());
@@ -85,6 +94,19 @@ mod tests {
         assert_eq!(w.observe(None), Some(Change::Lost));
         assert_eq!(w.observe(None), None);
         assert_eq!(w.observe(Some(&dev("a"))), Some(Change::Changed(dev("a"))));
+    }
+
+    #[test]
+    fn a_default_that_changed_while_the_source_opened_is_a_change_at_the_first_reading() {
+        let mut w = DeviceWatch::starting_at(Some(&dev("a")));
+        assert_eq!(w.observe(Some(&dev("b"))), Some(Change::Changed(dev("b"))));
+        let mut same = DeviceWatch::starting_at(Some(&dev("a")));
+        assert_eq!(same.observe(Some(&dev("a"))), None);
+        // Positive control: without the opened device the first reading is the baseline.
+        assert_eq!(
+            DeviceWatch::starting_at(None).observe(Some(&dev("b"))),
+            None
+        );
     }
 
     #[test]
