@@ -11,6 +11,7 @@ import { createHmac } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
+import type { CompleteResult, Provider } from "../src/main/llm/provider.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { rigCli } from "./cli-helpers.ts";
@@ -27,6 +28,13 @@ const deliveries: { event: string | null; sig: string | null; body: string }[] =
 let exportDir: string;
 let hookOut: string;
 let run: ReturnType<typeof rigCli>;
+
+/** Enhancement's provider: notes with one section and nothing under it. */
+const provider: Provider = {
+  id: "harness",
+  available: async () => ({ ok: true, detail: "fake" }),
+  complete: async (): Promise<CompleteResult> => ({ text: "## Decisions", model: "fake/1.0" }),
+};
 
 beforeAll(async () => {
   work = tempDir("akou-handoff-");
@@ -75,6 +83,7 @@ beforeAll(async () => {
       "webhook.url": `http://127.0.0.1:${receiver.port}/in`,
       "webhook.secret": "s3cret",
     },
+    provider,
   });
   run = rigCli(rig);
 });
@@ -145,6 +154,15 @@ describe("the hand-off after a call ends (DESIGN 8.2)", () => {
     LONG,
   );
 
+  test("the webhook secret is never shown back over the API", async () => {
+    const got = await rig.api("GET", "/config");
+    expect(got.status).toBe(200);
+    expect(got.body.settings["webhook.secret"]).toBe("(set)");
+    expect(JSON.stringify(got.body)).not.toContain("s3cret");
+    // Positive control: the address beside it is shown.
+    expect(got.body.settings["webhook.url"]).toBe(`http://127.0.0.1:${receiver.port}/in`);
+  });
+
   test(
     "export again: up to date; a note after the end re-exports on its own",
     async () => {
@@ -187,6 +205,72 @@ describe("the hand-off after a call ends (DESIGN 8.2)", () => {
       expect([r.status, r.body.error]).toEqual([409, "not_ended"]);
       expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
       expect(live).toBeString();
+    },
+    LONG,
+  );
+
+  test(
+    "enhance so far on a live call hands nothing off until the call ends",
+    async () => {
+      const live = await rig.startCall({ workspace: "work", title: "Enhanced while live" });
+      // The previous test's call may still be handing off; count this call's deliveries only.
+      const mine = () =>
+        deliveries.filter((d) => JSON.parse(d.body).call?.akou_id === live).map((d) => d.event);
+      const r = await rig.api("POST", "/calls/live/enhance", {});
+      expect(r.status).toBe(200);
+      expect(await events(live)).toContainEqual(expect.objectContaining({ type: "enhanced" }));
+      await Bun.sleep(1500);
+      const handed = (await events(live)).filter((e) =>
+        ["export.done", "hook.done", "webhook.done"].includes(e.type),
+      );
+      expect(handed).toEqual([]);
+      expect(mine()).toEqual([]);
+      // Positive control: the end hands the call off, enhanced notes included.
+      expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+      await until(
+        async () => (await events(live)).some((e) => e.type === "webhook.done"),
+        15_000,
+        "webhook.done after the end",
+      );
+      const log = await events(live);
+      expect(log.filter((e) => e.type === "export.done")).toHaveLength(1);
+      expect(mine()).toEqual(["call.ended"]);
+    },
+    LONG,
+  );
+});
+
+describe("a webhook address with no secret (DESIGN 8.2)", () => {
+  test(
+    "no unsigned delivery is ever sent",
+    async () => {
+      const got: string[] = [];
+      const bare = Bun.serve({
+        hostname: "127.0.0.1",
+        port: 0,
+        fetch: async (req) => {
+          got.push(await req.text());
+          return new Response("ok");
+        },
+      });
+      const r2 = await appRig({ settings: { "webhook.url": `http://127.0.0.1:${bare.port}/in` } });
+      try {
+        const id = await r2.startCall({ workspace: "work", title: "Unsigned" });
+        await Bun.sleep(300);
+        expect((await r2.api("POST", "/calls/live/stop")).status).toBe(200);
+        await until(
+          () => r2.logs.some((l) => l.msg.startsWith(`webhook not sent for ${id}`)),
+          10_000,
+          "the refusal in the log",
+        );
+        await Bun.sleep(1000);
+        expect(got).toEqual([]);
+        const log = (await r2.api("GET", `/calls/${id}/events?after=0`)).body.events as LogEvent[];
+        expect(log.some((e) => e.type === "webhook.done")).toBe(false);
+      } finally {
+        await r2.close();
+        bare.stop(true);
+      }
     },
     LONG,
   );

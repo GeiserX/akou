@@ -377,11 +377,22 @@ describe("settings for the provider", () => {
     expect(JSON.stringify(got.body)).not.toContain("sk-secret-123");
     // Positive control: the key is in the file the user owns.
     expect(readFileSync(join(rig.app.configDir, "config.json"), "utf8")).toContain("sk-secret-123");
-    for (const key of ["provider.harnessPath", "provider.baseUrl"]) {
-      const r = await rig.api("PATCH", "/config", { [key]: "/tmp/x" });
+    // Programs akou runs and addresses it sends a call to are set in config.json only.
+    const refused: Record<string, unknown> = {
+      "provider.harnessPath": "/tmp/x",
+      "provider.baseUrl": "http://127.0.0.1:9/v1",
+      hooks: [{ stage: "call.ended", command: ["/tmp/x"] }],
+      "webhook.url": "https://example.com/in",
+    };
+    for (const [key, value] of Object.entries(refused)) {
+      const r = await rig.api("PATCH", "/config", { [key]: value });
       expect(r.status).toBe(400);
       expect(r.body.message).toContain("not writable over the API");
     }
+    // Positive control: an ordinary setting of the same hand-off is accepted.
+    const ok = await rig.api("PATCH", "/config", { "export.dir": join(rig.home, "exports") });
+    expect(ok.status).toBe(200);
+    await rig.api("PATCH", "/config", { "export.dir": null });
     await rig.api("PATCH", "/config", { "provider.apiKey": null });
   });
 });
