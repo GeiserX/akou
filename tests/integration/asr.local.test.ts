@@ -219,88 +219,102 @@ describe.skipIf(!!SKIP)("the real pipeline", () => {
       },
       (id) => mgr.controller(id) as CallAccess | undefined,
     );
-    const t0 = performance.now();
-    const res = await mgr.start({ workspace: "work", title: "Integration" });
-    if (!res.ok) throw new Error(res.error);
-    const startMs = performance.now() - t0;
-    // Stop when the file has played once (the fake helper loops its source).
-    while (fileSeconds < total - 0.3) await Bun.sleep(50);
-    await mgr.stop();
-    const stopMs = performance.now() - t0;
+    // A failed expect or a stuck helper must still release the Worker and the helper, or both
+    // outlive the test while afterAll deletes the WAV the helper is reading.
+    try {
+      const t0 = performance.now();
+      const res = await mgr.start({ workspace: "work", title: "Integration" });
+      if (!res.ok) throw new Error(res.error);
+      const startMs = performance.now() - t0;
+      // Stop when the file has played once (the fake helper loops its source).
+      const deadline = performance.now() + 60_000;
+      while (fileSeconds < total - 0.3) {
+        if (performance.now() > deadline) {
+          throw new Error(`the helper played ${fileSeconds.toFixed(1)} s of ${total.toFixed(1)} s`);
+        }
+        await Bun.sleep(50);
+      }
+      await mgr.stop();
+      const stopMs = performance.now() - t0;
 
-    const segs = ofType(events, "seg") as Seg[];
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    console.log(
-      `asr.local: live, ${total.toFixed(1)} s of audio at 3x, 201 after ${startMs.toFixed(0)} ms, stopped after ${(stopMs / 1000).toFixed(1)} s, loads ${JSON.stringify(asr.loads)}`,
-    );
-    for (const s of segs) {
+      const segs = ofType(events, "seg") as Seg[];
+      const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
       console.log(
-        `  ${formatWall(s.w0 as number, tz)} ${s.id} ${String(s.ch).padEnd(4)} ${String(s.spk).padEnd(3)} ${(s.a0 as number).toFixed(2)}-${(s.a1 as number).toFixed(2)} s  ${s.text}`,
+        `asr.local: live, ${total.toFixed(1)} s of audio at 3x, 201 after ${startMs.toFixed(0)} ms, stopped after ${(stopMs / 1000).toFixed(1)} s, loads ${JSON.stringify(asr.loads)}`,
       );
-    }
-    const used = ofType(events, "vocab.used");
-    console.log(`  vocab.used: ${JSON.stringify(used.map((u) => u.entries))}`);
-    console.log(`  asr.lag: ${JSON.stringify(ofType(events, "asr.lag").map((l) => l.seconds))}`);
-    for (const l of logs.filter((x) => !x.startsWith("info"))) console.log(`  log ${l}`);
+      for (const s of segs) {
+        console.log(
+          `  ${formatWall(s.w0 as number, tz)} ${s.id} ${String(s.ch).padEnd(4)} ${String(s.spk).padEnd(3)} ${(s.a0 as number).toFixed(2)}-${(s.a1 as number).toFixed(2)} s  ${s.text}`,
+        );
+      }
+      const used = ofType(events, "vocab.used");
+      console.log(`  vocab.used: ${JSON.stringify(used.map((u) => u.entries))}`);
+      console.log(`  asr.lag: ${JSON.stringify(ofType(events, "asr.lag").map((l) => l.seconds))}`);
+      for (const l of logs.filter((x) => !x.startsWith("info"))) console.log(`  log ${l}`);
 
-    const micText = segs
-      .filter((s) => s.ch === "mic")
-      .map((s) => s.text)
-      .join(" ");
-    const callText = segs
-      .filter((s) => s.ch === "call")
-      .map((s) => s.text)
-      .join(" ");
-    expect(micText.toLowerCase()).toContain("move");
-    expect(micText.toLowerCase()).toContain("tomorrow");
-    expect(callText.toLowerCase()).toContain("friday");
-    expect(callText.toLowerCase()).toContain("invoice");
-    expect(micText).toContain("Vercel");
-    expect(callText).toContain("Kubernetes");
-    expect(used.at(-1)?.entries).toEqual(["Vercel", "Kubernetes"]);
+      const micText = segs
+        .filter((s) => s.ch === "mic")
+        .map((s) => s.text)
+        .join(" ");
+      const callText = segs
+        .filter((s) => s.ch === "call")
+        .map((s) => s.text)
+        .join(" ");
+      expect(micText.toLowerCase()).toContain("move");
+      expect(micText.toLowerCase()).toContain("tomorrow");
+      expect(callText.toLowerCase()).toContain("friday");
+      expect(callText.toLowerCase()).toContain("invoice");
+      expect(micText).toContain("Vercel");
+      expect(callText).toContain("Kubernetes");
+      expect(used.at(-1)?.entries).toEqual(["Vercel", "Kubernetes"]);
 
-    // Positive control: the same clips decoded with no hotwords.
-    const plain = new SherpaModels({ dir: MODELS as string, cacheDir: join(work, "cache-plain") });
-    const unbiased = plain.prepare(null);
-    const micPlain = unbiased.recognizer.decode(padSpan(micA)).text;
-    const callPlain = unbiased.recognizer.decode(padSpan(callA)).text;
-    console.log(`  unbiased control: mic "${micPlain}" | call "${callPlain}"`);
-    expect(micPlain).not.toContain("Vercel");
-    expect(segs.filter((s) => s.ch === "mic").every((s) => s.spk === "you")).toBe(true);
-    expect(asr.loads[RECOGNIZER]).toBe(1);
+      // Positive control: the same clips decoded with no hotwords.
+      const plain = new SherpaModels({
+        dir: MODELS as string,
+        cacheDir: join(work, "cache-plain"),
+      });
+      const unbiased = plain.prepare(null);
+      const micPlain = unbiased.recognizer.decode(padSpan(micA)).text;
+      const callPlain = unbiased.recognizer.decode(padSpan(callA)).text;
+      console.log(`  unbiased control: mic "${micPlain}" | call "${callPlain}"`);
+      expect(micPlain).not.toContain("Vercel");
+      expect(segs.filter((s) => s.ch === "mic").every((s) => s.spk === "you")).toBe(true);
+      expect(asr.loads[RECOGNIZER]).toBe(1);
 
-    // The final pass over the same audio, through its own Worker and the call's writer.
-    const c = mgr.controller(res.call);
-    if (!c) throw new Error("no controller");
-    const f0 = performance.now();
-    const fin = await finalizeCall(c, {
-      models: { kind: "sherpa", dir: MODELS as string, cacheDir: join(work, "cache") },
-      audio: { kind: "wav", files: { 1: wav } },
-      vocab,
-      onLog: (level, msg) => logs.push(`final ${level}: ${msg}`),
-    });
-    console.log(
-      `asr.local: final pass ${((performance.now() - f0) / 1000).toFixed(1)} s, ok ${fin.ok}, loads ${JSON.stringify(fin.loads)}, skipped ${fin.skipped.length}`,
-    );
-    for (const l of c.view.lines("final")) {
+      // The final pass over the same audio, through its own Worker and the call's writer.
+      const c = mgr.controller(res.call);
+      if (!c) throw new Error("no controller");
+      const f0 = performance.now();
+      const fin = await finalizeCall(c, {
+        models: { kind: "sherpa", dir: MODELS as string, cacheDir: join(work, "cache") },
+        audio: { kind: "wav", files: { 1: wav } },
+        vocab,
+        onLog: (level, msg) => logs.push(`final ${level}: ${msg}`),
+      });
       console.log(
-        `  ${formatWall(l.w0, tz)} ${l.id} ${l.ch.padEnd(4)} ${l.spkRaw.padEnd(3)} -> ${l.speaker.padEnd(10)} ${l.text}`,
+        `asr.local: final pass ${((performance.now() - f0) / 1000).toFixed(1)} s, ok ${fin.ok}, loads ${JSON.stringify(fin.loads)}, skipped ${fin.skipped.length}`,
       );
+      for (const l of c.view.lines("final")) {
+        console.log(
+          `  ${formatWall(l.w0, tz)} ${l.id} ${l.ch.padEnd(4)} ${l.spkRaw.padEnd(3)} -> ${l.speaker.padEnd(10)} ${l.text}`,
+        );
+      }
+      const { events: all } = await import("../../src/core/log/reader.ts").then((r) =>
+        r.readLog(join(res.folder, "events.jsonl")),
+      );
+      for (const m of all.filter((e) => e.type === "speaker.map" || e.type === "speaker.suggest")) {
+        console.log(`  ${JSON.stringify(m)}`);
+      }
+      expect(fin.ok).toBe(true);
+      const finalText = c.view
+        .lines("final")
+        .map((l) => l.text)
+        .join(" ");
+      expect(finalText).toContain("Vercel");
+      expect(finalText.toLowerCase()).toContain("invoice");
+    } finally {
+      await asr?.close();
+      await mgr.quit();
     }
-    const { events: all } = await import("../../src/core/log/reader.ts").then((r) =>
-      r.readLog(join(res.folder, "events.jsonl")),
-    );
-    for (const m of all.filter((e) => e.type === "speaker.map" || e.type === "speaker.suggest")) {
-      console.log(`  ${JSON.stringify(m)}`);
-    }
-    expect(fin.ok).toBe(true);
-    const finalText = c.view
-      .lines("final")
-      .map((l) => l.text)
-      .join(" ");
-    expect(finalText).toContain("Vercel");
-    expect(finalText.toLowerCase()).toContain("invoice");
-    await asr.close();
-    await mgr.quit();
   }, 180_000);
 });
