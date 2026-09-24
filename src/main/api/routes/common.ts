@@ -1,7 +1,8 @@
 /**
  * Resolving `{id}` on every route (docs/DESIGN.md section 6.2, TRAPS T3.14): a call ULID or `live`
- * everywhere; `last` only on GET routes and on the post-call actions `restart`, `finalize`,
- * `export` and `enhance`, so a control or a write can never land on a finished call by accident.
+ * everywhere; `last` only on GET routes, on the questions `context` and `ask` (reads, not changes)
+ * and on the post-call actions `restart`, `finalize`, `export` and `enhance`, so a control or a
+ * write can never land on a finished call by accident.
  */
 
 import type { CallController } from "../../call/call.ts";
@@ -9,7 +10,7 @@ import { HttpError, type RouteContext, throwOutcome } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 
 export interface ResolveOptions {
-  /** `last` is accepted (GET routes and the post-call actions). */
+  /** `last` is accepted (GET routes, the questions and the post-call actions). */
   allowLast?: boolean;
 }
 
@@ -18,7 +19,7 @@ export function resolveRef(app: ApiApp, ref: string, opts: ResolveOptions = {}):
     throw new HttpError(
       400,
       "last_refused",
-      "`last` is accepted only on GET routes and on restart, finalize, export and enhance; name the call or use `live`",
+      "`last` is accepted only on GET routes, context, ask, restart, finalize, export and enhance; name the call or use `live`",
     );
   }
   const r = app.manager.resolve(ref, { control: !opts.allowLast });

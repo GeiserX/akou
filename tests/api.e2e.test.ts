@@ -157,8 +157,15 @@ describe("controls", () => {
       const x = await rig.api("POST", `/calls/last/${c}`);
       expect([c, x.status, x.body.error]).toEqual([c, 400, "last_refused"]);
     }
-    // Writes refuse `last` too; reads and the post-call actions accept it.
-    expect((await rig.api("POST", "/calls/last/notes", { text: "x" })).status).toBe(400);
+    // Writes refuse `last` too, with a message naming every route that takes it (DESIGN 6.2);
+    // reads (context and ask are questions, not changes) and the post-call actions accept it.
+    const note = await rig.api("POST", "/calls/last/notes", { text: "x" });
+    expect(note.status).toBe(400);
+    for (const route of ["restart", "finalize", "export", "enhance", "context", "ask"]) {
+      expect(note.body.message).toContain(route);
+    }
+    const ask = await rig.api("POST", "/calls/last/ask", { question: "what happened?" });
+    expect(ask.body.error).not.toBe("last_refused");
     expect((await rig.api("GET", "/calls/last")).body.id).toBe(last?.id);
     const ctx = await rig.api("POST", "/calls/last/context", { question: "what happened?" });
     expect(ctx.status).toBe(200);
