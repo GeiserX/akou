@@ -5,11 +5,12 @@
  * look-ahead has arrived, as the real helper does; final mode decides everything at a flush.
  *
  *   bun tests/fixtures/fake-diarize.ts run --model FILE --mode live|final [--threads N]
- *     [--step S] [--look S] [--die-after S] [--garbage] [--no-ready]
+ *     [--step S] [--look S] [--die-after S] [--garbage] [--no-ready] [--protocol P] [--hang]
  *
  * `--die-after S` exits 70 once S seconds of audio have arrived; `--garbage` writes a line that is
- * not the protocol after the first audio; `--no-ready` never says ready. A model path that does
- * not exist exits 66 with an error line, as the real helper does.
+ * not the protocol after the first audio; `--no-ready` never says ready; `--protocol P` says ready
+ * in protocol P; `--hang` never answers a flush. A model path that does not exist exits 66 with an
+ * error line, as the real helper does.
  */
 
 import { existsSync } from "node:fs";
@@ -38,7 +39,13 @@ if (!existsSync(model)) {
   process.exit(66);
 }
 if (!argv.includes("--no-ready"))
-  out({ type: "ready", protocol: "akou-diarize/1", version: "0.0.0-fake", mode, latency: 2 });
+  out({
+    type: "ready",
+    protocol: opt("--protocol") ?? "akou-diarize/1",
+    version: "0.0.0-fake",
+    mode,
+    latency: 2,
+  });
 
 let held = new Float32Array(0);
 let heldStart = 0;
@@ -113,6 +120,7 @@ for await (const chunk of Bun.stdin.stream()) {
         if (ran) out({ type: "decided", at: decided });
       }
     } else if (kind === "f") {
+      if (argv.includes("--hang")) continue;
       decide(pos);
       out({ type: "flushed", at: decided });
       if (mode === "final") {

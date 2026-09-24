@@ -31,6 +31,15 @@ const FRAME_SAMPLES = 1 << 20;
 /** How long `close` waits for the helper to exit at the end of its input before killing it. */
 const EXIT_GRACE_MS = 2000;
 
+/**
+ * How long the final pass waits for the helper's turns: a quarter of the audio's length, and never
+ * under 30 s. CI measures under 3 s for 25 s of audio, model load included. It stays within half
+ * the pass's own budget (`finalBudgetMs`), so a helper that hangs still leaves time to decode.
+ */
+export function diarizeDeadlineMs(samples: number): number {
+  return Math.max(30_000, Math.round((samples / ASR_RATE) * 250));
+}
+
 export interface DiarizeHelperSpec {
   /** Program and leading arguments (`locateHelper`). */
   command: readonly string[];
@@ -156,6 +165,10 @@ export class DiarizeHelper {
             );
             return;
           }
+          if (m.type === "ready" && m.protocol !== DIARIZE_PROTOCOL) {
+            this.kill(`akou-diarize speaks ${m.protocol}, akou needs ${DIARIZE_PROTOCOL}`);
+            return;
+          }
           if (this.done) return;
           this.onMessage(m);
         }
@@ -222,6 +235,8 @@ export class NemotronDiarizer implements Diarizer {
   constructor(
     private readonly spec: Omit<DiarizeHelperSpec, "mode">,
     private readonly onLoad: () => void = () => {},
+    /** The deadline for the helper's answer; `diarizeDeadlineMs` of the audio by default. */
+    private readonly deadlineMs?: number,
   ) {}
 
   process(samples: Float32Array): Promise<DiarizedSpan[]> {
@@ -231,6 +246,7 @@ export class NemotronDiarizer implements Diarizer {
       const settle = (err: Error | null) => {
         if (settled) return;
         settled = true;
+        clearTimeout(timer);
         h.close();
         if (err) reject(err);
         else resolve(smoothTurns(turns));
@@ -244,6 +260,8 @@ export class NemotronDiarizer implements Diarizer {
         },
         (why) => settle(new Error(why)),
       );
+      const ms = this.deadlineMs ?? diarizeDeadlineMs(samples.length);
+      const timer = setTimeout(() => h.kill(`akou-diarize gave no answer within ${ms} ms`), ms);
       this.onLoad();
       void (async () => {
         try {

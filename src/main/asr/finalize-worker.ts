@@ -397,7 +397,16 @@ export async function runFinalPass(
         all.set(readAll(audio, p, "call", chunk), off);
         off += lens[i] as number;
       }
-      const spans = await models.diarizer().process(all);
+      // A diarizer that crashes, hangs past its deadline or errors costs the labels, not the pass.
+      let spans: DiarizedSpan[] = [];
+      try {
+        spans = await models.diarizer().process(all);
+      } catch (err) {
+        log(
+          "error",
+          `speaker labels failed, the final pass goes on without them: ${(err as Error).message}`,
+        );
+      }
       off = 0;
       for (const [i, p] of callParts.entries()) {
         const a = off / ASR_RATE;

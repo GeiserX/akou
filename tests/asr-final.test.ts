@@ -233,6 +233,33 @@ describe("speakers across the call", () => {
     ]);
   });
 
+  test("a diarizer that fails costs the speaker labels only: the final layer is written, unlabelled", async () => {
+    const call = concat(silence(0.3), speak(["hello", "world"], { voice: 1 }), silence(0.5));
+    const models = new FakeModels();
+    // A helper that crashed, hung past its deadline or refused its model rejects its promise.
+    models.diarizer = () => ({
+      process: () => Promise.reject(new Error("akou-diarize gave no answer within 1 ms")),
+    });
+    const out: EventDraft[] = [];
+    const logs: string[] = [];
+    const res = await runFinalPass(
+      {
+        events: callLog([1]),
+        audio: new MemoryAudio({ 1: { mic: silence(call.length / RATE), call } }),
+        decode: null,
+      },
+      models,
+      (d) => out.push(d),
+      (level, msg) => logs.push(`${level}: ${msg}`),
+    );
+    expect(res.ok).toBe(true);
+    expect(out.some((d) => d.type === "final.failed")).toBe(false);
+    const segs = out.filter((d) => d.type === "seg") as Omit<Seg, "seq" | "t">[];
+    expect(segs.map((x) => [x.ch, x.spk, x.text])).toEqual([["call", "s?", "hello world"]]);
+    expect(out.at(-1)?.type).toBe("final.done");
+    expect(logs.join("\n")).toContain("gave no answer within 1 ms");
+  });
+
   test("final clusters take the live names: a map at 60 % overlap, else a suggestion", async () => {
     const events = callLog([1], (b) => {
       b.seg({

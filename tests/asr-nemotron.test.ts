@@ -7,9 +7,12 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { LogEvent } from "../src/core/log/events.ts";
 import type { SpeakerTurn } from "../src/main/asr/engine.ts";
+import { finalBudgetMs } from "../src/main/asr/finalize-worker.ts";
 import {
   type DiarizeHelperSpec,
+  diarizeDeadlineMs,
   frame,
   NemotronDiarizer,
   NemotronStream,
@@ -112,6 +115,32 @@ describe("the final pass's diarizer", () => {
   test("a helper that crashes mid-pass rejects; it never hangs the pass", async () => {
     const d = new NemotronDiarizer(spec(["--die-after", "1"]));
     await expect(d.process(tone(3, 0.1))).rejects.toThrow(/exited with code 70/);
+  });
+
+  test("a helper that speaks another protocol version is refused, not trusted", async () => {
+    const d = new NemotronDiarizer(spec(["--protocol", "akou-diarize/2"]));
+    await expect(d.process(tone(1, 0.1))).rejects.toThrow(
+      /speaks akou-diarize\/2, akou needs akou-diarize\/1/,
+    );
+    // Positive control: the same helper saying akou-diarize/1 is used.
+    const ok = new NemotronDiarizer(spec(["--protocol", "akou-diarize/1"]));
+    expect((await ok.process(tone(1, 0.1))).map((t) => t.speaker)).toEqual([0]);
+  });
+
+  test("a helper that never answers is killed at its deadline; the pass never waits on it", async () => {
+    const d = new NemotronDiarizer(spec(["--hang"]), () => {}, 300);
+    const t0 = performance.now();
+    await expect(d.process(tone(1, 0.1))).rejects.toThrow(/gave no answer within 300 ms/);
+    expect(performance.now() - t0).toBeLessThan(5000);
+  }, 10_000);
+
+  test("the deadline leaves the final pass time to decode: under half its budget, however long the call", () => {
+    for (const seconds of [1, 60, 119, 600, 3 * 3600]) {
+      const budget = finalBudgetMs([{ type: "part.ended", fileSeconds: seconds } as LogEvent]);
+      expect(diarizeDeadlineMs(seconds * RATE)).toBeLessThanOrEqual(budget / 2);
+    }
+    // And it grows with the audio: a long call is not cut at the short call's deadline.
+    expect(diarizeDeadlineMs(3 * 3600 * RATE)).toBeGreaterThan(diarizeDeadlineMs(60 * RATE));
   });
 
   test("a program that does not exist is an error, not a hang", async () => {
