@@ -598,6 +598,10 @@ impl Frontend for MacFrontend {
         true
     }
 
+    fn probe_matches_call(&self) -> bool {
+        true
+    }
+
     fn close(mut self: Box<Self>) {
         if let Some(m) = self.mic.take() {
             m.close(CLOSE_BUDGET);

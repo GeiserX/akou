@@ -11,7 +11,8 @@
 //! - `exit-before-capturing=N`     exit with code N before `capturing` (77 = permission)
 //! - `call-silent`                 the call side delivers nothing and output is not running
 //! - `call-omit`                   no call packets at all on stdout (a helper without an aligner)
-//! - `call-dead-at=S`              the call side goes silent at S while output keeps running
+//! - `call-dead-at=S`              no call buffers at all from S, output still running (a dead tap)
+//! - `call-zeros-at=S`             call buffers of zeros from S, output still running (a quiet call)
 //! - `rebuild-heals`               a call rebuild brings a dead call side back
 //! - `hang-on-stop`                `stop` and closing stdin are ignored: a hung teardown
 //! - `crash-at=S`                  exit 70 at S, without `stopped`
@@ -27,6 +28,7 @@ mod imp {
         call_silent: bool,
         call_omit: bool,
         call_dead_at: Option<f64>,
+        call_zeros_at: Option<f64>,
         rebuild_heals: bool,
         hang_on_stop: bool,
         crash_at: Option<f64>,
@@ -59,6 +61,7 @@ mod imp {
                 "call-silent" => self.call_silent = true,
                 "call-omit" => self.call_omit = true,
                 "call-dead-at" => self.call_dead_at = Some(num(name, v)?),
+                "call-zeros-at" => self.call_zeros_at = Some(num(name, v)?),
                 "rebuild-heals" => self.rebuild_heals = true,
                 "hang-on-stop" => self.hang_on_stop = true,
                 "crash-at" => self.crash_at = Some(num(name, v)?),
@@ -75,6 +78,7 @@ mod imp {
                 || self.call_silent
                 || self.call_omit
                 || self.call_dead_at.is_some()
+                || self.call_zeros_at.is_some()
                 || self.rebuild_heals
                 || self.hang_on_stop
                 || self.crash_at.is_some()
@@ -95,6 +99,9 @@ mod imp {
         }
         pub fn call_dead_at(&self) -> Option<f64> {
             self.call_dead_at
+        }
+        pub fn call_zeros_at(&self) -> Option<f64> {
+            self.call_zeros_at
         }
         pub fn rebuild_heals(&self) -> bool {
             self.rebuild_heals
@@ -150,6 +157,9 @@ mod imp {
         pub const fn call_dead_at(&self) -> Option<f64> {
             None
         }
+        pub const fn call_zeros_at(&self) -> Option<f64> {
+            None
+        }
         pub const fn rebuild_heals(&self) -> bool {
             false
         }
@@ -182,6 +192,7 @@ mod tests {
             "hang-on-stop",
             "crash-at=1",
             "call-dead-at=0.5",
+            "call-zeros-at=0.5",
             "stall-at=1",
         ] {
             assert!(f.apply(s).is_err(), "{s}");
@@ -200,6 +211,7 @@ mod tests {
             "call-silent",
             "call-omit",
             "call-dead-at=0.5",
+            "call-zeros-at=0.5",
             "rebuild-heals",
             "hang-on-stop",
             "crash-at=0.3",

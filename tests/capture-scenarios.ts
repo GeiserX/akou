@@ -13,7 +13,11 @@ import type { LogEvent } from "../src/core/log/events.ts";
 import { processAlive } from "../src/core/log/writer.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import type { CallBudgets } from "../src/main/call/state.ts";
-import type { CaptureStartOptions } from "../src/main/capture/engine.ts";
+import type {
+  CaptureSession,
+  CaptureStartOptions,
+  StopOutcome,
+} from "../src/main/capture/engine.ts";
 import { AkouCaptureEngine, KILL_GRACE_MS } from "../src/main/capture/helper.ts";
 import type { Packet } from "../src/main/capture/protocol.ts";
 import { logOf, ofType, until } from "./capture-helpers.ts";
@@ -21,6 +25,8 @@ import { writeCallWav } from "./fixtures/audio.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 export const LONG = 20_000;
+/** What a wall-clock bound here allows for the runner: disk syncs and scheduling, not the app. */
+const RUNNER_MS = 1_000;
 
 /** The traps' fault list; times are seconds of audio on the file timeline. */
 export interface Faults {
@@ -32,7 +38,10 @@ export interface Faults {
   exitBeforeCapturing?: number;
   callSilent?: boolean;
   callOmit?: boolean;
+  /** The call side stops delivering buffers at this time, output still running. */
   callDeadAt?: number;
+  /** The call side delivers buffers of zeros from this time, output still running. */
+  callZerosAt?: number;
   hangOnStop?: boolean;
   crashAt?: number;
   stallAt?: number;
@@ -66,6 +75,7 @@ export const fakeHelper: HelperUnderTest = {
     if (f.callSilent) a.push("--call-silent");
     if (f.callOmit) a.push("--call-omit");
     if (f.callDeadAt !== undefined) a.push("--call-dead-at", String(f.callDeadAt));
+    if (f.callZerosAt !== undefined) a.push("--call-zeros-at", String(f.callZerosAt));
     if (f.hangOnStop) a.push("--hang-on-stop");
     if (f.crashAt !== undefined) a.push("--crash-at", String(f.crashAt));
     if (f.stallAt !== undefined) a.push("--stall-at", String(f.stallAt));
@@ -95,6 +105,7 @@ export function rustHelper(bin: string, defaultWav: string): HelperUnderTest {
       if (f.callSilent) sim("call-silent");
       if (f.callOmit) sim("call-omit");
       if (f.callDeadAt !== undefined) sim(`call-dead-at=${f.callDeadAt}`);
+      if (f.callZerosAt !== undefined) sim(`call-zeros-at=${f.callZerosAt}`);
       if (f.hangOnStop) sim("hang-on-stop");
       if (f.crashAt !== undefined) sim(`crash-at=${f.crashAt}`);
       if (f.stallAt !== undefined) sim(`stall-at=${f.stallAt}`);
@@ -129,6 +140,31 @@ export interface Rig {
   events: LogEvent[];
   packets: { part: number; p: Packet; at: number }[];
   pids: number[];
+  /** Every helper session the engine started, in order. */
+  sessions: CaptureSession[];
+  /** What each session's stop did and when (`performance.now()`), in the same order. */
+  stops: StopTimes[];
+}
+
+/**
+ * The helper's side of a stop, apart from the call's own work around it: when the session was
+ * asked to stop, when the helper said `stopped`, when the session killed it, when it saw the exit
+ * and when its stop answered, and what it answered.
+ */
+export interface StopTimes {
+  asked?: number;
+  said?: number;
+  kill?: number;
+  exit?: number;
+  answered?: number;
+  outcome?: StopOutcome;
+}
+
+/** One line for a test's output, in ms after the stop was asked. */
+export function describeStop(t: StopTimes, took: number): string {
+  const at = (x?: number) =>
+    x === undefined || t.asked === undefined ? "-" : `${Math.round(x - t.asked)}`;
+  return `stop took ${Math.round(took)} ms; helper said stopped at ${at(t.said)}, killed at ${at(t.kill)}, exit seen at ${at(t.exit)}, session answered at ${at(t.answered)}`;
 }
 
 /** A call manager whose engine spawns `h` (or `command`, for a helper that is not one of them). */
@@ -142,6 +178,8 @@ export function rig(
   const events: LogEvent[] = [];
   const packets: Rig["packets"] = [];
   const pids: number[] = [];
+  const sessions: CaptureSession[] = [];
+  const stops: StopTimes[] = [];
   const engine = new AkouCaptureEngine({
     command: command ?? h.command,
     extraArgs: (o) => h.args(faults(o)),
@@ -149,8 +187,34 @@ export function rig(
   });
   const inner = engine.start.bind(engine);
   engine.start = (o, handlers) => {
-    const s = inner(o, handlers);
+    const t: StopTimes = {};
+    const s = inner(o, {
+      ...handlers,
+      message(m) {
+        if (m.type === "stopped") t.said ??= performance.now();
+        handlers.message(m);
+      },
+      exit(e) {
+        t.exit ??= performance.now();
+        handlers.exit(e);
+      },
+    });
+    const kill = s.kill.bind(s);
+    s.kill = () => {
+      t.kill ??= performance.now();
+      kill();
+    };
+    const stop = s.stop.bind(s);
+    s.stop = async (budget) => {
+      t.asked ??= performance.now();
+      const out = await stop(budget);
+      t.answered = performance.now();
+      t.outcome = out;
+      return out;
+    };
     if (s.pid) pids.push(s.pid);
+    sessions.push(s);
+    stops.push(t);
     return s;
   };
   const mgr = new CallManager({
@@ -171,7 +235,7 @@ export function rig(
     }
     cleanup();
   });
-  return { root, mgr, events, packets, pids };
+  return { root, mgr, events, packets, pids, sessions, stops };
 }
 
 const has = (events: LogEvent[], f: (e: LogEvent) => boolean) => () => events.some(f);
@@ -238,14 +302,38 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         await until(() => r.packets.length > 10, 3_000, "packets");
         // The event loop keeps turning while the helper hangs.
         let ticks = 0;
-        const timer = setInterval(() => ticks++, 10);
+        let last = performance.now();
+        let maxGap = 0;
+        const timer = setInterval(() => {
+          const now = performance.now();
+          maxGap = Math.max(maxGap, now - last);
+          last = now;
+          ticks++;
+        }, 10);
         const t0 = performance.now();
         const stop = await r.mgr.stop("live");
         const took = performance.now() - t0;
         clearInterval(timer);
+        const at = r.stops[0] as StopTimes;
+        console.log(
+          `[T0.9] ${describeStop(at, took)}; longest event-loop gap ${Math.round(maxGap)} ms`,
+        );
         expect(stop.ok).toBe(true);
-        expect(took).toBeGreaterThanOrEqual(budget - 20);
-        expect(took).toBeLessThan(budget + KILL_GRACE_MS);
+        // The helper had the whole budget, then was killed.
+        expect(at.kill).toBeDefined();
+        expect((at.kill as number) - (at.asked as number)).toBeGreaterThanOrEqual(budget - 20);
+        // The kill worked: the session saw the helper exit within the kill grace (past it, the
+        // session gives up on the exit and answers with none).
+        expect(at.outcome).toMatchObject({ killed: true, exit: { killedByUs: true } });
+        // And the session answered as soon as it saw the exit: both run in the same turn of the
+        // event loop, so this holds however loaded the runner is.
+        expect((at.answered as number) - (at.exit as number)).toBeLessThan(50);
+        // Bounded. The exact budget is proven on a manual clock (call-machine.test.ts, [T0.9] and
+        // [T4.31]); this is the whole stop of a real process on a shared runner, which also syncs
+        // part.ended and call.ended to disk and waits whenever the runner does not schedule it. The
+        // bound is budget plus kill grace plus one second for that; a stop that waited on the hung
+        // helper without a deadline never answers, and fails on the test's timeout.
+        expect(took).toBeLessThan(budget + KILL_GRACE_MS + RUNNER_MS);
         expect(ticks).toBeGreaterThan(took / 10 / 4);
         expect(ofType(r.events, "part.ended")[0]).toMatchObject({ reason: "killed" });
         expect(processAlive(r.pids[0] as number)).toBe(false);
@@ -291,13 +379,23 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
     test(
       "[T2.51] quit stops the live helper within the stop budget and leaves the log ended",
       async () => {
-        const r = rig(h, () => ({}), { stopMs: 500 });
+        // The helper's own stop (finish the file, say stopped, exit) takes 10 to 50 ms on every
+        // runner; the budget leaves room for a runner that stalls for a second or so.
+        const budget = 2_000;
+        const r = rig(h, () => ({}), { stopMs: budget });
         const a = await r.mgr.start({ workspace: "work" });
         if (!a.ok) throw new Error(a.error);
         await until(() => r.packets.length > 10, 3_000, "packets");
         const t0 = performance.now();
         await r.mgr.quit();
-        expect(performance.now() - t0).toBeLessThan(500 + KILL_GRACE_MS);
+        const took = performance.now() - t0;
+        const at = r.stops[0] as StopTimes;
+        console.log(`[T2.51] ${describeStop(at, took)}`);
+        // The helper stopped by itself: it said `stopped` and exited 0 within the budget, and was
+        // never killed.
+        expect(at.said).toBeDefined();
+        expect(at.outcome).toMatchObject({ killed: false, exit: { code: 0, killedByUs: false } });
+        expect(took).toBeLessThan(budget);
         expect(processAlive(r.pids[0] as number)).toBe(false);
         const log = await logOf(a.folder);
         expect(log.slice(-2).map((e) => e.type)).toEqual(["part.ended", "call.ended"]);
@@ -361,6 +459,30 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         );
         await r.mgr.live()?.idle();
         expect(ofType(r.events, "part.ended")[0]).toMatchObject({ part: 1, reason: "restart" });
+      },
+      LONG,
+    );
+
+    test(
+      "[T0.2] a call side with no buffers at all is rebuilt within a second; one of zeros waits the 10 s probe rule",
+      async () => {
+        const deadOf = async (f: Faults) => {
+          const r = rig(h, (o) => (o.part === 1 ? { ...f, speed: 20 } : {}));
+          const a = await r.mgr.start({ workspace: "work" });
+          expect(a.ok).toBe(true);
+          await until(
+            has(r.events, (e) => e.type === "health" && e.state === "dead"),
+            5_000,
+            "health dead",
+          );
+          await r.mgr.stop("live");
+          return ofType(r.events, "health").find((e) => e.state === "dead");
+        };
+        const stopped = await deadOf({ callDeadAt: 0.5 });
+        expect(stopped?.silentFor).toBeGreaterThanOrEqual(1);
+        expect(stopped?.silentFor).toBeLessThan(2);
+        const zeros = await deadOf({ callZerosAt: 0.5 });
+        expect(zeros?.silentFor).toBeGreaterThanOrEqual(10);
       },
       LONG,
     );

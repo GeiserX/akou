@@ -37,12 +37,31 @@ export interface Levels {
   call: number;
 }
 
+/**
+ * The app's rendering of the lines its vocabulary corrects (DESIGN 5.4). The page folds raw events
+ * without the vocabulary files or the word lists, so for these lines it shows the app's text.
+ * `rev` is the revision the text belongs to. `all`: every corrected line, replacing what came
+ * before; otherwise an update, a line without `heard` having lost its correction.
+ */
+export interface ReadLine {
+  id: string;
+  rev: number;
+  text: string;
+  heard?: string;
+}
+
+export interface ReadLines {
+  all: boolean;
+  lines: ReadLine[];
+}
+
 export interface FollowSink {
   /** The stream is open; events follow. */
   open(): void;
   event(e: LogEvent): void;
   partial(lines: PartialLine[]): void;
   level(l: Levels): void;
+  read(r: ReadLines): void;
   /** Anything arrived, a keep-alive included: the connection is alive. */
   alive(): void;
   /** The stream ended or failed. The follower reconnects from its cursor. */
@@ -147,7 +166,7 @@ export interface AkouRpc {
     messages: {
       followed: {
         stream: string;
-        kind: "open" | "event" | "partial" | "level" | "alive" | "closed";
+        kind: "open" | "event" | "partial" | "level" | "read" | "alive" | "closed";
         data?: unknown;
       };
       asked: { stream: string; kind: "excerpts" | "token" | "answer" | "error"; data: unknown };

@@ -93,6 +93,14 @@ describe("[T4.9] Ranges bypassed by a hand-edited file", () => {
     expect(validateSetting("api.port", 0).ok).toBe(true);
     expect(validateSetting("api.port", 80).ok).toBe(false);
   });
+
+  test("vocab.languages takes only languages akou has a word list for; empty means all", () => {
+    expect(validateSetting("vocab.languages", []).ok).toBe(true);
+    expect(validateSetting("vocab.languages", ["es", "en"]).ok).toBe(true);
+    const bad = validateSetting("vocab.languages", ["en", "klingon"]);
+    expect(bad.ok).toBe(false);
+    expect(bad.ok ? "" : bad.error).toMatch(/klingon is not one of en, es/);
+  });
 });
 
 describe("[spike] The boost is a slider", () => {

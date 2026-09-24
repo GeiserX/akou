@@ -13,6 +13,12 @@
 //! - Clock skew between a device and the host clock is measured from the timestamps and followed
 //!   by nudging that source's resampler ratio by at most 0.1 %. A placement error beyond 50 ms is
 //!   a discontinuity (a gap, a restarted device) and re-anchors the source instead.
+//! - A source is placed right from its first audio. A rebuilt source is a new stream, so the
+//!   engine restarts it and its next buffer anchors it by its own timestamp. And in the first
+//!   second after any anchor, a step beyond 5 ms re-anchors once instead of being slewed away at
+//!   0.1 % (a 33 ms step took about 40 s): a buffer of the old stream still queued after a
+//!   restart, or a first buffer stamped by a late arrival. Past that second a step is skew or
+//!   jitter, and is slewed as before.
 
 use crate::protocol::Ch;
 use crate::resample::StreamResampler;
@@ -26,6 +32,11 @@ pub const CAP: usize = RATE as usize * 2;
 pub const RESYNC_FRAMES: f64 = 2_400.0;
 /// Largest ratio nudge for clock skew.
 pub const MAX_NUDGE: f64 = 0.001;
+/// After an anchor, a placement step beyond `STEP_FRAMES` within this many frames re-anchors
+/// the source once: 1 s.
+pub const SETTLE_FRAMES: f64 = RATE as f64;
+/// A step this large (5 ms) is not clock skew: skew moves a source 1 ms a second at most.
+pub const STEP_FRAMES: f64 = 240.0;
 /// The skew controller removes a placement error over about this many seconds.
 const CORRECT_OVER_S: f64 = 10.0;
 const ERR_SMOOTHING: f64 = 0.05;
@@ -60,6 +71,8 @@ struct Track {
     skip: usize,
     /// Expected timeline position of the next input sample, from what was pushed.
     nominal: f64,
+    /// Timeline frame up to which a step still re-anchors; `NEG_INFINITY` once it has.
+    settle_until: f64,
     err: f64,
     rel: f64,
     scratch: Vec<f32>,
@@ -78,6 +91,7 @@ impl Track {
             synced: false,
             skip: 0,
             nominal: 0.0,
+            settle_until: f64::NEG_INFINITY,
             err: 0.0,
             rel: 1.0,
             scratch: Vec::new(),
@@ -202,7 +216,11 @@ impl Aligner {
         let Some(rs) = t.resampler.as_mut() else {
             return;
         };
-        if !t.synced || (expected - t.nominal).abs() > RESYNC_FRAMES {
+        let step = (expected - t.nominal).abs();
+        // An anchoring push always opens a fresh window: a restart inside the old one must not
+        // use it up.
+        let settling = t.synced && expected < t.settle_until && step > STEP_FRAMES;
+        if !t.synced || step > RESYNC_FRAMES || settling {
             if t.synced {
                 t.stats.resyncs += 1;
             }
@@ -213,6 +231,12 @@ impl Aligner {
             t.err = 0.0;
             t.rel = 1.0;
             t.synced = true;
+            // One settling re-anchor per anchor, so jitter cannot keep re-anchoring.
+            t.settle_until = if settling {
+                f64::NEG_INFINITY
+            } else {
+                expected + SETTLE_FRAMES
+            };
         } else {
             let e = expected - t.nominal;
             t.err = t.err * (1.0 - ERR_SMOOTHING) + e * ERR_SMOOTHING;
@@ -354,6 +378,12 @@ impl Aligner {
             awake_ns,
             ch: chans,
         }
+    }
+
+    /// The source was rebuilt: its next buffer comes from a new stream on its own clock, and
+    /// anchors it by its own timestamp.
+    pub fn restart(&mut self, ch: Ch) {
+        self.tracks[ch.index()].synced = false;
     }
 
     /// Stops the timeline at `now`; nothing is pushed or emitted until `resume`.
@@ -636,6 +666,174 @@ mod tests {
         al.push(Ch::Mic, T0 + 500 * MS, 48_000, &vec![0.5; 480], true);
         assert!(al.stats(Ch::Mic).late > 0);
         assert_eq!(al.stats(Ch::Mic).before, 0);
+    }
+
+    /// Pushes 10 ms call buffers of `v`, stamped from `from_ns` (a source's own clock), until
+    /// `until_ns`; emits what is due on a host clock that follows the stamps, with the engine's
+    /// 100 ms device latency.
+    fn call_stream(al: &mut Aligner, out: &mut Vec<f32>, from_ns: u64, until_ns: u64, v: f32) {
+        let mut at = from_ns;
+        while at < until_ns {
+            al.push(Ch::Call, at, 48_000, &[v; 480], v != 0.0);
+            at += 10 * MS;
+            while let Some(s) = al.pop_due(at, 100 * MS) {
+                out.extend_from_slice(&s.ch[1].samples);
+            }
+        }
+    }
+
+    /// First timeline frame at or after `from` whose call sample is at least `level`.
+    fn first_at(out: &[f32], from: usize, level: f32) -> i64 {
+        out[from..].iter().position(|v| *v >= level).unwrap() as i64 + from as i64
+    }
+
+    /// [G4 quiet-tap run] A rebuilt tap is a new stream: its first buffer is placed by its own
+    /// timestamp at once. Kept on the old stream's clock instead, a new stream 21 ms later than
+    /// the old one ended lands 21 ms early and is slewed back at 1 ms a second, which is how the
+    /// first start after a silent tap stayed off for about 40 s.
+    #[test]
+    fn a_restarted_source_is_placed_by_its_own_timestamps_at_once() {
+        let end = T0 + 2_000 * MS;
+        let new_at = end + 21 * MS;
+        let expected = (new_at - T0) as i64 * 48 / 1_000_000;
+        for restart in [true, false] {
+            let mut al = Aligner::new(T0);
+            let mut out = Vec::new();
+            call_stream(&mut al, &mut out, T0, end, 0.25);
+            if restart {
+                al.restart(Ch::Call);
+            }
+            call_stream(&mut al, &mut out, new_at, new_at + 3_000 * MS, 0.75);
+            let got = first_at(&out, 90_000, 0.5);
+            if restart {
+                assert!((got - expected).abs() <= 48, "{got} vs {expected}");
+                // The 21 ms the rebuild lost are zeros where they belong, not closed up.
+                assert!(
+                    out[(expected - 500) as usize..(expected - 100) as usize]
+                        .iter()
+                        .all(|v| *v == 0.0)
+                );
+            } else {
+                // Positive control: without the restart the old clock holds it 21 ms early.
+                assert!(expected - got > 900, "{got} vs {expected}");
+            }
+        }
+    }
+
+    /// A buffer of the old stream that was still queued when the source was restarted anchors
+    /// it on the old clock; the new stream's first buffer is then a step, and a step in the first
+    /// second after an anchor re-anchors rather than slewing.
+    #[test]
+    fn a_stale_buffer_after_a_restart_does_not_hold_the_new_stream_to_the_old_clock() {
+        let end = T0 + 2_000 * MS;
+        // The new stream's clock reads 33 ms earlier than the old stream's for the same instant.
+        let new_at = end + 10 * MS - 33 * MS;
+        let expected = (new_at - T0) as i64 * 48 / 1_000_000;
+        let mut al = Aligner::new(T0);
+        let mut out = Vec::new();
+        call_stream(&mut al, &mut out, T0, end, 0.25);
+        al.restart(Ch::Call);
+        call_stream(&mut al, &mut out, end, end + 10 * MS, 0.25);
+        call_stream(&mut al, &mut out, new_at, new_at + 3_000 * MS, 0.75);
+        let got = first_at(&out, 90_000, 0.5);
+        assert!((got - expected).abs() <= 48, "{got} vs {expected}");
+        assert_eq!(al.stats(Ch::Call).resyncs, 1);
+    }
+
+    /// The first buffer of a stream stamped by its arrival can be late by up to a delivery
+    /// period; the next ones are not. The step shows within the first second and re-anchors
+    /// there, so alignment is right from the second buffer, not 15 s later. Past the first
+    /// second the same step is clock skew or jitter and is slewed as before (positive control).
+    #[test]
+    fn a_step_in_the_first_second_re_anchors_and_a_later_one_is_slewed() {
+        for (step_at_ms, snaps) in [(10u64, true), (1_500, false)] {
+            let mut al = Aligner::new(T0);
+            let mut out = Vec::new();
+            // Buffers up to `step_at` are stamped 15 ms late; the rest on time.
+            let mut at = T0;
+            while at < T0 + 3_000 * MS {
+                let stamp = if at < T0 + step_at_ms * MS {
+                    at + 15 * MS
+                } else {
+                    at
+                };
+                let v = if at >= T0 + 2_500 * MS { 0.75 } else { 0.25 };
+                al.push(Ch::Call, stamp, 48_000, &[v; 480], true);
+                at += 10 * MS;
+                while let Some(s) = al.pop_due(at + 15 * MS, LAT) {
+                    out.extend_from_slice(&s.ch[1].samples);
+                }
+            }
+            let expected: i64 = 2_500 * 48;
+            let got = first_at(&out, 100_000, 0.5);
+            if snaps {
+                assert!((got - expected).abs() <= 48, "{got} vs {expected}");
+                assert_eq!(al.stats(Ch::Call).resyncs, 1);
+            } else {
+                assert!((got - expected).abs() > 300, "{got} vs {expected}");
+                assert_eq!(al.stats(Ch::Call).resyncs, 0);
+            }
+        }
+    }
+
+    /// A source restarted inside the first second after its anchor gets a settle window of its
+    /// own: the new stream's late-stamped first buffer re-anchors on the next one, as it would
+    /// for a restart later on (positive control), instead of being slewed at 1 ms a second.
+    #[test]
+    fn a_restart_inside_the_settle_window_opens_a_window_for_the_new_stream() {
+        for restart_ms in [1_500u64, 500] {
+            let mut al = Aligner::new(T0);
+            let mut out = Vec::new();
+            let end = T0 + restart_ms * MS;
+            call_stream(&mut al, &mut out, T0, end, 0.25);
+            al.restart(Ch::Call);
+            let new_at = end + 50 * MS;
+            // The new stream's first buffer is stamped 20 ms late, the next ones on time.
+            al.push(Ch::Call, new_at + 20 * MS, 48_000, &[0.25; 480], true);
+            call_stream(
+                &mut al,
+                &mut out,
+                new_at + 10 * MS,
+                new_at + 1_500 * MS,
+                0.25,
+            );
+            call_stream(
+                &mut al,
+                &mut out,
+                new_at + 1_500 * MS,
+                new_at + 3_000 * MS,
+                0.75,
+            );
+            let expected = (new_at + 1_500 * MS - T0) as i64 * 48 / 1_000_000;
+            let got = first_at(&out, (expected - 24_000) as usize, 0.5);
+            assert!(
+                (got - expected).abs() <= 48,
+                "restart at {restart_ms} ms: {got} vs {expected}"
+            );
+            assert_eq!(al.stats(Ch::Call).resyncs, 1, "restart at {restart_ms} ms");
+        }
+    }
+
+    /// The settle window lasts a second after the anchor, not one buffer: a first buffer stamped
+    /// early makes the next one a step later than the anchor, and that step re-anchors too.
+    #[test]
+    fn a_first_buffer_stamped_early_re_anchors_on_the_next_one() {
+        let mut al = Aligner::new(T0);
+        let mut out = Vec::new();
+        let start = T0 + 100 * MS;
+        al.push(Ch::Call, start - 15 * MS, 48_000, &[0.25; 480], true);
+        call_stream(&mut al, &mut out, start + 10 * MS, start + 1_500 * MS, 0.25);
+        call_stream(
+            &mut al,
+            &mut out,
+            start + 1_500 * MS,
+            start + 3_000 * MS,
+            0.75,
+        );
+        let expected = (start + 1_500 * MS - T0) as i64 * 48 / 1_000_000;
+        let got = first_at(&out, (expected - 24_000) as usize, 0.5);
+        assert!((got - expected).abs() <= 48, "{got} vs {expected}");
+        assert_eq!(al.stats(Ch::Call).resyncs, 1);
     }
 
     #[test]
