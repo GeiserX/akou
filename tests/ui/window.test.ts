@@ -647,7 +647,8 @@ describe("the words to review (DESIGN 5.4, 7)", () => {
           expect(await text(page, ".review-item[data-term=Hetzner] .review-lines li")).toContain(
             "deploy to hetzner today",
           );
-          expect(await page.isVisible("#pill-review")).toBe(true);
+          // The pill follows the log, which reaches the page on its own stream after the reply.
+          await page.waitForSelector("#pill-review:not([hidden])");
           expect(await text(page, "#pill-review")).toBe("1 word to review");
           await page.click(".review-item[data-term=Hetzner] button.go");
           await until(
@@ -663,6 +664,37 @@ describe("the words to review (DESIGN 5.4, 7)", () => {
           expect(file).toContain(`source: "call:${id}"`);
           await page.click("#review-close");
           await until(async () => !(await page.isVisible("#pill-review")), 5000, "pill hidden");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a pass whose request fails is a toast, and Find misheard words works again",
+    async () => {
+      let id = "";
+      const provider = new FakeProvider();
+      provider.answer = () => JSON.stringify({ corrections: [], proposals: [] });
+      await withRig(
+        { provider, seed: (h) => (id = seedCall(h, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click("#tab-enhanced");
+          // The request itself fails (the app quit, the connection dropped mid-pass).
+          await page.route("**/api/v1/calls/*/vocab/pass", (r) => r.abort());
+          await page.click("#vocab-pass");
+          await until(
+            async () => (await text(page, "#toast"))?.includes("could not be checked") ?? false,
+            5000,
+            "error toast",
+          );
+          expect(await page.isEnabled("#vocab-pass")).toBe(true);
+          await page.unroute("**/api/v1/calls/*/vocab/pass");
+          await page.click("#vocab-pass");
+          await page.waitForSelector("#review[open]");
+          expect(await text(page, "#review-status")).toContain("corrected 0 words and proposed 0");
         },
       );
     },

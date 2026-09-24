@@ -10,7 +10,7 @@
 
 import { byId, h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
-import type { Transport } from "./protocol.ts";
+import type { Reply, Transport } from "./protocol.ts";
 
 interface ReviewLine {
   id: string;
@@ -186,13 +186,16 @@ export class ReviewPane {
     this.busy = true;
     this.paint();
     toast("Checking the transcript for misheard words…", "info");
-    const r = await this.d.t.request<{
-      corrections?: unknown[];
-      proposals?: unknown[];
-      error?: string;
-    }>("POST", `/calls/${call}/vocab/pass`, {});
-    this.busy = false;
-    this.paint();
+    let r: Reply<{ corrections?: unknown[]; proposals?: unknown[]; error?: string }>;
+    try {
+      r = await this.d.t.request("POST", `/calls/${call}/vocab/pass`, {});
+    } catch (err) {
+      toast(`The words could not be checked: ${(err as Error).message}`);
+      return;
+    } finally {
+      this.busy = false;
+      this.paint();
+    }
     if (r.status >= 400) {
       toast(
         r.body.error === "provider_unavailable"
