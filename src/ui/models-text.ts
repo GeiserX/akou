@@ -26,7 +26,7 @@ export function modelsCardText(m: ModelsInfo | undefined): {
   }
   if (m.state === "failed") {
     return {
-      text: `The speech model download stopped: ${m.error ?? "unknown error"}. What arrived is kept.`,
+      text: `The speech model download stopped: ${m.error ?? "unknown error"}. Files already verified are kept; the one that failed is fetched again.`,
       button: "Try again",
       progress: null,
     };

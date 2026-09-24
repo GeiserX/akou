@@ -389,5 +389,8 @@ describe("the first-run download card", () => {
     const failed = modelsCardText({ ...base, state: "failed", error: "a.onnx: SHA-256 mismatch" });
     expect(failed?.button).toBe("Try again");
     expect(failed?.text).toContain("SHA-256 mismatch");
+    // A file that fails its checksum is deleted and fetched again: the card must not say it is kept.
+    expect(failed?.text).not.toContain("What arrived is kept");
+    expect(failed?.text).toContain("the one that failed is fetched again");
   });
 });
