@@ -97,6 +97,14 @@ import {
 import { NoneProvider } from "./llm/none.ts";
 import { OpenAiCompatibleProvider } from "./llm/openai-compatible.ts";
 import type { Provider } from "./llm/provider.ts";
+import {
+  enhance,
+  enhancedDraft,
+  enhanceExclusive,
+  nextEnhancedRev,
+  reEnhanceState,
+  storeEnhanced,
+} from "./notes/enhance.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
 import { CallQuery } from "./query/context.ts";
 import {
@@ -605,6 +613,7 @@ export class AkouApp implements ApiApp {
     for (const fn of this.bus.get(id) ?? []) deliver(() => fn(e));
     for (const fn of this.watchers) deliver(() => fn(id, e));
     if (e.type === "seg" && e.layer === "live") queueMicrotask(() => void this.refreshMemo(id));
+    if (e.type === "final.done") queueMicrotask(() => void this.reEnhance(id));
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
       // After the event is out, so the pass starts from a log that has it.
@@ -670,6 +679,55 @@ export class AkouApp implements ApiApp {
       this.memoRetryAt.set(id, now + MEMO_MIN_INTERVAL_MS);
     } finally {
       this.memos.delete(id);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Re-enhance after the final layer (DESIGN 5.2)
+
+  /**
+   * The final layer landed: notes a provider wrote from the live layer are written again from it,
+   * with the same template. Notes written by hand, and the harness, are left to the window's button
+   * (`reEnhanceState`). A failure is logged; the button is still there.
+   */
+  private async reEnhance(id: string): Promise<void> {
+    if (this.quitting) return;
+    try {
+      const q = await this.query(id);
+      const provider = this.provider();
+      const state = reEnhanceState(q.view, provider.id);
+      if (!state.due || !state.auto) return;
+      if (!(await provider.available()).ok) return;
+      const template = this.templates().find((t) => t.name === state.template);
+      if (!template) return;
+      await enhanceExclusive(id, async () => {
+        // Checked again inside the lock: a request may have written new notes meanwhile.
+        if (!reEnhanceState(q.view, provider.id).due) return;
+        const r = await enhance({
+          q,
+          template,
+          provider,
+          now: this.now(),
+          write: (d) => this.write(id, d),
+          timeoutMs: this.providerTimeoutMs(),
+        });
+        const c = await this.call(id);
+        const rev = nextEnhancedRev(c.view);
+        storeEnhanced(c.dir, rev, template.name, r.markdown);
+        await this.write(
+          id,
+          enhancedDraft({
+            rev,
+            template: template.name,
+            coversSeq: r.coversSeq,
+            by: "app",
+            model: r.model,
+            cites: r.cites,
+          }),
+        );
+      });
+    } catch (err) {
+      this.log("warn", `re-enhance of ${id}: ${(err as Error).message}`);
     }
   }
 

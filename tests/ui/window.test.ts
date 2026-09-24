@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
@@ -663,6 +663,64 @@ describe("the words to review (DESIGN 5.4, 7)", () => {
           expect(file).toContain(`source: "call:${id}"`);
           await page.click("#review-close");
           await until(async () => !(await page.isVisible("#pill-review")), 5000, "pill hidden");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("re-enhance after the final layer (DESIGN 5.2)", () => {
+  test(
+    "notes written by hand before the final layer get a Re-enhance button, and it writes them from the final transcript",
+    async () => {
+      let id = "";
+      const provider = new FakeProvider();
+      provider.answer = () => "## Decisions\n- Move the build to the new box [#l000002]";
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            const seeded = seedCall(home, (b) => {
+              standardCall(b);
+              b.add({
+                type: "enhanced",
+                rev: 1,
+                template: "general",
+                file: "enhanced/001-general.md",
+                coversSeq: 6,
+                by: "agent:claude-code",
+                model: "agent:claude-code",
+                cites: ["l000002"],
+              });
+              b.add({ type: "final.started", pid: 1 });
+              b.add({ type: "final.done", parts: [1], skipped: [] });
+            });
+            id = seeded.id;
+            mkdirSync(join(seeded.dir, "enhanced"), { recursive: true });
+            writeFileSync(
+              join(seeded.dir, "enhanced", "001-general.md"),
+              "## Decisions\n- the build moves [#l000002]\n",
+            );
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click("#tab-enhanced");
+          await page.waitForSelector("#reenhance");
+          expect(await text(page, "#enhance-status")).toContain("written by hand");
+          await page.click("#reenhance");
+          await until(
+            async () => (await events(rig, id)).some((e) => e.type === "enhanced" && e.rev === 2),
+            10_000,
+            "rev 2",
+          );
+          const e = (await events(rig, id)).find(
+            (x) => x.type === "enhanced" && x.rev === 2,
+          ) as LogEvent & { template: string };
+          expect(e.template).toBe("general");
+          await until(async () => !(await page.isVisible("#reenhance")), 5000, "button gone");
         },
       );
     },

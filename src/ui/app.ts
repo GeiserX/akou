@@ -200,6 +200,8 @@ class App {
           if (e.type === "note" || e.type === "note.del") notes = true;
           if (e.type.startsWith("speaker.")) speakers = true;
           if (e.type === "enhanced") this.enhanced.refresh();
+          // Notes written before the final layer may now be offered a re-enhance.
+          if (e.type === "final.done") void this.enhanced.load();
         }
         if (notes) this.notepad.render();
         if (speakers) this.askPane.renderPresets();
