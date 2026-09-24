@@ -66,7 +66,7 @@ export interface ClassifyContext {
 
 /** A question about the asker being named or talked about. */
 const ABOUT_ME =
-  /\b(my name|mention(?:s|ed)? me|(?:talk(?:s|ed|ing)?|ask(?:s|ed)?|said anything) about me|called me|asked me|to me)\b/i;
+  /\b(my name|mention(?:s|ed)? me|(?:talk(?:s|ed|ing)?|ask(?:s|ed)?|said anything) about me|called me|asked me|(?:talk(?:s|ed|ing)?|spoke|speak(?:s|ing)?) to me)\b/i;
 const ABOUT_ME_WORDS = new Set(["name", "mention", "mentions", "mentioned", "called", "asked"]);
 
 /** The words to search for a question: the user's name first when it is about "me". */

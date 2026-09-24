@@ -10,6 +10,7 @@ import {
   classify,
   localClockToEpoch,
   parseNaming,
+  searchText,
 } from "../src/main/query/classify.ts";
 import { CallQuery, MCP_BUDGET, resolveCall, WHOLE_CALL_CAP } from "../src/main/query/context.ts";
 import {
@@ -407,7 +408,8 @@ describe("memo slot (DESIGN 5.4, 5.5)", () => {
     const signal = new AbortController().signal;
     const r = await refreshMemo(view, view.lines(), T0 + 30 * MIN, updater, render, signal);
     expect(calls).toEqual([200]);
-    expect(r?.ok && r.draft).toMatchObject({ type: "memo", by: "app", model: "fake-1" });
+    // The whole result, so a refused memo fails with its reason rather than `false`.
+    expect(r).toMatchObject({ ok: true, draft: { type: "memo", by: "app", model: "fake-1" } });
     const early = await refreshMemo(view, view.lines(), T0 + 10 * S, updater, render, signal);
     expect(early).toBeNull();
   });
@@ -764,5 +766,15 @@ describe("the ask box presets (DESIGN 7)", () => {
     const miss = other.context(question, { now: T0 + 40 * MIN });
     expect(miss.analysis.terms).not.toContain("ana");
     expect(miss.lines.map((l) => l.id)).not.toContain("l000040");
+  });
+
+  test("a question merely phrased 'to me' is not about the user; 'talked to me' is", () => {
+    const c = ctx({ user: "Ana" });
+    const plain = "Can you explain to me what the budget is?";
+    expect(classify(plain, c).terms).not.toContain("ana");
+    expect(searchText(plain, "Ana")).toBe(plain);
+    // Positive control: a question about someone speaking to the user still searches the name.
+    expect(classify("Who talked to me about the budget?", c).terms[0]).toBe("ana");
+    expect(searchText("Did anyone speak to me?", "Ana")).toBe("Ana Did anyone speak to me?");
   });
 });
