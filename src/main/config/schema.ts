@@ -43,6 +43,8 @@ export interface SettingSpec {
    * written over the local API, so the API token cannot become a way to run a chosen command.
    */
   apiWritable?: boolean;
+  /** A secret (an API key): never shown by `GET /config`, `config show` or `status`. */
+  secret?: boolean;
   doc: string;
 }
 
@@ -172,6 +174,50 @@ export const SETTINGS = {
     max: 30,
     default: 12,
     doc: "Longest live segment, seconds.",
+  },
+  "provider.kind": {
+    type: "string",
+    values: ["harness", "openai-compatible", "anthropic", "none"],
+    default: "harness",
+    doc: "What answers questions and writes enhanced notes: your own Claude Code or Codex (`harness`), an OpenAI-compatible server, the Anthropic API with your key, or `none` (excerpts only).",
+  },
+  "provider.harness": {
+    type: "string",
+    values: ["auto", "claude", "codex"],
+    default: "auto",
+    doc: "Which harness `harness` runs. `auto`: Claude Code if found, else Codex.",
+  },
+  "provider.harnessPath": {
+    type: "string",
+    default: "",
+    apiWritable: false,
+    doc: "Pin the harness program by absolute path. Empty: look it up on PATH and through the login shell.",
+  },
+  "provider.baseUrl": {
+    type: "string",
+    default: "",
+    apiWritable: false,
+    doc: "Server address for `openai-compatible` (Ollama: `http://127.0.0.1:11434/v1`), or another Anthropic API address. File only: it decides where your key and transcripts are sent.",
+  },
+  "provider.model": {
+    type: "string",
+    max: 200,
+    default: "",
+    doc: "Model id for `openai-compatible` (required) and `anthropic` (empty: the default model).",
+  },
+  "provider.apiKey": {
+    type: "string",
+    max: 400,
+    default: "",
+    secret: true,
+    doc: "API key for `openai-compatible` (optional) or `anthropic` (required). Never shown back or logged.",
+  },
+  "provider.timeoutSeconds": {
+    type: "integer",
+    min: 10,
+    max: 600,
+    default: 60,
+    doc: "How long an answer may take before akou shows the excerpts instead and says why.",
   },
   "vocab.extraFiles": {
     type: "string[]",
@@ -438,6 +484,17 @@ export function patchConfig(
     for (const i of check.issues) errors.push(i.message.replace(/; using the defaults?$/, ""));
   }
   return errors.length > 0 ? { ok: false, errors } : { ok: true, file: next };
+}
+
+/** The settings with every secret replaced by `set` or empty: what may be shown or sent back. */
+export function redactSettings<T extends Partial<Record<SettingKey, SettingValue>>>(values: T): T {
+  const out = { ...values } as Record<string, SettingValue>;
+  for (const k of SETTING_KEYS) {
+    if ((SETTINGS[k] as SettingSpec).secret && typeof out[k] === "string" && out[k] !== "") {
+      out[k] = "(set)";
+    }
+  }
+  return out as T;
 }
 
 /** The reference table, generated from the registry. */

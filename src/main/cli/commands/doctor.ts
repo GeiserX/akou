@@ -18,12 +18,12 @@
  * which needs the real helper.
  */
 
-import { spawnSync } from "node:child_process";
 import { existsSync, statSync } from "node:fs";
 import { isAbsolute } from "node:path";
 import { ensureToken, tokenFileAccess } from "../../api/guard.ts";
 import { MODELS, verifyModels } from "../../asr/models.ts";
 import { loadConfig } from "../../config/schema.ts";
+import { findProgram } from "../../llm/harness.ts";
 import { bool } from "../args.ts";
 import { EXIT } from "../client.ts";
 import type { Command, Ctx } from "../context.ts";
@@ -35,21 +35,7 @@ export interface Check {
   detail: string;
 }
 
-/** Finds a program on `PATH`, then through the login shell (`$SHELL -lc 'command -v NAME'`). */
-export function findProgram(name: string, env: Record<string, string | undefined>): string | null {
-  const direct = Bun.which(name, { PATH: env.PATH ?? "" });
-  if (direct) return direct;
-  const shell = env.SHELL;
-  if (!shell || process.platform === "win32") return null;
-  const quoted = `'${name.replace(/'/g, `'\\''`)}'`;
-  const r = spawnSync(shell, ["-lc", `command -v -- ${quoted}`], {
-    env: env as NodeJS.ProcessEnv,
-    encoding: "utf8",
-    timeout: 3000,
-  });
-  const path = r.status === 0 ? r.stdout.trim().split("\n").at(-1)?.trim() : "";
-  return path && isAbsolute(path) ? path : null;
-}
+export { findProgram };
 
 async function apiChecks(ctx: Ctx): Promise<Check[]> {
   const rt = await ctx.client.running();
