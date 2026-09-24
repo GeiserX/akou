@@ -292,3 +292,15 @@ describe("the compiled CLI starts the installed app, never itself", () => {
     expect(defaultLaunch({ ...compiled, platform: "linux", exists: () => true })).toBeNull();
   });
 });
+
+describe("the unsigned first open", () => {
+  test("the release notes give the first-open step per macOS version, as install.md does", () => {
+    const notes = readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+    const install = readFileSync(join(ROOT, "docs", "install.md"), "utf8");
+    // Control-click Open no longer gets past Gatekeeper from macOS 15: only Open Anyway does.
+    for (const doc of [notes, install]) {
+      expect(doc).toMatch(/On macOS 14, Control-click akou in Applications, choose Open/);
+      expect(doc).toMatch(/On macOS 15 and later,[^\n]*Privacy & Security[^\n]*Open Anyway/);
+    }
+  });
+});

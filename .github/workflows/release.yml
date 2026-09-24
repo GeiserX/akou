@@ -204,7 +204,7 @@ jobs:
           prerelease=""
           case "$version" in 0.*|*-*) prerelease="--prerelease" ;; esac
           cat > notes.md <<'EOF'
-          **This build is not signed by Apple.** The first time you open akou, macOS refuses it: right-click akou in Applications and choose Open, or open it once, then go to System Settings, Privacy & Security and choose Open Anyway. After an update macOS may ask for the microphone and system audio again. The speech models are downloaded on first run. See [docs/install.md](https://github.com/GeiserX/akou/blob/main/docs/install.md).
+          **This build is not signed by Apple.** The first time you open akou, macOS refuses it. On macOS 14, Control-click akou in Applications, choose Open, then Open again. On macOS 15 and later, open akou once, then go to System Settings, Privacy & Security, and click Open Anyway. After an update macOS may ask for the microphone and system audio again. The speech models are downloaded on first run. See [docs/install.md](https://github.com/GeiserX/akou/blob/main/docs/install.md).
           EOF
           gh release create "$TAG" \
             --repo "$GITHUB_REPOSITORY" \
