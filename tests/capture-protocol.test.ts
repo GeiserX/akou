@@ -180,6 +180,17 @@ describe("akou-capture/1 stderr and stdin", () => {
     ).toBe("text");
   });
 
+  test("a warn line without a string msg gets an empty msg, never undefined", () => {
+    const r = parseStderrLine(JSON.stringify({ type: "warn", code: "permission" }));
+    expect(r.kind).toBe("msg");
+    expect(r.kind === "msg" && r.msg.type === "warn" ? r.msg.msg : null).toBe("");
+    const n = parseStderrLine(JSON.stringify({ type: "warn", code: "permission", msg: 7 }));
+    expect(n.kind === "msg" && n.msg.type === "warn" ? n.msg.msg : null).toBe("");
+    // Positive control: a real msg passes through unchanged.
+    const ok = parseStderrLine(JSON.stringify({ type: "warn", code: "permission", msg: "denied" }));
+    expect(ok.kind === "msg" && ok.msg.type === "warn" ? ok.msg.msg : null).toBe("denied");
+  });
+
   test("capture_ns on the wire may be a decimal string or a safe integer", () => {
     expect(nsFromWire("18446744073709551615")).toBe(18446744073709551615n);
     expect(nsFromWire(42)).toBe(42n);

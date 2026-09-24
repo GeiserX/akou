@@ -274,6 +274,9 @@ export function parseStderrLine(line: string): StderrLine {
   if (rec.type === "health") {
     rec.detail = isStr(rec.detail) ? rec.detail : "";
   }
+  if (rec.type === "warn") {
+    rec.msg = isStr(rec.msg) ? rec.msg : "";
+  }
   if (checkMessage(rec) !== null) return { kind: "text", line };
   return { kind: "msg", msg: rec as unknown as HelperMessage };
 }
