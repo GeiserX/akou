@@ -11,10 +11,16 @@
  * `node:` import would break the page at load. `buildUi` refuses such a bundle.
  */
 
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 export const UI_DIR = join(import.meta.dir, "..", "..", "ui");
+/**
+ * The prebuilt pages the release copies beside the bundled main process (`bun run build:ui`, then
+ * `electrobun.config.ts`): the packaged app has no `src/ui` to build from.
+ */
+export const PREBUILT_UI_DIR = join(import.meta.dir, "ui");
+const PAGES = ["index.html", "index.js", "theme.css", "share.html", "share.js"] as const;
 
 export interface UiFile {
   type: string;
@@ -60,9 +66,25 @@ export function nodeImport(text: string): string | null {
 
 let cached: Promise<UiBundle> | null = null;
 
-/** Builds both pages in memory, once per process. */
+/** The prebuilt pages in `dir`, or null when any is missing. */
+export function prebuiltUi(dir: string = PREBUILT_UI_DIR): UiBundle | null {
+  if (!PAGES.every((f) => existsSync(join(dir, f)))) return null;
+  return new Map(
+    PAGES.map((f) => [
+      `/${f}`,
+      {
+        type: TYPES[f.split(".").pop() as string] as string,
+        body: readFileSync(join(dir, f), "utf8"),
+      },
+    ]),
+  );
+}
+
+/** Builds both pages in memory, once per process (or reads the prebuilt ones when packaged). */
 export function buildUi(): Promise<UiBundle> {
   cached ??= (async () => {
+    const prebuilt = prebuiltUi();
+    if (prebuilt) return prebuilt;
     const [index, share] = await Promise.all([buildEntry("web.ts"), buildEntry("share-viewer.ts")]);
     const read = (f: string) => readFileSync(join(UI_DIR, f), "utf8");
     const files = new Map<string, UiFile>([

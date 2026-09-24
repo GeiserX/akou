@@ -13,6 +13,7 @@
 
 import { spawn } from "node:child_process";
 import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join } from "node:path";
 import { processAlive } from "../../core/log/writer.ts";
 import { TOKEN_FILE } from "../api/guard.ts";
@@ -94,7 +95,43 @@ export interface RequestOptions {
   signal?: AbortSignal;
 }
 
-export const DEFAULT_LAUNCH = [process.execPath, join(import.meta.dir, "..", "index.ts")];
+/** Inside a program built by `bun build --compile`, whose modules live in Bun's virtual folder. */
+export function isCompiled(dir: string = import.meta.dir): boolean {
+  return dir.startsWith("/$bunfs/") || /^[A-Za-z]:[\\/]~BUN[\\/]/.test(dir);
+}
+
+/**
+ * How the CLI starts a cold app headless:
+ *
+ * - From source: this Bun on `src/main/index.ts`.
+ * - The compiled CLI on macOS: the installed `akou.app` through LaunchServices (`open`), so the app,
+ *   not the terminal, is the process macOS asks for the microphone and system-audio grants.
+ *   `--env` is how `open` passes `AKOU_HEADLESS`.
+ * - The compiled CLI anywhere else, or with no app installed: null, it never launches.
+ */
+export function defaultLaunch(
+  o: {
+    dir?: string;
+    execPath?: string;
+    platform?: string;
+    home?: string;
+    exists?: (path: string) => boolean;
+  } = {},
+): readonly string[] | null {
+  const dir = o.dir ?? import.meta.dir;
+  if (!isCompiled(dir)) return [o.execPath ?? process.execPath, join(dir, "..", "index.ts")];
+  if ((o.platform ?? process.platform) !== "darwin") return null;
+  const exists = o.exists ?? existsSync;
+  for (const app of [
+    "/Applications/akou.app",
+    join(o.home ?? homedir(), "Applications", "akou.app"),
+  ]) {
+    if (exists(app)) return ["/usr/bin/open", "-g", "-j", "-a", app, "--env", "AKOU_HEADLESS=1"];
+  }
+  return null;
+}
+
+export const DEFAULT_LAUNCH = defaultLaunch();
 
 export class ApiClient {
   readonly configDir: string;
@@ -182,9 +219,7 @@ export class ApiClient {
         if (!isConnectionError(err, method === "GET" || method === "HEAD")) throw err;
       }
     }
-    if (!allowLaunch || !this.launchCmd) {
-      throw new Unreachable("akou is not running");
-    }
+    if (!allowLaunch || !this.launchCmd) throw this.notRunning(allowLaunch);
     rt = await this.launch();
     return this.send(rt, method, path, o);
   }
@@ -202,11 +237,18 @@ export class ApiClient {
         if (!isConnectionError(err, false)) throw err;
       }
     }
-    if ((o.launch ?? true) === false || !this.launchCmd) {
-      throw new Unreachable("akou is not running");
-    }
+    if ((o.launch ?? true) === false || !this.launchCmd) throw this.notRunning(o.launch ?? true);
     rt = await this.launch();
     return this.fetchRaw(rt, method, path, o);
+  }
+
+  /** Nothing answers and this client will not launch: say what the user can do. */
+  private notRunning(launchAllowed: boolean): Unreachable {
+    return new Unreachable(
+      launchAllowed && !this.launchCmd
+        ? "akou is not running, and this command line cannot start it; open the akou app and try again"
+        : "akou is not running",
+    );
   }
 
   /** Is an app answering? Never launches one. */

@@ -8,6 +8,7 @@
  */
 
 import type { EventDraft, LogEvent } from "../../core/log/events.ts";
+import type { ModelsStatus } from "../asr/models.ts";
 import type { CallController, StartOk } from "../call/call.ts";
 import type { CallManager, StartRequest } from "../call/manager.ts";
 import type { Outcome } from "../call/state.ts";
@@ -24,6 +25,7 @@ import { authorOf, errorResponse, HttpError, json, Router } from "./http.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
+import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
 import { queryRoutes } from "./routes/query.ts";
@@ -53,6 +55,10 @@ export interface ApiApp {
   providerTimeoutMs(): number;
   /** The shipped templates, replaced or added to by the user's folder. */
   templates(): Template[];
+  /** The speech models on disk, or the download in progress (`GET /models`). */
+  models(): ModelsStatus;
+  /** Starts the one download of the missing models and answers at once (`POST /models/pull`). */
+  pullModels(): ModelsStatus;
   /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */
   start(req: StartRequest): Promise<Outcome<StartOk>>;
   /** The controller of a known call id (loaded from disk if needed). Throws 404 otherwise. */
@@ -131,6 +137,7 @@ export interface ApiServer {
 export function buildRouter(): Router<ApiApp> {
   const r = new Router<ApiApp>();
   settingsRoutes(r);
+  modelRoutes(r);
   callRoutes(r);
   followRoutes(r);
   queryRoutes(r);

@@ -496,7 +496,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 
 | Command | Does |
 |---|---|
-| `akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab TERM,…] [--json]` | Starts a call. Prints `{call, folder, url}` once audio is being written. `--vocab` writes call-scoped `vocab.add` events right after `call.created` (attendees, title terms). Exit 75 if a call is already recording |
+| `akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab TERM,…] [--without-models] [--json]` | Starts a call. Prints `{call, folder, url}` once audio is being written. `--vocab` writes call-scoped `vocab.add` events right after `call.created` (attendees, title terms). Exit 75 if a call is already recording. Exit 69 (`models_missing`) until the speech models are downloaded; `--without-models` records audio only |
 | `akou stop` · `pause` · `resume` · `mute` · `unmute` | Controls the live call. Exit 3 if nothing is live |
 | `akou restart [--force] [--call ID]` | New part in the same call, make before break |
 | `akou status [--json]` | App, live call, health, recognizer lag, models in use, provider state, share state |
@@ -531,7 +531,8 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | Method and path | Purpose |
 |---|---|
 | `GET /status` | As `akou status`. Always 200 |
-| `POST /calls` `{workspace, title, template, call, mic}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call}` · `403 permission` · `503 capture_failed {stage, error}` |
+| `POST /calls` `{workspace, title, template, call, mic, withoutModels}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call}` · `403 permission` · `503 capture_failed {stage, error}` · `503 models_missing` until the speech models are there, unless `withoutModels` |
+| `GET /models` · `POST /models/pull` | The speech models on disk (`missing`, `downloading` with bytes, `ready`, `failed`); the first-run download, answered at once (`202`) and followed with `GET /models` |
 | `GET /calls?workspace&limit&failed` | Metadata list |
 | `GET /calls/{id\|live\|last}` | Header, parts, roster, health, final state. `live` gives 404 `no_live_call {last}` when nothing is recording |
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
@@ -710,7 +711,7 @@ Every transport reads the same `follow(afterSeq)` as the window, filtered and re
 
 - **Targets.** macOS arm64 (`.dmg`, Homebrew cask in a formula-only tap); Windows x64 (ElectroBun installer, winget later; ARM runs the x64 build under emulation); Linux x64 and arm64 (AppImage, `.deb`, and the CLI-only tarball). Minimum macOS 14.4: the process-tap API exists from 14.2, and 14.4 is the floor we test on (Apple's sample code uses it); gate G4 on a 14.2 or 14.3 machine decides whether the floor can drop. Ubuntu 24.04 or glibc 2.38+, Windows 10 21H2.
 - **One version source**, `package.json`, stamped into the app, the helper, `Info.plist` and the CLI by one script. CI asserts they all match the tag.
-- **macOS signing.** Hutch signs, notarizes and staples. Two things it cannot do, so the release workflow does them: (1) Hutch writes `Info.plist` from a fixed table and cannot emit `NSAudioCaptureUsageDescription`, so the workflow patches the plist after the build and re-signs; (2) nested executables (the helper, `bun`, the `.node` addon and sherpa's dylibs) are signed individually with the hardened runtime and the `com.apple.security.device.audio-input` entitlement **before** the outer bundle. Bundle id `io.github.geiserx.akou`, stable across updates so grants survive them. Hutch copies the `.node` file but not its two dylibs; they are listed in `build.copy`.
+- **macOS signing.** Hutch signs, notarizes and staples. It writes `Info.plist` from a fixed table and cannot emit `NSAudioCaptureUsageDescription`, so the `postBuild` and `postWrap` build hooks patch both bundles' plists (the inner app and the stable wrapper) **before** Hutch signs them; there is no re-sign step, because a seal made in a hook is broken when Hutch rewrites `version.json` afterwards. Hutch then signs every nested Mach-O file (the helper, `bun`, the `.node` addon and sherpa's dylibs) with the hardened runtime and the `com.apple.security.device.audio-input` entitlement, then each bundle. Bundle id `io.github.geiserx.akou`, stable across updates, so with a Developer ID signature the grants survive them; while the app is ad-hoc signed, macOS keys a grant on each build's own signature and an update may ask again ([install.md](install.md#permissions)). Hutch 0.24.3 copies neither the `.node` file nor its two dylibs, so `build.copy` lists all three.
 - **Windows signing.** SignPath Foundation (free for open source) or Azure Trusted Signing. Until one is in place, releases are unsigned with the SmartScreen step documented plainly.
 - **Linux.** No code signing; SHA-256 checksums and GitHub build attestations.
 - **Updates.** ElectroBun's updater from GitHub Releases. The updater asks the app first and never installs while a call is recording or a final pass is running. The Windows updater has an open truncation bug (#535), so "check for update" always also links the full installer. The CLI tarball updates with `akou self-update`, verifying a cosign signature.

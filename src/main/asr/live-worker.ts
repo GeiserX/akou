@@ -52,6 +52,7 @@ import {
 } from "./engine.ts";
 import { RECOGNIZER } from "./models.ts";
 import { prepareSpan } from "./pad.ts";
+import { siblingModule } from "./sibling.ts";
 import { LiveSpeakers, MIN_EMBED_SECONDS, type SpeakerEvent } from "./speakers.ts";
 
 export interface LiveOptions {
@@ -673,7 +674,7 @@ export class LiveAsr {
       const side = new WorkerSide((m) => queueMicrotask(() => onMessage(m)));
       t = { post: (m) => side.handle(m), close: () => {} };
     } else {
-      const w = new Worker(new URL("./live-worker.ts", import.meta.url), {
+      const w = new Worker(siblingModule(import.meta.url, "live-worker"), {
         workerData: LIVE_WORKER_NAME,
       } as WorkerOptions);
       let dead = false;

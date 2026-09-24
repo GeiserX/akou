@@ -9,6 +9,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import config, { MAIN_OUT, SHERPA_LIBS, sherpaCopies } from "../electrobun.config.ts";
+import { MIN_MACOS } from "../scripts/build-app.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
@@ -375,12 +376,22 @@ describe("the ElectroBun build", () => {
     expect(config.build?.mac?.entitlements?.["com.apple.security.device.audio-input"]).toBe(true);
   });
 
-  test("[spike] Native libraries missing from the bundle: both sherpa dylibs are in build.copy beside the main process", () => {
+  test("[spike] Native libraries missing from the bundle: sherpa-onnx-node, its .node file and both libraries are in build.copy beside the main process", () => {
     const copies = sherpaCopies("darwin", "arm64");
+    const nm = `${MAIN_OUT}/node_modules`;
     expect(copies).toEqual({
-      "node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib": `${MAIN_OUT}/libsherpa-onnx-c-api.dylib`,
-      "node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib": `${MAIN_OUT}/libonnxruntime.dylib`,
+      "node_modules/sherpa-onnx-node": `${nm}/sherpa-onnx-node`,
+      "node_modules/sherpa-onnx-darwin-arm64/package.json": `${nm}/sherpa-onnx-darwin-arm64/package.json`,
+      "node_modules/sherpa-onnx-darwin-arm64/sherpa-onnx.node": `${nm}/sherpa-onnx-darwin-arm64/sherpa-onnx.node`,
+      "node_modules/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib": `${nm}/sherpa-onnx-darwin-arm64/libsherpa-onnx-c-api.dylib`,
+      "node_modules/sherpa-onnx-darwin-arm64/libonnxruntime.dylib": `${nm}/sherpa-onnx-darwin-arm64/libonnxruntime.dylib`,
     });
+    // The .node file finds its libraries beside itself (@loader_path), so they travel together.
+    for (const lib of SHERPA_LIBS.darwin ?? []) {
+      expect(copies[`node_modules/sherpa-onnx-darwin-arm64/${lib}`]).toBe(
+        `${nm}/sherpa-onnx-darwin-arm64/${lib}`,
+      );
+    }
     // The two names are the ones the addon links, when the package is here to ask.
     const node = join(ROOT, "node_modules", "sherpa-onnx-darwin-arm64", "sherpa-onnx.node");
     if (process.platform === "darwin" && existsSync(node)) {
@@ -400,7 +411,7 @@ describe("the ElectroBun build", () => {
     const plist = join(t.dir, "Info.plist");
     writeFileSync(
       plist,
-      `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string></dict></plist>\n`,
+      `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string><key>CFBundleVersion</key><string>1.2.3</string></dict></plist>\n`,
     );
     // Positive control: before the patch the key is missing.
     expect(
@@ -417,6 +428,36 @@ describe("the ElectroBun build", () => {
     expect(
       spawnSync("/bin/sh", [join(ROOT, "scripts", "patch-plist.sh"), join(t.dir, "none")]).status,
     ).toBe(66);
+    t.cleanup();
+  });
+
+  test("the patch gives Finder the version and macOS the 14.4 floor Hutch's table leaves out", () => {
+    if (process.platform !== "darwin") {
+      console.log(
+        "patch-plist: skipped, plutil exists on macOS only; the release job runs it there",
+      );
+      return;
+    }
+    const t = tempDir();
+    const plist = join(t.dir, "Info.plist");
+    const head = `<?xml version="1.0" encoding="UTF-8"?>\n<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">\n<plist version="1.0"><dict><key>CFBundleIdentifier</key><string>${BUNDLE_ID}</string>`;
+    const value = (key: string) => {
+      const r = spawnSync("/usr/bin/plutil", ["-extract", key, "raw", plist]);
+      return r.status === 0 ? r.stdout.toString().trim() : null;
+    };
+    // Hutch writes CFBundleVersion only.
+    writeFileSync(
+      plist,
+      `${head}<key>CFBundleVersion</key><string>1.2.3</string></dict></plist>\n`,
+    );
+    expect(value("CFBundleShortVersionString")).toBeNull();
+    expect(value("LSMinimumSystemVersion")).toBeNull();
+    expect(spawnSync("/bin/sh", [join(ROOT, "scripts", "patch-plist.sh"), plist]).status).toBe(0);
+    expect(value("CFBundleShortVersionString")).toBe("1.2.3");
+    expect(value("LSMinimumSystemVersion")).toBe(MIN_MACOS);
+    // Without a CFBundleVersion there is no version to show: the patch refuses.
+    writeFileSync(plist, `${head}</dict></plist>\n`);
+    expect(spawnSync("/bin/sh", [join(ROOT, "scripts", "patch-plist.sh"), plist]).status).toBe(70);
     t.cleanup();
   });
 });

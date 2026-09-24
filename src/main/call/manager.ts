@@ -65,6 +65,11 @@ export interface StartRequest {
   vocab?: readonly { term: string; heard?: readonly string[] }[];
   /** Author of the `vocab.add` events. */
   by?: string;
+  /**
+   * Record even though the speech models are not downloaded yet: audio only, nothing is transcribed
+   * live. Without it a start answers `503 models_missing` (the app checks, not the manager).
+   */
+  withoutModels?: boolean;
 }
 
 export type CallRef = string;

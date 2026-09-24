@@ -532,7 +532,12 @@ describe("DESIGN 7 parity with hark-viewer", () => {
             ids.push(seedCall(home, (b) => standardCall(b, "01J8Z6Q4M2VX0K7B3D4E5FIRST")).id);
             ids.push(
               seedCall(home, (b) => {
-                b.created({ id: "01J8Z6Q4M2VX0K7B3D4ESECOND", title: "Second call" });
+                // An hour after the first call: created at the same instant, the two would tie and
+                // their order would be whatever order the file system lists the folders in.
+                b.created(
+                  { id: "01J8Z6Q4M2VX0K7B3D4ESECOND", title: "Second call" },
+                  T0 + 3_600_000,
+                );
                 b.partStarted(1, T0 + 3_600_000);
                 b.seg({ id: "l000001", ch: "call", w0: T0 + 3_601_000, text: "only line here" });
                 b.partEnded(1, "stop");

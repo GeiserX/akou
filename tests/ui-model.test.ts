@@ -23,6 +23,7 @@ import {
   suggestReopen,
   YOU_HUE,
 } from "../src/ui/model.ts";
+import { modelsCardText } from "../src/ui/models-text.ts";
 import type { AppStatus } from "../src/ui/protocol.ts";
 import { LogBuilder, T0, TZ } from "./helpers.ts";
 
@@ -365,5 +366,31 @@ describe("citations", () => {
       "Action items",
       "What did Ben say?",
     ]);
+  });
+});
+
+describe("the first-run download card", () => {
+  test("hidden once the models are there; offers the download, shows progress, offers a retry", () => {
+    const base = { dir: "/m", bytes: 0, total: 700_000_000 };
+    expect(modelsCardText(undefined)).toBeNull();
+    expect(modelsCardText({ ...base, state: "ready", bytes: base.total })).toBeNull();
+    const missing = modelsCardText({ ...base, state: "missing" });
+    expect(missing?.button).toBe("Download speech models");
+    expect(missing?.text).toContain("700 MB");
+    const down = modelsCardText({
+      ...base,
+      state: "downloading",
+      bytes: 350_000_000,
+      file: "x/a.onnx",
+    });
+    expect(down?.button).toBeNull();
+    expect(down?.progress).toBe(0.5);
+    expect(down?.text).toContain("50 %");
+    const failed = modelsCardText({ ...base, state: "failed", error: "a.onnx: SHA-256 mismatch" });
+    expect(failed?.button).toBe("Try again");
+    expect(failed?.text).toContain("SHA-256 mismatch");
+    // A file that fails its checksum is deleted and fetched again: the card must not say it is kept.
+    expect(failed?.text).not.toContain("What arrived is kept");
+    expect(failed?.text).toContain("the one that failed is fetched again");
   });
 });

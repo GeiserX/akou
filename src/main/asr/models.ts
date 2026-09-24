@@ -155,6 +155,18 @@ export async function sha256File(path: string): Promise<string> {
   return h.digest("hex");
 }
 
+/** The first-run download of the speech models (`GET /models`, `POST /models/pull`). */
+export interface ModelsStatus {
+  state: "missing" | "downloading" | "ready" | "failed";
+  dir: string;
+  /** Bytes on disk of every file, and the total the registry declares. */
+  bytes: number;
+  total: number;
+  /** The file being fetched, while downloading. */
+  file?: string;
+  error?: string;
+}
+
 export interface FileState {
   model: string;
   name: string;

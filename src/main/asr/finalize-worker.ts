@@ -42,6 +42,7 @@ import {
 } from "./engine.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
 import { peak, prepareSpan } from "./pad.ts";
+import { siblingModule } from "./sibling.ts";
 import { mapFinalToLive, type TimedLabel } from "./speakers.ts";
 
 export interface FinalOptions {
@@ -674,7 +675,7 @@ export async function finalizeCall(
         void runInWorker(msg, onReply);
         return;
       }
-      w = new Worker(new URL("./finalize-worker.ts", import.meta.url), {
+      w = new Worker(siblingModule(import.meta.url, "finalize-worker"), {
         workerData: FINALIZE_WORKER_NAME,
       } as WorkerOptions);
       w.onmessage = (e: MessageEvent<FromFinal>) => onReply(e.data);

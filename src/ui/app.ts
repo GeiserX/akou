@@ -17,6 +17,7 @@ import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from "./model.ts";
+import { ModelsCard } from "./models-card.ts";
 import { message, NotepadPane } from "./notepad.ts";
 import type { AppStatus, Levels, Transport } from "./protocol.ts";
 import { SettingsPane } from "./settings.ts";
@@ -73,6 +74,7 @@ class App {
   private readonly notepad: NotepadPane;
   private readonly askPane: AskPane;
   private readonly enhanced: EnhancedPane;
+  private readonly modelsCard: ModelsCard;
   private readonly player = byId<HTMLAudioElement>("player");
   private blobs = new Map<string, string>();
   private mix: { mic: GainNode; call: GainNode } | null = null;
@@ -102,6 +104,7 @@ class App {
       t,
       () => this.view()?.call?.workspace ?? this.workspaceInput().value,
     );
+    this.modelsCard = new ModelsCard(t);
     this.enhanced = new EnhancedPane({
       t,
       call,
@@ -141,6 +144,7 @@ class App {
   private onStatus(s: AppStatus): void {
     const wasLive = this.status?.live?.call ?? null;
     this.status = s;
+    this.modelsCard.update(s.models);
     const live = s.live?.call ?? null;
     if (!this.chosen || (live && live !== wasLive && this.startedHere === live)) {
       const target = live ?? this.callId ?? s.last?.call ?? null;

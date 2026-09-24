@@ -93,8 +93,19 @@ export interface AppStatus {
   } | null;
   last: { call: string; title: string; state: string; endedAt: number | null } | null;
   asr: { state: string; reason?: string; model?: string };
+  /** The speech models on disk (`GET /models`); absent from an older app. */
+  models?: ModelsInfo;
   provider: { state: string; id: string; harness?: string; detail?: string; reason?: string };
   share: { active: boolean; shares?: ShareInfo[] };
+}
+
+export interface ModelsInfo {
+  state: "missing" | "downloading" | "ready" | "failed";
+  dir: string;
+  bytes: number;
+  total: number;
+  file?: string;
+  error?: string;
 }
 
 export interface ShareInfo {

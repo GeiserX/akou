@@ -20,18 +20,24 @@ export class LogBuilder {
     return e;
   }
 
-  created(extra: Partial<Extract<EventDraft, { type: "call.created" }>> = {}): LogEvent {
-    return this.add({
-      type: "call.created",
-      id: "01J8Z6Q4M2VX0K7B3D4E5F6G7H",
-      schema: 1,
-      workspace: "work",
-      title: "Weekly sync",
-      tz: TZ,
-      user: "Ana",
-      akou: "0.1.0",
-      ...extra,
-    });
+  created(
+    extra: Partial<Extract<EventDraft, { type: "call.created" }>> = {},
+    at?: number,
+  ): LogEvent {
+    return this.add(
+      {
+        type: "call.created",
+        id: "01J8Z6Q4M2VX0K7B3D4E5F6G7H",
+        schema: 1,
+        workspace: "work",
+        title: "Weekly sync",
+        tz: TZ,
+        user: "Ana",
+        akou: "0.1.0",
+        ...extra,
+      },
+      at,
+    );
   }
 
   partStarted(part: number, wallStart: number, monoStart = 1_000_000 + part * 10_000): LogEvent {

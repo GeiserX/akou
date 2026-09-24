@@ -19,20 +19,33 @@
 import {
   existsSync,
   mkdirSync,
+  mkdtempSync,
   readdirSync,
   readFileSync,
   renameSync,
   writeFileSync,
 } from "node:fs";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
+import EMBEDDED_SKILL from "../../../../skills/akou/SKILL.md" with { type: "text" };
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
 import type { Command, Ctx } from "../context.ts";
 import { usage } from "./calls.ts";
 
-/** `skills/akou` in the repository (and, packaged, beside the app code). */
+/** `skills/akou` in the repository. */
 export const SKILL_SOURCE = join(import.meta.dir, "..", "..", "..", "..", "skills", "akou");
+
+/**
+ * The folder to install from: the repository's, or, in the packaged app and the compiled CLI where
+ * there is none, a private temporary copy of the `SKILL.md` built into the program.
+ */
+export function skillSourceDir(dir: string = SKILL_SOURCE): string {
+  if (existsSync(join(dir, "SKILL.md"))) return dir;
+  const tmp = mkdtempSync(join(tmpdir(), "akou-skill-"));
+  writeFileSync(join(tmp, "SKILL.md"), EMBEDDED_SKILL);
+  return tmp;
+}
 export const SKILL_NAME = "akou";
 
 export type Harness = "claude" | "codex";
@@ -128,7 +141,7 @@ export const skillCommand: Command = {
     const results: InstallResult[] = [];
     try {
       for (const t of targets) {
-        results.push(installSkill(ctx.skillSource ?? SKILL_SOURCE, t, ctx.version));
+        results.push(installSkill(ctx.skillSource ?? skillSourceDir(), t, ctx.version));
       }
     } catch (err) {
       const msg = (err as Error).message;

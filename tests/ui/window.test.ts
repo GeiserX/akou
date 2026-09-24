@@ -934,6 +934,56 @@ describe("the share viewer (DESIGN 8.3)", () => {
   );
 });
 
+describe("the first-run download card (DESIGN 3)", () => {
+  test(
+    "a pull or a progress poll whose request fails is a toast or a skipped tick, never an unhandled rejection",
+    async () => {
+      // One model file that is not on disk, so the card offers the download.
+      const modelRegistry = [
+        {
+          id: "tiny",
+          job: "test",
+          licence: "MIT",
+          source: "test",
+          files: [
+            { name: "a.onnx", url: "http://127.0.0.1:9/a.onnx", sha256: "0".repeat(64), size: 1e6 },
+          ],
+        },
+      ];
+      await withRig({ modelRegistry }, async (rig) => {
+        const page = await rig.open();
+        await page.waitForSelector("#models-card:not([hidden]) #models-pull:not([hidden])");
+
+        // The request itself fails (the app quit, the network dropped): the button says so.
+        await page.route("**/api/v1/models/pull", (r) => r.abort());
+        await page.click("#models-pull");
+        await page.waitForSelector("#toast:not([hidden])");
+        expect(await text(page, "#toast")).toContain("could not start");
+
+        // A download in progress whose polls fail: each failed tick is skipped, none throws.
+        await page.unroute("**/api/v1/models/pull");
+        const { dir } = (await rig.api("GET", "/models")).body as { dir: string };
+        await page.route("**/api/v1/models/pull", (r) =>
+          r.fulfill({
+            status: 202,
+            contentType: "application/json",
+            body: JSON.stringify({ state: "downloading", dir, bytes: 0, total: 1e6 }),
+          }),
+        );
+        let polls = 0;
+        await page.route("**/api/v1/models", (r) => {
+          polls++;
+          return r.abort();
+        });
+        await page.click("#models-pull");
+        await page.waitForSelector("#models-progress:not([hidden])");
+        await until(async () => polls >= 2, 10_000, "two failed polls");
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("the page's own guard", () => {
   test(
     "the code leaves the address bar; a used link is dead; another site cannot drive the app",

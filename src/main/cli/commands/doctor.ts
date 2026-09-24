@@ -9,7 +9,9 @@
  * - api: the app answers, and refuses a request that looks like a browser (403) and one without the
  *   token (401), which is the security self-test;
  * - models: every file present, the right size, and its pinned SHA-256;
- * - helper: the capture helper program can be found;
+ * - helper: the capture helper program can be found. The running app's answer (`GET /status`) wins,
+ *   because it spawns the helper and resolves it from inside its bundle; the standalone CLI has no
+ *   helper beside it, so with no app running and none found it only warns;
  * - harness: `claude` or `codex` found, first on PATH, then through the login shell the way the
  *   app looks for them;
  * - permissions: what the operating system must grant, as a hint (`--grant` is not built yet).
@@ -18,11 +20,10 @@
  * which needs the real helper.
  */
 
-import { existsSync, statSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { statSync } from "node:fs";
 import { ensureToken, tokenFileAccess } from "../../api/guard.ts";
 import { MODELS, verifyModels } from "../../asr/models.ts";
-import { locateHelper } from "../../capture/helper.ts";
+import { findHelper, type HelperFound } from "../../capture/helper.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { findProgram } from "../../llm/harness.ts";
 import { bool } from "../args.ts";
@@ -38,16 +39,19 @@ export interface Check {
 
 export { findProgram };
 
-async function apiChecks(ctx: Ctx): Promise<Check[]> {
+async function apiChecks(ctx: Ctx): Promise<{ checks: Check[]; helper: HelperFound | null }> {
   const rt = await ctx.client.running();
   if (!rt) {
-    return [
-      {
-        name: "api",
-        state: "warn",
-        detail: "akou is not running; `akou start` launches it headless",
-      },
-    ];
+    return {
+      checks: [
+        {
+          name: "api",
+          state: "warn",
+          detail: "akou is not running; `akou start` launches it headless",
+        },
+      ],
+      helper: null,
+    };
   }
   const out: Check[] = [
     { name: "api", state: "ok", detail: `akou ${rt.version} answers on 127.0.0.1:${rt.port}` },
@@ -66,7 +70,53 @@ async function apiChecks(ctx: Ctx): Promise<Check[]> {
       ? "a browser request is refused (403) and a request without the token too (401)"
       : `a browser request answered ${asBrowser.status} and one without the token ${noToken.status}; expected 403 and 401`,
   });
-  return out;
+  let helper: HelperFound | null = null;
+  try {
+    const st = await ctx.client.request("GET", "/status", { launch: false, timeoutMs: 2000 });
+    helper = st.status === 200 ? (st.body?.helper ?? null) : null;
+  } catch {}
+  return { checks: out, helper };
+}
+
+/**
+ * The helper line. `app` is what the running app resolved (it spawns the helper), `local` what this
+ * process finds. The released CLI has no helper beside it and none on PATH, so without an app to ask
+ * that is a warning, not a failure; a `capture.helper` that does not exist is always a failure.
+ */
+export function helperCheck(local: HelperFound, app: HelperFound | null): Check {
+  if (app) {
+    return app.found
+      ? {
+          name: "helper",
+          state: "ok",
+          detail: `${[app.found, ...app.command.slice(1)].join(" ")} (the running app's)`,
+        }
+      : {
+          name: "helper",
+          state: "fail",
+          detail: `the running app cannot find its capture helper ${app.command[0]}${app.source === "config" ? " (capture.helper in config.json)" : "; reinstall akou"}`,
+        };
+  }
+  if (local.found) {
+    return {
+      name: "helper",
+      state: "ok",
+      detail: [local.found, ...local.command.slice(1)].join(" "),
+    };
+  }
+  if (local.source === "config") {
+    return {
+      name: "helper",
+      state: "fail",
+      detail: `the capture helper ${local.command[0]} was not found (capture.helper in config.json)`,
+    };
+  }
+  return {
+    name: "helper",
+    state: "warn",
+    detail:
+      "the capture helper ships inside the app, which checks it; open akou (or run `akou start`) and run `akou doctor` again",
+  };
 }
 
 function permissionHint(): string {
@@ -109,7 +159,8 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
     detail: `${t.path}, ${who}${t.created ? ", created now" : ""}`,
   });
 
-  checks.push(...(await apiChecks(ctx)));
+  const api = await apiChecks(ctx);
+  checks.push(...api.checks);
 
   const registry = ctx.models ?? MODELS;
   const dir = cfg.settings["asr.modelsDir"];
@@ -133,21 +184,11 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
         },
   );
 
-  const helper = locateHelper(cfg.settings["capture.helper"]);
-  const program = helper.command[0] as string;
-  const found = isAbsolute(program)
-    ? existsSync(program)
-      ? program
-      : null
-    : findProgram(program, env);
   checks.push(
-    found
-      ? { name: "helper", state: "ok", detail: [found, ...helper.command.slice(1)].join(" ") }
-      : {
-          name: "helper",
-          state: "fail",
-          detail: `the capture helper ${program} was not found${helper.source === "config" ? " (capture.helper in config.json)" : " (it ships inside the app)"}`,
-        },
+    helperCheck(
+      findHelper(cfg.settings["capture.helper"], (p) => findProgram(p, env)),
+      api.helper,
+    ),
   );
 
   const harnesses = ["claude", "codex"]
