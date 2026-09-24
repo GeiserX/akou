@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { fold } from "../src/core/log/fold.ts";
 import {
@@ -199,6 +199,31 @@ describe("vocabulary files: on disk", () => {
         "kubernetis",
         "cubernetes",
       ]);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("concurrent writes to one path each land whole, and a failed write leaves no temporary file", async () => {
+    const { dir, cleanup } = tempDir();
+    try {
+      const path = join(dir, "v.yaml");
+      const a = file(entry("Kubernetes", { heard: ["kubernetis"] }));
+      const b = file(entry("Vercel", { heard: ["versal"] }));
+      const results = await Promise.allSettled([
+        writeVocabFile(path, a),
+        writeVocabFile(path, b),
+        writeVocabFile(path, a),
+        writeVocabFile(path, b),
+      ]);
+      expect(results.map((r) => r.status)).toEqual(Array(4).fill("fulfilled"));
+      const back = (await readVocabFile(path)).file;
+      expect([a, b]).toContainEqual(back);
+      // A write that cannot land (the target is a folder) cleans up after itself.
+      const blocked = join(dir, "blocked.yaml");
+      mkdirSync(join(blocked, "inside"), { recursive: true });
+      await expect(writeVocabFile(blocked, a)).rejects.toThrow();
+      expect(readdirSync(dir).sort()).toEqual(["blocked.yaml", "v.yaml"]);
     } finally {
       cleanup();
     }

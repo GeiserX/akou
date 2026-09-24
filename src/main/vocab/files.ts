@@ -34,8 +34,8 @@
  * the proposals the user approved are written.
  */
 
-import { createHash } from "node:crypto";
-import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join } from "node:path";
 import type { FileVocabEntry } from "../../core/log/fold.ts";
@@ -349,9 +349,15 @@ export async function writeVocabFile(path: string, file: VocabFile): Promise<str
     throw new Error(`refusing to write ${basename(path)}: ${why}`);
   }
   await mkdir(dirname(path), { recursive: true });
-  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.tmp`);
-  await writeFile(tmp, text, "utf8");
-  await rename(tmp, path);
+  // One temporary file per write: two writes to one path must not share it.
+  const tmp = join(dirname(path), `.${basename(path)}.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    await writeFile(tmp, text, { encoding: "utf8", flag: "wx" });
+    await rename(tmp, path);
+  } catch (err) {
+    await rm(tmp, { force: true });
+    throw err;
+  }
   return sha256(text);
 }
 
