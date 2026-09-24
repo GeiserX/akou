@@ -1,11 +1,15 @@
 //! The part's audio file (DESIGN section 2): Ogg Opus, 48 kHz stereo, mic on the left and call on
 //! the right, 48 kbps, 20 ms packets, one Ogg page a second.
 //!
-//! Crash safety: every page carries the granule position of its last packet (pre-skip plus the
-//! samples so far, RFC 7845), and each page is handed to the OS as soon as it is complete, so a
-//! file cut off by a crash is playable up to its last page and its duration reads from that
-//! page's granule. The file is fsynced every ten pages and at the end. `finish` writes the last
-//! short packet with end trimming and the end-of-stream flag.
+//! Granules follow RFC 7845 (4.1, 4.3): a page's granule is the number of samples its packets
+//! decode to so far, pre-skip included, so granule minus pre-skip is the playable length. The
+//! encoder holds back `pre_skip` samples of lookahead, so a page mid-file plays `pre_skip` samples
+//! less than was written; `finish` feeds it enough silence to push every real sample out, and
+//! the final granule, pre-skip plus the samples written, trims the padding (end trimming).
+//!
+//! Crash safety: each page is handed to the OS as soon as it is complete, so a file cut off by a
+//! crash is playable up to its last page and its duration reads from that page's granule. The
+//! file is fsynced every ten pages and at the end.
 
 use std::fs::File;
 use std::io::{self, BufWriter, Write};
@@ -29,6 +33,8 @@ pub struct OpusWriter {
     pre_skip: u16,
     /// Samples per channel written (not counting pre-skip).
     samples: u64,
+    /// Packets encoded; each decodes to one slot.
+    packets: u64,
     in_page: u32,
     pages: u32,
     buf: Vec<u8>,
@@ -76,6 +82,7 @@ impl OpusWriter {
             serial,
             pre_skip,
             samples: 0,
+            packets: 0,
             in_page: 0,
             pages: 0,
             buf: vec![0; MAX_PACKET],
@@ -98,9 +105,17 @@ impl OpusWriter {
             self.frame.push(left.get(i).copied().unwrap_or(0.0));
             self.frame.push(right.get(i).copied().unwrap_or(0.0));
         }
-        self.enc
+        let n = self
+            .enc
             .encode_float(&self.frame, &mut self.buf)
-            .map_err(io_err)
+            .map_err(io_err)?;
+        self.packets += 1;
+        Ok(n)
+    }
+
+    /// Samples the packets so far decode to, pre-skip included (RFC 7845 4.1).
+    fn decoded(&self) -> u64 {
+        self.packets * SLOT as u64
     }
 
     /// Writes one 20 ms frame (960 samples per channel).
@@ -114,7 +129,7 @@ impl OpusWriter {
         } else {
             PacketWriteEndInfo::NormalPacket
         };
-        let granule = self.pre_skip as u64 + self.samples;
+        let granule = self.decoded();
         self.pw
             .write_packet(self.buf[..n].to_vec(), self.serial, end, granule)?;
         if self.in_page >= PACKETS_PER_PAGE {
@@ -128,21 +143,31 @@ impl OpusWriter {
         Ok(())
     }
 
-    /// Ends the stream. `tail` holds up to 959 more samples per channel; they are padded to a
-    /// full frame and trimmed by the final granule position.
+    /// Ends the stream. `tail` holds up to 959 more samples per channel; they are padded with
+    /// silence until the encoder's lookahead is out too, and the final granule trims the padding.
     pub fn finish(mut self, tail_left: &[f32], tail_right: &[f32]) -> io::Result<f64> {
         let tail = tail_left.len().min(SLOT - 1);
-        let n = self.encode(
+        self.samples += tail as u64;
+        let end = self.pre_skip as u64 + self.samples;
+        let mut n = self.encode(
             &tail_left[..tail],
             &tail_right[..tail.min(tail_right.len())],
         )?;
-        self.samples += tail as u64;
-        let granule = self.pre_skip as u64 + self.samples;
+        while self.decoded() < end {
+            let granule = self.decoded();
+            self.pw.write_packet(
+                self.buf[..n].to_vec(),
+                self.serial,
+                PacketWriteEndInfo::NormalPacket,
+                granule,
+            )?;
+            n = self.encode(&[], &[])?;
+        }
         self.pw.write_packet(
             self.buf[..n].to_vec(),
             self.serial,
             PacketWriteEndInfo::EndStream,
-            granule,
+            end,
         )?;
         let mut inner = self.pw.into_inner();
         inner.flush()?;
@@ -274,6 +299,49 @@ mod tests {
         assert!(power(r, 1_000.0) > 100.0 * power(r, 440.0));
     }
 
+    /// RFC 7845 4.1 and 4.3: a page's granule counts the samples decodable up to its last
+    /// packet, pre-skip included, so it never exceeds what the packets decode to; and the end
+    /// flushes the encoder's lookahead, so every real sample is decodable and the final granule
+    /// minus pre-skip is exactly the samples written.
+    #[test]
+    fn granules_follow_rfc_7845_and_the_last_real_samples_are_decodable() {
+        for tail in [0usize, 480, 900] {
+            let path = tmp(&format!("rfc-{tail}.opus"));
+            let mut w = OpusWriter::create(&path, 13, "akou-capture test").unwrap();
+            write_seconds(&mut w, 60);
+            w.finish(&vec![0.2; tail], &vec![0.2; tail]).unwrap();
+            let real = 60 * 960 + tail as u64;
+            let mut r = ogg::reading::PacketReader::new(std::io::BufReader::new(
+                File::open(&path).unwrap(),
+            ));
+            let (mut n, mut decoded, mut last) = (0, 0u64, 0u64);
+            let mut pre_skip = 0u64;
+            while let Some(p) = r.read_packet().unwrap() {
+                n += 1;
+                if n == 1 {
+                    pre_skip = u16::from_le_bytes([p.data[10], p.data[11]]) as u64;
+                }
+                if n <= 2 {
+                    continue;
+                }
+                decoded += 960;
+                if p.last_in_page() {
+                    let g = p.absgp_page();
+                    assert!(
+                        g <= decoded,
+                        "tail {tail}: page granule {g} > {decoded} decoded"
+                    );
+                    last = g;
+                }
+            }
+            assert_eq!(last - pre_skip, real, "tail {tail}");
+            assert!(
+                decoded >= last,
+                "tail {tail}: {decoded} decoded < final granule {last}"
+            );
+        }
+    }
+
     /// A crash mid-recording: the writer is never finished. The file reads up to its last
     /// complete page, and that page's granule gives the duration to within a second.
     #[test]
@@ -285,13 +353,17 @@ mod tests {
         std::mem::forget(w);
         let rec = recover(&path).unwrap();
         assert!(!rec.ended);
-        assert_eq!(rec.seconds(), 5.0);
+        // Five seconds of packets; the encoder's lookahead is still inside it, so the playable
+        // length is pre-skip short of that.
+        assert_eq!(rec.last_granule, 5 * 48_000);
+        let lookahead = rec.pre_skip as f64 / RATE as f64;
+        assert_eq!(rec.seconds(), 5.0 - lookahead);
         // Cut into the last page as well: still readable, one page less.
         let bytes = std::fs::read(&path).unwrap();
         let cut = tmp("cut.opus");
         std::fs::write(&cut, &bytes[..bytes.len() - 100]).unwrap();
         let rec = recover(&cut).unwrap();
-        assert_eq!(rec.seconds(), 4.0);
+        assert_eq!(rec.seconds(), 4.0 - lookahead);
     }
 
     #[test]
@@ -299,6 +371,7 @@ mod tests {
         let path = tmp("granules.opus");
         let mut w = OpusWriter::create(&path, 11, "akou-capture test").unwrap();
         write_seconds(&mut w, 150);
+        let pre_skip = w.pre_skip() as u64;
         w.finish(&[], &[]).unwrap();
         let mut r =
             ogg::reading::PacketReader::new(std::io::BufReader::new(File::open(&path).unwrap()));
@@ -308,8 +381,11 @@ mod tests {
                 granules.push(p.absgp_page());
             }
         }
-        let pre = granules[2] - 50 * 960;
-        let data: Vec<u64> = granules[2..].iter().map(|g| g - pre).collect();
-        assert_eq!(data, vec![48_000, 96_000, 144_000, 144_000]);
+        // A page a second of decoded samples; the last page flushes the lookahead and ends the
+        // stream at pre-skip plus the three seconds written.
+        assert_eq!(
+            granules[2..].to_vec(),
+            vec![48_000, 96_000, 144_000, 144_000 + pre_skip]
+        );
     }
 }

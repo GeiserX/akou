@@ -709,7 +709,9 @@ mod faults {
         assert!(typed(&r.lines(), "stopped").is_empty());
         let rec = opus_writer::recover(&r.path).unwrap();
         assert!(!rec.ended);
-        assert_eq!(rec.seconds(), 2.0);
+        // Two seconds of packets, less the encoder's lookahead that only `finish` flushes.
+        assert_eq!(rec.last_granule, 2 * 48_000);
+        assert_eq!(rec.seconds(), 2.0 - rec.pre_skip as f64 / 48_000.0);
     }
 
     #[test]
