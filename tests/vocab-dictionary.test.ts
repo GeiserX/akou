@@ -166,6 +166,20 @@ console.log(JSON.stringify(readWordList("es").has("tambien")));`,
     t.cleanup();
   });
 
+  test("NOTICE and LICENSE travel with the app and the CLI archive, and their checks require them", () => {
+    // CC BY-SA 4.0 (section 3(a)) wants the credit and the licence notice to go with the lists.
+    for (const f of ["NOTICE", "LICENSE"] as const) {
+      expect(config.build?.copy?.[f]).toBe(`${MAIN_OUT}/${f}`);
+      expect(existsSync(join(ROOT, f))).toBe(true);
+    }
+    const smokeApp = readFileSync(join(ROOT, "scripts", "smoke-app.ts"), "utf8");
+    expect(smokeApp).toMatch(/"NOTICE",\s*"LICENSE"/);
+    const buildCli = readFileSync(join(ROOT, "scripts", "build-cli.ts"), "utf8");
+    expect(buildCli).toContain('copyFileSync(join(ROOT, "NOTICE"), join(dir, "NOTICE"))');
+    const smokeCli = readFileSync(join(ROOT, "scripts", "smoke-cli.ts"), "utf8");
+    expect(smokeCli).toMatch(/\["LICENSE", "NOTICE"\]/);
+  });
+
   test("the app smoke check requires the lists and NOTICE credits their source", () => {
     const smoke = readFileSync(join(ROOT, "scripts", "smoke-app.ts"), "utf8");
     expect(smoke).toContain("dictionaries/");

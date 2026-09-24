@@ -13,6 +13,7 @@
  * - the inner app runs ElectroBun 2.0.1 with its bundled Bun 1.4.0 and says the version;
  * - every file the app loads by path is beside its main process: the Workers, the browser pages,
  *   the templates, the word lists, sherpa-onnx-node with its `.node` file and both libraries, the capture helper;
+ * - NOTICE and LICENSE are there too: the word lists' CC BY-SA 4.0 wants its credit to travel;
  * - the bundled Bun loads sherpa-onnx-node from inside the bundle, and the process has the `.node`
  *   file and both libraries open from the bundle's own folder (`lsof`; the hardened runtime ignores
  *   `DYLD_PRINT_LIBRARIES`) (TRAPS "Native libraries missing from the bundle");
@@ -194,6 +195,8 @@ async function checkInner(
   const main = join(app, "Contents", "Resources", "app", "bun");
   const bun = join(app, "Contents", "MacOS", "bun");
   const need = [
+    "NOTICE",
+    "LICENSE",
     "index.js",
     "live-worker.js",
     "finalize-worker.js",
