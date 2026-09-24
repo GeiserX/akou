@@ -20,6 +20,7 @@ import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from
 import { ModelsCard } from "./models-card.ts";
 import { message, NotepadPane } from "./notepad.ts";
 import type { AppStatus, Levels, Transport } from "./protocol.ts";
+import { ReviewPane } from "./review.ts";
 import { SettingsPane } from "./settings.ts";
 import { TranscriptPane } from "./transcript.ts";
 
@@ -74,6 +75,7 @@ class App {
   private readonly notepad: NotepadPane;
   private readonly askPane: AskPane;
   private readonly enhanced: EnhancedPane;
+  private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player = byId<HTMLAudioElement>("player");
   private blobs = new Map<string, string>();
@@ -111,6 +113,15 @@ class App {
       view,
       cite,
       openSettings: (key) => void settings.open(key),
+    });
+    this.review = new ReviewPane({
+      t,
+      call,
+      cite,
+      ended: () => {
+        const v = this.view();
+        return !!v?.call && !v.live;
+      },
     });
   }
 
@@ -189,6 +200,8 @@ class App {
           if (e.type === "note" || e.type === "note.del") notes = true;
           if (e.type.startsWith("speaker.")) speakers = true;
           if (e.type === "enhanced") this.enhanced.refresh();
+          // Notes written before the final layer may now be offered a re-enhance.
+          if (e.type === "final.done") void this.enhanced.load();
         }
         if (notes) this.notepad.render();
         if (speakers) this.askPane.renderPresets();
@@ -230,6 +243,7 @@ class App {
     const now = Date.now();
     const s = this.status;
     this.enhanced.paint();
+    this.review.paint();
     const st = stateLabel({
       view: v,
       status: s,

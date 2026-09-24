@@ -1,6 +1,7 @@
 /**
- * `akou skill install` (docs/DESIGN.md sections 6.1 and 6.5, TRAPS T3.0 and T3.1): copies
- * `skills/akou` into the harness's skills folder, so the agent learns how to drive akou.
+ * `akou skill install` (docs/DESIGN.md sections 6.1 and 6.5, TRAPS T3.0 and T3.1): copies the
+ * skills into the harness's skills folder: `skills/akou`, so the agent learns how to drive akou, and
+ * `skills/akou-vocab`, the learning skill that proposes vocabulary from the user's own sources.
  *
  * The skill is version-locked to the app: its `metadata.version` must equal the app's version, or
  * the install is refused, because a skill written for other tooling tells the agent to call tools
@@ -9,9 +10,11 @@
  *
  * Where it goes:
  *
- * - Claude Code: `$CLAUDE_CONFIG_DIR/skills/akou`, by default `~/.claude/skills/akou`.
- * - Codex: `$CODEX_HOME/skills/akou`, by default `~/.codex/skills/akou`.
- * - `--dir DIR`: `DIR/akou`, for any other skills folder.
+ * - Claude Code: `$CLAUDE_CONFIG_DIR/skills/<name>`, by default `~/.claude/skills/<name>`.
+ * - Codex: `$CODEX_HOME/skills/<name>`, by default `~/.codex/skills/<name>`.
+ * - `--dir DIR`: `DIR/<name>`, for any other skills folder.
+ *
+ * `<name>` is the skill's own `name:` from its front matter.
  *
  * With neither `--harness` nor `--dir`, it installs for every harness whose folder exists.
  */
@@ -28,25 +31,47 @@ import {
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import EMBEDDED_SKILL from "../../../../skills/akou/SKILL.md" with { type: "text" };
+import EMBEDDED_VOCAB_SKILL from "../../../../skills/akou-vocab/SKILL.md" with { type: "text" };
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
 import type { Command, Ctx } from "../context.ts";
 import { usage } from "./calls.ts";
 
+/** `skills/` in the repository. */
+export const SKILLS_ROOT = join(import.meta.dir, "..", "..", "..", "..", "skills");
 /** `skills/akou` in the repository. */
-export const SKILL_SOURCE = join(import.meta.dir, "..", "..", "..", "..", "skills", "akou");
+export const SKILL_SOURCE = join(SKILLS_ROOT, "akou");
+export const SKILL_NAME = "akou";
+
+/** Every skill akou ships, with the copy built into the program. */
+const SHIPPED: Readonly<Record<string, string>> = {
+  akou: EMBEDDED_SKILL,
+  "akou-vocab": EMBEDDED_VOCAB_SKILL,
+};
+export const SKILL_NAMES = Object.keys(SHIPPED);
 
 /**
- * The folder to install from: the repository's, or, in the packaged app and the compiled CLI where
- * there is none, a private temporary copy of the `SKILL.md` built into the program.
+ * The folder to install one skill from: the repository's, or, in the packaged app and the compiled
+ * CLI where there is none, a private temporary copy of the `SKILL.md` built into the program.
  */
-export function skillSourceDir(dir: string = SKILL_SOURCE): string {
+export function skillSourceDir(dir: string = SKILL_SOURCE, name = SKILL_NAME): string {
   if (existsSync(join(dir, "SKILL.md"))) return dir;
   const tmp = mkdtempSync(join(tmpdir(), "akou-skill-"));
-  writeFileSync(join(tmp, "SKILL.md"), EMBEDDED_SKILL);
+  writeFileSync(join(tmp, "SKILL.md"), SHIPPED[name] ?? EMBEDDED_SKILL);
   return tmp;
 }
-export const SKILL_NAME = "akou";
+
+/** The folders of every shipped skill. */
+export function skillSources(root: string = SKILLS_ROOT): string[] {
+  return SKILL_NAMES.map((n) => skillSourceDir(join(root, n), n));
+}
+
+/** The `name:` in a `SKILL.md` front matter, or null. */
+export function skillName(text: string): string | null {
+  const fm = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const m = fm ? /^name:\s*["']?([a-z0-9-]+)["']?\s*$/m.exec(fm[1] as string) : null;
+  return m ? (m[1] as string) : null;
+}
 
 export type Harness = "claude" | "codex";
 
@@ -75,17 +100,24 @@ export interface InstallResult {
   previous: string | null;
 }
 
-/** Copies the skill's files into `<skillsDir>/akou`. Refuses a version other than `version`. */
-export function installSkill(source: string, skillsDir: string, version: string): InstallResult {
-  const main = join(source, "SKILL.md");
-  const text = readFileSync(main, "utf8");
+function checkVersion(source: string, text: string, version: string): void {
   const found = skillVersion(text);
   if (found !== version) {
     throw new SkillVersionError(
       `the skill in ${source} is version ${found ?? "(none)"} but akou is ${version}; refusing to install a skill that does not match the app`,
     );
   }
-  const dest = join(skillsDir, SKILL_NAME);
+}
+
+/**
+ * Copies the skill's files into `<skillsDir>/<name>`, the name from its front matter. Refuses a
+ * version other than `version`.
+ */
+export function installSkill(source: string, skillsDir: string, version: string): InstallResult {
+  const main = join(source, "SKILL.md");
+  const text = readFileSync(main, "utf8");
+  checkVersion(source, text, version);
+  const dest = join(skillsDir, skillName(text) ?? SKILL_NAME);
   const destMain = join(dest, "SKILL.md");
   const previous = existsSync(destMain) ? skillVersion(readFileSync(destMain, "utf8")) : null;
   const existed = existsSync(destMain);
@@ -111,7 +143,7 @@ export function installSkill(source: string, skillsDir: string, version: string)
 
 export const skillCommand: Command = {
   name: "skill",
-  summary: "Install the akou skill into Claude Code's or Codex's skills folder",
+  summary: "Install the akou skills into Claude Code's or Codex's skills folder",
   usage: "akou skill install [--harness claude|codex] [--dir DIR] [--json]",
   flags: { harness: { type: "string" }, dir: { type: "string" } },
   run: async (ctx: Ctx, p) => {
@@ -139,9 +171,14 @@ export const skillCommand: Command = {
       }
     }
     const results: InstallResult[] = [];
+    const sources = ctx.skillSource ? [ctx.skillSource] : skillSources();
     try {
+      // Every source is checked before any is copied, so a refused version installs nothing.
+      for (const src of sources) {
+        checkVersion(src, readFileSync(join(src, "SKILL.md"), "utf8"), ctx.version);
+      }
       for (const t of targets) {
-        results.push(installSkill(ctx.skillSource ?? skillSourceDir(), t, ctx.version));
+        for (const src of sources) results.push(installSkill(src, t, ctx.version));
       }
     } catch (err) {
       const msg = (err as Error).message;

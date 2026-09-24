@@ -36,12 +36,35 @@ export interface CompleteRequest {
   system: string;
   prompt: string;
   maxTokens: number;
+  /**
+   * Continue a conversation the provider keeps (Claude Code's `--resume`): `resume: false` starts
+   * the session `id`, `resume: true` continues it. Only a provider whose `sessions()` is true reads
+   * it; the others answer the prompt alone.
+   */
+  session?: { id: string; resume: boolean };
+}
+
+/** Tokens one run spent, as the provider reported them. */
+export interface Usage {
+  input: number;
+  /** Written to the prompt cache. */
+  cacheCreation: number;
+  /** Read from the prompt cache. */
+  cacheRead: number;
+  output: number;
+}
+
+/** Every token the model processed in a run: the measure session reuse is judged by. */
+export function totalTokens(u: Usage): number {
+  return u.input + u.cacheCreation + u.cacheRead + u.output;
 }
 
 export interface CompleteResult {
   text: string;
   /** Provenance for the log: `claude-code/2.1.281`, `codex/0.151.0`, or the API model id. */
   model: string;
+  /** What the run spent, when the provider reports it. */
+  usage?: Usage;
 }
 
 export type Availability =
@@ -51,6 +74,8 @@ export type Availability =
 export interface Provider {
   readonly id: ProviderId;
   available(): Promise<Availability>;
+  /** Whether `CompleteRequest.session` is honoured. Absent: it is not. */
+  sessions?(): boolean;
   complete(
     req: CompleteRequest,
     onToken: (t: string) => void,

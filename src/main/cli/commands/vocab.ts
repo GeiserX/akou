@@ -10,6 +10,10 @@
  *   akou vocab import FILE [-w WS]
  *   akou vocab pass [CALL]
  *
+ * `list --call ID --unconfirmed` is the words to review for that call: its open proposals, with the
+ * lines each rests on, and the workspace's unconfirmed entries. `pass` runs the post-call pass on
+ * the configured provider (the last call by default) and prints what it corrected and proposed.
+ *
  * `add` with `--call` is a call-scoped `vocab.add` (mid-call, applies at once); without it the word
  * goes into the workspace file (or the global one). A term the API refuses exits 65.
  */
@@ -28,6 +32,40 @@ function entryLine(e: Body): string {
     e.scope ?? "",
   ].filter((x) => x !== "");
   return `${e.term}${heard}${flags.length ? `  [${flags.join(", ")}]` : ""}`;
+}
+
+/** The words to review, one block per proposal with the lines it rests on. */
+export function reviewText(review: Body | undefined): string {
+  const out: string[] = [];
+  for (const pr of review?.proposals ?? []) {
+    const heard = pr.heard?.length ? ` (heard: ${pr.heard.join(", ")})` : "";
+    out.push(`${pr.term}${heard}${pr.why ? `  (${pr.why})` : ""}`);
+    for (const l of pr.lines ?? []) out.push(`    ${l.time} ${l.speaker}: ${l.text}`);
+  }
+  for (const e of review?.unconfirmed ?? [])
+    out.push(`${entryLine(e)}  [unconfirmed, ${e.source}]`);
+  if (out.length === 0) return "No words to review.";
+  out.push(
+    "",
+    "Approve with `akou vocab approve TERM --call ID`, reject with `akou vocab reject TERM --call ID`.",
+  );
+  return out.join("\n");
+}
+
+function passText(b: Body): string {
+  const out: string[] = [];
+  for (const c of b.corrections ?? []) {
+    out.push(`Corrected "${c.heard}" to ${c.term} in ${c.lines.length} line(s)`);
+  }
+  for (const pr of b.proposals ?? []) {
+    out.push(`Proposed ${pr.term}${pr.heard?.length ? ` (heard: ${pr.heard.join(", ")})` : ""}`);
+  }
+  if (b.dropped?.length) out.push(`Dropped ${b.dropped.length} item(s) the check refused`);
+  if (out.length === 0) out.push("Nothing to correct or propose.");
+  if (b.proposals?.length) {
+    out.push(`Review them with \`akou vocab list --call ${b.call} --unconfirmed\`.`);
+  }
+  return out.join("\n");
 }
 
 export const vocab: Command = {
@@ -57,6 +95,9 @@ export const vocab: Command = {
           : await api(ctx, "GET", "/vocab", {
               query: { workspace: ws, unconfirmed: bool(p, "unconfirmed") || undefined },
             });
+        if (call && bool(p, "unconfirmed")) {
+          return finish(ctx, r, (b) => reviewText(b.review));
+        }
         return finish(ctx, r, (b) => {
           const out: string[] = [];
           for (const e of b.callVocab ?? []) out.push(`${entryLine(e)}  [call, ${e.id}]`);
@@ -133,9 +174,13 @@ export const vocab: Command = {
         );
       }
       case "pass": {
-        const target = args[0] ? enc(args[0]) : ref(p);
-        const r = await api(ctx, "POST", `/calls/${target}/vocab/pass`);
-        return finish(ctx, r, (b) => JSON.stringify(b, null, 2));
+        const target = args[0] ? enc(args[0]) : ref(p, "last");
+        const r = await api(ctx, "POST", `/calls/${target}/vocab/pass`, {
+          // A long call is checked batch by batch, one provider call after another.
+          timeoutMs: 60 * 60_000,
+          signal: ctx.io.signal,
+        });
+        return finish(ctx, r, passText);
       }
       default:
         return usage(

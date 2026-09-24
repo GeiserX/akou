@@ -97,8 +97,24 @@ import {
 import { NoneProvider } from "./llm/none.ts";
 import { OpenAiCompatibleProvider } from "./llm/openai-compatible.ts";
 import type { Provider } from "./llm/provider.ts";
+import {
+  enhance,
+  enhancedDraft,
+  enhanceExclusive,
+  nextEnhancedRev,
+  reEnhanceState,
+  storeEnhanced,
+} from "./notes/enhance.ts";
 import { listTemplates, type Template } from "./notes/templates.ts";
+import { MemorySessions, type SessionStore } from "./query/ask.ts";
 import { CallQuery } from "./query/context.ts";
+import {
+  MEMO_MIN_INTERVAL_MS,
+  memoByProvider,
+  ProviderMemoUpdater,
+  refreshMemo,
+} from "./query/memo.ts";
+import { renderLine } from "./query/render.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { mergeVocab, readVocabFile, vocabPaths } from "./vocab/files.ts";
@@ -278,6 +294,9 @@ export class AkouApp implements ApiApp {
   /** Per call, the hand-off work in order: one export or hook round at a time. */
   private readonly handoffs = new Map<string, Promise<unknown>>();
   private readonly reexports = new Map<string, ReturnType<typeof setTimeout>>();
+  /** Calls with a memo being written, and when a failed one may be tried again. */
+  private readonly memos = new Set<string>();
+  private readonly memoRetryAt = new Map<string, number>();
   private quitting: Promise<void> | null = null;
   /** Claude Code and Codex as found at start; null while still looking. */
   discovery: Discovery | null = null;
@@ -417,6 +436,21 @@ export class AkouApp implements ApiApp {
 
   providerTimeoutMs(): number {
     return this.cfg.settings["provider.timeoutSeconds"] * 1000;
+  }
+
+  private sessions: MemorySessions | null = null;
+
+  /**
+   * Kept harness sessions for follow-up questions (`provider.harnessResume`, off by default until
+   * measured, docs/providers.md). Turning it off forgets them.
+   */
+  askSessions(): SessionStore | undefined {
+    if (!this.cfg.settings["provider.harnessResume"]) {
+      this.sessions = null;
+      return undefined;
+    }
+    this.sessions ??= new MemorySessions((id) => HarnessProvider.endSession(id));
+    return this.sessions;
   }
 
   /** What `status` and `akou_ask`'s visibility read: `{state, id, harness?, detail | reason}`. */
@@ -594,6 +628,8 @@ export class AkouApp implements ApiApp {
     };
     for (const fn of this.bus.get(id) ?? []) deliver(() => fn(e));
     for (const fn of this.watchers) deliver(() => fn(id, e));
+    if (e.type === "seg" && e.layer === "live") queueMicrotask(() => void this.refreshMemo(id));
+    if (e.type === "final.done") queueMicrotask(() => void this.reEnhance(id));
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
       // After the event is out, so the pass starts from a log that has it.
@@ -604,6 +640,110 @@ export class AkouApp implements ApiApp {
       queueMicrotask(() => void this.handoff(id, stage));
     } else if (REEXPORT_ON.has(e.type) || (e.type === "seg" && e.by !== undefined)) {
       this.scheduleReexport(id);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // The rolling memo (DESIGN 5.4)
+
+  /**
+   * Whether the configured provider writes the memo: `memo.provider` says, and `auto` leaves the
+   * harness out (TRAPS "Unattended harness use"), because the memo runs on its own every few
+   * minutes and would spend the user's subscription without a request.
+   */
+  memoByProvider(): boolean {
+    const s = this.cfg.settings;
+    return memoByProvider(this.o.provider?.id ?? s["provider.kind"], s["memo.provider"]);
+  }
+
+  /** A new live line: refresh the memo when it is stale, one run at a time per call. */
+  private async refreshMemo(id: string): Promise<void> {
+    if (this.quitting || this.memos.has(id) || !this.memoByProvider()) return;
+    const now = this.now();
+    if ((this.memoRetryAt.get(id) ?? 0) > now) return;
+    const c = this.manager.controller(id);
+    if (!c?.view.live) return;
+    this.memos.add(id);
+    try {
+      const q = await this.query(id);
+      const tz = q.tz;
+      const lines = q.view.lines("best");
+      const provider = this.provider();
+      if (!(await provider.available()).ok) {
+        this.memoRetryAt.set(id, now + MEMO_MIN_INTERVAL_MS);
+        return;
+      }
+      const r = await refreshMemo(
+        q.view,
+        lines,
+        now,
+        new ProviderMemoUpdater(provider, this.providerTimeoutMs()),
+        (l) => renderLine(l, { tz }),
+        new AbortController().signal,
+      );
+      if (!r) return;
+      if (!r.ok) {
+        this.log("warn", `memo of ${id}: ${r.error}`);
+        this.memoRetryAt.set(id, now + MEMO_MIN_INTERVAL_MS);
+        return;
+      }
+      await this.write(id, r.draft);
+      this.memoRetryAt.delete(id);
+    } catch (err) {
+      // Nothing is queued or retried at once: the next line after the interval tries again.
+      this.log("warn", `memo of ${id}: ${(err as Error).message}`);
+      this.memoRetryAt.set(id, now + MEMO_MIN_INTERVAL_MS);
+    } finally {
+      this.memos.delete(id);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Re-enhance after the final layer (DESIGN 5.2)
+
+  /**
+   * The final layer landed: notes a provider wrote from the live layer are written again from it,
+   * with the same template. Notes written by hand, and the harness, are left to the window's button
+   * (`reEnhanceState`). A failure is logged; the button is still there.
+   */
+  private async reEnhance(id: string): Promise<void> {
+    if (this.quitting) return;
+    try {
+      const q = await this.query(id);
+      const provider = this.provider();
+      const state = reEnhanceState(q.view, provider.id);
+      if (!state.due || !state.auto) return;
+      if (!(await provider.available()).ok) return;
+      const template = this.templates().find((t) => t.name === state.template);
+      if (!template) return;
+      await enhanceExclusive(id, async () => {
+        // Checked again inside the lock: a request may have written new notes meanwhile.
+        if (!reEnhanceState(q.view, provider.id).due) return;
+        const r = await enhance({
+          q,
+          template,
+          provider,
+          now: this.now(),
+          write: (d) => this.write(id, d),
+          timeoutMs: this.providerTimeoutMs(),
+        });
+        const c = await this.call(id);
+        const rev = nextEnhancedRev(c.view);
+        storeEnhanced(c.dir, rev, template.name, r.markdown);
+        await this.write(
+          id,
+          enhancedDraft({
+            rev,
+            template: template.name,
+            coversSeq: r.coversSeq,
+            by: "app",
+            model: r.model,
+            cites: r.cites,
+          }),
+        );
+      });
+    } catch (err) {
+      this.log("warn", `re-enhance of ${id}: ${(err as Error).message}`);
     }
   }
 

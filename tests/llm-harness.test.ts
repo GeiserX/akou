@@ -323,7 +323,11 @@ describe("the provider against a fake harness", () => {
         { system: "SYS", prompt: "Reply with the word ok", maxTokens: 10 },
         (tok) => tokens.push(tok),
       );
-      expect(r).toEqual({ text: "ok", model: "claude-code/2.1.281" });
+      expect(r).toEqual({
+        text: "ok",
+        model: "claude-code/2.1.281",
+        usage: { input: 2, cacheCreation: 2967, cacheRead: 0, output: 4 },
+      });
       expect(tokens).toEqual(["ok"]);
       const rec = JSON.parse(readFileSync(record, "utf8"));
       expect(rec.stdin).toBe("Reply with the word ok");

@@ -21,7 +21,9 @@ import {
   type EnhanceResult,
   enhance,
   enhancedDraft,
+  enhanceExclusive,
   nextEnhancedRev,
+  reEnhanceState,
   storeEnhanced,
   userNotes,
 } from "../../notes/enhance.ts";
@@ -32,19 +34,12 @@ import { HttpError, intParam, json, outcome, type Router, readBody } from "../ht
 import type { ApiApp } from "../server.ts";
 import { callId, callOf } from "./common.ts";
 
-/** Calls with an enhancement being written: one at a time per call, so revisions never race. */
-const enhancing = new Set<string>();
-
 async function exclusive(id: string, fn: () => Promise<Response>): Promise<Response> {
-  if (enhancing.has(id)) {
+  const r = await enhanceExclusive(id, fn);
+  if (r === null) {
     throw new HttpError(409, "enhance_running", "the notes of this call are being written already");
   }
-  enhancing.add(id);
-  try {
-    return await fn();
-  } finally {
-    enhancing.delete(id);
-  }
+  return r;
 }
 
 function pickTemplate(app: ApiApp, q: CallQuery, explicit: string | undefined): Template {
@@ -246,7 +241,9 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     const want = intParam(c.url, "rev", undefined, 1, 1_000_000);
     const e = want === undefined ? call.view.latestEnhanced() : all.find((x) => x.rev === want);
     if (!e) {
-      if (want === undefined) return json(200, { call: call.id, enhanced: null, revisions: [] });
+      if (want === undefined) {
+        return json(200, { call: call.id, enhanced: null, revisions: [], reEnhance: null });
+      }
       throw new HttpError(404, "not_found", `call ${call.id} has no enhanced notes rev ${want}`);
     }
     const path = normalize(join(call.dir, e.file));
@@ -265,6 +262,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
         markdown: await Bun.file(path).text(),
       },
       revisions: all.map((x) => ({ rev: x.rev, template: x.template, by: x.by, model: x.model })),
+      reEnhance: reEnhanceState(call.view, c.app.provider().id),
     });
   });
 

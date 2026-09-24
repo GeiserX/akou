@@ -140,6 +140,22 @@ header {
   border-color: var(--warn);
   color: var(--warn);
 }
+button.pill {
+  background: transparent;
+  cursor: pointer;
+}
+#review-list {
+  list-style: none;
+  padding: 0;
+}
+.review-item {
+  border-bottom: 1px solid var(--line);
+  padding: 8px 0;
+}
+.review-lines {
+  margin: 4px 0;
+  color: var(--dim);
+}
 .pill.shared {
   background: var(--rec);
   border-color: var(--rec);

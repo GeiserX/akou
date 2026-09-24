@@ -16,7 +16,9 @@ import {
   harnessSkillsDir,
   installSkill,
   SKILL_SOURCE,
+  SKILLS_ROOT,
   SkillVersionError,
+  skillName,
   skillVersion,
 } from "../src/main/cli/commands/skill.ts";
 import { createMcpServer } from "../src/main/mcp/server.ts";
@@ -24,6 +26,7 @@ import { cli } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
 const SKILL = readFileSync(join(SKILL_SOURCE, "SKILL.md"), "utf8");
+const VOCAB_SKILL = readFileSync(join(SKILLS_ROOT, "akou-vocab", "SKILL.md"), "utf8");
 const PKG = JSON.parse(readFileSync(join(import.meta.dir, "..", "package.json"), "utf8"));
 
 /** Every tool the server can list: its app reports a provider, so akou_ask is listed too. */
@@ -98,6 +101,55 @@ describe("the skill text", () => {
   });
 });
 
+describe("the learning skill, akou-vocab (REQUIREMENTS V7)", () => {
+  test("[T3.0] every tool and command it names exists, and it carries the app's version", async () => {
+    const tools = new Set(await mcpToolNames());
+    const named = [...new Set(VOCAB_SKILL.match(/akou_[a-z_]+/g) ?? [])];
+    expect(named.length).toBeGreaterThan(4);
+    expect(named.filter((t) => !tools.has(t))).toEqual([]);
+    const commands = new Set(COMMANDS.map((c) => c.name));
+    const used = [...VOCAB_SKILL.matchAll(/`!? ?akou ([a-z-]+)/g)].map((m) => m[1] as string);
+    expect(used.length).toBeGreaterThan(0);
+    expect(used.filter((c) => !commands.has(c))).toEqual([]);
+    expect(skillVersion(VOCAB_SKILL)).toBe(APP_VERSION);
+    expect(skillName(VOCAB_SKILL)).toBe("akou-vocab");
+  });
+
+  test("it learns from the invite, the user's documents, repositories and exports, confirms spellings on the web, and turns corrections into heard forms", () => {
+    for (const must of [
+      "invite",
+      "attendees",
+      "documents",
+      "repository",
+      "exported calls",
+      "Confirm each spelling",
+      "Corrections become heard forms",
+      "frequency times rarity",
+      "akou_vocab_suggest",
+    ]) {
+      expect(VOCAB_SKILL).toContain(must);
+    }
+  });
+
+  test("it always ends in a proposal and never confirms a word without the user's yes", () => {
+    expect(VOCAB_SKILL).toContain("Everything you find is a proposal");
+    expect(VOCAB_SKILL).toContain("## 5. End with the proposal");
+    expect(VOCAB_SKILL).toContain("akou_vocab_propose");
+    // Approving is tied to the user's yes wherever the skill names it.
+    const approve = VOCAB_SKILL.split("\n").filter((l) => l.includes("akou_vocab_approve"));
+    expect(approve.length).toBeGreaterThan(0);
+    for (const line of approve) expect(line).toMatch(/yes|approve exactly|ask which/i);
+    // Adding to a file is never how an inferred word goes in: only a call-scoped add is named.
+    for (const m of VOCAB_SKILL.matchAll(/akou_vocab_add \{[^}]*\}/g)) {
+      expect(m[0]).toContain('scope: "call"');
+    }
+    // Positive control: a skill that approves on its own fails the check.
+    const eager = `${VOCAB_SKILL}\nThen call akou_vocab_approve with every term.`;
+    const bad = eager.split("\n").filter((l) => l.includes("akou_vocab_approve"));
+    expect(bad.some((l) => !/yes|approve exactly|ask which/i.test(l))).toBe(true);
+  });
+});
+
 describe("akou skill install", () => {
   test("[T3.0] refuses a skill whose version differs from the app's, and writes nothing", async () => {
     const t = tempDir();
@@ -126,7 +178,12 @@ describe("akou skill install", () => {
     const file = join(dest, "akou", "SKILL.md");
     expect(readFileSync(file, "utf8")).toBe(SKILL);
     const second = await cli({ HOME: t.dir }, ["skill", "install", "--dir", dest]);
-    expect(second.out).toBe(`${join(dest, "akou")}: already version ${APP_VERSION}`);
+    expect(second.out).toBe(
+      [
+        `${join(dest, "akou")}: already version ${APP_VERSION}`,
+        `${join(dest, "akou-vocab")}: already version ${APP_VERSION}`,
+      ].join("\n"),
+    );
     writeFileSync(file, SKILL.replace(/version: "[^"]+"/, 'version: "0.0.0-old"'));
     const third = await cli({ HOME: t.dir }, ["skill", "install", "--dir", dest, "--json"]);
     expect(third.json.installed[0]).toMatchObject({ action: "updated", previous: "0.0.0-old" });
@@ -151,6 +208,7 @@ describe("akou skill install", () => {
     expect(found.code).toBe(0);
     expect(found.json.installed.map((r: { path: string }) => r.path)).toEqual([
       join(t.dir, ".codex", "skills", "akou"),
+      join(t.dir, ".codex", "skills", "akou-vocab"),
     ]);
     const claude = await cli(env, ["skill", "install", "--harness", "claude"]);
     expect(claude.code).toBe(0);

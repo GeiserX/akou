@@ -18,6 +18,11 @@
  *   `stream_event`s and ends with a `result`; Codex reports `item.*` events whose `agent_message`
  *   text grows, and ends with `turn.completed` or `turn.failed`. The parsers are tested on
  *   sanitized recordings of the real programs (`tests/fixtures/harness/`).
+ * - **Session reuse** (`provider.harnessResume`, off by default). A request with a `session` runs
+ *   Claude Code with `--session-id ID` the first time and `--resume ID` after, instead of
+ *   `--no-session-persistence`, in one scratch folder per session (Claude Code files a session
+ *   under the folder it ran in), so a follow-up question sends only what is new. Codex runs every
+ *   request fresh. The token cost of each run is read from Claude Code's `result` event.
  * - **Failures.** A usage limit (Claude Code's `rate_limit_event` with `status: rejected`, an API
  *   status 429, or limit wording), a login problem (status 401, "log in", "sign in", refresh token)
  *   and a missing program are told apart from exit codes, the JSON and stderr. stderr never reaches
@@ -25,7 +30,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, isAbsolute, join } from "node:path";
 import {
@@ -35,6 +40,7 @@ import {
   type Provider,
   ProviderError,
   readLines,
+  type Usage,
 } from "./provider.ts";
 
 export type HarnessKind = "claude" | "codex";
@@ -186,6 +192,22 @@ export interface RunReport {
   resetsAt?: number;
   /** The harness said it finished (Claude Code `result`, Codex `turn.completed`). */
   finished: boolean;
+  /** Tokens the run spent (Claude Code's `result.usage`). */
+  usage?: Usage;
+}
+
+const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+
+/** Claude Code's `usage` object (the Messages API's), as a `Usage`. */
+export function parseUsage(u: unknown): Usage | undefined {
+  if (typeof u !== "object" || u === null) return undefined;
+  const o = u as Record<string, unknown>;
+  return {
+    input: num(o.input_tokens),
+    cacheCreation: num(o.cache_creation_input_tokens),
+    cacheRead: num(o.cache_read_input_tokens),
+    output: num(o.output_tokens),
+  };
 }
 
 export interface StreamParser {
@@ -252,6 +274,7 @@ export function claudeParser(): StreamParser {
         }
         case "result": {
           r.finished = true;
+          r.usage = parseUsage(e.usage) ?? r.usage;
           if (typeof e.api_error_status === "number") r.apiStatus = e.api_error_status;
           if (e.is_error === true) {
             r.errorText = typeof e.result === "string" ? e.result : (r.errorText ?? "error");
@@ -392,8 +415,17 @@ export interface HarnessProviderOptions {
   onLog?(level: "info" | "warn", msg: string): void;
 }
 
-export function harnessArgs(kind: HarnessKind, system: string): string[] {
+export function harnessArgs(
+  kind: HarnessKind,
+  system: string,
+  session?: CompleteRequest["session"],
+): string[] {
   if (kind === "claude") {
+    const persistence = !session
+      ? ["--no-session-persistence"]
+      : session.resume
+        ? ["--resume", session.id]
+        : ["--session-id", session.id];
     return [
       "-p",
       "--output-format",
@@ -403,7 +435,7 @@ export function harnessArgs(kind: HarnessKind, system: string): string[] {
       "--tools",
       "",
       "--strict-mcp-config",
-      "--no-session-persistence",
+      ...persistence,
       "--system-prompt",
       system,
     ];
@@ -443,6 +475,22 @@ export class HarnessProvider implements Provider {
 
   constructor(private readonly o: HarnessProviderOptions) {}
 
+  /** Claude Code keeps sessions; Codex runs each request fresh. */
+  sessions(): boolean {
+    const t = this.o.target();
+    return !("none" in t) && t.kind === "claude";
+  }
+
+  /** The scratch folder of a session: one per session id, kept between its runs. */
+  static sessionDir(id: string): string {
+    return join(tmpdir(), `akou-harness-session-${id.replace(/[^A-Za-z0-9-]/g, "")}`);
+  }
+
+  /** Forgets a session's scratch folder (the harness keeps its own record of the session). */
+  static endSession(id: string): void {
+    rmSync(HarnessProvider.sessionDir(id), { recursive: true, force: true });
+  }
+
   /** `claude-code/2.1.281`, or null with no harness. */
   label(): string | null {
     const t = this.o.target();
@@ -471,11 +519,22 @@ export class HarnessProvider implements Provider {
     const avail = await this.available();
     if (!avail.ok) throw new ProviderError(avail.kind, avail.reason);
     const t = this.o.target() as HarnessTarget;
-    const scratch = mkdtempSync(join(tmpdir(), "akou-harness-"));
+    const session = t.kind === "claude" ? req.session : undefined;
+    let scratch: string;
+    if (session) {
+      scratch = HarnessProvider.sessionDir(session.id);
+      mkdirSync(scratch, { recursive: true });
+    } else {
+      scratch = mkdtempSync(join(tmpdir(), "akou-harness-"));
+    }
+    // A session's folder outlives the run: its next question resumes from it.
+    const cleanup = () => {
+      if (!session) rmSync(scratch, { recursive: true, force: true });
+    };
     const parser = t.kind === "claude" ? claudeParser() : codexParser();
     let proc: ReturnType<typeof Bun.spawn>;
     try {
-      proc = Bun.spawn([...t.command, ...harnessArgs(t.kind, req.system)], {
+      proc = Bun.spawn([...t.command, ...harnessArgs(t.kind, req.system, session)], {
         cwd: scratch,
         env: (this.o.env ?? process.env) as Record<string, string>,
         stdin: "pipe",
@@ -485,7 +544,7 @@ export class HarnessProvider implements Provider {
         detached: process.platform !== "win32",
       });
     } catch (err) {
-      rmSync(scratch, { recursive: true, force: true });
+      cleanup();
       const code = (err as { code?: string }).code;
       throw new ProviderError(
         code === "ENOENT" ? "missing" : "other",
@@ -546,11 +605,12 @@ export class HarnessProvider implements Provider {
       return {
         text: report.text,
         model: `${HARNESS_LABEL[t.kind]}${version ? `/${version}` : ""}`,
+        ...(report.usage ? { usage: report.usage } : {}),
       };
     } finally {
       signal.removeEventListener("abort", onAbort);
       if (killTimer) clearTimeout(killTimer);
-      rmSync(scratch, { recursive: true, force: true });
+      cleanup();
     }
   }
 }

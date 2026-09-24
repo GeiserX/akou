@@ -32,7 +32,12 @@ const ROOT = join(import.meta.dir, "..");
 /** A copy of the files that carry a version, plus a helper crate like PR #6's. */
 function repoCopy(): { dir: string; cleanup(): void } {
   const t = tempDir();
-  for (const f of ["package.json", "src/main/app-info.ts", "skills/akou/SKILL.md"]) {
+  for (const f of [
+    "package.json",
+    "src/main/app-info.ts",
+    "skills/akou/SKILL.md",
+    "skills/akou-vocab/SKILL.md",
+  ]) {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
   }
@@ -67,7 +72,12 @@ describe("one version everywhere", () => {
     // The places that must exist on main are all found (the helper's join once its crate is here).
     const files = readAll(ROOT).map((f) => f.file);
     expect(files).toEqual(
-      expect.arrayContaining(["package.json", "src/main/app-info.ts", "skills/akou/SKILL.md"]),
+      expect.arrayContaining([
+        "package.json",
+        "src/main/app-info.ts",
+        "skills/akou/SKILL.md",
+        "skills/akou-vocab/SKILL.md",
+      ]),
     );
   });
 
@@ -106,7 +116,7 @@ describe("one version everywhere", () => {
     const t = repoCopy();
     expect(quiet(() => main(["--set", "0.1.0", "--root", t.dir]))).toBe(0);
     expect(readAll(t.dir).every((f) => f.version === "0.1.0")).toBe(true);
-    expect(readAll(t.dir)).toHaveLength(5);
+    expect(readAll(t.dir)).toHaveLength(6);
     expect(quiet(() => main(["--check", "--tag", "v0.1.0", "--root", t.dir]))).toBe(0);
     expect(quiet(() => main(["--check", "--tag", "v0.1.1", "--root", t.dir]))).toBe(1);
     expect(tagVersion("refs/tags/v1.2.3-rc.1")).toBe("1.2.3-rc.1");
