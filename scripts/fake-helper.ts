@@ -16,8 +16,11 @@
  *   --call-silent              the call side is silent from the start: zero-filled call packets,
  *                              output device not running
  *   --call-omit                call packets are never sent at all (a helper without an aligner)
- *   --call-dead-at S           the call tap dies at S seconds while output keeps running; the
- *                              dead-call monitor reports it and rebuilds
+ *   --call-dead-at S           the call tap stops delivering at S seconds while output keeps
+ *                              running (zero-filled packets); the dead-call monitor rebuilds it
+ *                              after 1 s
+ *   --call-zeros-at S          the call side delivers buffers of zeros from S seconds while output
+ *                              keeps running; the dead-call monitor waits 10 s, then rebuilds
  *   --rebuild-heals            a `rebuild_call` brings a dead call side back
  *   --hang-on-stop             `stop` and closing stdin are ignored: a hung teardown
  *   --crash-at S               exit 70 at S seconds, without `stopped`
@@ -176,6 +179,7 @@ async function runAkou(): Promise<void> {
   const callSilent = flag("--call-silent");
   const callOmit = flag("--call-omit");
   const deadAt = num("--call-dead-at");
+  const zerosAt = num("--call-zeros-at");
   const crashAt = num("--crash-at");
   const stallAt = num("--stall-at");
   const sleepAt = num("--sleep-at");
@@ -225,11 +229,13 @@ async function runAkou(): Promise<void> {
       });
     }
     const dead = deadAt !== undefined && t >= deadAt && !callHealed;
-    const callAudible = callMode !== "none" && !callSilent && !dead;
+    const zeros = zerosAt !== undefined && t >= zerosAt && !callHealed;
+    const callDelivered = callMode !== "none" && !callSilent && !dead;
+    const callAudible = callDelivered && !zeros;
     if (callMode !== "none" && !callOmit) {
       packets.push({
         ch: "call",
-        zeroFilled: !callAudible,
+        zeroFilled: !callDelivered,
         captureNs,
         fileSeconds: t,
         samples: callAudible ? slice(src.call, frame, frames) : new Float32Array(frames),
@@ -243,7 +249,7 @@ async function runAkou(): Promise<void> {
       }
     }
     stdout.flush();
-    if (deadAt !== undefined) {
+    if (deadAt !== undefined || zerosAt !== undefined) {
       const emit = (a: ReturnType<DeadCallMonitor["tick"]>[number]) => {
         if (a.kind !== "health") return;
         say({
@@ -255,7 +261,13 @@ async function runAkou(): Promise<void> {
           detail: a.detail,
         });
       };
-      for (const a of monitor.tick({ t, outputRunning: !callSilent, heard: callAudible })) {
+      const tick = {
+        t,
+        outputRunning: !callSilent,
+        heard: callAudible,
+        delivered: callDelivered,
+      };
+      for (const a of monitor.tick(tick)) {
         // The probe runs on the output, which is still playing, so it hears audio.
         if (a.kind === "probe") for (const r of monitor.probeResult(t, true)) emit(r);
         else emit(a);

@@ -223,6 +223,12 @@ pub trait Frontend: Send {
     fn permission_suspect(&self) -> bool {
         false
     }
+    /// The probe listens to exactly what the call side captures, per-app capture included
+    /// (macOS: a throwaway tap on the same processes). Elsewhere the probe reads the whole
+    /// output, so with per-app capture it can hear other apps while the tapped one is quiet.
+    fn probe_matches_call(&self) -> bool {
+        false
+    }
     /// Stops and releases everything. May block on a hung OS call; the engine runs it on its
     /// own thread under a deadline.
     fn close(self: Box<Self>);

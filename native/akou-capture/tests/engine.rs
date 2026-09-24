@@ -1186,13 +1186,23 @@ mod faults {
         );
     }
 
-    /// [T0.2] The call side dies while output keeps running (a tap-only aggregate delivers
-    /// nothing when it dies). The dead-call rule owns that symptom end to end: after 10 s of
-    /// nothing the probe hears audio, the call side is rebuilt and `health {state: dead}` goes
-    /// out, and the next rebuild waits for the backoff. The stall rule never rebuilds the call
-    /// side on its own, so there is no rebuild every 3 s and no `stalled` line.
+    /// The `silent_for` of each `dead` line on the call side.
+    fn dead_silent_for(lines: &[String]) -> Vec<f64> {
+        typed(lines, "health")
+            .into_iter()
+            .filter(|l| l.contains(r#""ch":"call""#) && l.contains(r#""state":"dead""#))
+            .map(|l| num_field(l, "silent_for"))
+            .collect()
+    }
+
+    /// [T0.2] The call side stops delivering while output keeps running (a tap-only aggregate
+    /// delivers nothing when its IO callback stops: the M0 hour run's 10.5 s gap). No buffers at
+    /// all is not a quiet call: after 1 s the probe hears audio, the call side is rebuilt and
+    /// `health {state: dead}` goes out, and the next rebuild waits for the backoff. The stall rule
+    /// never rebuilds the call side on its own, so there is no rebuild every 3 s and no
+    /// `stalled` line.
     #[test]
-    fn t0_2_a_dead_call_side_is_probed_rebuilt_and_reported() {
+    fn t0_2_a_call_side_that_stops_delivering_is_rebuilt_within_a_second() {
         let r = Run::start(
             "dead.opus",
             stereo(16_000, 30.0),
@@ -1205,19 +1215,56 @@ mod faults {
         let lines = r.lines();
         let health = call_health(&lines);
         assert!(health.iter().all(|(s, _)| s != "stalled"), "{health:?}");
-        // Dead at 11 s (10 s after the tap died), again at 21 s (10 s backoff); the 30 s backoff
-        // puts the third past the end of the file.
+        // Dead at 2 s (1 s after the last buffer), again at 12 s (10 s backoff); the 30 s
+        // backoff puts the third past the end of the file.
         assert_eq!(
             health,
             vec![("dead".to_string(), 1), ("dead".to_string(), 2)],
             "{health:?}"
         );
         assert_eq!(call_rebuilds(&lines), 2, "{lines:#?}");
+        let first = dead_silent_for(&lines)[0];
+        assert!((1.0..1.5).contains(&first), "{first}");
         let dead = typed(&lines, "health")
             .into_iter()
             .find(|l| l.contains(r#""state":"dead""#))
             .unwrap();
-        assert!(num_field(dead, "silent_for") >= 10.0);
+        assert!(dead.contains("stopped delivering"), "{dead}");
+    }
+
+    /// [T0.2] Positive control for the fast path: a call side that keeps delivering buffers, all
+    /// zeros, while output runs is a stream carrying silence. It keeps the probe-first 10 s rule,
+    /// so real silences are never "repaired" early.
+    #[test]
+    fn t0_2_a_call_side_of_zeros_waits_the_full_10_s_before_the_probe() {
+        let r = Run::start(
+            "zeros.opus",
+            stereo(16_000, 30.0),
+            20.0,
+            false,
+            CallMode::System,
+            with(&["call-zeros-at=1"]),
+        );
+        let (_, r) = r.join();
+        let lines = r.lines();
+        // Dead at 11 s and 21 s; the call packets kept coming, flagged delivered, all zeros.
+        assert_eq!(
+            call_health(&lines),
+            vec![("dead".to_string(), 1), ("dead".to_string(), 2)],
+            "{lines:#?}"
+        );
+        let first = dead_silent_for(&lines)[0];
+        assert!((10.0..10.5).contains(&first), "{first}");
+        let p = r.packets();
+        let late: Vec<&Packet> = p
+            .iter()
+            .filter(|x| x.ch == Ch::Call && x.file_seconds > 1.1)
+            .collect();
+        assert!(!late.is_empty());
+        assert!(
+            late.iter()
+                .all(|c| !c.zero_filled && c.samples.iter().all(|v| *v == 0.0))
+        );
     }
 
     /// A dead call side that a rebuild brings back: the dead-call rule's rebuild heals it, and
@@ -1231,6 +1278,24 @@ mod faults {
             false,
             CallMode::System,
             with(&["call-dead-at=1", "rebuild-heals"]),
+        );
+        let (_, r) = r.join();
+        let lines = r.lines();
+        let states: Vec<String> = call_health(&lines).into_iter().map(|h| h.0).collect();
+        assert_eq!(states, vec!["dead", "ok"], "{lines:#?}");
+        assert_eq!(call_rebuilds(&lines), 1);
+    }
+
+    /// The same healing for a stream of zeros: `rebuild-heals` brings its audio back.
+    #[test]
+    fn a_call_side_of_zeros_that_a_rebuild_heals_reports_dead_then_ok() {
+        let r = Run::start(
+            "heal-zeros.opus",
+            stereo(16_000, 20.0),
+            20.0,
+            false,
+            CallMode::System,
+            with(&["call-zeros-at=1", "rebuild-heals"]),
         );
         let (_, r) = r.join();
         let lines = r.lines();

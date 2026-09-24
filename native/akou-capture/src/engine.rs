@@ -504,6 +504,7 @@ impl Part {
                 t: st,
                 output_running: self.status.output_running.unwrap_or(false),
                 heard: slot.ch[1].heard,
+                delivered: slot.ch[1].delivered,
                 paused: false,
             };
             if let Some(d) = self.dead.as_mut() {
@@ -541,6 +542,7 @@ impl Part {
                 t,
                 output_running: false,
                 heard: false,
+                delivered: false,
                 paused: true,
             });
         }
@@ -684,7 +686,11 @@ pub fn run(
         first: [false; 2],
         level_sum: [0.0; 2],
         level_n: 0,
-        dead: on[1].then(|| DeadCallMonitor::new(0.0)),
+        dead: on[1].then(|| {
+            let mut d = DeadCallMonitor::new(0.0);
+            d.stopped_rule = cfg.call == CallMode::System || fe.probe_matches_call();
+            d
+        }),
         suspect: (on[1] && fe.permission_suspect()).then(PermissionSuspect::new),
         stall: StallMonitor::new(),
         no_buffers: NoBuffers::default(),

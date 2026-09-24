@@ -32,7 +32,10 @@ export interface Faults {
   exitBeforeCapturing?: number;
   callSilent?: boolean;
   callOmit?: boolean;
+  /** The call side stops delivering buffers at this time, output still running. */
   callDeadAt?: number;
+  /** The call side delivers buffers of zeros from this time, output still running. */
+  callZerosAt?: number;
   hangOnStop?: boolean;
   crashAt?: number;
   stallAt?: number;
@@ -66,6 +69,7 @@ export const fakeHelper: HelperUnderTest = {
     if (f.callSilent) a.push("--call-silent");
     if (f.callOmit) a.push("--call-omit");
     if (f.callDeadAt !== undefined) a.push("--call-dead-at", String(f.callDeadAt));
+    if (f.callZerosAt !== undefined) a.push("--call-zeros-at", String(f.callZerosAt));
     if (f.hangOnStop) a.push("--hang-on-stop");
     if (f.crashAt !== undefined) a.push("--crash-at", String(f.crashAt));
     if (f.stallAt !== undefined) a.push("--stall-at", String(f.stallAt));
@@ -95,6 +99,7 @@ export function rustHelper(bin: string, defaultWav: string): HelperUnderTest {
       if (f.callSilent) sim("call-silent");
       if (f.callOmit) sim("call-omit");
       if (f.callDeadAt !== undefined) sim(`call-dead-at=${f.callDeadAt}`);
+      if (f.callZerosAt !== undefined) sim(`call-zeros-at=${f.callZerosAt}`);
       if (f.hangOnStop) sim("hang-on-stop");
       if (f.crashAt !== undefined) sim(`crash-at=${f.crashAt}`);
       if (f.stallAt !== undefined) sim(`stall-at=${f.stallAt}`);
@@ -361,6 +366,30 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         );
         await r.mgr.live()?.idle();
         expect(ofType(r.events, "part.ended")[0]).toMatchObject({ part: 1, reason: "restart" });
+      },
+      LONG,
+    );
+
+    test(
+      "[T0.2] a call side with no buffers at all is rebuilt within a second; one of zeros waits the 10 s probe rule",
+      async () => {
+        const deadOf = async (f: Faults) => {
+          const r = rig(h, (o) => (o.part === 1 ? { ...f, speed: 20 } : {}));
+          const a = await r.mgr.start({ workspace: "work" });
+          expect(a.ok).toBe(true);
+          await until(
+            has(r.events, (e) => e.type === "health" && e.state === "dead"),
+            5_000,
+            "health dead",
+          );
+          await r.mgr.stop("live");
+          return ofType(r.events, "health").find((e) => e.state === "dead");
+        };
+        const stopped = await deadOf({ callDeadAt: 0.5 });
+        expect(stopped?.silentFor).toBeGreaterThanOrEqual(1);
+        expect(stopped?.silentFor).toBeLessThan(2);
+        const zeros = await deadOf({ callZerosAt: 0.5 });
+        expect(zeros?.silentFor).toBeGreaterThanOrEqual(10);
       },
       LONG,
     );
