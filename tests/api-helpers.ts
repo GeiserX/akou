@@ -57,7 +57,10 @@ export interface RigOptions {
   helperArgs?: string[];
   settings?: Record<string, unknown>;
   models?: ModelSpec | null;
-  /** The model files a start requires; with it, no recognizer is faked (tests/first-run). */
+  /**
+   * The model files a start requires (tests/first-run); the fake recognizer waits for them, as
+   * sherpa waits for the real ones.
+   */
   modelRegistry?: readonly ModelSpecEntry[];
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   home?: string;
@@ -100,7 +103,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
   const app = await startApp({
     env,
     models:
-      o.models !== undefined || o.modelRegistry
+      o.models !== undefined
         ? o.models
         : { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
     modelRegistry: o.modelRegistry,

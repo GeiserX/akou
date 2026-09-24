@@ -257,6 +257,8 @@ export class AkouApp implements ApiApp {
     reason: "not started",
   };
   private modelsPull: ModelsPull = { running: null, done: new Map() };
+  /** The recognizer waits for its model files (`startAsr`). */
+  private asrAwaitingModels = false;
 
   private cfg: LoadedConfig;
   private readonly clock: Clock;
@@ -484,11 +486,7 @@ export class AkouApp implements ApiApp {
         pull.running = null;
         pull.file = undefined;
         this.log("info", `models: every file is in ${dir} and verified`);
-        if (!this.o.modelRegistry && this.o.models === undefined) {
-          void this.asr?.close();
-          this.asr = null;
-          this.startAsr(this.cfg.settings);
-        }
+        this.recognizerOnNewModels();
         for (const fn of this.statusWatchers) fn();
       },
       (err: Error) => {
@@ -516,23 +514,42 @@ export class AkouApp implements ApiApp {
     else console.error(`akou ${level}: ${msg}`);
   }
 
+  /**
+   * The model files arrived while the app waited for them: from its own pull, or from the CLI's
+   * `akou models pull` or `models import`, which write the same folder behind its back. Runs on every
+   * start and status read, so the next recording is transcribed without restarting the app.
+   */
+  private recognizerOnNewModels(): void {
+    if (this.asrAwaitingModels && this.asr === null && !this.quitting) {
+      this.startAsr(this.cfg.settings);
+    }
+  }
+
+  /**
+   * Starts the recognizer once the model files are there. A recognizer given on purpose (tests, or
+   * none) starts at once, unless a model registry is given too: then it waits for those files, as
+   * sherpa waits for the real ones. Until they are there, `asrAwaitingModels` is set, and
+   * `recognizerOnNewModels` starts it when they arrive.
+   */
   private startAsr(s: Settings): void {
-    let spec: ModelSpec | null;
-    if (this.o.models !== undefined) spec = this.o.models;
-    else if (modelsPresent(s["asr.modelsDir"])) {
-      spec = {
-        kind: "sherpa",
-        dir: s["asr.modelsDir"],
-        cacheDir: join(s["asr.modelsDir"], ".cache"),
-        threads: s["asr.threads"],
-      };
-    } else {
+    const waits = this.o.models === undefined || this.o.modelRegistry !== undefined;
+    this.asrAwaitingModels = waits && !modelsPresent(s["asr.modelsDir"], this.registry());
+    if (this.asrAwaitingModels) {
       this.asrState = {
         state: "unavailable",
         reason: `the speech models are not in ${s["asr.modelsDir"]}; run \`akou models pull\``,
       };
       return;
     }
+    const spec: ModelSpec | null =
+      this.o.models !== undefined
+        ? this.o.models
+        : {
+            kind: "sherpa",
+            dir: s["asr.modelsDir"],
+            cacheDir: join(s["asr.modelsDir"], ".cache"),
+            threads: s["asr.threads"],
+          };
     if (!spec) {
       this.asrState = { state: "unavailable", reason: "no recognizer configured" };
       return;
@@ -994,6 +1011,7 @@ export class AkouApp implements ApiApp {
 
   async start(req: StartRequest): Promise<Outcome<StartOk>> {
     if (this.quitting) return fail(503, "quitting", "akou is quitting");
+    this.recognizerOnNewModels();
     // Without the speech models a call records audio that nothing transcribes: only when asked.
     if (!req.withoutModels && this.models().state !== "ready") {
       return fail(
@@ -1053,6 +1071,7 @@ export class AkouApp implements ApiApp {
   }
 
   async status(): Promise<Record<string, unknown>> {
+    this.recognizerOnNewModels();
     const live = this.manager.live();
     const last = this.manager.calls()[0];
     const s = this.cfg.settings;

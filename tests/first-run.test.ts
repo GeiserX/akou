@@ -7,6 +7,8 @@
 
 import { afterAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
+import { mkdirSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import { appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -74,11 +76,42 @@ describe("first run without the speech models", () => {
     );
     m = await rig.api("GET", "/models");
     expect(m.body).toMatchObject({ state: "ready", bytes: total, total });
+    // The recognizer starts on the new files.
+    await until(
+      async () => (await rig.api("GET", "/status")).body.asr.state === "ready",
+      10_000,
+      "the recognizer ready",
+    );
     // Pulling again changes nothing.
     expect((await rig.api("POST", "/models/pull")).status).toBe(200);
 
     const started = await rig.api("POST", "/calls", {});
     expect(started.status).toBe(201);
+    await rig.api("POST", "/calls/live/stop");
+    await rig.close();
+  });
+
+  test("models fetched behind the app's back (the CLI's pull or import) start the recognizer at the next start", async () => {
+    const rig = await appRig({ modelRegistry: registry() });
+    let st = (await rig.api("GET", "/status")).body;
+    expect(st.asr.state).toBe("unavailable");
+    expect(st.asr.reason).toContain("akou models pull");
+
+    // `akou models pull` in a terminal writes the files into the same folder.
+    const dir = join(st.models.dir, "tiny");
+    mkdirSync(dir, { recursive: true });
+    for (const [path, body] of Object.entries(FILES)) {
+      writeFileSync(join(dir, path.split("/").pop() as string), body);
+    }
+    const started = await rig.api("POST", "/calls", {});
+    expect(started.status).toBe(201);
+    st = (await rig.api("GET", "/status")).body;
+    expect(st.asr.state).not.toBe("unavailable");
+    await until(
+      async () => (await rig.api("GET", "/status")).body.asr.state === "ready",
+      10_000,
+      "the recognizer ready",
+    );
     await rig.api("POST", "/calls/live/stop");
     await rig.close();
   });
