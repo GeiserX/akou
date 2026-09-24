@@ -224,6 +224,15 @@ struct Part {
     probe_by_command: bool,
     /// When the dead-call monitor's probe started; a verdict that never comes counts as silence.
     probe_since: Option<f64>,
+    /// Awake-clock end of the slot whose silence asked for the probe. A verdict can arrive before
+    /// the slot carrying the stream's next audio is due (the macOS probe returns the moment it
+    /// hears), so the stream's own buffers are checked against this at the verdict.
+    probe_after_ns: Option<u64>,
+    /// Awake-clock end of the last slot emitted.
+    emitted_ns: u64,
+    /// Awake-clock end of the latest call buffer received, and of the latest audible one.
+    call_buffer_ns: u64,
+    call_audio_ns: u64,
     /// `cont - awake` offsets and the awake time each took effect: a sleep changes it, and a slot
     /// captured before the sleep keeps the old one even if it is emitted after.
     offsets: Vec<(u64, u64)>,
@@ -346,6 +355,7 @@ impl Part {
             match a {
                 dead_call::Action::Probe => {
                     self.probe_since = Some(self.t_of(self.now.awake_ns));
+                    self.probe_after_ns = Some(self.emitted_ns);
                     fe.probe_call();
                 }
                 dead_call::Action::Health {
@@ -459,6 +469,7 @@ impl Part {
         }
 
         // Monitors, on the slot's own time.
+        self.emitted_ns = self.aligner.awake_of(slot.frame + slot.len() as i64);
         let on = self.on;
         let st = self.t_of(slot.awake_ns);
         let any = (self.on[0] && slot.ch[0].delivered) || (self.on[1] && slot.ch[1].delivered);
@@ -519,6 +530,7 @@ impl Part {
                         .is_some_and(|s| st - s > dead_call::PROBE_S + 2.0)
                 {
                     self.probe_since = None;
+                    self.probe_after_ns = None;
                     actions.extend(d.probe_result(st, false));
                 }
                 actions.extend(d.tick(tick));
@@ -703,6 +715,10 @@ pub fn run(
         stalled: false,
         probe_by_command: false,
         probe_since: None,
+        probe_after_ns: None,
+        emitted_ns: anchor.awake_ns,
+        call_buffer_ns: 0,
+        call_audio_ns: 0,
         offsets: vec![(0, anchor.cont_ns.wrapping_sub(anchor.awake_ns))],
         rebuilds: [0; 2],
         mic_fails: 0,
@@ -740,6 +756,14 @@ pub fn run(
                             let now = if driven { p.now } else { clock::now() };
                             p.fit_latency(now.awake_ns.saturating_sub(c.awake_ns));
                         }
+                        if c.ch == Ch::Call && c.rate > 0 {
+                            let end = c.awake_ns
+                                + c.samples.len() as u64 * 1_000_000_000 / u64::from(c.rate);
+                            p.call_buffer_ns = p.call_buffer_ns.max(end);
+                            if c.heard {
+                                p.call_audio_ns = p.call_audio_ns.max(end);
+                            }
+                        }
                         p.aligner
                             .push(c.ch, c.awake_ns, c.rate, &c.samples, c.heard);
                     }
@@ -750,11 +774,21 @@ pub fn run(
                     let by_dead = p.dead.as_ref().is_some_and(|d| d.probing());
                     if by_dead {
                         p.probe_since = None;
-                        let actions = p
-                            .dead
-                            .as_mut()
-                            .map(|d| d.probe_result(t, heard))
-                            .unwrap_or_default();
+                        // What the stream delivered after the silence that asked for the probe
+                        // answers it first: a tap that works is never rebuilt for a verdict that
+                        // outran its audio.
+                        let after = p.probe_after_ns.take().unwrap_or(u64::MAX);
+                        let (buffer, audio) = (p.call_buffer_ns > after, p.call_audio_ns > after);
+                        let actions = match p.dead.as_mut() {
+                            Some(d) => {
+                                if d.stream_alive(buffer, audio) {
+                                    vec![]
+                                } else {
+                                    d.probe_result(t, heard)
+                                }
+                            }
+                            None => vec![],
+                        };
                         p.dead_actions(fe.as_mut(), actions);
                     }
                     if p.probe_by_command {

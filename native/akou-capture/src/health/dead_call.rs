@@ -161,6 +161,22 @@ impl DeadCallMonitor {
         vec![Action::Probe]
     }
 
+    /// The stream showed it is alive after the probe was asked, before its verdict: audio drops
+    /// either probe, any buffer drops a probe of a stopped stream. Returns true when it dropped
+    /// the probe; its verdict is then ignored. The engine asks at the verdict, because the
+    /// verdict can arrive before the slot carrying that audio reaches `tick`.
+    pub fn stream_alive(&mut self, buffer: bool, audio: bool) -> bool {
+        let drop = match self.probing {
+            Some(_) if audio => true,
+            Some(Why::Stopped) => buffer,
+            _ => false,
+        };
+        if drop {
+            self.probing = None;
+        }
+        drop
+    }
+
     /// The probe's verdict, within `PROBE_S` of the `Probe` action.
     pub fn probe_result(&mut self, t: f64, heard_audio: bool) -> Vec<Action> {
         let Some(why) = self.probing.take() else {
@@ -624,6 +640,71 @@ mod tests {
             r.iter().any(|a| matches!(a, Action::Rebuild { .. })),
             "{r:?}"
         );
+    }
+
+    /// The engine's side of the same rule: a verdict can reach the engine before the slot that
+    /// carries the stream's own audio (the macOS probe returns the moment it hears), so the
+    /// engine asks with what the stream delivered after the probe was asked. Audio drops either
+    /// probe, any buffer drops a probe of a stopped stream, zeros do not drop a probe of zeros.
+    #[test]
+    fn what_the_stream_delivered_after_the_ask_drops_the_probe() {
+        let tick = |t: f64, heard: bool, delivered: bool| Tick {
+            t,
+            output_running: true,
+            heard,
+            delivered,
+            paused: false,
+        };
+        let mut idle = DeadCallMonitor::new(0.0);
+        assert!(!idle.stream_alive(true, true), "no probe, nothing to drop");
+
+        let mut z = DeadCallMonitor::new(0.0);
+        assert_eq!(z.tick(tick(10.0, false, true)), vec![Action::Probe]);
+        assert!(
+            !z.stream_alive(true, false),
+            "zeros do not answer a probe of zeros"
+        );
+        assert!(z.probing());
+        assert!(z.stream_alive(true, true));
+        assert!(!z.probing());
+        assert!(z.probe_result(10.2, true).is_empty());
+        assert_eq!(z.rebuilds, 0);
+
+        let mut s = DeadCallMonitor::new(0.0);
+        assert!(s.tick(tick(0.0, false, true)).is_empty());
+        assert!(s.tick(tick(0.5, false, false)).is_empty());
+        assert_eq!(s.tick(tick(1.5, false, false)), vec![Action::Probe]);
+        assert!(
+            s.stream_alive(true, false),
+            "any buffer answers a probe of a stopped stream"
+        );
+        assert!(s.probe_result(1.7, true).is_empty());
+        assert_eq!(s.rebuilds, 0);
+    }
+
+    /// [T0.2] The 1 s path is for a stream that delivered and then stopped. One that has never
+    /// delivered (a tap whose first buffer has not come yet) is not stopped: with output running
+    /// it waits the 10 s like zeros.
+    #[test]
+    fn a_stream_that_never_delivered_is_not_probed_after_a_second() {
+        let mut m = DeadCallMonitor::new(0.0);
+        let log = script(
+            &mut m,
+            0.0,
+            12.0,
+            0.1,
+            &Script {
+                running: |_| true,
+                heard: |_| false,
+                delivered: |_| false,
+                probe_hears: true,
+            },
+        );
+        let first = log
+            .iter()
+            .find(|(_, a)| *a == Action::Probe)
+            .map(|(t, _)| *t);
+        assert!(first.is_some_and(|t| t >= DEAD_AFTER_S - 1e-6), "{first:?}");
     }
 
     #[test]

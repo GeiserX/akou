@@ -249,6 +249,15 @@ fn run_scripted(name: &str, fe: Scripted) -> (Vec<String>, Vec<Packet>) {
 
 /// Runs any driven front end to its end; returns stderr lines and packets.
 fn run_frontend(name: &str, fe: Box<dyn Frontend>) -> (Vec<String>, Vec<Packet>) {
+    run_frontend_as(name, fe, CallMode::System)
+}
+
+/// `run_frontend` with the call side captured as `call` says.
+fn run_frontend_as(
+    name: &str,
+    fe: Box<dyn Frontend>,
+    call: CallMode,
+) -> (Vec<String>, Vec<Packet>) {
     let path = tmp(name);
     let (_tx, rx) = mpsc::channel::<Vec<u8>>();
     let out = Shared::default();
@@ -256,7 +265,7 @@ fn run_frontend(name: &str, fe: Box<dyn Frontend>) -> (Vec<String>, Vec<Packet>)
     let cfg = RunConfig {
         out: path,
         mic_default: false,
-        call: CallMode::System,
+        call,
         faults: Faults::none(),
     };
     let outcome = engine::run(
@@ -1125,12 +1134,22 @@ fn a_command_line_that_is_not_utf8_is_reported_and_does_not_stop_the_part() {
 /// sends at `t` seconds: nothing, or a 1 kHz tone of some amplitude (0: a buffer of zeros)
 /// stamped `offset_ns` from `t` on the stream's own clock. The OS reports output running from
 /// `running_from`, and says so at once (`Event::Devices`). At `lost_at` the call stream fails
-/// (`Event::Lost`), and the engine rebuilds it. A probe hears audio while output runs.
+/// (`Event::Lost`), and the engine rebuilds it. A probe hears audio while output runs, and
+/// answers at once from its own thread.
+///
+/// With `probe_at` the probe answers the way the macOS probe does instead: it listens, and
+/// returns the moment it hears the app play, which here is `probe_at` s. The script waits there
+/// until the engine has asked, then sends that step's call buffer and the verdict right after it,
+/// ahead of the tick that makes the buffer's slot due: the order a real probe's verdict and the
+/// stream's own audio reach the engine in. `matches` is `probe_matches_call`.
 struct Tap {
     secs: f64,
     running_from: f64,
     call: fn(f64) -> Option<(i64, f32)>,
     lost_at: Option<f64>,
+    probe_at: Option<f64>,
+    matches: bool,
+    probe_wanted: Arc<AtomicBool>,
     running: Arc<AtomicBool>,
     tx: Option<std::sync::mpsc::SyncSender<Event>>,
 }
@@ -1142,6 +1161,9 @@ impl Tap {
             running_from,
             call,
             lost_at: None,
+            probe_at: None,
+            matches: false,
+            probe_wanted: Arc::new(AtomicBool::new(false)),
             running: Arc::new(AtomicBool::new(false)),
             tx: None,
         }
@@ -1174,12 +1196,26 @@ impl Frontend for Tap {
     fn start(&mut self, anchor: Now) {
         let Some(tx) = self.tx.clone() else { return };
         let (secs, from, call, lost_at) = (self.secs, self.running_from, self.call, self.lost_at);
+        let (probe_at, wanted) = (self.probe_at, self.probe_wanted.clone());
         let running = self.running.clone();
         std::thread::spawn(move || {
             let steps = (secs * 100.0).round() as u64;
             let mut lost = false;
+            let mut answered = false;
             for i in 0..steps {
                 let t = i as f64 / 100.0;
+                let answer_now = !answered && probe_at.is_some_and(|p| t >= p - 1e-9);
+                if answer_now {
+                    // The engine asks for the probe as it emits a slot; wait for it.
+                    let waited = std::time::Instant::now();
+                    while !wanted.load(Ordering::SeqCst) {
+                        assert!(
+                            waited.elapsed() < Duration::from_secs(10),
+                            "no probe was asked by {t} s"
+                        );
+                        std::thread::sleep(Duration::from_millis(1));
+                    }
+                }
                 let at = anchor.awake_ns + i * 10_000_000;
                 let run = t >= from - 1e-9;
                 if run != running.swap(run, Ordering::Relaxed) && tx.send(Event::Devices).is_err() {
@@ -1220,6 +1256,13 @@ impl Frontend for Tap {
                         return;
                     }
                 }
+                if answer_now {
+                    answered = true;
+                    wanted.store(false, Ordering::SeqCst);
+                    if tx.send(Event::Probe { heard: true }).is_err() {
+                        return;
+                    }
+                }
                 let end = at + 10_000_000;
                 let tick = Now {
                     awake_ns: end,
@@ -1236,6 +1279,11 @@ impl Frontend for Tap {
         Ok(vec![])
     }
     fn probe_call(&mut self) {
+        if self.probe_at.is_some() {
+            // The script answers when the probe hears the app (see `Tap`).
+            self.probe_wanted.store(true, Ordering::SeqCst);
+            return;
+        }
         // The verdict comes from the probe's own thread, as on macOS, and always arrives.
         let heard = self.running.load(Ordering::Relaxed);
         if let Some(tx) = self.tx.clone() {
@@ -1249,6 +1297,9 @@ impl Frontend for Tap {
             default_input: None,
             default_output: None,
         }
+    }
+    fn probe_matches_call(&self) -> bool {
+        self.matches
     }
     fn close(self: Box<Self>) {}
 }
@@ -1343,6 +1394,90 @@ fn a_rebuilt_call_stream_is_aligned_from_its_first_audio() {
         (onset - 5.967).abs() <= 0.002,
         "the audio after the rebuild starts at {onset} s, not 5.967 s"
     );
+}
+
+/// The call side's `health` and `device` lines.
+fn call_side_lines(lines: &[String]) -> Vec<&String> {
+    lines
+        .iter()
+        .filter(|l| l.contains(r#""ch":"call""#))
+        .filter(|l| l.contains(r#""type":"health""#) || l.contains(r#""type":"device""#))
+        .collect()
+}
+
+/// The `silent_for` of the first `dead` line on the call side.
+fn first_dead(lines: &[String]) -> Option<f64> {
+    lines
+        .iter()
+        .find(|l| l.contains(r#""type":"health","ch":"call","state":"dead""#))
+        .map(|l| num_field(l, "silent_for"))
+}
+
+/// [T0.2] A stream that stops for 1.5 s and comes back. The probe is asked after 1 s and hears
+/// the app the moment it plays again, which is the moment the stream's own buffers come back:
+/// the verdict reaches the engine before the slot carrying those buffers is due. The stream
+/// shows it is alive before the verdict, so the verdict is dropped: no `dead`, no rebuild, no
+/// lost first word.
+#[test]
+fn t0_2_a_probe_that_hears_the_stream_come_back_does_not_rebuild_it() {
+    let mut tap = Tap::new(6.0, 0.0, |t| (!(2.0..3.5).contains(&t)).then_some((0, 0.3)));
+    tap.probe_at = Some(3.5);
+    let (lines, _) = run_frontend("probe-race-stopped.opus", Box::new(tap));
+    assert!(call_side_lines(&lines).is_empty(), "{lines:#?}");
+}
+
+/// [T0.2] The same for a stream of zeros: 11 s of zeros while output runs, then speech. The probe
+/// hears the speech as the stream delivers it, and the verdict is dropped.
+#[test]
+fn t0_2_a_probe_that_hears_zeros_turn_into_speech_does_not_rebuild_the_stream() {
+    let mut tap = Tap::new(14.0, 0.0, |t| {
+        Some((0, if (1.0..12.0).contains(&t) { 0.0 } else { 0.3 }))
+    });
+    tap.probe_at = Some(12.0);
+    let (lines, _) = run_frontend("probe-race-zeros.opus", Box::new(tap));
+    assert!(call_side_lines(&lines).is_empty(), "{lines:#?}");
+}
+
+/// [T0.2] Positive control for the two above: the same probe, the app playing again at 3.5 s,
+/// but the stream stays dead. The verdict stands and the call side is rebuilt.
+#[test]
+fn t0_2_a_probe_that_hears_the_app_while_the_stream_stays_dead_rebuilds_it() {
+    let mut tap = Tap::new(6.0, 0.0, |t| (t < 2.0).then_some((0, 0.3)));
+    tap.probe_at = Some(3.5);
+    let (lines, _) = run_frontend("probe-race-dead.opus", Box::new(tap));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    let silent_for = first_dead(&lines).expect("a dead line");
+    assert!((1.0..2.0).contains(&silent_for), "{silent_for}");
+}
+
+/// [T0.2] With per-app capture and a probe that reads the whole output (Windows and Linux), a
+/// stream that stops delivering waits the full 10 s like zeros: the probe would hear the other
+/// apps. Where the probe listens to the same processes (macOS), the same stream is probed after
+/// 1 s (positive control).
+#[test]
+fn t0_2_per_app_capture_probes_no_buffers_after_1_s_only_when_the_probe_matches_the_call() {
+    for matches in [false, true] {
+        let mut tap = Tap::new(14.0, 0.0, |t| (t < 2.0).then_some((0, 0.3)));
+        tap.matches = matches;
+        // The app plays on: the probe answers just after the slot that should ask for it.
+        tap.probe_at = Some(if matches { 3.1 } else { 12.1 });
+        let (lines, _) = run_frontend_as(
+            &format!("apps-stopped-{matches}.opus"),
+            Box::new(tap),
+            CallMode::Apps(vec!["Meeting".into()]),
+        );
+        let silent_for = first_dead(&lines).expect("a dead line");
+        if matches {
+            assert!((1.0..2.0).contains(&silent_for), "{silent_for}");
+        } else {
+            assert!((10.0..11.0).contains(&silent_for), "{silent_for}");
+        }
+    }
 }
 
 #[cfg(feature = "simulate")]
