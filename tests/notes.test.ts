@@ -252,6 +252,22 @@ describe("[judging] Hallucinated citation in enhanced notes", () => {
     expect(r.dropped[0]?.reason).toContain("after the span these notes cover");
   });
 
+  test("a bullet citing a retracted segment is dropped as not a line of this call", () => {
+    const b = shortCall();
+    b.seg({ id: "l000003", rev: 2, text: null, w0: T0 + 20 * S });
+    const r = citeCheck("- The invoice numbers for March look wrong [#l000003]", {
+      view: fold(b.events),
+    });
+    expect(r.markdown).toBe("");
+    expect(r.dropped.map((d) => d.reason)).toEqual([
+      "cites #l000003, which is not a line of this call",
+    ]);
+    // Positive control: before the retraction the same bullet is kept.
+    expect(
+      citeCheck("- The invoice numbers for March look wrong [#l000003]", { view: view() }).kept,
+    ).toBe(1);
+  });
+
   test("a fake provider's bad citation never reaches the stored notes", async () => {
     const q = new CallQuery(fold(shortCall().events));
     const provider = new FakeProvider(() =>
@@ -311,6 +327,75 @@ describe("[5.2] enhanced notes", () => {
     });
     expect(unplaced.appended).toEqual([userLine(notes[0] as never, TZ)]);
     expect(unplaced.markdown).toEndWith("## Your notes\n- build -> new box? _(your note, 15:36)_");
+  });
+
+  test("a note is placed only by its id or a whole line equal to it, never by a substring or a rewording", () => {
+    const b = shortCall();
+    b.add({
+      type: "note",
+      id: "n0009",
+      rev: 1,
+      text: "ok",
+      w: T0 + 30 * S,
+      afterSeq: 5,
+      by: "user",
+    });
+    const v = fold(b.events);
+    const notes = v.notes().filter((n) => n.author === "human");
+    const ok = userLine(notes.find((n) => n.id === "n0009") as never, TZ);
+    const box = userLine(notes.find((n) => n.id === "n0007") as never, TZ);
+    const opts = { view: v, tz: TZ, maxSeq: v.lastSeq, notes };
+    // (a) "ok" inside "look" is not the user's line.
+    const a = composeNotes(
+      "## Decisions\n- {n0007}\n- the invoice numbers look wrong [#l000003]",
+      opts,
+    );
+    expect(a.appended).toEqual([ok]);
+    expect(a.markdown).toEndWith(`## Your notes\n${ok}`);
+    // (b) A reworded bullet around the user's words, with a real citation: kept as the model's
+    // bullet, and the user's line is still added verbatim.
+    const bb = composeNotes(
+      "## Decisions\n- {n0009}\n- build -> new box? we should move the build [#l000001]",
+      opts,
+    );
+    expect(bb.markdown).toContain("- build -> new box? we should move the build [#l000001]");
+    expect(bb.appended).toEqual([box]);
+    // (c) The same with a fake citation: the bullet goes, the user's line stays.
+    const c = composeNotes(
+      "## Decisions\n- {n0009}\n- build -> new box? and we agreed [#l999999]",
+      opts,
+    );
+    expect(c.check.dropped.length).toBe(1);
+    expect(c.appended).toEqual([box]);
+    expect(c.markdown).toContain(box);
+    // Positive control: an agent writing the whole line verbatim places it.
+    const d = composeNotes("## Decisions\n- build -> new box?\n- ok", opts);
+    expect(d.appended).toEqual([]);
+  });
+
+  test("a note with a newline stays one line of the notes and is kept whole", () => {
+    const b = shortCall();
+    b.add({
+      type: "note",
+      id: "n0009",
+      rev: 1,
+      text: "line one\nline two",
+      w: T0 + 30 * S,
+      afterSeq: 5,
+      by: "user",
+    });
+    const v = fold(b.events);
+    const notes = v.notes().filter((n) => n.author === "human");
+    const n9 = notes.find((n) => n.id === "n0009") as never;
+    expect(userLine(n9, TZ)).toBe("- line one line two _(your note, 15:36)_");
+    const opts = { view: v, tz: TZ, maxSeq: v.lastSeq, notes };
+    const placed = composeNotes("## Decisions\n- {n0007}\n- {n0009}", opts);
+    expect(placed.check.dropped).toEqual([]);
+    expect(placed.markdown).toBe(
+      "## Decisions\n- build -> new box? _(your note, 15:36)_\n- line one line two _(your note, 15:36)_",
+    );
+    const unplaced = composeNotes("## Decisions\n- {n0007}", opts);
+    expect(unplaced.markdown).toEndWith("## Your notes\n- line one line two _(your note, 15:36)_");
   });
 
   test("the input: template, the user's notes by id, the agent's notes as context, the transcript, local times", () => {

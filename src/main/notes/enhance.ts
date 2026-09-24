@@ -26,7 +26,7 @@ import type { CallView, Line, NoteView } from "../../core/log/fold.ts";
 import { type CompleteResult, type Provider, runProvider } from "../llm/provider.ts";
 import type { CallQuery } from "../query/context.ts";
 import { estimateTokens, renderLine, zoneLine } from "../query/render.ts";
-import { type CiteCheckResult, citeCheck, type DroppedLine } from "./cite-check.ts";
+import { type CiteCheckResult, citeCheck, type DroppedLine, stripMarker } from "./cite-check.ts";
 import { linesAround, renderNote } from "./notepad.ts";
 import { renderTemplate, type Template } from "./templates.ts";
 
@@ -203,9 +203,14 @@ export function buildEnhanceInput(
   };
 }
 
+/** A note's text on one Markdown line: a line break inside it becomes a space. */
+function oneLine(text: string): string {
+  return text.replace(/\s*\r?\n\s*/g, " ");
+}
+
 /** The user's line as it appears in the notes: the text untouched, marked as theirs. */
 export function userLine(n: NoteView, tz: string): string {
-  return `- ${n.text} _(your note, ${formatWall(n.w, tz, { seconds: false })})_`;
+  return `- ${oneLine(n.text)} _(your note, ${formatWall(n.w, tz, { seconds: false })})_`;
 }
 
 export interface Composed {
@@ -239,12 +244,15 @@ export function composeNotes(
     }
     lines.push(line);
   }
-  // A user's line an agent wrote out itself (verbatim) counts as placed.
   const body = lines.join("\n");
-  for (const n of o.notes) if (!placed.has(n.id) && body.includes(n.text)) placed.add(n.id);
-  const userLines = o.notes.flatMap((n) => [n.text, userLine(n, o.tz)]);
+  const userLines = o.notes.flatMap((n) => [oneLine(n.text), userLine(n, o.tz)]);
   const check = citeCheck(body, { view: o.view, maxSeq: o.maxSeq, userLines });
-  const missing = o.notes.filter((n) => !placed.has(n.id));
+  // A note counts as placed only when a whole kept line is it (by its id, or written out verbatim
+  // by an agent). A substring, or the user's words inside a longer bullet, is not their line.
+  const kept = new Set(check.markdown.split("\n").map((l) => stripMarker(l)));
+  const isKept = (n: NoteView) =>
+    kept.has(stripMarker(userLine(n, o.tz))) || kept.has(stripMarker(oneLine(n.text)));
+  const missing = o.notes.filter((n) => !isKept(n));
   const appended = missing.map((n) => userLine(n, o.tz));
   const markdown =
     appended.length > 0
