@@ -78,3 +78,175 @@ jobs:
             echo "capture e2e tests were skipped"
             exit 1
           fi
+
+  # ROADMAP M4: the real helper on Linux against virtual devices, through both sound servers it
+  # talks to. The PipeWire rig links one stereo stimulus into the mic (left) and the call output
+  # (right) in one graph, so both tones start on the same sample and the skew bound is asserted.
+  # PulseAudio needs two players, which start a few milliseconds apart, so there the channels are
+  # checked and the skew is only reported.
+  capture-linux:
+    name: capture-linux (${{ matrix.server }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - server: pipewire
+            packages: pipewire pipewire-pulse wireplumber pulseaudio-utils dbus
+            play: paplay --device=akou_stim "$STIM"
+            max_skew_ms: "20"
+          - server: pulseaudio
+            packages: pulseaudio pulseaudio-utils dbus
+            play: paplay -d akou_micbus "$STIM_MIC" & paplay -d akou_call "$STIM_CALL"; wait
+            max_skew_ms: ""
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+      XDG_RUNTIME_DIR: /tmp/akou-rig
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust 1.97.1
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+      - name: build the shipping helper
+        working-directory: native/akou-capture
+        run: cargo build --locked --release
+      - name: ${{ matrix.server }} with a virtual mic and call output
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends ${{ matrix.packages }}
+          unset DBUS_SESSION_BUS_ADDRESS
+          scripts/capture-rig.sh ${{ matrix.server }} | tee rig.txt
+          grep '^DBUS_SESSION_BUS_ADDRESS=' rig.txt >> "$GITHUB_ENV"
+      - name: the helper lists the devices
+        run: |
+          native/akou-capture/target/release/akou-capture devices | tee devices.json
+          {
+            echo "### devices (${{ matrix.server }})"
+            echo
+            echo '```json'
+            cat devices.json
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version: 1.4.2
+      - run: bun install --frozen-lockfile
+      - name: left = mic tone, right = call tone
+        env:
+          AKOU_CAPTURE_LIVE: "1"
+          AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture
+          AKOU_CAPTURE_LIVE_PLAY: ${{ matrix.play }}
+          AKOU_CAPTURE_LIVE_MAX_SKEW_MS: ${{ matrix.max_skew_ms }}
+        run: |
+          set -euo pipefail
+          bun test tests/capture-live.e2e.test.ts 2>&1 | tee live.log
+          # The live test must have run and passed; a skip is not a pass.
+          if ! grep -q '(pass) akou-capture against real devices > left = mic tone' live.log; then
+            echo "the live capture test did not run"
+            exit 1
+          fi
+          {
+            echo "### live capture (${{ matrix.server }})"
+            echo
+            grep -E '^left|"type":"(capturing|warn)"' live.log | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: sound server logs
+        if: failure()
+        run: tail -n 50 "$XDG_RUNTIME_DIR"/*.log || true
+
+  # ROADMAP M3: the helper on a Windows runner. It must load and list devices. GitHub's Windows
+  # runners have no audio endpoint, so a virtual cable (VB-CABLE, through LABSN's CI helper) is
+  # installed; when that works, the call side records a tone played through it by process
+  # loopback, and a player inside the tree the helper is told to exclude is not heard. When no
+  # endpoint exists the summary says so; the loopback test is then not run, and never passed.
+  capture-windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    env:
+      CARGO_TERM_COLOR: always
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Rust 1.97.1
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+      - name: build the shipping helper
+        working-directory: native/akou-capture
+        run: cargo build --locked --release
+      - name: the helper loads and lists devices before any driver
+        run: |
+          set +e
+          native/akou-capture/target/release/akou-capture.exe devices > before.json 2> before.err
+          code=$?
+          set -e
+          cat before.json before.err
+          # 0 (a list, maybe empty) or 69 (no audio service) are answers; anything else is a
+          # helper that did not load or crashed.
+          if [ "$code" != 0 ] && [ "$code" != 69 ]; then
+            echo "akou-capture devices exited $code"
+            exit 1
+          fi
+      - name: a virtual audio cable
+        id: cable
+        continue-on-error: true
+        uses: LABSN/sound-ci-helpers@e9d6ba52163a3283714a68412036ddf33f78d49c # v1.0.4
+      - name: the Windows audio service
+        continue-on-error: true
+        shell: pwsh
+        run: |
+          Set-Service -Name audiosrv -StartupType Automatic
+          Start-Service -Name audiosrv
+          Get-Service -Name audiosrv, audioendpointbuilder | Format-Table -AutoSize
+      - name: devices with the cable
+        id: devices
+        run: |
+          set +e
+          native/akou-capture/target/release/akou-capture.exe devices > devices.json 2> devices.err
+          code=$?
+          set -e
+          cat devices.json devices.err
+          outputs=$(grep -o '"outputs":\[[^]]*\]' devices.json | grep -o '"id"' | wc -l || true)
+          echo "outputs=$outputs" >> "$GITHUB_OUTPUT"
+          {
+            echo "### akou-capture on Windows"
+            echo
+            echo "- \`devices\` before the cable: $(cat before.json before.err | head -c 400)"
+            echo "- cable install: ${{ steps.cable.outcome }}"
+            echo "- \`devices\` after (exit $code): $(cat devices.json devices.err | head -c 600)"
+            if [ "$outputs" = 0 ]; then
+              echo "- **no audio output endpoint on this runner: the loopback test did not run**"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.devices.outputs.outputs != '0'
+        with:
+          bun-version: 1.4.2
+      - if: steps.devices.outputs.outputs != '0'
+        run: bun install --frozen-lockfile
+      - name: process loopback hears a player and leaves out the excluded tree
+        if: steps.devices.outputs.outputs != '0'
+        env:
+          AKOU_CAPTURE_LIVE: "1"
+          AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture.exe
+          AKOU_CAPTURE_LIVE_MIC: none
+          AKOU_CAPTURE_LIVE_EXCLUDE: "1"
+          AKOU_CAPTURE_LIVE_PLAY: (New-Object Media.SoundPlayer $env:STIM_CALL).PlaySync()
+        run: |
+          set -euo pipefail
+          bun test tests/capture-live.e2e.test.ts 2>&1 | tee live.log
+          # Both live tests must have run and passed; a skip is not a pass.
+          for t in 'left = mic tone' 'Own audio in the call channel'; do
+            if ! grep -q "(pass) akou-capture against real devices > .*$t" live.log; then
+              echo "the live test '$t' did not run"
+              exit 1
+            fi
+          done
+          {
+            echo
+            grep -E '"type":"(capturing|warn)"|call-only|excluded take' live.log | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
