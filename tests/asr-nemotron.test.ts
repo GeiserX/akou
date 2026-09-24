@@ -171,6 +171,10 @@ describe("the live stream", () => {
     await s.flush();
     expect(got.turns.every((t) => t.speaker === 0)).toBe(true);
     expect(got.turns[0]?.start).toBe(0);
+    // Positions are fenced too: the old stream's step (decided at 1.68 s) never reaches the
+    // listener, which would move the new stream's decided position with no turns behind it.
+    expect(got.decided).toEqual([Math.round(1.68 * RATE), 3 * RATE]);
+    expect(got.decided.every((at) => at <= 3 * RATE)).toBe(true);
 
     // Positive control: without the reset, the old stream's speaker-1 step is reported.
     const c = listen();
