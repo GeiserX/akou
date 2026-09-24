@@ -33,7 +33,8 @@ const ID = "01J8Z6Q4M2VX0K7B3D4E5F6G7H";
 const BASE = "2026-09-23 1536 Weekly sync";
 const ENHANCED = [
   "## Decisions",
-  "- Move the build to the new box #l000002",
+  "- Move the build to the new box [#l000002]",
+  "- Kubernetes this time, said Ben [#l000002 #l000003]",
   "- build -> new box? _(your note, 15:37)_",
 ].join("\n");
 
@@ -183,7 +184,10 @@ describe("the export Markdown (DESIGN 8.2)", () => {
     const r = rig();
     try {
       const md = readFileSync(r.run().path, "utf8");
-      expect(md).toContain("- Move the build to the new box [15:37:17 Ben]");
+      // The model's brackets are not doubled: `[[..]]` would be an Obsidian wikilink.
+      expect(md).toContain("- Move the build to the new box [15:37:17 Ben]\n");
+      expect(md).toContain("- Kubernetes this time, said Ben [15:37:17 Ben] [15:37:22 Ben]\n");
+      expect(md).not.toContain("[[");
       expect(md).toContain("- build -> new box? _(your note, 15:37)_");
       expect(md).not.toContain("#l000002");
       expect(md).toContain("- 15:37:18 build -> new box?\n");

@@ -236,6 +236,9 @@ export function renderTranscript(lines: readonly Line[], tz: string): string {
   return out.join("\n");
 }
 
+/** A bracketed group of citations, as the model writes them: `[#l000031 #l000045]`. */
+const BRACKETED = /\[\s*(#[lf]\d{6,}(?:\s+#[lf]\d{6,})*)\s*\]/g;
+
 /**
  * Enhanced notes for a person's knowledge base: headings one level down, under `## Notes`, and
  * each segment citation as the wall time and speaker it points at. A `#l000031` would otherwise be
@@ -249,10 +252,21 @@ export function renderEnhanced(markdown: string, view: CallView, tz: string): st
     .map((line) => {
       if (/_\(your note, [^)]*\)_\s*$/.test(line)) return line;
       const demoted = /^#{1,5} /.test(line) ? `#${line}` : line;
-      return demoted.replace(new RegExp(CITATION.source, "g"), (all, id: string) => {
+      const cite = (all: string, id: string) => {
         const l = view.resolve(id);
         return l ? `[${formatWall(l.w0, tz)} ${l.speaker}]` : all;
-      });
+      };
+      // `[#l000031 #l000045]` becomes `[15:41:07 Ben] [15:42:10 Ana]`, never `[[..]]`, which
+      // Obsidian would read as a link to a note; a bare `#l000031` is replaced on its own.
+      return demoted
+        .replace(BRACKETED, (_all, ids: string) =>
+          ids
+            .trim()
+            .split(/\s+/)
+            .map((p) => cite(p, p.slice(1)))
+            .join(" "),
+        )
+        .replace(new RegExp(CITATION.source, "g"), cite);
     })
     .join("\n");
 }
