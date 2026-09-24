@@ -103,9 +103,12 @@ describe("DESIGN 7 parity with hark-viewer", () => {
               b.partStarted(1, T0);
               b.partEnded(1, "crashed", 5);
             }).id;
+            // Interrupted a minute ago: an interrupted call left for 24 h is closed as abandoned
+            // at start (recovery.ts), so a fixed date here stops testing this state a day later.
+            const recent = Date.now() - 60_000;
             ids.interrupted = seedCall(home, (b) => {
-              b.created({ id: "01J8Z6Q4M2VX0K7B3D4EINTRPT", title: "Interrupted" });
-              b.partStarted(1, T0);
+              b.created({ id: "01J8Z6Q4M2VX0K7B3D4EINTRPT", title: "Interrupted" }, recent);
+              b.partStarted(1, recent);
               b.partEnded(1, "helper-exit", 5);
               b.add({ type: "call.ended", reason: "interrupted" });
             }).id;
