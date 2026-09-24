@@ -23,6 +23,10 @@ use akou_capture::source::{CallMode, DeviceConfig, Frontend};
 const USAGE: &str = "usage: akou-capture run --out FILE --mic default|<id>|none --call system|none|app:<id>[,<id>] \
 [--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]";
 
+/// The slowest `--speed` other than 0: a hundred times slower than real time. Below it the pacing
+/// wait of a long file no longer fits a `Duration`.
+const MIN_SPEED: f64 = 0.01;
+
 #[derive(Debug)]
 struct Args {
     out: PathBuf,
@@ -67,8 +71,10 @@ fn parse(argv: &[String]) -> Result<Args, String> {
                 speed = v
                     .parse::<f64>()
                     .ok()
-                    .filter(|s| s.is_finite() && *s >= 0.0)
-                    .ok_or_else(|| format!("--speed needs a number >= 0, not {v}"))?;
+                    .filter(|s| s.is_finite() && (*s == 0.0 || *s >= MIN_SPEED))
+                    .ok_or_else(|| {
+                        format!("--speed needs 0 or a number >= {MIN_SPEED}, not {v}")
+                    })?;
             }
             "--realtime" => speed = 1.0,
             "--loop" => looped = true,
@@ -150,16 +156,18 @@ fn main() {
     }
     let fe: Box<dyn Frontend> = match &args.from_wav {
         Some(path) => {
+            // A file that cannot be read or parsed is an I/O failure on both channels: `warn io`
+            // and exit 74. One that parses but cannot be used (not stereo, empty) is refused by
+            // the file source as `no-device`, exit 66.
             let bytes = std::fs::read(path).unwrap_or_else(|e| {
                 fail(
                     "io",
                     &format!("cannot read {}: {e}", path.display()),
-                    exit::NO_DEVICE,
+                    exit::IO,
                 )
             });
-            let wav = akou_capture::wav::parse(&bytes).unwrap_or_else(|e| {
-                fail("io", &format!("{}: {e}", path.display()), exit::NO_DEVICE)
-            });
+            let wav = akou_capture::wav::parse(&bytes)
+                .unwrap_or_else(|e| fail("io", &format!("{}: {e}", path.display()), exit::IO));
             let name = path
                 .file_name()
                 .map(|n| n.to_string_lossy().into_owned())
@@ -248,6 +256,20 @@ mod tests {
         assert!(parse(&argv("run --out o --mic default --call speakers")).is_err());
         assert!(parse(&argv("record")).is_err());
         assert!(parse(&argv("run --out o --mic default --call system --speed -1")).is_err());
+        assert!(
+            parse(&argv(
+                "run --out o --mic default --call system --speed 1e-300"
+            ))
+            .is_err()
+        );
+        assert_eq!(
+            parse(&argv(
+                "run --out o --mic default --call system --speed 0.01"
+            ))
+            .unwrap()
+            .speed,
+            0.01
+        );
     }
 
     /// DESIGN 2.5: fault switches are absent from a shipping build.
