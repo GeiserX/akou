@@ -58,6 +58,13 @@ export interface StartRequest {
   template?: string;
   mic?: string;
   call?: string;
+  /**
+   * Call-scoped words (attendees, title terms), written as `vocab.add` right after `call.created`
+   * and before capture opens, so the first segment is already decoded with them (DESIGN 6.1).
+   */
+  vocab?: readonly { term: string; heard?: readonly string[] }[];
+  /** Author of the `vocab.add` events. */
+  by?: string;
 }
 
 export type CallRef = string;
@@ -269,6 +276,16 @@ export class CallManager {
     }
     this.controllers.set(id, c);
     this.onEvent(id, workspace, c.view.call as LogEvent);
+    (req.vocab ?? []).forEach((v, i) => {
+      c.record({
+        type: "vocab.add",
+        id: `v${String(i + 1).padStart(4, "0")}`,
+        rev: 1,
+        term: v.term,
+        heard: [...(v.heard ?? [])],
+        by: req.by ?? "user",
+      });
+    });
     return c.begin();
   }
 
@@ -330,35 +347,53 @@ export class CallManager {
       }
     }
     if (!c) {
-      const s = this.index.get(r.id);
-      if (!s) return fail(404, "not_found", `no call ${r.id}`);
       // Two restarts at once (the window and an agent) share one load and one controller; the
       // second then finds the call starting and is refused, never a second helper.
-      let p = this.loading.get(r.id);
-      if (!p) {
-        const capture: CaptureChoice = {
-          mic: this.o.capture?.mic ?? "default",
-          call: this.o.capture?.call ?? "system",
-          excludeResponsible: this.o.capture?.excludeResponsible,
-        };
-        p = CallController.load(s.dir, this.deps(s.workspace), capture).then((loaded) => {
-          const existing = this.controllers.get(loaded.id);
-          if (existing) return existing;
-          this.controllers.set(loaded.id, loaded);
-          return loaded;
-        });
-        const id = r.id;
-        const done = () => this.loading.delete(id);
-        p.then(done, done);
-        this.loading.set(id, p);
-      }
-      c = await p;
+      const loaded = await this.open(r.id);
+      if (!loaded) return fail(404, "not_found", `no call ${r.id}`);
+      c = loaded;
       const other = this.live();
       if (other && other !== c) {
         return fail(409, "already_recording", "another call is recording", { call: other.id });
       }
     }
     return c.restart(opts);
+  }
+
+  /**
+   * The controller of a call, loading a finished call from disk if this run has not touched it, so
+   * a name, a note or a restart on an older call goes through that call's one writer. Concurrent
+   * opens of one call share one load. Null for an unknown id.
+   */
+  async open(id: string): Promise<CallController | null> {
+    await this.init();
+    const known = this.controllers.get(id);
+    if (known) return known;
+    const s = this.index.get(id);
+    if (!s) return null;
+    let p = this.loading.get(id);
+    if (!p) {
+      const capture: CaptureChoice = {
+        mic: this.o.capture?.mic ?? "default",
+        call: this.o.capture?.call ?? "system",
+        excludeResponsible: this.o.capture?.excludeResponsible,
+      };
+      p = CallController.load(s.dir, this.deps(s.workspace), capture).then((loaded) => {
+        const existing = this.controllers.get(loaded.id);
+        if (existing) return existing;
+        this.controllers.set(loaded.id, loaded);
+        return loaded;
+      });
+      const done = () => this.loading.delete(id);
+      p.then(done, done);
+      this.loading.set(id, p);
+    }
+    return p;
+  }
+
+  /** The folder and workspace of a known call, loaded or not. */
+  summary(id: string): CallSummary | undefined {
+    return this.index.get(id);
   }
 
   /** The quit path: stop the live call within the stop budget, then settle everything. */
