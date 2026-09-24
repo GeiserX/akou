@@ -3,6 +3,7 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -243,6 +244,11 @@ impl Frontend for Scripted {
 
 /// Runs a scripted front end to its end; returns stderr lines and packets.
 fn run_scripted(name: &str, fe: Scripted) -> (Vec<String>, Vec<Packet>) {
+    run_frontend(name, Box::new(fe))
+}
+
+/// Runs any driven front end to its end; returns stderr lines and packets.
+fn run_frontend(name: &str, fe: Box<dyn Frontend>) -> (Vec<String>, Vec<Packet>) {
     let path = tmp(name);
     let (_tx, rx) = mpsc::channel::<Vec<u8>>();
     let out = Shared::default();
@@ -255,7 +261,7 @@ fn run_scripted(name: &str, fe: Scripted) -> (Vec<String>, Vec<Packet>) {
     };
     let outcome = engine::run(
         cfg,
-        Box::new(fe),
+        fe,
         Box::new(Stdin { rx, buf: vec![] }),
         Box::new(out.clone()),
         Box::new(err.clone()),
@@ -1111,6 +1117,231 @@ fn a_command_line_that_is_not_utf8_is_reported_and_does_not_stop_the_part() {
     assert!(
         secs > at_report + 0.1,
         "{secs} after the report at {at_report}"
+    );
+}
+
+/// A call side scripted the way the G4 quiet-tap run saw a process tap (docs/gates/M0-results.md):
+/// driven, 16 kHz, 10 ms buffers. The mic always delivers. `call(t)` says what the call side
+/// sends at `t` seconds: nothing, or a 1 kHz tone of some amplitude (0: a buffer of zeros)
+/// stamped `offset_ns` from `t` on the stream's own clock. The OS reports output running from
+/// `running_from`, and says so at once (`Event::Devices`). At `lost_at` the call stream fails
+/// (`Event::Lost`), and the engine rebuilds it. A probe hears audio while output runs.
+struct Tap {
+    secs: f64,
+    running_from: f64,
+    call: fn(f64) -> Option<(i64, f32)>,
+    lost_at: Option<f64>,
+    running: Arc<AtomicBool>,
+    tx: Option<std::sync::mpsc::SyncSender<Event>>,
+}
+
+impl Tap {
+    fn new(secs: f64, running_from: f64, call: fn(f64) -> Option<(i64, f32)>) -> Tap {
+        Tap {
+            secs,
+            running_from,
+            call,
+            lost_at: None,
+            running: Arc::new(AtomicBool::new(false)),
+            tx: None,
+        }
+    }
+}
+
+impl Frontend for Tap {
+    fn caps(&self) -> Vec<&'static str> {
+        vec!["file"]
+    }
+    fn clock(&self) -> ClockKind {
+        ClockKind::Driven
+    }
+    fn open(&mut self, tx: std::sync::mpsc::SyncSender<Event>) -> Result<Opened, OpenError> {
+        self.tx = Some(tx);
+        Ok(Opened {
+            mic: Some(MicInfo {
+                id: "tap-test".into(),
+                name: "tap-test".into(),
+                rate: 16_000,
+            }),
+            call: Some(CallInfo {
+                mode: "system".into(),
+                rate: 16_000,
+            }),
+            exclude: vec![],
+            ..Default::default()
+        })
+    }
+    fn start(&mut self, anchor: Now) {
+        let Some(tx) = self.tx.clone() else { return };
+        let (secs, from, call, lost_at) = (self.secs, self.running_from, self.call, self.lost_at);
+        let running = self.running.clone();
+        std::thread::spawn(move || {
+            let steps = (secs * 100.0).round() as u64;
+            let mut lost = false;
+            for i in 0..steps {
+                let t = i as f64 / 100.0;
+                let at = anchor.awake_ns + i * 10_000_000;
+                let run = t >= from - 1e-9;
+                if run != running.swap(run, Ordering::Relaxed) && tx.send(Event::Devices).is_err() {
+                    return;
+                }
+                if !lost && lost_at.is_some_and(|l| t >= l - 1e-9) {
+                    lost = true;
+                    let _ = tx.send(Event::Lost {
+                        ch: Ch::Call,
+                        detail: "scripted".into(),
+                    });
+                }
+                let mic = Chunk {
+                    ch: Ch::Mic,
+                    awake_ns: at,
+                    rate: 16_000,
+                    samples: vec![0.01; 160],
+                    heard: true,
+                };
+                if tx.send(Event::Chunk(mic)).is_err() {
+                    return;
+                }
+                if let Some((off, amp)) = call(t) {
+                    let samples: Vec<f32> = (0..160u64)
+                        .map(|k| {
+                            let n = (i * 160 + k) as f64;
+                            amp * (2.0 * std::f64::consts::PI * 1_000.0 * n / 16_000.0).sin() as f32
+                        })
+                        .collect();
+                    let c = Chunk {
+                        ch: Ch::Call,
+                        awake_ns: (at as i64 + off) as u64,
+                        rate: 16_000,
+                        heard: amp != 0.0,
+                        samples,
+                    };
+                    if tx.send(Event::Chunk(c)).is_err() {
+                        return;
+                    }
+                }
+                let end = at + 10_000_000;
+                let tick = Now {
+                    awake_ns: end,
+                    cont_ns: anchor.cont_ns + (end - anchor.awake_ns),
+                };
+                if tx.send(Event::Tick(tick)).is_err() {
+                    return;
+                }
+            }
+            let _ = tx.send(Event::Eof);
+        });
+    }
+    fn rebuild(&mut self, _ch: Ch) -> Result<Vec<String>, String> {
+        Ok(vec![])
+    }
+    fn probe_call(&mut self) {
+        // The verdict comes from the probe's own thread, as on macOS, and always arrives.
+        let heard = self.running.load(Ordering::Relaxed);
+        if let Some(tx) = self.tx.clone() {
+            std::thread::spawn(move || tx.send(Event::Probe { heard }));
+        }
+    }
+    fn status(&mut self) -> Status {
+        Status {
+            output_running: Some(self.running.load(Ordering::Relaxed)),
+            mic_running: true,
+            default_input: None,
+            default_output: None,
+        }
+    }
+    fn close(self: Box<Self>) {}
+}
+
+/// Seconds on the file timeline of the first call sample at or above `level`, from `from` s.
+fn call_onset(packets: &[Packet], from: f64, level: f32) -> f64 {
+    for p in packets
+        .iter()
+        .filter(|p| p.ch == Ch::Call && p.file_seconds >= from)
+    {
+        if let Some(i) = p.samples.iter().position(|v| v.abs() >= level) {
+            return p.file_seconds + i as f64 / 16_000.0;
+        }
+    }
+    panic!("no call audio after {from} s");
+}
+
+/// The call samples of the timeline from `from` for `secs` seconds.
+fn call_span(packets: &[Packet], from: f64, secs: f64) -> Vec<f32> {
+    let mut out = vec![];
+    for p in packets.iter().filter(|p| p.ch == Ch::Call) {
+        for (i, v) in p.samples.iter().enumerate() {
+            let t = p.file_seconds + i as f64 / 16_000.0;
+            if t >= from - 1e-9 && t < from + secs - 1e-9 {
+                out.push(*v);
+            }
+        }
+    }
+    out
+}
+
+/// [G4 quiet-tap run] The call side is silent with nothing playing (no buffers at all) for 12 s,
+/// then the call starts. The OS reports output running 300 ms before the tap's first buffer,
+/// as the status poll can. That is not 12 s of silence while output ran: no probe, no rebuild,
+/// no `dead`. The first word is whole and sits where its timestamps say from its first sample.
+#[test]
+fn the_first_start_after_a_silent_tap_keeps_the_first_word_whole_and_aligned() {
+    let (lines, packets) = run_frontend(
+        "quiet-tap.opus",
+        Box::new(Tap::new(16.0, 11.7, |t| (t >= 12.0).then_some((0, 0.3)))),
+    );
+    let call_lines: Vec<&String> = lines
+        .iter()
+        .filter(|l| l.contains(r#""ch":"call""#))
+        .filter(|l| l.contains(r#""type":"health""#) || l.contains(r#""type":"device""#))
+        .collect();
+    assert!(call_lines.is_empty(), "{call_lines:#?}");
+    // Within 2 ms: the resampler and decimator add a fixed 1.4 ms to every channel alike.
+    let onset = call_onset(&packets, 11.0, 0.05);
+    assert!(
+        (onset - 12.0).abs() <= 0.002,
+        "the word starts at {onset} s, not 12 s"
+    );
+    // The first 20 ms of the word are there: a 0.3 sine has an RMS of 0.21.
+    let first = call_span(&packets, 12.0, 0.02);
+    let rms = (first.iter().map(|v| v * v).sum::<f32>() / first.len() as f32).sqrt();
+    assert!(rms > 0.18, "first 20 ms RMS {rms}");
+    assert!(
+        packets
+            .iter()
+            .filter(|p| p.ch == Ch::Call && p.file_seconds >= 12.0 && p.file_seconds < 15.5)
+            .all(|p| !p.zero_filled)
+    );
+}
+
+/// A call stream that fails and is rebuilt comes back as a new stream on its own clock (here it
+/// reads 33 ms earlier, 50 ms after the old one stopped). The engine restarts it on the
+/// timeline, so what it carries lands where its timestamps say at once, instead of 17 ms off and
+/// slewed back at 1 ms a second.
+#[test]
+fn a_rebuilt_call_stream_is_aligned_from_its_first_audio() {
+    let mut tap = Tap::new(9.0, 0.0, |t| {
+        if t < 5.0 {
+            Some((0, 0.3))
+        } else if t < 5.05 {
+            None
+        } else {
+            Some((-33_000_000, if t >= 6.0 { 0.3 } else { 0.0 }))
+        }
+    });
+    tap.lost_at = Some(5.0);
+    let (lines, packets) = run_frontend("rebuilt.opus", Box::new(tap));
+    assert!(
+        lines
+            .iter()
+            .any(|l| l.contains(r#""type":"device","ch":"call","event":"rebuilt""#)),
+        "{lines:#?}"
+    );
+    // Within 2 ms, as above; kept on the old clock it would be about 15 ms early.
+    let onset = call_onset(&packets, 5.5, 0.05);
+    assert!(
+        (onset - 5.967).abs() <= 0.002,
+        "the audio after the rebuild starts at {onset} s, not 5.967 s"
     );
 }
 

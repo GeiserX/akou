@@ -315,6 +315,8 @@ impl Part {
         self.rebuilds[ch.index()] += 1;
         match fe.rebuild(ch) {
             Ok(names) => {
+                // A new stream on its own clock: its next buffer anchors it on the timeline.
+                self.aligner.restart(ch);
                 if ch == Ch::Mic {
                     self.mic_fails = 0;
                     self.mic_retry = None;
