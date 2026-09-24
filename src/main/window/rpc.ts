@@ -73,6 +73,7 @@ export function windowRpc(
             event: (e) => followed("event", e),
             partial: (p) => followed("partial", p),
             level: (l) => followed("level", l),
+            read: (r) => followed("read", r),
             keepalive: () => followed("alive"),
           });
         } catch (err) {

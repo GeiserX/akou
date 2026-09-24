@@ -49,6 +49,43 @@ async function lines(): Promise<Row[]> {
 
 const lineOf = async (ch: string) => (await lines()).find((l) => l.ch === ch);
 
+interface ReadLines {
+  all: boolean;
+  lines: { id: string; rev: number; text: string; heard?: string }[];
+}
+
+/**
+ * Follows the call's SSE stream (what the window's page follows in a browser) and collects its
+ * `read` events: the app's rendering of the lines its vocabulary corrects.
+ */
+function followReads(): { reads: ReadLines[]; stop(): void } {
+  const ctl = new AbortController();
+  const reads: ReadLines[] = [];
+  void (async () => {
+    const res = await fetch(`http://127.0.0.1:${rig.port}/v1/calls/${id}/stream?after=0`, {
+      headers: { authorization: `Bearer ${rig.token}` },
+      signal: ctl.signal,
+    });
+    const reader = (res.body as ReadableStream<Uint8Array>).getReader();
+    const dec = new TextDecoder();
+    let text = "";
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) return;
+      text += dec.decode(value, { stream: true });
+      let i = text.indexOf("\n\n");
+      while (i >= 0) {
+        const block = text.slice(0, i);
+        text = text.slice(i + 2);
+        const data = /^data: (.+)$/m.exec(block)?.[1];
+        if (/^event: read$/m.test(block) && data) reads.push(JSON.parse(data) as ReadLines);
+        i = text.indexOf("\n\n");
+      }
+    }
+  })().catch(() => {});
+  return { reads, stop: () => ctl.abort() };
+}
+
 beforeAll(async () => {
   work = tempDir("akou-vocab-read-");
   const home = join(work.dir, "home");
@@ -120,6 +157,36 @@ describe("read-time vocabulary through the API", () => {
     });
     expect(add.status).toBeLessThan(300);
     expect((await lineOf("call"))?.text).toBe("deploy to Kubernetes");
+  });
+
+  test("[decision] File vocabulary that silently corrects nothing: the call's stream carries the app's corrected text for the window, and again when the files change", async () => {
+    const f = followReads();
+    try {
+      const corrected = (r: ReadLines | undefined) =>
+        r?.lines.find((l) => l.text === "deploy to Kubernetes");
+      await until(async () => f.reads.length > 0, 5000, "the first read");
+      expect(f.reads[0]?.all).toBe(true);
+      expect(corrected(f.reads[0])).toMatchObject({ heard: "deploy to kubernetis" });
+      // The page's own fold renders call-scoped pairs; "world" is inert in the file, so the app
+      // sends nothing for the mic line.
+      expect(f.reads[0]?.lines.some((l) => l.text.includes("Globex"))).toBe(false);
+      const n = f.reads.length;
+      expect((await rig.api("DELETE", "/vocab/Kubernetes?workspace=work")).status).toBe(200);
+      await until(async () => f.reads.length > n, 5000, "a read after the change");
+      const after = f.reads.at(-1);
+      expect(after?.all).toBe(true);
+      expect(corrected(after)).toBeUndefined();
+      const add = await rig.api("POST", "/vocab", {
+        term: "Kubernetes",
+        heard: ["kubernetis"],
+        workspace: "work",
+        decode: false,
+      });
+      expect(add.status).toBeLessThan(300);
+      await until(async () => corrected(f.reads.at(-1)) !== undefined, 5000, "the entry back");
+    } finally {
+      f.stop();
+    }
   });
 
   test(
