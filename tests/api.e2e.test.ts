@@ -459,7 +459,7 @@ describe("after the call", () => {
     const share = await rig.api("POST", "/share", { call: "last", bind: "nowhere" });
     expect([share.status, share.body.error]).toEqual([400, "bad_bind"]);
     expect((await rig.api("GET", "/share")).body).toEqual({ active: false, shares: [] });
-    expect((await rig.api("POST", "/vocab/suggest", {})).status).toBe(501);
+    expect((await rig.api("POST", "/vocab/check", { term: "Vercel" })).status).toBe(501);
   });
 });
 

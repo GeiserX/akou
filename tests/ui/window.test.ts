@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
@@ -609,6 +609,152 @@ describe("enhanced notes and templates (DESIGN 5.2)", () => {
         );
       });
       t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the words to review (DESIGN 5.4, 7)", () => {
+  test(
+    "Find misheard words runs the pass; the review screen shows each proposal with its line; Approve writes the workspace file",
+    async () => {
+      let id = "";
+      let home = "";
+      const provider = new FakeProvider();
+      provider.answer = () =>
+        JSON.stringify({
+          corrections: [{ line: "#l000001", heard: "hetzner", term: "Hetzner" }],
+          proposals: [
+            { term: "Hetzner", heard: ["hetzner"], lines: ["#l000003"], why: "a vendor" },
+          ],
+        });
+      await withRig(
+        {
+          provider,
+          seed: (h) => {
+            home = h;
+            id = seedCall(h, (b) => standardCall(b)).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click("#tab-enhanced");
+          await page.click("#vocab-pass");
+          await page.waitForSelector("#review[open] .review-item[data-term=Hetzner]");
+          // The bad span (hetzner is not in l000001) was dropped; the proposal carries its line.
+          expect(await text(page, "#review-status")).toContain("corrected 0 words and proposed 1");
+          expect(await text(page, ".review-item[data-term=Hetzner] .review-lines li")).toContain(
+            "deploy to hetzner today",
+          );
+          // The pill follows the log, which reaches the page on its own stream after the reply.
+          await page.waitForSelector("#pill-review:not([hidden])");
+          expect(await text(page, "#pill-review")).toBe("1 word to review");
+          await page.click(".review-item[data-term=Hetzner] button.go");
+          await until(
+            async () =>
+              (await text(page, "#review-status"))?.includes("in the vocabulary") ?? false,
+            5000,
+            "approved",
+          );
+          const file = readFileSync(
+            join(home, ".config", "akou", "vocabulary", "work.yaml"),
+            "utf8",
+          );
+          expect(file).toContain(`source: "call:${id}"`);
+          await page.click("#review-close");
+          await until(async () => !(await page.isVisible("#pill-review")), 5000, "pill hidden");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a pass whose request fails is a toast, and Find misheard words works again",
+    async () => {
+      let id = "";
+      const provider = new FakeProvider();
+      provider.answer = () => JSON.stringify({ corrections: [], proposals: [] });
+      await withRig(
+        { provider, seed: (h) => (id = seedCall(h, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click("#tab-enhanced");
+          // The request itself fails (the app quit, the connection dropped mid-pass).
+          await page.route("**/api/v1/calls/*/vocab/pass", (r) => r.abort());
+          await page.click("#vocab-pass");
+          await until(
+            async () => (await text(page, "#toast"))?.includes("could not be checked") ?? false,
+            5000,
+            "error toast",
+          );
+          expect(await page.isEnabled("#vocab-pass")).toBe(true);
+          await page.unroute("**/api/v1/calls/*/vocab/pass");
+          await page.click("#vocab-pass");
+          await page.waitForSelector("#review[open]");
+          expect(await text(page, "#review-status")).toContain("corrected 0 words and proposed 0");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("re-enhance after the final layer (DESIGN 5.2)", () => {
+  test(
+    "notes written by hand before the final layer get a Re-enhance button, and it writes them from the final transcript",
+    async () => {
+      let id = "";
+      const provider = new FakeProvider();
+      provider.answer = () => "## Decisions\n- Move the build to the new box [#l000002]";
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            const seeded = seedCall(home, (b) => {
+              standardCall(b);
+              b.add({
+                type: "enhanced",
+                rev: 1,
+                template: "general",
+                file: "enhanced/001-general.md",
+                coversSeq: 6,
+                by: "agent:claude-code",
+                model: "agent:claude-code",
+                cites: ["l000002"],
+              });
+              b.add({ type: "final.started", pid: 1 });
+              b.add({ type: "final.done", parts: [1], skipped: [] });
+            });
+            id = seeded.id;
+            mkdirSync(join(seeded.dir, "enhanced"), { recursive: true });
+            writeFileSync(
+              join(seeded.dir, "enhanced", "001-general.md"),
+              "## Decisions\n- the build moves [#l000002]\n",
+            );
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.click("#tab-enhanced");
+          await page.waitForSelector("#reenhance");
+          expect(await text(page, "#enhance-status")).toContain("written by hand");
+          await page.click("#reenhance");
+          await until(
+            async () => (await events(rig, id)).some((e) => e.type === "enhanced" && e.rev === 2),
+            10_000,
+            "rev 2",
+          );
+          const e = (await events(rig, id)).find(
+            (x) => x.type === "enhanced" && x.rev === 2,
+          ) as LogEvent & { template: string };
+          expect(e.template).toBe("general");
+          await until(async () => !(await page.isVisible("#reenhance")), 5000, "button gone");
+        },
+      );
     },
     UI_TIMEOUT,
   );

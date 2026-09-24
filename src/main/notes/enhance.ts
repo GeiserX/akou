@@ -16,6 +16,12 @@
  * - Every added bullet cites segment ids, and `cite-check.ts` drops any that fails.
  * - The result is an `enhanced {rev}` event and a file per revision under `enhanced/`, plus
  *   `notes.enhanced.md` as the latest; enhancing again with another template keeps both.
+ *
+ * Re-enhance after the final layer (`reEnhanceState`): notes written before the final pass read the
+ * live transcript. When the final layer lands, akou writes them again from it with the same
+ * template, on its own, unless a person or an agent wrote those notes (then re-enhancing would
+ * replace their work) or the provider is the harness (it runs only when asked); in both cases the
+ * window offers a button instead.
  */
 
 import { mkdirSync, renameSync, writeFileSync } from "node:fs";
@@ -403,4 +409,57 @@ export function storeEnhanced(
   writeAtomic(join(dir, file), body);
   writeAtomic(join(dir, ENHANCED_LATEST), body);
   return file;
+}
+
+/** Calls with an enhancement being written: one at a time per call, so revisions never race. */
+const enhancing = new Set<string>();
+
+/** Runs `fn` as the call's one enhancement, or returns null when one is already running. */
+export async function enhanceExclusive<T>(id: string, fn: () => Promise<T>): Promise<T | null> {
+  if (enhancing.has(id)) return null;
+  enhancing.add(id);
+  try {
+    return await fn();
+  } finally {
+    enhancing.delete(id);
+  }
+}
+
+export interface ReEnhanceState {
+  /** The notes predate the final layer that has since landed. */
+  due: boolean;
+  /** akou re-enhances on its own; otherwise the window offers a button. */
+  auto: boolean;
+  template?: string;
+  reason: string;
+}
+
+/**
+ * Whether the latest notes should be written again from the final transcript. `provider` is the
+ * configured provider's id: the harness is never run on its own.
+ */
+export function reEnhanceState(view: CallView, provider: string): ReEnhanceState {
+  const latest = view.latestEnhanced();
+  const done = view.final.state === "done" ? view.final.done : undefined;
+  if (!latest) return { due: false, auto: false, reason: "no enhanced notes yet" };
+  if (!done) return { due: false, auto: false, reason: "the final transcript is not ready" };
+  if (latest.seq > done.seq) {
+    return { due: false, auto: false, reason: "the notes were written from the final transcript" };
+  }
+  const base = { due: true, template: latest.template };
+  // A provider's notes carry its model; notes put by a person or an agent carry their author.
+  if (latest.model === latest.by) {
+    return {
+      ...base,
+      auto: false,
+      reason: "these notes were written by hand; re-enhancing would replace them",
+    };
+  }
+  if (provider === "harness") {
+    return { ...base, auto: false, reason: "the harness runs only when you ask" };
+  }
+  if (provider === "none") {
+    return { ...base, auto: false, reason: "no provider is set up" };
+  }
+  return { ...base, auto: true, reason: "the final transcript landed after these notes" };
 }

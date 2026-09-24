@@ -21,7 +21,7 @@
     <span class="pill" id="pill-template" hidden></span>
     <span class="pill" id="pill-provider" hidden></span>
     <span class="pill" id="pill-models" hidden></span>
-    <span class="pill warn" id="pill-review" hidden></span>
+    <button class="pill warn" id="pill-review" type="button" hidden title="Proposed words: approve or reject each"></button>
     <span class="pill" id="pill-lang" hidden></span>
     <span class="pill shared" id="pill-share" hidden><span id="share-text"></span> <button id="share-stop" type="button" aria-label="Stop sharing">Stop</button></span>
   </span>
@@ -81,6 +81,7 @@
         <select id="enhance-template" aria-label="Template for the notes"><option value="">template: automatic</option></select>
         <button id="enhance" type="button" class="go">Enhance</button>
         <select id="enhance-rev" aria-label="Revision" hidden></select>
+        <button id="vocab-pass" type="button" hidden title="Your provider reads the finished transcript, corrects words from your vocabulary and proposes new ones for you to review">Find misheard words</button>
       </div>
       <p id="enhance-status" role="status"></p>
       <div id="enhanced-body"></div>
@@ -97,6 +98,13 @@
 <div id="toast" role="alert" hidden></div>
 <button id="jump" class="go" type="button">↓ Back to live</button>
 <div id="popover" role="dialog" hidden></div>
+<dialog id="review" aria-label="Words to review">
+  <h2>Words to review</h2>
+  <p class="hint">Nothing changes your vocabulary until you approve it. Approved words go into this workspace's vocabulary file.</p>
+  <p id="review-status" role="status"></p>
+  <ul id="review-list"></ul>
+  <div class="bar"><button type="button" id="review-close">Close</button></div>
+</dialog>
 <dialog id="settings" aria-label="Settings">
   <!-- The registry validates every value (PATCH /config); the browser must not block a value the registry allows, such as port 0. -->
   <form id="settings-form" novalidate>

@@ -4,8 +4,8 @@
  *
  * - `src/main/app-info.ts`: `APP_VERSION`, which the app, `akou --version`, the MCP server and the
  *   API report.
- * - `skills/akou/SKILL.md`: `metadata.version`, which `akou skill install` requires to equal the
- *   app's.
+ * - `skills/akou/SKILL.md` and `skills/akou-vocab/SKILL.md`: `metadata.version`, which `akou skill
+ *   install` requires to equal the app's.
  * - `native/akou-capture/Cargo.toml` and `Cargo.lock`: the helper's version, reported by
  *   `akou-capture --version` and in its `hello` packet. Skipped while `native/` is absent.
  * - `electrobun.config.ts` reads `package.json` itself, so the bundle's `Info.plist`
@@ -48,6 +48,10 @@ export const PLACES: readonly Place[] = [
   },
   {
     file: "skills/akou/SKILL.md",
+    pattern: /^(\s+version:\s*")([^"]*)(")$/m,
+  },
+  {
+    file: "skills/akou-vocab/SKILL.md",
     pattern: /^(\s+version:\s*")([^"]*)(")$/m,
   },
   {

@@ -14,7 +14,7 @@ A release is a `v<version>` tag on `main`. The [release workflow](../.github/wor
    bun run check
    ```
 
-   [stamp-version.ts](stamp-version.ts) writes `package.json`, `src/main/app-info.ts`, `skills/akou/SKILL.md`, and the helper's `Cargo.toml` and `Cargo.lock`. Commit it (`chore(release): 0.1.0`) and merge it to `main`.
+   [stamp-version.ts](stamp-version.ts) writes `package.json`, `src/main/app-info.ts`, `skills/akou/SKILL.md`, `skills/akou-vocab/SKILL.md`, and the helper's `Cargo.toml` and `Cargo.lock`. Commit it (`chore(release): 0.1.0`) and merge it to `main`.
 4. Dry run the workflow on `main` and read every check line:
 
    ```sh

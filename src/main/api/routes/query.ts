@@ -98,6 +98,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
       write: (d: EventDraft | ((view: CallView) => EventDraft)) =>
         c.app.write(id, typeof d === "function" ? (call) => d(call.view) : d),
       timeoutMs: c.app.providerTimeoutMs(),
+      sessions: c.app.askSessions?.(),
     };
     if (!b.stream) {
       try {

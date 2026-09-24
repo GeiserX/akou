@@ -1,7 +1,9 @@
 /**
  * The Enhanced tab (docs/DESIGN.md sections 5.2 and 7): the notes the provider wrote from the
  * user's notepad, the transcript and a template. "Enhance" after the call, "Enhance so far" during
- * it; a template picker; every revision kept and selectable.
+ * it; a template picker; every revision kept and selectable. When the final transcript lands after
+ * the notes were written and akou did not re-enhance on its own (notes written by hand, or the
+ * harness, which runs only when asked), a "Re-enhance from it" button is offered.
  *
  * The user's own lines (kept word for word, marked `_(your note, 15:41)_`) are drawn as theirs and
  * the provider's bullets as the AI's, and every `[#l000031]` citation becomes `[15:41 Ben]`, a
@@ -133,9 +135,32 @@ export class EnhancedPane {
     const r = await this.d.t.request<{
       enhanced: Enhanced | null;
       revisions: { rev: number; template: string; by: string }[];
+      reEnhance?: { due: boolean; auto: boolean; template?: string; reason: string } | null;
     }>("GET", `/calls/${call}/enhanced${rev ? `?rev=${rev}` : ""}`);
     if (r.status >= 400 || !r.body.enhanced) return;
     const e = r.body.enhanced;
+    const again = r.body.reEnhance;
+    if (again?.due && !again.auto && !this.busy) {
+      // The final transcript is better than the one these notes were written from.
+      replace(
+        this.note,
+        `The final transcript is ready (${again.reason}). `,
+        h(
+          "button",
+          {
+            type: "button",
+            id: "reenhance",
+            on: {
+              click: () => {
+                this.template.value = again.template ?? "";
+                void this.enhance();
+              },
+            },
+          },
+          "Re-enhance from it",
+        ),
+      );
+    }
     this.shownRev = e.rev;
     replace(
       this.revs,
