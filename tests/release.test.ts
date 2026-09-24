@@ -222,7 +222,14 @@ console.log(JSON.stringify(locateHelper([])));`,
     expect(where()).toEqual({ command: [HELPER_NAME], source: "path" });
     const target = helperCopies(process.platform, () => true)[helperBuildPath()] as string;
     writeFileSync(join(t.dir, target), "");
-    expect(where()).toEqual({ command: [join(realpathSync(out), HELPER_NAME)], source: "bundled" });
+    // Bun reports the module's folder resolved (macOS /var is /private/var; a Windows 8.3 short name
+    // such as RUNNER~1 is spelled out), so compare the files, not the spellings.
+    const found = where() as { command: string[]; source: string };
+    expect(found.source).toBe("bundled");
+    expect(found.command).toHaveLength(1);
+    expect(realpathSync.native(found.command[0] as string)).toBe(
+      realpathSync.native(join(out, HELPER_NAME)),
+    );
     t.cleanup();
   });
 
@@ -273,21 +280,11 @@ describe("the compiled CLI starts the installed app, never itself", () => {
       join("/repo/src/main/cli", "..", "index.ts"),
     ]);
     const compiled = { dir: "/$bunfs/root", home: "/Users/x" };
+    // The per-user app path is joined with this platform's separator; only macOS ever uses it.
+    const userApp = join("/Users/x", "Applications", "akou.app");
     expect(
-      defaultLaunch({
-        ...compiled,
-        platform: "darwin",
-        exists: (p) => p === "/Users/x/Applications/akou.app",
-      }),
-    ).toEqual([
-      "/usr/bin/open",
-      "-g",
-      "-j",
-      "-a",
-      "/Users/x/Applications/akou.app",
-      "--env",
-      "AKOU_HEADLESS=1",
-    ]);
+      defaultLaunch({ ...compiled, platform: "darwin", exists: (p) => p === userApp }),
+    ).toEqual(["/usr/bin/open", "-g", "-j", "-a", userApp, "--env", "AKOU_HEADLESS=1"]);
     expect(defaultLaunch({ ...compiled, platform: "darwin", exists: () => false })).toBeNull();
     expect(defaultLaunch({ ...compiled, platform: "linux", exists: () => true })).toBeNull();
   });
