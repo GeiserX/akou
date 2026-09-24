@@ -1,0 +1,228 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 825.078125
+  },
+  "wallSeconds": 825.105,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.0.0",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 6001"],
+      "capture_ns": "183239380877291"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "183239380877291"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "183274220877291"
+    },
+    {
+      "type": "device",
+      "ch": "call",
+      "event": "rebuilt",
+      "name": "dead call side"
+    },
+    {
+      "type": "health",
+      "ch": "call",
+      "state": "dead",
+      "silent_for": 35.189545,
+      "rebuilds": 1,
+      "detail": "output running, probe heard audio, rebuilding; excluding pid 6001"
+    },
+    {
+      "type": "health",
+      "ch": "call",
+      "state": "ok",
+      "silent_for": 0,
+      "rebuilds": 1,
+      "detail": "call audio is back"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 825.078125,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -26.9,
+  "leftSeconds": 825.078,
+  "leftGaps": {
+    "scannedSeconds": 0,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "rightSeconds": 825.078,
+  "rightGaps": {
+    "scannedSeconds": 178.6,
+    "over5ms": 1,
+    "over20ms": 1,
+    "longestMs": 21.3,
+    "worst": [
+      {
+        "at": 35.188,
+        "ms": 21.3
+      }
+    ]
+  },
+  "quietWindows": [
+    {
+      "from": 0.5,
+      "to": 34.6,
+      "callRmsDbfs": null,
+      "callPeakDbfs": null
+    },
+    {
+      "from": 155.3,
+      "to": 754.4,
+      "callRmsDbfs": null,
+      "callPeakDbfs": null
+    }
+  ],
+  "firstWords": [
+    {
+      "at": 35.092,
+      "speechOnsetMs": 140,
+      "lagMs": -37.42,
+      "headScore": 0.792,
+      "lostMs": 20,
+      "scoresPer20msFromOnset": [
+        0.22, 0.92, 0.95, 0.98, 0.99, 0.98, 0.96, 0.97, -0.47, -0.41, 0.2, 0.42, 0.45, 0.07, -0.15
+      ]
+    },
+    {
+      "at": 754.885,
+      "speechOnsetMs": 140,
+      "lagMs": 0.04,
+      "headScore": 0.962,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.96, 0.97, 0.97, 0.98, 0.97, 0.96, 0.96, 0.96, 0.75, 0.8, 0.82, 0.84, 0.8, 0.08, 0.89
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -105.7,
+    "left_peak_dbfs": -61.7,
+    "right_rms_dbfs": -39.7,
+    "right_peak_dbfs": -3.2
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 0
+    },
+    "call@right": {
+      "found": 18,
+      "expected": 18,
+      "missing": [],
+      "latencyMs": {
+        "n": 18,
+        "min": -24.464,
+        "median": 8.348,
+        "max": 8.379,
+        "spread": 32.842999999999996
+      },
+      "slopeMsPerHour": 39.2,
+      "minScore": 0.984,
+      "firstRows": [
+        {
+          "k": 3,
+          "t": 39.81,
+          "ms": -24.464
+        },
+        {
+          "k": 4,
+          "t": 49.81,
+          "ms": -14.466
+        },
+        {
+          "k": 5,
+          "t": 59.81,
+          "ms": -4.468
+        },
+        {
+          "k": 6,
+          "t": 69.81,
+          "ms": 3.567
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 79,
+          "t": 799.81,
+          "ms": 8.379
+        },
+        {
+          "k": 80,
+          "t": 809.81,
+          "ms": 8.379
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 0,
+    "note": "no mic chirps on the left channel to pair with"
+  },
+  "memory": {
+    "helper": {
+      "samples": 29,
+      "firstKb": 13008,
+      "lastKb": 12320,
+      "minKb": 10976,
+      "maxKb": 13568,
+      "slopeKbPerHour": -2226
+    },
+    "helperMuted": {
+      "samples": 20,
+      "firstKb": 12272,
+      "lastKb": 11936,
+      "minKb": 11936,
+      "maxKb": 12272,
+      "slopeKbPerHour": -1593
+    },
+    "app": {
+      "samples": 29,
+      "firstKb": 65104,
+      "lastKb": 277952,
+      "minKb": 65104,
+      "maxKb": 277952,
+      "slopeKbPerHour": 890948
+    },
+    "appMuted": {
+      "samples": 20,
+      "firstKb": 122544,
+      "lastKb": 261712,
+      "minKb": 122544,
+      "maxKb": 261712,
+      "slopeKbPerHour": 853639
+    }
+  }
+}

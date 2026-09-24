@@ -1,0 +1,503 @@
+{
+  "recovered": {
+    "leftRightOffsetShiftMs": -50,
+    "callTrainOffsetShiftMs": 50,
+    "leftRightSlopeMsPerHour": 73.53,
+    "callTrainSlopeMsPerHour": -74.99,
+    "micTrainSlopeMsPerHour": -73.67
+  },
+  "expected": {
+    "leftRightOffsetShiftMs": -50,
+    "callTrainOffsetShiftMs": 50,
+    "leftRightSlopeMsPerHour": 75,
+    "callTrainSlopeMsPerHour": -75,
+    "micTrainSlopeMsPerHour": -75
+  },
+  "tolerance": {
+    "leftRightOffsetShiftMs": 1,
+    "callTrainOffsetShiftMs": 1,
+    "leftRightSlopeMsPerHour": 4,
+    "callTrainSlopeMsPerHour": 1.5,
+    "micTrainSlopeMsPerHour": 4
+  },
+  "pass": {
+    "leftRightOffsetShiftMs": true,
+    "callTrainOffsetShiftMs": true,
+    "leftRightSlopeMsPerHour": true,
+    "callTrainSlopeMsPerHour": true,
+    "micTrainSlopeMsPerHour": true
+  },
+  "variants": {
+    "base": {
+      "leftRight": {
+        "pairs": 59,
+        "offsetMs": {
+          "n": 59,
+          "min": -3.531,
+          "median": -3.495,
+          "max": -3.23,
+          "spread": 0.30100000000000016
+        },
+        "slopeMsPerHour": 0.04
+      },
+      "micAtLeft": {
+        "found": 61,
+        "expected": 61,
+        "missing": [],
+        "latencyMs": {
+          "n": 61,
+          "min": 11.644,
+          "median": 11.911,
+          "max": 11.916,
+          "spread": 0.27200000000000024
+        },
+        "slopeMsPerHour": 0.2,
+        "minScore": 0.524,
+        "firstRows": [
+          {
+            "k": 0,
+            "t": 4.82,
+            "ms": 11.909
+          },
+          {
+            "k": 1,
+            "t": 14.82,
+            "ms": 11.911
+          },
+          {
+            "k": 2,
+            "t": 24.82,
+            "ms": 11.911
+          },
+          {
+            "k": 3,
+            "t": 34.82,
+            "ms": 11.91
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 59,
+            "t": 594.82,
+            "ms": 11.913
+          },
+          {
+            "k": 60,
+            "t": 604.82,
+            "ms": 11.909
+          }
+        ]
+      },
+      "callAtLeft": {
+        "found": 59,
+        "expected": 59,
+        "missing": [],
+        "latencyMs": {
+          "n": 59,
+          "min": 8.38,
+          "median": 8.411,
+          "max": 8.424,
+          "spread": 0.04399999999999871
+        },
+        "slopeMsPerHour": 0.26,
+        "minScore": 0.973,
+        "firstRows": [
+          {
+            "k": 1,
+            "t": 19.82,
+            "ms": 8.382
+          },
+          {
+            "k": 2,
+            "t": 29.82,
+            "ms": 8.389
+          },
+          {
+            "k": 3,
+            "t": 39.82,
+            "ms": 8.384
+          },
+          {
+            "k": 4,
+            "t": 49.82,
+            "ms": 8.385
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 58,
+            "t": 589.82,
+            "ms": 8.423
+          },
+          {
+            "k": 59,
+            "t": 599.82,
+            "ms": 8.422
+          }
+        ]
+      },
+      "callAtRight": {
+        "found": 59,
+        "expected": 59,
+        "missing": [],
+        "latencyMs": {
+          "n": 59,
+          "min": 8.38,
+          "median": 8.411,
+          "max": 8.424,
+          "spread": 0.04399999999999871
+        },
+        "slopeMsPerHour": 0.26,
+        "minScore": 0.973,
+        "firstRows": [
+          {
+            "k": 1,
+            "t": 19.82,
+            "ms": 8.382
+          },
+          {
+            "k": 2,
+            "t": 29.82,
+            "ms": 8.389
+          },
+          {
+            "k": 3,
+            "t": 39.82,
+            "ms": 8.384
+          },
+          {
+            "k": 4,
+            "t": 49.82,
+            "ms": 8.385
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 58,
+            "t": 589.82,
+            "ms": 8.423
+          },
+          {
+            "k": 59,
+            "t": 599.82,
+            "ms": 8.422
+          }
+        ]
+      }
+    },
+    "shift50": {
+      "leftRight": {
+        "pairs": 59,
+        "offsetMs": {
+          "n": 59,
+          "min": -53.531,
+          "median": -53.495,
+          "max": -53.23,
+          "spread": 0.30100000000000193
+        },
+        "slopeMsPerHour": 0.04
+      },
+      "micAtLeft": {
+        "found": 61,
+        "expected": 61,
+        "missing": [],
+        "latencyMs": {
+          "n": 61,
+          "min": 61.644,
+          "median": 61.911,
+          "max": 61.916,
+          "spread": 0.27199999999999847
+        },
+        "slopeMsPerHour": 0.2,
+        "minScore": 0.524,
+        "firstRows": [
+          {
+            "k": 0,
+            "t": 4.82,
+            "ms": 61.909
+          },
+          {
+            "k": 1,
+            "t": 14.82,
+            "ms": 61.911
+          },
+          {
+            "k": 2,
+            "t": 24.82,
+            "ms": 61.911
+          },
+          {
+            "k": 3,
+            "t": 34.82,
+            "ms": 61.91
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 59,
+            "t": 594.82,
+            "ms": 61.913
+          },
+          {
+            "k": 60,
+            "t": 604.82,
+            "ms": 61.909
+          }
+        ]
+      },
+      "callAtLeft": {
+        "found": 59,
+        "expected": 59,
+        "missing": [],
+        "latencyMs": {
+          "n": 59,
+          "min": 58.38,
+          "median": 58.411,
+          "max": 58.424,
+          "spread": 0.04399999999999693
+        },
+        "slopeMsPerHour": 0.26,
+        "minScore": 0.973,
+        "firstRows": [
+          {
+            "k": 1,
+            "t": 19.82,
+            "ms": 58.382
+          },
+          {
+            "k": 2,
+            "t": 29.82,
+            "ms": 58.389
+          },
+          {
+            "k": 3,
+            "t": 39.82,
+            "ms": 58.384
+          },
+          {
+            "k": 4,
+            "t": 49.82,
+            "ms": 58.385
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 58,
+            "t": 589.82,
+            "ms": 58.423
+          },
+          {
+            "k": 59,
+            "t": 599.82,
+            "ms": 58.422
+          }
+        ]
+      },
+      "callAtRight": {
+        "found": 59,
+        "expected": 59,
+        "missing": [],
+        "latencyMs": {
+          "n": 59,
+          "min": 8.38,
+          "median": 8.411,
+          "max": 8.424,
+          "spread": 0.04399999999999871
+        },
+        "slopeMsPerHour": 0.26,
+        "minScore": 0.973,
+        "firstRows": [
+          {
+            "k": 1,
+            "t": 19.82,
+            "ms": 8.382
+          },
+          {
+            "k": 2,
+            "t": 29.82,
+            "ms": 8.389
+          },
+          {
+            "k": 3,
+            "t": 39.82,
+            "ms": 8.384
+          },
+          {
+            "k": 4,
+            "t": 49.82,
+            "ms": 8.385
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 58,
+            "t": 589.82,
+            "ms": 8.423
+          },
+          {
+            "k": 59,
+            "t": 599.82,
+            "ms": 8.422
+          }
+        ]
+      }
+    },
+    "drift75": {
+      "leftRight": {
+        "pairs": 59,
+        "offsetMs": {
+          "n": 59,
+          "min": -2.853,
+          "median": 3.266,
+          "max": 9.171,
+          "spread": 12.024
+        },
+        "slopeMsPerHour": 73.57
+      },
+      "micAtLeft": {
+        "found": 61,
+        "expected": 61,
+        "missing": [],
+        "latencyMs": {
+          "n": 61,
+          "min": -0.749,
+          "median": 5.145,
+          "max": 11.807,
+          "spread": 12.556000000000001
+        },
+        "slopeMsPerHour": -73.47,
+        "minScore": 0.506,
+        "firstRows": [
+          {
+            "k": 0,
+            "t": 4.82,
+            "ms": 11.807
+          },
+          {
+            "k": 1,
+            "t": 14.82,
+            "ms": 11.074
+          },
+          {
+            "k": 2,
+            "t": 24.82,
+            "ms": 10.337
+          },
+          {
+            "k": 3,
+            "t": 34.82,
+            "ms": 10.658
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 59,
+            "t": 594.82,
+            "ms": -0.749
+          },
+          {
+            "k": 60,
+            "t": 604.82,
+            "ms": -0.692
+          }
+        ]
+      },
+      "callAtLeft": {
+        "found": 59,
+        "expected": 59,
+        "missing": [],
+        "latencyMs": {
+          "n": 59,
+          "min": -4.075,
+          "median": 1.959,
+          "max": 7.968,
+          "spread": 12.043
+        },
+        "slopeMsPerHour": -74.73,
+        "minScore": 0.972,
+        "firstRows": [
+          {
+            "k": 1,
+            "t": 19.82,
+            "ms": 7.968
+          },
+          {
+            "k": 2,
+            "t": 29.82,
+            "ms": 7.767
+          },
+          {
+            "k": 3,
+            "t": 39.82,
+            "ms": 7.553
+          },
+          {
+            "k": 4,
+            "t": 49.82,
+            "ms": 7.346
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 58,
+            "t": 589.82,
+            "ms": -3.865
+          },
+          {
+            "k": 59,
+            "t": 599.82,
+            "ms": -4.075
+          }
+        ]
+      },
+      "callAtRight": {
+        "found": 59,
+        "expected": 59,
+        "missing": [],
+        "latencyMs": {
+          "n": 59,
+          "min": 8.38,
+          "median": 8.411,
+          "max": 8.424,
+          "spread": 0.04399999999999871
+        },
+        "slopeMsPerHour": 0.26,
+        "minScore": 0.973,
+        "firstRows": [
+          {
+            "k": 1,
+            "t": 19.82,
+            "ms": 8.382
+          },
+          {
+            "k": 2,
+            "t": 29.82,
+            "ms": 8.389
+          },
+          {
+            "k": 3,
+            "t": 39.82,
+            "ms": 8.384
+          },
+          {
+            "k": 4,
+            "t": 49.82,
+            "ms": 8.385
+          }
+        ],
+        "lastRows": [
+          {
+            "k": 58,
+            "t": 589.82,
+            "ms": 8.423
+          },
+          {
+            "k": 59,
+            "t": 599.82,
+            "ms": 8.422
+          }
+        ]
+      }
+    }
+  }
+}
