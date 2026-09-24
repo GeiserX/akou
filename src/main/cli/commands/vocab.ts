@@ -47,7 +47,7 @@ export function reviewText(review: Body | undefined): string {
   if (out.length === 0) return "No words to review.";
   out.push(
     "",
-    "Approve with `akou vocab approve TERM --call ID`, reject with `akou vocab reject`.",
+    "Approve with `akou vocab approve TERM --call ID`, reject with `akou vocab reject TERM --call ID`.",
   );
   return out.join("\n");
 }

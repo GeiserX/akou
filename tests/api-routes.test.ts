@@ -9,7 +9,7 @@ import type { LogEvent } from "../src/core/log/events.ts";
 import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server.ts";
 import type { ApiClient, RequestOptions } from "../src/main/cli/client.ts";
 import { handoffCommands } from "../src/main/cli/commands/handoff.ts";
-import { vocab } from "../src/main/cli/commands/vocab.ts";
+import { reviewText, vocab } from "../src/main/cli/commands/vocab.ts";
 import type { Ctx } from "../src/main/cli/context.ts";
 
 const EV = (seq: number) => ({ seq, t: seq, type: "note" }) as unknown as LogEvent;
@@ -226,5 +226,15 @@ describe("the vocabulary pass from the CLI", () => {
     // The pass runs one provider call per batch, one after another: the client's one-minute
     // default gives up while the server is still working.
     expect(asked?.timeoutMs).toBeGreaterThanOrEqual(60 * 60_000);
+  });
+
+  test("the words to review say how to reject a proposal of that call, not a bare `reject`", () => {
+    const text = reviewText({
+      proposals: [{ term: "Hetzner", heard: ["hetzner"], lines: [] }],
+      unconfirmed: [],
+    });
+    // Without a term the CLI refuses; without --call the proposal stays open in the call.
+    expect(text).toContain("`akou vocab reject TERM --call ID`");
+    expect(text).toContain("`akou vocab approve TERM --call ID`");
   });
 });
