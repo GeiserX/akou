@@ -36,7 +36,7 @@ import {
 /** After a kill, how long we wait for the exit to be reported before giving up on it. */
 export const KILL_GRACE_MS = 1000;
 /** After exit, how long the pipes may take to drain before the exit is reported anyway. */
-const DRAIN_GRACE_MS = 500;
+export const DRAIN_GRACE_MS = 500;
 
 /** How one kind of child turns its stdout into packets and how it is asked to stop. */
 export interface Dialect {

@@ -8,8 +8,16 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
-import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
+import { AkouCaptureEngine } from "../src/main/capture/helper.ts";
+import { type AppRig, appRig, FAKE_HELPER, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
+import {
+  answeredOnCapturingBroken,
+  describeSteps,
+  recordingClock,
+  recordSteps,
+  type Step,
+} from "./capture-scenarios.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { stereoWav } from "./fixtures/audio.ts";
 import { tempDir } from "./helpers.ts";
@@ -17,6 +25,8 @@ import { tempDir } from "./helpers.ts";
 const LONG = 30_000;
 let rig: AppRig;
 let wavDir: { dir: string; cleanup: () => void };
+/** What the app's calls and helpers did, in order, on the app's recording clock. */
+const steps: Step[] = [];
 
 /** Mic: "hello world"; call: "deploy to hetzner", which the unbiased fake engine hears "hetzna". */
 function writeSpeech(dir: string): string {
@@ -31,8 +41,18 @@ function writeSpeech(dir: string): string {
 
 beforeAll(async () => {
   wavDir = tempDir();
+  const helperArgs = ["--wav", writeSpeech(wavDir.dir)];
+  // The engine the app would build from `capture.helper`, with its steps recorded.
+  const clock = recordingClock(steps);
+  const engine = new AkouCaptureEngine({
+    command: [process.execPath, FAKE_HELPER, ...helperArgs],
+    clock,
+  });
+  recordSteps(engine, steps);
   rig = await appRig({
-    helperArgs: ["--wav", writeSpeech(wavDir.dir)],
+    helperArgs,
+    clock,
+    engine,
     finalAudio: ({ parts }) => ({
       kind: "module",
       path: FAKE_MODELS,
@@ -78,6 +98,7 @@ describe("starting a call", () => {
     "[T3.6] Minutes to start: POST /v1/calls answers 201 fast, after capturing, with the folder",
     async () => {
       await stopAll();
+      const from = steps.length;
       const t0 = performance.now();
       const r = await rig.api("POST", "/calls", {
         workspace: "work",
@@ -85,14 +106,18 @@ describe("starting a call", () => {
         vocab: ["Hetzner", "Ben"],
       });
       const ms = performance.now() - t0;
+      steps.push({ step: "started", ok: r.status === 201, status: r.status });
       expect(r.status).toBe(201);
       expect(r.body).toMatchObject({ part: 1, url: `akou://call/${r.body.call}` });
       expect(existsSync(join(r.body.folder, "events.jsonl"))).toBe(true);
-      // The design's target is 1 s with the app running; CI runners get the cold budget.
+      // "Fast", from the steps: the app's first start arms the cold budget (10 s here) at the
+      // spawn and answers on the helper's `capturing`, the budget never firing. The seconds
+      // themselves are measured on the reference Mac (scripts/gates/g8-start.ts); here they are
+      // printed.
       console.log(
-        `start: 201 in ${ms.toFixed(0)} ms (helper capturing after ${r.body.firstAudioMs} ms)`,
+        `start: 201 in ${ms.toFixed(0)} ms (helper capturing after ${r.body.firstAudioMs} ms): ${describeSteps(steps.slice(from))}`,
       );
-      expect(ms).toBeLessThan(3000);
+      expect(answeredOnCapturingBroken(steps.slice(from), 10_000)).toEqual([]);
       const types = (await eventsOf(r.body.call)).map((e) => e.type);
       // `--vocab` words are written right after call.created, before capture opens.
       expect(types.slice(0, 4)).toEqual(["call.created", "vocab.add", "vocab.add", "part.started"]);
