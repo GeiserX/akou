@@ -27,6 +27,7 @@ const TABLE: Record<string, Access> = {
   "GET /v1/jobs/:id/result": "jobs",
   "DELETE /v1/jobs/:id": "jobs",
   "GET /v1/events": "jobs",
+  "POST /v1/audio/transcriptions": "jobs",
   "GET /v1/status": "admin",
   "GET /v1/config": "admin",
   "PATCH /v1/config": "admin",

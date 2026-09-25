@@ -40,6 +40,7 @@ import { handoffRoutes } from "./routes/handoff.ts";
 import { jobRoutes } from "./routes/jobs.ts";
 import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
+import { openaiRoutes } from "./routes/openai.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
 import { queryRoutes } from "./routes/query.ts";
 import { rootRoutes, serverRoutes } from "./routes/server.ts";
@@ -264,7 +265,10 @@ function reachable(bind: string | undefined): string {
 export function startApiServer(o: ServerOptions): ApiServer {
   const router = buildRouter();
   // The job routes exist in server mode only: the desktop app answers 404 for them (SV-J1).
-  if (o.app.mode === "server") jobRoutes(router);
+  if (o.app.mode === "server") {
+    jobRoutes(router);
+    openaiRoutes(router);
+  }
   o.routes?.(router);
   const root = buildRootRouter();
   const check = o.guard ?? defaultGuard;
