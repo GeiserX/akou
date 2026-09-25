@@ -44,7 +44,11 @@ The workflow checks the tag equals every version string, builds and checks every
    - A 60-second call records both channels; the transcript appears live.
    - Install the previous release, grant, then update to this one: record 10 s and note whether macOS asked again (expected while builds are ad-hoc signed) and whether both channels have sound after allowing.
    - The Bluetooth probe-click listening test ([TRAPS](../docs/TRAPS.md) "Probe click in Bluetooth headphones").
+   - The idle tray item shows its icon in a dark and a light menu bar (System Settings > Appearance). Save both screenshots under `docs/gates/` with the date, the macOS version and the akou version ([DESKTOP](../docs/ux/DESKTOP.md) DK-T1, [TRAPS](../docs/TRAPS.md) "An invisible tray").
+   - `⌘C` and `⌘V` copy and paste in the notepad and in the ask box, and `⌘Z` undoes a typed word (DK-M1).
+   - With the window closed, `akou start -t "Check title"` shows one "Recording started" notification, "Started from the command line", and the title appears nowhere in it (DK-N1, DK-N4).
 3. `akou-cli-<version>-darwin-arm64`: `akou --version`, `akou doctor`, `akou start` against the installed app.
+4. On Ubuntu 24.04 with the GNOME AppIndicator extension, once a Linux app build exists: the tray icon shows (DK-T1).
 
 ## Signing, when the Developer ID exists
 

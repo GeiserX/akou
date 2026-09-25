@@ -129,6 +129,11 @@ Every number here comes from our vocabulary measurements: a synthetic TTS set an
 - **The skill drifts from the tooling** [T3.0, T3.1] (M1). Given the skill ships with the app, `akou skill install` must refuse to install a `SKILL.md` whose version differs from the app's. Test: install with a mismatched version; assert refusal.
 - **The call channel labelled as one person** [T3.43] (M1). Given the call channel carries everyone remote, the pack roster and the export must never label the whole call channel with one person's name; clusters are named one by one. Test: a two-cluster call with one named cluster; assert the other cluster keeps its own label.
 
+## Desktop
+
+- **An invisible tray** [DK-T1] (M1). Given no tray image and an empty title, the idle macOS status item has nothing to show, and the tray is the app while the window is closed. akou must always give the tray an image, idle included: a template PNG on macOS, an ICO on Windows, a PNG for the Linux AppIndicator, drawn by `scripts/tray-icons.ts` and copied beside the main process. Test: the shell over the fake `NativeUi` checks `createTray` gets a readable image of the platform's format on each OS, with no image, a missing file and the wrong format as positive controls; the smoke check finds the icon in the bundle; the release checklist records the idle item in a dark and a light menu bar.
+- **Lock-screen leaks** [DK-N4] (M1). Given notifications show on the lock screen and in screenshots, no notification may carry a call's title, workspace, speaker names, notes or transcript words. `notifyFor` builds every title and body from fixed strings chosen by the event's kind, and no event it takes carries content. Test: a call whose title, workspace, names, note, vocabulary and words are markers reaches every row an agent can trigger (started, refused, shared, capture dead) and no notification contains a marker; the positive control adds a notification carrying the title and the scan catches it.
+
 ## Kept from closed traps, as invariants
 
 The predecessors fixed these, and they must stay true in akou:
