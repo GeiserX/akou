@@ -82,6 +82,68 @@ function lineOf(l: Body): string {
   return `[${l.time} ${l.speaker}] ${l.annotated ?? l.text}`;
 }
 
+/** How a harness may treat a tool (MCP `ToolAnnotations`), stated in full: the MCP defaults assume
+ * a destructive, open-world tool, which akou's are not. */
+type Hints = {
+  readOnlyHint: boolean;
+  destructiveHint?: boolean;
+  idempotentHint?: boolean;
+  openWorldHint: boolean;
+};
+const READ: Hints = { readOnlyHint: true, openWorldHint: false };
+const WRITE: Hints = {
+  readOnlyHint: false,
+  destructiveHint: false,
+  idempotentHint: false,
+  openWorldHint: false,
+};
+/** Ends or rebuilds the recording: the harness should confirm. */
+const DESTRUCTIVE: Hints = { ...WRITE, destructiveHint: true };
+const IDEMPOTENT: Hints = { ...WRITE, idempotentHint: true };
+/** Runs akou's configured provider, which may be a remote API. */
+const PROVIDER: Hints = { ...WRITE, openWorldHint: true };
+
+/**
+ * Every tool's title and annotations (PG-M2): one row per tool, and registering a tool without a
+ * row throws, so a new tool cannot ship without saying whether it is safe to auto-approve.
+ */
+export const TOOLS: Readonly<Record<string, { title: string; hints: Hints }>> = {
+  akou_start: { title: "Start recording", hints: WRITE },
+  akou_stop: { title: "Stop recording", hints: DESTRUCTIVE },
+  akou_pause: { title: "Pause recording", hints: WRITE },
+  akou_resume: { title: "Resume recording", hints: WRITE },
+  akou_mute: { title: "Mute the microphone", hints: WRITE },
+  akou_unmute: { title: "Unmute the microphone", hints: WRITE },
+  akou_restart: { title: "Restart capture", hints: DESTRUCTIVE },
+  akou_status: { title: "Recorder status", hints: READ },
+  akou_context: { title: "Context for a question", hints: READ },
+  akou_read: { title: "Read new lines", hints: READ },
+  akou_search: { title: "Search a call", hints: READ },
+  akou_ask: { title: "Ask akou's provider", hints: PROVIDER },
+  akou_name_speaker: { title: "Name a speaker", hints: IDEMPOTENT },
+  akou_merge_speakers: { title: "Merge two speakers", hints: WRITE },
+  akou_unmerge_speaker: { title: "Undo a speaker merge", hints: WRITE },
+  akou_add_note: { title: "Add a note", hints: WRITE },
+  akou_get_notes: { title: "Read the notepad", hints: READ },
+  akou_remember: { title: "Remember a fact", hints: WRITE },
+  akou_forget: { title: "Forget a fact", hints: WRITE },
+  akou_memo_get: { title: "Read the memo", hints: READ },
+  akou_memo_put: { title: "Write the memo", hints: IDEMPOTENT },
+  akou_vocab_add: { title: "Add a word", hints: WRITE },
+  akou_vocab_propose: { title: "Propose words", hints: WRITE },
+  akou_vocab_approve: { title: "Approve proposed words", hints: WRITE },
+  akou_vocab_reject: { title: "Reject proposed words", hints: WRITE },
+  akou_vocab_list: { title: "List the vocabulary", hints: READ },
+  akou_vocab_suggest: { title: "Suggest words", hints: READ },
+  akou_vocab_check: { title: "Check a word", hints: READ },
+  akou_enhance_context: { title: "Context for enhanced notes", hints: READ },
+  akou_enhanced_put: { title: "Save enhanced notes", hints: WRITE },
+  akou_enhance: { title: "Enhance notes with akou's provider", hints: PROVIDER },
+  akou_list_calls: { title: "List past calls", hints: READ },
+  akou_get_call: { title: "Read a named call", hints: READ },
+  akou_export: { title: "Export a call", hints: WRITE },
+};
+
 export interface McpOptions {
   client: ApiClient;
   version?: string;
@@ -114,10 +176,20 @@ export function createMcpServer(o: McpOptions): McpServer {
   const req = (method: string, path: string, ro: RequestOptions = {}) =>
     call(method, path, { ...ro, client: tag() });
   const id = (c: string) => encodeURIComponent(c);
+  /** `registerTool` with the tool's title and annotations from `TOOLS`. */
+  const tool = ((name: string, config: object, cb: never) => {
+    const row = TOOLS[name];
+    if (!row) throw new Error(`akou mcp: ${name} has no row in TOOLS`);
+    return server.registerTool(
+      name,
+      { ...config, title: row.title, annotations: row.hints } as never,
+      cb,
+    );
+  }) as typeof server.registerTool;
 
   // --- starting and controlling -----------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "akou_start",
     {
       description:
@@ -145,7 +217,7 @@ export function createMcpServer(o: McpOptions): McpServer {
   );
 
   for (const name of ["stop", "pause", "resume", "mute", "unmute"] as const) {
-    server.registerTool(
+    tool(
       `akou_${name}`,
       {
         description: `${name[0]?.toUpperCase()}${name.slice(1)} the live call${name.endsWith("mute") ? "'s microphone" : ""}.`,
@@ -158,7 +230,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     );
   }
 
-  server.registerTool(
+  tool(
     "akou_restart",
     {
       description:
@@ -171,7 +243,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_status",
     {
       description:
@@ -187,7 +259,7 @@ export function createMcpServer(o: McpOptions): McpServer {
 
   // --- questions and following ------------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "akou_context",
     {
       description: `The main tool for answering any question about a call: pass the user's question verbatim and answer from the pack it returns (a few thousand tokens, never the whole transcript). Also returns a cursor for akou_read, the call state and memoStale. ${RULES} If the answer is not in the pack, say so and name the time range to fetch.`,
@@ -209,7 +281,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_read",
     {
       description: `New committed lines since a cursor (from akou_context or an earlier akou_read), plus the line still being spoken and the next cursor. Use it to follow a call instead of re-reading. ${RULES}`,
@@ -241,7 +313,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_search",
     {
       description: `Exact word hits in a call with wall-time citations, for names, numbers and terms. ${RULES}`,
@@ -263,7 +335,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  const ask = server.registerTool(
+  const ask = tool(
     "akou_ask",
     {
       description:
@@ -283,7 +355,7 @@ export function createMcpServer(o: McpOptions): McpServer {
 
   // --- speakers, notes, memory, memo ------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "akou_name_speaker",
     {
       description:
@@ -298,7 +370,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_merge_speakers",
     {
       description: "Merge speaker `a` into speaker `b` when both are the same person.",
@@ -312,7 +384,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_unmerge_speaker",
     {
       description: "Undo a merge: the speaker gets its own label back for later lines.",
@@ -324,7 +396,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_add_note",
     {
       description: "Add a line to the live call's notepad, marked as written by you.",
@@ -336,7 +408,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_get_notes",
     {
       description: "The live call's notepad: the user's lines and yours.",
@@ -348,7 +420,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_remember",
     {
       description:
@@ -361,7 +433,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_forget",
     {
       description: "Retract a line kept with akou_remember, by its id.",
@@ -373,7 +445,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_memo_get",
     {
       description: "The live call's rolling memo and the seq it covers.",
@@ -385,7 +457,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_memo_put",
     {
       description:
@@ -400,7 +472,7 @@ export function createMcpServer(o: McpOptions): McpServer {
 
   // --- vocabulary -------------------------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "akou_vocab_add",
     {
       description:
@@ -437,7 +509,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_vocab_propose",
     {
       description:
@@ -477,7 +549,7 @@ export function createMcpServer(o: McpOptions): McpServer {
   );
 
   for (const action of ["approve", "reject"] as const) {
-    server.registerTool(
+    tool(
       `akou_vocab_${action}`,
       {
         description:
@@ -493,7 +565,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     );
   }
 
-  server.registerTool(
+  tool(
     "akou_vocab_list",
     {
       description:
@@ -518,7 +590,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_vocab_suggest",
     {
       description: "Ranked candidate words from a call or a text, to propose to the user.",
@@ -534,7 +606,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_vocab_check",
     {
       description: "Whether a word is safe to bias recognition with.",
@@ -548,7 +620,7 @@ export function createMcpServer(o: McpOptions): McpServer {
 
   // --- after the call ---------------------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "akou_enhance_context",
     {
       description:
@@ -563,7 +635,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_enhanced_put",
     {
       description:
@@ -578,7 +650,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_enhance",
     {
       description:
@@ -597,7 +669,7 @@ export function createMcpServer(o: McpOptions): McpServer {
 
   // --- past calls -------------------------------------------------------------------------------
 
-  server.registerTool(
+  tool(
     "akou_list_calls",
     {
       description:
@@ -625,7 +697,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_get_call",
     {
       description: `A call the user named: its transcript (the newest 12k tokens at most; use akou_search or akou_context with \`call\` for the rest). ${RULES}`,
@@ -643,7 +715,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     },
   );
 
-  server.registerTool(
+  tool(
     "akou_export",
     {
       description:
