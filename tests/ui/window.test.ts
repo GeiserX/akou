@@ -991,6 +991,61 @@ describe("playback and Fix this word", () => {
   );
 
   test(
+    "[W5.2] Space pauses a playing line and resumes it from the same position; the Play button does the same; Space in a text field types",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const folder = (await rig.api("GET", `/calls/${id}`)).body.folder as string;
+          writeFileSync(
+            join(folder, "audio", "part-001.opus"),
+            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
+          );
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const player = () =>
+            page.evaluate(() => {
+              const p = document.getElementById("player") as HTMLAudioElement;
+              return { paused: p.paused, at: p.currentTime };
+            });
+          expect(await page.locator("#play").isDisabled()).toBe(true);
+          await page.hover('#lines .row[data-id="l000003"]');
+          await page.click('#lines .row[data-id="l000003"] .play');
+          await until(async () => (await player()).at > 0.3, 8000, "the line playing");
+          expect(await text(page, "#play")).toBe("❚❚ Pause");
+          // Space, with focus still on the row's Play button, pauses: it does not restart the line.
+          await page.keyboard.press("Space");
+          const paused = await player();
+          expect(paused.paused).toBe(true);
+          expect(paused.at).toBeGreaterThan(0.3);
+          expect(await text(page, "#play")).toBe("▶ Play");
+          await page.waitForTimeout(400);
+          expect((await player()).at).toBe(paused.at);
+          await page.keyboard.press("Space");
+          expect((await player()).paused).toBe(false);
+          await until(async () => (await player()).at > paused.at, 5000, "playing on");
+          // It went on from where it stopped, not from the line's start.
+          expect((await player()).at).toBeGreaterThanOrEqual(paused.at);
+          // The button pauses and resumes too.
+          await page.click("#play");
+          expect((await player()).paused).toBe(true);
+          const at = (await player()).at;
+          await page.click("#play");
+          expect((await player()).paused).toBe(false);
+          expect((await player()).at).toBeGreaterThanOrEqual(at);
+          // In a text field, Space is a space.
+          await page.click("#note-input");
+          await page.keyboard.type("a b");
+          expect(await page.inputValue("#note-input")).toBe("a b");
+          expect((await player()).paused).toBe(false);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[decision] File vocabulary that silently corrects nothing: a workspace file entry corrects the window's line, and a change to the files reaches the open window",
     async () => {
       let id = "";

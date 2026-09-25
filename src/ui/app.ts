@@ -139,6 +139,7 @@ class App {
     this.wireControls();
     this.wireTabs();
     this.wirePopover();
+    this.wirePlayer();
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
@@ -649,12 +650,7 @@ class App {
     const v = this.view();
     const call = this.callId;
     const line = v?.resolve(id);
-    if (!v || !call || !line) return;
-    if (this.platform === "linux" && v.live) {
-      // PipeWire cannot keep the window's audio out of the recording (DESIGN 2.3).
-      toast("akou does not play audio while a call is recording on Linux.");
-      return;
-    }
+    if (!v || !call || !line || !this.mayPlay()) return;
     const k = `${call}:${line.part}`;
     let url = this.blobs.get(k);
     if (!url) {
@@ -674,9 +670,55 @@ class App {
       p.currentTime = line.a0;
       this.balance();
       void p.play().catch(() => {});
+      this.drawPlay();
     };
     if (p.readyState >= 1) seek();
     else p.addEventListener("loadedmetadata", seek, { once: true });
+  }
+
+  private mayPlay(): boolean {
+    if (this.platform === "linux" && this.view()?.live) {
+      // PipeWire cannot keep the window's audio out of the recording (DESIGN 2.3).
+      toast("akou does not play audio while a call is recording on Linux.");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Play and pause (WINDOW W5.2): the player bar's button, and Space outside text fields. Resuming
+   * goes on from where the pause left it. Until a line has been played there is nothing to pause,
+   * so Space keeps its usual meaning.
+   */
+  private wirePlayer(): void {
+    const p = this.player;
+    for (const ev of ["play", "pause", "ended", "emptied"]) {
+      p.addEventListener(ev, () => this.drawPlay());
+    }
+    byId("play").addEventListener("click", () => this.togglePlay());
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== " " || e.metaKey || e.ctrlKey || e.altKey || !p.src) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
+      // Also keeps a focused button (a line's Play) from being pressed by the same key.
+      e.preventDefault();
+      if (!e.repeat) this.togglePlay();
+    });
+  }
+
+  private togglePlay(): void {
+    const p = this.player;
+    if (!p.src) return;
+    if (!p.paused) p.pause();
+    else if (this.mayPlay()) void p.play().catch(() => {});
+    this.drawPlay();
+  }
+
+  private drawPlay(): void {
+    const p = this.player;
+    const btn = byId<HTMLButtonElement>("play");
+    btn.disabled = !p.src;
+    btn.textContent = p.paused ? "▶ Play" : "❚❚ Pause";
   }
 
   /** Mic and call balance: the file keeps them on the left and the right channel. */
