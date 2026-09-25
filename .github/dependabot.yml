@@ -1,0 +1,48 @@
+# Dependency updates (docs/CI-CD.md CI-13): once a week per ecosystem, minor and patch updates in
+# one pull request, each major in a pull request of its own. Every ignore says why on the line
+# above it; tests/dependabot.test.ts fails on an ignore without a reason.
+#
+# Merge these with an explicit subject and body (`gh pr merge --squash --subject ... --body ...`):
+# a bare squash merge adds a `Co-authored-by: dependabot[bot]` trailer, and commits here carry no
+# trailers.
+
+version: 2
+updates:
+  - package-ecosystem: "bun"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      bun-minor-and-patch:
+        update-types: [minor, patch]
+    ignore:
+      # Bun's types move with .bun-version, which Dependabot cannot bump; a lone types bump
+      # describes a runtime nobody runs.
+      - dependency-name: "@types/bun"
+      # ElectroBun pairs a Hutch release and bundles its own Bun (PINS in scripts/build-app.ts);
+      # it moves by hand with those pins and a packaged dry run.
+      - dependency-name: "electrobun"
+
+  - package-ecosystem: "cargo"
+    directories:
+      - "/native/akou-capture"
+      - "/native/akou-diarize"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(deps)"
+    groups:
+      cargo-minor-and-patch:
+        update-types: [minor, patch]
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    commit-message:
+      prefix: "chore(ci)"
+    groups:
+      actions-minor-and-patch:
+        update-types: [minor, patch]
