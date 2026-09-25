@@ -6,6 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { join } from "node:path";
 import {
   akouCaptureDialect,
   ChildCaptureSession,
@@ -30,6 +31,8 @@ import {
   stoppedWithinBudgetBroken,
   useRigCleanups,
 } from "./capture-scenarios.ts";
+
+const LATE_STOPPED = join(import.meta.dir, "fixtures", "late-stopped.ts");
 
 useRigCleanups();
 captureTrapScenarios(fakeHelper);
@@ -312,17 +315,12 @@ describe("a helper's last stderr line", () => {
    * `stopped` line `delayMs` later: the exit is noticed before the pipe has drained.
    */
   function lateStopped(delayMs: number, drop?: Parameters<typeof recordingClock>[1]) {
-    const line = JSON.stringify({ type: "stopped", file_seconds: 7.5, reason: "stop" });
-    const grandchild = `setTimeout(() => process.stderr.write(${JSON.stringify(`${line}\n`)}), ${delayMs})`;
-    const child = [
-      'const { spawn } = require("node:child_process");',
-      `const g = spawn(process.execPath, ["-e", ${JSON.stringify(grandchild)}], { stdio: ["ignore", "ignore", "inherit"], detached: true });`,
-      "g.unref();",
-      "process.exit(0);",
-    ].join("\n");
     const steps: Step[] = [];
     const session = new ChildCaptureSession(
-      { argv: [process.execPath, "-e", child], clock: recordingClock(steps, drop) },
+      {
+        argv: [process.execPath, LATE_STOPPED, String(delayMs)],
+        clock: recordingClock(steps, drop),
+      },
       {
         packet: () => {},
         message: () => {},
