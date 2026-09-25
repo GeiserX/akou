@@ -592,7 +592,7 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
 
 declare const self: Worker;
 if (!Bun.isMainThread && workerData === FINALIZE_WORKER_NAME) {
-  const post = (m: FromFinal) => self.postMessage(m);
+  const post = (m: FromFinal | FromJob) => self.postMessage(m);
   const toLog =
     (level: "info" | "warn" | "error") =>
     (...args: unknown[]) =>
@@ -601,7 +601,8 @@ if (!Bun.isMainThread && workerData === FINALIZE_WORKER_NAME) {
   console.info = toLog("info");
   console.warn = toLog("warn");
   console.error = toLog("error");
-  self.onmessage = (e: MessageEvent<ToFinal>) => void runInWorker(e.data, post);
+  self.onmessage = (e: MessageEvent<ToFinal | ToJob>) =>
+    void (e.data.type === "job" ? runJobInWorker(e.data, post) : runInWorker(e.data, post));
 }
 
 /** What the host needs of a call: its folder, its writer, and a hold on it past the call's end. */
@@ -703,5 +704,232 @@ export async function finalizeCall(
     });
   } finally {
     release();
+  }
+}
+
+// ---------------------------------------------------------------------------
+// A file job: one channel, no "you" (docs/ux/SERVER.md SV-J7, SV-R5)
+
+/** Speech found by the VAD is kept with this much audio around it; the rest is trimmed (SV-R5). */
+export const JOB_TRIM_PAD_SECONDS = 0.5;
+
+export interface JobPassInput {
+  /** 16 kHz mono. */
+  samples: Float32Array;
+  /** Label the lines with speakers (`s<N>`); otherwise every speaker is null. */
+  diarize: boolean;
+  /** The job's hotwords, or null. */
+  decode: DecodeList | null;
+  options?: Partial<FinalOptions>;
+}
+
+export interface JobSegment {
+  /** Seconds into the file. */
+  s: number;
+  e: number;
+  text: string;
+  speaker: string | null;
+}
+
+export interface JobPassResult {
+  text: string;
+  segments: JobSegment[];
+  /** Detected by the engine, when it detects one (Parakeet does not). */
+  language: string | null;
+  duration_s: number;
+  /** The recognizer's registry name, or null when nothing was decoded. */
+  model: string | null;
+  skipped: { s: number; e: number; error: string }[];
+}
+
+/**
+ * The final pass over one channel. The same rules as a call's channel: energy before any model
+ * loads, VAD cut points, pieces over the whole timeline, `prepareSpan`, and the halving of a span
+ * the engine refuses. Two rules are the job's own (SV-R5): a file in which the VAD finds no speech
+ * at all is not decoded, and the audio before the first and after the last speech the VAD finds
+ * (less `JOB_TRIM_PAD_SECONDS`) is trimmed, so an engine never sees room noise on its own and
+ * cannot invent a sentence from it. Inside the speech the whole-timeline rule holds, so a word the
+ * VAD missed between two runs of speech is still decoded.
+ */
+export async function runJobPass(
+  input: JobPassInput,
+  models: ModelSet,
+  log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
+): Promise<JobPassResult> {
+  const o = { ...DEFAULT_FINAL, ...input.options };
+  const x = input.samples;
+  const duration_s = round3(x.length / ASR_RATE);
+  const empty: JobPassResult = {
+    text: "",
+    segments: [],
+    language: null,
+    duration_s,
+    model: null,
+    skipped: [],
+  };
+  if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
+  const hw = models.prepare(input.decode);
+  for (const d of hw.dropped) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
+  const { flags, window } = speechFlags(x, models);
+  const first = flags.indexOf(true);
+  if (first < 0) return { ...empty, model: hw.recognizer.model };
+  const last = flags.lastIndexOf(true);
+  const pad = Math.round((JOB_TRIM_PAD_SECONDS * ASR_RATE) / window);
+  const w0 = Math.max(0, first - pad);
+  const w1 = Math.min(flags.length, last + 1 + pad);
+  const from = w0 * window;
+  const samples = x.subarray(from, Math.min(x.length, w1 * window));
+  let spans: DiarizedSpan[] = [];
+  if (input.diarize) {
+    // A diarizer that fails costs the labels, not the job, as on a call.
+    try {
+      spans = await models.diarizer().process(samples);
+    } catch (err) {
+      log(
+        "error",
+        `speaker labels failed, the job goes on without them: ${(err as Error).message}`,
+      );
+    }
+  }
+  const cuts = spans.flatMap((s) => [s.start * ASR_RATE, s.end * ASR_RATE]);
+  const skipped: JobPassResult["skipped"] = [];
+  const segments: JobSegment[] = [];
+  let language: string | null = null;
+  // The pad counts as speech, so it stays with the speech beside it and never becomes a piece of
+  // noise on its own.
+  const kept = flags.slice(w0, w1).map((f, i) => f || i < first - w0 || i > last - w0);
+  for (const piece of timelinePieces(samples, kept, window, o, cuts)) {
+    const r = decodeHalving(samples, piece.from, piece.to, hw, o, (a, b, error) =>
+      skipped.push({ s: round3((from + a) / ASR_RATE), e: round3((from + b) / ASR_RATE), error }),
+    );
+    if (r.lang) language ??= r.lang;
+    if (r.text === "") continue;
+    segments.push({
+      s: round3((from + piece.from) / ASR_RATE),
+      e: round3((from + piece.to) / ASR_RATE),
+      text: r.text,
+      speaker: input.diarize ? labelPiece(piece, spans, o.attachSeconds) : null,
+    });
+  }
+  return {
+    text: segments.map((s) => s.text).join(" "),
+    segments,
+    language,
+    duration_s,
+    model: hw.recognizer.model,
+    skipped,
+  };
+}
+
+type ToJob = {
+  type: "job";
+  samples: Float32Array;
+  models: ModelSpec;
+  decode: DecodeList | null;
+  diarize: boolean;
+  options?: Partial<FinalOptions>;
+};
+
+type FromJob =
+  | { type: "log"; level: "info" | "warn" | "error"; msg: string }
+  | { type: "job.done"; result: JobPassResult; loads: Record<string, number> }
+  | { type: "job.failed"; error: string; loads: Record<string, number> };
+
+/** The job Worker keeps its models between jobs: loaded once per Worker, keyed by the spec. */
+let jobModels: { key: string; set: Promise<ModelSet> } | null = null;
+
+async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<void> {
+  const key = JSON.stringify(m.models);
+  if (jobModels?.key !== key) jobModels = { key, set: loadModelSet(m.models) };
+  let models: ModelSet | null = null;
+  try {
+    models = await jobModels.set;
+    const result = await runJobPass(
+      { samples: m.samples, diarize: m.diarize, decode: m.decode, options: m.options },
+      models,
+      (level, msg) => reply({ type: "log", level, msg }),
+    );
+    reply({ type: "job.done", result, loads: { ...models.loads } });
+  } catch (err) {
+    if (!models) jobModels = null;
+    reply({ type: "job.failed", error: (err as Error).message, loads: { ...models?.loads } });
+  }
+}
+
+/**
+ * One long-lived finalize Worker for file jobs: the models load once and serve every job after.
+ * One job at a time. `cancel` terminates the Worker (a decode stuck in a native call answers
+ * nothing), so the job in it ends at once and the next job starts a fresh Worker (SV-J6).
+ */
+export class JobWorker {
+  private w: Worker | null = null;
+  private busy: { reject(e: Error): void } | null = null;
+  private lastLoads: Record<string, number> = {};
+
+  constructor(
+    private readonly models: ModelSpec,
+    private readonly onLog?: (level: "info" | "warn" | "error", msg: string) => void,
+  ) {}
+
+  run(input: Omit<JobPassInput, "options"> & { options?: Partial<FinalOptions> }) {
+    if (this.busy) return Promise.reject(new Error("the job Worker is busy"));
+    this.w ??= new Worker(siblingModule(import.meta.url, "finalize-worker"), {
+      workerData: FINALIZE_WORKER_NAME,
+    } as WorkerOptions);
+    const w = this.w;
+    return new Promise<JobPassResult>((resolve, reject) => {
+      const done = () => {
+        this.busy = null;
+        w.onmessage = null;
+        w.onerror = null;
+      };
+      this.busy = {
+        reject: (e) => {
+          done();
+          reject(e);
+        },
+      };
+      w.onmessage = (e: MessageEvent<FromJob>) => {
+        const r = e.data;
+        if (r.type === "log") return this.onLog?.(r.level, r.msg);
+        this.lastLoads = r.loads;
+        done();
+        if (r.type === "job.done") resolve(r.result);
+        else reject(new Error(r.error));
+      };
+      w.onerror = (e) => {
+        // A Worker that died is not reused.
+        this.w = null;
+        w.terminate();
+        done();
+        reject(new Error(e.message));
+      };
+      const msg: ToJob = {
+        type: "job",
+        samples: input.samples,
+        models: this.models,
+        decode: input.decode,
+        diarize: input.diarize,
+        options: input.options,
+      };
+      w.postMessage(msg);
+    });
+  }
+
+  /** Stops the job in flight: the Worker is terminated and `run` rejects with `reason`. */
+  cancel(reason = "cancelled"): void {
+    const w = this.w;
+    this.w = null;
+    w?.terminate();
+    this.busy?.reject(new Error(reason));
+  }
+
+  /** Model loads in the Worker so far, as of the last job. */
+  loads(): Record<string, number> {
+    return { ...this.lastLoads };
+  }
+
+  close(): void {
+    this.cancel("the job Worker closed");
   }
 }
