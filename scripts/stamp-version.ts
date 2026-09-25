@@ -239,7 +239,8 @@ export function gateProblems(m0Md: string): string[] {
 
 /**
  * The newest stable tag below `version` in the git repository at `root`, with its date. Throws
- * when `root` is not the top of a git checkout, so a missing history never reads as "no release".
+ * when `root` is not the top of a git checkout or is a shallow clone, so a missing history never
+ * reads as "no release".
  */
 export function previousStable(
   root: string,
@@ -249,6 +250,11 @@ export function previousStable(
   const top = git(["rev-parse", "--show-toplevel"]);
   if (top.status !== 0 || realpathSync(top.stdout.trim()) !== realpathSync(root))
     throw new Error(`cannot list the tags: ${root} is not the top of a git checkout`);
+  // A shallow clone holds none of the older tags, so "no stable tag" would be a guess.
+  if (git(["rev-parse", "--is-shallow-repository"]).stdout.trim() !== "false")
+    throw new Error(
+      `cannot list the tags: ${root} is a shallow clone (git fetch --unshallow --tags)`,
+    );
   const r = git(["tag", "--list", "v*", "--format=%(refname:short) %(creatordate:short)"]);
   if (r.status !== 0) throw new Error(`cannot list the tags: ${r.stderr.trim()}`);
   let best: { tag: string; date: string; v: string } | null = null;

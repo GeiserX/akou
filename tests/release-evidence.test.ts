@@ -245,6 +245,25 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
     GIT_TIMEOUT,
   );
 
+  test(
+    "a shallow clone fails rather than read as the first stable release",
+    () => {
+      const t = repoCopy();
+      try {
+        withTags(t.dir, []);
+        // Positive control: a full history with no tags is a first stable release.
+        expect(previousStable(t.dir, "1.0.0")).toBeNull();
+        // A shallow clone lists no tags either; git marks it with .git/shallow.
+        const head = Bun.spawnSync(["git", "-C", t.dir, "rev-parse", "HEAD"]).stdout.toString();
+        writeFileSync(join(t.dir, ".git", "shallow"), head);
+        expect(() => previousStable(t.dir, "1.0.0")).toThrow("shallow clone");
+      } finally {
+        t.cleanup();
+      }
+    },
+    GIT_TIMEOUT,
+  );
+
   test("the release workflow's version check sees every tag", () => {
     const wf = Bun.YAML.parse(
       readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
