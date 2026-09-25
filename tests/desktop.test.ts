@@ -548,6 +548,7 @@ function memoryOps(o: { locked?: string[]; cancel?: boolean } = {}) {
   const files = new Set<string>();
   const links = new Map<string, string>();
   const admin: string[] = [];
+  const replaced: (string | null)[] = [];
   const ops: InstallOps = {
     exists: (p) => files.has(p) || links.has(p),
     readlink: (p) => links.get(p) ?? null,
@@ -556,14 +557,15 @@ function memoryOps(o: { locked?: string[]; cancel?: boolean } = {}) {
       if (files.has(dst)) throw new Error("EEXIST");
       links.set(dst, src);
     },
-    linkAsAdmin: async (src, dst) => {
+    linkAsAdmin: async (src, dst, replacing) => {
       admin.push(dst);
+      replaced.push(replacing);
       if (o.cancel) return false;
       links.set(dst, src);
       return true;
     },
   };
-  return { ops, files, links, admin };
+  return { ops, files, links, admin, replaced };
 }
 
 describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
@@ -587,6 +589,15 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
     m.files.add(SRC);
     expect((await installCli(SRC, m.ops)).state).toBe("installed");
     expect(m.admin).toEqual([`${CLI_DIR}/akou`]);
+    // Nothing was there, so root is told to replace nothing.
+    expect(m.replaced).toEqual([null]);
+    const o = memoryOps({ locked: [CLI_DIR] });
+    const older = "/Users/x/Downloads/akou.app/Contents/Resources/app/bun/akou";
+    o.files.add(SRC);
+    o.links.set(`${CLI_DIR}/akou`, older);
+    expect((await installCli(SRC, o.ops)).state).toBe("installed");
+    // An older copy's link: root replaces exactly that link.
+    expect(o.replaced).toEqual([older]);
     const c = memoryOps({ locked: [CLI_DIR], cancel: true });
     c.files.add(SRC);
     expect(await installCli(SRC, c.ops)).toEqual({ state: "refused" });
@@ -656,7 +667,7 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
   });
 
   test(
-    "the admin script quotes paths, and as root replaces only a link: a file that appeared stays",
+    "the admin script quotes paths, and as root replaces only the link the check saw",
     () => {
       if (process.platform === "win32") return;
       // The command root runs, run here as the user in a scratch folder: paths with spaces and quotes.
@@ -666,8 +677,10 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
       const dst = join(bin, "akou");
       mkdirSync(dirname(src));
       writeFileSync(src, "#!/bin/sh\n");
-      const run = () => {
-        const s = adminScript(src, dst);
+      const older = "/Applications/old/akou.app/Contents/Resources/app/bun/akou";
+      const brew = "/usr/local/Cellar/akou/1.0/bin/akou";
+      const run = (replacing: string | null) => {
+        const s = adminScript(src, dst, replacing);
         const head = 'do shell script "';
         const tail = '" with administrator privileges';
         expect(s.startsWith(head) && s.endsWith(tail)).toBe(true);
@@ -677,20 +690,28 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
       };
       try {
         // A missing folder is made and the link goes in.
-        expect(run().exitCode).toBe(0);
+        expect(run(null).exitCode).toBe(0);
         expect(readlinkSync(dst)).toBe(src);
-        // A link (an older copy of the app) is replaced.
+        // The link the check saw (an older copy of the app) is replaced.
         unlinkSync(dst);
-        symlinkSync("/Applications/old/akou.app/Contents/Resources/app/bun/akou", dst);
-        expect(run().exitCode).toBe(0);
+        symlinkSync(older, dst);
+        expect(run(older).exitCode).toBe(0);
         expect(readlinkSync(dst)).toBe(src);
-        // Another command that appeared during the password prompt is left alone.
+        // What appeared during the password prompt is left alone: another tool's link where the
+        // older one was, or a file where nothing was.
+        unlinkSync(dst);
+        symlinkSync(brew, dst);
+        const moved = run(older);
+        expect(moved.exitCode).not.toBe(0);
+        expect(moved.stderr.toString()).toContain("changed while macOS asked for the password");
+        expect(readlinkSync(dst)).toBe(brew);
         unlinkSync(dst);
         writeFileSync(dst, "someone else's\n");
-        const r = run();
-        expect(r.exitCode).not.toBe(0);
-        expect(r.stderr.toString()).toContain("File exists");
-        expect(readFileSync(dst, "utf8")).toBe("someone else's\n");
+        for (const replacing of [null, older]) {
+          const r = run(replacing);
+          expect(r.exitCode).not.toBe(0);
+          expect(readFileSync(dst, "utf8")).toBe("someone else's\n");
+        }
       } finally {
         t.cleanup();
       }

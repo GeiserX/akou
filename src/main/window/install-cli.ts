@@ -54,8 +54,12 @@ export interface InstallOps {
   writable(dir: string): boolean;
   /** Replaces `dst` (absent, or a link) with a link to `src`. */
   link(src: string, dst: string): void;
-  /** The same, as root, after macOS asks for a password. False when the user cancelled; throws when the link failed. */
-  linkAsAdmin(src: string, dst: string): Promise<boolean>;
+  /**
+   * The same, as root, after macOS asks for a password. `replacing` is the link target `readlink`
+   * saw at `dst` (null: nothing was there); root replaces only that. False when the user cancelled;
+   * throws when the link failed.
+   */
+  linkAsAdmin(src: string, dst: string, replacing: string | null): Promise<boolean>;
 }
 
 export async function installCli(
@@ -75,7 +79,7 @@ export async function installCli(
     return { state: "in-the-way", path };
   try {
     if (ops.writable(dir)) ops.link(source, path);
-    else if (!(await ops.linkAsAdmin(source, path))) return { state: "refused" };
+    else if (!(await ops.linkAsAdmin(source, path, current))) return { state: "refused" };
   } catch (err) {
     return { state: "failed", error: (err as Error).message };
   }
@@ -130,14 +134,19 @@ export function installMessage(o: InstallOutcome): { title: string; detail: stri
 const shQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
 /**
- * The AppleScript that makes the link as root: a shell command in an AppleScript string. Like
- * `nodeOps.link` it removes only a link and never forces, so a command that appeared at `dst`
- * while macOS asked for the password makes `ln` fail with "File exists" and stays.
+ * The AppleScript that makes the link as root: a shell command in an AppleScript string. It removes
+ * only the link the check saw (`replacing`) and never forces, so whatever appeared at `dst` while
+ * macOS asked for the password stays: a changed link stops the script, a new file makes `ln` fail.
  */
-export function adminScript(src: string, dst: string): string {
+export function adminScript(src: string, dst: string, replacing: string | null = null): string {
   const dir = dst.slice(0, dst.lastIndexOf("/")) || "/";
-  const [d, s] = [shQuote(dst), shQuote(src)];
-  const cmd = `/bin/mkdir -p ${shQuote(dir)} && { [ ! -L ${d} ] || /bin/rm ${d}; } && /bin/ln -s ${s} ${d}`;
+  const d = shQuote(dst);
+  const changed = shQuote(`${dst} changed while macOS asked for the password; akou left it alone`);
+  const clear =
+    replacing === null
+      ? ""
+      : `{ [ "$(/usr/bin/readlink ${d})" = ${shQuote(replacing)} ] || { echo ${changed} >&2; exit 1; }; } && /bin/rm ${d} && `;
+  const cmd = `/bin/mkdir -p ${shQuote(dir)} && ${clear}/bin/ln -s ${shQuote(src)} ${d}`;
   const asString = `"${cmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   return `do shell script ${asString} with administrator privileges`;
 }
@@ -175,8 +184,8 @@ export const nodeOps: InstallOps = {
     symlinkSync(src, dst);
   },
   // Asynchronous: the password dialog must not stall the main process, which carries the capture.
-  linkAsAdmin: async (src, dst) => {
-    const p = Bun.spawn(["/usr/bin/osascript", "-e", adminScript(src, dst)], {
+  linkAsAdmin: async (src, dst, replacing) => {
+    const p = Bun.spawn(["/usr/bin/osascript", "-e", adminScript(src, dst, replacing)], {
       stdout: "ignore",
       stderr: "pipe",
     });
