@@ -305,7 +305,11 @@ export interface Query {
   raw(name: string): string | null;
 }
 
-/** The context a routed handler sees: the request, plus its declared body and query. */
+/**
+ * The context a routed handler sees: the request, plus its declared body and query. A handler
+ * reads the query only through `query` and the body only through `body()`, never `c.url` or the
+ * request itself; `tests/openapi.test.ts` scans the routes and fails on a read around the specs.
+ */
 export interface RoutedContext<A> extends RouteContext<A> {
   /** The body, parsed against the route's declared `body` (`readBody`). */
   body<T = Record<string, unknown>>(): Promise<T>;

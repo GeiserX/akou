@@ -11,7 +11,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
+import { join } from "node:path";
 import { controlFailure } from "../scripts/ci/executor-roundtrip.ts";
 import { OPENAPI_FILE, openApiDrifted, renderOpenApi } from "../scripts/openapi.ts";
 import { SCOPES } from "../src/main/api/access.ts";
@@ -528,5 +529,37 @@ describe("[SI-2] the Executor job's positive control", () => {
       "the control failed, but not with HTTP 401: slug already exists",
     );
     expect(controlFailure({ ok: false })).toBe("the control failed, but not with HTTP 401: ?");
+  });
+});
+
+describe("[PG-A2] a route reads only what it declares", () => {
+  /** A read of the query or the body that goes around the route's declared specs. */
+  const RAW_READ =
+    /searchParams|readBody\(|\breq\.(json|text|arrayBuffer)\(|\bc\.url\b|\breq\.url\b/;
+  const rawReads = (files: { name: string; text: string }[]) =>
+    files.flatMap(({ name, text }) =>
+      text
+        .split("\n")
+        .map((line, i) => ({ line, at: `${name}:${i + 1}` }))
+        .filter(({ line }) => RAW_READ.test(line))
+        .map(({ at }) => at),
+    );
+
+  test("no handler under src/main/api/routes reads the query string or the body directly", () => {
+    const dir = join(import.meta.dir, "../src/main/api/routes");
+    const files = readdirSync(dir)
+      .filter((f) => f.endsWith(".ts"))
+      .map((f) => ({ name: f, text: readFileSync(join(dir, f), "utf8") }));
+    expect(files.length).toBeGreaterThan(5);
+    expect(rawReads(files)).toEqual([]);
+    // Positive controls: each way around the specs is caught.
+    for (const bad of [
+      'const q = c.url.searchParams.get("q");',
+      "const b = await readBody(c.req, SPEC);",
+      "const b = await c.req.json();",
+      "const u = new URL(c.req.url);",
+    ]) {
+      expect(rawReads([{ name: "bad.ts", text: `ok\n${bad}` }])).toEqual(["bad.ts:2"]);
+    }
   });
 });
