@@ -5,6 +5,7 @@
  */
 
 import Electrobun, {
+  ApplicationMenu,
   BrowserView,
   BrowserWindow,
   GlobalShortcut,
@@ -37,6 +38,10 @@ export function electrobunUi(): NativeUi {
         },
         close: () => win.close(),
         onClose: (fn) => win.on("close", fn),
+        onFocus: (fn) => {
+          win.on("focus", () => fn(true));
+          win.on("blur", () => fn(false));
+        },
       };
       return {
         window,
@@ -45,12 +50,13 @@ export function electrobunUi(): NativeUi {
           asked: (m) => defined.send.asked(m),
           status: (s) => defined.send.status(s),
           showCall: (m) => defined.send.showCall(m),
+          showSettings: (m) => defined.send.showSettings(m),
         },
       };
     },
 
-    createTray({ title }): NativeTray {
-      const tray = new Tray({ title, template: true, width: 16, height: 16 });
+    createTray({ title, image, template }): NativeTray {
+      const tray = new Tray({ title, image, template, width: 16, height: 16 });
       return {
         setMenu: (items: TrayMenuItem[]) => tray.setMenu(items),
         setTitle: (t) => tray.setTitle(t),
@@ -62,6 +68,16 @@ export function electrobunUi(): NativeUi {
         remove: () => tray.remove(),
       };
     },
+
+    setApplicationMenu(items, onAction) {
+      ApplicationMenu.setApplicationMenu(items);
+      ApplicationMenu.on("application-menu-clicked", (e) => {
+        const action = (e as { data?: { action?: string } }).data?.action;
+        if (action) onAction(action);
+      });
+    },
+
+    showNotification: ({ title, body }) => Utils.showNotification({ title, body }),
 
     registerShortcut: (accelerator, fn) => GlobalShortcut.register(accelerator, fn),
     unregisterShortcut: (accelerator) => GlobalShortcut.unregister(accelerator),

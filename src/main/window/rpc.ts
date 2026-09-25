@@ -21,6 +21,7 @@ export interface WindowSend {
   asked(m: Messages["asked"]): void;
   status(s: Messages["status"]): void;
   showCall(m: Messages["showCall"]): void;
+  showSettings(m: Messages["showSettings"]): void;
 }
 
 export interface WindowRpc {

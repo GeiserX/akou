@@ -10,6 +10,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import config, { MAIN_OUT, SHERPA_LIBS, sherpaCopies } from "../electrobun.config.ts";
 import { MIN_MACOS } from "../scripts/build-app.ts";
+import { trayIconFiles } from "../scripts/tray-icons.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { BUNDLE_ID } from "../src/main/app-info.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
@@ -23,11 +24,13 @@ import {
 } from "../src/main/window/login-item.ts";
 import { type WindowSend, windowRpc } from "../src/main/window/rpc.ts";
 import {
+  type AppMenuItem,
+  DOCS_URL,
   hotkeyFor,
-  type NativeTray,
-  type NativeUi,
   Shell,
   type ShellApp,
+  TRAY_DIR,
+  trayImage,
   trayMenu,
   trayTitle,
   WINDOW_URL,
@@ -35,9 +38,58 @@ import {
 import { appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
+import { fakeUi } from "./shell-helpers.ts";
 
 const ROOT = join(import.meta.dir, "..");
 const LONG = 30_000;
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+/** Why a tray item would show nothing, or null when its image would show (DK-T1). */
+function trayImageFault(
+  o: { title?: string; image?: string; template?: boolean },
+  platform: string,
+): string | null {
+  if (!o.image) return "no image";
+  if (!existsSync(o.image)) return "no file";
+  const b = readFileSync(o.image);
+  if (platform === "win32") {
+    if (b.readUInt32BE(0) !== 0x00000100 || b.readUInt16LE(4) < 1) return "not an ICO";
+    return o.template ? "a template image off macOS" : null;
+  }
+  if (!b.subarray(0, 8).equals(PNG_SIGNATURE)) return "not a PNG";
+  const w = b.readUInt32BE(16);
+  const h = b.readUInt32BE(20);
+  if (w !== h || w < 16) return `a ${w}x${h} image`;
+  // Colour type 6: RGBA. A template image is its alpha channel.
+  if (b[25] !== 6) return "no alpha channel";
+  if ((platform === "darwin") !== (o.template === true)) return "the template flag is wrong";
+  return null;
+}
+
+const EDIT_ROLES = ["undo", "redo", "cut", "copy", "paste", "selectAll"];
+
+function roles(items: readonly AppMenuItem[] | null, into = new Set<string>()): Set<string> {
+  for (const i of items ?? []) {
+    if ("role" in i && i.role) into.add(i.role);
+    if ("submenu" in i && i.submenu) roles(i.submenu, into);
+  }
+  return into;
+}
+
+function missingRoles(menu: readonly AppMenuItem[] | null, want: string[]): string[] {
+  const have = roles(menu);
+  return want.filter((r) => !have.has(r));
+}
+
+function findItem(items: readonly AppMenuItem[] | null, action: string): AppMenuItem | undefined {
+  for (const i of items ?? []) {
+    if ("action" in i && i.action === action) return i;
+    const inner = "submenu" in i && i.submenu ? findItem(i.submenu, action) : undefined;
+    if (inner) return inner;
+  }
+  return undefined;
+}
 
 describe("the window's RPC handlers (main side)", () => {
   test(
@@ -51,6 +103,7 @@ describe("the window's RPC handlers (main side)", () => {
         asked: () => {},
         status: () => {},
         showCall: () => {},
+        showSettings: () => {},
       };
       const rpc = windowRpc(
         new Bridge(rig.app),
@@ -100,68 +153,6 @@ describe("the window's RPC handlers (main side)", () => {
 });
 
 describe("the desktop shell over a fake NativeUi", () => {
-  function fakeUi() {
-    const log: string[] = [];
-    let action: (a: string) => void = () => {};
-    let beforeQuit: (e: { cancel(): void }) => void = () => {};
-    let menu: unknown[] = [];
-    let title = "";
-    const shortcuts = new Map<string, () => void>();
-    const ui: NativeUi = {
-      openWindow: (o) => {
-        log.push(`window ${o.url}`);
-        return {
-          window: {
-            show: () => log.push("show"),
-            close: () => log.push("close"),
-            onClose: () => {},
-          },
-          send: {
-            followed: () => {},
-            asked: () => {},
-            status: () => {},
-            showCall: (m) => log.push(`call ${m.call}`),
-          },
-        };
-      },
-      createTray: (): NativeTray => ({
-        setMenu: (m) => {
-          menu = m;
-        },
-        setTitle: (t) => {
-          title = t;
-        },
-        onAction: (fn) => {
-          action = fn;
-        },
-        remove: () => log.push("tray removed"),
-      }),
-      registerShortcut: (a, fn) => {
-        shortcuts.set(a, fn);
-        return true;
-      },
-      unregisterShortcut: (a) => shortcuts.delete(a),
-      onBeforeQuit: (fn) => {
-        beforeQuit = fn;
-      },
-      quit: () => log.push("quit"),
-      openExternal: () => true,
-    };
-    return {
-      ui,
-      log,
-      shortcuts,
-      menu: () => menu,
-      title: () => title,
-      tray: (a: string) => action(a),
-      quitRequested: () => {
-        let cancelled = false;
-        beforeQuit({ cancel: () => (cancelled = true) });
-        return cancelled;
-      },
-    };
-  }
-
   function fakeApp() {
     const state = { live: false, login: false, quits: 0, starts: 0, windows: 0 };
     let shell: Shell | null = null;
@@ -173,7 +164,7 @@ describe("the desktop shell over a fake NativeUi", () => {
       start: async () => {
         state.starts++;
         state.live = true;
-        return { ok: true };
+        return { ok: true, call: "c1" };
       },
       stopLive: async () => {
         state.live = false;
@@ -190,13 +181,14 @@ describe("the desktop shell over a fake NativeUi", () => {
         state.windows++;
         shell?.show(call);
       },
+      onAnnounce: () => () => {},
     };
     return { app, state, bind: (s: Shell) => (shell = s) };
   }
 
   const bridgeStub = {
     watchLifecycle: () => () => {},
-    app: { status: async () => ({}) },
+    app: { status: async () => ({}), watch: () => () => {} },
   } as unknown as Bridge;
 
   test("the hotkey is the platform default unless set", () => {
@@ -273,6 +265,78 @@ describe("the desktop shell over a fake NativeUi", () => {
     expect(f.log).toContain("close");
     expect(f.log).toContain("tray removed");
     expect(f.shortcuts.size).toBe(0);
+  });
+
+  test("[DK-T1] An invisible tray: the tray always gets the platform's icon, idle included", async () => {
+    for (const platform of ["darwin", "win32", "linux"]) {
+      const f = fakeUi();
+      const a = fakeApp();
+      const shell = new Shell(a.app, bridgeStub, f.ui, { platform, setLoginItem: async () => {} });
+      await shell.start();
+      expect(f.trays).toHaveLength(1);
+      expect(trayImageFault(f.trays[0] ?? {}, platform)).toBeNull();
+      // Idle has no text title, so the image is all the menu bar shows.
+      expect(f.title()).toBe("");
+      await shell.close();
+    }
+    // Positive controls: no image, a missing file and the wrong format all fail the same check.
+    expect(trayImageFault({ title: "" }, "darwin")).toBe("no image");
+    expect(trayImageFault({ image: join(TRAY_DIR, "none.png"), template: true }, "darwin")).toBe(
+      "no file",
+    );
+    expect(trayImageFault({ ...trayImage("darwin"), template: false }, "win32")).toBe("not an ICO");
+    expect(trayImageFault({ ...trayImage("win32") }, "linux")).toBe("not a PNG");
+  });
+
+  test("the tray icons on disk are the ones scripts/tray-icons.ts draws", () => {
+    const files = trayIconFiles();
+    expect(Object.keys(files).sort()).toEqual(["akou-template.png", "akou.ico", "akou.png"]);
+    for (const [name, bytes] of Object.entries(files)) {
+      expect(Buffer.from(readFileSync(join(TRAY_DIR, name))).equals(Buffer.from(bytes))).toBe(true);
+    }
+  });
+
+  test("[DK-M1] the application menu carries the Edit roles, so copy and paste work in the notepad and the ask box", async () => {
+    const f = fakeUi();
+    const a = fakeApp();
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    a.bind(shell);
+    await shell.start();
+    const menu = f.appMenu();
+    expect(missingRoles(menu, EDIT_ROLES)).toEqual([]);
+    expect(missingRoles(menu, ["about", "hide", "quit", "minimize", "zoom", "close"])).toEqual([]);
+    // Positive control: the same check on a menu without Copy, and on no menu at all.
+    const noCopy = (menu ?? []).map((m) =>
+      "submenu" in m && m.submenu
+        ? { ...m, submenu: m.submenu.filter((i) => !("role" in i && i.role === "copy")) }
+        : m,
+    );
+    expect(missingRoles(noCopy, EDIT_ROLES)).toEqual(["copy"]);
+    expect(missingRoles(null, EDIT_ROLES)).toEqual(EDIT_ROLES);
+    // Settings… opens the window on Settings; the Help item opens the docs.
+    expect(findItem(menu, "settings")).toMatchObject({ label: "Settings…", accelerator: "," });
+    f.menu("settings");
+    await until(() => f.log.includes("settings"), 1000, "the settings pane");
+    expect(a.state.windows).toBe(1);
+    f.menu("docs");
+    expect(f.log).toContain(`open ${DOCS_URL}`);
+    await shell.close();
+  });
+
+  test("off macOS the webview handles the clipboard keys itself: no application menu is set", async () => {
+    for (const platform of ["win32", "linux"]) {
+      const f = fakeUi();
+      const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+        platform,
+        setLoginItem: async () => {},
+      });
+      await shell.start();
+      expect(f.appMenu()).toBeNull();
+      await shell.close();
+    }
   });
 
   test("[spike] Signals swallowed by the shell: the first quit is held until the app has quit", async () => {
