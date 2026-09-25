@@ -59,7 +59,7 @@ mkdir -p $T/E/.codex $T/E/.agents && cp -R $T/A/.codex/skills $T/E/.agents/skill
 
 ## Output
 
-The install, case A:
+The install, case A, as the build the check ran printed it (commit `f69fc82`). Later builds word the last line `` the `codex` program is not on your PATH; to give Codex the akou tools, run: … ``, with the same command.
 
 ```
 $T/A/.codex/skills/akou: installed version 0.0.0
