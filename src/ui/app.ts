@@ -330,6 +330,7 @@ class App {
       pill.title = `${share.url}${share.warning ? `\n${share.warning}` : ""}`;
     }
     byId("share-start").hidden = !!share || !v?.call;
+    byId("copy-transcript").hidden = !v?.call;
   }
 
   private controls(v: CallView | null): void {
@@ -518,6 +519,15 @@ class App {
       }
     });
     byId("share-start").addEventListener("click", () => void this.share());
+    byId("copy-transcript").addEventListener("click", () => void this.copyTranscript());
+    document.addEventListener("keydown", (e) => {
+      const mod = this.platform === "mac" ? e.metaKey : e.ctrlKey;
+      if (!mod || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "c") return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
+      e.preventDefault();
+      void this.copyTranscript();
+    });
     byId("share-stop").addEventListener("click", () => {
       void this.t.request("DELETE", "/share", { call: this.callId }).then((r) => {
         if (r.status >= 400) toast(message(r.body, "the share could not be stopped"));
@@ -564,6 +574,38 @@ class App {
           .writeText(url)
           .catch(() => toast("The clipboard is not available here.")),
     );
+  }
+
+  /**
+   * Copy transcript so far (WINDOW W12.2): the export's `## Transcript` section as the app renders
+   * it, names and vocabulary applied; the final layer once the final pass is done. The text is
+   * handed to the clipboard as a promise, so WebKit still counts the click or key as the gesture
+   * that allows the write.
+   */
+  private async copyTranscript(): Promise<void> {
+    const call = this.callId;
+    if (!call || !this.view()?.call) return;
+    const text = this.t
+      .request<string>("GET", `/calls/${encodeURIComponent(call)}/transcript?format=export`)
+      .then((r) => {
+        if (r.status >= 400 || typeof r.body !== "string") {
+          throw new Error(message(r.body, `the transcript could not be read (${r.status})`));
+        }
+        return r.body;
+      });
+    try {
+      if (typeof ClipboardItem === "function") {
+        const blob = text.then((s) => new Blob([s], { type: "text/plain" }));
+        await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      } else await navigator.clipboard.writeText(await text);
+      toast("Transcript copied.", "info");
+    } catch (err) {
+      const failed = await text.then(
+        () => null,
+        (e: Error) => e.message,
+      );
+      toast(failed ?? `The clipboard is not available here (${(err as Error).message}).`);
+    }
   }
 
   /** The consent reminder, once per call started here, with notice text to copy. */

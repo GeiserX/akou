@@ -106,10 +106,15 @@ export class Bridge {
     });
   }
 
-  /** A request whose reply is JSON (every route but the streams and the audio). */
+  /**
+   * A request whose reply is JSON (every route but the streams and the audio), or text: a
+   * transcript as Markdown arrives as the string itself.
+   */
   async json(method: Method, path: string, body?: unknown): Promise<ApiReply> {
     const res = await this.request(method, path, { body });
     const text = await res.text();
+    if (res.headers.get("content-type")?.startsWith("text/"))
+      return { status: res.status, body: text };
     let parsed: unknown = null;
     try {
       parsed = text === "" ? null : JSON.parse(text);

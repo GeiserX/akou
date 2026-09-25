@@ -12,6 +12,7 @@ import { join } from "node:path";
 import type { Page } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
+import { renderExport } from "../../src/main/handoff/export.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
 import {
@@ -1186,6 +1187,83 @@ describe("playback and Fix this word", () => {
             5000,
             "the workspace entry",
           );
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("copy the transcript so far (W12.2)", () => {
+  /** The export's `## Transcript` section for the call as the app sees it now. */
+  const section = async (rig: UiRig, id: string) => {
+    const view = (await rig.app.call(id)).view;
+    const md = renderExport({ view, version: "0.0.0", enhanced: null, audio: [], rev: 1 });
+    return md.slice(md.indexOf("## Transcript"));
+  };
+  const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
+
+  test(
+    "[W12.2] during a call, Mod+Shift+C copies the transcript as the export's Transcript section",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const id = await rig.startCall({ title: "Copy live" });
+        const page = await rig.open(id);
+        await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+        await page.evaluate(() => navigator.clipboard.writeText("before"));
+        await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
+        await rig.write(id, seg("l000002", "which region", { spk: "c2" }));
+        await until(async () => (await rowIds(page)).length === 2, 5000, "two rows");
+        await page.click("#scroller");
+        await page.keyboard.press("ControlOrMeta+Shift+C");
+        await until(async () => (await clipboard(page)) !== "before", 5000, "the copy");
+        const copied = await clipboard(page);
+        expect(copied).toBe(await section(rig, id));
+        expect(copied).toStartWith("## Transcript\n");
+        expect(copied).toContain("which region");
+        // The key does nothing in a text field, where it is the field's own.
+        await page.evaluate(() => navigator.clipboard.writeText("before"));
+        await page.click("#note-input");
+        await page.keyboard.press("ControlOrMeta+Shift+C");
+        await page.waitForTimeout(500);
+        expect(await clipboard(page)).toBe("before");
+        await rig.api("POST", "/calls/live/stop");
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W12.2] after the final pass, the header's Copy transcript copies the final layer",
+    async () => {
+      let id = "";
+      await withRig(
+        {
+          seed: (home) =>
+            (id = seedCall(home, (b) => {
+              standardCall(b);
+              b.add({ type: "final.started", pid: 1 });
+              b.seg({ id: "f000001", ch: "call", spk: "c1", w0: T0 + 3000, text: "final words" });
+              b.add({ type: "final.part.done", part: 1 });
+              b.add({ type: "final.done", parts: [1], skipped: [] });
+            }).id),
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.waitForSelector("#lines .row");
+          await page.click("#copy-transcript");
+          await until(
+            async () => (await clipboard(page)).startsWith("## Transcript"),
+            5000,
+            "the copy",
+          );
+          const copied = await clipboard(page);
+          expect(copied).toBe(await section(rig, id));
+          expect(copied).toContain("final words");
+          expect(copied).not.toContain("hello everyone");
         },
       );
     },

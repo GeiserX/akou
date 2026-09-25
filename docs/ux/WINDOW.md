@@ -323,7 +323,7 @@ The window shows where a call went and gives the one-click ways out. It does not
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W12.1 | Hand-off status line: export path, hook results, webhook result | done | DESIGN 7 | Existing tests | has |
-| W12.2 | Copy transcript so far: `Mod+Shift+C`, palette, header menu | P0 | REQ F1.42 marks it carried from hark (`y`), and it is not built; Granola, Fathom, Buzz | During a call, the clipboard gets the transcript rendered as the export's `## Transcript` section; after the final pass, the final layer | missing |
+| W12.2 | Copy transcript so far: `Mod+Shift+C`, palette, header menu | P0 | REQ F1.42 marks it carried from hark (`y`), and it is not built; Granola, Fathom, Buzz | During a call, the clipboard gets the transcript rendered as the export's `## Transcript` section; after the final pass, the final layer | partial: key and header button; the palette entry comes with W14.5 |
 | W12.3 | Copy the whole call as Markdown (the export render) | P1 | Wispr, Granola | The clipboard equals the export file body for that call | missing |
 | W12.4 | Reveal the export in the file manager; open it in the default app | P1 | Desktop craft | Native smoke: the button opens the folder with the file selected | missing |
 | W12.5 | Re-run hooks and re-export from the window | P2 | Audit: CLI-only | Buttons call the hooks route; a `hook.done` appears | missing |
