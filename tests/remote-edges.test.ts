@@ -18,6 +18,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
+import { parseArgs } from "../src/main/cli/args.ts";
 import { ApiClient, EXIT, remoteTarget, Unreachable } from "../src/main/cli/client.ts";
 import { CLI, cli } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -265,5 +266,24 @@ describe("secret flags and the key file", () => {
       })?.key,
     ).toBe("ak_from_file");
     t.cleanup();
+  });
+
+  test("a blank AKOU_API_KEY does not hide the key in AKOU_API_KEY_FILE", () => {
+    const t = tempDir();
+    const file = join(t.dir, "remote.key");
+    writeFileSync(file, "ak_from_file\n");
+    const base = { AKOU_URL: "https://akou.example", AKOU_API_KEY_FILE: file };
+    expect(remoteTarget({ ...base, AKOU_API_KEY: "  " })?.key).toBe("ak_from_file");
+    expect(remoteTarget({ ...base, AKOU_API_KEY: "" })?.key).toBe("ak_from_file");
+    // Positive control: a real AKOU_API_KEY still wins over the file.
+    expect(remoteTarget({ ...base, AKOU_API_KEY: " ak_inline " })?.key).toBe("ak_inline");
+    t.cleanup();
+  });
+
+  test("a command cannot declare a secret flag, so the refusal holds on every command", () => {
+    expect(() => parseArgs([], { token: { type: "string" } })).toThrow("--token");
+    expect(() => parseArgs([], { key: { type: "string", short: "k" } })).toThrow("--key");
+    // Positive control: an ordinary flag still parses.
+    expect(parseArgs(["--title", "x"], { title: { type: "string" } }).flags.title).toBe("x");
   });
 });

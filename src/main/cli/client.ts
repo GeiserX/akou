@@ -110,7 +110,9 @@ export function remoteTarget(env: Record<string, string | undefined>): RemoteTar
     );
   }
   const base = raw.replace(/\/+$/, "");
-  if (env.AKOU_API_KEY) return { base, key: env.AKOU_API_KEY.trim() };
+  // A blank AKOU_API_KEY (`-e AKOU_API_KEY=` in a compose file) falls through to the key file.
+  const inline = env.AKOU_API_KEY?.trim();
+  if (inline) return { base, key: inline };
   const given = env.AKOU_API_KEY_FILE;
   if (!given) return { base, key: "" };
   // `docker -e` and a systemd unit pass `~/...` as written; no shell expands it there.

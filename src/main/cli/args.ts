@@ -54,6 +54,11 @@ function isFlag(a: string): boolean {
 }
 
 export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
+  for (const n of Object.keys(spec)) {
+    // A declared secret flag would take the value this parser exists to refuse.
+    if (SECRET_FLAGS.has(n))
+      throw new Error(`--${n} is reserved: a secret never comes from a flag`);
+  }
   const all: Record<string, FlagSpec> = { ...COMMON, ...spec };
   const byShort = new Map<string, string>();
   for (const [name, s] of Object.entries(all)) if (s.short) byShort.set(s.short, name);
