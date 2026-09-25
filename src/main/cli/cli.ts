@@ -18,11 +18,12 @@
 import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
 import { parseArgs, UsageError } from "./args.ts";
-import { ApiClient, EXIT, Unreachable } from "./client.ts";
+import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { handoffCommands } from "./commands/handoff.ts";
+import { jobsCommand } from "./commands/jobs.ts";
 import { noteCommands } from "./commands/notes.ts";
 import { serveCommand } from "./commands/serve.ts";
 import { setupCommands } from "./commands/setup.ts";
@@ -47,6 +48,7 @@ export const COMMANDS: readonly Command[] = [
   ...followCommands,
   ...noteCommands,
   ...handoffCommands,
+  jobsCommand,
   vocab,
   doctorCommand,
   ...setupCommands,
@@ -128,6 +130,11 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     if (err instanceof UsageError) {
       io.err(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`);
       return EXIT.usage;
+    }
+    if (err instanceof TargetError) {
+      if (json) io.out(JSON.stringify({ error: "target", message: err.message }));
+      else io.err(`akou: ${err.message}`);
+      return err.exit;
     }
     if (err instanceof Unreachable) {
       if (json) io.out(JSON.stringify({ error: "unavailable", message: err.message }));

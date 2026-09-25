@@ -32,6 +32,12 @@ const COMMON: FlagSpecs = {
   help: { type: "boolean", short: "h" },
 };
 
+/**
+ * Flags that would carry a secret. They are refused by name on every command, so a key never lands
+ * in the process list or the shell history (CLI-06); the message names the environment form.
+ */
+const SECRET_FLAGS = new Set(["key", "api-key", "token", "secret", "password"]);
+
 /** A word the parser reads as a flag or as `--`, never as a value. */
 function isFlag(a: string): boolean {
   return a.startsWith("--") || /^-[a-zA-Z]$/.test(a);
@@ -63,6 +69,13 @@ export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
       continue;
     }
     const s = all[name];
+    if (!s && SECRET_FLAGS.has(name)) {
+      throw new UsageError(
+        `--${name} would put a secret on the command line, where the process list and the shell history keep it; ` +
+          "set AKOU_API_KEY, or AKOU_API_KEY_FILE to a file that holds it\n" +
+          "try: AKOU_API_KEY_FILE=~/.config/akou/remote.key akou jobs list",
+      );
+    }
     if (!s) throw new UsageError(`unknown option --${name}`);
     if (s.type === "boolean") {
       if (inline !== undefined) throw new UsageError(`--${name} takes no value`);

@@ -9,6 +9,12 @@
  *
  * Loopback requests never go through a proxy (DESIGN 6.3 rule 6): `NO_PROXY` is extended with the
  * loopback names for this process and for the app it launches.
+ *
+ * A remote akou (docs/research/service-interface.md SI-1): with `AKOU_URL` set, every request goes to
+ * that base URL (`https://akou.example` gets `/v1/...` appended) with `Authorization: Bearer` and
+ * the key from `AKOU_API_KEY`, or from the file `AKOU_API_KEY_FILE` names. The key is never an
+ * argument (the parser refuses `--key`). Then `runtime.json` is never read and the app is never
+ * launched: a remote that does not answer is `Unreachable`, exit 69.
  */
 
 import { spawn } from "node:child_process";
@@ -69,6 +75,52 @@ export interface ApiResponse {
 /** The app is not running and was not (or could not be) launched. */
 export class Unreachable extends Error {
   override name = "Unreachable";
+}
+
+/** The remote target is set up wrong: an `AKOU_URL` that is not a URL (64), a key file (77). */
+export class TargetError extends Error {
+  override name = "TargetError";
+  constructor(
+    message: string,
+    readonly exit: number,
+  ) {
+    super(message);
+  }
+}
+
+/** Where a remote target's requests go and the key they carry, or null for the local app. */
+export interface RemoteTarget {
+  /** The base URL as given, without a trailing slash. */
+  base: string;
+  key: string;
+}
+
+/** `AKOU_URL` and its key (SI-1), read when a request is made, or null when `AKOU_URL` is unset. */
+export function remoteTarget(env: Record<string, string | undefined>): RemoteTarget | null {
+  const raw = env.AKOU_URL?.trim();
+  if (!raw) return null;
+  let url: URL | null = null;
+  try {
+    url = new URL(raw);
+  } catch {}
+  if (!url || (url.protocol !== "http:" && url.protocol !== "https:")) {
+    throw new TargetError(
+      `AKOU_URL must be an http or https URL, like https://akou.example; it is ${JSON.stringify(raw)}`,
+      EXIT.usage,
+    );
+  }
+  const base = raw.replace(/\/+$/, "");
+  if (env.AKOU_API_KEY) return { base, key: env.AKOU_API_KEY.trim() };
+  const file = env.AKOU_API_KEY_FILE;
+  if (!file) return { base, key: "" };
+  try {
+    return { base, key: readFileSync(file, "utf8").trim() };
+  } catch (err) {
+    throw new TargetError(
+      `cannot read the key in AKOU_API_KEY_FILE (${file}): ${(err as Error).message}`,
+      EXIT.permission,
+    );
+  }
 }
 
 export interface ClientOptions {
@@ -145,8 +197,12 @@ export class ApiClient {
     this.budget = o.launchBudgetMs ?? LAUNCH_BUDGET_MS;
   }
 
-  /** `runtime.json` of a running app, or null (no file, bad file, or its pid is gone). */
+  /**
+   * `runtime.json` of a running app, or null (no file, bad file, or its pid is gone). Never read
+   * with a remote target: the app on this machine is not the one being talked to.
+   */
   runtime(): Runtime | null {
+    if (this.o.env.AKOU_URL?.trim()) return null;
     try {
       const rt = JSON.parse(readFileSync(join(this.configDir, RUNTIME_FILE), "utf8")) as Runtime;
       if (typeof rt.port !== "number" || !processAlive(rt.pid)) return null;
@@ -165,12 +221,13 @@ export class ApiClient {
   }
 
   private async fetchRaw(
-    rt: Runtime,
+    to: Runtime | RemoteTarget,
     method: string,
     path: string,
     o: RequestOptions,
   ): Promise<Response> {
-    const url = new URL(`http://127.0.0.1:${rt.port}/v1${path}`);
+    const remote = "base" in to;
+    const url = new URL(remote ? `${to.base}/v1${path}` : `http://127.0.0.1:${to.port}/v1${path}`);
     for (const [k, v] of Object.entries(o.query ?? {})) {
       if (v !== undefined) url.searchParams.set(k, String(v));
     }
@@ -178,7 +235,7 @@ export class ApiClient {
     return fetch(url, {
       method,
       headers: {
-        authorization: `Bearer ${this.token()}`,
+        authorization: `Bearer ${remote ? to.key : this.token()}`,
         "x-akou-client": o.client ?? this.o.client,
         ...(hasBody ? { "content-type": "application/json" } : {}),
       },
@@ -189,8 +246,8 @@ export class ApiClient {
     });
   }
 
-  private async send(rt: Runtime, method: string, path: string, o: RequestOptions) {
-    const res = await this.fetchRaw(rt, method, path, o);
+  private async send(to: Runtime | RemoteTarget, method: string, path: string, o: RequestOptions) {
+    const res = await this.fetchRaw(to, method, path, o);
     const text = await res.text();
     let body: unknown = null;
     try {
@@ -210,6 +267,8 @@ export class ApiClient {
    * `Unreachable` when there is no app to talk to.
    */
   async request(method: string, path: string, o: RequestOptions = {}): Promise<ApiResponse> {
+    const remote = remoteTarget(this.o.env);
+    if (remote) return this.onRemote(remote, () => this.send(remote, method, path, o));
     const allowLaunch = o.launch ?? true;
     let rt = this.runtime();
     if (rt) {
@@ -229,6 +288,8 @@ export class ApiClient {
    * the app like `request` when nothing answers. The caller reads and closes the body.
    */
   async stream(method: string, path: string, o: RequestOptions = {}): Promise<Response> {
+    const remote = remoteTarget(this.o.env);
+    if (remote) return this.onRemote(remote, () => this.fetchRaw(remote, method, path, o));
     let rt = this.runtime();
     if (rt) {
       try {
@@ -240,6 +301,18 @@ export class ApiClient {
     if ((o.launch ?? true) === false || !this.launchCmd) throw this.notRunning(o.launch ?? true);
     rt = await this.launch();
     return this.fetchRaw(rt, method, path, o);
+  }
+
+  /** One request to a remote target: a refused connection is `Unreachable`, never a launch. */
+  private async onRemote<T>(remote: RemoteTarget, go: () => Promise<T>): Promise<T> {
+    try {
+      return await go();
+    } catch (err) {
+      if (isConnectionError(err, true)) {
+        throw new Unreachable(`nothing answers at ${remote.base} (AKOU_URL)`);
+      }
+      throw err;
+    }
   }
 
   /** Nothing answers and this client will not launch: say what the user can do. */
