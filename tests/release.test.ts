@@ -211,7 +211,9 @@ describe("signing secrets reach tag builds only", () => {
     // Positive control: an ungated read is reported.
     const ungated = `      X: $${"{{"} secrets.MACOS_CERTIFICATE_P12 }}`;
     expect(ungatedSecretReads(ungated)).toHaveLength(1);
-    expect(ungatedSecretReads(ungated.replace("secrets.", "github.event_name == 'push' && secrets."))).toEqual([]);
+    expect(
+      ungatedSecretReads(ungated.replace("secrets.", "github.event_name == 'push' && secrets.")),
+    ).toEqual([]);
   });
 });
 
