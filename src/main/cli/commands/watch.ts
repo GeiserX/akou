@@ -157,7 +157,13 @@ export const watch: Command = {
   name: "watch",
   summary: "Follow a call in the terminal and ask it questions as it runs",
   usage: "akou watch [-c CALL]",
-  flags: { call: callFlag("live, else last") },
+  flags: {
+    call: callFlag("live, else last"),
+    json: {
+      type: "boolean",
+      desc: "exits 64: watch is for a terminal; `akou tail -f --json` streams JSON",
+    },
+  },
   examples: ["akou watch", "akou watch -c last"],
   run: async (ctx, p) => {
     const keys = ctx.io.keys;

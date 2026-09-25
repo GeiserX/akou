@@ -35,6 +35,7 @@ const mcp: Command = {
   name: "mcp",
   summary: "Serve MCP on stdin and stdout for an agent (a thin client of the local API)",
   usage: "akou mcp",
+  flags: { json: { type: "boolean", desc: "ignored: MCP already speaks JSON-RPC on stdout" } },
   examples: ["akou mcp"],
   run: async (ctx) => {
     // Loaded only here, so the SDK never slows down the other commands.

@@ -148,6 +148,19 @@ describe("[CLI-05] Help lists every flag with an example, and help CMD works", (
     ]);
   });
 
+  test("--json says what it does on each command: tail's is --format json; watch refuses it; mcp ignores it", () => {
+    const jsonRow = (name: string) =>
+      commandHelp(COMMANDS.find((c) => c.name === name) as Command)
+        .split("\n")
+        .find((l) => /^ {6}--json /.test(l))
+        ?.replace(/^\s*--json\s+/, "");
+    expect(jsonRow("tail")).toBe("same as --format json");
+    expect(jsonRow("watch")).toContain("exits 64");
+    expect(jsonRow("mcp")).toContain("ignored");
+    // Positive control: a command that prints its answer as JSON keeps the common line.
+    expect(jsonRow("show")).toBe("print the answer as JSON, errors included");
+  });
+
   test("every command has at least one example, and each parses against its own flags", () => {
     const bad: string[] = [];
     for (const c of COMMANDS) {

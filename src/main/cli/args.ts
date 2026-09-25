@@ -31,9 +31,9 @@ export class UsageError extends Error {
   override name = "UsageError";
 }
 
-/** The flags every command accepts. */
+/** The flags every command accepts. A command whose `--json` does something else declares its own. */
 export const COMMON: FlagSpecs = {
-  json: { type: "boolean", desc: "print the API's answer as JSON, errors included" },
+  json: { type: "boolean", desc: "print the answer as JSON, errors included" },
   help: { type: "boolean", short: "h", desc: "show this help" },
 };
 

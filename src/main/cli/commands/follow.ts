@@ -46,6 +46,7 @@ const tail: Command = {
       value: "F",
       desc: "txt (default), md or json (one row per line)",
     },
+    json: { type: "boolean", desc: "same as --format json" },
   },
   examples: ["akou tail -f --last 2m"],
   run: async (ctx, p) => {
