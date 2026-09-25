@@ -10,7 +10,7 @@ import type { Page } from "playwright-core";
 import type { EventDraft } from "../../src/core/log/events.ts";
 import { tempDir } from "../helpers.ts";
 import { type DesktopRig, desktopRig } from "./desktop-rig.ts";
-import { seg, silentWav, UI_TIMEOUT, until } from "./rig.ts";
+import { seg, silentWav, UI_TIMEOUT, uiRig, until } from "./rig.ts";
 
 /** Markers carried by the call's title, its lines and its speaker's name. */
 const MARKS = ["TITLEMARK-q7x", "SEGMARK-z9k", "NAMEMARK-w3v"] as const;
@@ -136,6 +136,53 @@ describe("[DK-F1] the floating indicator", () => {
         );
         await until(() => rig.indicator() === null, 5000, "the indicator closed");
       });
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("[DK-K4] Settings warns about a Control+Alt hotkey", () => {
+  /** The page as it runs on another OS: the pane reads the OS from the browser. */
+  const as = (platform: string, ua: string) => (page: Page) =>
+    page.addInitScript(
+      ([p, u]) => {
+        Object.defineProperty(navigator, "platform", { get: () => p });
+        Object.defineProperty(navigator, "userAgent", { get: () => u });
+      },
+      [platform, ua],
+    );
+
+  test(
+    "off macOS the field warns while you type; on macOS it does not",
+    async () => {
+      const t = tempDir("akou-ui-hk-");
+      const rig = await uiRig({ home: t.dir });
+      try {
+        for (const [platform, ua, warns] of [
+          ["Win32", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", true],
+          ["MacIntel", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4)", false],
+        ] as const) {
+          const page = await rig.open(undefined, { before: as(platform, ua) });
+          await page.click("#settings-open");
+          const field = page.locator("#set-app-hotkey");
+          await field.waitFor();
+          const hint = page.locator('div.setting[data-key="app.hotkey"] small.issue');
+          await field.fill("Control+Shift+F9");
+          expect(await hint.isHidden()).toBe(true);
+          await field.fill("Control+Alt+X");
+          if (warns) {
+            await hint.waitFor({ state: "visible" });
+            expect(await hint.textContent()).toContain("AltGr");
+          } else {
+            await Bun.sleep(100);
+            expect(await hint.isHidden()).toBe(true);
+          }
+          await page.close();
+        }
+      } finally {
+        await rig.close();
+        t.cleanup();
+      }
     },
     UI_TIMEOUT,
   );
