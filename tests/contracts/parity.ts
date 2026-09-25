@@ -173,17 +173,15 @@ export const PARITY: readonly Row[] = [
     window: { none: "no memo pane is built" },
   },
   {
-    action: "Vocabulary: add, propose, approve, reject, list, remove",
+    action: "Vocabulary: add, propose, approve, reject, list",
     cli: ["vocab"],
     api: [
       "GET /vocab",
       "POST /vocab",
-      "DELETE /vocab/:term",
       "POST /vocab/approve",
       "POST /vocab/reject",
       "GET /calls/:id/vocab",
       "POST /calls/:id/vocab",
-      "DELETE /calls/:id/vocab/:vid",
     ],
     mcp: [
       "akou_vocab_add",
@@ -197,6 +195,13 @@ export const PARITY: readonly Row[] = [
       ui("review.ts", "`/vocab/#{action}`"),
       ui("settings.ts", '"GET", `/vocab'),
     ],
+  },
+  {
+    action: "Vocabulary: remove a word",
+    cli: ["vocab"],
+    api: ["DELETE /vocab/:term", "DELETE /calls/:id/vocab/:vid"],
+    mcp: { none: "no tool yet, and no design item names one" },
+    window: { none: "W9.2 designs it (remove in the Words dialog)" },
   },
   {
     action: "Vocabulary: suggest and check",
