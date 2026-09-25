@@ -216,6 +216,8 @@ Debug switches that inject faults (kill the tap after N seconds, hang teardown) 
 
 ## 3. Speech recognition, speaker labels and the final pass
 
+The recognition design that replaces this section (streaming live engines, an in-call upgrade, several engines in the final pass fused by confidence ROVER) is in [research/asr-architecture.md](research/asr-architecture.md); this section describes what ships today until step ASR-10 rewrites it.
+
 Recognition, voice activity and embeddings run through sherpa-onnx-node in Bun Workers; speaker diarization runs in the `akou-diarize` helper those Workers start (section 3.4). Everything runs on the CPU in v1.
 
 | Job | Model | Weights licence | Notes |
