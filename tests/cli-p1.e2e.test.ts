@@ -233,7 +233,7 @@ describe("with a running app", () => {
       expect(body.grants.map((x: Grant) => [x.name, x.state])).toEqual([
         ["mic", "requested"],
         ["system audio", "granted"],
-        ["accessibility", "requested"],
+        ["accessibility", "unknown"],
       ]);
       const plain = JSON.parse((await doctor(["--json"], g.checker, true)).out);
       expect(plain.grants.map((x: Grant) => [x.name, x.state])).toEqual([
@@ -241,6 +241,23 @@ describe("with a running app", () => {
         ["system audio", "granted"],
         ["accessibility", "unknown"],
       ]);
+    });
+
+    test("--grant asks for one grant per run, since each settings pane replaces the one before", async () => {
+      const states: Record<string, Grant["state"]> = {
+        mic: "missing",
+        "system audio": "missing",
+        accessibility: "unknown",
+      };
+      const g = fakeGrants(states);
+      const first = await doctor(["--grant"], g.checker, true);
+      expect(g.requested).toEqual(["mic"]);
+      expect(first.out).toMatch(/^warn {2}mic: requested/m);
+      expect(first.out).toMatch(/^fail {2}system audio: missing; run `akou doctor --grant` again/m);
+      // The next run asks for the next one.
+      states.mic = "granted";
+      await doctor(["--grant"], g.checker, true);
+      expect(g.requested).toEqual(["mic", "system audio"]);
     });
 
     test("positive controls: plain doctor and --grant without a terminal ask nothing, and a missing grant fails", async () => {

@@ -17,8 +17,9 @@
  * - harness: `claude` or `codex` found, first on PATH, then through the login shell the way the
  *   app looks for them;
  * - grants: the microphone, system-audio and (macOS) Accessibility grants, each with its state
- *   (`grants.ts`). With `--grant`, on a terminal, each missing or unreadable one is asked for once,
- *   or its settings pane is opened (CLI-38); without a terminal nothing is asked.
+ *   (`grants.ts`). With `--grant`, on a terminal, the first missing or unreadable one is asked
+ *   for, or its settings pane is opened, and the rest wait for the next run (CLI-38); without a
+ *   terminal nothing is asked.
  *
  * Exit 0 when nothing failed, 69 otherwise. Not here yet: the 3 s capture test the design lists,
  * which needs the real helper.
@@ -175,16 +176,25 @@ export interface GrantState {
   name: string;
   state: Grant["state"] | "requested" | "settings opened";
   detail: string;
+  /** Not asked for this run: `--grant` asks for one grant per run. */
+  next?: boolean;
 }
 
-/** Reads the grants; with `ask`, asks for each one missing or unreadable, once. */
+/**
+ * Reads the grants; with `ask`, asks for the first one missing or unreadable and leaves the rest
+ * for the next run. One per run, because asking can open a settings pane and each pane opened
+ * replaces the one before: three in a row show only the last.
+ */
 export async function grantStates(ctx: Ctx, ask: boolean): Promise<GrantState[]> {
   const checker = ctx.grants ?? systemGrants;
   const out: GrantState[] = [];
+  let asked = false;
   for (const g of await checker.check()) {
-    if (ask && (g.state === "missing" || g.state === "unknown")) {
+    if (!ask || (g.state !== "missing" && g.state !== "unknown")) out.push(g);
+    else if (!asked) {
+      asked = true;
       out.push({ ...g, state: await checker.request(g.name) });
-    } else out.push(g);
+    } else out.push({ ...g, next: true });
   }
   return out;
 }
@@ -198,8 +208,9 @@ function grantCheck(g: GrantState): Check {
         : g.state === "requested"
           ? "warn"
           : "info";
-  const what =
-    g.state === "missing"
+  const what = g.next
+    ? `${g.state}; run \`akou doctor --grant\` again to ask for it next`
+    : g.state === "missing"
       ? "missing; run `akou doctor --grant` in a terminal to ask for it"
       : g.state === "requested"
         ? "requested; answer the system's prompt, then run `akou doctor` again"
