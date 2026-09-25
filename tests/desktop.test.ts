@@ -6,7 +6,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { BUILT, builtCopies, MAIN_OUT } from "../electrobun.config.ts";
 import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
@@ -14,6 +21,7 @@ import { Bridge } from "../src/main/window/bridge.ts";
 import { DEFAULT_HOTKEY, hotkeyWarning } from "../src/main/window/hotkey.ts";
 import { indicatorEvent, indicatorRpc, indicatorStatus } from "../src/main/window/indicator.ts";
 import {
+  adminLinked,
   adminScript,
   BUNDLED_CLI,
   CLI_DIR,
@@ -196,6 +204,26 @@ describe("[DK-M2] clicking the Dock icon reopens a closed window", () => {
     f.closeWindow();
     f.reopen();
     await until(() => f.log.filter((l) => l.startsWith("window")).length === 2, 1000, "reopened");
+    await shell.close();
+  });
+
+  test("a Dock click while akou quits leaves no unhandled rejection", async () => {
+    // The app's openWindow answers 503 "quitting" for the seconds a quit takes.
+    const f = fakeUi();
+    const a = fakeApp();
+    a.app.openWindow = async () => {
+      throw new Error("akou is quitting");
+    };
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    await shell.start();
+    // bun test fails the test that leaves a rejection unhandled, so the click alone is the check:
+    // without the shell's catch this test fails with "akou is quitting".
+    f.reopen();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(f.log.filter((l) => l.startsWith("window"))).toEqual([]);
     await shell.close();
   });
 });
@@ -669,6 +697,42 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
     expect(nodeOps.writable(join(t.dir, "none"))).toBe(false);
     expect(existsSync(join(bin, "akou"))).toBe(true);
     t.cleanup();
+  });
+
+  test("a destination it cannot look at counts as something in the way (POSIX)", () => {
+    // Only ENOENT means absent. Any other error, here EACCES on a folder with no search bit,
+    // must not send the install down the password path, where `ln -sfn` would replace the file.
+    if (process.platform === "win32") return;
+    const t = tempDir();
+    const bin = join(t.dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "akou"), "someone else's\n");
+    // Positive control: readable, the file is there and absence is absence.
+    expect(nodeOps.exists(join(bin, "akou"))).toBe(true);
+    expect(nodeOps.exists(join(bin, "nothing"))).toBe(false);
+    chmodSync(bin, 0o000);
+    try {
+      expect(nodeOps.exists(join(bin, "akou"))).toBe(true);
+    } finally {
+      chmodSync(bin, 0o755);
+      t.cleanup();
+    }
+  });
+
+  test("a cancelled password prompt is a refusal; a failed privileged link is a failure", async () => {
+    // osascript's exit and stderr, as macOS gives them.
+    expect(adminLinked(0, "")).toBe(true);
+    expect(adminLinked(1, "0:163: execution error: User cancelled. (-128)\n")).toBe(false);
+    const failed = "0:163: execution error: ln: /usr/local/bin/akou: Read-only file system (1)\n";
+    expect(() => adminLinked(1, failed)).toThrow("Read-only file system");
+    expect(() => adminLinked(1, "")).toThrow("osascript exited 1");
+    // Through the install: the failure reaches the menu with its reason, not as "not given".
+    const m = memoryOps({ locked: [CLI_DIR] });
+    m.files.add(SRC);
+    m.ops.linkAsAdmin = async () => adminLinked(1, failed);
+    const o = await installCli(SRC, m.ops);
+    expect(o.state).toBe("failed");
+    expect(installMessage(o).detail).toContain("Read-only file system");
   });
 
   test("the app carries the binary where the menu looks: beside the main process", () => {

@@ -54,7 +54,7 @@ export interface InstallOps {
   writable(dir: string): boolean;
   /** Replaces `dst` (absent, or a link) with a link to `src`. */
   link(src: string, dst: string): void;
-  /** The same, as root, after macOS asks for a password. False when the user cancelled. */
+  /** The same, as root, after macOS asks for a password. False when the user cancelled; throws when the link failed. */
   linkAsAdmin(src: string, dst: string): Promise<boolean>;
 }
 
@@ -138,12 +138,14 @@ export function adminScript(src: string, dst: string): string {
 }
 
 export const nodeOps: InstallOps = {
+  // Only ENOENT is absence. A path it cannot look at (EACCES) may hold another command, and the
+  // password path's `ln -sfn` would replace it.
   exists: (p) => {
     try {
       lstatSync(p);
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      return (err as NodeJS.ErrnoException).code !== "ENOENT";
     }
   },
   readlink: (p) => {
@@ -168,9 +170,23 @@ export const nodeOps: InstallOps = {
     symlinkSync(src, dst);
   },
   // Asynchronous: the password dialog must not stall the main process, which carries the capture.
-  linkAsAdmin: async (src, dst) =>
-    (await Bun.spawn(["/usr/bin/osascript", "-e", adminScript(src, dst)], {
+  linkAsAdmin: async (src, dst) => {
+    const p = Bun.spawn(["/usr/bin/osascript", "-e", adminScript(src, dst)], {
       stdout: "ignore",
-      stderr: "ignore",
-    }).exited) === 0,
+      stderr: "pipe",
+    });
+    const [code, stderr] = await Promise.all([p.exited, new Response(p.stderr).text()]);
+    return adminLinked(code, stderr);
+  },
 };
+
+/**
+ * osascript's answer to the admin script: true when the link was made, false when the user
+ * cancelled the password prompt (AppleScript error -128). Anything else is a failed install, so it
+ * throws with osascript's message rather than reading as "the password was not given".
+ */
+export function adminLinked(code: number, stderr: string): boolean {
+  if (code === 0) return true;
+  if (/\(-128\)\s*$/.test(stderr)) return false;
+  throw new Error(stderr.trim() || `osascript exited ${code}`);
+}

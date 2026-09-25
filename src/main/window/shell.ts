@@ -407,7 +407,8 @@ export class Shell implements WindowShell {
       void this.quitApp();
     });
     // The Dock icon after the window was closed (DK-M2): the window again, or the same one forward.
-    this.ui.onReopen(() => void this.app.openWindow());
+    // While a quit runs, openWindow answers 503 "quitting": the click then does nothing.
+    this.ui.onReopen(() => void this.app.openWindow().catch(() => {}));
     const unwatchLifecycle = this.bridge.watchLifecycle(() => void this.refresh());
     const unannounce = this.app.onAnnounce((a) => this.onAnnounce(a));
     const unhealth = this.bridge.app.watch((call, e) => {
