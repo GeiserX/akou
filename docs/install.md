@@ -59,6 +59,10 @@ With a Developer ID signature, which comes later, the grants will survive update
 
 The app is all you need to record. The `akou` command lets you and your coding agent drive it from a terminal.
 
+With the app installed, the quickest way is the akou menu: **Install Command-Line Tool…** links the app's own `akou` into `/usr/local/bin`. macOS asks for your password only when that folder needs it. Open a new terminal and run `akou --version`. The link follows the app, so an update updates the command too.
+
+Without the app, or on Linux and Windows, use the release archive:
+
 ```sh
 tar -xzf akou-cli-<version>-darwin-arm64.tar.gz
 mkdir -p ~/.local/bin

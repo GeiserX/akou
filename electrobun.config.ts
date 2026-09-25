@@ -13,7 +13,9 @@
  *   - sherpa-onnx-node and its platform package under `bun/node_modules`, where the app's
  *     `createRequire` finds them; the `.node` file links its two libraries through `@rpath` with an
  *     `@loader_path` rpath, so they sit beside it in the platform package;
- *   - the two recognition Workers and the browser pages, which `build-app.ts` builds first;
+ *   - the two recognition Workers, the browser pages and the `akou` command line (a
+ *     `bun build --compile` binary the akou menu links into PATH), which `build-app.ts` builds
+ *     first;
  *   - the shipped note templates;
  *   - the tray icons (`scripts/tray-icons.ts`), which the tray loads by path;
  *   - the capture helper from `native/akou-capture` and the diarization helper from
@@ -56,6 +58,8 @@ export const SHERPA_LIBS: Readonly<Record<string, readonly string[]>> = {
 export const BUILT = {
   ui: "dist/ui",
   workers: ["dist/workers/live-worker.js", "dist/workers/finalize-worker.js"],
+  /** The `akou` command the app carries, for "Install Command-Line Tool…" (DK-M6). */
+  cli: "dist/app-cli/akou",
 } as const;
 
 type Exists = (path: string) => boolean;
@@ -91,10 +95,11 @@ export function helperCopies(
   return out;
 }
 
-/** The Workers and the browser pages beside the main process, when they have been built. */
+/** The Workers, the browser pages and the command line beside the main process, once built. */
 export function builtCopies(exists: Exists = projectFileExists): Record<string, string> {
   const out: Record<string, string> = {};
   if (exists(`${BUILT.ui}/index.js`)) out[BUILT.ui] = `${MAIN_OUT}/ui`;
+  if (exists(BUILT.cli)) out[BUILT.cli] = `${MAIN_OUT}/akou`;
   for (const w of BUILT.workers) {
     if (exists(w)) out[w] = `${MAIN_OUT}/${w.split("/").pop()}`;
   }

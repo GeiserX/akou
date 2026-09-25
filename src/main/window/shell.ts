@@ -28,6 +28,7 @@ import type { AppStatus } from "../../ui/protocol.ts";
 import type { AkouApp, Announcement, WindowShell } from "../index.ts";
 import type { Bridge } from "./bridge.ts";
 import { hotkeyFor } from "./hotkey.ts";
+import { type InstallOutcome, installMessage } from "./install-cli.ts";
 import { DEDUP_MS, type NotifyEvent, notifyFor, originOf } from "./notify.ts";
 import type { SettingsPane } from "./page-server.ts";
 import { type WindowRpc, type WindowSend, windowRpc } from "./rpc.ts";
@@ -175,6 +176,8 @@ export interface ShellOptions {
   onLog?(level: "info" | "warn" | "error", msg: string): void;
   /** Epoch ms, for the once-a-minute rule. Tests pass their own. */
   now?(): number;
+  /** "Install Command-Line Tool…" (DK-M6): links the bundled `akou` into PATH (`install-cli.ts`). */
+  installCli?(): Promise<InstallOutcome>;
   /** Where the window's frame is kept between runs. None: forgotten at quit. */
   state?: { load(): ShellState; save(s: ShellState): void };
 }
@@ -248,6 +251,7 @@ export function appMenu(platform: string): AppMenuItem[] | null {
         { role: "about", label: "About akou" },
         { type: "separator" },
         { label: "Settings…", action: "settings", accelerator: "," },
+        { label: "Install Command-Line Tool…", action: "install-cli" },
         { type: "separator" },
         { role: "hide", label: "Hide akou", accelerator: "h" },
         { role: "hideOthers" },
@@ -473,6 +477,21 @@ export class Shell implements WindowShell {
       case "docs":
         this.ui.openExternal(DOCS_URL);
         break;
+      case "install-cli": {
+        const out = (await this.o.installCli?.()) ?? { state: "missing" };
+        if (out.state === "failed") this.o.onLog?.("warn", `install the command: ${out.error}`);
+        const m = installMessage(out);
+        await this.ui.showMessageBox({
+          type: out.state === "installed" || out.state === "already" ? "info" : "warning",
+          title: "Install Command-Line Tool",
+          message: m.title,
+          detail: m.detail,
+          buttons: ["OK"],
+          defaultId: 0,
+          cancelId: 0,
+        });
+        break;
+      }
     }
   }
 

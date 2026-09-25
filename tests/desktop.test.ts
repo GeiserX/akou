@@ -6,11 +6,22 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { BUILT, builtCopies, MAIN_OUT } from "../electrobun.config.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
 import type { Bridge } from "../src/main/window/bridge.ts";
 import { DEFAULT_HOTKEY, hotkeyWarning } from "../src/main/window/hotkey.ts";
+import {
+  adminScript,
+  BUNDLED_CLI,
+  CLI_DIR,
+  type InstallOps,
+  type InstallOutcome,
+  installCli,
+  installMessage,
+  nodeOps,
+} from "../src/main/window/install-cli.ts";
 import {
   hotkeyFor,
   placeFrame,
@@ -18,6 +29,7 @@ import {
   Shell,
   type ShellApp,
   type ShellState,
+  TRAY_DIR,
   WINDOW_URL,
 } from "../src/main/window/shell.ts";
 import { fileState, SHELL_STATE_FILE } from "../src/main/window/state.ts";
@@ -390,6 +402,156 @@ describe("[DK-M4] the remembered frame on disk", () => {
     writeFileSync(path, JSON.stringify({ window: { x: 1, y: 2, width: 3, height: 4 } }));
     expect(st.load()).toEqual({ window: { x: 1, y: 2, width: 3, height: 4 } });
     t.cleanup();
+  });
+});
+
+/** A filesystem in memory: files, links, and folders that need a password. */
+function memoryOps(o: { locked?: string[]; cancel?: boolean } = {}) {
+  const files = new Set<string>();
+  const links = new Map<string, string>();
+  const admin: string[] = [];
+  const ops: InstallOps = {
+    exists: (p) => files.has(p) || links.has(p),
+    readlink: (p) => links.get(p) ?? null,
+    writable: (dir) => !(o.locked ?? []).includes(dir),
+    link: (src, dst) => {
+      if (files.has(dst)) throw new Error("EEXIST");
+      links.set(dst, src);
+    },
+    linkAsAdmin: async (src, dst) => {
+      admin.push(dst);
+      if (o.cancel) return false;
+      links.set(dst, src);
+      return true;
+    },
+  };
+  return { ops, files, links, admin };
+}
+
+describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
+  const SRC = "/Applications/akou.app/Contents/Resources/app/bun/akou";
+
+  test("links the bundled akou into /usr/local/bin, and a second run says it is already there", async () => {
+    const m = memoryOps();
+    m.files.add(SRC);
+    expect(await installCli(SRC, m.ops)).toEqual({ state: "installed", path: `${CLI_DIR}/akou` });
+    expect(m.links.get(`${CLI_DIR}/akou`)).toBe(SRC);
+    expect(await installCli(SRC, m.ops)).toEqual({ state: "already", path: `${CLI_DIR}/akou` });
+    expect(installMessage({ state: "already", path: `${CLI_DIR}/akou` }).title).toBe(
+      "The akou command is already installed.",
+    );
+    // No password was asked for a folder that needed none.
+    expect(m.admin).toEqual([]);
+  });
+
+  test("asks for the password only when the folder needs one; a cancel installs nothing", async () => {
+    const m = memoryOps({ locked: [CLI_DIR] });
+    m.files.add(SRC);
+    expect((await installCli(SRC, m.ops)).state).toBe("installed");
+    expect(m.admin).toEqual([`${CLI_DIR}/akou`]);
+    const c = memoryOps({ locked: [CLI_DIR], cancel: true });
+    c.files.add(SRC);
+    expect(await installCli(SRC, c.ops)).toEqual({ state: "refused" });
+    expect(c.links.size).toBe(0);
+  });
+
+  test("a link into an older copy is repointed; a file that is not ours is left alone", async () => {
+    const m = memoryOps();
+    m.files.add(SRC);
+    m.links.set(`${CLI_DIR}/akou`, "/Users/x/Downloads/akou.app/Contents/Resources/app/bun/akou");
+    expect((await installCli(SRC, m.ops)).state).toBe("installed");
+    expect(m.links.get(`${CLI_DIR}/akou`)).toBe(SRC);
+    const f = memoryOps();
+    f.files.add(SRC);
+    f.files.add(`${CLI_DIR}/akou`);
+    expect(await installCli(SRC, f.ops)).toEqual({ state: "in-the-way", path: `${CLI_DIR}/akou` });
+    expect(f.links.size).toBe(0);
+    // A build without the binary (a checkout) says so and touches nothing.
+    const none = memoryOps();
+    expect(await installCli(SRC, none.ops)).toEqual({ state: "missing" });
+  });
+
+  test(
+    "the admin script quotes paths with spaces and quotes",
+    () => {
+      const src = `/Applications/a k"o'u.app/akou`;
+      const s = adminScript(src, "/usr/local/bin/akou");
+      const head = 'do shell script "';
+      const tail = '" with administrator privileges';
+      expect(s.startsWith(head) && s.endsWith(tail)).toBe(true);
+      // Unescaped once as AppleScript reads its string, it is the command sh gets.
+      const cmd = s.slice(head.length, -tail.length).replace(/\\(.)/g, "$1");
+      if (process.platform === "win32") return;
+      // sh with the two programs swapped for printf prints the arguments they would get.
+      const probe = cmd
+        .replace("/bin/mkdir -p", "printf '%s\\n'")
+        .replace("/bin/ln -sfn", "printf '%s\\n'");
+      const r = Bun.spawnSync(["/bin/sh", "-c", probe]);
+      expect(r.stdout.toString().split("\n")).toEqual([
+        "/usr/local/bin",
+        src,
+        "/usr/local/bin/akou",
+        "",
+      ]);
+    },
+    LONG,
+  );
+
+  test("the real file operations make and read the link (POSIX)", async () => {
+    // The menu exists on macOS only; this checks nodeOps where links need no privilege.
+    if (process.platform === "win32") return;
+    const t = tempDir();
+    const src = join(t.dir, "app", "akou");
+    mkdirSync(join(t.dir, "app"));
+    mkdirSync(join(t.dir, "bin"));
+    writeFileSync(src, "#!/bin/sh\n");
+    const bin = join(t.dir, "bin");
+    expect(await installCli(src, nodeOps, bin)).toEqual({
+      state: "installed",
+      path: join(bin, "akou"),
+    });
+    expect(readlinkSync(join(bin, "akou"))).toBe(src);
+    expect((await installCli(src, nodeOps, bin)).state).toBe("already");
+    expect(nodeOps.writable(join(t.dir, "none"))).toBe(false);
+    expect(existsSync(join(bin, "akou"))).toBe(true);
+    t.cleanup();
+  });
+
+  test("the app carries the binary where the menu looks: beside the main process", () => {
+    // The build copies it to `bun/akou`, beside `bun/tray`; the menu reads it beside the tray.
+    expect(builtCopies((p) => p === BUILT.cli)).toEqual({ [BUILT.cli]: `${MAIN_OUT}/akou` });
+    expect(builtCopies(() => false)).toEqual({});
+    expect(dirname(BUNDLED_CLI)).toBe(dirname(TRAY_DIR));
+    expect(basename(BUNDLED_CLI)).toBe("akou");
+  });
+
+  test("the menu item runs the install and shows what happened", async () => {
+    const f = fakeUi();
+    const runs: string[] = [];
+    let next: InstallOutcome = { state: "installed", path: `${CLI_DIR}/akou` };
+    const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+      installCli: async () => {
+        runs.push("install");
+        return next;
+      },
+    });
+    await shell.start();
+    const menu = f.appMenu() ?? [];
+    const akou = menu[0] as { submenu: { label?: string; action?: string }[] };
+    expect(akou.submenu.find((i) => i.action === "install-cli")?.label).toBe(
+      "Install Command-Line Tool…",
+    );
+    f.menu("install-cli");
+    await until(() => f.boxes.length === 1, 1000, "the result");
+    expect(f.boxes[0]?.message).toBe("The akou command is installed.");
+    next = { state: "already", path: `${CLI_DIR}/akou` };
+    f.menu("install-cli");
+    await until(() => f.boxes.length === 2, 1000, "the second result");
+    expect(f.boxes[1]?.message).toBe("The akou command is already installed.");
+    expect(runs).toHaveLength(2);
+    await shell.close();
   });
 });
 

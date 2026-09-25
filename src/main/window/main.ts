@@ -16,6 +16,7 @@ import { BUNDLE_ID } from "../app-info.ts";
 import { loadConfig } from "../config/schema.ts";
 import { type AkouApp, AlreadyRunningError, startApp } from "../index.ts";
 import { Bridge } from "./bridge.ts";
+import { BUNDLED_CLI, installCli, nodeOps } from "./install-cli.ts";
 import { setLoginItem } from "./login-item.ts";
 import { electrobunUi } from "./native.ts";
 import { appForShell, Shell } from "./shell.ts";
@@ -36,6 +37,7 @@ async function ensureShell(app: AkouApp): Promise<Shell> {
       }),
     onLog: (level, msg) => console.error(`akou ${level}: ${msg}`),
     state: fileState(loadConfig(process.env).paths.configDir),
+    installCli: () => installCli(BUNDLED_CLI, nodeOps),
   });
   shell = s;
   await s.start();

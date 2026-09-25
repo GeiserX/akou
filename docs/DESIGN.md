@@ -528,7 +528,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 
 ### 6.1 CLI
 
-A shim runs the bundled Bun on `cli.js` (installed from the menu "Install command-line tool": `~/.local/bin/akou`, `akou.cmd`, or a symlink). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
+`akou` is one compiled binary: the release ships it on its own, and the macOS app carries a copy beside its main process that the akou menu's "Install Command-Line Tool…" links into `/usr/local/bin`, asking for a password only when that folder needs one ([DESKTOP.md](ux/DESKTOP.md) DK-M6). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
 
 | Command | Does |
 |---|---|

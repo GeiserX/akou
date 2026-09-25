@@ -46,6 +46,8 @@ The workflow checks the tag equals every version string, builds and checks every
    - The Bluetooth probe-click listening test ([TRAPS](../docs/TRAPS.md) "Probe click in Bluetooth headphones").
    - The idle tray item shows its icon in a dark and a light menu bar (System Settings > Appearance). Save both screenshots under `docs/gates/` with the date, the macOS version and the akou version ([DESKTOP](../docs/ux/DESKTOP.md) DK-T1, [TRAPS](../docs/TRAPS.md) "An invisible tray").
    - `⌘C` and `⌘V` copy and paste in the notepad and in the ask box, `⌘Z` undoes a typed word and `⇧⌘Z` redoes it, `⌘,` opens Settings with the window closed, `⌘W` closes the window and `⌘Q` quits (DK-M1).
+   - During a recording, `⌘Q` asks "A call is recording. Stop it and quit?"; Cancel keeps recording, Stop and quit quits. Close the window, click the Dock icon: the window comes back where it was (DK-M3, DK-M2, DK-M4).
+   - On a Mac with no `akou` on PATH, akou menu > Install Command-Line Tool… installs it (a password is asked only if `/usr/local/bin` needs one); in a new terminal `akou --version` prints this release's version; a second run says it is already installed (DK-M6).
    - With the window closed, `akou start -t "Check title"` shows one "Recording started" notification, "Started from the command line", and the title appears nowhere in it (DK-N1, DK-N4).
 3. `akou-cli-<version>-darwin-arm64`: `akou --version`, `akou doctor`, `akou start` against the installed app.
 4. On Ubuntu 24.04 with the GNOME AppIndicator extension, once a Linux app build exists: the tray icon shows (DK-T1).
