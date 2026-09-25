@@ -128,8 +128,10 @@ describe("[T4.20] a job that runs too few tests fails", () => {
     }
   });
 
-  test("every job ci.yml hands to the floor script has a floor", () => {
-    const yaml = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  test("every job ci.yml and nightly.yml hand to the floor script has a floor", () => {
+    const yaml = ["ci.yml", "nightly.yml"]
+      .map((f) => readFileSync(join(ROOT, ".github", "workflows", f), "utf8"))
+      .join("\n");
     const floors = Object.keys(
       JSON.parse(readFileSync(join(ROOT, "tests", "floors.json"), "utf8")),
     );

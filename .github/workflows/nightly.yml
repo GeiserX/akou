@@ -1,0 +1,39 @@
+name: nightly
+
+# Once a day on main, and by hand (docs/CI-CD.md section 2.2). Nothing here is a required check;
+# a red night shows in the job summary and GitHub emails whoever last changed the schedule.
+#
+# - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
+#   WebKitGTK the app ships (TS-14). It moves into ci.yml's `ui` leg, and so under ci-ok, once
+#   it passes: today 8 of its 52 tests fail on WebKit only (docs/TESTING.md TS-14).
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nightly-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  ui-webkit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      AKOU_UI_BROWSER: webkit
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      # The WebKit build pinned by playwright-core, with its system libraries.
+      - run: bunx playwright-core install --with-deps webkit
+      - run: bun run test:ui --reporter=junit --reporter-outfile=.junit-ui.xml
+      - run: bun scripts/ci/test-floor.ts ui-webkit .junit-ui.xml
