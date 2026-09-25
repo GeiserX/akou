@@ -201,7 +201,7 @@ The player bar gets real controls. Line-level sync comes first, because it needs
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W6.1 | Notepad with markers, time gutter, agent lines in their own colour | done | DESIGN 5.1 | Existing tests | has |
-| W6.2 | Editing a note saves on blur and after a 2 s pause, not only on Enter | P0 | Audit: clicking away drops the edit, which loses what the user typed; DESIGN 5.1 says Enter or a 2 s pause | Type in an existing note, click the transcript: the log has `note rev+1` with the new text | partial (bug) |
+| W6.2 | Editing a note saves on blur and after a 2 s pause, not only on Enter | P0 | Audit: clicking away drops the edit, which loses what the user typed; DESIGN 5.1 says Enter or a 2 s pause | Type in an existing note, click the transcript: the log has `note rev+1` with the new text | has |
 | W6.3 | Delete a note with a 10 s undo | P1 | Audit: no confirm and no undo | Delete shows "Note deleted · Undo"; Undo restores it as a new revision | partial |
 
 ### 6.2 Ask

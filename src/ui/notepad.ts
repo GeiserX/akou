@@ -32,6 +32,8 @@ export class NotepadPane {
   private draft: { w: number; afterSeq: number; id?: string; saved?: string } | null = null;
   private pause: ReturnType<typeof setTimeout> | null = null;
   private saving: Promise<void> = Promise.resolve();
+  /** The note being edited in place. The list is not redrawn under it, which would drop the edit. */
+  private editing: string | null = null;
 
   constructor(private readonly d: NotepadDeps) {
     this.input.addEventListener("input", () => this.onInput());
@@ -46,6 +48,7 @@ export class NotepadPane {
 
   reset(): void {
     this.draft = null;
+    this.editing = null;
     this.input.value = "";
     if (this.pause) clearTimeout(this.pause);
     this.render();
@@ -96,6 +99,7 @@ export class NotepadPane {
 
   /** Draws the notepad from the fold. */
   render(): void {
+    if (this.editing) return;
     const v = this.d.view();
     if (!v?.call) {
       replace(this.list);
@@ -156,18 +160,41 @@ export class NotepadPane {
     });
     span.replaceWith(input);
     input.focus();
-    const done = async (save: boolean) => {
+    this.editing = id;
+    // An edit is saved on Enter, when focus leaves it and after a 2 s pause (WINDOW W6.2), each
+    // save a new revision; Escape closes it without saving what was not saved yet.
+    let saved = span.textContent ?? "";
+    let pause: ReturnType<typeof setTimeout> | null = null;
+    let open = true;
+    const save = (): Promise<void> => {
+      if (pause) clearTimeout(pause);
+      pause = null;
       const text = input.value.trim();
-      if (save && text !== "" && text !== span.textContent) {
+      this.saving = this.saving.then(async () => {
+        if (text === "" || text === saved) return;
         const r = await this.d.t.request("PATCH", `/calls/${call}/notes/${id}`, { text });
         if (r.status >= 400) toast(message(r.body, "the note was not saved"));
-      }
+        else saved = text;
+      });
+      return this.saving;
+    };
+    const done = async (keep: boolean) => {
+      if (!open) return;
+      open = false;
+      if (pause) clearTimeout(pause);
+      if (keep) await save();
+      if (this.editing === id) this.editing = null;
       this.render();
     };
+    input.addEventListener("input", () => {
+      if (pause) clearTimeout(pause);
+      pause = setTimeout(() => void save(), PAUSE_SAVES_MS);
+    });
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") void done(true);
       else if (e.key === "Escape") void done(false);
     });
+    input.addEventListener("blur", () => void done(true));
   }
 }
 

@@ -567,6 +567,66 @@ describe("the notepad (DESIGN 5.1)", () => {
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "[W6.2] an edit to a note is kept when you click away, and after a 2 s pause; Escape still discards it",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const made = await rig.api("POST", `/calls/${id}/notes`, { text: "budget review" });
+          const nid = made.body.note.id as string;
+          const revs = async () =>
+            (await events(rig, id))
+              .filter((e) => e.type === "note" && (e as { id: string }).id === nid)
+              .map((e) => ({
+                rev: (e as { rev: number }).rev,
+                text: (e as { text: string }).text,
+              }));
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const row = `#notes li.note[data-id="${nid}"]`;
+          await page.waitForSelector(row);
+          const edit = async (typed: string) => {
+            await page.click(`${row} .edit`);
+            await page.waitForSelector(`${row} .note-edit`);
+            await page.keyboard.press("End");
+            await page.keyboard.type(typed);
+          };
+          // Type, then click the transcript: the edit is saved as rev 2 and the editor closes.
+          await edit(" first");
+          await page.click('#lines .row[data-id="l000002"] .text');
+          await until(async () => (await revs()).length === 2, 5000, "the edit saved on blur");
+          expect((await revs())[1]).toEqual({ rev: 2, text: "budget review first" });
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          await until(
+            async () => (await text(page, `${row} .note-text`)) === "budget review first",
+            5000,
+            "the notepad showing the edit",
+          );
+          // Type and stop: the pause saves it while the editor stays open.
+          await edit(" today");
+          await until(async () => (await revs()).length === 3, 5000, "the edit saved on a pause");
+          expect((await revs())[2]).toEqual({ rev: 3, text: "budget review first today" });
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          // Enter saves what came after; neither the pause timer nor the blur saves it again.
+          await page.keyboard.type("!");
+          await page.keyboard.press("Enter");
+          await until(async () => (await revs()).length === 4, 5000, "the edit saved on Enter");
+          expect((await revs())[3]).toEqual({ rev: 4, text: "budget review first today!" });
+          // Escape discards: nothing is written, now or after the pause.
+          await edit(" nope");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          await page.waitForTimeout(2500);
+          expect((await revs()).length).toBe(4);
+          expect(await text(page, `${row} .note-text`)).toBe("budget review first today!");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
 });
 
 describe("the ask box (DESIGN 5.3, 5.4)", () => {
