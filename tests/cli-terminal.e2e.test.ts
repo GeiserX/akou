@@ -140,18 +140,25 @@ describe("[CLI-20] Colour on a terminal only, and never colour alone", () => {
   );
 });
 
+const ANSWER = "The release moves to Thursday, if the migration lands tomorrow.";
+
+/** Answers in two chunks, and holds the second until the test calls `release`. */
 class FakeProvider implements Provider {
   readonly id = "harness" as const;
   readonly questions: string[] = [];
+  release: () => void = () => {};
   async available() {
     return { ok: true as const, detail: "fake" };
   }
   async complete(req: CompleteRequest, onToken: (t: string) => void): Promise<CompleteResult> {
     this.questions.push(JSON.stringify(req));
-    const text = "The release moves to Thursday, if the migration lands tomorrow.";
-    onToken(text.slice(0, 20));
-    onToken(text.slice(20));
-    return { text, model: "fake/1.0" };
+    const held = new Promise<void>((r) => {
+      this.release = r;
+    });
+    onToken(ANSWER.slice(0, 20));
+    await held;
+    onToken(ANSWER.slice(20));
+    return { text: ANSWER, model: "fake/1.0" };
   }
 }
 
@@ -240,14 +247,14 @@ describe("[CLI-24] Follow and ask a live call in the terminal with akou watch", 
           "the committed line's newline",
         );
 
-        // A question streams an answer from the provider.
+        // A question streams an answer from the provider: the first chunk is on the terminal
+        // while the provider still holds the second.
         const asked = t.bytes().length;
         t.type("what did we decide?\r");
-        await t.waitFor(
-          "The release moves to Thursday, if the migration lands tomorrow.",
-          10_000,
-          asked,
-        );
+        const chunk = await t.waitFor(ANSWER.slice(0, 20), 10_000, asked);
+        expect(t.bytes().includes(ANSWER.slice(20), chunk)).toBe(false);
+        provider.release();
+        await t.waitFor(ANSWER, 10_000, asked);
         expect(provider.questions.length).toBe(1);
 
         // `/note` is the CLI's `note`, bound to this call, written as the CLI: no header is the user.
