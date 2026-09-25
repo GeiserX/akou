@@ -36,6 +36,13 @@ export const BROWSER: "chromium" | "webkit" = (() => {
   return b;
 })();
 
+/**
+ * The permissions that let a test read what the page copied. WebKit knows `clipboard-read` only
+ * and lets a page write without asking; asking it for `clipboard-write` throws "Unknown permission".
+ */
+export const CLIPBOARD_PERMISSIONS: readonly string[] =
+  BROWSER === "webkit" ? ["clipboard-read"] : ["clipboard-read", "clipboard-write"];
+
 /** One headless browser for the whole run; Playwright closes it when the process exits. */
 export async function launch(): Promise<Browser> {
   if (!browser?.isConnected()) {
