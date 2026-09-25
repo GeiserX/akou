@@ -47,6 +47,8 @@ export function windowRpc(
   bridge: Bridge,
   send: () => WindowSend,
   openSettings: (pane: SettingsPane) => Promise<boolean>,
+  /** The page pulled the status, which it does once its message handlers are registered. */
+  booted: () => void = () => {},
 ): WindowRpc {
   const follows = new Map<string, () => void>();
   const asks = new Map<string, AbortController>();
@@ -131,7 +133,10 @@ export function windowRpc(
         };
       },
 
-      status: async () => (await bridge.app.status()) as unknown as AppStatus,
+      status: async () => {
+        booted();
+        return (await bridge.app.status()) as unknown as AppStatus;
+      },
 
       openSettingsPane: async ({ pane }) => openSettings(pane),
     },

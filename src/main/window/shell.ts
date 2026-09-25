@@ -190,7 +190,7 @@ export function appMenu(platform: string): AppMenuItem[] | null {
         { role: "close", accelerator: "w" },
       ],
     },
-    { label: "Help", submenu: [{ label: "akou documentation", action: "docs" }] },
+    { label: "Help", submenu: [{ label: "Open the docs", action: "docs" }] },
   ];
 }
 
@@ -230,7 +230,12 @@ export class Shell implements WindowShell {
   private quitting = false;
   private unwatch: () => void = () => {};
   private live = false;
+  /** Only the window's focus and blur events set this: a shown window may not have the focus. */
   private focused = false;
+  /** The page pulled the status, so its message handlers exist; a message sent earlier is lost. */
+  private pageReady = false;
+  /** What to tell a page that is still loading, sent when it boots. */
+  private pending: ((send: WindowSend) => void)[] = [];
   /** When each notice key last showed, for the once-a-minute rule. */
   private readonly shown = new Map<string, number>();
 
@@ -303,24 +308,41 @@ export class Shell implements WindowShell {
         this.bridge,
         () => this.sender(),
         (pane) => this.app.openSettingsPane(pane),
+        () => this.onPageReady(),
       );
       const w = this.ui.openWindow({ title: "akou", url: WINDOW_URL, rpc: this.rpc });
       this.window = w.window;
       this.send = w.send;
+      this.pageReady = false;
+      this.pending = [];
       w.window.onClose(() => {
         this.rpc?.close();
         this.rpc = null;
         this.window = null;
         this.send = null;
         this.focused = false;
+        this.pageReady = false;
+        this.pending = [];
       });
       w.window.onFocus((focused) => {
         this.focused = focused;
       });
     }
     this.window.show();
-    this.focused = true;
-    if (call) this.send?.showCall({ call });
+    if (call) this.toPage((send) => send.showCall({ call }));
+  }
+
+  /** Sends to the page now, or when it boots if it is still loading. */
+  private toPage(fn: (send: WindowSend) => void): void {
+    if (this.pageReady && this.send) fn(this.send);
+    else this.pending.push(fn);
+  }
+
+  private onPageReady(): void {
+    const send = this.send;
+    if (this.pageReady || !send) return;
+    this.pageReady = true;
+    for (const fn of this.pending.splice(0)) fn(send);
   }
 
   private sender(): WindowSend {
@@ -353,7 +375,7 @@ export class Shell implements WindowShell {
     switch (action) {
       case "settings":
         await this.app.openWindow();
-        this.send?.showSettings({});
+        this.toPage((send) => send.showSettings({}));
         break;
       case "docs":
         this.ui.openExternal(DOCS_URL);

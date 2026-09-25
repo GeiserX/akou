@@ -5,6 +5,7 @@
  */
 
 import { Bridge } from "../src/main/window/bridge.ts";
+import type { WindowRpc } from "../src/main/window/rpc.ts";
 import {
   type AppMenuItem,
   appForShell,
@@ -31,15 +32,25 @@ export interface FakeUi {
   tray: (action: string) => void;
   /** The window gains (true) or loses (false) focus. */
   focus: (focused: boolean) => void;
+  /** The page finishes loading and pulls the status, as `src/ui/app.ts` does at boot. */
+  boot: () => Promise<unknown>;
   quitRequested: () => boolean;
 }
 
-export function fakeUi(): FakeUi {
+/**
+ * `focusOnShow: false` is a window the OS shows without focusing (another app is active), so no
+ * focus event follows `show`. Messages sent to a page before it booted are lost, as ElectroBun's
+ * are when the page has not registered its handlers yet.
+ */
+export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
+  const focusOnShow = opts.focusOnShow ?? true;
   const log: string[] = [];
   let action: (a: string) => void = () => {};
   let beforeQuit: (e: { cancel(): void }) => void = () => {};
   let menuAction: (a: string) => void = () => {};
   let focusFn: (focused: boolean) => void = () => {};
+  let rpc: WindowRpc | null = null;
+  let booted = false;
   let trayItems: unknown[] = [];
   let title = "";
   let appMenu: AppMenuItem[] | null = null;
@@ -49,11 +60,16 @@ export function fakeUi(): FakeUi {
   const ui: NativeUi = {
     openWindow: (o) => {
       log.push(`window ${o.url}`);
+      rpc = o.rpc;
+      booted = false;
+      const page = (line: string) => {
+        if (booted) log.push(line);
+      };
       return {
         window: {
           show: () => {
             log.push("show");
-            focusFn(true);
+            if (focusOnShow) focusFn(true);
           },
           close: () => log.push("close"),
           onClose: () => {},
@@ -65,8 +81,8 @@ export function fakeUi(): FakeUi {
           followed: () => {},
           asked: () => {},
           status: () => {},
-          showCall: (m) => log.push(`call ${m.call}`),
-          showSettings: () => log.push("settings"),
+          showCall: (m) => page(`call ${m.call}`),
+          showSettings: () => page("settings"),
         },
       };
     },
@@ -118,6 +134,10 @@ export function fakeUi(): FakeUi {
     title: () => title,
     tray: (a) => action(a),
     focus: (f) => focusFn(f),
+    boot: async () => {
+      booted = true;
+      return rpc?.handlers.status({});
+    },
     quitRequested: () => {
       let cancelled = false;
       beforeQuit({ cancel: () => (cancelled = true) });

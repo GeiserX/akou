@@ -11,7 +11,8 @@
  * - **Quiet while the window is in front**, except the rows marked Always: a call started from
  *   anything but the window, a refused start, a share an agent started. An unseen start is a
  *   privacy hole; a banner in the window already says the rest.
- * - **Once a minute** at most per event and call: `key` is what the shell deduplicates on.
+ * - **Once a minute** at most per event and call: `key` is what the shell deduplicates on. A new
+ *   capture state is a new event, so a `permission-suspect` right after a `dead` still shows.
  */
 
 /** The door a start came through. The window writes as `user`; agents, the CLI included, as `agent:<client>`. */
@@ -72,16 +73,25 @@ function refusal(code: string, platform: string): string {
   switch (code) {
     case "models_missing":
       return `The speech models are not downloaded yet. Use "${MODELS_BUTTON}" in the akou window.`;
-    case "permission":
-      return `akou is not allowed to record. Allow it in ${privacyPane(platform, "Microphone and System Audio Recording")}.`;
+    case "permission": {
+      // Two panes on macOS, and the refusal does not say which channel it was.
+      const where =
+        platform === "darwin"
+          ? "System Settings > Privacy & Security, under Microphone and under System Audio Recording"
+          : privacyPane(platform, "Microphone");
+      return `akou is not allowed to record. Allow it in ${where}.`;
+    }
     case "already_recording":
       return "A call is already recording.";
     case "capture_failed":
-      return "The audio capture did not start.";
+      return "The audio capture did not start. Press Record in the akou window to try again.";
     case "quitting":
       return "akou is quitting.";
     default:
-      return "akou refused the start.";
+      // A refusal code is a fixed word from the app, never call content.
+      return /^[a-z_]+$/.test(code)
+        ? `akou refused the start (${code}).`
+        : "akou refused the start.";
   }
 }
 
@@ -124,7 +134,7 @@ export function notifyFor(e: NotifyEvent, ctx: NotifyContext): Notice | null {
       return {
         title: e.ch === "call" ? "Call side silent" : "Microphone silent",
         body: body(ctx.platform, e.ch),
-        key: `capture:${e.call}:${e.ch}`,
+        key: `capture:${e.call}:${e.ch}:${e.state}`,
       };
     }
   }

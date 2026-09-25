@@ -6,6 +6,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import {
@@ -104,8 +106,24 @@ describe("notifyFor", () => {
     const perm = (platform: string) =>
       notifyFor({ type: "refused", origin: "hotkey", code: "permission" }, at(false, platform))
         ?.body;
-    expect(perm("darwin")).toContain("System Settings > Privacy & Security");
+    // Microphone and System Audio Recording are two panes, and the refusal cannot tell which.
+    expect(perm("darwin")).toContain(
+      "System Settings > Privacy & Security, under Microphone and under System Audio Recording",
+    );
+    expect(perm("darwin")).not.toContain("> Microphone and");
     expect(perm("win32")).toContain("Settings > Privacy > Microphone");
+    const refusal = (code: string) =>
+      notifyFor({ type: "refused", origin: "hotkey", code }, at(false))?.body;
+    // A failed capture says what to do next, with the window's own Record button.
+    expect(readFileSync(join(import.meta.dir, "../src/ui/index.html"), "utf8")).toContain(
+      ">● Record</button>",
+    );
+    expect(refusal("capture_failed")).toBe(
+      "The audio capture did not start. Press Record in the akou window to try again.",
+    );
+    // A code this table does not know is named, so the person has something to look up.
+    expect(refusal("bad_workspace")).toBe("akou refused the start (bad_workspace).");
+    expect(refusal("not a code")).toBe("akou refused the start.");
     const suspect = notifyFor(
       { type: "capture", call: "c1", ch: "call", state: "permission-suspect" },
       at(false),
@@ -184,13 +202,17 @@ describe("the shell's notifications over a whole app", () => {
       (await rig.app.events(id, 0)).filter(
         (e: LogEvent) => e.type === "health" && e.state === "dead",
       ).length;
+    await until(() => silent().length === 1, 40_000, "the first notice");
+    expect(await deads()).toBe(1);
+    // The second dead comes 59 s later on the notice clock: still inside the minute.
+    now += 59_000;
     await until(async () => (await deads()) >= 2, 40_000, "a second dead health event");
     await Bun.sleep(200);
     expect(silent()).toEqual([
       { title: "Call side silent", body: "akou is rebuilding the capture." },
     ]);
-    // Positive control for the once-a-minute rule: a minute on, the next one notifies.
-    now += 61_000;
+    // Positive control for the once-a-minute rule: 61 s after the first, the next one notifies.
+    now += 2_000;
     const seen = await deads();
     await until(async () => (await deads()) > seen, 40_000, "the next dead health event");
     await until(() => silent().length === 2, 2000, "the notification a minute later");

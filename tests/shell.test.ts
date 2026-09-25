@@ -260,7 +260,13 @@ describe("the desktop shell over a fake NativeUi", () => {
     shell.show();
     shell.show("c9");
     expect(f.log.filter((l) => l.startsWith("window"))).toEqual([`window ${WINDOW_URL}`]);
-    expect(f.log).toContain("call c9");
+    // A new page is still loading and would drop the message: it waits for the page's boot.
+    expect(f.log).not.toContain("call c9");
+    await f.boot();
+    expect(f.log.filter((l) => l === "call c9")).toEqual(["call c9"]);
+    // The booted page gets the next one at once.
+    shell.show("c8");
+    expect(f.log).toContain("call c8");
     await shell.close();
     expect(f.log).toContain("close");
     expect(f.log).toContain("tray removed");
@@ -316,13 +322,75 @@ describe("the desktop shell over a fake NativeUi", () => {
     );
     expect(missingRoles(noCopy, EDIT_ROLES)).toEqual(["copy"]);
     expect(missingRoles(null, EDIT_ROLES)).toEqual(EDIT_ROLES);
-    // Settings… opens the window on Settings; the Help item opens the docs.
+    // Settings… with no window opens the window on Settings once its page has booted; the Help
+    // item opens the docs.
     expect(findItem(menu, "settings")).toMatchObject({ label: "Settings…", accelerator: "," });
     f.menu("settings");
+    await until(() => a.state.windows === 1, 1000, "the window");
+    expect(f.log).not.toContain("settings");
+    await f.boot();
     await until(() => f.log.includes("settings"), 1000, "the settings pane");
-    expect(a.state.windows).toBe(1);
+    // With the page up, Settings… reaches it directly.
+    f.menu("settings");
+    await until(() => f.log.filter((l) => l === "settings").length === 2, 1000, "again");
+    expect(findItem(menu, "docs")).toMatchObject({ label: "Open the docs" });
     f.menu("docs");
     expect(f.log).toContain(`open ${DOCS_URL}`);
+    await shell.close();
+  });
+
+  /** A shell whose bridge hands the test the app's event watcher, to feed it health events. */
+  async function healthShell(f: ReturnType<typeof fakeUi>) {
+    let watcher: (call: string, e: LogEvent) => void = () => {};
+    const bridge = {
+      watchLifecycle: () => () => {},
+      app: {
+        status: async () => ({}),
+        watch: (fn: typeof watcher) => {
+          watcher = fn;
+          return () => {};
+        },
+      },
+    } as unknown as Bridge;
+    const shell = new Shell(fakeApp().app, bridge, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    await shell.start();
+    const health = (ch: "mic" | "call", state: string) =>
+      watcher("c1", { type: "health", ch, state } as unknown as LogEvent);
+    return { shell, health };
+  }
+
+  test("[DK-N2] a window shown without the focus leaves the capture notices on", async () => {
+    const f = fakeUi({ focusOnShow: false });
+    const { shell, health } = await healthShell(f);
+    // An agent or `akou open` shows the window while the user stays in the meeting app.
+    shell.show();
+    health("call", "dead");
+    expect(f.notices.map((n) => n.title)).toEqual(["Call side silent"]);
+    // Positive control: once the OS says the window has the focus, its banner says it instead.
+    f.focus(true);
+    health("mic", "dead");
+    expect(f.notices).toHaveLength(1);
+    f.focus(false);
+    health("mic", "dead");
+    expect(f.notices.map((n) => n.title)).toEqual(["Call side silent", "Microphone silent"]);
+    await shell.close();
+  });
+
+  test("[DK-N2] a new capture state on the same channel within the minute still notifies", async () => {
+    const f = fakeUi();
+    const { shell, health } = await healthShell(f);
+    health("call", "dead");
+    health("call", "dead");
+    expect(f.notices).toHaveLength(1);
+    // The helper's `permission-suspect` names the fix; a `dead` a moment earlier must not hide it.
+    health("call", "permission-suspect");
+    expect(f.notices.map((n) => n.body)).toEqual([
+      "akou is rebuilding the capture.",
+      "Check that akou is allowed in System Settings > Privacy & Security > System Audio Recording.",
+    ]);
     await shell.close();
   });
 
