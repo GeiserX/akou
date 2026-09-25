@@ -5,7 +5,7 @@
  * any other rate or depth, goes through ffmpeg (`decodeAudio`, SV-P6).
  */
 
-import { closeSync, openSync, readSync } from "node:fs";
+import { closeSync, fstatSync, openSync, readSync } from "node:fs";
 import { decodeAudio } from "../asr/decode.ts";
 import { ASR_RATE } from "../asr/engine.ts";
 
@@ -33,7 +33,12 @@ function pcm16k(path: string): { data: number; bytes: number; channels: number }
       } else if (id === "data") {
         if (fmt?.format !== 1 || fmt.bits !== 16 || fmt.rate !== ASR_RATE) return null;
         if (fmt.channels < 1) return null;
-        return { data: o + 8, bytes: size, channels: fmt.channels };
+        // A streaming writer (ffmpeg or sox to a pipe, arecord) cannot seek back to fill in the
+        // size, so it leaves 0 or 0xFFFFFFFF: the audio then runs to the end of the file. Any size
+        // is capped at what the file holds.
+        const rest = Math.max(0, fstatSync(fd).size - (o + 8));
+        const bytes = size === 0 || size > rest ? rest : size;
+        return { data: o + 8, bytes, channels: fmt.channels };
       }
       o += 8 + size + (size % 2);
     }
