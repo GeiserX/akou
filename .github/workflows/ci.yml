@@ -32,8 +32,9 @@ concurrency:
 
 jobs:
   # What a pull request needs. `code` is false only when every changed file is documentation
-  # (under docs/ or a Markdown file at the top); then only the Linux `check` leg runs, because
-  # some tests read the docs. A push to main and a dispatch run everything.
+  # (under docs/, the issue tracker's export under .beads/, or a Markdown file at the top); then
+  # only the Linux `check` leg runs, because some tests read the docs. A push to main and a
+  # dispatch run everything.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -54,7 +55,7 @@ jobs:
           fi
           git diff --name-only HEAD^1 HEAD > changed.txt
           cat changed.txt
-          if grep -qvE '^(docs/|[^/]+\.md$)' changed.txt; then
+          if grep -qvE '^(docs/|\.beads/|[^/]+\.md$)' changed.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
