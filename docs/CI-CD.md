@@ -21,7 +21,7 @@ Items use the same fields as TESTING.md: an id, a priority (P0 now, P1 this segm
 | `capture` | push to `main`, every PR | Rust fmt, clippy, `cargo test`, release and `simulate` builds, the trap e2e against the real binary (a skip fails), PipeWire and PulseAudio rigs, a Windows VB-CABLE exclusion test | moved into `ci.yml` (CI-2); no cargo cache; the helper-crash flake is fixed (TS-1 a) |
 | `models` | changes to model pins or loaders, dispatch | downloads the pinned recognizer and transcribes one clip on three OSes | has |
 | `release` | tag `v*`, dispatch (dry run), packaging PRs | version check, full `check` again, macOS app through Hutch (ad-hoc signed), three CLI binaries, smoke checks, `SHA256SUMS`, GitHub release | has |
-| `diarize` | PR #15 branch only | Nemotron helper checks, cached model, two-voice smoke | pending merge |
+| `diarize` | PRs that touch the diarization helper, its client or smoke; push to `main` | Nemotron helper checks, cached model, two-voice smoke | moved into `ci.yml` under `ci-ok` (TS-20) |
 | `scratch-stop-trace` | none (branch deleted) | a leftover from debugging, still registered as active | disable after CI-2 merges, with the old `check`, `ui` and `capture` |
 
 Already right: every action pinned by commit SHA with a version comment; `permissions: contents: read`; capture jobs fail on any skip; the Windows job fails when no audio endpoint exists instead of passing; release concurrency never cancels; the tag must equal every version string. Secret scanning and push protection are on.

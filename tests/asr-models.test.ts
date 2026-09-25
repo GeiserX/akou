@@ -119,7 +119,7 @@ describe("the registry", () => {
       sha256: /^\s*MODEL_SHA256:\s*(\S+)\s*$/m.exec(yml)?.[1],
     });
     const yml = readFileSync(
-      join(import.meta.dir, "..", ".github", "workflows", "diarize.yml"),
+      join(import.meta.dir, "..", ".github", "workflows", "ci.yml"),
       "utf8",
     );
     const f = MODELS.find((x) => x.id === NEMOTRON)?.files[0];

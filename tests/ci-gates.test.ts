@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { countsOf, judge, scaled, skippedOf } from "../scripts/ci/test-floor.ts";
 import { tempDir } from "./helpers.ts";
@@ -323,5 +323,62 @@ describe("[CI-2] one workflow, one required check", () => {
       "\n  stray:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 1\n\n  ci-ok:\n",
     );
     expect(outsideAggregate(extra)).toEqual(["stray"]);
+  });
+});
+
+describe("[TS-20] the two-voice diarization smoke guards main from ci.yml", () => {
+  type Job = {
+    needs?: string | string[];
+    if?: string;
+    strategy?: unknown;
+    steps?: { id?: string; run?: string }[];
+  };
+  const wf = () =>
+    Bun.YAML.parse(readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+
+  /** The pattern the `changes` job greps for the diarization leg. */
+  function diarizePattern(): RegExp {
+    const run = wf().jobs.changes?.steps?.find((s) => s.id === "diff")?.run ?? "";
+    const m = /grep -qE '([^']+)' changed\.txt; then\s+echo "diarize=true"/.exec(run);
+    if (!m) throw new Error("the changes job has no diarize filter");
+    return new RegExp(m[1] as string);
+  }
+
+  test("the diarize leg runs on three OSes under ci-ok, when its own paths change", () => {
+    const jobs = wf().jobs;
+    const leg = jobs.diarize;
+    expect(leg?.if).toBe("needs.changes.outputs.diarize == 'true'");
+    expect(JSON.stringify(leg?.strategy)).toContain("windows");
+    expect(JSON.stringify(leg?.strategy)).toContain("macos");
+    expect(JSON.stringify(leg?.strategy)).toContain("ubuntu");
+    expect([jobs["ci-ok"]?.needs].flat()).toContain("diarize");
+    expect(leg?.steps?.some((s) => s.run?.includes("scripts/diarize-smoke.ts"))).toBe(true);
+    // One workflow: the separate diarize.yml is gone.
+    expect(existsSync(join(ROOT, ".github", "workflows", "diarize.yml"))).toBe(false);
+  });
+
+  test("the diarize filter picks the helper, its client, the smoke and its fixtures, and nothing else", () => {
+    const re = diarizePattern();
+    for (const f of [
+      "native/akou-diarize/src/main.rs",
+      "native/akou-diarize/Cargo.lock",
+      "src/main/asr/nemotron.ts",
+      "src/main/asr/models.ts",
+      "scripts/diarize-smoke.ts",
+      "tests/fixtures/two-voices.wav",
+      "NOTICE",
+      ".github/workflows/ci.yml",
+    ])
+      expect({ f, hit: re.test(f) }).toEqual({ f, hit: true });
+    for (const f of [
+      "native/akou-capture/src/main.rs",
+      "src/main/asr/sherpa.ts",
+      "docs/TESTING.md",
+      "tests/ui/window.test.ts",
+      "NOTICE.md",
+    ])
+      expect({ f, hit: re.test(f) }).toEqual({ f, hit: false });
   });
 });
