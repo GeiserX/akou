@@ -134,6 +134,7 @@ function watchCtx(o: {
   keys: Keys;
   stream: (signal: AbortSignal | undefined) => Response;
   run?: Ctx["run"];
+  color?: boolean;
 }) {
   let screen = "";
   const io: Io = {
@@ -156,7 +157,14 @@ function watchCtx(o: {
     },
     stream: async (_m: string, _p: string, r: { signal?: AbortSignal }) => o.stream(r.signal),
   } as unknown as ApiClient;
-  const ctx: Ctx = { io, json: false, client, version: "0.0.0", color: false, run: o.run };
+  const ctx: Ctx = {
+    io,
+    json: false,
+    client,
+    version: "0.0.0",
+    color: o.color ?? false,
+    run: o.run,
+  };
   return { ctx, screen: () => screen };
 }
 
@@ -209,5 +217,51 @@ describe("[CLI-24] watch waits for a confirmed /stop before it leaves", () => {
     const code = await watch.run(ctx, { flags: {}, positional: [] });
     expect(ran).toEqual([["stop", "-c", "c1"]]);
     expect([code, stopped]).toEqual([EXIT.ok, true]);
+  });
+});
+
+/** A stream that sends `events` as the app's log events, then stays open until watch aborts it. */
+function streamOf(events: object[]) {
+  return (signal: AbortSignal | undefined): Response => {
+    const text = events.map((e) => `event: event\ndata: ${JSON.stringify(e)}\n\n`).join("");
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new TextEncoder().encode(text));
+        signal?.addEventListener("abort", () => c.close());
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "text/event-stream" } });
+  };
+}
+
+describe("[CLI-20] watch shows a health change in its colour and with its word", () => {
+  const t = Date.now();
+  const events = [
+    { type: "health", ch: "call", state: "dead", t },
+    { type: "health", ch: "mic", state: "quiet", t },
+  ];
+
+  async function watched(color: boolean): Promise<string> {
+    const keys = fakeKeys([], false);
+    const { ctx, screen } = watchCtx({ keys, stream: streamOf(events), color });
+    const running = watch.run(ctx, { flags: {}, positional: [] });
+    const end = performance.now() + 3000;
+    while (!screen().includes("mic: ") && performance.now() < end) await Bun.sleep(20);
+    keys.close();
+    await running;
+    return screen();
+  }
+
+  test("on a colour terminal, dead is red and quiet is yellow, each with its word", async () => {
+    const out = await watched(true);
+    expect(out).toContain("call: \x1b[31mdead\x1b[0m");
+    expect(out).toContain("mic: \x1b[33mquiet\x1b[0m");
+  });
+
+  test("positive control: without colour the words stay and no colour code is left", async () => {
+    const out = await watched(false);
+    expect(out).toContain("call: dead");
+    expect(out).toContain("mic: quiet");
+    expect(out.includes("\x1b[31m") || out.includes("\x1b[33m")).toBe(false);
   });
 });

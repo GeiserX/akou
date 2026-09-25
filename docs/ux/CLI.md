@@ -194,7 +194,7 @@ A few of the texts, as they should read:
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-20 | Colour and terminal rules as above | P1 | clig.dev, no-color.org; the window's speaker hues | On a pty, `tail` output contains ANSI colour codes and each speaker keeps one colour across lines; with `NO_COLOR=1`, or piped, the output has no escape byte. A `status` snapshot on a pty with a dead channel shows both the colour and the word `dead` | has: speakers in `tail` and `watch`, health in `status` and `watch` |
+| CLI-20 | Colour and terminal rules as above | P1 | clig.dev, no-color.org; the window's speaker hues | On a pty, `tail` output contains ANSI colour codes and each speaker keeps one colour across lines; with `NO_COLOR=1`, or piped, the output has no escape byte. A `status` snapshot on a pty with a dead channel shows both the colour and the word `dead` | partial: the acceptance passes (speakers in `tail` and `watch`, health in `status` and `watch`); not built: dim ids and dim "(default)"; the second speaker's hue (orange, drawn as yellow) is the same yellow as quiet or degraded health |
 
 ## 9. Help, completions and "did you mean"
 
