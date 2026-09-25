@@ -72,7 +72,15 @@ function recordingClient(seen: string[]): ApiClient {
 async function requestsOf(cmd: Command, argv: string[]): Promise<string[]> {
   const seen: string[] = [];
   const ctx: Ctx = {
-    io: { env: {}, out: () => {}, err: () => {} },
+    // A terminal whose keyboard closes at once, so `watch` runs as far as its first requests.
+    io: {
+      env: {},
+      out: () => {},
+      err: () => {},
+      write: () => {},
+      tty: true,
+      keys: { read: async function* () {}, close: () => {}, columns: () => 80 },
+    },
     json: false,
     client: recordingClient(seen),
     version: "0",
@@ -93,6 +101,8 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
 };
 
 const CALL_ROUTE = /^[A-Z]+ \/calls\/[^/?]+/;
+/** Routes that act on one call named in the body (`call`, default live), not in the path. */
+const CALL_BODY_ROUTES = new Set(["POST /share", "DELETE /share"]);
 
 function argvOf(example: string): string[] {
   const words = (example.match(/"[^"]*"|'[^']*'|\S+/g) ?? []).map((w) =>
@@ -110,7 +120,12 @@ async function callFlagGaps(commands: readonly Command[]): Promise<string[]> {
     for (const ex of cmd.examples) {
       for (const r of await requestsOf(cmd, argvOf(ex))) routes.add(r);
     }
-    const scoped = [...routes].filter((r) => CALL_ROUTE.test(r));
+    // An example that sends nothing hides the command from the sweep: it fails instead.
+    if (routes.size === 0) {
+      gaps.push(`${cmd.name} (no example sent a request; mark it LOCAL_ONLY if it needs none)`);
+      continue;
+    }
+    const scoped = [...routes].filter((r) => CALL_ROUTE.test(r) || CALL_BODY_ROUTES.has(r));
     const flag = cmd.flags?.call;
     if (scoped.length > 0 && (flag?.type !== "string" || flag.short !== "c")) {
       gaps.push(`${cmd.name} (${scoped.join(", ")})`);
@@ -237,6 +252,27 @@ describe("[CLI-03] One way to name a call in every command", () => {
       },
     };
     expect(await callFlagGaps([bare])).toEqual(["poke (POST /calls/live/poke)"]);
+    // An example that throws before its first request cannot hide a command from the sweep.
+    const broken: Command = {
+      ...bare,
+      name: "broken",
+      run: async () => {
+        throw new Error("boom");
+      },
+    };
+    expect(await callFlagGaps([broken])).toEqual([
+      "broken (no example sent a request; mark it LOCAL_ONLY if it needs none)",
+    ]);
+    // A call named in the body, on a route that acts on one call, counts as call-scoped.
+    const sharing: Command = {
+      ...bare,
+      name: "sharing",
+      run: async (ctx) => {
+        await ctx.client.request("POST", "/share", { body: {} });
+        return 0;
+      },
+    };
+    expect(await callFlagGaps([sharing])).toEqual(["sharing (POST /share)"]);
   });
 
   test("a call named with -c sends the same request as the call as first word", async () => {
@@ -255,6 +291,32 @@ describe("[CLI-03] One way to name a call in every command", () => {
     const mute = COMMANDS.find((x) => x.name === "mute") as Command;
     expect(await requestsOf(mute, [])).toEqual(["POST /calls/live/mute"]);
     expect(await requestsOf(mute, ["-c", "01JB7X"])).toEqual(["POST /calls/01JB7X/mute"]);
+  });
+
+  test("share names its call with -c in the body, and sends none without it (the app's live)", async () => {
+    const share = COMMANDS.find((x) => x.name === "share") as Command;
+    const bodies: unknown[] = [];
+    const client = {
+      request: async (method: string, path: string, o?: RequestOptions) => {
+        bodies.push([method, path, (o?.body as { call?: string } | undefined)?.call]);
+        return { status: 200, body: { ok: true }, text: "", contentType: "application/json" };
+      },
+    } as unknown as ApiClient;
+    const ctx: Ctx = {
+      io: { env: {}, out: () => {}, err: () => {} },
+      json: false,
+      client,
+      version: "0",
+    };
+    for (const argv of [["on", "-c", "last"], ["on"], ["off", "-c", "01JB7X"], ["off"]]) {
+      await share.run(ctx, parseArgs(argv, share.flags ?? {}));
+    }
+    expect(bodies).toEqual([
+      ["POST", "/share", "last"],
+      ["POST", "/share", undefined],
+      ["DELETE", "/share", "01JB7X"],
+      ["DELETE", "/share", undefined],
+    ]);
   });
 
   test("the call named twice, two different ways, is a usage error", async () => {

@@ -24,7 +24,7 @@ import {
 import { isSettingKey, loadConfig, SETTINGS, type SettingSpec } from "../../config/schema.ts";
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
-import { api, type Body, type Command, type Ctx, finish, notBuilt } from "../context.ts";
+import { api, type Body, type Command, type Ctx, callFlag, finish, notBuilt } from "../context.ts";
 import { usage } from "./calls.ts";
 
 /** A value from the command line: JSON when it parses (`8476`, `true`, `["a"]`), else a string. */
@@ -273,8 +273,10 @@ const models: Command = {
 const share: Command = {
   name: "share",
   summary: "A read-only live link to the call",
-  usage: "akou share on|off|status [--bind tailnet|lan|IP] [--notes] [--expires 3h] [--json]",
+  usage:
+    "akou share on|off|status [-c CALL] [--bind tailnet|lan|IP] [--notes] [--expires 3h] [--json]",
   flags: {
+    call: callFlag("live; `off` without it stops every share"),
     bind: { type: "string", value: "WHERE", desc: "tailnet, lan or an address (default: tailnet)" },
     notes: { type: "boolean", desc: "share the notepad too" },
     expires: { type: "string", value: "3h", desc: "turn the link off after this long" },
@@ -289,6 +291,7 @@ const share: Command = {
     if (sub === "on") {
       const r = await api(ctx, "POST", "/share", {
         body: {
+          call: str(p, "call"),
           bind: str(p, "bind"),
           notes: p.flags.notes === true ? true : undefined,
           expires: str(p, "expires"),
@@ -297,7 +300,8 @@ const share: Command = {
       return finish(ctx, r, (b) => JSON.stringify(b, null, 2));
     }
     if (sub === "off") {
-      const r = await api(ctx, "DELETE", "/share");
+      const call = str(p, "call");
+      const r = await api(ctx, "DELETE", "/share", call ? { body: { call } } : {});
       return finish(ctx, r, () => "Sharing is off");
     }
     return usage(ctx, "share needs on, off or status");

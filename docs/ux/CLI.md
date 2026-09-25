@@ -75,7 +75,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | Vocabulary | `vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename\|move\|delete\|restore CALL …` **new** (CLI-26) · `import hark-viewer DIR… [-w WS]` | has, except the subcommands |
-| Share | `share on\|off\|status [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
+| Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
 | Setup | `config show\|get\|set\|unset\|path` · `models list\|pull\|import\|select` · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
 | Agents | `skill install\|uninstall [--harness claude\|codex] [--dir DIR]` · `mcp` · `webhook test` **new** (PG-W2) · `api METHOD PATH` **new** (CLI-11) | has, except `webhook test`, `api` |
 | App | `quit` · `self-update` (Linux tarball, M4) · `version` · `help [CMD]` | has, except `self-update` |
@@ -95,7 +95,7 @@ This is resolved in the CLI from the API's `404 no_live_call {last}` answer, whi
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-03 | One way to name a call: `-c/--call` on every call command, the call as first word where it is the object | P1 | Audit: four forms in use | A registry test fails for any command with a call-scoped route that does not declare `call` with short `c`. `akou show -c X` and `akou show X` print the same bytes. The exit-code half of the matrix row moves to CLI-16 | has: the sweep in `tests/cli-registry.test.ts` reads each command's routes from what its examples request |
+| CLI-03 | One way to name a call: `-c/--call` on every call command, the call as first word where it is the object | P1 | Audit: four forms in use | A registry test fails for any command with a call-scoped route that does not declare `call` with short `c`. `akou show -c X` and `akou show X` print the same bytes. The exit-code half of the matrix row moves to CLI-16 | has: the sweep in `tests/cli-registry.test.ts` reads each command's routes from what its examples request, fails a command whose examples send nothing, and counts `/share` (the call in the body) as call-scoped |
 | CLI-18 | Default call: live, else last, for everything except controls, with the stderr note; `-q/--quiet` drops notes and progress, never errors | P1 | intent: questions after a call are as easy as during it; audit asked for `--quiet` | With one ended call and nothing live, `akou ask "q"` answers from that call and stderr has one line naming its title and end time; with `-q` stderr is empty; `akou mute` exits 3 and prints nothing on stdout, and with `-q` still prints its error | missing: `ask` and `tail` exit 3, `enhance` exits 64 |
 
 ## 5. Output
