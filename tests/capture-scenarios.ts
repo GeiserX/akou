@@ -168,6 +168,15 @@ export function describeStop(t: StopTimes, took: number): string {
 }
 
 /**
+ * [T0.9]'s rule: between the ask and the kill the event loop never goes half the stop budget
+ * without a turn. The budget itself would pass a stop that held the loop for all but one turn of
+ * it; a free loop holds for one timer period (12 ms measured on a laptop).
+ */
+export function holdBound(budget: number): number {
+  return budget / 2;
+}
+
+/**
  * The longest the event loop went without a turn between `from` and `to`, from the times a timer
  * ran (`turns`). With no turn in between it is the whole window: a stop that held the loop from
  * the ask to the kill scores the budget itself.
@@ -333,10 +342,10 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         // The helper had the whole budget, then was killed.
         expect(at.kill).toBeDefined();
         expect((at.kill as number) - (at.asked as number)).toBeGreaterThanOrEqual(budget - 20);
-        // Between the ask and the kill the loop turned, and never waited out the budget on the
-        // hung helper. Only this window is the rule: after the kill the call syncs part.ended and
+        // Between the ask and the kill the loop turned, and never went half the budget without a
+        // turn while the helper hung. Only this window is the rule: after the kill the call syncs part.ended and
         // call.ended to disk, which takes what the runner's disk takes.
-        expect(held).toBeLessThan(budget);
+        expect(held).toBeLessThan(holdBound(budget));
         // The kill worked: the session saw the helper exit within the kill grace (past it, the
         // session gives up on the exit and answers with none).
         expect(at.outcome).toMatchObject({ killed: true, exit: { killedByUs: true } });

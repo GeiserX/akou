@@ -10,6 +10,7 @@ import { akouCaptureDialect, ChildCaptureSession } from "../src/main/capture/hel
 import {
   captureTrapScenarios,
   fakeHelper,
+  holdBound,
   LONG,
   longestHold,
   rig,
@@ -51,8 +52,35 @@ describe("[T0.9] the hang check can fail", () => {
       clearInterval(timer);
       const at = r.stops[0] as StopTimes;
       expect(longestHold(turns, at.asked as number, at.kill as number)).toBeGreaterThanOrEqual(
-        budget,
+        holdBound(budget),
       );
+    },
+    LONG,
+  );
+
+  test(
+    "positive control: a stop that holds the loop for most of the budget, not all of it, fails too",
+    async () => {
+      const budget = 300;
+      const r = rig(fakeHelper, () => ({ hangOnStop: true }), { stopMs: budget });
+      expect((await r.mgr.start({ workspace: "work" })).ok).toBe(true);
+      // Just after the ask, the loop is held for nine tenths of the budget, then let go: one
+      // turn fits before the kill.
+      const s = r.sessions[0];
+      if (!s) throw new Error("no session");
+      const stop = s.stop.bind(s);
+      s.stop = (b) => {
+        setTimeout(() => Bun.sleepSync(budget * 0.9), 5);
+        return stop(b);
+      };
+      const turns: number[] = [];
+      const timer = setInterval(() => turns.push(performance.now()), 10);
+      await r.mgr.stop("live");
+      clearInterval(timer);
+      const at = r.stops[0] as StopTimes;
+      const held = longestHold(turns, at.asked as number, at.kill as number);
+      expect(held).toBeLessThan(budget);
+      expect(held).toBeGreaterThanOrEqual(holdBound(budget));
     },
     LONG,
   );
