@@ -21,7 +21,7 @@ import type { Template } from "../notes/templates.ts";
 import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
 import type { ShareHandle, ShareStatus } from "../share/transport.ts";
-import { ADMIN_ROUTE, type Identity } from "./access.ts";
+import { type Identity, UNKNOWN_ROUTE } from "./access.ts";
 import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
 import {
   authorOf,
@@ -288,8 +288,8 @@ export function startApiServer(o: ServerOptions): ApiServer {
       const found = inV1
         ? router.match(req.method, url.pathname.slice(API_PREFIX.length))
         : root.match(req.method, url.pathname);
-      // An unknown path is checked as an admin route: without a key, 401 before any 404.
-      const route = "meta" in found ? found.meta : ADMIN_ROUTE;
+      // An unknown path needs a key: without one, 401 before any 404 (`UNKNOWN_ROUTE`).
+      const route = "meta" in found ? found.meta : UNKNOWN_ROUTE;
       const peer = srv.requestIP(req)?.address ?? "";
       const source = sourceAddress(peer, req.headers.get("x-forwarded-for"), trusted);
       const g = check(req, {

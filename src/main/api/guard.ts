@@ -50,7 +50,7 @@ export interface GuardContext {
   port: number;
   /** The bearer token. */
   token: string;
-  /** The route asked for; an unknown path is checked as `admin` (`ADMIN_ROUTE`). */
+  /** The route asked for; an unknown path is checked as `UNKNOWN_ROUTE` (any key). */
   route: RouteMeta;
   /** The largest body an upload route takes, bytes (`server.max_upload_mb`). */
   maxUploadBytes: number;

@@ -4,7 +4,7 @@
  */
 
 import type { Outcome } from "../call/state.ts";
-import type { Identity, RouteMeta } from "./access.ts";
+import { ADMIN_ROUTE, type Identity, type RouteMeta } from "./access.ts";
 import { MAX_BODY_BYTES } from "./guard.ts";
 
 export class HttpError extends Error {
@@ -272,7 +272,7 @@ export class Router<A> {
       method,
       parts: pattern.split("/").filter(Boolean),
       handler,
-      meta: meta ?? { access: "admin" },
+      meta: meta ?? ADMIN_ROUTE,
     });
     return this;
   }

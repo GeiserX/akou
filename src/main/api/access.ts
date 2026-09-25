@@ -33,8 +33,15 @@ export interface RouteMeta {
   upload?: boolean;
 }
 
-/** What a route that says nothing gets, and what an unknown path is checked as. */
+/** What a route that says nothing gets (`Router.add`). */
 export const ADMIN_ROUTE: RouteMeta = { access: "admin" };
+
+/**
+ * What a path that is no route (or a method it does not take) is checked as: any key, so a
+ * request with none is 401 before any 404, and a valid key then gets the 404 or 405 it earned,
+ * not a 403 that says the typo needs admin.
+ */
+export const UNKNOWN_ROUTE: RouteMeta = { access: "jobs" };
 
 export interface Identity {
   /** The key id, or `app` for the app's token, or `session` for an admin login. */

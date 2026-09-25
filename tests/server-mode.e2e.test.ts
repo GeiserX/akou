@@ -344,6 +344,28 @@ describe("SV-K2: keys", () => {
   });
 });
 
+describe("SV-K3: a path that is not a route", () => {
+  test("with a valid key it is 404 or 405, never 'needs admin'; with no key it is 401", async () => {
+    const k = await newKey(server, "typo");
+    const auth = { authorization: `Bearer ${k.key}` };
+    const typo = await get(server, "/v1/jbos", auth);
+    expect(typo.status).toBe(404);
+    expect(JSON.parse(typo.body).error).toBe("not_found");
+    const method = await rawRequest(server.port, {
+      method: "DELETE",
+      path: "/v1/keys/me",
+      headers: { ...auth, "content-type": "application/json" },
+    });
+    expect(method.status).toBe(405);
+    // No key: 401 before any 404, so the route table is not probed anonymously.
+    expect((await get(server, "/v1/jbos")).status).toBe(401);
+    // Positive control: a route that exists and needs admin is still 403 for this key.
+    const admin = await get(server, "/v1/status", auth);
+    expect(admin.status).toBe(403);
+    expect(JSON.parse(admin.body).error).toBe("forbidden");
+  });
+});
+
 describe("SV-K4: callback hosts are an allowlist per key", () => {
   test("a key with --callback-host archive.lan accepts archive.lan and refuses other.lan; '*' accepts both", async () => {
     const one = await newKey(server, "cb-one", ["--callback-host", "archive.lan"]);
