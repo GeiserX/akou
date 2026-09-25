@@ -42,12 +42,45 @@ export const TRAY_DIR = join(import.meta.dir, "tray");
 /** The Help menu's page. */
 export const DOCS_URL = "https://github.com/GeiserX/akou#readme";
 
+/** A window's frame, or a display's work area, in screen points. */
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** What the shell remembers between runs (`state.ts` keeps it in the config folder). */
+export interface ShellState {
+  /** The main window's last frame (DK-M4). */
+  window?: Rect;
+  /** The floating indicator's last frame (DK-F1). */
+  indicator?: Rect;
+}
+
 export interface NativeWindow {
   show(): void;
   close(): void;
   onClose(fn: () => void): void;
   /** The window gained (true) or lost (false) the focus. */
   onFocus(fn: (focused: boolean) => void): void;
+  /** The frame now, when the OS says. */
+  frame(): Rect | undefined;
+  /** The window moved or was resized. */
+  onFrame(fn: (frame: Rect) => void): void;
+}
+
+/** A question with buttons; resolves to the index of the one pressed. */
+export interface MessageBox {
+  type: "question" | "warning" | "info";
+  title: string;
+  message: string;
+  detail?: string;
+  buttons: string[];
+  /** The button Return presses. */
+  defaultId: number;
+  /** The button Escape and closing the box press. */
+  cancelId: number;
 }
 
 export type TrayMenuItem =
@@ -71,7 +104,7 @@ export type AppMenuItem =
 /** The part of ElectroBun the shell uses. */
 export interface NativeUi {
   /** A window over the page, its RPC wired to `rpc.handlers`; returns the window and its sender. */
-  openWindow(o: { title: string; url: string; rpc: WindowRpc }): {
+  openWindow(o: { title: string; url: string; rpc: WindowRpc; frame?: Rect }): {
     window: NativeWindow;
     send: WindowSend;
   };
@@ -86,6 +119,11 @@ export interface NativeUi {
   /** Asks the process to exit (runs `before-quit` again). */
   quit(): void;
   openExternal(url: string): boolean;
+  /** The Dock icon was clicked (macOS `reopen`). */
+  onReopen(fn: () => void): void;
+  showMessageBox(o: MessageBox): Promise<number>;
+  /** Every display's work area (the screen less the menu bar and Dock), the primary first. */
+  workAreas(): Rect[];
 }
 
 /** What the shell needs of the app. */
@@ -137,6 +175,52 @@ export interface ShellOptions {
   onLog?(level: "info" | "warn" | "error", msg: string): void;
   /** Epoch ms, for the once-a-minute rule. Tests pass their own. */
   now?(): number;
+  /** Where the window's frame is kept between runs. None: forgotten at quit. */
+  state?: { load(): ShellState; save(s: ShellState): void };
+}
+
+/** The window's size the first time it opens. */
+export const DEFAULT_WINDOW = { width: 1280, height: 820 } as const;
+/** No window is restored smaller than this. */
+const MIN_WINDOW = { width: 480, height: 360 } as const;
+
+const overlap = (a: Rect, b: Rect) =>
+  Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) *
+  Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
+
+/**
+ * Where the window opens (DK-M4): the saved frame on the display it overlaps most, pulled whole
+ * into that display's work area and shrunk to fit it; on the primary display when it overlaps
+ * none (a display that was unplugged). With nothing saved, the default size centred on the primary.
+ * With no display reported (the SDK answers zeros when it cannot tell), the saved frame as it was.
+ */
+export function placeFrame(saved: Rect | undefined, areas: readonly Rect[]): Rect {
+  const real = areas.filter((a) => a.width > 0 && a.height > 0);
+  const primary = real[0];
+  if (!primary) return saved ?? { x: 0, y: 0, ...DEFAULT_WINDOW };
+  const want = saved ?? {
+    x: primary.x + Math.round((primary.width - DEFAULT_WINDOW.width) / 2),
+    y: primary.y + Math.round((primary.height - DEFAULT_WINDOW.height) / 2),
+    ...DEFAULT_WINDOW,
+  };
+  let area = primary;
+  let best = 0;
+  for (const a of real) {
+    const o = overlap(want, a);
+    if (o > best) {
+      best = o;
+      area = a;
+    }
+  }
+  const width = Math.min(Math.max(want.width, MIN_WINDOW.width), area.width);
+  const height = Math.min(Math.max(want.height, MIN_WINDOW.height), area.height);
+  const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
+  return {
+    x: clamp(want.x, area.x, area.x + area.width - width),
+    y: clamp(want.y, area.y, area.y + area.height - height),
+    width,
+    height,
+  };
 }
 
 /** The tray image for a platform: a template PNG on macOS, an ICO on Windows, a PNG elsewhere. */
@@ -225,6 +309,10 @@ export class Shell implements WindowShell {
   private tray: NativeTray | null = null;
   private hotkey: string | null = null;
   private quitting = false;
+  /** The quit question is up; a second quit waits for its answer instead of asking again. */
+  private asking = false;
+  /** The window's frame as last reported, saved when it closes and at quit (DK-M4). */
+  private frame: Rect | undefined;
   private unwatch: () => void = () => {};
   private live = false;
   /** Only the window's focus and blur events set this: a shown window may not have the focus. */
@@ -263,6 +351,8 @@ export class Shell implements WindowShell {
       e.cancel();
       void this.quitApp();
     });
+    // The Dock icon after the window was closed (DK-M2): the window again, or the same one forward.
+    this.ui.onReopen(() => void this.app.openWindow());
     const unwatchLifecycle = this.bridge.watchLifecycle(() => void this.refresh());
     const unannounce = this.app.onAnnounce((a) => this.onAnnounce(a));
     const unhealth = this.bridge.app.watch((call, e) => {
@@ -307,12 +397,18 @@ export class Shell implements WindowShell {
         (pane) => this.app.openSettingsPane(pane),
         () => this.onPageReady(),
       );
-      const w = this.ui.openWindow({ title: "akou", url: WINDOW_URL, rpc: this.rpc });
+      const frame = placeFrame(this.o.state?.load().window, this.ui.workAreas());
+      const w = this.ui.openWindow({ title: "akou", url: WINDOW_URL, rpc: this.rpc, frame });
+      this.frame = frame;
       this.window = w.window;
       this.send = w.send;
       this.pageReady = false;
       this.pending = [];
+      w.window.onFrame((f) => {
+        this.frame = f;
+      });
       w.window.onClose(() => {
+        this.saveFrame();
         this.rpc?.close();
         this.rpc = null;
         this.window = null;
@@ -414,14 +510,54 @@ export class Shell implements WindowShell {
     );
   }
 
+  /**
+   * The one quit path of the tray, the menu's Quit and `Cmd+Q` (DK-M3). During a recording it asks
+   * first, with Cancel the default: a quit never stops a call by accident. Stop and quit stops the
+   * call through the app's quit, so `part.ended` is in the log before the process exits.
+   */
   private async quitApp(): Promise<void> {
-    if (this.quitting) return;
+    if (this.quitting || this.asking) return;
+    this.asking = true;
+    let go: boolean;
+    try {
+      go = await this.confirmQuit();
+    } finally {
+      this.asking = false;
+    }
+    if (!go || this.quitting) return;
     this.quitting = true;
     await this.app.quit();
     this.ui.quit();
   }
 
+  private async confirmQuit(): Promise<boolean> {
+    const live = !!((await this.app.status()) as { live?: unknown }).live;
+    if (!live) return true;
+    const pressed = await this.ui.showMessageBox({
+      type: "warning",
+      title: "Quit akou",
+      message: "A call is recording. Stop it and quit?",
+      detail: "Everything recorded so far is kept.",
+      buttons: ["Cancel", "Stop and quit"],
+      defaultId: 0,
+      cancelId: 0,
+    });
+    return pressed === 1;
+  }
+
+  private saveFrame(): void {
+    const store = this.o.state;
+    const frame = this.window?.frame() ?? this.frame;
+    if (!store || !frame) return;
+    try {
+      store.save({ ...store.load(), window: frame });
+    } catch (err) {
+      this.o.onLog?.("warn", `the window's place was not saved: ${(err as Error).message}`);
+    }
+  }
+
   async close(): Promise<void> {
+    if (this.window) this.saveFrame();
     this.unwatch();
     this.rpc?.close();
     this.window?.close();

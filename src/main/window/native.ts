@@ -9,6 +9,7 @@ import Electrobun, {
   BrowserView,
   BrowserWindow,
   GlobalShortcut,
+  Screen,
   Tray,
   Utils,
 } from "electrobun/main";
@@ -20,7 +21,7 @@ const MAX_REQUEST_MS = 600_000;
 
 export function electrobunUi(): NativeUi {
   return {
-    openWindow({ title, url, rpc }) {
+    openWindow({ title, url, rpc, frame }) {
       const defined = BrowserView.defineRPC<AkouRpc>({
         maxRequestTime: MAX_REQUEST_MS,
         handlers: { requests: rpc.handlers, messages: {} },
@@ -29,7 +30,7 @@ export function electrobunUi(): NativeUi {
         title,
         url,
         rpc: defined,
-        frame: { width: 1280, height: 820 },
+        frame: frame ?? { width: 1280, height: 820 },
       });
       const window: NativeWindow = {
         show: () => {
@@ -41,6 +42,11 @@ export function electrobunUi(): NativeUi {
         onFocus: (fn) => {
           win.on("focus", () => fn(true));
           win.on("blur", () => fn(false));
+        },
+        frame: () => win.getFrame(),
+        onFrame: (fn) => {
+          win.on("move", () => fn(win.getFrame()));
+          win.on("resize", () => fn(win.getFrame()));
         },
       };
       return {
@@ -94,5 +100,16 @@ export function electrobunUi(): NativeUi {
 
     quit: () => Utils.quit(0),
     openExternal: (url) => Utils.openExternal(url),
+
+    onReopen: (fn) => Electrobun.events.on("reopen", () => fn()),
+
+    showMessageBox: async (o) => (await Utils.showMessageBox(o)).response,
+
+    workAreas: () => {
+      const all = Screen.getAllDisplays();
+      return [...all.filter((d) => d.isPrimary), ...all.filter((d) => !d.isPrimary)].map(
+        (d) => d.workArea,
+      );
+    },
   };
 }

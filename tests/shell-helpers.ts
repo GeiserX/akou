@@ -10,6 +10,7 @@ import {
   type AppMenuItem,
   appForShell,
   type NativeUi,
+  type Rect,
   Shell,
   type ShellOptions,
 } from "../src/main/window/shell.ts";
@@ -35,6 +36,22 @@ export interface FakeUi {
   /** The page finishes loading and pulls the status, as `src/ui/app.ts` does at boot. */
   boot: () => Promise<unknown>;
   quitRequested: () => boolean;
+  /** Clicks the Dock icon (`reopen`). */
+  reopen: () => void;
+  /** Every message box shown, in order, with the button the fake pressed. */
+  boxes: { message: string; buttons: string[]; defaultId: number; cancelId: number }[];
+  /** The button the next message box answers with; by default its cancel button. */
+  answer: (message: string) => number | undefined;
+  /** Runs when the shell asks the process to exit, before `quit` is logged. */
+  onQuit: () => void;
+  /** Every frame a window was opened at, in order. */
+  frames: (Rect | undefined)[];
+  /** The OS moved or resized the window. */
+  moveWindow: (r: Rect) => void;
+  /** The user closed the window (its close button). */
+  closeWindow: () => void;
+  /** The displays' work areas, the primary first. */
+  areas: Rect[];
 }
 
 /**
@@ -44,6 +61,10 @@ export interface FakeUi {
  */
 export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
   const focusOnShow = opts.focusOnShow ?? true;
+  let reopenFn: () => void = () => {};
+  let frameFn: (r: Rect) => void = () => {};
+  let closeFn: () => void = () => {};
+  let current: Rect | undefined;
   const log: string[] = [];
   let action: (a: string) => void = () => {};
   let beforeQuit: (e: { cancel(): void }) => void = () => {};
@@ -60,6 +81,8 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
   const ui: NativeUi = {
     openWindow: (o) => {
       log.push(`window ${o.url}`);
+      f.frames.push(o.frame);
+      current = o.frame;
       rpc = o.rpc;
       booted = false;
       const page = (line: string) => {
@@ -72,7 +95,13 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
             if (focusOnShow) focusFn(true);
           },
           close: () => log.push("close"),
-          onClose: () => {},
+          onClose: (fn) => {
+            closeFn = fn;
+          },
+          frame: () => current,
+          onFrame: (fn) => {
+            frameFn = fn;
+          },
           onFocus: (fn) => {
             focusFn = fn;
           },
@@ -116,13 +145,30 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     onBeforeQuit: (fn) => {
       beforeQuit = fn;
     },
-    quit: () => log.push("quit"),
+    quit: () => {
+      f.onQuit();
+      log.push("quit");
+    },
+    onReopen: (fn) => {
+      reopenFn = fn;
+    },
+    showMessageBox: async (o) => {
+      const pressed = f.answer(o.message) ?? o.cancelId;
+      f.boxes.push({
+        message: o.message,
+        buttons: [...o.buttons],
+        defaultId: o.defaultId,
+        cancelId: o.cancelId,
+      });
+      return pressed;
+    },
+    workAreas: () => f.areas,
     openExternal: (url) => {
       log.push(`open ${url}`);
       return true;
     },
   };
-  return {
+  const f: FakeUi = {
     ui,
     log,
     shortcuts,
@@ -143,7 +189,22 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       beforeQuit({ cancel: () => (cancelled = true) });
       return cancelled;
     },
+    reopen: () => reopenFn(),
+    boxes: [],
+    answer: () => undefined,
+    onQuit: () => {},
+    frames: [],
+    moveWindow: (r) => {
+      current = r;
+      frameFn(r);
+    },
+    closeWindow: () => {
+      log.push("closed by the user");
+      closeFn();
+    },
+    areas: [{ x: 0, y: 0, width: 1440, height: 875 }],
   };
+  return f;
 }
 
 /** The real shell over a whole app, with the fake `NativeUi`. */

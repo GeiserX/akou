@@ -19,6 +19,7 @@ import { Bridge } from "./bridge.ts";
 import { setLoginItem } from "./login-item.ts";
 import { electrobunUi } from "./native.ts";
 import { appForShell, Shell } from "./shell.ts";
+import { fileState } from "./state.ts";
 
 const ui = electrobunUi();
 let shell: Shell | null = null;
@@ -34,6 +35,7 @@ async function ensureShell(app: AkouApp): Promise<Shell> {
         program: process.execPath,
       }),
     onLog: (level, msg) => console.error(`akou ${level}: ${msg}`),
+    state: fileState(loadConfig(process.env).paths.configDir),
   });
   shell = s;
   await s.start();
