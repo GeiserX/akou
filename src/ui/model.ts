@@ -417,3 +417,78 @@ export function noteKind(text: string): "text" | "bullet" | "action" | "question
   if (text.startsWith("- ")) return "bullet";
   return "text";
 }
+
+// ---------------------------------------------------------------------------
+// Speaker chips (WINDOW W4.2)
+
+/**
+ * A live cluster is a guess until someone names it or the final pass lands (DESIGN 3.2), so its
+ * chip reads `c3?` and is drawn provisional. A name, the final layer, or `final.done` makes it
+ * solid; you, on the mic, are never a guess.
+ */
+export function speakerChip(
+  line: { layer: "live" | "final"; ch: "mic" | "call"; spk: string; speaker: string },
+  o: { named: boolean; finalDone: boolean },
+): { label: string; provisional: boolean } {
+  const provisional = line.ch === "call" && line.layer === "live" && !o.named && !o.finalDone;
+  if (!provisional) return { label: line.speaker, provisional };
+  return { label: line.spk.endsWith("?") ? line.spk : `${line.spk}?`, provisional };
+}
+
+// ---------------------------------------------------------------------------
+// Playback (WINDOW section 5)
+
+/** Playback speeds, 0.75x to 2x in 0.25 steps; `[` and `]` move one step. */
+export const RATES = [0.75, 1, 1.25, 1.5, 1.75, 2] as const;
+export const SEEK_STEP_S = 5;
+
+/** One step slower (-1) or faster (1), held at both ends. */
+export function stepRate(rate: number, dir: -1 | 1): number {
+  const i = RATES.indexOf(rate as (typeof RATES)[number]);
+  const at = i < 0 ? RATES.indexOf(1) : i;
+  return RATES[Math.max(0, Math.min(RATES.length - 1, at + dir))] as number;
+}
+
+/** The speed kept from an earlier visit, or 1x when what was kept is not one of the steps. */
+export function restoreRate(saved: string | null): number {
+  const r = Number(saved);
+  return saved && RATES.includes(r as (typeof RATES)[number]) ? r : 1;
+}
+
+/** `1.0x`, `1.25x`, `2.0x`. */
+export function rateLabel(rate: number): string {
+  return `${Number.isInteger(rate) ? rate.toFixed(1) : String(rate)}x`;
+}
+
+/** A position moved by `delta` seconds, held inside the part: 0 to its length once known. */
+export function seekBy(t: number, delta: number, duration: number): number {
+  const to = Math.max(0, t + delta);
+  return Number.isFinite(duration) ? Math.min(duration, to) : to;
+}
+
+/**
+ * The line being played at `t` seconds into a part's audio: `a0 <= t < a1`. When two lines overlap
+ * (the mic and the call at once), the one that started last; between lines, none.
+ */
+export function playingLine(
+  lines: readonly { id: string; part: number; a0: number; a1: number }[],
+  part: number,
+  t: number,
+): string | null {
+  let best: { id: string; a0: number } | null = null;
+  for (const l of lines) {
+    if (l.part !== part || t < l.a0 || t >= l.a1) continue;
+    if (!best || l.a0 >= best.a0) best = l;
+  }
+  return best?.id ?? null;
+}
+
+/**
+ * A position in a part's audio as the wall time of that instant, through the part's clock, so a
+ * pause or a sleep in the part moves it (TRAPS "Clock drifts by paused time"). Never an offset.
+ */
+export function positionText(v: CallView, part: number, a: number): string {
+  const p = v.part(part);
+  if (!p) return "";
+  return formatWall(p.clock.wallFromAudio(a), v.call?.tz ?? "UTC");
+}

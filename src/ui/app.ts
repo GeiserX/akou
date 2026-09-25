@@ -16,9 +16,11 @@ import { AskPane } from "./ask.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
+import { type LineAction, LineMenu } from "./line-menu.ts";
 import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from "./model.ts";
 import { ModelsCard } from "./models-card.ts";
 import { message, NotepadPane } from "./notepad.ts";
+import { Player } from "./player.ts";
 import type { AppStatus, Levels, Transport } from "./protocol.ts";
 import { ReviewPane } from "./review.ts";
 import { SettingsPane } from "./settings.ts";
@@ -82,9 +84,8 @@ class App {
   private readonly enhanced: EnhancedPane;
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
-  private readonly player = byId<HTMLAudioElement>("player");
+  private readonly player: Player;
   private blobs = new Map<string, string>();
-  private mix: { mic: GainNode; call: GainNode } | null = null;
 
   constructor(readonly t: Transport) {
     const view = () => this.view();
@@ -96,6 +97,13 @@ class App {
       play: (id) => void this.play(id),
       speakerMenu: (spk, anchor) => this.speakerMenu(spk, anchor),
       fixWord: (id, anchor, sel) => this.fixWord(id, anchor, sel),
+    });
+    new LineMenu(byId("lines"), () => this.lineActions());
+    this.player = new Player({
+      view,
+      mayPlay: () => this.mayPlay(),
+      playing: (id, running) => this.transcript.playing(id, running),
+      stopped: () => this.transcript.playing(null, false, false),
     });
     this.notepad = new NotepadPane({
       t,
@@ -144,7 +152,6 @@ class App {
     this.wireControls();
     this.wireTabs();
     this.wirePopover();
-    this.wirePlayer();
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
@@ -188,7 +195,7 @@ class App {
     this.notepad.reset();
     this.askPane.reset();
     this.enhanced.reset();
-    this.stopAudio();
+    this.player.stop();
     this.meters(null);
     if (this.t.kind === "browser")
       history.replaceState(null, "", `?call=${encodeURIComponent(id)}`);
@@ -196,7 +203,9 @@ class App {
       changed: (c) => {
         if (f !== this.follower) return;
         const animate = c.events.length < 20;
-        this.transcript.update(c, animate);
+        // The final pass ending makes every live speaker label solid (W4.2): each row may change.
+        const done = c.events.some((e) => e.type === "final.done");
+        this.transcript.update(done ? { all: true, ids: [] } : c, animate);
         let notes = c.all;
         let speakers = c.all;
         for (const e of c.events) {
@@ -728,18 +737,7 @@ class App {
       // Another call opened while the audio downloaded: it stays cached, and does not play.
       if (call !== this.callId) return;
     }
-    const p = this.player;
-    if (p.src !== url) p.src = url;
-    p.dataset.line = id;
-    p.dataset.seek = String(line.a0);
-    const seek = () => {
-      p.currentTime = line.a0;
-      this.balance();
-      void p.play().catch(() => {});
-      this.drawPlay();
-    };
-    if (p.readyState >= 1) seek();
-    else p.addEventListener("loadedmetadata", seek, { once: true });
+    this.player.load(url, line.part, line.a0, id);
   }
 
   private mayPlay(): boolean {
@@ -751,82 +749,46 @@ class App {
     return true;
   }
 
-  /**
-   * Play and pause (WINDOW W5.2): the player bar's button, and Space outside text fields. Resuming
-   * goes on from where the pause left it. Until a line has been played there is nothing to pause,
-   * so Space keeps its usual meaning.
-   */
-  private wirePlayer(): void {
-    const p = this.player;
-    for (const ev of ["play", "pause", "ended", "emptied"]) {
-      p.addEventListener(ev, () => this.drawPlay());
-    }
-    byId("play").addEventListener("click", () => this.togglePlay());
-    document.addEventListener("keydown", (e) => {
-      if (e.key !== " " || e.metaKey || e.ctrlKey || e.altKey || !p.src) return;
-      const t = e.target as HTMLElement | null;
-      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
-      // Any other focused control keeps Space as its own key. A line's Play is taken, so the key
-      // pauses what it started instead of starting the line again.
-      if (t?.closest("button, a[href], summary, [role=tab]") && !t.closest(".row .play, #play"))
-        return;
-      e.preventDefault();
-      if (!e.repeat) this.togglePlay();
-    });
+  // ---------------------------------------------------------------------------
+  // A line's actions (W4.4): the line menu lists these, and a line's own buttons run the same code
+
+  private lineActions(): LineAction[] {
+    return [
+      { id: "line.play", label: "Play from here", run: (id) => void this.play(id) },
+      { id: "line.copy", label: "Copy line", run: (id) => this.copyLine(id, false) },
+      {
+        id: "line.copy-cited",
+        label: "Copy with time and speaker",
+        run: (id) => this.copyLine(id, true),
+      },
+      {
+        id: "speaker.name",
+        label: "Name this speaker…",
+        run: (id, anchor) => {
+          const spk = this.view()?.resolve(id)?.spk;
+          if (spk) this.speakerMenu(spk, anchor);
+        },
+      },
+      {
+        id: "line.fix-word",
+        label: "Fix a word…",
+        run: (id, anchor) => {
+          const sel = getSelection()?.toString().trim() ?? "";
+          this.fixWord(id, anchor, sel.length <= 60 ? sel : "");
+        },
+      },
+    ];
   }
 
-  private togglePlay(): void {
-    const p = this.player;
-    if (!p.src) return;
-    if (!p.paused) p.pause();
-    else if (this.mayPlay()) void p.play().catch(() => {});
-    this.drawPlay();
-  }
-
-  /** Another call opened: the last one's audio stops and is let go, so nothing can resume it. */
-  private stopAudio(): void {
-    const p = this.player;
-    p.pause();
-    p.removeAttribute("src");
-    delete p.dataset.line;
-    delete p.dataset.seek;
-    p.load();
-  }
-
-  private drawPlay(): void {
-    const p = this.player;
-    const btn = byId<HTMLButtonElement>("play");
-    btn.disabled = !p.src;
-    btn.textContent = p.paused ? "▶ Play" : "❚❚ Pause";
-  }
-
-  /** Mic and call balance: the file keeps them on the left and the right channel. */
-  private balance(): void {
-    const b = Number(byId<HTMLInputElement>("balance").value);
-    if (!this.mix) {
-      try {
-        const ctx = new AudioContext();
-        const src = ctx.createMediaElementSource(this.player);
-        const split = ctx.createChannelSplitter(2);
-        const merge = ctx.createChannelMerger(2);
-        const mic = ctx.createGain();
-        const call = ctx.createGain();
-        src.connect(split);
-        split.connect(mic, 0);
-        split.connect(call, 1);
-        for (const g of [mic, call]) {
-          g.connect(merge, 0, 0);
-          g.connect(merge, 0, 1);
-        }
-        merge.connect(ctx.destination);
-        this.mix = { mic, call };
-        byId("balance").addEventListener("input", () => this.balance());
-      } catch {
-        return;
-      }
-    }
-    this.mix.mic.gain.value = Math.min(1, 1 - b);
-    this.mix.call.gain.value = Math.min(1, 1 + b);
+  /** One line as shown, alone or as `[15:41:07 Ben] text`, the export's citation form. */
+  private copyLine(id: string, cited: boolean): void {
+    const l = this.transcript.shown(id);
+    if (!l) return;
+    const text = cited ? `[${l.time} ${l.speaker}] ${l.text}` : l.text;
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => toast("Line copied.", "info"))
+      .catch(() => toast("The clipboard is not available here."));
   }
 
   // ---------------------------------------------------------------------------

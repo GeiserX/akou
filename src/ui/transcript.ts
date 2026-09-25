@@ -12,12 +12,16 @@
  *
  * The grey provisional row sits below the list with a dashed border; it is replaced as it
  * changes, never becomes a row, and is gone 3 s after its last update.
+ *
+ * A live cluster's chip is a guess until it is named or the final pass is done (WINDOW W4.2): it
+ * reads `c3?` and is dashed. While audio plays, the line being played is lit and kept in view
+ * (W5.6); a scroll by hand stops that until Follow is pressed.
  */
 
 import { formatWall } from "../core/log/clock.ts";
 import { type CallView, type Line, PROVISIONAL_TTL_MS } from "../core/log/fold.ts";
 import { byId, h, replace } from "./dom.ts";
-import { formatDuration } from "./model.ts";
+import { formatDuration, speakerChip } from "./model.ts";
 import type { PartialLine, ReadLine } from "./protocol.ts";
 
 export const SCROLL_PIN_PX = 80;
@@ -63,6 +67,9 @@ export function fillRow(
     text: string;
     heard?: string;
     ch: string;
+    /** A live label still a guess (W4.2): `speaker` reads `c3?`, `who` is the full label. */
+    provisional?: boolean;
+    who?: string;
   },
   hue: number,
 ): void {
@@ -77,7 +84,13 @@ export function fillRow(
   const who = body.querySelector(".who") as HTMLElement;
   who.textContent = l.speaker;
   who.dataset.spk = l.spk;
-  who.setAttribute("aria-label", `${l.speaker}: rename, merge or unmerge`);
+  who.classList.toggle("provisional", !!l.provisional);
+  who.setAttribute(
+    "aria-label",
+    l.provisional
+      ? `${l.who ?? l.speaker}, a guess until the final pass: rename, merge or unmerge`
+      : `${l.speaker}: rename, merge or unmerge`,
+  );
   const text = body.querySelector(".text") as HTMLElement;
   text.textContent = l.text;
   if (l.heard !== undefined) {
@@ -166,6 +179,9 @@ function before(a: [number, number, number], b: [number, number, number]): boole
   return a[0] !== b[0] ? a[0] < b[0] : a[1] !== b[1] ? a[1] < b[1] : a[2] < b[2];
 }
 
+/** Keys that scroll the transcript when it has focus: a reader moving by hand. */
+const SCROLL_KEYS = new Set(["PageUp", "PageDown", "Home", "End", "ArrowUp", "ArrowDown"]);
+
 export class TranscriptPane {
   private readonly rows = new Map<string, HTMLElement>();
   private readonly list = byId("lines");
@@ -173,10 +189,34 @@ export class TranscriptPane {
   private readonly partialBox = byId("partial");
   private partialTimer: ReturnType<typeof setTimeout> | null = null;
   private readonly pin = new ScrollPin(this.scroller, byId("jump"));
+  /** Follow audio (W5.6): the line lit, whether audio is loaded, whether to keep it in view. */
+  private readonly audio = { id: null as string | null, loaded: false, follow: true };
+  private readonly followBtn = byId("follow");
 
   constructor(private readonly d: TranscriptDeps) {
     this.list.addEventListener("click", (e) => this.onClick(e));
     new FontKeys();
+    const s = this.scroller;
+    s.addEventListener("wheel", () => this.byHand(), { passive: true });
+    s.addEventListener("touchmove", () => this.byHand(), { passive: true });
+    s.addEventListener("keydown", (e) => {
+      const t = e.target as HTMLElement;
+      if (
+        SCROLL_KEYS.has(e.key) &&
+        !t.closest("input, textarea, select, button, [contenteditable]")
+      )
+        this.byHand();
+    });
+    // The scrollbar: a press on the scroller itself, right of its content box.
+    s.addEventListener("mousedown", (e) => {
+      if (e.target === s && e.offsetX >= s.clientWidth) this.byHand();
+    });
+    byId("jump").addEventListener("click", () => this.byHand());
+    this.followBtn.addEventListener("click", () => {
+      this.audio.follow = true;
+      this.followBtn.hidden = true;
+      if (this.audio.id) this.keepInView(this.audio.id);
+    });
   }
 
   get count(): number {
@@ -198,6 +238,15 @@ export class TranscriptPane {
       ? new Set([...this.rows.keys(), ...v.lines("best").map((l) => l.id)])
       : new Set(ch.ids);
     let added = 0;
+    const chips = {
+      named: new Set(
+        v
+          .roster()
+          .filter((s) => s.name)
+          .map((s) => s.spk),
+      ),
+      finalDone: v.final.state === "done",
+    };
     for (const id of ids) {
       const line = v.visibleIn(id, "best") ? v.resolve(id) : null;
       const row = this.rows.get(id);
@@ -206,10 +255,10 @@ export class TranscriptPane {
         this.rows.delete(id);
         continue;
       }
-      if (row) this.fill(row, line, v);
+      if (row) this.fill(row, line, v, chips);
       else {
         const r = rowElement();
-        this.fill(r, line, v);
+        this.fill(r, line, v, chips);
         r.dataset.w0 = String(line.w0);
         r.dataset.ch = line.ch;
         r.dataset.seq = String(line.seq);
@@ -235,12 +284,16 @@ export class TranscriptPane {
     return added;
   }
 
-  private fill(row: HTMLElement, l: Line, v: CallView): void {
+  private fill(
+    row: HTMLElement,
+    l: Line,
+    v: CallView,
+    chips: { named: ReadonlySet<string>; finalDone: boolean },
+  ): void {
     const tz = v.call?.tz ?? "UTC";
-    // The app's rendering of this revision, when it has one; else the page's own.
-    const app = this.d.read?.(l.id);
-    const shown = app && app.rev === l.rev ? app : l;
+    const shown = this.shownText(l);
     const first = v.parts()[0]?.wallStart ?? l.w0;
+    const chip = speakerChip(l, { named: chips.named.has(l.spk), finalDone: chips.finalDone });
     fillRow(
       row,
       {
@@ -248,7 +301,9 @@ export class TranscriptPane {
         time: formatWall(l.w0, tz),
         timeTitle: intoTheCall(l.w0, first),
         spk: l.spk,
-        speaker: l.speaker,
+        speaker: chip.label,
+        who: l.speaker,
+        provisional: chip.provisional,
         text: shown.text,
         heard: shown.heard,
         ch: l.ch,
@@ -275,6 +330,64 @@ export class TranscriptPane {
         ),
       );
     }
+  }
+
+  /** The app's rendering of this revision, when it has one; else the page's own. */
+  private shownText(l: Line): { text: string; heard?: string } {
+    const app = this.d.read?.(l.id);
+    return app && app.rev === l.rev ? app : l;
+  }
+
+  /** A line as shown: its wall time, its speaker's full label and its text, for copying. */
+  shown(id: string): { time: string; speaker: string; text: string } | null {
+    const v = this.d.view();
+    const l = v?.visibleIn(id, "best") ? v.resolve(id) : null;
+    if (!v || !l) return null;
+    return {
+      time: formatWall(l.w0, v.call?.tz ?? "UTC"),
+      speaker: l.speaker,
+      text: this.shownText(l).text,
+    };
+  }
+
+  /**
+   * The line being played (W5.6): lit, and kept in view while the audio runs and the reader has
+   * not scrolled by hand. `loaded` false means nothing is loaded: no light, and following resets.
+   */
+  playing(id: string | null, running: boolean, loaded = true): void {
+    const a = this.audio;
+    if (!loaded) {
+      a.follow = true;
+      this.followBtn.hidden = true;
+    }
+    a.loaded = loaded;
+    const row = id ? this.rows.get(id) : undefined;
+    for (const lit of this.list.querySelectorAll<HTMLElement>(".row.playing")) {
+      if (lit === row) continue;
+      lit.classList.remove("playing");
+      lit.removeAttribute("aria-current");
+    }
+    row?.classList.add("playing");
+    row?.setAttribute("aria-current", "true");
+    a.id = row ? (id as string) : null;
+    if (running && a.follow && a.id) this.keepInView(a.id);
+  }
+
+  /** A scroll by hand while audio is loaded stops the following until Follow is pressed. */
+  private byHand(): void {
+    if (!this.audio.loaded || !this.audio.follow) return;
+    this.audio.follow = false;
+    this.followBtn.hidden = false;
+  }
+
+  private keepInView(id: string): void {
+    const row = this.rows.get(id);
+    if (!row) return;
+    const s = this.scroller.getBoundingClientRect();
+    const r = row.getBoundingClientRect();
+    if (r.top >= s.top && r.bottom <= s.bottom) return;
+    this.pin.unpin();
+    row.scrollIntoView({ block: "center", behavior: "instant" });
   }
 
   /** Inserts a row in the one sort order; new lines almost always go last. */
@@ -319,19 +432,33 @@ export class TranscriptPane {
       box.hidden = true;
       return;
     }
+    const named = new Set(
+      v
+        .roster()
+        .filter((s) => s.name)
+        .map((s) => s.spk),
+    );
     replace(
       box,
       ...lines.map((p) => {
         const spk = p.ch === "mic" ? "you" : (p.spk ?? "c?");
         const r = rowElement();
         r.classList.add("draft", "turn");
+        const speaker = v.speakerLabel(spk);
+        const root = v.resolveSpeaker(spk);
+        const chip = speakerChip(
+          { layer: "live", ch: p.ch, spk: root, speaker },
+          { named: named.has(root), finalDone: v.final.state === "done" },
+        );
         fillRow(
           r,
           {
             id: `draft-${p.ch}`,
             time: p.time,
             spk,
-            speaker: v.speakerLabel(spk),
+            speaker: chip.label,
+            who: speaker,
+            provisional: chip.provisional,
             text: p.text,
             ch: p.ch,
           },

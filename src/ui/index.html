@@ -91,6 +91,11 @@
       <!-- biome-ignore lint/a11y/useMediaCaption: the transcript beside it is the caption of every line played -->
       <audio id="player" preload="none"></audio>
       <button id="play" type="button" disabled title="Play or pause (Space)">▶ Play</button>
+      <time id="pos"></time>
+      <input id="scrub" type="range" min="0" max="0" step="0.1" value="0" disabled aria-label="Position in the call" title="Back or forward 5 s: Shift+← and Shift+→">
+      <time id="pos-end"></time>
+      <select id="speed" aria-label="Playback speed" title="Slower or faster: [ and ]"></select>
+      <button id="follow" type="button" hidden title="Keep the line being played in view">Follow</button>
       <label for="balance">mic</label>
       <input id="balance" type="range" min="-1" max="1" step="0.1" value="0" aria-label="Playback balance, mic to call">
       <label for="balance">call</label>
@@ -100,6 +105,7 @@
 <div id="toast" role="alert" hidden></div>
 <button id="jump" class="go" type="button">↓ Back to live</button>
 <div id="popover" role="dialog" hidden></div>
+<div id="line-menu" role="menu" aria-label="Line" hidden></div>
 <dialog id="review" aria-label="Words to review">
   <h2>Words to review</h2>
   <p class="hint">Nothing changes your vocabulary until you approve it. Approved words go into this workspace's vocabulary file.</p>
