@@ -116,7 +116,11 @@ async function pinned(url: string, path: string, sha: string): Promise<Uint8Arra
   return b;
 }
 
-/** Mono samples at `ASR_RATE` from a PCM WAV (16-bit or 32-bit float, any rate and channels). */
+/**
+ * Mono samples at `ASR_RATE` from a PCM WAV (16-bit or 32-bit float, any rate and channels). Any
+ * other sample format (24-bit, the extensible tag) is refused rather than read as 16-bit. The
+ * resampling is linear with no low-pass filter, which is exact for the 16 kHz sets it reads today.
+ */
 export function readWav(b: Uint8Array): Float32Array {
   const v = new DataView(b.buffer, b.byteOffset, b.byteLength);
   let rate = 0;
@@ -133,6 +137,10 @@ export function readWav(b: Uint8Array): Float32Array {
       rate = v.getUint32(o + 12, true);
       bits = v.getUint16(o + 22, true);
     } else if (id === "data") {
+      if (!((format === 1 && bits === 16) || (format === 3 && bits === 32)))
+        throw new Error(
+          `WAV format ${format} with ${bits} bits: only 16-bit PCM (1) and 32-bit float (3) are read`,
+        );
       const width = bits / 8;
       const n = Math.floor(Math.min(size, b.length - o - 8) / (width * channels));
       const mono = new Float32Array(n);

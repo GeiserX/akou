@@ -142,4 +142,30 @@ describe("a WAV at the recognizer's rate", () => {
     expect(Math.max(...st.map(Math.abs))).toBeLessThan(1e-3);
     expect(() => readWav(new Uint8Array(44))).toThrow("not a PCM WAV");
   });
+
+  /** `wav`'s header with its format tag and sample width rewritten, samples left as they are. */
+  const retag = (b: Uint8Array, format: number, bits: number) => {
+    const v = new DataView(b.buffer);
+    v.setUint16(20, format, true);
+    v.setUint16(34, bits, true);
+    return b;
+  };
+
+  test("a sample format it cannot decode is refused, never read as 16-bit", () => {
+    const ok = () => wav(ASR_RATE, 1, () => 0.25, 1200);
+    // 24-bit PCM and the extensible tag (0xFFFE) would otherwise decode as 16-bit noise.
+    expect(() => readWav(retag(ok(), 1, 24))).toThrow("format 1 with 24 bits");
+    expect(() => readWav(retag(ok(), 0xfffe, 16))).toThrow("format 65534 with 16 bits");
+    expect(() => readWav(retag(ok(), 3, 16))).toThrow("format 3 with 16 bits");
+    // Positive control: 32-bit float, the other format it reads, still decodes.
+    const f = new Uint8Array(44 + 4 * 400);
+    f.set(ok().subarray(0, 44));
+    const fv = new DataView(f.buffer);
+    retag(f, 3, 32);
+    fv.setUint32(40, 4 * 400, true);
+    for (let i = 0; i < 400; i++) fv.setFloat32(44 + 4 * i, 0.25, true);
+    const x = readWav(f);
+    expect(x.length).toBe(400);
+    expect(x[399]).toBeCloseTo(0.25, 6);
+  });
 });
