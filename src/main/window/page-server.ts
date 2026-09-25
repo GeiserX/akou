@@ -22,6 +22,11 @@
  * marks as cross-site is refused; no CORS header is ever sent; every page carries a strict Content
  * Security Policy (scripts only from this origin, no inline script) and `Referrer-Policy:
  * no-referrer`.
+ *
+ * In server mode (docs/ux/SERVER.md SV-U1) there is no listener of its own: the API's listener
+ * hands it every path that is not the API (`mounted`), the `Host` rule is server mode's, a request
+ * whose `Origin` is not the page's own is refused, and `POST /session` also takes the admin
+ * password or an `admin` key; a wrong one is answered after 2 s.
  */
 
 import { randomBytes } from "node:crypto";
@@ -85,11 +90,37 @@ const SECURITY_HEADERS: Record<string, string> = {
 export const SETTINGS_PANES = ["microphone", "system-audio"] as const;
 export type SettingsPane = (typeof SETTINGS_PANES)[number];
 
+/** A wrong admin password or key is answered after this long (SV-U1). */
+export const LOGIN_FAIL_MS = 2_000;
+
+/**
+ * Server mode (docs/ux/SERVER.md SV-U1): the page is served by the API's own listener behind the
+ * proxy, not by a loopback listener of its own, and a session is opened with the admin password
+ * or an `admin` key as well as with a one-time code.
+ */
+export interface MountedPage {
+  /** The API listener's origin, for `openUrl`. */
+  origin: string;
+  /** The server-mode Host rule (`serverHostAllowed`). */
+  hostAllowed(host: string | null): boolean;
+  /** Checks the admin password or an `admin` key. */
+  login(c: { password?: string; key?: string }): Promise<boolean>;
+  /**
+   * False when the listener is on a network address with no proxy in front: then the page
+   * refuses to load, since it would go over plain HTTP. startApp refuses that bind already.
+   */
+  pageAllowed: boolean;
+}
+
 export interface PageServerOptions {
   bridge: Bridge;
   bundle: UiBundle;
   /** 0 picks a free port. */
   port?: number;
+  /** Mounted on the API's listener in server mode; absent, a loopback listener of its own. */
+  mounted?: MountedPage;
+  /** How long a failed login waits before its 401 (`LOGIN_FAIL_MS`). */
+  loginFailMs?: number;
   now?: () => number;
   /** Opens a system settings pane (the permission banner's button); false when it cannot. */
   openSettings?: (pane: SettingsPane) => Promise<boolean>;
@@ -98,6 +129,15 @@ export interface PageServerOptions {
 
 function refuse(status: number, error: string, message: string): Response {
   return withHeaders(Response.json({ error, message }, { status }));
+}
+
+/** Does an `Origin` header name the host the request was sent to? */
+function sameOrigin(origin: string, host: string | null): boolean {
+  try {
+    return host !== null && new URL(origin).host.toLowerCase() === host.toLowerCase();
+  } catch {
+    return false;
+  }
 }
 
 function withHeaders(res: Response): Response {
@@ -110,7 +150,7 @@ function withHeaders(res: Response): Response {
 export class PageServer {
   readonly port: number;
   readonly origin: string;
-  private readonly server: ReturnType<typeof Bun.serve>;
+  private readonly server: ReturnType<typeof Bun.serve> | null;
   private readonly codes = new Map<string, number>();
   private readonly sessions = new Set<string>();
   /** Open streams, so a quit (or a test) can close them all at once. */
@@ -120,6 +160,12 @@ export class PageServer {
 
   constructor(private readonly o: PageServerOptions) {
     this.now = o.now ?? Date.now;
+    if (o.mounted) {
+      this.server = null;
+      this.origin = o.mounted.origin;
+      this.port = Number(new URL(o.mounted.origin).port);
+      return;
+    }
     this.server = Bun.serve({
       hostname: "127.0.0.1",
       port: o.port ?? 0,
@@ -167,7 +213,7 @@ export class PageServer {
   async stop(): Promise<void> {
     this.stopping = true;
     this.closeStreams();
-    await Promise.race([this.server.stop(true), Bun.sleep(STOP_BUDGET_MS)]);
+    if (this.server) await Promise.race([this.server.stop(true), Bun.sleep(STOP_BUDGET_MS)]);
   }
 
   /** A signal for one stream: aborted when the client goes away or `closeStreams` runs. */
@@ -187,22 +233,58 @@ export class PageServer {
     return false;
   }
 
+  /** A request on the API's listener in server mode, with the page's own headers added. */
+  async fetch(
+    req: Request,
+    srv: { timeout(req: Request, seconds: number): void },
+  ): Promise<Response> {
+    try {
+      return withHeaders(await this.handle(req, srv));
+    } catch (err) {
+      this.o.onError?.(err);
+      return refuse(500, "internal", (err as Error).message);
+    }
+  }
+
   private async handle(
     req: Request,
     srv: { timeout(req: Request, seconds: number): void },
   ): Promise<Response> {
     if (this.stopping) return refuse(503, "stopping", "akou is quitting");
     const host = req.headers.get("host");
-    if (host !== `127.0.0.1:${this.port}` && host !== `localhost:${this.port}`) {
+    const mounted = this.o.mounted;
+    if (mounted) {
+      if (!mounted.hostAllowed(host)) {
+        return refuse(403, "bad_host", "Host must be server.public_host, or loopback");
+      }
+      if (!mounted.pageAllowed) {
+        return refuse(
+          403,
+          "no_tls",
+          "the page is not served over plain HTTP on a network address; set server.behind_proxy with a TLS proxy in front",
+        );
+      }
+    } else if (host !== `127.0.0.1:${this.port}` && host !== `localhost:${this.port}`) {
       return refuse(403, "bad_host", "Host must be this listener's own address");
     }
     const site = req.headers.get("sec-fetch-site");
     if (site !== null && site !== "same-origin" && site !== "none") {
       return refuse(403, "cross_site", "requests from another site are refused");
     }
+    // On the network a browser is a client (SV-D2), so the cross-origin refusal is here: a page on
+    // another origin may not use this one's session or open one.
+    const origin = req.headers.get("origin");
+    if (mounted && origin !== null && !sameOrigin(origin, host)) {
+      return refuse(403, "cross_site", "requests from another origin are refused");
+    }
     if (req.method === "OPTIONS") return refuse(405, "method_not_allowed", "no CORS here");
     const url = new URL(req.url);
     const path = url.pathname;
+
+    if (req.method === "GET" && path === "/session") {
+      // What the page offers when it has no session: a login form in server mode.
+      return Response.json({ login: mounted !== undefined });
+    }
 
     if (req.method === "GET" && !path.startsWith("/api/") && !path.startsWith("/app/")) {
       const file = this.o.bundle.get(path === "/" ? "/index.html" : path);
@@ -216,10 +298,24 @@ export class PageServer {
       if (site !== "same-origin" && site !== null) {
         return refuse(403, "cross_site", "a session is opened by the page itself");
       }
-      let code = "";
+      let body: { code?: unknown; password?: unknown; key?: unknown } = {};
       try {
-        code = String(((await req.json()) as { code?: unknown }).code ?? "");
+        body = (await req.json()) as typeof body;
       } catch {}
+      if (mounted && (typeof body.password === "string" || typeof body.key === "string")) {
+        const ok = await mounted.login({
+          password: typeof body.password === "string" ? body.password : undefined,
+          key: typeof body.key === "string" ? body.key : undefined,
+        });
+        if (!ok) {
+          await Bun.sleep(this.o.loginFailMs ?? LOGIN_FAIL_MS);
+          return refuse(401, "bad_login", "wrong admin password or key");
+        }
+        const session = randomBytes(32).toString("hex");
+        this.sessions.add(session);
+        return Response.json({ session });
+      }
+      const code = String(body.code ?? "");
       const at = this.codes.get(code);
       // One use only: a code is gone whether or not it was still fresh.
       this.codes.delete(code);

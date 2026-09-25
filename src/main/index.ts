@@ -49,7 +49,14 @@ import {
   processAlive,
   readLock,
 } from "../core/log/writer.ts";
-import { ensureToken, type Guard, makePrivateDir, serverGuard, TokenSource } from "./api/guard.ts";
+import {
+  ensureToken,
+  type Guard,
+  makePrivateDir,
+  serverGuard,
+  serverHostAllowed,
+  TokenSource,
+} from "./api/guard.ts";
 import { HttpError } from "./api/http.ts";
 import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
@@ -80,7 +87,10 @@ import {
   type HookStage,
   type LoadedConfig,
   loadConfig,
+  SETTING_KEYS,
+  SETTINGS,
   type SettingKey,
+  type SettingSpec,
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
@@ -1181,7 +1191,22 @@ export class AkouApp implements ApiApp {
 
   private pageServer(): Promise<PageServer> {
     this.pageStarting ??= buildUi().then((bundle) => {
+      const s = this.cfg.settings;
       this.page = new PageServer({
+        // Server mode serves the page on the API's own listener, behind the proxy (SV-U1).
+        mounted:
+          this.mode === "server" && this.server
+            ? {
+                origin: `http://127.0.0.1:${this.server.port}`,
+                hostAllowed: (host) =>
+                  serverHostAllowed(host, this.server?.port ?? 0, {
+                    publicHost: s["server.public_host"],
+                    behindProxy: s["server.behind_proxy"],
+                  }),
+                login: (c) => this.adminLogin(c),
+                pageAllowed: isLoopback(apiBind(s)) || s["server.behind_proxy"],
+              }
+            : undefined,
         bridge: new Bridge(this, (err) =>
           this.log("error", `window request: ${(err as Error).stack ?? err}`),
         ),
@@ -1231,7 +1256,16 @@ export class AkouApp implements ApiApp {
 
   async saveConfig(file: Partial<Record<SettingKey, SettingValue>>): Promise<LoadedConfig> {
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
-    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(file, null, 2)}\n`);
+    // The keys the API cannot write are the file's: what is on disk now wins over this process's
+    // copy, so a save never drops a value written since the start (`akou admin set-password`).
+    const onDisk = loadConfig(this.o.env ?? process.env, this.o.platform).file;
+    const next: Partial<Record<SettingKey, SettingValue>> = { ...file };
+    for (const k of SETTING_KEYS) {
+      if ((SETTINGS[k] as SettingSpec).apiWritable !== false) continue;
+      if (onDisk[k] === undefined) delete next[k];
+      else next[k] = onDisk[k];
+    }
+    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(next, null, 2)}\n`);
     const before = this.cfg.settings;
     this.cfg = loadConfig(this.o.env ?? process.env, this.o.platform);
     const after = this.cfg.settings;
@@ -1537,6 +1571,28 @@ export class AkouApp implements ApiApp {
     return this.keyStore;
   }
 
+  /**
+   * The web UI's admin login (SV-U1): the password against `server.admin_password_hash`, read
+   * from the file at each try so `akou admin set-password` works without a restart, or an `admin`
+   * key pasted once.
+   */
+  async adminLogin(c: { password?: string; key?: string }): Promise<boolean> {
+    if (c.key !== undefined) {
+      const id = this.keyStore?.authenticate(c.key);
+      return id?.scopes.includes("admin") ?? false;
+    }
+    if (c.password === undefined || c.password === "") return false;
+    const hash = loadConfig(this.o.env ?? process.env, this.o.platform).settings[
+      "server.admin_password_hash"
+    ];
+    if (hash === "") return false;
+    try {
+      return await Bun.password.verify(c.password, hash);
+    } catch {
+      return false;
+    }
+  }
+
   async listen(): Promise<void> {
     const s = this.cfg.settings;
     if (this.mode === "app" && s["api.bind"] !== "" && !isLoopback(s["api.bind"])) {
@@ -1552,6 +1608,10 @@ export class AkouApp implements ApiApp {
         .map((c) => parseCidr(c))
         .filter((c): c is Cidr => c !== null),
       token: () => this.tokens.current(),
+      page:
+        this.mode === "server"
+          ? async (req, srv) => (await this.pageServer()).fetch(req, srv)
+          : undefined,
       guard:
         this.o.guard ??
         (keys
