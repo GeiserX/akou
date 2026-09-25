@@ -289,7 +289,9 @@ impl Part {
     }
 
     /// The `crash-at` fault: exit 70 without `stopped`, after the packets already queued for
-    /// stdout are out, so a simulated crash comes after exactly the packets before it.
+    /// stdout are out, so a simulated crash comes after exactly the packets before it. The wait
+    /// is the writer's drain budget; a stdout blocked past it loses the rest, which the crash
+    /// test's exact packet count reports.
     fn crash(&mut self) -> Outcome {
         self.out.finish();
         Outcome::Exit(exit::SOFTWARE)
