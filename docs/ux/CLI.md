@@ -144,7 +144,7 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 | 3 | There is no call to act on | `akou mute` with nothing live; any call command when there are no calls at all; `-c` names a call that does not exist |
 | 64 | The command line is wrong | Unknown command, flag or value; a missing question |
 | 65 | A vocabulary term fails validation | `akou vocab add` with a term that fails the checks |
-| 69 | Something needed is unavailable | The app cannot be reached or launched; speech models missing; no provider answered (`ask` still prints the excerpts); a command not built yet |
+| 69 | Something needed is unavailable | The app cannot be reached or launched; speech models missing; no provider answered (`ask` still prints the excerpts); a command not built yet; `akou wait --for final.done` on a call whose final pass cannot run |
 | 70 | akou failed | A bug; a stage that failed, reported by `akou wait` |
 | 75 | Already recording | `akou start` while a call is live |
 | 77 | Permission | The token is refused; an OS grant is missing |

@@ -23,6 +23,8 @@ let dir: { dir: string; cleanup: () => void };
 let akou: ReturnType<typeof rigCli>;
 /** Calls whose final pass is made to fail: its audio file does not exist. */
 const failing = new Set<string>();
+/** Calls whose audio the final pass cannot read at all, so the pass can never start. */
+const unreadable = new Set<string>();
 
 beforeAll(async () => {
   dir = tempDir();
@@ -35,26 +37,32 @@ beforeAll(async () => {
   rig = await appRig({
     helperArgs: ["--wav", wav],
     finalAudio: ({ id, parts }) =>
-      failing.has(id)
-        ? {
-            kind: "wav",
-            files: Object.fromEntries(parts.map((p) => [p, join(dir.dir, "gone.wav")])),
-          }
-        : {
-            kind: "module",
-            path: FAKE_MODELS,
-            options: {
-              parts: Object.fromEntries(
-                parts.map((p) => [
-                  p,
-                  {
-                    mic: concat(silence(0.3), speak(["thanks", "meeting", "today"]), silence(1)),
-                    call: concat(silence(1.8), speak(["yes", "build"], { voice: 2 }), silence(0.5)),
-                  },
-                ]),
-              ),
+      unreadable.has(id)
+        ? null
+        : failing.has(id)
+          ? {
+              kind: "wav",
+              files: Object.fromEntries(parts.map((p) => [p, join(dir.dir, "gone.wav")])),
+            }
+          : {
+              kind: "module",
+              path: FAKE_MODELS,
+              options: {
+                parts: Object.fromEntries(
+                  parts.map((p) => [
+                    p,
+                    {
+                      mic: concat(silence(0.3), speak(["thanks", "meeting", "today"]), silence(1)),
+                      call: concat(
+                        silence(1.8),
+                        speak(["yes", "build"], { voice: 2 }),
+                        silence(0.5),
+                      ),
+                    },
+                  ]),
+                ),
+              },
             },
-          },
   });
   akou = rigCli(rig);
 });
@@ -116,6 +124,66 @@ describe("[PG-S5] akou wait", () => {
   );
 
   test(
+    "a restarted call waits for the new final pass, never the old one",
+    async () => {
+      const id = await liveCall();
+      expect((await akou(["stop"])).code).toBe(0);
+      expect((await akou(["wait", id, "--for", "final.done"])).code).toBe(0);
+      const r = await rig.api("POST", `/calls/${id}/restart`, {});
+      expect(r.body.part).toBe(2);
+      await until(
+        async () =>
+          (await rig.api("GET", `/calls/${id}/transcript`)).body.lines.some(
+            (l: { part: number }) => l.part === 2,
+          ),
+        10_000,
+        "a live line in part 2",
+      );
+      expect((await akou(["stop"])).code).toBe(0);
+      const ended = (await rig.api("GET", `/calls/${id}/events`)).body.events
+        .filter((e: { type: string }) => e.type === "call.ended")
+        .at(-1).seq;
+      const w = await akou(["wait", id, "--for", "final.done", "--timeout", "20s", "--json"]);
+      expect([w.code, w.err]).toEqual([0, ""]);
+      expect(w.json.event.seq).toBeGreaterThan(ended);
+      expect(w.json.event.parts).toContain(2);
+    },
+    LONG,
+  );
+
+  test(
+    "`akou finalize --force && akou wait` waits for the forced pass",
+    async () => {
+      const id = await liveCall();
+      expect((await akou(["stop"])).code).toBe(0);
+      expect((await akou(["wait", id, "--for", "final.done"])).code).toBe(0);
+      const before = (await rig.api("GET", `/calls/${id}/events`)).body.cursor;
+      expect((await akou(["finalize", id, "--force"])).code).toBe(0);
+      const w = await akou(["wait", id, "--for", "final.done", "--timeout", "20s", "--json"]);
+      expect([w.code, w.err]).toEqual([0, ""]);
+      expect(w.json.event.seq).toBeGreaterThan(before);
+    },
+    LONG,
+  );
+
+  test(
+    "a final pass that cannot start exits 69 at once with the reason",
+    async () => {
+      const id = await liveCall();
+      unreadable.add(id);
+      expect((await akou(["stop"])).code).toBe(0);
+      const t0 = Date.now();
+      const w = await akou(["wait", id, "--for", "final.done", "--timeout", "20s"]);
+      expect(w.code).toBe(69);
+      expect(w.err).toContain("cannot read this call's audio");
+      expect(Date.now() - t0).toBeLessThan(10_000);
+      const call = (await rig.api("GET", `/calls/${id}`)).body;
+      expect(call.final.state).toBe("failed");
+    },
+    LONG,
+  );
+
+  test(
     "a stage that never comes exits 124 at the timeout; one reached later exits 0",
     async () => {
       // No export.dir and no notes: neither stage comes on its own.
@@ -168,5 +236,30 @@ describe("[PG-S5] akou wait", () => {
     );
     expect(stageAfter("enhanced", pending, [{ type: "export.done" }]).state).toBe("pending");
     expect(stageAfter("exported", pending, [{ type: "export.done" }]).state).toBe("done");
+  });
+
+  test("stageAfter: a new part or a new final layer makes an earlier stage stale", () => {
+    const pending = { state: "pending" } as const;
+    // A restarted call: the old final.done does not count once a part starts after it.
+    const restarted = [{ type: "final.done" }, { type: "part.started" }, { type: "call.ended" }];
+    expect(stageAfter("final.done", pending, restarted)).toEqual(pending);
+    expect(
+      stageAfter("final.done", pending, [
+        ...restarted,
+        { type: "final.started" },
+        { type: "final.done" },
+      ]).state,
+    ).toBe("done");
+    // Notes and exports made before the final layer wait for the ones after it.
+    for (const [stage, type] of [
+      ["enhanced", "enhanced"],
+      ["exported", "export.done"],
+    ] as const) {
+      expect(stageAfter(stage, pending, [{ type }, { type: "final.done" }])).toEqual(pending);
+      expect(stageAfter(stage, pending, [{ type }, { type: "part.started" }])).toEqual(pending);
+      // Positive control: one after the final layer counts, and a failed pass keeps the old one.
+      expect(stageAfter(stage, pending, [{ type: "final.done" }, { type }]).state).toBe("done");
+      expect(stageAfter(stage, pending, [{ type }, { type: "final.failed" }]).state).toBe("done");
+    }
   });
 });

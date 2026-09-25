@@ -103,6 +103,8 @@ export interface FinalInput {
   decode: DecodeList | null;
   files?: readonly { path: string; sha256: string }[];
   pid?: number;
+  /** The host already wrote `final.started` (finalizeCall), so the pass does not write it again. */
+  announced?: boolean;
   options?: Partial<FinalOptions>;
 }
 
@@ -347,7 +349,7 @@ export async function runFinalPass(
     .filter((p) => audio.length(p) > 0);
   const skipped: SkippedSpan[] = [];
   let step = "energy";
-  emit({ type: "final.started", pid: input.pid ?? process.pid });
+  if (!input.announced) emit({ type: "final.started", pid: input.pid ?? process.pid });
   try {
     // 1. Energy, before any model loads.
     const energy = new Map<string, boolean>();
@@ -573,7 +575,14 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
     const audio = await openFinalAudio(m.audio);
     try {
       result = await runFinalPass(
-        { events: m.events, audio, decode: m.decode, files: m.files, options: m.options },
+        {
+          events: m.events,
+          audio,
+          decode: m.decode,
+          files: m.files,
+          announced: true,
+          options: m.options,
+        },
         models,
         emit,
         (level, msg) => reply({ type: "log", level, msg }),
@@ -649,6 +658,9 @@ export async function finalizeCall(
   o: FinalizeOptions,
 ): Promise<FinalResult & { loads: Record<string, number> }> {
   const release = call.holdWriter();
+  // Written before the first await, so the pass is in the log by the time the caller answers: a
+  // `finalize --force` followed by `akou wait` never takes the earlier final.done for this one.
+  call.record({ type: "final.started", pid: process.pid });
   try {
     const { events } = await readLog(join(call.dir, EVENTS_FILE));
     const view = fold(events);

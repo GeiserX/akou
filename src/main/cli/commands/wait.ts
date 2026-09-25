@@ -6,11 +6,15 @@
  *
  * It reads the call's log and follows it by long poll, the same stream `akou tail -f` uses, so it
  * never polls call folders and sees a stage the moment its event is written. The stage is reached
- * when its event is in the log: `final.done` (a later `final.started` means the pass runs again,
- * so it waits for that one), `enhanced`, or `export.done`. Exit codes:
+ * when its event is in the log and nothing since has made it stale: `final.done` (a later
+ * `final.started` or a new part means the pass runs again, so it waits for that one), `enhanced`
+ * or `export.done` (a later `final.done` or a new part changes the transcript they were made
+ * from, so it waits for the next). Exit codes:
  *
- *   0 the stage is reached (at once if it already was) · 70 it failed: `final.failed`, or a call
- *   that never recorded (`call.failed`) · 124 the timeout passed first, like `timeout(1)`
+ *   0 the stage is reached (at once if it already was) · 69 the final pass cannot run on this call
+ *   (`final.failed {step: unavailable}`: no readable audio or no models) · 70 it failed:
+ *   `final.failed`, or a call that never recorded (`call.failed`) · 124 the timeout passed first,
+ *   like `timeout(1)`
  *
  * `enhanced` and `exported` have no failure event: notes are written when someone asks for them
  * or the provider re-enhances, and the export needs `export.dir`. Waiting for one that never comes
@@ -44,17 +48,21 @@ export function stageAfter(
   let s = before;
   for (const e of events) {
     if (e.type === "call.failed") s = { state: "failed", event: e };
+    // New audio makes every stage stale.
+    else if (e.type === "part.started") s = { state: "pending" };
     else if (stage === "final.done") {
       if (e.type === "final.started") s = { state: "pending" };
       else if (e.type === "final.done") s = { state: "done", event: e };
       else if (e.type === "final.failed") s = { state: "failed", event: e };
-    } else if (stage === "enhanced" && e.type === "enhanced") s = { state: "done", event: e };
+    } else if (e.type === "final.done") s = { state: "pending" };
+    else if (stage === "enhanced" && e.type === "enhanced") s = { state: "done", event: e };
     else if (stage === "exported" && e.type === "export.done") s = { state: "done", event: e };
   }
   return s;
 }
 
 function failure(e: Body): string {
+  if (e.type === "final.failed" && e.step === "unavailable") return `no final pass: ${e.error}`;
   if (e.type === "final.failed") return `the final pass failed at ${e.step}: ${e.error}`;
   if (e.type === "call.failed") return `the call never recorded (${e.stage}: ${e.error})`;
   return e.type;
@@ -99,7 +107,10 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
     s = stageAfter(stage as WaitStage, s, r.body.events);
     cursor = r.body.cursor;
     if (s.state === "done") return report("done", EXIT.ok, `${id}: ${stage}`, s.event);
-    if (s.state === "failed") return report("failed", EXIT.software, failure(s.event), s.event);
+    if (s.state === "failed") {
+      const code = s.event.step === "unavailable" ? EXIT.unavailable : EXIT.software;
+      return report("failed", code, failure(s.event), s.event);
+    }
     const left = Math.ceil((deadline - Date.now()) / 1000);
     if (left <= 0) {
       return report(
@@ -114,7 +125,8 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
 
 export const waitCommand: Command = {
   name: "wait",
-  summary: "Block until a call reaches final.done, enhanced or exported (70 failed, 124 timeout)",
+  summary:
+    "Block until a call reaches final.done, enhanced or exported (69 unavailable, 70 failed, 124 timeout)",
   usage: "akou wait [CALL] --for final.done|enhanced|exported [--timeout 30m] [--json]",
   flags: { for: { type: "string" }, timeout: { type: "string" } },
   run,

@@ -545,7 +545,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 | `akou note "text"` · `akou remember "text"` · `akou remember --del ID` | Notepad line, agent memory, retract a remembered line |
 | `akou vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | The custom vocabulary: entries in force, add a word (mid-call with `--call`), proposals, ranked candidates from a call or text, decode safety of a word, import of older list formats, the post-call pass. |
 | `akou enhance [--template T] [--call ID]` · `akou finalize [CALL] [--force]` | Post-call |
-| `akou wait [CALL] --for final.done\|enhanced\|exported [--timeout 30m]` | Blocks until the call reaches the stage: exit 0, 70 when it failed, 124 at the timeout |
+| `akou wait [CALL] --for final.done\|enhanced\|exported [--timeout 30m]` | Blocks until the call reaches the stage: exit 0, 69 when the final pass cannot run (`final.failed {step: unavailable}`), 70 when it failed, 124 at the timeout. A stage reached before a new part, or notes and an export made before a new final layer, do not count |
 | `akou calls [-w WS] [--limit N] [--failed]` | Lists calls by date, title, duration, participants. No content search |
 | `akou show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | One call's transcript or notes |
 | `akou export [CALL] [--to DIR]` · `akou hooks run CALL [--stage S]` | Hand-off, re-run |
