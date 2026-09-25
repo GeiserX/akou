@@ -361,15 +361,40 @@ describe("capAnswer, the last guard every tool answer passes", () => {
     const lines = text.split("\n");
     expect(lines.filter((l) => l === CALL_TEXT_OPEN)).toHaveLength(1);
     expect(lines.filter((l) => l === CALL_TEXT_CLOSE)).toHaveLength(1);
-    const note = lines.at(-1) as string;
+    // The cut falls in the block: the note right after its close, and what followed it kept.
+    const note = lines[lines.indexOf(CALL_TEXT_CLOSE) + 1] as string;
     expect(note).toMatch(/^\[cut here: .*8,000-token ceiling; \d+ lines left out/);
-    expect(lines.indexOf(CALL_TEXT_CLOSE)).toBe(lines.length - 2);
+    expect(lines.slice(-2)).toEqual([note, "footer: 1"]);
     expect(lines[0]).toBe("Header line");
     const sc = out.structuredContent as { call: string; callText: string };
     expect(sc.call).toBe("c1");
     expect(estimateTokens(JSON.stringify(sc))).toBeLessThanOrEqual(MAX_ANSWER_TOKENS);
     expect(sc.callText.split("\n").filter((l) => l === CALL_TEXT_CLOSE)).toHaveLength(1);
     expect(out.isError).toBeUndefined();
+  });
+
+  test("[PG-Z1] a cut keeps the structured call text the same block as in the text", () => {
+    // Quotes escape in JSON, so the structured result outgrows the text: find a block whose text
+    // fits the ceiling and whose JSON does not, beside one where both are over.
+    const said = (n: number) =>
+      quoteCallText(
+        Array.from({ length: n }, (_, i) => `"line" ${i} "of" "what" "was" "said"`).join("\n"),
+      );
+    let n = 100;
+    while (estimateTokens(JSON.stringify({ callText: said(n) })) <= MAX_ANSWER_TOKENS) n += 10;
+    expect(estimateTokens(said(n))).toBeLessThanOrEqual(MAX_ANSWER_TOKENS);
+    for (const t of [said(n), said(5000)]) {
+      const out = capAnswer({
+        content: [{ type: "text", text: t }],
+        structuredContent: { call: "c1", callText: t },
+      });
+      const text = out.content[0]?.text as string;
+      const sc = out.structuredContent as { call: string; callText: string };
+      expect(sc.callText).not.toBe(t);
+      expect(estimateTokens(text)).toBeLessThanOrEqual(MAX_ANSWER_TOKENS);
+      expect(estimateTokens(JSON.stringify(sc))).toBeLessThanOrEqual(MAX_ANSWER_TOKENS);
+      expect(text.includes(sc.callText)).toBe(true);
+    }
   });
 
   test("an answer that cannot be cut on a line becomes an error that says what to narrow", () => {

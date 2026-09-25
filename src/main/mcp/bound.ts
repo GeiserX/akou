@@ -75,8 +75,7 @@ export function capAnswer(r: ToolResult, max = MAX_ANSWER_TOKENS, less = ASK_FOR
   const scTokens = sc === undefined ? 0 : estimateTokens(JSON.stringify(sc));
   if (textTokens <= max && scTokens <= max) return r;
   if (r.isError) return tooLarge(Math.max(textTokens, scTokens), less);
-  const cut = textTokens <= max ? text : cutText(text, max, less);
-  if (cut === null) return tooLarge(textTokens, less);
+  let body = text;
   let data = sc;
   if (sc !== undefined && scTokens > max) {
     // Cut the long strings (call text); what else is typed stays as it is.
@@ -94,9 +93,14 @@ export function capAnswer(r: ToolResult, max = MAX_ANSWER_TOKENS, less = ASK_FOR
       const c = cutText(v as string, Math.floor(share / 1.25), less);
       if (c === null) return tooLarge(scTokens, less);
       data[k] = c;
+      // The same call text in the text answer gets the same cut, so the two stay one block (PG-Z1).
+      const at = body.indexOf(v as string);
+      if (at >= 0) body = body.slice(0, at) + c + body.slice(at + (v as string).length);
     }
     if (estimateTokens(JSON.stringify(data)) > max) return tooLarge(scTokens, less);
   }
+  const cut = estimateTokens(body) <= max ? body : cutText(body, max, less);
+  if (cut === null) return tooLarge(textTokens, less);
   return {
     content: [{ type: "text", text: cut }],
     ...(data !== undefined ? { structuredContent: data } : {}),
