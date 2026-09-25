@@ -8,7 +8,7 @@ The contracts already built are in [DESIGN.md](../DESIGN.md) section 6.1 (comman
 
 - **One client.** Every command is a thin client of `http://127.0.0.1:<port>/v1`, the same API the MCP server uses. The CLI never reads a call folder. If the app is not running, a command that needs it launches it headless and waits up to 3 s.
 - **One way to name a call.** `-c ID|live|last` works on every command that touches a call. With no `-c`, controls act on the live call only; everything else uses the live call, or the last one when nothing is live, and says so on stderr.
-- **Three output modes.** Human text by default. `--json` prints the API's answer as one JSON value, errors included. A command that runs over time (`tail -f`, `events -f`) prints one JSON object per line.
+- **Three output modes.** Human text by default. `--json` prints the API's answer as one JSON value, errors included. `tail -f --json` prints one JSON object per line. `events` is the one command with no human form: it always prints one JSON object per line (PG-S3), and the human view of a live call is `tail -f` or `watch`.
 - **Exit codes mean one thing each.** 3 is always "there is no call to act on", in every command.
 - **Errors say what to do.** One line for what happened, then at most one `try:` line naming a command that exists.
 - **`akou watch` is the live call in a terminal.** The transcript scrolls, the in-progress line redraws in place, and what you type is a question for the call. Lines that start with `/` are the same CLI commands, bound to that call. It keeps scrollback and needs no full-screen library.
@@ -117,11 +117,11 @@ Share: off
 
 ### `--json`
 
-One JSON value on stdout: the API's body, unchanged. An error is `{"error": "<code>", "message": "…", "hint": "…"}` (the `hint` is new, CLI-19). Clients ignore fields they do not know; the API's versioning rule covers the CLI's JSON (PROGRAMMABILITY section 3). We do not add a second envelope on top: the API body is the contract, so the CLI, MCP and a `curl` user read the same thing.
+One JSON value on stdout. A success is the API's body, unchanged. An error is the API's error body, `{"error": "<code>", "message": "…"}`, plus one field the CLI adds, `hint` (CLI-19); nothing else changes. Clients ignore fields they do not know; the API's versioning rule covers the CLI's JSON (PROGRAMMABILITY section 3). We do not add a second envelope on top: the API body is the contract, so the CLI, MCP and a `curl` user read the same thing.
 
 ### Streams
 
-A command that prints over time prints one JSON object per line with `--json`: `tail -f --json` (has) and `events -f` (PG-S3, which has every event type and a server-side filter). Each line is flushed as it is written, so `| head -3` exits after three lines. `ask` streams tokens on a terminal; with `--json` it prints the final answer object once.
+A command that prints over time prints one JSON object per line: `tail -f` with `--json` (has), and `events` always, with or without `--json` (PG-S3, which has every event type and a server-side filter). An event has no human form, so `events` has no text mode. Each line is flushed as it is written, so `| head -3` exits after three lines. `ask` streams tokens on a terminal; with `--json` it prints the final answer object once.
 
 ### Progress
 
