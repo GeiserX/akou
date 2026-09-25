@@ -261,7 +261,6 @@ function loginPage(o: { failMs: number; login: MountedPage["login"] }): PageServ
       origin: "http://127.0.0.1:8476",
       hostAllowed: () => true,
       originAllowed: () => false,
-      pageAllowed: true,
       login: o.login,
     },
   });

@@ -141,7 +141,7 @@ export const SETTINGS = {
     // Where the API is reachable, and who may reach it below, change only in the file: the token
     // must not become a way to put the API on the network.
     apiWritable: false,
-    doc: "Address the API listens on in server mode. Empty: 0.0.0.0 in server mode. Any address that is not loopback needs `server.behind_proxy`. The app always listens on 127.0.0.1.",
+    doc: "Address the API listens on in server mode: 127.0.0.1, 0.0.0.0 or ::, the binds akou's CLI on the same box reaches. Empty: 0.0.0.0. 0.0.0.0 and :: need `server.behind_proxy`. The app always listens on 127.0.0.1.",
   },
   "server.enabled": {
     type: "boolean",

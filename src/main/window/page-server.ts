@@ -111,11 +111,6 @@ export interface MountedPage {
   originAllowed(origin: string): boolean;
   /** Checks the admin password or an `admin` key. */
   login(c: { password?: string; key?: string }): Promise<boolean>;
-  /**
-   * False when the listener is on a network address with no proxy in front: then the page
-   * refuses to load, since it would go over plain HTTP. startApp refuses that bind already.
-   */
-  pageAllowed: boolean;
 }
 
 export interface PageServerOptions {
@@ -266,15 +261,10 @@ export class PageServer {
     const host = req.headers.get("host");
     const mounted = this.o.mounted;
     if (mounted) {
+      // No plain HTTP on the network: `apiBind` refuses to start on a network address unless
+      // `server.behind_proxy` says a TLS proxy is in front, so the page needs no check of its own.
       if (!mounted.hostAllowed(host)) {
         return refuse(403, "bad_host", "Host must be server.public_host, or loopback");
-      }
-      if (!mounted.pageAllowed) {
-        return refuse(
-          403,
-          "no_tls",
-          "the page is not served over plain HTTP on a network address; set server.behind_proxy with a TLS proxy in front",
-        );
       }
     } else if (host !== `127.0.0.1:${this.port}` && host !== `localhost:${this.port}`) {
       return refuse(403, "bad_host", "Host must be this listener's own address");

@@ -152,13 +152,43 @@ describe("SV-P5: the bind address and the source address", () => {
         return apiBind(loadConfig({ AKOU_HOME: t.dir }).settings);
       };
       expect(at({ "server.enabled": true, "server.behind_proxy": true })).toBe("0.0.0.0");
-      expect(at({ "server.enabled": true, "api.bind": "::1" })).toBe("::1");
+      expect(at({ "server.enabled": true, "server.behind_proxy": true, "api.bind": "::" })).toBe(
+        "::",
+      );
       expect(() => at({ "server.enabled": true })).toThrow(StartRefused);
       // The app keeps 127.0.0.1 whatever api.bind says.
       expect(at({ "api.bind": "0.0.0.0" })).toBe("127.0.0.1");
       // AKOU_SERVER is the switch, as the image sets it.
       writeSettings(t.dir, { "server.behind_proxy": true });
       expect(apiBind(loadConfig({ AKOU_HOME: t.dir, AKOU_SERVER: "1" }).settings)).toBe("0.0.0.0");
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("a bind the CLI on this box cannot reach at 127.0.0.1 is refused at start", () => {
+    const t = tempDir("akou-bind-");
+    try {
+      const at = (bind: string) => {
+        writeSettings(t.dir, {
+          "server.enabled": true,
+          "server.behind_proxy": true,
+          "api.bind": bind,
+        });
+        return apiBind(loadConfig({ AKOU_HOME: t.dir }).settings);
+      };
+      for (const bind of ["192.168.1.5", "::1", "127.0.0.2", "localhost"]) {
+        let err: unknown = null;
+        try {
+          at(bind);
+        } catch (e) {
+          err = e;
+        }
+        expect([bind, err instanceof StartRefused]).toEqual([bind, true]);
+        expect((err as Error).message).toContain("127.0.0.1, 0.0.0.0 or ::");
+      }
+      // Positive control: the three binds the local CLI reaches.
+      expect(["127.0.0.1", "0.0.0.0", "::"].map(at)).toEqual(["127.0.0.1", "0.0.0.0", "::"]);
     } finally {
       t.cleanup();
     }

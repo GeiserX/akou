@@ -241,6 +241,13 @@ export class StartRefused extends Error {
 export function apiBind(s: LoadedConfig["settings"]): string {
   if (!s["server.enabled"]) return "127.0.0.1";
   const bind = s["api.bind"] === "" ? "0.0.0.0" : s["api.bind"];
+  // The CLI and the MCP server on this box dial 127.0.0.1 (`runtime.json` holds the port only),
+  // which reaches these three binds and no other.
+  if (bind !== "127.0.0.1" && bind !== "0.0.0.0" && bind !== "::") {
+    throw new StartRefused(
+      `api.bind is ${bind}; server mode binds 127.0.0.1, 0.0.0.0 or ::, since akou's CLI on this box reaches the server at 127.0.0.1`,
+    );
+  }
   if (!isLoopback(bind) && !s["server.behind_proxy"]) {
     throw new StartRefused(
       `api.bind is ${bind}, which is not loopback, and server.behind_proxy is false: put a reverse proxy with TLS in front of akou and set server.behind_proxy to true, or set api.bind to 127.0.0.1`,
@@ -1231,7 +1238,6 @@ export class AkouApp implements ApiApp {
                   }
                 },
                 login: (c) => this.adminLogin(c),
-                pageAllowed: isLoopback(apiBind(s)) || s["server.behind_proxy"],
               }
             : undefined,
         bridge: new Bridge(this, (err) =>
