@@ -220,6 +220,8 @@ export interface McpResult {
   previous?: string;
   /** For `other-scope`: Claude Code's scope of the entry akou left alone, `local` or `project`. */
   scope?: string;
+  /** For `other-scope` on uninstall: whether a user entry under that one was removed. */
+  userRemoved?: boolean;
   error?: string;
 }
 
@@ -269,12 +271,18 @@ export function unregisterMcp(h: Harness, env: Record<string, string | undefined
   if (got.code !== 0) return { harness: h, action: "absent", command };
   const scope = registeredScope(h, got.out);
   const r = runProgram(path, mcpArgs(h, "remove"), env);
-  // The entry shown is one akou never adds; a user entry under it, if any, was removed.
+  // The entry shown is one akou never adds, and it still gives the harness the akou tools; a user
+  // entry under it, if any, was removed.
   if (scope !== "user") {
     const previous = registeredCommand(h, got.out) ?? undefined;
-    return r.code === 0
-      ? { harness: h, action: "removed", command }
-      : { harness: h, action: "other-scope", command, previous, scope };
+    return {
+      harness: h,
+      action: "other-scope",
+      command,
+      previous,
+      scope,
+      userRemoved: r.code === 0,
+    };
   }
   if (r.code !== 0) {
     const why = firstLine(r.err) || firstLine(r.out) || `exit ${r.code}`;
@@ -296,7 +304,7 @@ function mcpText(r: McpResult): string {
       const drop = shellLine([r.harness, "mcp", "remove", "-s", r.scope ?? "local", MCP_NAME]);
       return adding
         ? `${who}: left alone the akou entry in its ${r.scope} config, which runs ${r.previous ?? "another command"} and wins over the one akou adds; to use this akou, run: ${drop}, then: ${line}`
-        : `${who}: left alone the akou entry in its ${r.scope} config, which akou does not add; to remove it, run: ${drop}`;
+        : `${who}: ${r.userRemoved ? `removed the akou tools from its user config (${line}), and ` : ""}left alone the akou entry in its ${r.scope} config, which akou does not add; to remove it, run: ${drop}`;
     }
     case "unchanged":
       return `${who}: the akou tools are already registered`;
@@ -407,7 +415,13 @@ export const skillCommand: Command = {
     else {
       targets = (["claude", "codex"] as const)
         .map((h) => ({ dir: harnessSkillsDir(h, env), harness: h }))
-        .filter((t) => existsSync(join(t.dir, "..")));
+        // Uninstall also reaches a harness on PATH whose folder is gone: Claude Code keeps its
+        // user entries in ~/.claude.json, outside ~/.claude.
+        .filter(
+          (t) =>
+            existsSync(join(t.dir, "..")) ||
+            (sub === "uninstall" && findProgram(t.harness, env) !== null),
+        );
       if (targets.length === 0) {
         if (sub === "uninstall") {
           if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, removed: [], mcp: [] }));

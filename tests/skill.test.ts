@@ -477,6 +477,73 @@ describe("[PG-M1] akou skill install registers the akou tools with the harness",
     }
   }, 30_000);
 
+  test("uninstall with a user entry under a local one removes the user entry and says the local one still wins", async () => {
+    const t = tempDir();
+    try {
+      const f = fakeHarnesses(t.dir, ["claude"]);
+      const akou = join(t.dir, "bin", "akou");
+      const other = join(t.dir, "checkout", "akou");
+      writeFileSync(
+        join(f.state, "claude-local.json"),
+        JSON.stringify({ akou: { command: other, args: ["mcp"] } }),
+      );
+      writeFileSync(
+        join(f.state, "claude.json"),
+        JSON.stringify({ akou: { command: akou, args: ["mcp"] } }),
+      );
+      const gone = await cli(f.env, ["skill", "uninstall", "--harness", "claude", "--json"], {
+        self: [akou],
+      });
+      expect([gone.code, gone.err]).toEqual([0, ""]);
+      expect(f.entries("claude")).toEqual({});
+      // Claude Code still has the akou tools from the local entry, so this is not "removed".
+      expect(gone.json.mcp).toEqual([
+        {
+          harness: "claude",
+          action: "other-scope",
+          scope: "local",
+          previous: `${other} mcp`,
+          userRemoved: true,
+          command: ["claude", "mcp", "remove", "-s", "user", "akou"],
+        },
+      ]);
+      writeFileSync(
+        join(f.state, "claude.json"),
+        JSON.stringify({ akou: { command: akou, args: ["mcp"] } }),
+      );
+      const text = await cli(f.env, ["skill", "uninstall", "--harness", "claude"], {
+        self: [akou],
+      });
+      expect(text.out).toContain("Claude Code: removed the akou tools from its user config");
+      expect(text.out).toContain("claude mcp remove -s local akou");
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
+
+  test("uninstall reaches a harness on PATH whose folder is gone: Claude Code keeps entries in ~/.claude.json", async () => {
+    const t = tempDir();
+    try {
+      // No ~/.claude and no ~/.codex, but the programs are on PATH and Claude Code has the entry.
+      const f = fakeHarnesses(t.dir);
+      const akou = join(t.dir, "bin", "akou");
+      writeFileSync(
+        join(f.state, "claude.json"),
+        JSON.stringify({ akou: { command: akou, args: ["mcp"] } }),
+      );
+      const gone = await cli(f.env, ["skill", "uninstall"], { self: [akou] });
+      expect([gone.code, gone.err]).toEqual([0, ""]);
+      expect(f.entries("claude")).toEqual({});
+      expect(gone.out).toContain("Claude Code: removed the akou tools");
+      // Install still needs the folder: it has nowhere to copy the skills.
+      const install = await cli(f.env, ["skill", "install"], { self: [akou] });
+      expect(install.code).toBe(69);
+      expect(f.adds("claude")).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
+
   test("the command registered is this akou: the compiled binary, or Bun on the CLI source", () => {
     const src = akouCommand();
     expect(src).toEqual([
