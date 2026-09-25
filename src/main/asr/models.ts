@@ -35,7 +35,7 @@ export interface ModelSpecEntry {
 }
 
 const HF_PARAKEET =
-  "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3-int8/resolve/2bda32ec70b097a55adaa07d9a7173915b43cc78";
+  "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/1a468a35cbba69418f126de829e75261dea4a4e4";
 const HF_PARAKEET_UPSTREAM =
   "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3/resolve/541d1f99c6b0c3cd0b11a95167540bb8edefd82b";
 const HF_PYANNOTE =
@@ -47,9 +47,19 @@ const GH = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
 const HF_NEMOTRON =
   "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/nemotron-3-diarization";
 
-export const RECOGNIZER = "parakeet-tdt-0.6b-v3-int8";
+/**
+ * The full-precision (fp32) export: a third fewer word errors in English and a fifth fewer in Spanish
+ * than the int8 build on FLEURS, and more names found under biasing (docs/research/asr-benchmark.md).
+ */
+export const RECOGNIZER = "parakeet-tdt-0.6b-v3-fp32";
 export const NEMOTRON = "nemotron-3-diarization";
 export const NEMOTRON_FILE = "nemotron3_diar_v3.onnx";
+
+/**
+ * Model folders an earlier akou downloaded and nothing reads any more. They are deleted once every
+ * current file is in place and verified, never before, so an interrupted download leaves them be.
+ */
+export const RETIRED_MODELS: readonly string[] = ["parakeet-tdt-0.6b-v3-int8"];
 
 export const MODELS: readonly ModelSpecEntry[] = [
   {
@@ -59,22 +69,30 @@ export const MODELS: readonly ModelSpecEntry[] = [
     source: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
     files: [
       {
-        name: "encoder.int8.onnx",
-        url: `${HF_PARAKEET}/encoder.int8.onnx`,
-        sha256: "acfc2b4456377e15d04f0243af540b7fe7c992f8d898d751cf134c3a55fd2247",
-        size: 652184281,
+        name: "encoder.onnx",
+        url: `${HF_PARAKEET}/encoder.onnx`,
+        sha256: "3eed7ce424bf8339ad09233533c687e2dbd07e74ccf5027b5e7344019ea373b0",
+        size: 41766257,
       },
       {
-        name: "decoder.int8.onnx",
-        url: `${HF_PARAKEET}/decoder.int8.onnx`,
-        sha256: "179e50c43d1a9de79c8a24149a2f9bac6eb5981823f2a2ed88d655b24248db4e",
-        size: 11845275,
+        // The encoder's weights, over protobuf's 2 GB limit. encoder.onnx names this file, so it
+        // must keep this exact name and sit in the same folder.
+        name: "encoder.weights",
+        url: `${HF_PARAKEET}/encoder.weights`,
+        sha256: "3af3f51af5f2d01dbbf5af47d42c7962a2c205f11004254bb4f2b979862f39a8",
+        size: 2435420160,
       },
       {
-        name: "joiner.int8.onnx",
-        url: `${HF_PARAKEET}/joiner.int8.onnx`,
-        sha256: "3164c13fc2821009440d20fcb5fdc78bff28b4db2f8d0f0b329101719c0948b3",
-        size: 6355277,
+        name: "decoder.onnx",
+        url: `${HF_PARAKEET}/decoder.onnx`,
+        sha256: "d593cdb0e571f5a457ec2219af9968cbf6b0e8198e8f7839b40a8754593bf68c",
+        size: 47233743,
+      },
+      {
+        name: "joiner.onnx",
+        url: `${HF_PARAKEET}/joiner.onnx`,
+        sha256: "b9b0bcf88ac571902e69a6536223ed2d94885e981b85045410f1403d53121a63",
+        size: 25286330,
       },
       {
         name: "tokens.txt",
@@ -172,6 +190,29 @@ export function modelEntry(id: string): ModelSpecEntry {
 
 export function modelFile(dir: string, id: string, name: string): string {
   return join(dir, id, name);
+}
+
+/**
+ * Deletes the retired model folders in `dir` (`RETIRED_MODELS`) and returns the ids it removed.
+ * Callers run it only after every current file is verified. A folder that cannot be removed (a file
+ * held open on Windows) is left for the next pull, never failing the one that just succeeded.
+ */
+export function pruneRetiredModels(
+  dir: string,
+  retired: readonly string[] = RETIRED_MODELS,
+): string[] {
+  const removed: string[] = [];
+  for (const id of retired) {
+    const path = join(dir, id);
+    if (!existsSync(path)) continue;
+    try {
+      rmSync(path, { recursive: true, force: true });
+      removed.push(id);
+    } catch {
+      // Left in place; the next pull tries again.
+    }
+  }
+  return removed;
 }
 
 /** `~/.local/share/akou/models` on Linux, `~/Library/Application Support/akou/models` on macOS. */

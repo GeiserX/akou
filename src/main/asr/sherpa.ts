@@ -212,9 +212,9 @@ export class SherpaModels implements ModelSet {
       featConfig: { sampleRate: ASR_RATE, featureDim: 80 },
       modelConfig: {
         transducer: {
-          encoder: this.file(RECOGNIZER, "encoder.int8.onnx"),
-          decoder: this.file(RECOGNIZER, "decoder.int8.onnx"),
-          joiner: this.file(RECOGNIZER, "joiner.int8.onnx"),
+          encoder: this.file(RECOGNIZER, "encoder.onnx"),
+          decoder: this.file(RECOGNIZER, "decoder.onnx"),
+          joiner: this.file(RECOGNIZER, "joiner.onnx"),
         },
         tokens: this.file(RECOGNIZER, "tokens.txt"),
         numThreads: this.threads,

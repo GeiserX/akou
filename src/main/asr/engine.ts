@@ -20,7 +20,7 @@ export interface Recognized {
 }
 
 export interface Recognizer {
-  /** Registry name, written into every `seg` (`parakeet-tdt-0.6b-v3-int8`). */
+  /** Registry name, written into every `seg` (`parakeet-tdt-0.6b-v3-fp32`). */
   readonly model: string;
   readonly kind: ModelKind;
   /**

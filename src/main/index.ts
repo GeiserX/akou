@@ -60,6 +60,7 @@ import {
   type ModelsStatus,
   modelFile,
   modelsFor,
+  pruneRetiredModels,
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import type { CallController, StartOk } from "./call/call.ts";
@@ -552,6 +553,9 @@ export class AkouApp implements ApiApp {
         pull.running = null;
         pull.file = undefined;
         this.log("info", `models: every file is in ${dir} and verified`);
+        for (const id of pruneRetiredModels(dir)) {
+          this.log("info", `models: removed ${id}, which this version no longer uses`);
+        }
         this.recognizerOnNewModels();
         for (const fn of this.statusWatchers) fn();
       },
