@@ -275,7 +275,14 @@ function unbuilt(
   why: string,
   flags?: Command["flags"],
 ): Command {
-  return { name, summary, usage: cmdUsage, flags, run: async (ctx) => notBuilt(ctx, why) };
+  return {
+    name,
+    summary,
+    usage: cmdUsage,
+    flags,
+    unbuilt: why,
+    run: async (ctx) => notBuilt(ctx, why),
+  };
 }
 
 export const setupCommands: Command[] = [

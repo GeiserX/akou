@@ -68,6 +68,61 @@ export class FakeProvider implements Provider {
   }
 }
 
+/**
+ * TS-15, "hidden means hidden": every element with the `hidden` attribute has computed
+ * `display: none` and holds no focus. Returns what breaks the rule, as `#id` or `tag.class`.
+ */
+export function hiddenOffenders(page: Page): Promise<string[]> {
+  return page.evaluate(() => {
+    const name = (el: Element) =>
+      el.id ? `#${el.id}` : [el.tagName.toLowerCase(), ...el.classList].join(".");
+    const out: string[] = [];
+    for (const el of document.querySelectorAll("[hidden]")) {
+      if (getComputedStyle(el).display !== "none") out.push(`${name(el)} shows`);
+    }
+    const a = document.activeElement;
+    const box = a?.closest("[hidden]");
+    if (a && box) out.push(`${name(a)} has focus inside ${name(box)}`);
+    return out;
+  });
+}
+
+/**
+ * The display half of the same check, run on every screen a test reaches: after each change to
+ * the page's DOM, what breaks the rule is kept in `window.__hiddenOffenders`, and the rig fails
+ * the test at close. A new pane is covered without a new test. Focus is checked only where a test
+ * calls `hiddenOffenders` itself.
+ */
+function watchHidden(): void {
+  const found = new Set<string>();
+  (window as unknown as { __hiddenOffenders: Set<string> }).__hiddenOffenders = found;
+  const name = (el: Element) =>
+    el.id ? `#${el.id}` : [el.tagName.toLowerCase(), ...el.classList].join(".");
+  const check = () => {
+    for (const el of document.querySelectorAll("[hidden]")) {
+      if (getComputedStyle(el).display !== "none") found.add(`${name(el)} shows`);
+    }
+  };
+  document.addEventListener("DOMContentLoaded", () => {
+    new MutationObserver(check).observe(document.documentElement, {
+      subtree: true,
+      childList: true,
+      attributes: true,
+    });
+    check();
+  });
+}
+
+/** What the page's watch found since it opened, or since the last `clear`. */
+export function watchedOffenders(page: Page, o: { clear?: boolean } = {}): Promise<string[]> {
+  return page.evaluate((clear) => {
+    const found = (window as unknown as { __hiddenOffenders?: Set<string> }).__hiddenOffenders;
+    const all = [...(found ?? [])];
+    if (clear) found?.clear();
+    return all;
+  }, !!o.clear);
+}
+
 export interface UiRig extends AppRig {
   opened: string[];
   /** Opens the window in a new page, on a call when one is named. */
@@ -106,6 +161,7 @@ export async function uiRig(
     page.on("console", (m) => {
       if (m.type() === "error") console.error(`page console: ${m.text()}`);
     });
+    await page.addInitScript(watchHidden);
     await oo.before?.(page);
     await page.goto(r.body.url as string);
     await page.waitForFunction(() => document.body.dataset.transport === "browser");
@@ -114,10 +170,20 @@ export async function uiRig(
   ui.write = (call, draft) => rig.app.write(call, draft);
   const close = rig.close;
   ui.close = async () => {
+    const hidden = new Set<string>();
+    // Blind spots: a page the test closed itself is skipped, and a page not opened through
+    // `open` (the share viewer, opened on a browser of its own) was never watched.
+    for (const p of pages) {
+      if (p.isClosed()) continue;
+      for (const o of await watchedOffenders(p).catch(() => [])) hidden.add(o);
+    }
     for (const p of pages) await p.close().catch(() => {});
     await close();
     const errors = pageErrors.splice(0);
     if (errors.length > 0) throw new Error(`the page threw: ${errors.join("; ")}`);
+    if (hidden.size > 0) {
+      throw new Error(`[TS-15] hidden but shown: ${[...hidden].sort().join("; ")}`);
+    }
   };
   return ui;
 }

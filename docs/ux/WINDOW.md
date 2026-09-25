@@ -62,7 +62,7 @@ Under 900 px wide the calls column collapses to a button in the header. Under 64
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W1.1 | The Notes, Ask and Enhanced tabs show one pane at a time | P0 | Audit: `[role="tabpanel"]{display:flex}` in `theme.css` beats `[hidden]`, so all three panes show stacked | For each tab, the other two panes have computed `display: none` and are skipped by Tab. The general "hidden means hidden" invariant with its positive control is TESTING TS-15; this row is the fix that turns it green | partial (broken) |
+| W1.1 | The Notes, Ask and Enhanced tabs show one pane at a time | P0 | Audit: `[role="tabpanel"]{display:flex}` in `theme.css` beats `[hidden]`, so all three panes show stacked | For each tab, the other two panes have computed `display: none` and are skipped by Tab. The general "hidden means hidden" invariant with its positive control is TESTING TS-15; this row is the fix that turns it green | has |
 | W1.3 | Narrow layouts: calls column collapses under 900 px, side pane becomes a drawer under 640 px | P2 | Audit: at 800 px the sidebar keeps its width | Screenshots at 1280, 800 and 600 px show the described layout; no horizontal scroll | missing |
 
 Moved: W1.2 (tests assert computed visibility) is TESTING TS-15. W1.4 (remember the window frame) is DESKTOP DK-M4.
@@ -175,7 +175,7 @@ The player bar gets real controls. Line-level sync comes first, because it needs
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W5.1 | Play from any line, mic/call balance | done | DESIGN 7 | Existing tests | has |
-| W5.2 | Play and pause: a button and `Space` (outside text fields) | P0 | Audit: the player has no controls and nothing can pause it | Start a line, press Space: `player.paused` is true; press again: it resumes from the same position | missing |
+| W5.2 | Play and pause: a button and `Space` (outside text fields) | P0 | Audit: the player has no controls and nothing can pause it | Start a line, press Space: `player.paused` is true; press again: it resumes from the same position | has |
 | W5.3 | Position shown as wall time, a scrubber over the call | P1 | Buzz, MacWhisper, VoiceInk | Seeking to 50 % shows the wall time of that instant, never a bare offset (TRAPS time rule) | missing |
 | W5.4 | Speed 0.75x to 2x in 0.25 steps, `[` and `]`, remembered | P1 | Buzz, MacWhisper | `]` twice sets 1.5x; reload keeps it | missing |
 | W5.5 | Seek back or forward 5 s: `Shift+←` / `Shift+→` | P1 | Otter, MacWhisper | Position moves 5 s; clamps at the part bounds | missing |
@@ -201,7 +201,7 @@ The player bar gets real controls. Line-level sync comes first, because it needs
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W6.1 | Notepad with markers, time gutter, agent lines in their own colour | done | DESIGN 5.1 | Existing tests | has |
-| W6.2 | Editing a note saves on blur and after a 2 s pause, not only on Enter | P0 | Audit: clicking away drops the edit, which loses what the user typed; DESIGN 5.1 says Enter or a 2 s pause | Type in an existing note, click the transcript: the log has `note rev+1` with the new text | partial (bug) |
+| W6.2 | Editing a note saves on blur and after a 2 s pause, not only on Enter | P0 | Audit: clicking away drops the edit, which loses what the user typed; DESIGN 5.1 says Enter or a 2 s pause | Type in an existing note, click the transcript: the log has `note rev+1` with the new text | has |
 | W6.3 | Delete a note with a 10 s undo | P1 | Audit: no confirm and no undo | Delete shows "Note deleted · Undo"; Undo restores it as a new revision | partial |
 
 ### 6.2 Ask
@@ -323,7 +323,7 @@ The window shows where a call went and gives the one-click ways out. It does not
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W12.1 | Hand-off status line: export path, hook results, webhook result | done | DESIGN 7 | Existing tests | has |
-| W12.2 | Copy transcript so far: `Mod+Shift+C`, palette, header menu | P0 | REQ F1.42 marks it carried from hark (`y`), and it is not built; Granola, Fathom, Buzz | During a call, the clipboard gets the transcript rendered as the export's `## Transcript` section; after the final pass, the final layer | missing |
+| W12.2 | Copy transcript so far: `Mod+Shift+C`, palette, header menu | P0 | REQ F1.42 marks it carried from hark (`y`), and it is not built; Granola, Fathom, Buzz | During a call, the clipboard gets the transcript rendered as the export's `## Transcript` section; after the final pass, the final layer | partial: key and header button; the palette entry comes with W14.5 |
 | W12.3 | Copy the whole call as Markdown (the export render) | P1 | Wispr, Granola | The clipboard equals the export file body for that call | missing |
 | W12.4 | Reveal the export in the file manager; open it in the default app | P1 | Desktop craft | Native smoke: the button opens the folder with the file selected | missing |
 | W12.5 | Re-run hooks and re-export from the window | P2 | Audit: CLI-only | Buttons call the hooks route; a `hook.done` appears | missing |
