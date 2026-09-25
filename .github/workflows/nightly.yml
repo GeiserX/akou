@@ -7,7 +7,8 @@ name: nightly
 #   through the app's own code, on every OS (docs/TESTING.md TS-19 and TS-20). WER per engine and
 #   language on FLEURS, latency percentiles and the real-time factor, diarization error on two
 #   AMI Meeting Corpus test meetings, and the replay recall floor, each next to its committed
-#   baseline in docs/gates/nightly-baselines.json (scripts/eval/nightly.ts).
+#   baseline in docs/gates/nightly-baselines.json (scripts/eval/nightly.ts). Today it scores the
+#   default recognizer only, not every engine.
 # - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
 #   WebKitGTK the app ships (TS-14). It runs by hand only while some of its tests fail on WebKit
 #   (docs/TESTING.md TS-14), so the scheduled night is not red by design; it joins the schedule,
