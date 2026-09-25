@@ -14,6 +14,7 @@ import type { ModelSpec } from "../src/main/asr/engine.ts";
 import { finalBudgetMs, finalizeCall, runFinalPass } from "../src/main/asr/finalize-worker.ts";
 import { type LiveOut, LivePipeline } from "../src/main/asr/live-worker.ts";
 import { MIN_SPAN_SECONDS } from "../src/main/asr/pad.ts";
+import { GREEDY_NO_HOTWORDS } from "../src/main/asr/sherpa.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { buildDecodeList } from "../src/main/vocab/decode-list.ts";
 import { logOf, ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
@@ -392,6 +393,30 @@ describe("refused spans and re-runs", () => {
     const retracted = ok.out.filter((d) => d.type === "seg" && d.text === null);
     expect(retracted.map((d) => (d as { id: string }).id)).toEqual(["f000001", "f000002"]);
     expect(ok.segs.map((s) => s.id)).toEqual(["f000003", "f000004"]);
+  });
+
+  test("under greedy decoding a non-empty decode list is logged at warn, and vocab.used is empty", async () => {
+    const mic = concat(silence(0.3), speak(["deploy", "to", "hetzner"]), silence(0.5));
+    const decode = buildDecodeList({
+      model: "fake-parakeet",
+      callVocab: [],
+      names: ["Hetzner"],
+      files: [],
+    });
+    const logs: string[] = [];
+    const out: EventDraft[] = [];
+    await runFinalPass(
+      {
+        events: callLog([1]),
+        audio: new MemoryAudio({ 1: { mic, call: silence(mic.length / RATE) } }),
+        decode,
+      },
+      new FakeModels({ greedy: true }),
+      (d) => out.push(d),
+      (level, msg) => logs.push(`${level}: ${msg}`),
+    );
+    expect(out.find((d) => d.type === "vocab.used")).toMatchObject({ entries: [] });
+    expect(logs).toContain(`warn: ${GREEDY_NO_HOTWORDS}`);
   });
 
   test("the decode list in force is recorded as vocab.used and biases the final pass", async () => {
