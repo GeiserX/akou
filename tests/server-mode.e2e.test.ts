@@ -7,12 +7,12 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type APP_IDENTITY, callbackAllowed } from "../src/main/api/access.ts";
 import { requireCallbackAllowed } from "../src/main/api/caller.ts";
 import { HttpError, json } from "../src/main/api/http.ts";
-import { KeyStore } from "../src/main/api/keys.ts";
+import { KeyError, KeyStore } from "../src/main/api/keys.ts";
 import { inCidr, isLoopback, parseCidr, sourceAddress } from "../src/main/api/net.ts";
 import { type ApiApp, startApiServer } from "../src/main/api/server.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
@@ -363,6 +363,39 @@ describe("SV-K3: a path that is not a route", () => {
     const admin = await get(server, "/v1/status", auth);
     expect(admin.status).toBe(403);
     expect(JSON.parse(admin.body).error).toBe("forbidden");
+  });
+});
+
+describe("SV-K2: edits to the keys file", () => {
+  test("revoke takes an id only: a name, even one shaped like an id, removes nothing", async () => {
+    const victim = await newKey(server, "victim");
+    const store = new KeyStore(server.app.configDir);
+    expect(store.revoke("victim")).toBe(false);
+    // A key named like another key's id cannot take that key down with it.
+    const shaped = await newKey(server, victim.id);
+    expect(store.revoke(victim.id)).toBe(true);
+    expect(store.authenticate(victim.key)).toBeNull();
+    expect(store.authenticate(shaped.key)?.name).toBe(victim.id);
+  });
+
+  test("a create or revoke waits for no one: another edit in progress refuses it, and nothing is lost", async () => {
+    const k = await newKey(server, "held");
+    const store = new KeyStore(server.app.configDir);
+    const lock = join(server.app.configDir, "keys.json.lock");
+    // Another live process holds the edit lock (the test runner's parent stands in for it).
+    writeFileSync(lock, `${process.ppid} 0123456789abcdef\n`);
+    try {
+      expect(() => store.revoke(k.id)).toThrow(/another edit of the keys \(pid \d+\) is running/);
+      expect(() => store.create({ name: "blocked" })).toThrow(KeyError);
+      expect(store.authenticate(k.key)?.id).toBe(k.id);
+      expect(store.list().some((x) => x.name === "blocked")).toBe(false);
+    } finally {
+      rmSync(lock, { force: true });
+    }
+    // Positive control: with the lock gone, the same edits run, and leave no lock behind.
+    expect(store.revoke(k.id)).toBe(true);
+    expect(store.create({ name: "blocked" }).name).toBe("blocked");
+    expect(existsSync(lock)).toBe(false);
   });
 });
 

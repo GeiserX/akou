@@ -12,11 +12,21 @@
  *   a revoked key gets 401 on its next request.
  * - When a key was last used goes to `keys-used.json`, which only the server writes, at most once a
  *   minute per key, so the server never rewrites the file the CLI edits.
+ * - A create or a revoke reads, changes and writes the file under `keys.json.lock`, so two edits
+ *   at once cannot write back a list the other changed (a revoked key coming back). An edit that
+ *   finds the lock held is refused, never queued.
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
-import { mkdirSync, readFileSync, statSync } from "node:fs";
+import { mkdirSync, readFileSync, statSync, unlinkSync } from "node:fs";
 import { join } from "node:path";
+import {
+  acquireLock,
+  INSTANCE_ID,
+  LockError,
+  processAlive,
+  readLock,
+} from "../../core/log/writer.ts";
 import { type Identity, SCOPES, type Scope } from "./access.ts";
 import { writePrivateFile } from "./guard.ts";
 
@@ -146,6 +156,33 @@ export class KeyStore {
     this.stamp = "";
   }
 
+  /** Runs one read-change-write of the file under its lock, on the file as it is now. */
+  private edit<T>(fn: (keys: KeyRecord[]) => T): T {
+    mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
+    const lock = `${this.path}.lock`;
+    try {
+      acquireLock(lock, process.pid, processAlive);
+    } catch (err) {
+      if (err instanceof LockError) {
+        throw new KeyError(
+          `another edit of the keys (pid ${err.holderPid}) is running; run this again when it ends`,
+        );
+      }
+      throw err;
+    }
+    try {
+      this.stamp = "";
+      return fn([...this.load()]);
+    } finally {
+      const held = readLock(lock);
+      if (held?.pid === process.pid && held.id === INSTANCE_ID) {
+        try {
+          unlinkSync(lock);
+        } catch {}
+      }
+    }
+  }
+
   private readUsed(): Record<string, number> {
     try {
       const o = JSON.parse(readFileSync(this.usedPath, "utf8")) as Record<string, unknown>;
@@ -173,25 +210,26 @@ export class KeyStore {
     if (bad !== undefined) {
       throw new KeyError(`"${bad}" is not a host name or an address (no scheme, port or path)`);
     }
-    const keys = [...this.load()];
-    if (keys.some((k) => k.name === name)) throw new KeyError(`a key named "${name}" exists`);
-    let id: string;
-    do id = `key_${randomBytes(4).toString("hex")}`;
-    while (keys.some((k) => k.id === id));
-    const key = newApiKey();
-    const secret = newWebhookSecret();
-    const record: KeyRecord = {
-      id,
-      name,
-      scopes: [scope],
-      callback_hosts: hosts,
-      created_at: this.now(),
-      sha256: hashKey(key),
-      secret,
-    };
-    this.save([...keys, record]);
-    const { sha256: _h, secret: _s, ...info } = record;
-    return { ...info, key, secret };
+    return this.edit((keys) => {
+      if (keys.some((k) => k.name === name)) throw new KeyError(`a key named "${name}" exists`);
+      let id: string;
+      do id = `key_${randomBytes(4).toString("hex")}`;
+      while (keys.some((k) => k.id === id));
+      const key = newApiKey();
+      const secret = newWebhookSecret();
+      const record: KeyRecord = {
+        id,
+        name,
+        scopes: [scope],
+        callback_hosts: hosts,
+        created_at: this.now(),
+        sha256: hashKey(key),
+        secret,
+      };
+      this.save([...keys, record]);
+      const { sha256: _h, secret: _s, ...info } = record;
+      return { ...info, key, secret };
+    });
   }
 
   list(): KeyInfo[] {
@@ -206,13 +244,14 @@ export class KeyStore {
     }));
   }
 
-  /** Removes a key by id or name. False when there is none. */
-  revoke(idOrName: string): boolean {
-    const keys = this.load();
-    const next = keys.filter((k) => k.id !== idOrName && k.name !== idOrName);
-    if (next.length === keys.length) return false;
-    this.save(next);
-    return true;
+  /** Removes a key by its id, never its name. False when there is none. */
+  revoke(id: string): boolean {
+    return this.edit((keys) => {
+      const next = keys.filter((k) => k.id !== id);
+      if (next.length === keys.length) return false;
+      this.save(next);
+      return true;
+    });
   }
 
   /** The key a bearer value names, as an identity; null for anything else. */
