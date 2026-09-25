@@ -119,7 +119,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     "POST",
     "/calls/:id/enhance",
     doc({
-      id: "enhanced.create",
+      id: "calls.enhance",
       doc: "Write the call's enhanced notes with the configured provider, from the transcript and the user's notepad, in a template's sections, citing the transcript. With no provider, an agent writes them with enhanced.context and enhanced.put.",
       body: { "template?": "string" },
       ok: 200,

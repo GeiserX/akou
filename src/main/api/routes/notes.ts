@@ -205,7 +205,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
     "POST",
     "/calls/:id/remember",
     doc({
-      id: "memory.add",
+      id: "memory.remember",
       doc: "Keep a line of agent memory on the call, marked as the agent's.",
       body: { text: "string" },
       ok: 201,
@@ -229,7 +229,7 @@ export function notesRoutes(r: Router<ApiApp>): void {
     "DELETE",
     "/calls/:id/remember/:rid",
     doc({
-      id: "memory.delete",
+      id: "memory.forget",
       doc: "Forget one line of agent memory. The log keeps it, with the delete after it.",
       params: { rid: "The memory id (`r0012`)." },
       body: {},

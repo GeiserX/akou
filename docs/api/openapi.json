@@ -1761,7 +1761,7 @@
     },
     "/v1/calls/{id}/remember": {
       "post": {
-        "operationId": "memory.add",
+        "operationId": "memory.remember",
         "tags": [
           "memory"
         ],
@@ -1819,7 +1819,7 @@
     },
     "/v1/calls/{id}/remember/{rid}": {
       "delete": {
-        "operationId": "memory.delete",
+        "operationId": "memory.forget",
         "tags": [
           "memory"
         ],
@@ -2684,9 +2684,9 @@
     },
     "/v1/calls/{id}/enhance": {
       "post": {
-        "operationId": "enhanced.create",
+        "operationId": "calls.enhance",
         "tags": [
-          "enhanced"
+          "calls"
         ],
         "description": "Write the call's enhanced notes with the configured provider, from the transcript and the user's notepad, in a template's sections, citing the transcript. With no provider, an agent writes them with enhanced.context and enhanced.put.",
         "parameters": [

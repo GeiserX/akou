@@ -563,3 +563,47 @@ describe("[PG-A2] a route reads only what it declares", () => {
     }
   });
 });
+
+describe("[SI-2] an operation takes the verb the other doors already use (PRINCIPLES 3)", () => {
+  /**
+   * The route each MCP tool calls, and its operationId: Executor names a tool after the id, and
+   * an id is never renamed once released. Only actions every door names with one word are here;
+   * `calls.transcript` (`akou_read`, `akou_get_call`), `notes.list` (`akou_get_notes`) and
+   * `vocab.add` (`akou_vocab_add`, `akou_vocab_propose`) wait for the parity table (TS-13).
+   */
+  const SAME_VERB: [tool: string, route: string][] = [
+    ["akou_remember", "POST /v1/calls/{id}/remember"],
+    ["akou_forget", "DELETE /v1/calls/{id}/remember/{rid}"],
+    ["akou_enhance", "POST /v1/calls/{id}/enhance"],
+    ["akou_start", "POST /v1/calls"],
+    ["akou_restart", "POST /v1/calls/{id}/restart"],
+    ["akou_ask", "POST /v1/calls/{id}/ask"],
+    ["akou_search", "GET /v1/calls/{id}/search"],
+    ["akou_export", "POST /v1/calls/{id}/export"],
+    ["akou_list_calls", "GET /v1/calls"],
+    ["akou_add_note", "POST /v1/calls/{id}/notes"],
+    ["akou_name_speaker", "POST /v1/calls/{id}/speakers"],
+    ["akou_merge_speakers", "POST /v1/calls/{id}/speakers/merge"],
+  ];
+  const verbMismatches = (doc: OpenApiDoc) => {
+    const byRoute = new Map(
+      operations(doc).map((o) => [`${o.method.toUpperCase()} ${o.path}`, o.op.operationId]),
+    );
+    return SAME_VERB.flatMap(([tool, route]) => {
+      const id = byRoute.get(route);
+      const verb = id?.split(".")[1];
+      return verb && tool.split("_").includes(verb) ? [] : [`${route}: ${id}, tool ${tool}`];
+    });
+  };
+
+  test("each operationId's verb is a word of its MCP tool's name", () => {
+    expect(verbMismatches(committed())).toEqual([]);
+    // Positive control: a route that names the action its own way.
+    const doc = clone(committed());
+    const op = doc.paths["/v1/calls/{id}/remember"]?.post;
+    if (op) op.operationId = "memory.add";
+    expect(verbMismatches(doc)).toEqual([
+      "POST /v1/calls/{id}/remember: memory.add, tool akou_remember",
+    ]);
+  });
+});
