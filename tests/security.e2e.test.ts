@@ -22,6 +22,7 @@ import {
   tokenFileAccess,
   tokenMatches,
 } from "../src/main/api/guard.ts";
+import { DRAIN_BODY_BYTES, DRAIN_BODY_MS, drainBody } from "../src/main/api/http.ts";
 import { type AppRig, appRig, type RawResponse, rawRequest } from "./api-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -494,7 +495,111 @@ describe("bodies", () => {
     expect(r.status).toBe(400);
     expect(JSON.parse(r.body)).toMatchObject({ error: "unknown_field", field: "by" });
     const big = JSON.stringify({ text: "x".repeat(70 * 1024) });
-    expect((await post(guarded, j, big)).status).toBe(413);
+    const refused = await post(guarded, j, big);
+    expect(refused.status).toBe(413);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: "body_too_large" });
+  });
+
+  /** A valid note padded with JSON whitespace to exactly `bytes` bytes. */
+  const padded = (bytes: number) => {
+    const note = '{"text":"x"';
+    return `${note}${" ".repeat(bytes - note.length - 1)}}`;
+  };
+
+  test("the limit is exactly 64 KB: one byte over is 413, at the limit is accepted", async () => {
+    await recording(guarded);
+    const j = { "Content-Type": "application/json" };
+    const over = await post(guarded, j, padded(64 * 1024 + 1));
+    expect(over.status).toBe(413);
+    expect(JSON.parse(over.body)).toMatchObject({ error: "body_too_large" });
+    // Positive control: the same request one byte shorter is inside the limit and lands.
+    expect((await post(guarded, j, padded(64 * 1024))).status).toBe(201);
+  });
+
+  test("the 413 reaches the client whole even when the body is still arriving", async () => {
+    // The server answers before the body has been sent; if it then closed the socket with the
+    // rest unread, the kernel would reset the connection and the client would read ECONNRESET
+    // instead of the 413 (measured at 5 to 67 % of requests before the drain, growing with size).
+    await recording(guarded);
+    const j = { "Content-Type": "application/json" };
+    const big = JSON.stringify({ text: "x".repeat(512 * 1024) });
+    for (let i = 0; i < 10; i++) {
+      const refused = await post(guarded, j, big);
+      expect(refused.status).toBe(413);
+      expect(JSON.parse(refused.body)).toMatchObject({ error: "body_too_large" });
+    }
+  });
+
+  test("a chunked body with no Content-Length is cut off at the same 64 KB", async () => {
+    await recording(guarded);
+    const big = JSON.stringify({ text: "x".repeat(512 * 1024) });
+    const refused = await rawRequest(guarded.port, {
+      method: "POST",
+      path: "/v1/calls/live/notes",
+      headers: { Authorization: `Bearer ${guarded.token}`, "Content-Type": "application/json" },
+      body: big,
+      chunked: true,
+    });
+    expect(refused.status).toBe(413);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: "body_too_large" });
+    // Positive control: chunked and inside the limit is an ordinary request.
+    const ok = await rawRequest(guarded.port, {
+      method: "POST",
+      path: "/v1/calls/live/notes",
+      headers: { Authorization: `Bearer ${guarded.token}`, "Content-Type": "application/json" },
+      body: '{"text":"chunked"}',
+      chunked: true,
+    });
+    expect(ok.status).toBe(201);
+  });
+
+  test("the drain is bounded in bytes and in time, so a trickled body cannot hold a refusal open", async () => {
+    /** A reader that yields `size` bytes per read and moves a fake clock `tick` ms each time. */
+    const trickle = (size: number, tick: number, ends?: number) => {
+      let clock = 0;
+      let reads = 0;
+      let cancelled = false;
+      const reader = {
+        read: async () => {
+          reads++;
+          clock += tick;
+          if (ends !== undefined && reads > ends) return { done: true as const, value: undefined };
+          return { done: false as const, value: new Uint8Array(size) };
+        },
+        cancel: async () => {
+          cancelled = true;
+        },
+      };
+      return { reader, now: () => clock, reads: () => reads, cancelled: () => cancelled };
+    };
+    // Time: one byte every half second is cut off once the clock passes the bound, not at 1 MB.
+    const slow = trickle(1, 500);
+    await drainBody(slow.reader, 0, slow.now);
+    expect(slow.reads()).toBe(DRAIN_BODY_MS / 500);
+    expect(slow.cancelled()).toBe(true);
+    // Bytes: a fast firehose is cut off at the cap, with the clock never moving.
+    const fast = trickle(256 * 1024, 0);
+    await drainBody(fast.reader, 0, fast.now);
+    expect(fast.reads()).toBe(DRAIN_BODY_BYTES / (256 * 1024) + 1);
+    expect(fast.cancelled()).toBe(true);
+    // Positive control: a body that ends inside both bounds is read to its end and never cancelled.
+    const short = trickle(1024, 10, 3);
+    await drainBody(short.reader, 0, short.now);
+    expect(short.reads()).toBe(4);
+    expect(short.cancelled()).toBe(false);
+  });
+
+  test("any refusal of a request with a large body reaches the client: a bad token is 401", async () => {
+    await recording(guarded);
+    const big = JSON.stringify({ text: "x".repeat(512 * 1024) });
+    const refused = await rawRequest(guarded.port, {
+      method: "POST",
+      path: "/v1/calls/live/notes",
+      headers: { Authorization: "Bearer nope", "Content-Type": "application/json" },
+      body: big,
+    });
+    expect(refused.status).toBe(401);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: "unauthorized" });
   });
 });
 
