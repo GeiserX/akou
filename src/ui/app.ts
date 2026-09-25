@@ -50,6 +50,11 @@ export function showCall(call?: string): void {
   if (target) current.openCall(target, call !== undefined);
 }
 
+/** The application menu's Settings… opens the settings pane, as its button does. */
+export function showSettings(): void {
+  document.getElementById("settings-open")?.click();
+}
+
 function platform(): "mac" | "windows" | "linux" {
   const p = `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
   return p.includes("mac") ? "mac" : p.includes("win") ? "windows" : "linux";

@@ -92,7 +92,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       { "call?": "string", "bind?": "string", "notes?": "boolean", "expires?": "string" },
     );
     const call = resolveRef(c.app, b.call ?? "live", { allowLast: true });
-    const share = await c.app.startShare(call, b);
+    const share = await c.app.startShare(call, { ...b, by: c.by });
     return json(201, share);
   });
 

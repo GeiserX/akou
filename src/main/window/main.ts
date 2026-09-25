@@ -18,35 +18,14 @@ import { type AkouApp, AlreadyRunningError, startApp } from "../index.ts";
 import { Bridge } from "./bridge.ts";
 import { setLoginItem } from "./login-item.ts";
 import { electrobunUi } from "./native.ts";
-import { Shell, type ShellApp } from "./shell.ts";
-
-function shellApp(app: AkouApp): ShellApp {
-  return {
-    status: () => app.status(),
-    start: async (req) => {
-      const r = await app.start(req);
-      return r.ok ? { ok: true } : { ok: false, message: r.error };
-    },
-    stopLive: async () => {
-      const live = app.manager.live();
-      if (live) await app.manager.stop(live.id);
-    },
-    config: () => app.config(),
-    saveSetting: async (key, value) => {
-      await app.saveConfig({ ...app.config().file, [key]: value });
-    },
-    quit: () => app.quit(),
-    openSettingsPane: (pane) => app.openSettingsPane(pane),
-    openWindow: (call) => app.openWindow(call),
-  };
-}
+import { appForShell, Shell } from "./shell.ts";
 
 const ui = electrobunUi();
 let shell: Shell | null = null;
 
 async function ensureShell(app: AkouApp): Promise<Shell> {
   if (shell) return shell;
-  const s = new Shell(shellApp(app), new Bridge(app), ui, {
+  const s = new Shell(appForShell(app), new Bridge(app), ui, {
     platform: process.platform,
     setLoginItem: (enabled) =>
       setLoginItem(enabled, {

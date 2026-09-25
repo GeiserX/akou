@@ -3,8 +3,8 @@
  * the Hutch devkit. ElectroBun 2 does not ship its SDK through npm: Hutch projects it into
  * `.hutch/devkit` when the app is built (`electrobun build`), and the npm `electrobun` package only
  * throws. These declarations follow the 2.0.1 API reference (BrowserWindow, BrowserView.defineRPC,
- * Electroview.defineRPC, Tray, GlobalShortcut, Utils, the `before-quit` event, ElectrobunConfig);
- * the M0 build is what proves them against the real SDK.
+ * Electroview.defineRPC, Tray, ApplicationMenu, GlobalShortcut, Utils, the `before-quit` event,
+ * ElectrobunConfig); the M0 build is what proves them against the real SDK.
  */
 
 declare module "electrobun" {
@@ -108,6 +108,23 @@ declare module "electrobun/main" {
     on(event: "tray-clicked", fn: (e: unknown) => void): void;
     remove(): void;
   }
+  /** A role (the OS implements it) or an action (`application-menu-clicked` carries it). */
+  export type ApplicationMenuItem =
+    | { type: "divider" | "separator" }
+    | {
+        type?: "normal";
+        label?: string;
+        role?: string;
+        action?: string;
+        accelerator?: string;
+        enabled?: boolean;
+        checked?: boolean;
+        submenu?: ApplicationMenuItem[];
+      };
+  export const ApplicationMenu: {
+    setApplicationMenu(menu: ApplicationMenuItem[]): void;
+    on(name: "application-menu-clicked", fn: (e: unknown) => void): void;
+  };
   export const GlobalShortcut: {
     register(accelerator: string, fn: () => void): boolean;
     unregister(accelerator: string): void;

@@ -153,6 +153,15 @@ export interface WindowShell {
 
 export type WindowFactory = (app: AkouApp) => Promise<WindowShell>;
 
+/**
+ * What a door just asked of the app and how it went, with who asked (`by`): the shell turns it
+ * into a notification (docs/ux/DESKTOP.md section 8). Nothing about the call's content.
+ */
+export type Announcement =
+  | { what: "start"; by: string; ok: true; call: string }
+  | { what: "start"; by: string; ok: false; code: string }
+  | { what: "share"; by: string; call: string };
+
 export interface AppOptions {
   env?: Record<string, string | undefined>;
   platform?: string;
@@ -291,6 +300,8 @@ export class AkouApp implements ApiApp {
   private readonly watchers = new Set<(call: string, e: LogEvent) => void>();
   /** Told when the status changes without a log event (a share viewer came or went). */
   private readonly statusWatchers = new Set<() => void>();
+  /** Told after every start and share, with who asked (`onAnnounce`). */
+  private readonly announceWatchers = new Set<(a: Announcement) => void>();
   /** The window in a browser, started the first time a headless app is asked to show it. */
   page: PageServer | null = null;
   /** Read-only live links (DESIGN 8.3); in memory only, so a share never survives a restart. */
@@ -1054,7 +1065,7 @@ export class AkouApp implements ApiApp {
   /** `POST /share`: a read-only live link to a call. Starting it again answers the same link. */
   async startShare(
     call: string,
-    o: { bind?: string; notes?: boolean; expires?: string },
+    o: { bind?: string; notes?: boolean; expires?: string; by?: string },
   ): Promise<ShareStatus> {
     if (this.quitting) throw new HttpError(503, "quitting", "akou is quitting");
     const expires = parseExpiry(o.expires);
@@ -1072,6 +1083,7 @@ export class AkouApp implements ApiApp {
       expires,
       bind: o.bind ?? this.cfg.settings["share.bind"],
     });
+    this.announce({ what: "share", by: o.by ?? "user", call: h.call });
     return this.sharing.of(h.call) as ShareStatus;
   }
 
@@ -1092,6 +1104,24 @@ export class AkouApp implements ApiApp {
     return () => {
       this.statusWatchers.delete(fn);
     };
+  }
+
+  /** Every start (refused ones too) and every share started, from any door. */
+  onAnnounce(fn: (a: Announcement) => void): () => void {
+    this.announceWatchers.add(fn);
+    return () => {
+      this.announceWatchers.delete(fn);
+    };
+  }
+
+  private announce(a: Announcement): void {
+    for (const fn of this.announceWatchers) {
+      try {
+        fn(a);
+      } catch (err) {
+        this.log("warn", `announce: ${(err as Error).message}`);
+      }
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -1254,6 +1284,17 @@ export class AkouApp implements ApiApp {
   }
 
   async start(req: StartRequest): Promise<Outcome<StartOk>> {
+    const r = await this.startCall(req);
+    const by = req.by ?? "user";
+    this.announce(
+      r.ok
+        ? { what: "start", by, ok: true, call: r.call }
+        : { what: "start", by, ok: false, code: r.code },
+    );
+    return r;
+  }
+
+  private async startCall(req: StartRequest): Promise<Outcome<StartOk>> {
     if (this.quitting) return fail(503, "quitting", "akou is quitting");
     this.recognizerOnNewModels();
     // Without the speech models a call records audio that nothing transcribes: only when asked.

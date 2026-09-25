@@ -15,6 +15,7 @@
  *     `@loader_path` rpath, so they sit beside it in the platform package;
  *   - the two recognition Workers and the browser pages, which `build-app.ts` builds first;
  *   - the shipped note templates;
+ *   - the tray icons (`scripts/tray-icons.ts`), which the tray loads by path;
  *   - the capture helper from `native/akou-capture` and the diarization helper from
  *     `native/akou-diarize` (Nemotron on a statically linked ONNX Runtime; no library beside it).
  *   Built pieces are listed only once built; `build-app.ts` builds them and the smoke check proves
@@ -146,6 +147,7 @@ export default {
       "src/ui/theme.css": "views/main/theme.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
       "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
+      "src/main/window/tray": `${MAIN_OUT}/tray`,
       // The licence and the third-party credits, which the bundled word lists' CC BY-SA 4.0 and
       // the linked crates want to travel with the app.
       NOTICE: `${MAIN_OUT}/NOTICE`,

@@ -110,7 +110,7 @@ export interface ApiApp {
   shares(): ShareStatus[];
   startShare(
     call: string,
-    o: { bind?: string; notes?: boolean; expires?: string },
+    o: { bind?: string; notes?: boolean; expires?: string; by?: string },
   ): Promise<ShareStatus>;
   stopShare(call?: string): Promise<ShareHandle[]>;
   /**
