@@ -62,6 +62,9 @@ class HttpTransport implements Transport {
     });
     if (r.status === 401) sessionEnded();
     const text = await r.text();
+    // A text reply (a transcript as Markdown) arrives as the string itself.
+    if (r.headers.get("content-type")?.startsWith("text/"))
+      return { status: r.status, body: text as T };
     let parsed: unknown = null;
     try {
       parsed = text === "" ? null : JSON.parse(text);

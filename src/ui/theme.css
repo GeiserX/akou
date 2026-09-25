@@ -32,18 +32,11 @@
 * {
   box-sizing: border-box;
 }
-/* Elements that set their own display need their own hidden rule, or [hidden] loses. */
-[hidden],
-#final[hidden],
-#models-card[hidden],
-#models-pull[hidden],
-#confirm[hidden],
-#fatal[hidden],
-#popover[hidden],
-#banner[hidden],
-.row[hidden],
-.row .tools[hidden] {
-  display: none;
+/* Hidden means hidden (TESTING TS-15): no rule that sets its own display, such as the tab panels'
+   flex, may show an element that carries the attribute. */
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: the attribute must beat every display rule, whatever its specificity */
+  display: none !important;
 }
 html,
 body {
