@@ -232,7 +232,11 @@ interface ChannelState {
 
 export class LivePipeline {
   private readonly o: LiveOptions;
-  private readonly chans: Record<Channel, ChannelState>;
+  /**
+   * A Map, not an object keyed by channel: a channel name that arrives in a Worker message is
+   * looked up here, and on an object `__proto__` would find Object.prototype and write into it.
+   */
+  private readonly chans: ReadonlyMap<Channel, ChannelState>;
   private list: DecodeList | null = null;
   private listVersion = 0;
   private prepared: PreparedHotwords | null = null;
@@ -272,7 +276,7 @@ export class LivePipeline {
       lastProvisional: 0,
       pseq: 0,
     });
-    this.chans = { mic: state("mic"), call: state("call") };
+    this.chans = new Map(CHANNELS.map((ch) => [ch, state(ch)]));
   }
 
   private sec(n: number): number {
@@ -288,8 +292,7 @@ export class LivePipeline {
     state: Parameters<LiveSpeakers["restore"]>[0] & { ids?: string[] },
   ): Promise<void> {
     let open = false;
-    for (const ch of CHANNELS) {
-      const st = this.chans[ch];
+    for (const st of this.chans.values()) {
       if (st.part === null) continue;
       open = true;
       this.flushPending(st);
@@ -300,7 +303,7 @@ export class LivePipeline {
     this.speakers = new LiveSpeakers();
     this.speakers.restore(state);
     for (const id of state.ids ?? []) this.speakers.noteId(id);
-    for (const ch of CHANNELS) this.resetChannel(this.chans[ch], null, 0);
+    for (const st of this.chans.values()) this.resetChannel(st, null, 0);
     // The new call's stream starts afresh: its speakers take the call's labels by centroid, or
     // the numbers after every label the call already has (a Worker that took over a call mid-way
     // has lost the old stream's speaker state).
@@ -359,8 +362,12 @@ export class LivePipeline {
 
   /** Audio for one channel at `start` (samples on the part's file timeline). */
   audio(part: number, ch: Channel, start: number, samples: Float32Array, live = true): void {
+    const st = this.chans.get(ch);
+    if (!st) {
+      this.emit({ type: "log", level: "error", msg: "live: audio for an unknown channel ignored" });
+      return;
+    }
     this.live = live;
-    const st = this.chans[ch];
     if (st.part !== part) {
       if (st.part !== null) this.closeOpen(st);
       this.resetChannel(st, part, start);
@@ -526,8 +533,7 @@ export class LivePipeline {
    * speakers keep their labels (TRAPS T2.48).
    */
   async endPart(part: number): Promise<void> {
-    for (const ch of CHANNELS) {
-      const st = this.chans[ch];
+    for (const st of this.chans.values()) {
       if (st.part !== part) continue;
       this.flushPending(st);
       this.closeOpen(st);
@@ -539,8 +545,7 @@ export class LivePipeline {
 
   /** Closes what is open on every channel (the call is ending) and labels what is waiting. */
   async flush(): Promise<void> {
-    for (const ch of CHANNELS) {
-      const st = this.chans[ch];
+    for (const st of this.chans.values()) {
       this.flushPending(st);
       this.closeOpen(st);
       this.resetChannel(st, null, 0);
@@ -653,7 +658,7 @@ export class LivePipeline {
     if (s && (!head || head.stream === s)) {
       // Keep the turns of the call segment still open too: it is labelled by all of it.
       let keep = head ? head.s0 : s.speakers.decided;
-      const call = this.chans.call;
+      const call = this.chans.get("call") as ChannelState;
       const open =
         call.inSpeech && call.part !== null
           ? streamRange(s, call.part, call.segStart, call.segStart + 1)
@@ -1242,6 +1247,7 @@ export class LiveAsr {
       }
       case "vocab": {
         if (!c || m.version !== c.version) return;
+        for (const w of m.warnings) this.log("warn", w);
         // `vocab.used` lists what decoding really uses: the words that passed the tokenization
         // check, not the list the host asked for.
         const files = this.o.vocab?.(c.id).files ?? [];
