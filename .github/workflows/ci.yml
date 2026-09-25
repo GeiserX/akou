@@ -251,7 +251,7 @@ jobs:
           {
             echo "### live capture (${{ matrix.server }})"
             echo
-            grep -E '^left|"type":"(capturing|warn)"' live.log | sed 's/^/    /'
+            grep -E '^left|^tone runs|"type":"(capturing|warn)"' live.log | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
       - run: bun scripts/ci/test-floor.ts capture-live-${{ matrix.server }} .junit-live.xml
       - name: sound server logs
