@@ -293,6 +293,8 @@ export class AkouApp implements ApiApp {
    * the next start, and the final pass runs this one until then.
    */
   private asrDiarizer: DiarizerKind | null = null;
+  /** How the running recognizer decodes. `asr.parakeet.decoding` also waits for the next start. */
+  private asrDecoding: ParakeetDecoding | null = null;
 
   private cfg: LoadedConfig;
   private readonly clock: Clock;
@@ -512,6 +514,11 @@ export class AkouApp implements ApiApp {
     return this.asrDiarizer ?? (this.cfg.settings["asr.diarizer"] as DiarizerKind);
   }
 
+  /** How the running recognizer decodes, else the setting: the final pass decodes the same way. */
+  private runningDecoding(): ParakeetDecoding {
+    return this.asrDecoding ?? (this.cfg.settings["asr.parakeet.decoding"] as ParakeetDecoding);
+  }
+
   /**
    * Whether the running engine's model files are there: what a start and the final pass need. A
    * change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
@@ -522,14 +529,18 @@ export class AkouApp implements ApiApp {
   }
 
   /** The real engines on the models folder, with the speaker-label engine the settings choose. */
-  private sherpaSpec(s: Settings, diarizer = s["asr.diarizer"] as DiarizerKind): ModelSpec {
+  private sherpaSpec(
+    s: Settings,
+    diarizer = s["asr.diarizer"] as DiarizerKind,
+    decoding = s["asr.parakeet.decoding"] as ParakeetDecoding,
+  ): ModelSpec {
     return {
       kind: "sherpa",
       dir: s["asr.modelsDir"],
       cacheDir: join(s["asr.modelsDir"], ".cache"),
       threads: s["asr.threads"],
       diarizer,
-      decoding: s["asr.parakeet.decoding"] as ParakeetDecoding,
+      decoding,
       diarizeHelper: locateHelper(s["asr.diarizeHelper"], { name: DIARIZE_HELPER_NAME }).command,
     };
   }
@@ -647,6 +658,7 @@ export class AkouApp implements ApiApp {
       return;
     }
     this.asrDiarizer = s["asr.diarizer"] as DiarizerKind;
+    this.asrDecoding = s["asr.parakeet.decoding"] as ParakeetDecoding;
     const asr = new LiveAsr(
       {
         models: spec,
@@ -1402,6 +1414,7 @@ export class AkouApp implements ApiApp {
         ...this.asrState,
         loads: this.asr?.loads ?? {},
         diarizer: this.runningDiarizer(),
+        decoding: this.runningDecoding(),
       },
       models: this.models(),
       // The helper this app spawns, resolved from inside the bundle: `akou doctor` from the
@@ -1445,7 +1458,7 @@ export class AkouApp implements ApiApp {
     if (!this.runningModelsPresent()) return null;
     return this.o.models !== undefined
       ? this.o.models
-      : this.sherpaSpec(this.cfg.settings, this.runningDiarizer());
+      : this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
   }
 
   /** Starts the final pass in the background. Returns why it cannot run, or null once started. */

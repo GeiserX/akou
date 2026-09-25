@@ -166,6 +166,32 @@ describe("asr.diarizer changed while the app runs", () => {
   );
 });
 
+describe("asr.parakeet.decoding changed while the app runs", () => {
+  test(
+    "the running mode stays until the next start, so the final pass decodes as live did",
+    async () => {
+      const home = tempDir("akou-app-");
+      const rig = await appRig({ home: home.dir });
+      await until(
+        async () => (await rig.api("GET", "/status")).body.asr.state === "ready",
+        10_000,
+        "the recognizer",
+      );
+      expect((await rig.api("GET", "/status")).body.asr.decoding).toBe("greedy");
+      const patched = await rig.api("PATCH", "/config", { "asr.parakeet.decoding": "beam" });
+      expect(patched.status).toBe(200);
+      expect((await rig.api("GET", "/status")).body.asr.decoding).toBe("greedy");
+      await rig.close();
+      // Positive control: the next start runs what the setting says.
+      const next = await appRig({ home: home.dir, settings: { "asr.parakeet.decoding": "beam" } });
+      expect((await next.api("GET", "/status")).body.asr.decoding).toBe("beam");
+      await next.close();
+      home.cleanup();
+    },
+    LONG,
+  );
+});
+
 describe("[spike] Command-line arguments dropped by the launcher", () => {
   test("no code reads process.argv for mode selection; headless comes from AKOU_HEADLESS", () => {
     // The CLI's entry point is the one reader: its arguments are its interface, not the app's
