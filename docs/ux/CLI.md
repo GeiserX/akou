@@ -362,7 +362,7 @@ Re-run the final pass and the export on every call in a workspace, for example a
 
 ```sh
 akou calls -w work --limit 1000 --json | jq -r '.calls[].id' | while read -r id; do
-  akou finalize "$id" --force && akou wait -c "$id" --for final.done && akou export "$id"
+  akou finalize "$id" --force && akou wait "$id" --for final.done && akou export "$id"
 done
 ```
 
