@@ -1851,6 +1851,58 @@ mod faults {
         assert_eq!(rec.seconds(), 2.0 - rec.pre_skip as f64 / 48_000.0);
     }
 
+    /// stdout that takes `delay` for every write, like a pipe the app reads slowly.
+    struct Slow(Shared, Duration);
+
+    impl Write for Slow {
+        fn write(&mut self, b: &[u8]) -> std::io::Result<usize> {
+            std::thread::sleep(self.1);
+            self.0.write(b)
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// A simulated crash comes after the packets before it: the ones still queued for stdout are
+    /// written before the exit, so the app sees exactly the audio up to the crash (TESTING TS-1 a).
+    #[test]
+    fn a_crash_delivers_every_packet_it_wrote_before_it() {
+        let faults = with(&["crash-at=0.3"]);
+        let fe = FileSource::new(
+            stereo(48_000, 1.0),
+            "test.wav",
+            0.0,
+            false,
+            true,
+            true,
+            faults.clone(),
+        );
+        let (_stdin, rx) = mpsc::channel::<Vec<u8>>();
+        let out = Shared::default();
+        let cfg = RunConfig {
+            out: tmp("crash-slow.opus"),
+            mic_default: false,
+            call: CallMode::System,
+            faults,
+        };
+        let outcome = engine::run(
+            cfg,
+            Box::new(fe),
+            Box::new(Stdin { rx, buf: vec![] }),
+            Box::new(Slow(out.clone(), Duration::from_millis(5))),
+            Box::new(Shared::default()),
+        );
+        assert_eq!(outcome, Outcome::Exit(70));
+        let bytes = out.0.lock().unwrap().clone();
+        let (p, used) = protocol::decode_packets(&bytes).unwrap();
+        assert_eq!(used, bytes.len(), "a torn packet on stdout");
+        let mic: Vec<&Packet> = p.iter().filter(|x| x.ch == Ch::Mic).collect();
+        // 15 slots of 20 ms before 0.3 s.
+        assert_eq!(mic.len(), 15);
+        assert_eq!(mic.last().map(|x| x.file_seconds), Some(0.28));
+    }
+
     #[test]
     fn sleep_shows_as_a_host_clock_jump_the_file_does_not_have() {
         let r = Run::start(

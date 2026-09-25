@@ -10,13 +10,84 @@ import { akouCaptureDialect, ChildCaptureSession } from "../src/main/capture/hel
 import {
   captureTrapScenarios,
   fakeHelper,
+  holdBound,
   LONG,
+  longestHold,
   rig,
+  type StopTimes,
   useRigCleanups,
 } from "./capture-scenarios.ts";
 
 useRigCleanups();
 captureTrapScenarios(fakeHelper);
+
+describe("[T0.9] the hang check can fail", () => {
+  test("longestHold: turns every 10 ms score 10 ms; no turn at all scores the whole window", () => {
+    const turns = Array.from({ length: 29 }, (_, i) => 1_000 + (i + 1) * 10);
+    expect(longestHold(turns, 1_000, 1_300)).toBe(10);
+    expect(longestHold([], 1_000, 1_300)).toBe(300);
+    // Turns outside the window do not count.
+    expect(longestHold([900, 1_400], 1_000, 1_300)).toBe(300);
+    expect(longestHold([1_010, 1_290], 1_000, 1_300)).toBe(280);
+  });
+
+  test(
+    "positive control: a stop that holds the event loop until the kill scores the whole budget",
+    async () => {
+      const budget = 300;
+      const r = rig(fakeHelper, () => ({ hangOnStop: true }), { stopMs: budget });
+      expect((await r.mgr.start({ workspace: "work" })).ok).toBe(true);
+      // The kill blocks the loop for the budget first, as a stop that waited on the helper
+      // synchronously would.
+      const s = r.sessions[0];
+      if (!s) throw new Error("no session");
+      const kill = s.kill.bind(s);
+      s.kill = () => {
+        Bun.sleepSync(budget);
+        kill();
+      };
+      const turns: number[] = [];
+      const timer = setInterval(() => turns.push(performance.now()), 10);
+      await r.mgr.stop("live");
+      clearInterval(timer);
+      const at = r.stops[0] as StopTimes;
+      expect(longestHold(turns, at.asked as number, at.kill as number)).toBeGreaterThanOrEqual(
+        holdBound(budget),
+      );
+    },
+    LONG,
+  );
+
+  test(
+    "positive control: a stop that holds the loop for more than half the budget, not all of it, fails too",
+    async () => {
+      const budget = 1_000;
+      const r = rig(fakeHelper, () => ({ hangOnStop: true }), { stopMs: budget });
+      expect((await r.mgr.start({ workspace: "work" })).ok).toBe(true);
+      // Just after the ask, the loop is held for six tenths of the budget, then let go, so turns
+      // come again before the kill. The hold alone is past the bound whatever the runner does.
+      // The 400 ms left before the kill is the room a slow runner has to start the hold late
+      // and turn late after it: a macOS runner took 130 ms more than asked, which a hold of
+      // nine tenths of 300 ms, 25 ms from the kill, did not survive.
+      const s = r.sessions[0];
+      if (!s) throw new Error("no session");
+      const stop = s.stop.bind(s);
+      s.stop = (b) => {
+        setTimeout(() => Bun.sleepSync(budget * 0.6), 5);
+        return stop(b);
+      };
+      const turns: number[] = [];
+      const timer = setInterval(() => turns.push(performance.now()), 10);
+      await r.mgr.stop("live");
+      clearInterval(timer);
+      const at = r.stops[0] as StopTimes;
+      const held = longestHold(turns, at.asked as number, at.kill as number);
+      expect(held).toBeLessThan(budget);
+      expect(held).toBeGreaterThanOrEqual(holdBound(budget));
+    },
+    LONG,
+  );
+});
 
 describe("a helper that is not a helper", () => {
   test(

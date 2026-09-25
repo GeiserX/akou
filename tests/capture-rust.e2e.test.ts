@@ -72,7 +72,11 @@ function oggOpus(bytes: Uint8Array): { channels: number; preSkip: number; granul
 }
 
 if (!BIN) {
-  test.skip("set AKOU_CAPTURE_BIN to a `--features simulate` build to run the capture traps against the Rust helper", () => {});
+  // Says why nothing below ran; the capture job sets AKOU_CAPTURE_BIN and allows no skip.
+  test.skipIf(!BIN)(
+    "the capture traps against the Rust helper (skipped: needs AKOU_CAPTURE_BIN, a `--features simulate` build)",
+    () => {},
+  );
 } else {
   useRigCleanups();
   const bin = BIN;

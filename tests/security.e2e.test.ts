@@ -299,7 +299,7 @@ describe("the bearer token", () => {
   });
 
   test.skipIf(process.platform === "win32")(
-    "[Token file readable by others] the token file is mode 0600, 32 random bytes",
+    "[Token file readable by others] the token file is mode 0600, 32 random bytes (POSIX file modes; skipped on Windows)",
     () => {
       const path = guarded.app.tokenPath;
       expect(statSync(path).mode & 0o777).toBe(0o600);
@@ -309,7 +309,7 @@ describe("the bearer token", () => {
   );
 
   test.skipIf(process.platform === "win32")(
-    "a token file others can read is replaced, not trusted; rotation takes effect at once",
+    "a token file others can read is replaced, not trusted; rotation takes effect at once (POSIX file modes; skipped on Windows)",
     async () => {
       const t = tempDir();
       const first = ensureToken(t.dir);
@@ -346,7 +346,7 @@ describe("the bearer token", () => {
   );
 
   test.skipIf(process.platform === "win32")(
-    "[Token file readable by others] a live token whose file goes loose is burned at once",
+    "[Token file readable by others] a live token whose file goes loose is burned at once (POSIX file modes; skipped on Windows)",
     async () => {
       const path = guarded.app.tokenPath;
       const old = guarded.token;
@@ -430,7 +430,7 @@ describe("the token file on Windows (an ACL for the current user only)", () => {
   });
 
   test.skipIf(process.platform !== "win32")(
-    "[Token file readable by others] a token whose ACL cannot be set is never written",
+    "[Token file readable by others] a token whose ACL cannot be set is never written (Windows ACLs; Windows only)",
     () => {
       const t = tempDir();
       const first = ensureToken(t.dir);
@@ -449,7 +449,7 @@ describe("the token file on Windows (an ACL for the current user only)", () => {
   );
 
   test.skipIf(process.platform !== "win32")(
-    "[Token file readable by others] the token is the user's alone; one others can read is replaced",
+    "[Token file readable by others] the token is the user's alone; one others can read is replaced (Windows ACLs; Windows only)",
     () => {
       const t = tempDir();
       const first = ensureToken(t.dir);

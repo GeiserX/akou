@@ -14,9 +14,10 @@ One package. Follow the layout in DESIGN section 10 exactly.
 ## Commands
 
 - `bun install --frozen-lockfile`
-- `bun run check`: Biome, `tsc --noEmit`, then `bun test`. CI runs exactly this on macOS, Windows and Linux.
+- `bun run check`: the pinned Bun, Biome, `tsc --noEmit`, then `bun test` and its floor. CI runs exactly this on macOS, Windows and Linux. It refuses any Bun but the one in `.bun-version`; run that one without installing it with `bunx bun@$(cat .bun-version) run check`.
+- Every CI test job has a floor in `tests/floors.json` (`scripts/ci/test-floor.ts`): fewer passes or more skips fail the job. Adding tests needs no edit; a new skip raises `maxSkip` in the same diff. A skip is only `test.skipIf(cond)` for a missing model, device or OS, with the reason in the test name; Biome fails `test.only` and `test.skip` under `tests/`, and the floor fails any `test.todo`. `maxSkip` is CI's count, so a machine missing something CI has (a model, a non-loopback network) skips more and fails the floor locally; the script lists the skipped tests so you can tell.
 - `bun run format`: apply Biome's fixes.
-- `bun run test:ui`: the window in a headless browser (Playwright's Chromium headless shell, installed with `bunx playwright-core install --only-shell chromium`). `bun run check` leaves `tests/ui/` out; the `ui` workflow runs it.
+- `bun run test:ui`: the window in a headless browser (Playwright's Chromium headless shell, installed with `bunx playwright-core install --only-shell chromium`). `bun run check` leaves `tests/ui/` out; the `ui` job of `ci.yml` runs it.
 - `bun run build:ui`: the window's static bundle into `dist/ui`.
 
 ## Rules

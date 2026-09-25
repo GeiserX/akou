@@ -121,7 +121,7 @@ function whoSpoke(turns: readonly DiarizedSpan[], at: readonly [number, number][
 
 const spec = () => ({ command: [HELPER as string], model: MODEL, threads: 2 });
 
-describe.skipIf(!!SKIP)("Nemotron 3 Diarization, for real", () => {
+describe.skipIf(!!SKIP)("Nemotron 3 Diarization, for real (needs the model, helper, `say`)", () => {
   test("the model on disk matches its pinned checksum", async () => {
     const bad = (await verifyModels(MODELS as string, [NEMOTRON])).filter((s) => s.state !== "ok");
     expect(bad).toEqual([]);

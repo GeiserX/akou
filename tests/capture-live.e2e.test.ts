@@ -180,7 +180,11 @@ function channels(ogg: Uint8Array): number {
 }
 
 if (!LIVE || !BIN || !PLAY) {
-  test.skip("set AKOU_CAPTURE_LIVE=1, AKOU_CAPTURE_BIN and AKOU_CAPTURE_LIVE_PLAY to record from real devices (CI only)", () => {});
+  // Says why nothing below ran; the live capture jobs set all three.
+  test.skipIf(!LIVE || !BIN || !PLAY)(
+    "akou-capture against real devices (skipped: needs AKOU_CAPTURE_LIVE=1, AKOU_CAPTURE_BIN and AKOU_CAPTURE_LIVE_PLAY, CI only)",
+    () => {},
+  );
 } else {
   describe("akou-capture against real devices", () => {
     const dir = mkdtempSync(join(tmpdir(), "akou-live-"));
@@ -221,7 +225,7 @@ if (!LIVE || !BIN || !PLAY) {
     }, 60_000);
 
     test.skipIf(!EXCLUDE)(
-      "[spike] Own audio in the call channel: a player inside the excluded tree is never heard",
+      "[spike] Own audio in the call channel: a player inside the excluded tree is never heard (needs AKOU_CAPTURE_LIVE_EXCLUDE=1, Windows)",
       async () => {
         // This test process started the player, so it is the root of the tree to leave out.
         const t = await take(dir, "excluded", ["--exclude-responsible", String(process.pid)]);

@@ -26,6 +26,17 @@
   },
   "overrides": [
     {
+      "includes": ["tests/**"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noFocusedTests": "error",
+            "noSkippedTests": "error"
+          }
+        }
+      }
+    },
+    {
       "includes": ["src/ui/theme.css"],
       "linter": {
         "rules": {

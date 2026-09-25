@@ -97,7 +97,7 @@ const entry = (term: string): MergedEntry => ({
   file: "work.yaml",
 });
 
-describe.skipIf(!!SKIP)("the real pipeline", () => {
+describe.skipIf(!!SKIP)("the real pipeline (needs AKOU_MODELS_DIR and macOS `say`)", () => {
   test("the models on disk match their pinned checksums", async () => {
     const bad = (await verifyModels(MODELS as string)).filter((s) => s.state !== "ok");
     expect(bad).toEqual([]);

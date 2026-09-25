@@ -219,7 +219,7 @@ describe("hooks (DESIGN 8.2)", () => {
 
   for (const mode of ["", "stubborn"]) {
     test.skipIf(process.platform === "win32")(
-      `past its timeout the whole group is killed, not just the shell${mode ? " (SIGTERM ignored)" : ""}`,
+      `past its timeout the whole group is killed, not just the shell${mode ? " (SIGTERM ignored)" : ""} (POSIX process groups; skipped on Windows)`,
       async () => {
         const pidFile = join(scripts, `pid-${mode || "plain"}.txt`);
         const q = (x: string) => JSON.stringify(x);
@@ -427,7 +427,7 @@ describe("the webhook (DESIGN 8.2)", () => {
   });
 });
 
-describe.skipIf(process.platform === "win32")("examples/hooks/git-commit.sh", () => {
+describe.skipIf(process.platform === "win32")("examples/hooks/git-commit.sh (POSIX sh)", () => {
   const HOOK = join(import.meta.dir, "..", "examples", "hooks", "git-commit.sh");
   const git = (cwd: string, ...args: string[]) => {
     const r = Bun.spawnSync(["git", "-C", cwd, ...args], { stderr: "pipe" });

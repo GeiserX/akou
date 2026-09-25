@@ -115,14 +115,14 @@ describe("the final pass's diarizer", () => {
   // POSIX only: the fake leaves a child behind to write after it exits, and on Windows that child
   // never writes (CI saw the exit, and no line, 24 ms in). The fix itself is not platform-specific.
   test.skipIf(process.platform === "win32")(
-    "the helper's own words are read to the end of its output, even when its exit is seen first",
+    "the helper's own words are read to the end of its output, even when its exit is seen first (POSIX only)",
     async () => {
       const d = new NemotronDiarizer(spec(["--late-error"], join("/nonexistent", "model.onnx")));
       await expect(d.process(tone(1, 0.1))).rejects.toThrow(/cannot load/);
     },
   );
   test.skipIf(process.platform === "win32")(
-    "a helper that exits while its audio is still being sent is judged by its own words, not the broken pipe",
+    "a helper that exits while its audio is still being sent is judged by its own words, not the broken pipe (POSIX only)",
     async () => {
       // 70 s is more than the pipe holds, so the write is still pending when the helper exits.
       const d = new NemotronDiarizer(spec(["--late-error"], join("/nonexistent", "model.onnx")));

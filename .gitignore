@@ -4,6 +4,7 @@ target/
 .omc/
 *.log
 tests/.tmp/
+.junit-*.xml
 # ElectroBun and Hutch build output (scripts/build-app.ts)
 build/
 artifacts/
