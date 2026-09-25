@@ -12,6 +12,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { ApiClient, type ApiResponse } from "../src/main/cli/client.ts";
 import { askListed, createMcpServer, harnessOf } from "../src/main/mcp/server.ts";
+import { CALL_TEXT_CLOSE, CALL_TEXT_OPEN } from "../src/main/query/render.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { CLI } from "./cli-helpers.ts";
@@ -101,6 +102,14 @@ async function connect(
     return { text, isError: r.isError === true };
   };
   return { client, server, call, close: () => client.close() };
+}
+
+/** The JSON inside an answer's call-text block (PG-Z1). */
+function quotedJson(text: string) {
+  const lines = text.split("\n");
+  return JSON.parse(
+    lines.slice(lines.indexOf(CALL_TEXT_OPEN) + 1, lines.indexOf(CALL_TEXT_CLOSE)).join("\n"),
+  );
 }
 
 async function stopAll(): Promise<void> {
@@ -296,18 +305,18 @@ describe("following a call", () => {
     async () => {
       const c = await connect("claude-code");
       expect((await c.call("akou_add_note", { text: "ship it friday" })).isError).toBe(false);
-      const notes = JSON.parse((await c.call("akou_get_notes")).text);
+      const notes = quotedJson((await c.call("akou_get_notes")).text);
       expect(notes.notes.at(-1)).toMatchObject({ text: "ship it friday", by: "agent:claude-code" });
       const rem = await c.call("akou_remember", { text: "temporary fact" });
       const rid = /\((r\d+)\)/.exec(rem.text)?.[1] as string;
       expect((await c.call("akou_forget", { id: rid })).isError).toBe(false);
-      const memoBefore = JSON.parse((await c.call("akou_memo_get")).text);
+      const memoBefore = quotedJson((await c.call("akou_memo_get")).text);
       const put = await c.call("akou_memo_put", {
         text: "Deploy moved to Friday [15:41]",
         coversSeq: memoBefore.cursor,
       });
       expect(put.isError).toBe(false);
-      const memo = JSON.parse((await c.call("akou_memo_get")).text);
+      const memo = quotedJson((await c.call("akou_memo_get")).text);
       expect(memo.memo.body).toContain("Deploy moved to Friday");
       await c.close();
     },

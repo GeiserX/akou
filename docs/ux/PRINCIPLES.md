@@ -211,7 +211,7 @@ Each row is one bead labelled `docs-lag`, closed by the PR that fixes the doc.
 | DESIGN §1.5 | Hotkey default | Matches DK-K4 |
 | DESIGN §4.3 | No low-disk stop | `part.ended {reason: low-disk}` (REC-02 in the matrix) |
 | DESIGN §5.2 vs providers.md | Re-enhance after the final layer is automatic in one and never automatic with the harness in the other | DESIGN 5.2 adds "except with the harness provider" |
-| [TRAPS.md](../TRAPS.md) "The boost is a slider" | Names `akou vocab check --boost`, which does not exist | Rewritten against the per-entry `boost`; CLI-17's scan covers TRAPS.md |
+| [TRAPS.md](../TRAPS.md) "The boost is a slider" | Names `akou vocab check --boost`, which does not exist | Rewritten against the per-entry `decode` field; CLI-17's scan covers TRAPS.md |
 | [install.md](../install.md) | No MCP registration step | The manual `claude mcp add` and `codex mcp add` lines until PG-M1 lands |
 
 ## Open decisions

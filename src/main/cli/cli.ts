@@ -73,6 +73,7 @@ export interface CliOptions {
   launchBudgetMs?: number;
   models?: readonly ModelSpecEntry[];
   skillSource?: string;
+  self?: readonly string[];
   version?: string;
 }
 
@@ -116,6 +117,7 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     }),
     models: o.models,
     skillSource: o.skillSource,
+    self: o.self,
     version: o.version ?? APP_VERSION,
   };
   try {
