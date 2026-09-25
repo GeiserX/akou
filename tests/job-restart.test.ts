@@ -6,8 +6,9 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { ModelSpec } from "../src/main/asr/engine.ts";
 import { JobService } from "../src/main/server/jobs.ts";
 import { JOBS_DB, JobStore } from "../src/main/server/store.ts";
 import { until } from "./capture-helpers.ts";
@@ -46,12 +47,14 @@ function leftRunning(stops: number): { dir: string; id: string; audio: string } 
   return { dir: t.dir, id: job.id, audio };
 }
 
-function service(dir: string): JobService {
+function service(dir: string, o: { hold?: boolean } = {}): JobService {
   const svc = new JobService({
     dir,
     version: "0.0.0",
     // No models: a job that runs again fails at once as models_missing, which tells it apart.
-    models: () => null,
+    // `hold` keeps a running job on its decode instead, so its upload stays on disk.
+    models: () => (o.hold ? ({} as ModelSpec) : null),
+    ...(o.hold ? { decode: () => new Promise<Float32Array>(() => {}) } : {}),
     diarizer: () => "embeddings",
     secrets: () => [],
     hostListed: () => false,
@@ -81,5 +84,19 @@ describe("SV-J9: a job left running is queued again once, not forever", () => {
     const events = svc.store.events("key_a", 0, 10);
     expect(events.map((e) => e.type)).toEqual(["transcription.failed"]);
     expect(existsSync(audio)).toBe(false);
+  });
+});
+
+describe("SV-J6: an upload no job names is deleted at start", () => {
+  test("a crash's leftover upload is deleted, and a job's own upload is kept", async () => {
+    const { dir, id, audio } = leftRunning(1);
+    const orphan = join(dir, "audio", "left-by-a-crash.upload");
+    writeFileSync(orphan, "audio");
+    const svc = service(dir, { hold: true });
+    await until(() => svc.store.job(id)?.status === "running", 3000, "the job to run again");
+    expect(existsSync(orphan)).toBe(false);
+    // Positive control: the running job's upload, named in its row, is still there.
+    expect(existsSync(audio)).toBe(true);
+    expect(readdirSync(join(dir, "audio"))).toEqual(["a.upload"]);
   });
 });

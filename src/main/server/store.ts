@@ -337,6 +337,14 @@ export class JobStore {
     return this.job(id);
   }
 
+  /** Every upload a job row names. */
+  uploads(): Set<string> {
+    const rows = this.db.query("SELECT audio FROM jobs WHERE audio IS NOT NULL").all() as {
+      audio: string;
+    }[];
+    return new Set(rows.map((r) => r.audio));
+  }
+
   /** Jobs left running, as the last process left them. */
   running(): Job[] {
     return (

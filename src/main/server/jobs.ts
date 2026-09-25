@@ -13,7 +13,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, rmSync } from "node:fs";
+import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Identity } from "../api/access.ts";
 import { DecodeError } from "../asr/decode.ts";
@@ -194,6 +194,17 @@ export class JobService {
     const requeued = this.store.requeueRunning();
     if (requeued > 0)
       this.o.log("info", `jobs: ${requeued} left running at the last stop are queued again`);
+    // An upload no job names was left by a crash (mid-upload, or between a job's end and the
+    // file's delete): nothing would ever read or delete it.
+    const named = this.store.uploads();
+    let orphans = 0;
+    for (const f of readdirSync(this.audioDir)) {
+      const path = join(this.audioDir, f);
+      if (!f.endsWith(".upload") || named.has(path)) continue;
+      rmSync(path, { force: true });
+      orphans++;
+    }
+    if (orphans > 0) this.o.log("info", `jobs: ${orphans} upload(s) no job names were deleted`);
     this.sweep();
     // clock: retention runs hourly; each run reads the store's own times.
     this.retention = setInterval(() => this.sweep(), RETENTION_SWEEP_MS);
