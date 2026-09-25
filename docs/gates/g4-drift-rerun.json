@@ -1,0 +1,248 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 3726.1568125
+  },
+  "wallSeconds": 3726.194,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.0.0",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 68787"],
+      "capture_ns": "223845637218833"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "223845637218833"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "223848337218833"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 3726.1568125,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -37.2,
+  "leftSeconds": 3726.157,
+  "leftGaps": {
+    "scannedSeconds": 3721.1,
+    "over5ms": 1,
+    "over20ms": 1,
+    "longestMs": 3721109.7,
+    "worst": [
+      {
+        "at": 3.039,
+        "ms": 3721109.7
+      }
+    ]
+  },
+  "rightSeconds": 3726.157,
+  "rightGaps": {
+    "scannedSeconds": 3721.1,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "firstWords": [
+    {
+      "at": 39.722,
+      "speechOnsetMs": 140,
+      "lagMs": -0.04,
+      "headScore": 0.955,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.95, 0.97, 0.97, 0.96, 0.96, 0.96, 0.94, 0.84, 0.8, 0.76, 0.86, 0.76, 0.01, 0.74
+      ]
+    },
+    {
+      "at": 2704.729,
+      "speechOnsetMs": 140,
+      "lagMs": -0.02,
+      "headScore": 0.959,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.98, 0.98, 0.97, 0.96, 0.97, 0.95, 0.94, 0.81, 0.8, 0.81, 0.8, 0.69, 0.03, 0.72
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -122.9,
+    "left_peak_dbfs": -84.3,
+    "right_rms_dbfs": -35.7,
+    "right_peak_dbfs": -3.1
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 373,
+      "expected": 373,
+      "missing": [],
+      "latencyMs": {
+        "n": 373,
+        "min": 11.361,
+        "median": 11.362,
+        "max": 11.363,
+        "spread": 0.0019999999999988916
+      },
+      "slopeMsPerHour": 0,
+      "minScore": 0.916,
+      "firstRows": [
+        {
+          "k": 0,
+          "t": 4.64,
+          "ms": 11.362
+        },
+        {
+          "k": 1,
+          "t": 14.64,
+          "ms": 11.362
+        },
+        {
+          "k": 2,
+          "t": 24.64,
+          "ms": 11.362
+        },
+        {
+          "k": 3,
+          "t": 34.64,
+          "ms": 11.362
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 371,
+          "t": 3714.64,
+          "ms": 11.362
+        },
+        {
+          "k": 372,
+          "t": 3724.64,
+          "ms": 11.362
+        }
+      ]
+    },
+    "call@right": {
+      "found": 308,
+      "expected": 308,
+      "missing": [],
+      "latencyMs": {
+        "n": 308,
+        "min": 8.328,
+        "median": 8.403,
+        "max": 8.463,
+        "spread": 0.1349999999999998
+      },
+      "slopeMsPerHour": 0.06,
+      "minScore": 0.981,
+      "firstRows": [
+        {
+          "k": 4,
+          "t": 49.64,
+          "ms": 8.361
+        },
+        {
+          "k": 5,
+          "t": 59.64,
+          "ms": 8.37
+        },
+        {
+          "k": 6,
+          "t": 69.64,
+          "ms": 8.378
+        },
+        {
+          "k": 7,
+          "t": 79.64,
+          "ms": 8.38
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 370,
+          "t": 3709.64,
+          "ms": 8.461
+        },
+        {
+          "k": 371,
+          "t": 3719.64,
+          "ms": 8.462
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 0,
+    "note": "no mic chirps on the left channel to pair with"
+  },
+  "bothTrainsInTap": {
+    "pairs": 308,
+    "offsetMs": {
+      "n": 308,
+      "min": -3.033,
+      "median": -2.959,
+      "max": -2.899,
+      "spread": 0.1339999999999999
+    },
+    "slopeMsPerHour": 0.06
+  },
+  "memory": {
+    "helper": {
+      "samples": 125,
+      "firstKb": 13024,
+      "lastKb": 11184,
+      "minKb": 11024,
+      "maxKb": 13024,
+      "slopeKbPerHour": -952
+    },
+    "helperMuted": {
+      "samples": 20,
+      "firstKb": 11424,
+      "lastKb": 11056,
+      "minKb": 11056,
+      "maxKb": 11488,
+      "slopeKbPerHour": -1091
+    },
+    "app": {
+      "samples": 125,
+      "firstKb": 70480,
+      "lastKb": 373376,
+      "minKb": 70480,
+      "maxKb": 398624,
+      "slopeKbPerHour": 155846
+    },
+    "appMuted": {
+      "samples": 20,
+      "firstKb": 379264,
+      "lastKb": 277248,
+      "minKb": 254528,
+      "maxKb": 379264,
+      "slopeKbPerHour": -472057
+    }
+  }
+}

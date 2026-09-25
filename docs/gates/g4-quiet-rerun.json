@@ -1,0 +1,201 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 825.0875625
+  },
+  "wallSeconds": 825.141,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.0.0",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 51341"],
+      "capture_ns": "223019050991750"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "223019050991750"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "223053870991750"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 825.0875625,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -53.4,
+  "leftSeconds": 825.088,
+  "leftGaps": {
+    "scannedSeconds": 0,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "rightSeconds": 825.088,
+  "rightGaps": {
+    "scannedSeconds": 178.5,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "quietWindows": [
+    {
+      "from": 0.5,
+      "to": 34.6,
+      "callRmsDbfs": null,
+      "callPeakDbfs": null
+    },
+    {
+      "from": 155.2,
+      "to": 754.3,
+      "callRmsDbfs": null,
+      "callPeakDbfs": null
+    }
+  ],
+  "firstWords": [
+    {
+      "at": 35.12,
+      "speechOnsetMs": 140,
+      "lagMs": 0,
+      "headScore": 0.96,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.97, 0.97, 0.97, 0.97, 0.96, 0.97, 0.96, 0.96, 0.86, 0.85, 0.82, 0.84, 0.79, 0.05, 0.83
+      ]
+    },
+    {
+      "at": 754.807,
+      "speechOnsetMs": 140,
+      "lagMs": 0,
+      "headScore": 0.96,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.96, 0.96, 0.97, 0.97, 0.97, 0.97, 0.96, 0.94, 0.84, 0.84, 0.79, 0.84, 0.78, 0.08, 0.78
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -103.4,
+    "left_peak_dbfs": -50.8,
+    "right_rms_dbfs": -39.9,
+    "right_peak_dbfs": -3.3
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 0
+    },
+    "call@right": {
+      "found": 18,
+      "expected": 18,
+      "missing": [],
+      "latencyMs": {
+        "n": 18,
+        "min": 8.364,
+        "median": 8.408,
+        "max": 8.429,
+        "spread": 0.0649999999999995
+      },
+      "slopeMsPerHour": -0.21,
+      "minScore": 0.982,
+      "firstRows": [
+        {
+          "k": 3,
+          "t": 39.74,
+          "ms": 8.397
+        },
+        {
+          "k": 4,
+          "t": 49.74,
+          "ms": 8.403
+        },
+        {
+          "k": 5,
+          "t": 59.74,
+          "ms": 8.408
+        },
+        {
+          "k": 6,
+          "t": 69.74,
+          "ms": 8.413
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 79,
+          "t": 799.74,
+          "ms": 8.369
+        },
+        {
+          "k": 80,
+          "t": 809.74,
+          "ms": 8.364
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 0,
+    "note": "no mic chirps on the left channel to pair with"
+  },
+  "memory": {
+    "helper": {
+      "samples": 28,
+      "firstKb": 13104,
+      "lastKb": 12272,
+      "minKb": 11328,
+      "maxKb": 13312,
+      "slopeKbPerHour": -4652
+    },
+    "helperMuted": {
+      "samples": 20,
+      "firstKb": 13056,
+      "lastKb": 12160,
+      "minKb": 11888,
+      "maxKb": 13056,
+      "slopeKbPerHour": -7216
+    },
+    "app": {
+      "samples": 28,
+      "firstKb": 82912,
+      "lastKb": 300592,
+      "minKb": 82912,
+      "maxKb": 300592,
+      "slopeKbPerHour": 891094
+    },
+    "appMuted": {
+      "samples": 20,
+      "firstKb": 143936,
+      "lastKb": 290192,
+      "minKb": 143936,
+      "maxKb": 290192,
+      "slopeKbPerHour": 878312
+    }
+  }
+}
