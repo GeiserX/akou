@@ -201,8 +201,8 @@ async function main(): Promise<number> {
   const dir = mkdtempSync(join(tmpdir(), "akou-executor-"));
   const exe = new Executor(bin, dir);
   const open = akou();
-  // The positive control: the guard with the file's `access: none` ignored.
-  const strict = akou((req, ctx) => guard(req, { ...ctx, anonymous: false }));
+  // The positive control: the guard with the file's `access: "open"` ignored.
+  const strict = akou((req, ctx) => guard(req, { ...ctx, route: { access: "admin" } }));
   const lines: string[] = [];
   const failures: string[] = [];
   try {

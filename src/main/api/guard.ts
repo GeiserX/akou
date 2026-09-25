@@ -11,7 +11,7 @@
  * 2. Any `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Mode` header is refused: our clients never send
  *    them, and browsers always do on a cross-origin request.
  * 3. `Authorization: Bearer <token>` on every request, GETs included, compared in constant time.
- *    The one exception is a route the route table marks `access: "none"`: the OpenAPI file,
+ *    The one exception is a route the route table marks `access: "open"`: the OpenAPI file,
  *    which holds no secrets and which Executor fetches with no credentials. Its tests, with their
  *    positive control, are in `tests/openapi.test.ts` and `tests/scopes.test.ts`.
  * 4. Every method but GET and HEAD needs `Content-Type: application/json`; bodies are capped at
@@ -37,6 +37,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { RouteMeta } from "./access.ts";
 
 export const TOKEN_FILE = "token";
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -47,8 +48,8 @@ export interface GuardContext {
   port: number;
   /** The bearer token. */
   token: string;
-  /** The route asked for needs no key (`access: "none"` in the route table). */
-  anonymous?: boolean;
+  /** The route asked for, from the route table; an unknown path is checked as `admin` (`ADMIN_ROUTE`). */
+  route: RouteMeta;
 }
 
 /** Answers a refused request, or null to let it through. */
@@ -77,7 +78,7 @@ export const guard: Guard = (req, ctx) => {
   }
   const auth = req.headers.get("authorization") ?? "";
   const m = /^Bearer (\S+)$/.exec(auth);
-  if (!ctx.anonymous && (!m || !tokenMatches(m[1] as string, ctx.token))) {
+  if (ctx.route.access !== "open" && (!m || !tokenMatches(m[1] as string, ctx.token))) {
     return new Response(
       JSON.stringify({ error: "unauthorized", message: "a valid bearer token is required" }),
       {

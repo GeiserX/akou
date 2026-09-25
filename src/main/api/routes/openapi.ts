@@ -6,9 +6,13 @@
  * key can call.
  */
 
+import type { Scope } from "../access.ts";
 import { json, type Router } from "../http.ts";
-import { buildOpenApi, SCOPES, type Scope, servedOpenApi, serverUrlFor } from "../openapi.ts";
+import { buildOpenApi, servedOpenApi, serverUrlFor } from "../openapi.ts";
 import type { ApiApp } from "../server.ts";
+
+/** The views `?scope=` names. An `admin` key calls everything, so its view is the unscoped one. */
+const VIEWS = ["jobs"] as const satisfies readonly Scope[];
 
 export function openapiRoutes(r: Router<ApiApp>): void {
   r.add(
@@ -17,13 +21,13 @@ export function openapiRoutes(r: Router<ApiApp>): void {
     {
       id: "openapi.get",
       doc: "This API's OpenAPI 3.1 description, for the running mode. Needs no key. `scope=jobs` lists only the operations a `jobs` key can call, with no compatibility route.",
-      access: "none",
+      access: "open",
       modes: ["app", "server"],
       door: "spec",
       query: {
         scope: {
           type: "string",
-          values: SCOPES,
+          values: VIEWS,
           doc: "`jobs`: only what a key with the `jobs` scope can call.",
         },
       },
@@ -31,10 +35,10 @@ export function openapiRoutes(r: Router<ApiApp>): void {
     },
     (c) => {
       const scope = c.query.raw("scope");
-      if (scope !== null && !(SCOPES as readonly string[]).includes(scope)) {
+      if (scope !== null && !(VIEWS as readonly string[]).includes(scope)) {
         return json(400, {
           error: "bad_param",
-          message: `scope must be one of ${SCOPES.join(", ")}`,
+          message: `scope must be one of ${VIEWS.join(", ")}`,
           param: "scope",
         });
       }

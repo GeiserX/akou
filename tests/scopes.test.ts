@@ -13,8 +13,9 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { OPENAPI_FILE } from "../scripts/openapi.ts";
+import type { Access } from "../src/main/api/access.ts";
 import { type Guard, guard } from "../src/main/api/guard.ts";
-import type { Access, RouteEntry } from "../src/main/api/http.ts";
+import type { RouteEntry } from "../src/main/api/http.ts";
 import { HttpError } from "../src/main/api/http.ts";
 import {
   buildOpenApi,
@@ -29,7 +30,7 @@ import { FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
 process.env.NO_PROXY = "127.0.0.1,localhost";
 
 /**
- * Who may call each operation: `none` needs no key, `jobs` a key with the `jobs` scope (or more),
+ * Who may call each operation: `open` needs no key, `jobs` a key with the `jobs` scope (or more),
  * `admin` only an `admin` key or the app's token. Written by hand, never read from the routes.
  */
 const TABLE: Record<string, Access> = {
@@ -91,7 +92,7 @@ const TABLE: Record<string, Access> = {
   "POST /v1/calls/{id}/export": "admin",
   "POST /v1/calls/{id}/hooks": "admin",
   "POST /v1/import/hark-viewer": "admin",
-  "GET /v1/openapi.json": "none",
+  "GET /v1/openapi.json": "open",
   // Anonymous, next to `/healthz` and `GET /v1/server` once they exist (service-interface.md SI-2).
 };
 
@@ -106,7 +107,7 @@ const HEADERS: Record<Credential, Record<string, string>> = {
 
 /** What the table says a credential gets: refused with 401 or 403, or let through. */
 function expected(access: Access, cred: Credential | "jobs"): 401 | 403 | "allowed" {
-  if (access === "none" || cred === "admin") return "allowed";
+  if (access === "open" || cred === "admin") return "allowed";
   if (cred === "jobs") return access === "admin" ? 403 : "allowed";
   return 401;
 }
@@ -235,7 +236,7 @@ describe("[SV-T5] one table of who may call each route", () => {
 
   test("positive control: the walk reports routes that let a request through without the token", async () => {
     // The guard with every route treated as anonymous.
-    const r = await walk((req, ctx) => guard(req, { ...ctx, anonymous: true }));
+    const r = await walk((req, ctx) => guard(req, { ...ctx, route: { access: "open" } }));
     expect(r.wrong).toContain("GET /v1/status with none: 418, table says 401");
     expect(r.wrong).toContain("POST /v1/quit with unknown: 418, table says 401");
     expect(r.wrong.length).toBe((Object.keys(TABLE).length - 1) * 2);

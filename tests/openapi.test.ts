@@ -13,6 +13,7 @@
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { OPENAPI_FILE, openApiDrifted, renderOpenApi } from "../scripts/openapi.ts";
+import { SCOPES } from "../src/main/api/access.ts";
 import { type Guard, guard } from "../src/main/api/guard.ts";
 import { json, type Mode, type RouteEntry, Router } from "../src/main/api/http.ts";
 import {
@@ -252,6 +253,36 @@ describe("[SI-2] Executor's rules over the file", () => {
     ).toContain("GET /v1/calls: operationId calls.list twice");
   });
 
+  test("x-akou-access is `open` or one of the scopes the keys carry, one vocabulary with access.ts", () => {
+    expect(SCOPES).toEqual(["jobs", "admin"]);
+    const doc = clone(fixtureDoc());
+    expect(openApiProblems(doc)).toEqual([]);
+    // Positive control: the old name for a route with no key is not a level any key or guard knows.
+    const spec = doc.paths["/v1/openapi.json"]?.get as unknown as Record<string, unknown>;
+    spec["x-akou-access"] = "none";
+    expect(openApiProblems(doc)).toEqual(['GET /v1/openapi.json: x-akou-access "none"']);
+  });
+
+  test("an operation is tagged `openai` exactly when it is a compatibility route", () => {
+    const broken = (mutate: (op: Record<string, unknown>) => void) => {
+      const d = clone(fixtureDoc());
+      mutate(d.paths["/v1/audio/transcriptions"]?.post as unknown as Record<string, unknown>);
+      return openApiProblems(d);
+    };
+    expect(broken(() => {})).toEqual([]);
+    // Positive controls, both ways: the OpenAI route that forgets its door would enter the jobs
+    // view, and a compatibility route under another tag would hide an ordinary operation.
+    expect(broken((op) => delete op["x-akou-door"])).toEqual([
+      "POST /v1/audio/transcriptions: tag openai without x-akou-door: compat",
+    ]);
+    expect(
+      broken((op) => {
+        op.operationId = "jobs.transcribe";
+        op.tags = ["jobs"];
+      }),
+    ).toEqual(["POST /v1/audio/transcriptions: x-akou-door: compat on tag jobs, not openai"]);
+  });
+
   test("the generator gives a route whose id is not <tag>.<verb> no tag, so the rules catch it", () => {
     const doc = buildOpenApi(
       [
@@ -288,7 +319,7 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
   });
 
   test("positive control: a guard that ignores the route's `access: none` refuses the file with 401", async () => {
-    const strict: Guard = (req, ctx) => guard(req, { ...ctx, anonymous: false });
+    const strict: Guard = (req, ctx) => guard(req, { ...ctx, route: { access: "admin" } });
     const { server, get } = await serve({ guard: strict });
     try {
       expect((await get("/openapi.json")).status).toBe(401);

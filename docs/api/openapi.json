@@ -3151,7 +3151,7 @@
           "app",
           "server"
         ],
-        "x-akou-access": "none",
+        "x-akou-access": "open",
         "x-akou-door": "spec"
       }
     }

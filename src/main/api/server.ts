@@ -21,9 +21,9 @@ import type { Template } from "../notes/templates.ts";
 import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
 import type { ShareHandle, ShareStatus } from "../share/transport.ts";
+import { ADMIN_ROUTE, type RouteMeta } from "./access.ts";
 import { guard as defaultGuard, type Guard } from "./guard.ts";
 import {
-  type Access,
   authorOf,
   DRAIN_BODY_BYTES,
   drainBody,
@@ -213,12 +213,16 @@ export async function routeRequest(
   }
 }
 
-/** Who may call the route a request names, from the route table; undefined when none matches. */
-export function routeAccess(router: Router<ApiApp>, req: Request): Access | undefined {
+/**
+ * What the guard checks a request against: the route it names, from the route table (its
+ * `RouteDoc` is its `RouteMeta`), or `ADMIN_ROUTE` when none matches, so a path the table does not
+ * know is closed.
+ */
+export function routeMeta(router: Router<ApiApp>, req: Request): RouteMeta {
   const { pathname } = new URL(req.url);
-  if (!pathname.startsWith(`${API_PREFIX}/`)) return undefined;
+  if (!pathname.startsWith(`${API_PREFIX}/`)) return ADMIN_ROUTE;
   const m = router.match(req.method, pathname.slice(API_PREFIX.length));
-  return "doc" in m ? m.doc.access : undefined;
+  return "doc" in m ? m.doc : ADMIN_ROUTE;
 }
 
 export function startApiServer(o: ServerOptions): ApiServer {
@@ -237,7 +241,7 @@ export function startApiServer(o: ServerOptions): ApiServer {
       const refused = check(req, {
         port: srv.port as number,
         token: o.token(),
-        anonymous: routeAccess(router, req) === "none",
+        route: routeMeta(router, req),
       });
       const res =
         refused ??

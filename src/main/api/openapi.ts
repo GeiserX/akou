@@ -11,8 +11,8 @@
  *   Executor names its tools and derives its one auth template.
  */
 
+import { type Access, SCOPES, type Scope } from "./access.ts";
 import {
-  type Access,
   type BodySpec,
   type FieldType,
   isMultipart,
@@ -32,8 +32,8 @@ export const SECURITY_SCHEME = "bearerAuth";
 export const LOCAL_SERVER = "http://127.0.0.1:8476";
 /** `<tag>.<verb>`: Executor strips the tag, so the tool is `jobs.create`, not a long made-up name. */
 export const OPERATION_ID = /^([a-z][A-Za-z0-9]*)\.([a-z][A-Za-z0-9]*)$/;
-export const SCOPES = ["jobs"] as const;
-export type Scope = (typeof SCOPES)[number];
+/** The tag of the one compatibility dialect, the OpenAI endpoint (`x-akou-door: compat`). */
+export const COMPAT_TAG = "openai";
 
 type Json = Record<string, unknown>;
 
@@ -182,7 +182,7 @@ function operation(method: string, path: string, d: RouteDoc): OpenApiOperation 
       default: { $ref: "#/components/responses/Error" },
     },
     // An anonymous route overrides the file's one security requirement with none.
-    ...(d.access === "none" ? { security: [] } : {}),
+    ...(d.access === "open" ? { security: [] } : {}),
     "x-akou-modes": [...d.modes],
     "x-akou-access": d.access,
     ...(d.door ? { "x-akou-door": d.door } : {}),
@@ -310,7 +310,8 @@ export function operations(
  * The rules of service-interface.md section 2, as a list of what breaks them (empty when the file
  * keeps them all): version 3.1.0; exactly one security scheme, `http` bearer; on every operation
  * one tag, a description, an `operationId` `<tag>.<verb>` unique in the file, `x-akou-modes`, an
- * `x-akou-door` only of `compat` or `spec`; and every multipart file field `format: binary`.
+ * `x-akou-access` of `open` or a scope, an `x-akou-door` only of `compat` or `spec`, `compat`
+ * exactly on the `openai` tag; and every multipart file field `format: binary`.
  */
 export function openApiProblems(doc: OpenApiDoc): string[] {
   const problems: string[] = [];
@@ -352,9 +353,20 @@ export function openApiProblems(doc: OpenApiDoc): string[] {
     ) {
       problems.push(`${where}: x-akou-modes ${JSON.stringify(modes)} is not a list of modes`);
     }
+    const access = op["x-akou-access"];
+    if (access !== "open" && !(SCOPES as readonly string[]).includes(access)) {
+      problems.push(`${where}: x-akou-access ${JSON.stringify(access)}`);
+    }
     const door = op["x-akou-door"];
     if (door !== undefined && door !== "compat" && door !== "spec") {
       problems.push(`${where}: x-akou-door ${JSON.stringify(door)}`);
+    }
+    // The `?scope=jobs` view drops a compatibility route by its door, so the OpenAI dialect must
+    // carry it, and nothing else may.
+    if (tags[0] === COMPAT_TAG && door !== "compat") {
+      problems.push(`${where}: tag ${COMPAT_TAG} without x-akou-door: compat`);
+    } else if (door === "compat" && tags[0] !== COMPAT_TAG) {
+      problems.push(`${where}: x-akou-door: compat on tag ${tags[0]}, not ${COMPAT_TAG}`);
     }
     const form = (op.requestBody?.content as Json | undefined)?.["multipart/form-data"] as
       | { schema?: { properties?: Record<string, Json> } }

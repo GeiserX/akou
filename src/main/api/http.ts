@@ -4,6 +4,7 @@
  */
 
 import type { Outcome } from "../call/state.ts";
+import type { RouteMeta } from "./access.ts";
 import { MAX_BODY_BYTES } from "./guard.ts";
 
 export class HttpError extends Error {
@@ -242,12 +243,6 @@ export type Handler<A> = (c: RouteContext<A>) => Response | Promise<Response>;
 export type Mode = "app" | "server";
 export const MODES: readonly Mode[] = ["app", "server"];
 
-/**
- * Who may call a route: anyone (`none`, no key at all), a key with the `jobs` scope, or only an
- * `admin` key and the app's own token (SERVER.md SV-K3).
- */
-export type Access = "none" | "jobs" | "admin";
-
 /** One query parameter a route reads. A route reads only the parameters it declares. */
 export type QueryParam =
   | { type: "integer"; min: number; max: number; default?: number; doc: string }
@@ -277,12 +272,11 @@ export function isMultipart(spec: BodySpec | MultipartSpec): spec is MultipartSp
  * table, and the body and query specs here are the ones the handler validates with, so the file
  * cannot describe a request the route would refuse.
  */
-export interface RouteDoc {
+export interface RouteDoc extends RouteMeta {
   /** The `operationId`, `<tag>.<verb>`: the tag is the resource, and becomes the tool group. */
   id: string;
   /** What the route does, written for an agent: the only text a tool built from it carries. */
   doc: string;
-  access: Access;
   modes: readonly Mode[];
   /**
    * `compat`: a route that speaks another tool's dialect (the OpenAI endpoint), a second way into
