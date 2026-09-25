@@ -481,11 +481,16 @@ export class JobStore {
     ).map(deliveryOf);
   }
 
-  /** When the next pending delivery is due, or null when none is. */
-  nextDue(): number | null {
+  /**
+   * When the next pending delivery is due, or null when none is. A delivery whose try is out
+   * (`inFlight`) is left out: its due time may already have passed while it waits for the receiver.
+   */
+  nextDue(inFlight: Iterable<string> = []): number | null {
     const r = this.db
-      .query("SELECT min(next_at) AS t FROM outbox WHERE state = 'pending'")
-      .get() as { t: number | null };
+      .query(
+        "SELECT min(next_at) AS t FROM outbox WHERE state = 'pending' AND event_id NOT IN (SELECT value FROM json_each(?))",
+      )
+      .get(JSON.stringify([...inFlight])) as { t: number | null };
     return r.t;
   }
 
@@ -494,7 +499,10 @@ export class JobStore {
     return r ? deliveryOf(r) : null;
   }
 
-  /** One try's outcome, written before the next try can start. */
+  /**
+   * One try's outcome, written before the next try can start. Only a pending delivery is written:
+   * one closed while its try was out (its job deleted) stays closed. False when nothing was written.
+   */
   recordAttempt(
     eventId: string,
     o: {
@@ -504,12 +512,14 @@ export class JobStore {
       status: number | null;
       error: string | null;
     },
-  ): void {
-    this.db
-      .query(
-        "UPDATE outbox SET attempts = ?, state = ?, next_at = ?, last_status = ?, last_error = ? WHERE event_id = ?",
-      )
-      .run(o.attempts, o.state, o.next_at, o.status, o.error, eventId);
+  ): boolean {
+    return (
+      this.db
+        .query(
+          "UPDATE outbox SET attempts = ?, state = ?, next_at = ?, last_status = ?, last_error = ? WHERE event_id = ? AND state = 'pending'",
+        )
+        .run(o.attempts, o.state, o.next_at, o.status, o.error, eventId).changes === 1
+    );
   }
 
   /**

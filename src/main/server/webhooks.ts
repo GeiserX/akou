@@ -311,7 +311,7 @@ export class Deliverer {
     if (this.closed) return;
     if (this.timer) clearTimeout(this.timer);
     this.timer = null;
-    const next = this.o.store.nextDue();
+    const next = this.o.store.nextDue(this.inFlight);
     if (next === null) return;
     // clock: the outbox's next due time; a restart reads it again from the store.
     this.timer = setTimeout(
@@ -374,15 +374,17 @@ export class Deliverer {
       error = (err as Error).message;
     }
     if (this.closed) return;
+    // Each write below lands only on a delivery still pending: one whose job was deleted while the
+    // try was out stays failed, so the receiver is not asked again.
     if (status !== null && status >= 200 && status < 300) {
-      store.recordAttempt(d.event_id, {
+      const wrote = store.recordAttempt(d.event_id, {
         attempts: n + 1,
         state: "delivered",
         next_at: null,
         status,
         error: null,
       });
-      this.o.audit?.("webhook.done", d, `status ${status} on try ${n + 1}`);
+      if (wrote) this.o.audit?.("webhook.done", d, `status ${status} on try ${n + 1}`);
       return;
     }
     if (status === 410) {
@@ -398,14 +400,16 @@ export class Deliverer {
       return;
     }
     const why = error ?? `status ${status}`;
-    store.recordAttempt(d.event_id, {
+    // The next delay runs from this answer, not from the try's start (SV-E4).
+    const wrote = store.recordAttempt(d.event_id, {
       attempts: n + 1,
-      state: nextAt === null ? "failed" : "pending",
-      next_at: nextAt,
+      state: after === null ? "failed" : "pending",
+      next_at: after === null ? null : this.now() + after,
       status,
       error: why,
     });
-    if (nextAt === null) this.o.audit?.("webhook.failed", d, `${why}, after ${n + 1} tries`);
+    if (wrote && after === null)
+      this.o.audit?.("webhook.failed", d, `${why}, after ${n + 1} tries`);
   }
 
   close(): void {

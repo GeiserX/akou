@@ -332,6 +332,44 @@ describe("SV-E4: the retry schedule", () => {
     expect(s.delivery(e.id)?.attempts).toBe(2);
   });
 
+  test("a try that outlasts the next delay does not spin the deliverer while it is out", async () => {
+    let release = () => {};
+    const held = new Promise<number>((r) => {
+      release = () => r(500);
+    });
+    const r = receiver((n) => (n === 0 ? held : 204) as number | Promise<never>);
+    const s = store();
+    const e = deliveredJob(s, r.url);
+    let polls = 0;
+    const nextDue = s.nextDue.bind(s);
+    s.nextDue = (...a: Parameters<JobStore["nextDue"]>) => {
+      polls++;
+      return nextDue(...a);
+    };
+    deliverer(s, { schedule: [0, 20, 60_000] }).d.kick();
+    await until(() => r.hits.length === 1, 3000, "the first try to reach the receiver");
+    const before = polls;
+    // Ten times the next delay, all of it with the first try still out.
+    await Bun.sleep(200);
+    expect(polls - before).toBeLessThanOrEqual(1);
+    release();
+    await until(() => s.delivery(e.id)?.state === "delivered", 3000, "the retry");
+  });
+
+  test("the next delay runs from the failed try's answer, not from its start", async () => {
+    const at: number[] = [];
+    const r = receiver((n) => {
+      at.push(performance.now());
+      return (n === 0 ? Bun.sleep(300).then(() => 500) : 204) as number | Promise<never>;
+    });
+    const s = store();
+    const e = deliveredJob(s, r.url);
+    deliverer(s, { schedule: [0, 200, 60_000] }).d.kick();
+    await until(() => s.delivery(e.id)?.state === "delivered", 3000, "the retry");
+    // The first try answered 300 ms after it arrived; the retry waits its 200 ms after that.
+    expect((at[1] as number) - (at[0] as number)).toBeGreaterThanOrEqual(490);
+  });
+
   test("after the last try the delivery is failed and audited", async () => {
     const r = receiver([500]);
     const s = store();
@@ -378,6 +416,36 @@ describe("SV-E5: the outbox survives a restart", () => {
     await Bun.sleep(100);
     expect(s.delivery(e.id)).toEqual(before);
   });
+
+  for (const answer of [500, 204, 410]) {
+    test(`a job deleted while its try is out stays failed when the try answers ${answer}`, async () => {
+      let release = () => {};
+      const held = new Promise<number>((r) => {
+        release = () => r(answer);
+      });
+      const r = receiver((n) => (n === 0 ? held : 204) as number | Promise<never>);
+      const s = store();
+      const e = deliveredJob(s, r.url);
+      const { d, audit } = deliverer(s);
+      d.kick();
+      await until(() => r.hits.length === 1, 3000, "the try to reach the receiver");
+      expect(s.remove(e.job_id)).not.toBeNull();
+      expect(s.delivery(e.id)).toMatchObject({
+        state: "failed",
+        last_error: "the job was deleted",
+      });
+      release();
+      // Past the time every remaining try of the schedule would have run.
+      await Bun.sleep(300);
+      expect(s.delivery(e.id)).toMatchObject({
+        state: "failed",
+        last_error: "the job was deleted",
+      });
+      expect(r.hits.length).toBe(1);
+      // A 410 still disables the endpoint for the key's other deliveries: the receiver said so.
+      expect(audit.map((a) => a.what)).toEqual(answer === 410 ? ["webhook.disabled"] : []);
+    });
+  }
 
   test("killed between try 2 and 3, the delivery goes out once more with the same id on restart", async () => {
     const r = receiver([500, 500, 204]);
