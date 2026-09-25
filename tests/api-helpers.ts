@@ -186,6 +186,8 @@ export function rawRequest(
     headers: Record<string, string>;
     body?: string;
     host?: string;
+    /** Send the body as `Transfer-Encoding: chunked` in 8 KB chunks, with no `Content-Length`. */
+    chunked?: boolean;
   },
 ): Promise<RawResponse> {
   const body = o.body ?? "";
@@ -194,9 +196,9 @@ export function rawRequest(
     `Host: ${o.host ?? `127.0.0.1:${port}`}`,
     "Connection: close",
     ...Object.entries(o.headers).map(([k, v]) => `${k}: ${v}`),
-    `Content-Length: ${Buffer.byteLength(body)}`,
+    o.chunked ? "Transfer-Encoding: chunked" : `Content-Length: ${Buffer.byteLength(body)}`,
     "",
-    body,
+    o.chunked ? chunkEncode(body) : body,
   ];
   return new Promise((resolve, reject) => {
     const sock = connect({ host: "127.0.0.1", port });
@@ -249,7 +251,8 @@ export function rawRequest(
         finish({ status, headers, body: rest.toString("utf8") });
       }
     };
-    sock.on("connect", () => sock.write(lines.join("\r\n")));
+    // A chunked body is already bytes spelled as Latin-1; UTF-8 would widen them past the lengths.
+    sock.on("connect", () => sock.write(lines.join("\r\n"), o.chunked ? "latin1" : "utf8"));
     sock.on("data", (d) => {
       buf = Buffer.concat([buf, Buffer.from(d)]);
       tryParse(false);
@@ -257,4 +260,15 @@ export function rawRequest(
     sock.on("error", (e) => (done ? undefined : reject(e)));
     sock.on("close", () => tryParse(true));
   });
+}
+
+/** A body as HTTP/1.1 chunks of at most 8 KB, ending with the empty chunk. */
+function chunkEncode(body: string): string {
+  const bytes = Buffer.from(body);
+  let out = "";
+  for (let at = 0; at < bytes.length; at += 8192) {
+    const chunk = bytes.subarray(at, at + 8192);
+    out += `${chunk.length.toString(16)}\r\n${chunk.toString("latin1")}\r\n`;
+  }
+  return `${out}0\r\n\r\n`;
 }

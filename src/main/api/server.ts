@@ -21,8 +21,16 @@ import type { Template } from "../notes/templates.ts";
 import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
 import type { ShareHandle, ShareStatus } from "../share/transport.ts";
-import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
-import { authorOf, errorResponse, HttpError, json, Router } from "./http.ts";
+import { guard as defaultGuard, type Guard } from "./guard.ts";
+import {
+  authorOf,
+  DRAIN_BODY_BYTES,
+  drainBody,
+  errorResponse,
+  HttpError,
+  json,
+  Router,
+} from "./http.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
@@ -201,17 +209,23 @@ export function startApiServer(o: ServerOptions): ApiServer {
     // IPv4 loopback only, by address, so no name is resolved at bind (DESIGN 6.3 rule 1).
     hostname: "127.0.0.1",
     port: o.port,
-    maxRequestBodySize: MAX_BODY_BYTES,
+    // The 64 KB limit is the guard's and `readBody`'s, so an oversized body is refused with an
+    // answer the client can read (see `DRAIN_BODY_BYTES`); Bun only refuses past the drain cap.
+    maxRequestBodySize: DRAIN_BODY_BYTES,
     // Long polls wait up to 30 s; streams send a keep-alive every 15 s.
     idleTimeout: 60,
     fetch: async (req, srv) => {
       const refused = check(req, { port: srv.port as number, token: o.token() });
-      if (refused) return refused;
-      return routeRequest(router, o.app, req, {
-        by: authorOf(req),
-        timeout: (seconds) => srv.timeout(req, seconds),
-        onError: o.onError,
-      });
+      const res =
+        refused ??
+        (await routeRequest(router, o.app, req, {
+          by: authorOf(req),
+          timeout: (seconds) => srv.timeout(req, seconds),
+          onError: o.onError,
+        }));
+      // An answer never closes the socket on unread bytes: the client would get a reset, not it.
+      if (!req.bodyUsed && req.body) await drainBody(req.body.getReader());
+      return res;
     },
   });
   const port = server.port as number;
