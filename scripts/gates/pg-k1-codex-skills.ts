@@ -20,12 +20,27 @@ import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..", "..");
 const CLI = join(ROOT, "src", "main", "cli", "cli.ts");
-const T = realpathSync(mkdtempSync(join(tmpdir(), "akou-pg-k1-")));
+const T = import.meta.main ? realpathSync(mkdtempSync(join(tmpdir(), "akou-pg-k1-"))) : "";
 
-function run(cmd: string[], env: Record<string, string>, cwd = T): string {
+/** A command's output; throws when it fails, so a broken case never reads as an empty list. */
+export function run(cmd: string[], env: Record<string, string>, cwd = T || undefined): string {
   const r = spawnSync(cmd[0] as string, cmd.slice(1), { env, cwd, encoding: "utf8" });
   if (r.error) throw r.error;
-  return `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  const out = `${r.stdout ?? ""}${r.stderr ?? ""}`;
+  if (r.status !== 0) throw new Error(`${cmd.join(" ")}: exit ${r.status ?? r.signal}\n${out}`);
+  return out;
+}
+
+/** Codex's environment for a case: HOME set, and CODEX_HOME only when the case names one. */
+export function codexEnv(
+  home: string,
+  codexHome: string | undefined,
+  base: Record<string, string | undefined> = process.env,
+): Record<string, string> {
+  const env = { ...base, HOME: home } as Record<string, string>;
+  delete env.CODEX_HOME;
+  if (codexHome) env.CODEX_HOME = codexHome;
+  return env;
 }
 
 /** The akou skills in the prompt Codex builds, as `name: file`, from `codex debug prompt-input`. */
@@ -39,9 +54,9 @@ export function listedSkills(prompt: string): string[] {
   return [...out].sort();
 }
 
-function codexList(home: string, codexHome: string): string[] {
+function codexList(home: string, codexHome?: string): string[] {
   mkdirSync(join(home, "work"), { recursive: true });
-  const env = { ...process.env, HOME: home, CODEX_HOME: codexHome } as Record<string, string>;
+  const env = codexEnv(home, codexHome);
   return listedSkills(run(["codex", "debug", "prompt-input", "hi"], env, join(home, "work")));
 }
 
@@ -58,52 +73,57 @@ const show = (s: string) =>
 const expected = (dir: string) =>
   [`akou: ${dir}/akou/SKILL.md`, `akou-vocab: ${dir}/akou-vocab/SKILL.md`].sort();
 
-try {
-  const sh = (cmd: string[]) => run(cmd, process.env as Record<string, string>, ROOT).trim();
-  console.log(`date: ${new Date().toISOString().slice(0, 10)}`);
-  console.log(
-    `machine: ${platform()} ${arch()} ${platform() === "darwin" ? sh(["sw_vers", "-productVersion"]) : ""}`.trim(),
-  );
-  console.log(`codex: ${sh(["codex", "--version"])}`);
-  console.log(
-    `akou: ${sh(["git", "rev-parse", "--short", "HEAD"])} (${sh(["git", "branch", "--show-current"])})`,
-  );
+if (import.meta.main) main();
 
-  // A: akou's install, CODEX_HOME unset.
-  const a = join(T, "A");
-  console.log(`\n== install (A)\n${show(install(a)).trim()}`);
-  // B: akou's install with CODEX_HOME set.
-  const b = join(T, "B");
-  install(b, join(b, "ch"));
-  // C (control): the same skills in ~/.codex/skills while CODEX_HOME points elsewhere.
-  const c = join(T, "C");
-  mkdirSync(join(c, "ch"), { recursive: true });
-  cpSync(join(a, ".codex", "skills"), join(c, ".codex", "skills"), { recursive: true });
-  // D (baseline): a clean home.
-  const d = join(T, "D");
-  mkdirSync(join(d, ".codex"), { recursive: true });
-  // E (the other folder): the same skills only in ~/.agents/skills.
-  const e = join(T, "E");
-  mkdirSync(join(e, ".codex"), { recursive: true });
-  cpSync(join(a, ".codex", "skills"), join(e, ".agents", "skills"), { recursive: true });
+function main(): void {
+  try {
+    const sh = (cmd: string[]) => run(cmd, process.env as Record<string, string>, ROOT).trim();
+    console.log(`date: ${new Date().toISOString().slice(0, 10)}`);
+    console.log(
+      `machine: ${platform()} ${arch()} ${platform() === "darwin" ? sh(["sw_vers", "-productVersion"]) : ""}`.trim(),
+    );
+    console.log(`codex: ${sh(["codex", "--version"])}`);
+    console.log(
+      `akou: ${sh(["git", "rev-parse", "--short", "HEAD"])} (${sh(["git", "branch", "--show-current"])})`,
+    );
 
-  const cases: [string, string[], string[] | null][] = [
-    ["A", codexList(a, join(a, ".codex")), expected(join(a, ".codex", "skills"))],
-    ["B", codexList(b, join(b, "ch")), expected(join(b, "ch", "skills"))],
-    ["C", codexList(c, join(c, "ch")), []],
-    ["D", codexList(d, join(d, ".codex")), []],
-    // Informational: Codex 0.151.0 reads this folder too, so it is not a control.
-    ["E", codexList(e, join(e, ".codex")), null],
-  ];
-  const failed: string[] = [];
-  console.log("");
-  for (const [name, got, want] of cases) {
-    console.log(`== ${name}`);
-    for (const l of got) console.log(show(l));
-    if (want && JSON.stringify(got) !== JSON.stringify(want)) failed.push(name);
+    // A: akou's install, CODEX_HOME unset.
+    const a = join(T, "A");
+    console.log(`\n== install (A)\n${show(install(a)).trim()}`);
+    // B: akou's install with CODEX_HOME set.
+    const b = join(T, "B");
+    install(b, join(b, "ch"));
+    // C (control): the same skills in ~/.codex/skills while CODEX_HOME points elsewhere.
+    const c = join(T, "C");
+    mkdirSync(join(c, "ch"), { recursive: true });
+    cpSync(join(a, ".codex", "skills"), join(c, ".codex", "skills"), { recursive: true });
+    // D (baseline): a clean home.
+    const d = join(T, "D");
+    mkdirSync(join(d, ".codex"), { recursive: true });
+    // E (the other folder): the same skills only in ~/.agents/skills.
+    const e = join(T, "E");
+    mkdirSync(join(e, ".codex"), { recursive: true });
+    cpSync(join(a, ".codex", "skills"), join(e, ".agents", "skills"), { recursive: true });
+
+    const cases: [string, string[], string[] | null][] = [
+      // A: Codex with CODEX_HOME unset, so it has to find ~/.codex/skills by its own default.
+      ["A", codexList(a), expected(join(a, ".codex", "skills"))],
+      ["B", codexList(b, join(b, "ch")), expected(join(b, "ch", "skills"))],
+      ["C", codexList(c, join(c, "ch")), []],
+      ["D", codexList(d, join(d, ".codex")), []],
+      // Informational: Codex 0.151.0 reads this folder too, so it is not a control.
+      ["E", codexList(e, join(e, ".codex")), null],
+    ];
+    const failed: string[] = [];
+    console.log("");
+    for (const [name, got, want] of cases) {
+      console.log(`== ${name}`);
+      for (const l of got) console.log(show(l));
+      if (want && JSON.stringify(got) !== JSON.stringify(want)) failed.push(name);
+    }
+    console.log(failed.length === 0 ? "\nResult: pass" : `\nResult: fail (${failed.join(", ")})`);
+    process.exitCode = failed.length === 0 ? 0 : 1;
+  } finally {
+    rmSync(T, { recursive: true, force: true });
   }
-  console.log(failed.length === 0 ? "\nResult: pass" : `\nResult: fail (${failed.join(", ")})`);
-  process.exitCode = failed.length === 0 ? 0 : 1;
-} finally {
-  rmSync(T, { recursive: true, force: true });
 }
