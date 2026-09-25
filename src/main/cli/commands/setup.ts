@@ -70,6 +70,11 @@ const config: Command = {
       }
       let value: unknown;
       if (fromStdin) {
+        // Typed at a terminal, the read waits for the end of input: say so, or it looks hung.
+        if (ctx.io.keys) {
+          const end = process.platform === "win32" ? "Ctrl-Z then Enter" : "Ctrl-D";
+          ctx.io.err(`akou: reading the value from stdin; end it with ${end}`);
+        }
         // One trailing newline is the shell's (`echo`), not the value's.
         const raw = (await (ctx.io.readStdin?.() ?? Promise.resolve(""))).replace(/\r?\n$/, "");
         if (raw === "") return usage(ctx, `config set ${key} - read nothing from stdin`);
@@ -91,7 +96,7 @@ const config: Command = {
 
 /** Refuses a secret given as an argument: exit 64, nothing stored, and the stdin form to use. */
 function refuseSecretArg(ctx: Ctx, key: string): number {
-  const message = `${key} is a secret, so akou never takes it from the command line, where shell history and ps would keep it`;
+  const message = `${key} is a secret, so akou never takes it from the command line, where shell history and ps would keep it; if that was a real key, rotate it`;
   const hint = `printf '%s' "$VALUE" | akou config set ${key} -`;
   if (ctx.json) ctx.io.out(JSON.stringify({ error: "usage", message, hint }));
   else ctx.io.err(`akou: ${message}\n  try: ${hint}`);

@@ -27,7 +27,7 @@ export interface Io {
   tty?: boolean;
   /** Everything on stdin, for `config set KEY -` (CLI-06). Absent: stdin is empty. */
   readStdin?(): Promise<string>;
-  /** Keys typed at a terminal, for `akou watch`. Absent: stdin is not a terminal. */
+  /** Keys typed at a terminal, for `akou watch`. Absent: stdin is not a terminal (`config set KEY -` reads it silently). */
   keys?: Keys;
 }
 

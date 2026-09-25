@@ -142,6 +142,34 @@ describe("with a running app", () => {
       expect((await run(["config", "unset", "asr.threads"])).code).toBe(0);
     });
 
+    test("typed at a terminal, `config set KEY -` says it is reading stdin and how to end it", async () => {
+      const set = async (terminal: boolean) => {
+        const err: string[] = [];
+        const code = await runCli(
+          ["config", "set", "provider.apiKey", "-"],
+          {
+            env: { ...process.env, ...rig.env },
+            out: () => {},
+            err: (t) => err.push(t),
+            readStdin: async () => "sk-typed\n",
+            keys: terminal
+              ? { read: async function* () {}, close: () => {}, columns: () => 80 }
+              : undefined,
+          },
+          { launch: null },
+        );
+        return { code, err: err.join("\n") };
+      };
+      const typed = await set(true);
+      expect(typed.code).toBe(0);
+      const end = process.platform === "win32" ? "Ctrl-Z then Enter" : "Ctrl-D";
+      expect(typed.err).toBe(`akou: reading the value from stdin; end it with ${end}`);
+      expect(stored()).toBe("sk-typed");
+      // Positive control: piped, stdin is already on its way, and nothing is said.
+      const piped = await set(false);
+      expect([piped.code, piped.err]).toEqual([0, ""]);
+    });
+
     test("`akou config set provider.apiKey sk-test` exits 64, stores nothing, and shows the stdin form", async () => {
       expect((await run(["config", "unset", "provider.apiKey"])).code).toBe(0);
       const before = readFileSync(file(), "utf8");
@@ -151,6 +179,8 @@ describe("with a running app", () => {
       expect(stored()).toBeUndefined();
       const lines = r.err.split("\n");
       expect(lines.length).toBe(2);
+      // The key is in shell history already: the refusal says what to do about that.
+      expect(lines[0]).toContain("if that was a real key, rotate it");
       expect(lines[1]).toBe(`  try: printf '%s' "$VALUE" | akou config set provider.apiKey -`);
       expect(r.err).not.toContain("sk-test");
       // With --json the same, as the error body plus its hint.
