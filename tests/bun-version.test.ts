@@ -60,6 +60,12 @@ describe("one Bun version for CI and every machine", () => {
     expect(seen.length).toBeGreaterThan(0);
   });
 
+  test("package.json names no Bun but the pinned one", () => {
+    const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8"));
+    const named = pkg.engines?.bun;
+    if (named !== undefined) expect(named).toBe(pinnedBun(PIN_FILE));
+  });
+
   test("positive control: a workflow on another Bun is seen", () => {
     const yaml = [
       "      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0",
