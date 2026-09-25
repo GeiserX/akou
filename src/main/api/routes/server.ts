@@ -69,8 +69,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
         gpu: null,
         capabilities: {
           jobs: has("POST", "/jobs"),
-          // Signed deliveries per key (SV-E2) are not built; this turns true with them.
-          webhooks: false,
+          // Signed deliveries per key (SV-E2) come with the job route's `callback_url`.
+          webhooks: has("POST", "/jobs"),
           events: has("GET", "/events"),
           openai: has("POST", "/audio/transcriptions"),
           wyoming: false,

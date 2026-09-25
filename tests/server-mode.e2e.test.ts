@@ -536,8 +536,9 @@ describe("SV-K1: GET /v1/server", () => {
       expect(Object.keys(b.capabilities).sort()).toEqual(
         ["bazarr", "events", "jobs", "openai", "webhooks", "wyoming"].sort(),
       );
-      // No job route exists yet, in either mode.
-      expect(b.capabilities.jobs).toBe(false);
+      // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
+      for (const c of ["jobs", "events", "webhooks"])
+        expect(b.capabilities[c]).toBe(mode === "server");
     }
   });
 

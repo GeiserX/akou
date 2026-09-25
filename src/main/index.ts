@@ -134,6 +134,7 @@ import {
   refreshMemo,
 } from "./query/memo.ts";
 import { renderLine } from "./query/render.ts";
+import { JobService, type JobServiceOptions } from "./server/jobs.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
@@ -225,6 +226,8 @@ export interface AppOptions {
   excludeResponsible?: string;
   /** Test-only: the security suite's positive control replaces the guard. */
   guard?: Guard;
+  /** Test-only: the file jobs' upload decoder and webhook network (server mode). */
+  jobs?: Pick<JobServiceOptions, "decode" | "delivery" | "now">;
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
@@ -398,6 +401,8 @@ export class AkouApp implements ApiApp {
   readonly mode: "app" | "server";
   /** The API keys; server mode only (SV-K2). */
   private readonly keyStore: KeyStore | null;
+  /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
+  private jobService: JobService | null = null;
 
   constructor(
     private readonly o: AppOptions,
@@ -1605,6 +1610,36 @@ export class AkouApp implements ApiApp {
     return this.keyStore;
   }
 
+  jobs(): JobService | null {
+    return this.jobService;
+  }
+
+  queueDepth(): number {
+    return this.jobService?.depth() ?? 0;
+  }
+
+  /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
+  private startJobs(): void {
+    const keys = this.keyStore;
+    if (this.mode !== "server" || !keys) return;
+    this.jobService = new JobService({
+      dir: join(this.configDir, "jobs"),
+      version: this.version,
+      models: () => this.finalModels(),
+      diarizer: () => this.runningDiarizer(),
+      secrets: (id) => {
+        const s = keys.secretOf(id);
+        return s ? [s] : [];
+      },
+      hostListed: (id, host) =>
+        keys.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
+      retainDays: () => this.cfg.settings["server.retain_days"],
+      ...this.o.jobs,
+      log: (level, msg) => this.log(level, msg),
+    });
+    this.jobService.start();
+  }
+
   recognizer(): "loading" | "ready" | "unavailable" {
     return this.asrState.state;
   }
@@ -1691,6 +1726,7 @@ export class AkouApp implements ApiApp {
         ),
     });
     this.writeRuntime();
+    this.startJobs();
     // Recovery and the final-pass catch-up run behind the API, never before it.
     void this.manager
       .init()
@@ -1744,6 +1780,8 @@ export class AkouApp implements ApiApp {
       await this.asr?.close();
       await this.page?.stop();
       await this.server?.stop();
+      // After the API: no request is left holding the store. A running job is queued again at start.
+      this.jobService?.close();
       try {
         const rt = JSON.parse(readFileSync(this.runtimeFile, "utf8")) as { pid?: number };
         if (rt.pid === process.pid) unlinkSync(this.runtimeFile);

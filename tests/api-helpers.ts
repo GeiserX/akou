@@ -13,7 +13,7 @@ import type { ModelSpec } from "../src/main/asr/engine.ts";
 import type { FinalAudioSpec } from "../src/main/asr/finalize-worker.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import type { Clock } from "../src/main/capture/engine.ts";
-import { type AkouApp, startApp } from "../src/main/index.ts";
+import { type AkouApp, type AppOptions, startApp } from "../src/main/index.ts";
 import type { Discovery } from "../src/main/llm/harness.ts";
 import type { Provider } from "../src/main/llm/provider.ts";
 import { until } from "./capture-helpers.ts";
@@ -71,6 +71,8 @@ export interface RigOptions {
   openExternal?: (url: string) => Promise<boolean>;
   /** The app's clock; tests that need minutes to pass move a real clock forward. */
   clock?: Clock;
+  /** The file jobs' seams (server mode): the webhook schedule and network. */
+  jobs?: AppOptions["jobs"];
 }
 
 /** A WAV the fake recognizer reads as words: "hello world" on the mic, "ok great" on the call. */
@@ -118,6 +120,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     discover: o.discover,
     openExternal: o.openExternal,
     clock: o.clock,
+    jobs: o.jobs,
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

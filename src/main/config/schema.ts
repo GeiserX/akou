@@ -180,6 +180,13 @@ export const SETTINGS = {
     default: 512,
     doc: "Largest upload an upload route takes, in MiB. Every other route keeps the 64 KB JSON cap.",
   },
+  "server.retain_days": {
+    type: "integer",
+    min: 1,
+    max: 3650,
+    default: 7,
+    doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends.",
+  },
   "server.admin_password_hash": {
     type: "string",
     max: 512,

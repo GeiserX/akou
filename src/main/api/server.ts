@@ -37,6 +37,7 @@ import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
+import { jobRoutes } from "./routes/jobs.ts";
 import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
@@ -135,8 +136,10 @@ export interface ApiApp {
    * while it is still loading them, or after it failed to. Absent: ready once the files are.
    */
   recognizer?(): "loading" | "ready" | "unavailable";
-  /** Jobs waiting or running, for `/healthz`; 0 until the job queue exists. */
+  /** Jobs waiting or running, for `/healthz`. */
   queueDepth?(): number;
+  /** The file jobs of server mode (docs/ux/SERVER.md section 5); none in app mode. */
+  jobs?(): import("../server/jobs.ts").JobService | null;
 }
 
 export interface ServerOptions {
@@ -260,6 +263,8 @@ function reachable(bind: string | undefined): string {
 
 export function startApiServer(o: ServerOptions): ApiServer {
   const router = buildRouter();
+  // The job routes exist in server mode only: the desktop app answers 404 for them (SV-J1).
+  if (o.app.mode === "server") jobRoutes(router);
   o.routes?.(router);
   const root = buildRootRouter();
   const check = o.guard ?? defaultGuard;

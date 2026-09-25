@@ -16,6 +16,7 @@ import {
   runJobPass,
 } from "../src/main/asr/finalize-worker.ts";
 import { concat, FakeModels, MemoryAudio, RATE, silence, speak } from "./fixtures/asr-fake.ts";
+import { roomNoise } from "./fixtures/audio.ts";
 import { LogBuilder, T0 } from "./helpers.ts";
 
 const FAKE = join(import.meta.dir, "fixtures", "asr-fake.ts");
@@ -24,20 +25,6 @@ const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
   for (const c of cleanups.splice(0)) await c();
 });
-
-/** Seeded broadband noise at about -41 dBFS RMS: above the silence floor, under the VAD. */
-export function roomNoise(seconds: number, seed = 7, amp = 0.015): Float32Array {
-  let a = seed >>> 0;
-  const out = new Float32Array(Math.round(seconds * RATE));
-  for (let i = 0; i < out.length; i++) {
-    a = (a + 0x6d2b79f5) >>> 0;
-    let t = a;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    out[i] = amp * (2 * (((t ^ (t >>> 14)) >>> 0) / 4294967296) - 1);
-  }
-  return out;
-}
 
 function mix(a: Float32Array, b: Float32Array): Float32Array {
   const out = new Float32Array(Math.max(a.length, b.length));

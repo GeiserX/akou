@@ -154,3 +154,44 @@ export function rms(x: Float32Array, from = 0, to = x.length): number {
   for (let i = from; i < to; i++) s += (x[i] as number) ** 2;
   return Math.sqrt(s / Math.max(1, to - from));
 }
+
+/** 16-bit PCM mono WAV. */
+export function monoWav(x: Float32Array, rate = RATE): Uint8Array {
+  const bytes = new Uint8Array(44 + x.length * 2);
+  const v = new DataView(bytes.buffer);
+  const tag = (o: number, s: string) => {
+    for (let i = 0; i < s.length; i++) v.setUint8(o + i, s.charCodeAt(i));
+  };
+  tag(0, "RIFF");
+  v.setUint32(4, 36 + x.length * 2, true);
+  tag(8, "WAVE");
+  tag(12, "fmt ");
+  v.setUint32(16, 16, true);
+  v.setUint16(20, 1, true);
+  v.setUint16(22, 1, true);
+  v.setUint32(24, rate, true);
+  v.setUint32(28, rate * 2, true);
+  v.setUint16(32, 2, true);
+  v.setUint16(34, 16, true);
+  tag(36, "data");
+  v.setUint32(40, x.length * 2, true);
+  for (let i = 0; i < x.length; i++) {
+    const s = Math.max(-1, Math.min(1, x[i] as number));
+    v.setInt16(44 + i * 2, Math.round(s * 32767), true);
+  }
+  return bytes;
+}
+
+/** Seeded broadband noise at about -41 dBFS RMS: above the silence floor, under the VAD. */
+export function roomNoise(seconds: number, seed = 7, amp = 0.015): Float32Array {
+  let a = seed >>> 0;
+  const out = new Float32Array(Math.round(seconds * RATE));
+  for (let i = 0; i < out.length; i++) {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    out[i] = amp * (2 * (((t ^ (t >>> 14)) >>> 0) / 4294967296) - 1);
+  }
+  return out;
+}
