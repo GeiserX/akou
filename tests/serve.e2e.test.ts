@@ -71,7 +71,7 @@ describe("[SV-P8] akou serve", () => {
     expect(compiledServeWarning(false)).toBeNull();
   });
 
-  test("runs the server in the foreground, answers the API, and quits cleanly on SIGTERM", async () => {
+  test("runs the server in the foreground, answers the API, and quits cleanly on SIGTERM (POST /quit on Windows, which has no SIGTERM)", async () => {
     const h = home();
     const proc = serve(h.env);
     await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
@@ -86,7 +86,18 @@ describe("[SV-P8] akou serve", () => {
     expect(res.status).toBe(200);
     expect(((await res.json()) as { app: { pid: number } }).app.pid).toBe(proc.pid);
 
-    proc.kill("SIGTERM");
+    if (process.platform === "win32") {
+      // Windows turns SIGTERM into TerminateProcess, which no handler sees: the quit route is its
+      // clean stop, and the same one quit path runs.
+      const q = await fetch(`http://127.0.0.1:${rt.port}/v1/quit`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
+        body: "{}",
+      });
+      expect(q.status).toBe(202);
+    } else {
+      proc.kill("SIGTERM");
+    }
     const code = await proc.exited;
     const err = await new Response(proc.stderr).text();
     expect(err).toContain(`serving on http://127.0.0.1:${rt.port}/v1`);

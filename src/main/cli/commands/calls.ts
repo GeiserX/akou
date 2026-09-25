@@ -232,6 +232,13 @@ const quit: Command = {
   summary: "Stop the app cleanly (the live call is stopped and its log ended first)",
   usage: "akou quit [--json]",
   run: async (ctx) => {
+    // `runtime.json` is never read with a remote target, so the wait below could not see it go.
+    if (ctx.io.env.AKOU_URL?.trim()) {
+      return usage(
+        ctx,
+        "akou quit stops the app on this machine, and AKOU_URL points at a server, which it never stops; unset AKOU_URL to quit the local app",
+      );
+    }
     let r: Awaited<ReturnType<typeof api>>;
     try {
       r = await api(ctx, "POST", "/quit", { launch: false });

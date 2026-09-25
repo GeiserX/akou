@@ -17,7 +17,7 @@
 
 import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
-import { parseArgs, UsageError } from "./args.ts";
+import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
 import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
 import { doctorCommand } from "./commands/doctor.ts";
@@ -102,6 +102,11 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     parsed = parseArgs(rest, cmd.flags ?? {});
   } catch (err) {
     if (!(err instanceof UsageError)) throw err;
+    if (err instanceof SecretFlagError) {
+      const again = ["akou", name, ...err.rest].join(" ");
+      io.err(`akou ${name}: ${err.message}\ntry: AKOU_API_KEY_FILE=/path/to/key ${again}`);
+      return EXIT.usage;
+    }
     io.err(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`);
     return EXIT.usage;
   }
@@ -154,8 +159,6 @@ if (import.meta.main) {
     if (ac.signal.aborted) process.exit(130);
     ac.abort();
   });
-  // `docker stop` and systemd send SIGTERM; as pid 1 in a container nothing else would handle it.
-  process.on("SIGTERM", () => ac.abort());
   const code = await runCli(process.argv.slice(2), {
     env: process.env,
     out: (t) => process.stdout.write(`${t}\n`),

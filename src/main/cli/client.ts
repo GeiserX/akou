@@ -111,8 +111,12 @@ export function remoteTarget(env: Record<string, string | undefined>): RemoteTar
   }
   const base = raw.replace(/\/+$/, "");
   if (env.AKOU_API_KEY) return { base, key: env.AKOU_API_KEY.trim() };
-  const file = env.AKOU_API_KEY_FILE;
-  if (!file) return { base, key: "" };
+  const given = env.AKOU_API_KEY_FILE;
+  if (!given) return { base, key: "" };
+  // `docker -e` and a systemd unit pass `~/...` as written; no shell expands it there.
+  const file = /^~[\\/]/.test(given)
+    ? join(env.HOME ?? env.USERPROFILE ?? homedir(), given.slice(2))
+    : given;
   try {
     return { base, key: readFileSync(file, "utf8").trim() };
   } catch (err) {
@@ -268,7 +272,10 @@ export class ApiClient {
    */
   async request(method: string, path: string, o: RequestOptions = {}): Promise<ApiResponse> {
     const remote = remoteTarget(this.o.env);
-    if (remote) return this.onRemote(remote, () => this.send(remote, method, path, o));
+    if (remote) {
+      const idempotent = method === "GET" || method === "HEAD";
+      return this.onRemote(remote, idempotent, o, () => this.send(remote, method, path, o));
+    }
     const allowLaunch = o.launch ?? true;
     let rt = this.runtime();
     if (rt) {
@@ -289,7 +296,10 @@ export class ApiClient {
    */
   async stream(method: string, path: string, o: RequestOptions = {}): Promise<Response> {
     const remote = remoteTarget(this.o.env);
-    if (remote) return this.onRemote(remote, () => this.fetchRaw(remote, method, path, o));
+    if (remote) {
+      const idempotent = method === "GET" || method === "HEAD";
+      return this.onRemote(remote, idempotent, o, () => this.fetchRaw(remote, method, path, o));
+    }
     let rt = this.runtime();
     if (rt) {
       try {
@@ -303,13 +313,26 @@ export class ApiClient {
     return this.fetchRaw(rt, method, path, o);
   }
 
-  /** One request to a remote target: a refused connection is `Unreachable`, never a launch. */
-  private async onRemote<T>(remote: RemoteTarget, go: () => Promise<T>): Promise<T> {
+  /**
+   * One request to a remote target, never a launch. A refused connection, or one that never
+   * answers, is `Unreachable`; a broken connection is too, for a read only: a write may have landed.
+   */
+  private async onRemote<T>(
+    remote: RemoteTarget,
+    idempotent: boolean,
+    o: RequestOptions,
+    go: () => Promise<T>,
+  ): Promise<T> {
     try {
       return await go();
     } catch (err) {
-      if (isConnectionError(err, true)) {
-        throw new Unreachable(`nothing answers at ${remote.base} (AKOU_URL)`);
+      const proxy = proxyNote(remote.base, this.o.env);
+      if ((err as Error)?.name === "TimeoutError") {
+        const s = Math.round((o.timeoutMs ?? 60_000) / 100) / 10;
+        throw new Unreachable(`no answer from ${remote.base} (AKOU_URL) within ${s} s${proxy}`);
+      }
+      if (isConnectionError(err, idempotent)) {
+        throw new Unreachable(`nothing answers at ${remote.base} (AKOU_URL)${proxy}`);
       }
       throw err;
     }
@@ -388,6 +411,21 @@ export class ApiClient {
  * never arrived; a reset or a closed socket may come after the app applied it, so a write
  * (`idempotent` false) is never sent again on one.
  */
+/**
+ * When a proxy variable covers a remote's scheme, the words that say so: the request went to the
+ * proxy, not to `AKOU_URL`, unless `NO_PROXY` names the host. Loopback never goes through one.
+ */
+function proxyNote(base: string, env: Record<string, string | undefined>): string {
+  const url = new URL(base);
+  if (LOOPBACK.includes(url.hostname) || url.hostname === "[::1]") return "";
+  const names =
+    url.protocol === "https:" ? ["HTTPS_PROXY", "https_proxy"] : ["HTTP_PROXY", "http_proxy"];
+  const name = names.find((n) => env[n]);
+  return name
+    ? `; ${name} is set, so the request went through ${env[name]} unless NO_PROXY names the host`
+    : "";
+}
+
 function isConnectionError(err: unknown, idempotent: boolean): boolean {
   const e = err as { code?: string; name?: string; message?: string };
   if (e?.name === "TimeoutError" || e?.name === "AbortError") return false;

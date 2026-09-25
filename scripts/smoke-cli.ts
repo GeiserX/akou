@@ -12,7 +12,8 @@
  * - `akou start --json`, with no app running and none installed, exits 69 and says the app must be
  *   opened: the compiled CLI never tries to be the app.
  * - `akou serve` runs the server in the foreground from this binary (SV-P8): `GET /healthz` answers
- *   with no token, `akou status` through the same binary reaches it, and SIGTERM ends it with 0.
+ *   with no token, `akou status` through the same binary reaches it, and SIGTERM ends it with 0
+ *   (`akou quit` on Windows, where SIGTERM is TerminateProcess and no handler runs).
  *
  * Nothing here opens a window; `akou serve` is the one server it starts, and it stops it.
  */
@@ -176,9 +177,15 @@ async function serveCheck(): Promise<void> {
       status.stdout,
     );
   } finally {
-    child.kill("SIGTERM");
+    const windows = process.platform === "win32";
+    if (windows) {
+      const q = spawnSync(exe, ["quit"], { env: serveEnv, encoding: "utf8", timeout: 30_000 });
+      check(q.status === 0, "akou quit through the same binary stops the server", q.stderr);
+    } else {
+      child.kill("SIGTERM");
+    }
     const code = await Promise.race([exited, Bun.sleep(15_000).then(() => "timeout" as const)]);
-    check(code === 0, "akou serve exits 0 on SIGTERM", String(code));
+    check(code === 0, `akou serve exits 0 on ${windows ? "akou quit" : "SIGTERM"}`, String(code));
     // Read once the process is gone, so every line it wrote has arrived.
     check(
       stderr.includes("cannot transcribe"),

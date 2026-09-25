@@ -64,7 +64,14 @@ export const serveCommand: Command = {
     const quit = () => void app.quit();
     if (ctx.io.signal?.aborted) quit();
     ctx.io.signal?.addEventListener("abort", quit, { once: true });
-    await app.closed;
+    // `docker stop` and systemd send SIGTERM, and as pid 1 in a container nothing else handles it.
+    // Only here: a listener anywhere else would keep every other command alive through a SIGTERM.
+    process.on("SIGTERM", quit);
+    try {
+      await app.closed;
+    } finally {
+      process.off("SIGTERM", quit);
+    }
     return EXIT.ok;
   },
 };

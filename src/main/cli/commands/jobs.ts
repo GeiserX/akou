@@ -5,6 +5,7 @@
  */
 
 import { str } from "../args.ts";
+import { EXIT } from "../client.ts";
 import { api, type Body, type Command, finish } from "../context.ts";
 import { usage } from "./calls.ts";
 
@@ -23,6 +24,14 @@ export const jobsCommand: Command = {
       return usage(ctx, `--status is one of ${STATES.join(", ")}`);
     }
     const r = await api(ctx, "GET", "/jobs", { query: { status } });
+    // The desktop app has no job routes: that is not a usage error, it is the wrong kind of akou.
+    if (r.status === 404 && !ctx.io.env.AKOU_URL?.trim()) {
+      const message =
+        "jobs exist only on an akou server, and the akou on this machine is the desktop app; run `akou serve`, or set AKOU_URL to a server";
+      if (ctx.json) ctx.io.out(JSON.stringify({ error: "not_server", message }));
+      else ctx.io.err(`akou: ${message}`);
+      return EXIT.unavailable;
+    }
     return finish(ctx, r, (b) => {
       const jobs = (b?.jobs ?? []) as Body[];
       if (jobs.length === 0) return "No jobs";

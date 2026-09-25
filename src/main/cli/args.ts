@@ -27,6 +27,16 @@ export class UsageError extends Error {
   override name = "UsageError";
 }
 
+/** A secret flag, refused; `rest` is the arguments without it and its value. */
+export class SecretFlagError extends UsageError {
+  constructor(
+    message: string,
+    readonly rest: readonly string[],
+  ) {
+    super(message);
+  }
+}
+
 const COMMON: FlagSpecs = {
   json: { type: "boolean" },
   help: { type: "boolean", short: "h" },
@@ -70,10 +80,14 @@ export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
     }
     const s = all[name];
     if (!s && SECRET_FLAGS.has(name)) {
-      throw new UsageError(
+      // The same words without the flag and its value, for the `try:` line runCli adds.
+      const valueNext =
+        inline === undefined && i + 1 < argv.length && !isFlag(argv[i + 1] as string);
+      const rest = [...argv.slice(0, i), ...argv.slice(i + (valueNext ? 2 : 1))];
+      throw new SecretFlagError(
         `--${name} would put a secret on the command line, where the process list and the shell history keep it; ` +
-          "set AKOU_API_KEY, or AKOU_API_KEY_FILE to a file that holds it\n" +
-          "try: AKOU_API_KEY_FILE=~/.config/akou/remote.key akou jobs list",
+          "set AKOU_API_KEY, or AKOU_API_KEY_FILE to a file that holds it",
+        rest,
       );
     }
     if (!s) throw new UsageError(`unknown option --${name}`);
