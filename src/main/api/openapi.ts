@@ -288,7 +288,10 @@ export function servedOpenApi(
 
 /**
  * The address `servers[0]` names: `server.public_host` when set (a bare host means https, since
- * a proxy terminates TLS in front of it), else the host the request came in on.
+ * a proxy terminates TLS in front of it), else the host the request came in on. That host is
+ * `http://` only when it is loopback, akou itself; any other Host reached akou through the proxy
+ * that SV-D2 requires for a non-loopback bind, so it is `https://`, and a key never travels in
+ * clear text because akou saw plain HTTP behind that proxy.
  */
 export function serverUrlFor(publicHost: unknown, req: Request): string {
   if (typeof publicHost === "string" && publicHost.trim() !== "") {
@@ -296,7 +299,9 @@ export function serverUrlFor(publicHost: unknown, req: Request): string {
     return /^https?:\/\//.test(h) ? h : `https://${h}`;
   }
   const host = req.headers.get("host") ?? new URL(req.url).host;
-  return `${new URL(req.url).protocol}//${host}`;
+  const name = host.replace(/:\d+$/, "").toLowerCase();
+  const loopback = name === "127.0.0.1" || name === "localhost" || name === "[::1]";
+  return `${loopback ? new URL(req.url).protocol : "https:"}//${host}`;
 }
 
 /** Every operation of a file, with where it is. */

@@ -24,6 +24,7 @@ import {
   openApiProblems,
   operations,
   servedOpenApi,
+  serverUrlFor,
 } from "../src/main/api/openapi.ts";
 import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
@@ -382,6 +383,19 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
     } finally {
       await withScheme.server.stop();
     }
+  });
+
+  test("with no server.public_host, a Host that is not loopback came through the TLS proxy: https", () => {
+    // SV-D2: server mode binds a non-loopback address only behind a proxy that terminates TLS, so
+    // the plain `http:` akou itself sees is not what a client must use.
+    const at = (host: string) =>
+      serverUrlFor("", new Request(`http://${host}/v1/openapi.json`, { headers: { host } }));
+    expect(at("akou.example")).toBe("https://akou.example");
+    expect(at("akou.lan:8443")).toBe("https://akou.lan:8443");
+    // Positive controls: loopback is akou itself, over plain HTTP.
+    expect(at("127.0.0.1:8476")).toBe("http://127.0.0.1:8476");
+    expect(at("localhost:8476")).toBe("http://localhost:8476");
+    expect(at("[::1]:8476")).toBe("http://[::1]:8476");
   });
 
   test("in app mode the served copy has the call routes; in server mode it has no /calls route", async () => {
