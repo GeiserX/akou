@@ -83,12 +83,14 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 45
     env:
-      # Empty until the owner adds them: then Hutch signs with the Developer ID and notarizes.
-      ELECTROBUN_DEVELOPER_ID: ${{ secrets.ELECTROBUN_DEVELOPER_ID }}
-      ELECTROBUN_TEAMID: ${{ secrets.ELECTROBUN_TEAMID }}
-      ELECTROBUN_APPLEID: ${{ secrets.ELECTROBUN_APPLEID }}
-      ELECTROBUN_APPLEIDPASS: ${{ secrets.ELECTROBUN_APPLEIDPASS }}
-      HAS_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE_P12 != '' }}
+      # Empty until the owner adds them: then Hutch signs with the Developer ID and notarizes. Only a
+      # pushed tag reads them (this workflow's only push trigger is v* tags): a pull request's dry run
+      # runs the branch's own build scripts and must never have a signing secret in reach.
+      ELECTROBUN_DEVELOPER_ID: ${{ github.event_name == 'push' && secrets.ELECTROBUN_DEVELOPER_ID || '' }}
+      ELECTROBUN_TEAMID: ${{ github.event_name == 'push' && secrets.ELECTROBUN_TEAMID || '' }}
+      ELECTROBUN_APPLEID: ${{ github.event_name == 'push' && secrets.ELECTROBUN_APPLEID || '' }}
+      ELECTROBUN_APPLEIDPASS: ${{ github.event_name == 'push' && secrets.ELECTROBUN_APPLEIDPASS || '' }}
+      HAS_CERTIFICATE: ${{ github.event_name == 'push' && secrets.MACOS_CERTIFICATE_P12 != '' }}
       HELPER_FLAG: ${{ (github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && inputs.allow_missing_helper)) && '--allow-missing-helper' || '' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -114,8 +116,8 @@ jobs:
           cargo --version
       - name: the Developer ID certificate, when the owner has added one
         env:
-          P12: ${{ secrets.MACOS_CERTIFICATE_P12 }}
-          P12_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          P12: ${{ github.event_name == 'push' && secrets.MACOS_CERTIFICATE_P12 || '' }}
+          P12_PASSWORD: ${{ github.event_name == 'push' && secrets.MACOS_CERTIFICATE_PASSWORD || '' }}
         if: env.HAS_CERTIFICATE == 'true'
         run: |
           keychain="$RUNNER_TEMP/signing.keychain-db"
