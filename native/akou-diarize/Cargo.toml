@@ -1,0 +1,28 @@
+[package]
+name = "akou-diarize"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-only"
+description = "akou's diarization helper: who speaks when on the call channel, with NVIDIA Nemotron 3 Diarization through ONNX Runtime"
+publish = false
+
+[dependencies]
+# Nemotron 3 Diarization (Streaming Sortformer v3) on ONNX Runtime: the log-mel front end, the
+# speaker cache and the streaming state machine, matched to NeMo frame for frame. Its default
+# features link a prebuilt ONNX Runtime statically, so the helper carries no second
+# `onnxruntime` library next to sherpa-onnx's and never loads a system one.
+parakeet-rs = { version = "=0.3.8", features = ["sortformer"] }
+# The same `ort` parakeet-rs is built on, only to switch ONNX Runtime's telemetry off before the
+# first session is made.
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["std"] }
+serde_json = "1"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
+panic = "abort"
+
+[profile.dev.package."*"]
+opt-level = 2
