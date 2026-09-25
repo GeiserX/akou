@@ -167,6 +167,31 @@ export function describeStop(t: StopTimes, took: number): string {
   return `stop took ${Math.round(took)} ms; helper said stopped at ${at(t.said)}, killed at ${at(t.kill)}, exit seen at ${at(t.exit)}, session answered at ${at(t.answered)}`;
 }
 
+/**
+ * [T0.9]'s rule: between the ask and the kill the event loop never goes half the stop budget
+ * without a turn. The budget itself would pass a stop that held the loop for all but one turn of
+ * it; a free loop holds for one timer period (12 ms measured on a laptop).
+ */
+export function holdBound(budget: number): number {
+  return budget / 2;
+}
+
+/**
+ * The longest the event loop went without a turn between `from` and `to`, from the times a timer
+ * ran (`turns`). With no turn in between it is the whole window: a stop that held the loop from
+ * the ask to the kill scores the budget itself.
+ */
+export function longestHold(turns: readonly number[], from: number, to: number): number {
+  let last = from;
+  let most = 0;
+  for (const t of turns) {
+    if (t <= from || t >= to) continue;
+    most = Math.max(most, t - last);
+    last = t;
+  }
+  return Math.max(most, to - last);
+}
+
 /** A call manager whose engine spawns `h` (or `command`, for a helper that is not one of them). */
 export function rig(
   h: HelperUnderTest,
@@ -300,28 +325,27 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         const a = await r.mgr.start({ workspace: "work", title: "Hangs" });
         expect(a.ok).toBe(true);
         await until(() => r.packets.length > 10, 3_000, "packets");
-        // The event loop keeps turning while the helper hangs.
-        let ticks = 0;
-        let last = performance.now();
-        let maxGap = 0;
-        const timer = setInterval(() => {
-          const now = performance.now();
-          maxGap = Math.max(maxGap, now - last);
-          last = now;
-          ticks++;
-        }, 10);
+        // The event loop keeps turning while the helper hangs: a timer's turns, in order with the
+        // stop's own steps.
+        const turns: number[] = [];
+        const timer = setInterval(() => turns.push(performance.now()), 10);
         const t0 = performance.now();
         const stop = await r.mgr.stop("live");
         const took = performance.now() - t0;
         clearInterval(timer);
         const at = r.stops[0] as StopTimes;
+        const held = longestHold(turns, at.asked as number, at.kill as number);
         console.log(
-          `[T0.9] ${describeStop(at, took)}; longest event-loop gap ${Math.round(maxGap)} ms`,
+          `[T0.9] ${describeStop(at, took)}; longest the loop was held while the helper hung ${Math.round(held)} ms`,
         );
         expect(stop.ok).toBe(true);
         // The helper had the whole budget, then was killed.
         expect(at.kill).toBeDefined();
         expect((at.kill as number) - (at.asked as number)).toBeGreaterThanOrEqual(budget - 20);
+        // Between the ask and the kill the loop turned, and never went half the budget without a
+        // turn while the helper hung. Only this window is the rule: after the kill the call syncs part.ended and
+        // call.ended to disk, which takes what the runner's disk takes.
+        expect(held).toBeLessThan(holdBound(budget));
         // The kill worked: the session saw the helper exit within the kill grace (past it, the
         // session gives up on the exit and answers with none).
         expect(at.outcome).toMatchObject({ killed: true, exit: { killedByUs: true } });
@@ -334,7 +358,6 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         // bound is budget plus kill grace plus one second for that; a stop that waited on the hung
         // helper without a deadline never answers, and fails on the test's timeout.
         expect(took).toBeLessThan(budget + KILL_GRACE_MS + RUNNER_MS);
-        expect(ticks).toBeGreaterThan(took / 10 / 4);
         expect(ofType(r.events, "part.ended")[0]).toMatchObject({ reason: "killed" });
         expect(processAlive(r.pids[0] as number)).toBe(false);
         const t1 = performance.now();
@@ -490,7 +513,10 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
     test(
       "helper crash: part.ended {helper-exit}, automatic restart; after stop the next start answers fast",
       async () => {
-        const r = rig(h, (o) => (o.part === 1 ? { crashAt: 0.3 } : {}));
+        // The helper crashes after 15 packets of 20 ms: every packet it wrote before the crash
+        // reaches the app, so the part ends at 0.3 s of audio, whatever the wall clock did.
+        const crashAt = 0.3;
+        const r = rig(h, (o) => (o.part === 1 ? { crashAt } : {}));
         const a = await r.mgr.start({ workspace: "work" });
         expect(a.ok).toBe(true);
         await until(
@@ -500,7 +526,11 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         );
         const ended = ofType(r.events, "part.ended")[0];
         expect(ended).toMatchObject({ part: 1, reason: "helper-exit" });
-        expect(ended?.fileSeconds).toBeGreaterThan(0.2);
+        const mic = r.packets.filter((x) => x.part === 1 && x.p.ch === "mic");
+        const packet = (mic[0]?.p.samples.length ?? 0) / 16000;
+        expect(packet).toBeGreaterThan(0);
+        expect(mic.length).toBe(Math.round(crashAt / packet));
+        expect(Math.abs((ended?.fileSeconds ?? 0) - crashAt)).toBeLessThanOrEqual(packet);
         expect(r.mgr.live()?.status).toBe("recording");
         await r.mgr.stop("live");
         const t0 = performance.now();

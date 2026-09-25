@@ -238,7 +238,7 @@ describe("invocation and discovery", () => {
   });
 
   test.skipIf(process.platform === "win32")(
-    "[decision] Harness not found from an app bundle: found through the login shell, PATH minimal",
+    "[decision] Harness not found from an app bundle: found through the login shell, PATH minimal (POSIX login shell; skipped on Windows)",
     async () => {
       const t = tempDir();
       try {
@@ -269,7 +269,7 @@ describe("invocation and discovery", () => {
   );
 
   test.skipIf(process.platform === "win32")(
-    "discovery ends when the login shell leaves a background process holding its stdout",
+    "discovery ends when the login shell leaves a background process holding its stdout (POSIX login shell; skipped on Windows)",
     async () => {
       const t = tempDir();
       const pidFile = join(t.dir, "sleeper.pid");
@@ -376,7 +376,7 @@ describe("the provider against a fake harness", () => {
     expect(err.kind).toBe("cancelled");
   });
 
-  describe.skipIf(process.platform === "win32")("a descendant holding the harness's stdout", () => {
+  describe.skipIf(process.platform === "win32")("a descendant holding its stdout (POSIX)", () => {
     const alive = (pid: number) => {
       try {
         process.kill(pid, 0);
