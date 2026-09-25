@@ -162,6 +162,34 @@ describe("[SV-C4] the file covers the server-mode routes as they are added", () 
     expect(doc.paths["/v1/audio/transcriptions"]?.post?.operationId).toBe("openai.transcribe");
     expect(openApiProblems(doc)).toEqual([]);
   });
+
+  test("a real route the fixture also has wins: the fixture fills only what is missing", async () => {
+    // The jobs routes may land before `keys.me`; the file must then describe the real upload.
+    const router = buildRouter();
+    const real = { ...(FIXTURE_ROUTES[0] as RouteEntry).doc, doc: "The real one." };
+    router.add("POST", "/jobs", { ...real, body: { multipart: { audio: "file" } } }, () =>
+      json(202, { real: true }),
+    );
+    const added = addFixtureRoutes(router);
+    expect(added).not.toContain("jobs.create");
+    expect(added).toContain("keys.me");
+    const doc = buildOpenApi(router.entries(), { version: APP_VERSION });
+    const op = doc.paths["/v1/jobs"]?.post;
+    expect(op?.description).toBe("The real one.");
+    expect(JSON.stringify(op?.requestBody)).toContain('"audio"');
+    expect(JSON.stringify(op?.requestBody)).not.toContain('"file"');
+    // With nothing real in the way, the fixture adds every one of its routes.
+    expect(addFixtureRoutes(buildRouter()).length).toBe(FIXTURE_ROUTES.length);
+  });
+
+  test("two routes of the same method and path are refused: the second would be served by the first", () => {
+    const entries = buildRouter().entries();
+    const again = entries[0] as RouteEntry;
+    expect(() => buildOpenApi([...entries, again], { version: APP_VERSION })).toThrow(
+      `${again.method} ${openApiPath(again.path)} is in the route table twice`,
+    );
+    expect(() => buildOpenApi(entries, { version: APP_VERSION })).not.toThrow();
+  });
 });
 
 describe("[SI-2] Executor's rules over the file", () => {

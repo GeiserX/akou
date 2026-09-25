@@ -82,12 +82,20 @@ export const FIXTURE_ROUTES: { method: string; path: string; doc: RouteDoc }[] =
   },
 ];
 
-/** Adds the fixture routes to a table, each answering 501. */
-export function addFixtureRoutes(r: Router<ApiApp>): Router<ApiApp> {
+/**
+ * Adds to a table the fixture routes it does not have yet, by method and path, each answering
+ * 501, and returns the ids it added. A real route always wins: when the jobs routes land before
+ * `keys.me`, the file describes the real upload, and only `keys.me` comes from here.
+ */
+export function addFixtureRoutes(r: Router<ApiApp>): string[] {
+  const have = new Set(r.entries().map((e) => `${e.method} ${e.path}`));
+  const added: string[] = [];
   for (const f of FIXTURE_ROUTES) {
+    if (have.has(`${f.method} ${f.path}`)) continue;
     r.add(f.method, f.path, f.doc, () =>
       json(501, { error: "not_built", message: `${f.doc.id} is a test fixture` }),
     );
+    added.push(f.doc.id);
   }
-  return r;
+  return added;
 }

@@ -201,6 +201,10 @@ export function buildOpenApi(
     const p = openApiPath(r.path);
     const op = operation(r.method, r.path, r.doc);
     const byMethod = paths[p] ?? {};
+    // The router serves the first match, so a second route would be described and never run.
+    if (byMethod[r.method.toLowerCase()]) {
+      throw new Error(`${r.method} ${p} is in the route table twice`);
+    }
     byMethod[r.method.toLowerCase()] = op;
     paths[p] = byMethod;
     for (const t of op.tags) if (!tags.includes(t)) tags.push(t);

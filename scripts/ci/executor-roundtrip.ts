@@ -9,10 +9,11 @@
  * a throwaway home and data folder, and its daemon listens on a free port, so no Executor the
  * machine already runs is touched.
  *
- * 1. An akou API server in server mode starts over an inert app, with the real route table. The
- *    jobs routes (SERVER.md SV-J) are not built yet; until they are, the table gets the test
- *    fixture of them (`tests/fixtures/openapi-routes.ts`), and the run says so. The file itself,
- *    its generation, the guard and the view are the real ones either way.
+ * 1. An akou API server in server mode starts over an inert app, with the real route table. Each
+ *    server-mode route not built yet (SERVER.md SV-J, SI-3) comes from the test fixture
+ *    (`tests/fixtures/openapi-routes.ts`), only where the table has no route of that method and
+ *    path, and the run names them. A real route always wins, so the file describes it. The file
+ *    itself, its generation, the guard and the view are the real ones either way.
  * 2. `openapi addSpec` against the `?scope=jobs` URL, then `executor resume --action accept`.
  * 3. Executor's own store must hold the tools `jobs.create`, `jobs.get` and `keys.me`, no
  *    `openai.transcribe`, exactly one auth template, and `jobs.create` must take a file argument.
@@ -52,11 +53,9 @@ function inertApp(): ApiApp {
   } as unknown as ApiApp;
 }
 
-function akou(g?: Guard): { server: ApiServer; fixture: boolean } {
+function akou(g?: Guard): { server: ApiServer; fixture: string[] } {
   const router = buildRouter();
-  const ids = new Set(router.entries().map((e) => e.doc.id));
-  const fixture = !JOBS_TOOLS.every((id) => ids.has(id));
-  if (fixture) addFixtureRoutes(router);
+  const fixture = addFixtureRoutes(router);
   const server = startApiServer({
     app: inertApp(),
     port: 0,
@@ -209,9 +208,9 @@ async function main(): Promise<number> {
     const version = await exe.run(["--version"]);
     lines.push(`- Executor: ${version.out.trim()}`);
     lines.push(
-      open.fixture
-        ? "- The jobs routes are not built yet: the route table carries the test fixture of them"
-        : "- The route table's own jobs routes",
+      open.fixture.length > 0
+        ? `- Not built yet, from the test fixture: ${open.fixture.join(", ")}`
+        : "- Every route is the route table's own",
     );
     await exe.start();
 
