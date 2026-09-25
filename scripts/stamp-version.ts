@@ -30,7 +30,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const SEMVER =
@@ -247,8 +247,10 @@ export function previousStable(
   version: string,
 ): { tag: string; date: string } | null {
   const git = (args: string[]) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
-  const top = git(["rev-parse", "--show-toplevel"]);
-  if (top.status !== 0 || realpathSync(top.stdout.trim()) !== realpathSync(root))
+  // Asked of git, not by comparing paths: on Windows git prints C:/Users/runneradmin/... where
+  // the caller may hold C:\Users\RUNNER~1\..., the same folder under its short name.
+  const top = git(["rev-parse", "--show-cdup"]);
+  if (top.status !== 0 || top.stdout.trim() !== "")
     throw new Error(`cannot list the tags: ${root} is not the top of a git checkout`);
   // A shallow clone holds none of the older tags, so "no stable tag" would be a guess.
   if (git(["rev-parse", "--is-shallow-repository"]).stdout.trim() !== "false")

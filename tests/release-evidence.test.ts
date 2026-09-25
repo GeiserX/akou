@@ -236,6 +236,12 @@ describe("[CI-28] a stable release needs the terms check and every M0 gate on re
         const r = check(["--check", "--root", t.dir]);
         expect(r.code).toBe(1);
         expect(r.out).toContain("cannot list the tags");
+        // A folder inside a checkout is not its top: its tags would belong to another project.
+        withTags(t.dir, [["v1.0.0", "2027-01-01"]]);
+        expect(previousStable(t.dir, "1.1.0")).toEqual({ tag: "v1.0.0", date: "2027-01-01" });
+        expect(() => previousStable(join(t.dir, "docs"), "1.1.0")).toThrow(
+          "not the top of a git checkout",
+        );
       } finally {
         t.cleanup();
       }
