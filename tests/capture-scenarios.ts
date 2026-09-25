@@ -4,6 +4,10 @@
  * helper in file mode (tests/capture-rust.e2e.test.ts). Each helper maps the same fault list to its
  * own switches. Budgets are small real durations; every wait has a deadline below the test
  * timeout, so a regression fails instead of hanging (TRAPS T4.31).
+ *
+ * A budget rule is read from the rig's steps (`Step`), never from how long something took: a
+ * shared runner stalls for seconds at a time, and a stall changes durations but not the order in
+ * which the app armed, fired and cleared its deadlines and the helper spoke, exited or was killed.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -13,20 +17,254 @@ import type { LogEvent } from "../src/core/log/events.ts";
 import { processAlive } from "../src/core/log/writer.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import type { CallBudgets } from "../src/main/call/state.ts";
-import type {
-  CaptureSession,
-  CaptureStartOptions,
-  StopOutcome,
+import {
+  type CaptureEngine,
+  type CaptureSession,
+  type CaptureStartOptions,
+  type Clock,
+  realClock,
+  type StopOutcome,
 } from "../src/main/capture/engine.ts";
-import { AkouCaptureEngine, KILL_GRACE_MS } from "../src/main/capture/helper.ts";
+import { AkouCaptureEngine } from "../src/main/capture/helper.ts";
 import type { Packet } from "../src/main/capture/protocol.ts";
 import { logOf, ofType, until } from "./capture-helpers.ts";
 import { writeCallWav } from "./fixtures/audio.ts";
 import { TZ, tempDir } from "./helpers.ts";
 
 export const LONG = 20_000;
-/** What a wall-clock bound here allows for the runner: disk syncs and scheduling, not the app. */
-const RUNNER_MS = 1_000;
+/** A `capturingDelayMs` no test outlives: a helper that is still opening whenever it is asked. */
+export const NEVER = 3_600_000;
+
+/**
+ * One thing the app or the helper did, in the order the app saw it, with no time on it.
+ *
+ * - `spawn`, `said`, `kill`, `exit`: the helper session (`said` is a stderr message by type).
+ * - `armed`, `fired`: a timer on the app's clock, the call's and the session's alike. A timer
+ *   that is cleared has no `fired`.
+ * - `ask`, `stopped`: a session's stop was asked, and answered.
+ * - `started`: a start answered, from `Rig.start`.
+ *
+ * `fired`, `said` and `exit` are what the app can wait on: a timer of its clock, a helper message,
+ * the helper's exit. Two steps with none of those between them followed each other without the app
+ * waiting on anything recorded here, however loaded the runner was (`oneTurn`).
+ */
+export type Step =
+  | { step: "spawn"; part: number }
+  | { step: "armed"; id: number; ms: number }
+  | { step: "fired"; id: number; ms: number }
+  | { step: "said"; part: number; type: string }
+  | { step: "kill"; part: number }
+  | { step: "exit"; part: number; code: number | null; killedByUs: boolean }
+  | { step: "ask"; part: number }
+  | { step: "stopped"; part: number; killed: boolean }
+  | { step: "started"; ok: boolean; status: number };
+
+const TURN: readonly Step["step"][] = ["fired", "said", "exit"];
+
+/** The steps as one line for a test's output. */
+export function describeSteps(steps: readonly Step[]): string {
+  return steps
+    .map((s) => {
+      switch (s.step) {
+        case "armed":
+          return `armed #${s.id} ${s.ms} ms`;
+        case "fired":
+          return `fired #${s.id}`;
+        case "said":
+          return `said ${s.type}`;
+        case "exit":
+          return `exit ${s.code ?? "-"}${s.killedByUs ? " (ours)" : ""}`;
+        case "stopped":
+          return `stop answered${s.killed ? " (killed)" : ""}`;
+        case "started":
+          return `started ${s.status}`;
+        default:
+          return s.step;
+      }
+    })
+    .join(", ");
+}
+
+/**
+ * The real clock, recording every timer armed and fired on it into `steps`. `drop` swallows a
+ * timer (it is armed and never fires): the positive controls use it to take a deadline away.
+ */
+export function recordingClock(
+  steps: Step[],
+  drop?: (ms: number, before: Step | undefined) => boolean,
+): Clock {
+  let next = 0;
+  return {
+    now: () => realClock.now(),
+    mono: () => realClock.mono(),
+    setTimeout(fn, ms) {
+      const id = ++next;
+      const before = steps.at(-1);
+      steps.push({ step: "armed", id, ms });
+      if (drop?.(ms, before)) return undefined;
+      return realClock.setTimeout(() => {
+        steps.push({ step: "fired", id, ms });
+        fn();
+      }, ms);
+    },
+    clearTimeout(h) {
+      if (h !== undefined) realClock.clearTimeout(h);
+    },
+  };
+}
+
+/**
+ * Wraps `engine.start` so every session it starts adds its steps to `steps`: the spawn, each
+ * message, the exit, a kill, and a stop's ask and answer.
+ */
+export function recordSteps(engine: CaptureEngine, steps: Step[]): void {
+  const inner = engine.start.bind(engine);
+  engine.start = (o, handlers) => {
+    const part = o.part;
+    const s = inner(o, {
+      ...handlers,
+      message(m) {
+        steps.push({ step: "said", part, type: m.type });
+        handlers.message(m);
+      },
+      exit(e) {
+        steps.push({ step: "exit", part, code: e.code, killedByUs: e.killedByUs });
+        handlers.exit(e);
+      },
+    });
+    steps.push({ step: "spawn", part });
+    const kill = s.kill.bind(s);
+    s.kill = () => {
+      steps.push({ step: "kill", part });
+      kill();
+    };
+    const stop = s.stop.bind(s);
+    s.stop = async (budget) => {
+      steps.push({ step: "ask", part });
+      const out = await stop(budget);
+      steps.push({ step: "stopped", part, killed: out.killed });
+      return out;
+    };
+    return s;
+  };
+}
+
+/** Swallows the deadline armed right after `after` (a `spawn` or an `ask`): a budget ignored. */
+export function dropDeadlineAfter(after: "spawn" | "ask") {
+  return (_ms: number, before: Step | undefined) => before?.step === after;
+}
+
+/** The timer armed right after the first `after` step, and where it fired (-1 if it never did). */
+function deadlineAfter(steps: readonly Step[], after: "spawn" | "ask") {
+  const at = steps.findIndex((s) => s.step === after);
+  const armed = at >= 0 ? steps[at + 1] : undefined;
+  if (armed?.step !== "armed") return { at, armed: undefined, fired: -1 };
+  const fired = steps.findIndex((s) => s.step === "fired" && s.id === armed.id);
+  return { at, armed, fired };
+}
+
+/**
+ * Whether `b` followed `a` (indexes) with no timer fired, message or exit between them: the step
+ * that answers a deadline or an exit came straight from it, not after another wait.
+ */
+function oneTurn(steps: readonly Step[], a: number, b: number): boolean {
+  return a >= 0 && b > a && !steps.slice(a + 1, b).some((s) => TURN.includes(s.step));
+}
+
+const indexOf = (steps: readonly Step[], f: (s: Step) => boolean) => steps.findIndex(f);
+
+/**
+ * [T1.26] with a helper that never says `capturing`: what is broken, from a start's steps. The
+ * start budget is armed right after the spawn (never before it) with exactly `budget` ms; it
+ * fires; the helper is killed in that turn, before it says `capturing`; it exits by our kill; the
+ * start answers 503 after the budget fired.
+ */
+export function pastBudgetBroken(steps: readonly Step[], budget: number): string[] {
+  const bad: string[] = [];
+  const { at, armed, fired } = deadlineAfter(steps, "spawn");
+  if (at < 0) return ["no helper was spawned"];
+  if (!armed || armed.ms !== budget) bad.push(`no ${budget} ms start budget armed at the spawn`);
+  if (armed && fired < 0) bad.push("the start budget never fired");
+  const kill = indexOf(steps, (s) => s.step === "kill");
+  if (kill < 0) bad.push("the helper was never killed");
+  else if (!oneTurn(steps, fired, kill)) bad.push("the kill did not follow the budget in its turn");
+  const capturing = indexOf(steps, (s) => s.step === "said" && s.type === "capturing");
+  if (capturing >= 0 && (kill < 0 || capturing < kill)) bad.push("the helper said capturing");
+  const exit = steps.find((s) => s.step === "exit");
+  if (exit?.step !== "exit" || !exit.killedByUs) bad.push("the helper did not exit by our kill");
+  const started = indexOf(steps, (s) => s.step === "started");
+  const answer = steps[started];
+  if (answer?.step !== "started" || answer.status !== 503) bad.push("the start did not answer 503");
+  else if (fired < 0 || started < fired) bad.push("the start answered before its budget fired");
+  return bad;
+}
+
+/**
+ * [T3.6]: what is broken in a start that should answer on `capturing` with the `budget` ms start
+ * budget (the warm one, when the app has started a call before). The budget is armed right after
+ * the spawn; the helper says `capturing`; the start answers 201 after that; the budget never
+ * fires. What the app adds in wall time (its own disk writes) is printed, and budgeted on the
+ * reference Mac (scripts/gates/g8-start.ts).
+ */
+export function answeredOnCapturingBroken(steps: readonly Step[], budget: number): string[] {
+  const bad: string[] = [];
+  const { at, armed, fired } = deadlineAfter(steps, "spawn");
+  if (at < 0) return ["no helper was spawned"];
+  if (!armed || armed.ms !== budget) bad.push(`no ${budget} ms start budget armed at the spawn`);
+  const capturing = indexOf(steps, (s) => s.step === "said" && s.type === "capturing");
+  if (capturing < 0) bad.push("the helper never said capturing");
+  const started = indexOf(steps, (s) => s.step === "started");
+  const answer = steps[started];
+  if (answer?.step !== "started" || !answer.ok) bad.push("the start did not answer 201");
+  else if (capturing < 0 || started < capturing) bad.push("the start answered before capturing");
+  if (fired >= 0 && (started < 0 || fired < started)) bad.push("the start budget fired");
+  return bad;
+}
+
+/**
+ * [T0.9] for a helper that hangs on stop: what is broken, from the stop's steps. The stop budget
+ * is armed right after the ask with exactly `budget` ms; it fires; the kill follows in that turn;
+ * the helper exits by our kill; the session answers `killed` in the turn it saw the exit.
+ */
+export function killedAtBudgetBroken(steps: readonly Step[], budget: number): string[] {
+  const bad: string[] = [];
+  const { at, armed, fired } = deadlineAfter(steps, "ask");
+  if (at < 0) return ["no stop was asked"];
+  if (!armed || armed.ms !== budget) bad.push(`no ${budget} ms stop budget armed at the ask`);
+  if (armed && fired < 0) bad.push("the stop budget never fired");
+  const kill = indexOf(steps, (s) => s.step === "kill");
+  if (kill < 0) bad.push("the helper was never killed");
+  else if (!oneTurn(steps, fired, kill)) bad.push("the kill did not follow the budget in its turn");
+  const exit = indexOf(steps, (s) => s.step === "exit");
+  const e = steps[exit];
+  if (e?.step !== "exit" || !e.killedByUs) bad.push("the helper did not exit by our kill");
+  const stopped = indexOf(steps, (s) => s.step === "stopped");
+  const answer = steps[stopped];
+  if (answer?.step !== "stopped" || !answer.killed) bad.push("the stop did not answer killed");
+  else if (!oneTurn(steps, exit, stopped)) bad.push("the stop did not answer in the exit's turn");
+  return bad;
+}
+
+/**
+ * [T2.51]: what is broken in a stop the helper should finish by itself within `budget` ms. The
+ * stop budget is armed right after the ask; the helper says `stopped` and exits 0; the stop
+ * answers not killed; the budget never fires and nothing is killed.
+ */
+export function stoppedWithinBudgetBroken(steps: readonly Step[], budget: number): string[] {
+  const bad: string[] = [];
+  const { at, armed, fired } = deadlineAfter(steps, "ask");
+  if (at < 0) return ["no stop was asked"];
+  if (!armed || armed.ms !== budget) bad.push(`no ${budget} ms stop budget armed at the ask`);
+  if (fired >= 0) bad.push("the stop budget fired");
+  if (indexOf(steps, (s) => s.step === "said" && s.type === "stopped") < 0)
+    bad.push("the helper never said stopped");
+  const e = steps.find((s) => s.step === "exit");
+  if (e?.step !== "exit" || e.code !== 0 || e.killedByUs) bad.push("the helper did not exit 0");
+  if (steps.some((s) => s.step === "kill")) bad.push("the helper was killed");
+  const answer = steps.find((s) => s.step === "stopped");
+  if (answer?.step !== "stopped" || answer.killed) bad.push("the stop did not answer unkilled");
+  return bad;
+}
 
 /** The traps' fault list; times are seconds of audio on the file timeline. */
 export interface Faults {
@@ -144,6 +382,17 @@ export interface Rig {
   sessions: CaptureSession[];
   /** What each session's stop did and when (`performance.now()`), in the same order. */
   stops: StopTimes[];
+  /** What the app and the helpers did, in order (`Step`). */
+  steps: Step[];
+  /** `mgr.start`, adding its answer to `steps`. */
+  start(req: Parameters<CallManager["start"]>[0]): ReturnType<CallManager["start"]>;
+}
+
+export interface RigOptions {
+  /** Swallows a timer on the app's clock (`recordingClock`). */
+  drop?: (ms: number, before: Step | undefined) => boolean;
+  /** Runs on every new session, after the rig has wrapped it, before the app sees it. */
+  session?: (s: CaptureSession) => void;
 }
 
 /**
@@ -198,6 +447,7 @@ export function rig(
   faults: (o: CaptureStartOptions) => Faults,
   budgets: Partial<CallBudgets> = {},
   command?: string[],
+  opts: RigOptions = {},
 ): Rig {
   const { dir: root, cleanup } = tempDir();
   const events: LogEvent[] = [];
@@ -205,11 +455,15 @@ export function rig(
   const pids: number[] = [];
   const sessions: CaptureSession[] = [];
   const stops: StopTimes[] = [];
+  const steps: Step[] = [];
+  const clock = recordingClock(steps, opts.drop);
   const engine = new AkouCaptureEngine({
     command: command ?? h.command,
     extraArgs: (o) => h.args(faults(o)),
     env: h.env,
+    clock,
   });
+  recordSteps(engine, steps);
   const inner = engine.start.bind(engine);
   engine.start = (o, handlers) => {
     const t: StopTimes = {};
@@ -240,11 +494,13 @@ export function rig(
     if (s.pid) pids.push(s.pid);
     sessions.push(s);
     stops.push(t);
+    opts.session?.(s);
     return s;
   };
   const mgr = new CallManager({
     root,
     engine,
+    clock,
     tz: TZ,
     budgets: { coldStartMs: 5_000, warmStartMs: 3_000, stopMs: 2_000, ...budgets },
     ingest: { queueSeconds: 10 },
@@ -260,7 +516,12 @@ export function rig(
     }
     cleanup();
   });
-  return { root, mgr, events, packets, pids, sessions, stops };
+  const start: Rig["start"] = async (req) => {
+    const res = await mgr.start(req);
+    steps.push({ step: "started", ok: res.ok, status: res.ok ? 201 : res.status });
+    return res;
+  };
+  return { root, mgr, events, packets, pids, sessions, stops, steps, start };
 }
 
 const has = (events: LogEvent[], f: (e: LogEvent) => boolean) => () => events.some(f);
@@ -271,7 +532,9 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
     test(
       "[T1.26] stop 200 ms after start while the helper is still opening: cancelled, never failed",
       async () => {
-        const r = rig(h, () => ({ capturingDelayMs: 3000 }), { coldStartMs: 10_000 });
+        // The helper is still opening when the stop comes, however late the runner makes it: it
+        // never says `capturing` by itself, so only the stop can end its open.
+        const r = rig(h, () => ({ capturingDelayMs: NEVER }), { coldStartMs: 10_000 });
         const start = r.mgr.start({ workspace: "work" });
         await Bun.sleep(200);
         const stop = r.mgr.stop("live");
@@ -287,10 +550,12 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
     test(
       "[T1.26] capturing past the budget: 503 capture_failed {stage: open}, call.failed, helper killed",
       async () => {
-        const r = rig(h, () => ({ capturingDelayMs: 4000 }), { coldStartMs: 500 });
-        const t0 = performance.now();
-        const res = await r.mgr.start({ workspace: "work" });
-        expect(performance.now() - t0).toBeLessThan(2_000);
+        // The helper never says `capturing`, so only the budget can end the start. The rule is read
+        // from the steps (`pastBudgetBroken`), not from how long the start took: a runner that
+        // stalls for seconds (3.2 s once on Windows) moves every time and none of the order.
+        const budget = 500;
+        const r = rig(h, () => ({ capturingDelayMs: NEVER }), { coldStartMs: budget });
+        const res = await r.start({ workspace: "work" });
         expect(res).toMatchObject({
           ok: false,
           status: 503,
@@ -298,7 +563,11 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
           stage: "open",
         });
         expect(ofType(r.events, "call.failed")[0]?.stage).toBe("open");
-        await until(() => !processAlive(r.pids[0] as number), 2_000, "the helper to be killed");
+        // A helper we killed exits; waiting for that exit is the test's only wait.
+        if (r.steps.some((s) => s.step === "kill")) await r.sessions[0]?.exited;
+        console.log(`[T1.26] ${describeSteps(r.steps)}`);
+        expect(pastBudgetBroken(r.steps, budget)).toEqual([]);
+        expect(processAlive(r.pids[0] as number)).toBe(false);
       },
       LONG,
     );
@@ -329,6 +598,7 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         // stop's own steps.
         const turns: number[] = [];
         const timer = setInterval(() => turns.push(performance.now()), 10);
+        const from = r.steps.length;
         const t0 = performance.now();
         const stop = await r.mgr.stop("live");
         const took = performance.now() - t0;
@@ -349,21 +619,20 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         // The kill worked: the session saw the helper exit within the kill grace (past it, the
         // session gives up on the exit and answers with none).
         expect(at.outcome).toMatchObject({ killed: true, exit: { killedByUs: true } });
-        // And the session answered as soon as it saw the exit: both run in the same turn of the
-        // event loop, so this holds however loaded the runner is.
-        expect((at.answered as number) - (at.exit as number)).toBeLessThan(50);
-        // Bounded. The exact budget is proven on a manual clock (call-machine.test.ts, [T0.9] and
-        // [T4.31]); this is the whole stop of a real process on a shared runner, which also syncs
-        // part.ended and call.ended to disk and waits whenever the runner does not schedule it. The
-        // bound is budget plus kill grace plus one second for that; a stop that waited on the hung
-        // helper without a deadline never answers, and fails on the test's timeout.
-        expect(took).toBeLessThan(budget + KILL_GRACE_MS + RUNNER_MS);
+        // Killed at the budget, from the steps: the stop budget armed at the ask is `budget` ms,
+        // the kill came in the turn it fired, and the session answered in the turn it saw the
+        // exit. What the stop took after that (syncing part.ended and call.ended) is the runner's
+        // disk, printed above. The same budget on a manual clock: call-machine.test.ts.
+        const stopSteps = r.steps.slice(from);
+        console.log(`[T0.9] ${describeSteps(stopSteps)}`);
+        expect(killedAtBudgetBroken(stopSteps, budget)).toEqual([]);
         expect(ofType(r.events, "part.ended")[0]).toMatchObject({ reason: "killed" });
         expect(processAlive(r.pids[0] as number)).toBe(false);
-        const t1 = performance.now();
-        const b = await r.mgr.start({ workspace: "work", title: "Next" });
+        // The next start is a fresh helper, answered on its `capturing` under the warm budget.
+        const next = r.steps.length;
+        const b = await r.start({ workspace: "work", title: "Next" });
         expect(b.ok).toBe(true);
-        expect(performance.now() - t1).toBeLessThan(3_000);
+        expect(answeredOnCapturingBroken(r.steps.slice(next), 3_000)).toEqual([]);
       },
       LONG,
     );
@@ -384,17 +653,26 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
     );
 
     test(
-      "[T3.6] with the app running, a warm start answers 201 within 1 s",
+      "[T3.6] with the app running, a warm start answers 201 on capturing, under the warm budget",
       async () => {
-        const r = rig(h, () => ({}));
+        const r = rig(h, () => ({}), { coldStartMs: 5_000, warmStartMs: 3_000 });
         const warm = await r.mgr.start({ workspace: "work" });
         expect(warm.ok).toBe(true);
         await r.mgr.stop("live");
+        const from = r.steps.length;
         const t0 = performance.now();
-        const res = await r.mgr.start({ workspace: "work" });
+        const res = await r.start({ workspace: "work" });
         const took = performance.now() - t0;
         expect(res.ok).toBe(true);
-        expect(took).toBeLessThan(1_000);
+        // The rule, from the steps: the warm budget (not the cold one) is armed at the spawn, and
+        // the start answers on the helper's `capturing` with that budget never firing. The 1 s
+        // itself is a wall-clock budget, measured on the reference Mac (scripts/gates/g8-start.ts);
+        // a shared runner only prints it.
+        const steps = r.steps.slice(from);
+        console.log(
+          `[T3.6] warm start answered in ${Math.round(took)} ms: ${describeSteps(steps)}`,
+        );
+        expect(answeredOnCapturingBroken(steps, 3_000)).toEqual([]);
       },
       LONG,
     );
@@ -409,16 +687,18 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         const a = await r.mgr.start({ workspace: "work" });
         if (!a.ok) throw new Error(a.error);
         await until(() => r.packets.length > 10, 3_000, "packets");
+        const from = r.steps.length;
         const t0 = performance.now();
         await r.mgr.quit();
         const took = performance.now() - t0;
         const at = r.stops[0] as StopTimes;
         console.log(`[T2.51] ${describeStop(at, took)}`);
         // The helper stopped by itself: it said `stopped` and exited 0 within the budget, and was
-        // never killed.
+        // never killed. "Within the budget" is the session's own deadline, which never fired, not
+        // how long the whole quit took (that includes syncing the log on the runner's disk).
         expect(at.said).toBeDefined();
         expect(at.outcome).toMatchObject({ killed: false, exit: { code: 0, killedByUs: false } });
-        expect(took).toBeLessThan(budget);
+        expect(stoppedWithinBudgetBroken(r.steps.slice(from), budget)).toEqual([]);
         expect(processAlive(r.pids[0] as number)).toBe(false);
         const log = await logOf(a.folder);
         expect(log.slice(-2).map((e) => e.type)).toEqual(["part.ended", "call.ended"]);
@@ -533,10 +813,11 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         expect(Math.abs((ended?.fileSeconds ?? 0) - crashAt)).toBeLessThanOrEqual(packet);
         expect(r.mgr.live()?.status).toBe("recording");
         await r.mgr.stop("live");
-        const t0 = performance.now();
-        const b = await r.mgr.start({ workspace: "work" });
+        // The next start answers on its helper's `capturing` under the warm budget.
+        const next = r.steps.length;
+        const b = await r.start({ workspace: "work" });
         expect(b.ok).toBe(true);
-        expect(performance.now() - t0).toBeLessThan(3_000);
+        expect(answeredOnCapturingBroken(r.steps.slice(next), 3_000)).toEqual([]);
       },
       LONG,
     );
