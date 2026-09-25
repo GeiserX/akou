@@ -6,9 +6,9 @@
  *
  * What it does: `say` writes two sentences for the mic (left) and two voices for the call (right)
  * into a generated 16 kHz stereo WAV; the fake capture helper replays it as `akou-capture/1`
- * packets; the live Worker runs Silero, Parakeet TDT v3 with hotwords, and TitaNet; the host writes
- * the log. Then the final pass runs with pyannote diarization. The transcript is printed so a run
- * leaves its evidence in the output.
+ * packets; the live Worker runs Silero, Parakeet TDT v3 with hotwords (so with beam decoding,
+ * which hotwords need), and TitaNet; the host writes the log. Then the final pass runs with pyannote
+ * diarization. The transcript is printed so a run leaves its evidence in the output.
  */
 
 import { afterAll, describe, expect, test } from "bun:test";
@@ -213,7 +213,12 @@ describe.skipIf(!!SKIP)("the real pipeline (needs AKOU_MODELS_DIR and macOS `say
     });
     asr = new LiveAsr(
       {
-        models: { kind: "sherpa", dir: MODELS as string, cacheDir: join(work, "cache") },
+        models: {
+          kind: "sherpa",
+          dir: MODELS as string,
+          cacheDir: join(work, "cache"),
+          decoding: "beam",
+        },
         vocab: () => vocab,
         onLog: (level, msg) => logs.push(`${level}: ${msg}`),
       },
@@ -272,6 +277,7 @@ describe.skipIf(!!SKIP)("the real pipeline (needs AKOU_MODELS_DIR and macOS `say
       const plain = new SherpaModels({
         dir: MODELS as string,
         cacheDir: join(work, "cache-plain"),
+        decoding: "beam",
       });
       const unbiased = plain.prepare(null);
       const micPlain = unbiased.recognizer.decode(padSpan(micA)).text;
@@ -286,7 +292,12 @@ describe.skipIf(!!SKIP)("the real pipeline (needs AKOU_MODELS_DIR and macOS `say
       if (!c) throw new Error("no controller");
       const f0 = performance.now();
       const fin = await finalizeCall(c, {
-        models: { kind: "sherpa", dir: MODELS as string, cacheDir: join(work, "cache") },
+        models: {
+          kind: "sherpa",
+          dir: MODELS as string,
+          cacheDir: join(work, "cache"),
+          decoding: "beam",
+        },
         audio: { kind: "wav", files: { 1: wav } },
         vocab,
         onLog: (level, msg) => logs.push(`final ${level}: ${msg}`),
