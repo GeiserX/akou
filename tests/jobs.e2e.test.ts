@@ -800,6 +800,33 @@ describe("SV-D1: transcribing a file is a product feature", () => {
     }
   });
 
+  test("the job is deleted once its transcript is printed: the server keeps no copy", async () => {
+    const f = noteFile();
+    try {
+      const j = await cli({ ...process.env, ...server.env }, ["transcribe", f.path, "--json"]);
+      expect(j.code).toBe(0);
+      const id = (j.json as { job_id: string }).job_id;
+      expect(id).toMatch(/^job_/);
+      expect((await server.api("GET", `/jobs/${id}`)).status).toBe(404);
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("no speech prints nothing on stdout, so a pipe saves no placeholder", async () => {
+    const t = tempDir("akou-transcribe-silent-");
+    try {
+      const path = join(t.dir, "silent.wav");
+      writeFileSync(path, monoWav(silence(2)));
+      const r = await cli({ ...process.env, ...server.env }, ["transcribe", path]);
+      expect(r.code).toBe(0);
+      expect(r.out).toBe("");
+      expect(r.err).toContain("no speech");
+    } finally {
+      t.cleanup();
+    }
+  });
+
   test("a preset that is not built is refused with the reason", async () => {
     const f = noteFile();
     try {

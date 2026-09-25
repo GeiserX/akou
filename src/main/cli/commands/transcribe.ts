@@ -54,19 +54,39 @@ export const transcribeCommand: Command = {
     const sent = await api(ctx, "POST", "/jobs", { form, timeoutMs: 600_000 });
     if (sent.status !== 202 && sent.status !== 200) return finish(ctx, sent, () => "");
     const id = sent.body.id as string;
-    let job = { ...sent, status: 200 };
-    while (job.status === 200 && ["queued", "running"].includes(job.body?.status)) {
-      job = await api(ctx, "GET", `/jobs/${id}`, { query: { wait: 60 }, timeoutMs: 90_000 });
+    // The transcript printed is the only copy the caller asked for: the job is deleted once it is
+    // out, and on Ctrl-C, which also cancels a job still queued or running (SV-J6).
+    try {
+      let job = { ...sent, status: 200 };
+      while (job.status === 200 && ["queued", "running"].includes(job.body?.status)) {
+        job = await api(ctx, "GET", `/jobs/${id}`, {
+          query: { wait: 60 },
+          timeoutMs: 90_000,
+          signal: ctx.io.signal,
+        });
+      }
+      if (job.status !== 200) return finish(ctx, job, () => "");
+      if (job.body.status !== "done") {
+        const e = job.body.error as { code?: string; message?: string } | undefined;
+        const message = `the job ${job.body.status}${e?.message ? `: ${e.message}` : ""}`;
+        if (ctx.json)
+          ctx.io.out(JSON.stringify({ error: e?.code ?? job.body.status, message, id }));
+        else ctx.io.err(`akou: ${message} (${id})`);
+        return EXIT.software;
+      }
+      const result = await api(ctx, "GET", `/jobs/${id}/result`, { signal: ctx.io.signal });
+      // No speech prints nothing on stdout, so a pipe never saves a placeholder as the transcript.
+      if (!ctx.json && result.status === 200 && !result.body?.text) {
+        ctx.io.err("akou: no speech in the file");
+        return EXIT.ok;
+      }
+      return finish(ctx, result, (b: Body) => b.text as string);
+    } catch (err) {
+      // Ctrl-C: the job is cancelled below, and the exit is the shell's for SIGINT.
+      if (ctx.io.signal?.aborted) return 130;
+      throw err;
+    } finally {
+      await api(ctx, "DELETE", `/jobs/${id}`, { launch: false }).catch(() => {});
     }
-    if (job.status !== 200) return finish(ctx, job, () => "");
-    if (job.body.status !== "done") {
-      const e = job.body.error as { code?: string; message?: string } | undefined;
-      const message = `the job ${job.body.status}${e?.message ? `: ${e.message}` : ""}`;
-      if (ctx.json) ctx.io.out(JSON.stringify({ error: e?.code ?? job.body.status, message, id }));
-      else ctx.io.err(`akou: ${message} (${id})`);
-      return EXIT.software;
-    }
-    const result = await api(ctx, "GET", `/jobs/${id}/result`);
-    return finish(ctx, result, (b: Body) => (b.text as string) || "(no speech)");
   },
 };
