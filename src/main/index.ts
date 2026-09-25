@@ -42,12 +42,17 @@ import { eventsAfter, readLog } from "../core/log/reader.ts";
 import {
   acquireLock,
   EVENTS_FILE,
+  INSTANCE_ID,
   LockError,
   LogWriteError,
+  lockHeartbeat,
   processAlive,
+  readLock,
 } from "../core/log/writer.ts";
-import { ensureToken, type Guard, makePrivateDir, TokenSource } from "./api/guard.ts";
+import { ensureToken, type Guard, makePrivateDir, serverGuard, TokenSource } from "./api/guard.ts";
 import { HttpError } from "./api/http.ts";
+import { KeyStore } from "./api/keys.ts";
+import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
 import type { DiarizerKind, ModelSpec } from "./asr/engine.ts";
@@ -213,6 +218,27 @@ export interface AppOptions {
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
+/** The settings forbid a start; the entry point exits 78 (EX_CONFIG) with the message. */
+export class StartRefused extends Error {
+  override name = "StartRefused";
+}
+
+/**
+ * Where the API listens (SV-D2, SV-P5): the app on 127.0.0.1 always, as DESIGN 6.3 rule 1 says;
+ * server mode on `api.bind`, 0.0.0.0 by default, and on an address that is not loopback only with
+ * `server.behind_proxy`, since TLS is the proxy's job and akou has none of its own.
+ */
+export function apiBind(s: LoadedConfig["settings"]): string {
+  if (!s["server.enabled"]) return "127.0.0.1";
+  const bind = s["api.bind"] === "" ? "0.0.0.0" : s["api.bind"];
+  if (!isLoopback(bind) && !s["server.behind_proxy"]) {
+    throw new StartRefused(
+      `api.bind is ${bind}, which is not loopback, and server.behind_proxy is false: put a reverse proxy with TLS in front of akou and set server.behind_proxy to true, or set api.bind to 127.0.0.1`,
+    );
+  }
+  return bind;
+}
+
 export class AlreadyRunningError extends Error {
   constructor(
     readonly pid: number,
@@ -334,6 +360,10 @@ export class AkouApp implements ApiApp {
   private resolveClosed!: () => void;
   private lockPath: string;
   tokens: TokenSource;
+  /** `server` when `server.enabled` is on (docs/ux/SERVER.md); fixed for the life of the process. */
+  readonly mode: "app" | "server";
+  /** The API keys; server mode only (SV-K2). */
+  private readonly keyStore: KeyStore | null;
 
   constructor(
     private readonly o: AppOptions,
@@ -346,6 +376,8 @@ export class AkouApp implements ApiApp {
     this.clock = o.clock ?? realClock;
     this.configDir = cfg.paths.configDir;
     this.headless = o.headless ?? cfg.settings["app.headless"];
+    this.mode = cfg.settings["server.enabled"] ? "server" : "app";
+    this.keyStore = this.mode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.tokenPath = token.path;
@@ -363,6 +395,7 @@ export class AkouApp implements ApiApp {
       });
     this.manager = new CallManager({
       root: s["recordings.root"],
+      writer: { serverMode: this.mode === "server" },
       engine,
       clock: this.clock,
       user: s["user.name"],
@@ -1500,12 +1533,39 @@ export class AkouApp implements ApiApp {
   // -------------------------------------------------------------------------
   // Start and quit
 
+  keys(): KeyStore | null {
+    return this.keyStore;
+  }
+
   async listen(): Promise<void> {
+    const s = this.cfg.settings;
+    if (this.mode === "app" && s["api.bind"] !== "" && !isLoopback(s["api.bind"])) {
+      this.log("warn", "api.bind applies in server mode only; the app listens on 127.0.0.1");
+    }
+    const keys = this.keyStore;
     this.server = startApiServer({
       app: this,
-      port: this.cfg.settings["api.port"],
+      port: s["api.port"],
+      hostname: apiBind(s),
+      maxUploadBytes: s["server.max_upload_mb"] * 1024 * 1024,
+      trustedProxies: s["server.trusted_proxies"]
+        .map((c) => parseCidr(c))
+        .filter((c): c is Cidr => c !== null),
       token: () => this.tokens.current(),
-      guard: this.o.guard,
+      guard:
+        this.o.guard ??
+        (keys
+          ? serverGuard({
+              publicHost: s["server.public_host"],
+              behindProxy: s["server.behind_proxy"],
+              keys,
+              onRefused: (r) =>
+                this.log(
+                  "warn",
+                  `key.refused ${r.keyPrefix === "" ? "(no key)" : `${r.keyPrefix}…`} from ${r.source} on ${r.path}`,
+                ),
+            })
+          : undefined),
       onError: (err, req) =>
         this.log(
           "error",
@@ -1577,10 +1637,16 @@ export class AkouApp implements ApiApp {
   }
 }
 
+/** The app lock's heartbeat, stopped when the lock is released. */
+const heartbeats = new Map<string, () => void>();
+
 function releaseLock(path: string): void {
+  heartbeats.get(path)?.();
+  heartbeats.delete(path);
+  const held = readLock(path);
+  if (held?.pid !== process.pid || held.id !== INSTANCE_ID) return;
   try {
-    const pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
-    if (pid === process.pid) unlinkSync(path);
+    unlinkSync(path);
   } catch {}
 }
 
@@ -1595,17 +1661,22 @@ function readRuntime(configDir: string): { port?: number; version?: string } | n
 /** Starts the app: settings, the single-instance lock, the token, the API. */
 export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
   const cfg = loadConfig(o.env ?? process.env, o.platform);
+  // A bind the settings forbid stops the start before anything is taken or written.
+  apiBind(cfg.settings);
   // The folder holds the token and runtime.json: the owner's alone.
   makePrivateDir(cfg.paths.configDir);
   const lockPath = join(cfg.paths.configDir, APP_LOCK);
+  const serverMode = cfg.settings["server.enabled"];
   try {
-    acquireLock(lockPath, process.pid, processAlive);
+    acquireLock(lockPath, process.pid, processAlive, { serverMode });
   } catch (err) {
     if (err instanceof LockError) {
       throw new AlreadyRunningError(err.holderPid, readRuntime(cfg.paths.configDir));
     }
     throw err;
   }
+  // The heartbeat tells another container on the same volume that this one still runs (SI-4).
+  heartbeats.set(lockPath, lockHeartbeat(lockPath, process.pid));
   let app: AkouApp | null = null;
   try {
     const token = ensureToken(cfg.paths.configDir);
@@ -1631,6 +1702,10 @@ if (import.meta.main) {
     if (err instanceof AlreadyRunningError) {
       console.error(err.message);
       process.exit(0);
+    }
+    if (err instanceof StartRefused) {
+      console.error(`akou: cannot start: ${err.message}`);
+      process.exit(78);
     }
     console.error(`akou: cannot start: ${(err as Error).message}`);
     process.exit(70);

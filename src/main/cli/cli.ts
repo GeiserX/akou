@@ -24,6 +24,7 @@ import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { handoffCommands } from "./commands/handoff.ts";
 import { noteCommands } from "./commands/notes.ts";
+import { serverCommands } from "./commands/server.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
 import { vocab } from "./commands/vocab.ts";
@@ -49,6 +50,7 @@ export const COMMANDS: readonly Command[] = [
   vocab,
   doctorCommand,
   ...setupCommands,
+  ...serverCommands,
   skillCommand,
   mcp,
 ];
@@ -151,6 +153,7 @@ if (import.meta.main) {
     err: (t) => process.stderr.write(`${t}\n`),
     write: (t) => process.stdout.write(t),
     signal: ac.signal,
+    stdin: () => Bun.stdin.text(),
   });
   process.exit(code);
 }

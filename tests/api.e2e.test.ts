@@ -542,11 +542,17 @@ describe("settings over the API", () => {
       .sort();
     expect(fileOnly).toEqual(
       [
+        "api.bind",
         "asr.diarizeHelper",
         "capture.helper",
         "hooks",
         "provider.baseUrl",
         "provider.harnessPath",
+        "server.admin_password_hash",
+        "server.behind_proxy",
+        "server.enabled",
+        "server.public_host",
+        "server.trusted_proxies",
         "webhook.url",
       ].sort(),
     );

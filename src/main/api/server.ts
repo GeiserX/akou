@@ -21,7 +21,8 @@ import type { Template } from "../notes/templates.ts";
 import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
 import type { ShareHandle, ShareStatus } from "../share/transport.ts";
-import { guard as defaultGuard, type Guard } from "./guard.ts";
+import { ADMIN_ROUTE, type Identity } from "./access.ts";
+import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
 import {
   authorOf,
   DRAIN_BODY_BYTES,
@@ -31,6 +32,8 @@ import {
   json,
   Router,
 } from "./http.ts";
+import type { KeyStore } from "./keys.ts";
+import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
@@ -38,11 +41,14 @@ import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
 import { queryRoutes } from "./routes/query.ts";
+import { rootRoutes, serverRoutes } from "./routes/server.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { vocabRoutes } from "./routes/vocab.ts";
 
 export const API_PREFIX = "/v1";
 export const DEFAULT_PORT = 8476;
+/** `server.max_upload_mb`'s default, in bytes. */
+export const DEFAULT_MAX_UPLOAD_BYTES = 512 * 1024 * 1024;
 
 /** Levels of the live call, dBFS, from the last packets. */
 export interface Levels {
@@ -54,6 +60,8 @@ export interface Levels {
 /** What the routes need of the app. `index.ts` implements it. */
 export interface ApiApp {
   readonly version: string;
+  /** `server` in server mode (`server.enabled`), else `app`. */
+  readonly mode?: "app" | "server";
   readonly manager: CallManager;
   readonly configDir: string;
   now(): number;
@@ -120,12 +128,29 @@ export interface ApiApp {
   openWindow(call?: string): Promise<{ shown: true } | { url: string }>;
   /** The clean shutdown, after the answer is sent. */
   quit(): void;
+  /** The API keys of server mode (SV-K2); none in app mode. */
+  keys?(): KeyStore | null;
+  /** Jobs waiting or running, for `/healthz`; 0 until the job queue exists. */
+  queueDepth?(): number;
 }
 
 export interface ServerOptions {
   app: ApiApp;
   /** 0 picks a free port. */
   port: number;
+  /** The address to listen on: 127.0.0.1 unless server mode binds `api.bind` (SV-P5). */
+  hostname?: string;
+  /** The largest body an upload route takes (`server.max_upload_mb`). */
+  maxUploadBytes?: number;
+  /** `server.trusted_proxies`: the peers whose `X-Forwarded-For` names the source. */
+  trustedProxies?: readonly Cidr[];
+  /** Test-only: extra routes (the SV-D3 upload stub); no setting, variable or argument reaches it. */
+  routes?: (r: Router<ApiApp>) => void;
+  /**
+   * Every request that is not the API (`/v1/…`, `/healthz`): the web UI in server mode (SV-U1).
+   * Absent: 404.
+   */
+  page?(req: Request, srv: { timeout(req: Request, seconds: number): void }): Promise<Response>;
   /** The token as of this request (it follows `akou token rotate`). */
   token: () => string;
   /**
@@ -141,7 +166,7 @@ export interface ApiServer {
   readonly url: string;
   /** The address the listener is bound to, as the server reports it. */
   readonly hostname: string;
-  routes(): { method: string; path: string }[];
+  routes(): { method: string; path: string; meta: import("./access.ts").RouteMeta }[];
   stop(): Promise<void>;
 }
 
@@ -156,6 +181,14 @@ export function buildRouter(): Router<ApiApp> {
   vocabRoutes(r);
   postCallRoutes(r);
   handoffRoutes(r);
+  serverRoutes(r);
+  return r;
+}
+
+/** The routes outside `/v1`: `/healthz` (SV-P4). */
+export function buildRootRouter(): Router<ApiApp> {
+  const r = new Router<ApiApp>();
+  rootRoutes(r);
   return r;
 }
 
@@ -172,13 +205,21 @@ export async function routeRequest(
     by: string;
     timeout?: (seconds: number) => void;
     onError?(err: unknown, req: Request): void;
+    /** Who is calling (the guard's answer); absent in process, which is the user. */
+    identity?: Identity | null;
+    source?: string;
+    /** The routes outside `/v1`; the HTTP server passes them, the window's bridge does not. */
+    root?: Router<ApiApp>;
   },
 ): Promise<Response> {
   const url = new URL(req.url);
-  if (!url.pathname.startsWith(`${API_PREFIX}/`)) {
+  const inV1 = url.pathname.startsWith(`${API_PREFIX}/`);
+  if (!inV1 && !o.root) {
     return json(404, { error: "not_found", message: "the API is under /v1" });
   }
-  const m = router.match(req.method, url.pathname.slice(API_PREFIX.length));
+  const m = inV1
+    ? router.match(req.method, url.pathname.slice(API_PREFIX.length))
+    : (o.root as Router<ApiApp>).match(req.method, url.pathname);
   if ("status" in m) {
     return m.status === 405
       ? json(405, { error: "method_not_allowed", message: `${req.method} is not allowed here` })
@@ -194,6 +235,8 @@ export async function routeRequest(
       app,
       by: o.by,
       timeout: o.timeout,
+      identity: o.identity,
+      source: o.source,
     });
   } catch (err) {
     if (err instanceof HttpError) return errorResponse(err);
@@ -202,27 +245,66 @@ export async function routeRequest(
   }
 }
 
+/** The address a client on this machine uses: loopback for a loopback or wildcard bind. */
+function reachable(bind: string | undefined): string {
+  if (bind === undefined || bind === "0.0.0.0" || bind === "::" || isLoopback(bind)) {
+    return "127.0.0.1";
+  }
+  return bind.includes(":") ? `[${bind}]` : bind;
+}
+
 export function startApiServer(o: ServerOptions): ApiServer {
   const router = buildRouter();
+  o.routes?.(router);
+  const root = buildRootRouter();
   const check = o.guard ?? defaultGuard;
+  const maxUploadBytes = o.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
+  const trusted = o.trustedProxies ?? [];
   const server = Bun.serve({
-    // IPv4 loopback only, by address, so no name is resolved at bind (DESIGN 6.3 rule 1).
-    hostname: "127.0.0.1",
+    // IPv4 loopback by address, so no name is resolved at bind (DESIGN 6.3 rule 1); server mode
+    // binds `api.bind`, which startApp has checked against `server.behind_proxy` (SV-P5).
+    hostname: o.hostname ?? "127.0.0.1",
     port: o.port,
     // The 64 KB limit is the guard's and `readBody`'s, so an oversized body is refused with an
     // answer the client can read (see `DRAIN_BODY_BYTES`); Bun only refuses past the drain cap.
-    maxRequestBodySize: DRAIN_BODY_BYTES,
+    // Bun has one limit for the whole server, so it is raised to the upload cap, and the guard
+    // holds every route that is not an upload to 64 KB (SV-D3).
+    maxRequestBodySize: Math.max(DRAIN_BODY_BYTES, maxUploadBytes + MAX_BODY_BYTES),
     // Long polls wait up to 30 s; streams send a keep-alive every 15 s.
     idleTimeout: 60,
     fetch: async (req, srv) => {
-      const refused = check(req, { port: srv.port as number, token: o.token() });
+      const url = new URL(req.url);
+      const inV1 = url.pathname.startsWith(`${API_PREFIX}/`);
+      if (!inV1 && o.page && url.pathname !== "/healthz") {
+        const res = await o.page(req, srv);
+        if (!req.bodyUsed && req.body) await drainBody(req.body.getReader());
+        return res;
+      }
+      const found = inV1
+        ? router.match(req.method, url.pathname.slice(API_PREFIX.length))
+        : root.match(req.method, url.pathname);
+      // An unknown path is checked as an admin route: without a key, 401 before any 404.
+      const route = "meta" in found ? found.meta : ADMIN_ROUTE;
+      const peer = srv.requestIP(req)?.address ?? "";
+      const source = sourceAddress(peer, req.headers.get("x-forwarded-for"), trusted);
+      const g = check(req, {
+        port: srv.port as number,
+        token: o.token(),
+        route,
+        maxUploadBytes,
+        source,
+      });
       const res =
-        refused ??
-        (await routeRequest(router, o.app, req, {
-          by: authorOf(req),
-          timeout: (seconds) => srv.timeout(req, seconds),
-          onError: o.onError,
-        }));
+        "refused" in g
+          ? g.refused
+          : await routeRequest(router, o.app, req, {
+              by: authorOf(req),
+              timeout: (seconds) => srv.timeout(req, seconds),
+              onError: o.onError,
+              identity: g.identity,
+              source,
+              root,
+            });
       // An answer never closes the socket on unread bytes: the client would get a reset, not it.
       if (!req.bodyUsed && req.body) await drainBody(req.body.getReader());
       return res;
@@ -231,9 +313,12 @@ export function startApiServer(o: ServerOptions): ApiServer {
   const port = server.port as number;
   return {
     port,
-    url: `http://127.0.0.1:${port}${API_PREFIX}`,
+    url: `http://${reachable(o.hostname)}:${port}${API_PREFIX}`,
     hostname: server.hostname ?? "",
-    routes: () => router.list(),
+    routes: () => [
+      ...router.list().map((r) => ({ ...r, path: `${API_PREFIX}${r.path}` })),
+      ...root.list(),
+    ],
     stop: async () => {
       await server.stop(true);
     },

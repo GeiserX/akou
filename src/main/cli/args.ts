@@ -14,12 +14,14 @@ export interface FlagSpec {
   type: FlagType;
   /** A one-letter alias, without the dash (`w` for `-w`). */
   short?: string;
+  /** A string flag that may be given more than once: its values are kept in order (`list`). */
+  repeat?: boolean;
 }
 
 export type FlagSpecs = Readonly<Record<string, FlagSpec>>;
 
 export interface Parsed {
-  flags: Record<string, string | boolean>;
+  flags: Record<string, string | boolean | string[]>;
   positional: string[];
 }
 
@@ -41,7 +43,7 @@ export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
   const all: Record<string, FlagSpec> = { ...COMMON, ...spec };
   const byShort = new Map<string, string>();
   for (const [name, s] of Object.entries(all)) if (s.short) byShort.set(s.short, name);
-  const flags: Record<string, string | boolean> = {};
+  const flags: Parsed["flags"] = {};
   const positional: string[] = [];
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i] as string;
@@ -77,7 +79,10 @@ export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
       value = next;
       i++;
     }
-    flags[name] = value;
+    if (s.repeat) {
+      const prev = flags[name];
+      flags[name] = [...(Array.isArray(prev) ? prev : []), value];
+    } else flags[name] = value;
   }
   return { flags, positional };
 }
@@ -85,6 +90,12 @@ export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
 export function str(p: Parsed, name: string): string | undefined {
   const v = p.flags[name];
   return typeof v === "string" ? v : undefined;
+}
+
+/** Every value of a repeatable flag, in order; none when it was not given. */
+export function repeated(p: Parsed, name: string): string[] {
+  const v = p.flags[name];
+  return Array.isArray(v) ? v : typeof v === "string" ? [v] : [];
 }
 
 export function bool(p: Parsed, name: string): boolean {

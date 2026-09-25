@@ -4,6 +4,7 @@
  */
 
 import type { Outcome } from "../call/state.ts";
+import type { Identity, RouteMeta } from "./access.ts";
 import { MAX_BODY_BYTES } from "./guard.ts";
 
 export class HttpError extends Error {
@@ -230,6 +231,16 @@ export interface RouteContext<A> {
   /** `agent:<client>` from `X-Akou-Client`, or `agent:api`. */
   by: string;
   /**
+   * Who is calling, as the guard found it: null on an `open` route called with no key; absent in
+   * process (the window's bridge), which is the user, `admin`. Read it with `caller(c)`.
+   */
+  identity?: Identity | null;
+  /**
+   * The source address: the TCP peer, or the client a trusted proxy names (`server.trusted_proxies`,
+   * SV-P5). For rate limits and audit, never for access. Absent in process.
+   */
+  source?: string;
+  /**
    * Sets this request's idle timeout, seconds; 0 turns it off. A route that waits on a model
    * (ask, enhance) turns it off, so a slow answer is not cut at the server's idle limit.
    */
@@ -245,10 +256,21 @@ export interface Route<A> {
 }
 
 export class Router<A> {
-  private readonly routes: { method: string; parts: string[]; handler: Handler<A> }[] = [];
+  private readonly routes: {
+    method: string;
+    parts: string[];
+    handler: Handler<A>;
+    meta: RouteMeta;
+  }[] = [];
 
-  add(method: string, pattern: string, handler: Handler<A>): this {
-    this.routes.push({ method, parts: pattern.split("/").filter(Boolean), handler });
+  /** A route; with no `meta` it is `admin` only (`access.ts`). */
+  add(method: string, pattern: string, handler: Handler<A>, meta?: RouteMeta): this {
+    this.routes.push({
+      method,
+      parts: pattern.split("/").filter(Boolean),
+      handler,
+      meta: meta ?? { access: "admin" },
+    });
     return this;
   }
 
@@ -256,7 +278,9 @@ export class Router<A> {
   match(
     method: string,
     path: string,
-  ): { handler: Handler<A>; params: Record<string, string> } | { status: 404 | 405 } {
+  ):
+    | { handler: Handler<A>; params: Record<string, string>; meta: RouteMeta }
+    | { status: 404 | 405 } {
     const segs = path.split("/").filter(Boolean);
     let pathMatched = false;
     for (const r of this.routes) {
@@ -281,14 +305,18 @@ export class Router<A> {
       if (!ok) continue;
       pathMatched = true;
       if (r.method === method || (method === "HEAD" && r.method === "GET")) {
-        return { handler: r.handler, params };
+        return { handler: r.handler, params, meta: r.meta };
       }
     }
     return { status: pathMatched ? 405 : 404 };
   }
 
-  list(): { method: string; path: string }[] {
-    return this.routes.map((r) => ({ method: r.method, path: `/${r.parts.join("/")}` }));
+  list(): { method: string; path: string; meta: RouteMeta }[] {
+    return this.routes.map((r) => ({
+      method: r.method,
+      path: `/${r.parts.join("/")}`,
+      meta: r.meta,
+    }));
   }
 }
 

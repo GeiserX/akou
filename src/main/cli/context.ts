@@ -23,6 +23,8 @@ export interface Io {
   write?(text: string): void;
   /** Ends `tail -f` and the MCP server. */
   signal?: AbortSignal;
+  /** Reads standard input to its end (a password, never an argument). Absent: nothing to read. */
+  stdin?(): Promise<string>;
 }
 
 export interface Ctx {
