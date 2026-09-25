@@ -47,7 +47,7 @@ async function apiChecks(ctx: Ctx): Promise<{ checks: Check[]; helper: HelperFou
         {
           name: "api",
           state: "warn",
-          detail: "akou is not running; `akou start` launches it headless",
+          detail: "akou is not running; `akou open` starts it",
         },
       ],
       helper: null,
@@ -115,7 +115,7 @@ export function helperCheck(local: HelperFound, app: HelperFound | null): Check 
     name: "helper",
     state: "warn",
     detail:
-      "the capture helper ships inside the app, which checks it; open akou (or run `akou start`) and run `akou doctor` again",
+      "the capture helper ships inside the app, which checks it; open akou (or run `akou open`) and run `akou doctor` again",
   };
 }
 

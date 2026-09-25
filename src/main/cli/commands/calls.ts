@@ -109,7 +109,7 @@ const status: Command = {
     } catch (err) {
       if (!(err instanceof Unreachable)) throw err;
       if (ctx.json) ctx.io.out(JSON.stringify({ running: false }));
-      else ctx.io.err("akou is not running (`akou start` launches it)");
+      else ctx.io.err("akou is not running (`akou open` starts it and shows the window)");
       return EXIT.unavailable;
     }
     return finish(ctx, r, statusText);

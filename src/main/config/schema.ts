@@ -141,7 +141,7 @@ export const SETTINGS = {
     type: "string",
     min: 1,
     default: "default",
-    doc: "Microphone: `default`, `none`, or a device id from `akou devices`.",
+    doc: "Microphone: `default`, `none`, or a device id.",
   },
   "capture.call": {
     type: "string",
@@ -338,7 +338,7 @@ export type Settings = { -readonly [K in SettingKey]: ValueOf<(typeof SETTINGS)[
 /** Keys refused with a reason of their own, beyond "unknown key". */
 const FORBIDDEN: Readonly<Record<string, string>> = {
   "vocab.boost":
-    "there is no global boost setting: it is the constant 3; a per-entry boost is set with `akou vocab check --boost`",
+    "there is no global boost setting: it is the constant 3; a word the engine keeps missing gets its own boost, up to 5, as `decode` in its vocabulary file entry",
 };
 
 export const SETTING_KEYS = Object.keys(SETTINGS) as SettingKey[];
