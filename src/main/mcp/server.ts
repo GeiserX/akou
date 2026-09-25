@@ -28,7 +28,8 @@ import * as z from "zod";
 import { APP_VERSION } from "../app-info.ts";
 import type { ApiClient, ApiResponse, RequestOptions } from "../cli/client.ts";
 import { type Body, describeError, wall } from "../cli/context.ts";
-import { type PackState, packState, quoteCallText } from "../query/render.ts";
+import { estimateTokens, type PackState, packState, quoteCallText } from "../query/render.ts";
+import { capAnswer, type ToolResult } from "./bound.ts";
 
 const CALL = z
   .string()
@@ -68,11 +69,14 @@ export function clientTag(name: string | undefined): string {
 }
 
 type Data = Record<string, unknown>;
-type ToolResult = {
-  content: { type: "text"; text: string }[];
-  structuredContent?: Data;
-  isError?: boolean;
-};
+
+/**
+ * Token budgets inside the 8,000-token ceiling (PG-M5, `bound.ts`): the lines of one answer, with
+ * room left for the header, the quoting and the JSON escapes of the structured copy.
+ */
+const PAGE_TOKENS = 5500;
+/** `akou_context`'s largest budget: the pack, its footer and its structured copy fit the ceiling. */
+const MAX_PACK_BUDGET = 7000;
 
 /** A tool's answer: the text a model reads, and the same facts typed (PG-M3). */
 type Answer = { text: string; data: Data };
@@ -164,6 +168,7 @@ const OUT = {
     memoStale: MEMO_STALE,
     provisional: PROVISIONAL,
     lines: INT.min(0).describe("Committed lines in this answer."),
+    omitted: INT.min(0).describe("Older new lines left out to keep the answer small."),
     callText: CALL_TEXT.nullable(),
   }),
   search: z.object({
@@ -202,6 +207,7 @@ const OUT = {
     callText: CALL_TEXT,
   }),
   calls: z.object({
+    omitted: INT.min(0).describe("Calls past the answer's budget, not shown."),
     calls: z.array(
       z.object({
         id: z.string(),
@@ -213,7 +219,19 @@ const OUT = {
       }),
     ),
   }),
-  getCall: z.object({ call: z.string(), layer: z.string(), callText: CALL_TEXT }),
+  getCall: z.object({
+    call: z.string(),
+    state: PACK_STATE,
+    layer: z.enum(["best", "live", "final"]),
+    total: INT.min(0).describe("Lines in the call."),
+    from: INT.min(0).describe("Index of this page's first line."),
+    lines: INT.min(0).describe("Lines on this page."),
+    nextCursor: z
+      .string()
+      .nullable()
+      .describe("Pass it as `cursor` for the next page; null on the last page."),
+    callText: CALL_TEXT,
+  }),
 };
 
 /** How a harness may treat a tool (MCP `ToolAnnotations`), stated in full: the MCP defaults assume
@@ -311,13 +329,17 @@ export function createMcpServer(o: McpOptions): McpServer {
     call(method, path, { ...ro, client: tag() });
   const id = (c: string) => encodeURIComponent(c);
   /** `registerTool` with the tool's title and annotations from `TOOLS`. */
-  const tool = ((name: string, config: object, cb: never) => {
+  /**
+   * `registerTool` with the tool's title and annotations from `TOOLS`, and every answer held to
+   * the 8,000-token ceiling (`capAnswer`).
+   */
+  const tool = ((name: string, config: object, cb: (...a: unknown[]) => Promise<ToolResult>) => {
     const row = TOOLS[name];
     if (!row) throw new Error(`akou mcp: ${name} has no row in TOOLS`);
     return server.registerTool(
       name,
       { ...config, title: row.title, annotations: row.hints } as never,
-      cb,
+      (async (...a: unknown[]) => capAnswer(await cb(...a))) as never,
     );
   }) as typeof server.registerTool;
 
@@ -403,7 +425,7 @@ export function createMcpServer(o: McpOptions): McpServer {
       inputSchema: z.object({
         question: z.string().min(1),
         call: CALL,
-        budget: z.number().int().min(500).max(32000).default(6000),
+        budget: z.number().int().min(500).max(MAX_PACK_BUDGET).default(6000),
       }),
       outputSchema: OUT.context,
     },
@@ -442,6 +464,8 @@ export function createMcpServer(o: McpOptions): McpServer {
           format: "json",
           since: a.since,
           from: a.lastSeconds !== undefined ? Date.now() - a.lastSeconds * 1000 : undefined,
+          // The newest lines that fit; the rest are counted in `omitted` (PG-M5).
+          limitTokens: PAGE_TOKENS,
         },
       });
       return asResult(r, (b) => {
@@ -451,9 +475,15 @@ export function createMcpServer(o: McpOptions): McpServer {
           lines.push(`DRAFT, still being spoken, may change: [${p.time} ${p.speaker}] ${p.text}`);
         }
         const block = lines.length > 0 ? quoteCallText(lines.join("\n")) : null;
+        const omitted: number = b.omitted ?? 0;
         return {
           text: [
             b.live ? "LIVE, recording now" : `ENDED (state: ${b.state}); this call is not live`,
+            ...(omitted > 0
+              ? [
+                  `${omitted} earlier lines left out to keep this answer small; page them with akou_get_call, or ask with akou_context.`,
+                ]
+              : []),
             block ?? "(no new lines)",
             `cursor: ${b.cursor}`,
           ].join("\n"),
@@ -465,6 +495,7 @@ export function createMcpServer(o: McpOptions): McpServer {
             memoStale: b.memoStale === true,
             provisional: drafts.length > 0,
             lines: (b.lines as Body[]).length,
+            omitted,
             callText: block,
           },
         };
@@ -919,18 +950,34 @@ export function createMcpServer(o: McpOptions): McpServer {
         query: { workspace: a.workspace, limit: a.limit, failed: a.failed || undefined },
       });
       return asResult(r, (b) => {
-        const calls = b.calls as Body[];
+        // The newest calls first, as many as fit the budget.
+        const calls: Body[] = [];
+        const rows: string[] = [];
+        let used = 0;
+        for (const c of b.calls as Body[]) {
+          const row = `${c.id}  ${new Date(c.createdAt).toLocaleDateString("en-CA")} ${wall(c.createdAt)}  ${c.workspace}  "${c.title}"  ${c.state}${c.endedAt ? `, ended ${wall(c.endedAt)}` : ""}`;
+          // The structured copy of a row costs about as much again as the row.
+          const t = 2 * estimateTokens(row) + 12;
+          if (used + t > PAGE_TOKENS) break;
+          used += t;
+          rows.push(row);
+          calls.push(c);
+        }
+        const omitted = (b.calls as Body[]).length - calls.length;
         return {
           text:
-            calls.length === 0
+            rows.length === 0
               ? "No calls."
-              : calls
-                  .map(
-                    (c) =>
-                      `${c.id}  ${new Date(c.createdAt).toLocaleDateString("en-CA")} ${wall(c.createdAt)}  ${c.workspace}  "${c.title}"  ${c.state}${c.endedAt ? `, ended ${wall(c.endedAt)}` : ""}`,
-                  )
-                  .join("\n"),
+              : [
+                  ...rows,
+                  ...(omitted > 0
+                    ? [
+                        `${omitted} more calls not shown; narrow with \`workspace\` or a smaller \`limit\`.`,
+                      ]
+                    : []),
+                ].join("\n"),
           data: {
+            omitted,
             calls: calls.map((c) => ({
               id: String(c.id),
               createdAt: c.createdAt ?? null,
@@ -948,22 +995,52 @@ export function createMcpServer(o: McpOptions): McpServer {
   tool(
     "akou_get_call",
     {
-      description: `A call the user named: its transcript (the newest 12k tokens at most; use akou_search or akou_context with \`call\` for the rest). ${RULES}`,
+      description: `A call the user named: its transcript from the start, one page at a time, each line with its segment id. When \`nextCursor\` is not null, call again with it as \`cursor\` for the next page, and the same \`layer\`. To answer a question, akou_context with \`call\` is cheaper than reading every page. ${RULES}`,
       inputSchema: z.object({
         call: z.string(),
         layer: z.enum(["best", "live", "final"]).default("best"),
+        cursor: z
+          .string()
+          .optional()
+          .describe("The nextCursor of the previous page; leave it out for the first page."),
       }),
       outputSchema: OUT.getCall,
     },
     async (a) => {
-      const r = await req("GET", `/calls/${id(a.call)}/transcript`, {
-        query: { layer: a.layer, format: "md", limitTokens: 12000 },
-      });
-      if (r.status === 200) {
-        const t = quoteCallText(r.text);
-        return result({ text: t, data: { call: a.call, layer: a.layer, callText: t } });
+      const offset =
+        a.cursor === undefined ? 0 : /^\d{1,15}$/.test(a.cursor) ? Number(a.cursor) : -1;
+      if (offset < 0) {
+        return errorText(`bad_cursor: "${a.cursor}" is not a nextCursor from akou_get_call`);
       }
-      return asResult(r, compact);
+      const r = await req("GET", `/calls/${id(a.call)}/transcript`, {
+        query: { layer: a.layer, format: "json", offset, limitTokens: PAGE_TOKENS },
+      });
+      return asResult(r, (b) => {
+        const lines = b.lines as Body[];
+        const total: number = b.total ?? lines.length;
+        const next: number | null = b.nextOffset ?? null;
+        const block = quoteCallText(
+          lines.map((l) => `#${l.id} ${l.time} ${l.speaker}: ${l.annotated ?? l.text}`).join("\n"),
+        );
+        const state = packState(b.state);
+        return {
+          text: [
+            `${state === "LIVE" ? "LIVE" : "ENDED"}: call ${b.call}, lines ${lines.length > 0 ? `${offset + 1} to ${offset + lines.length}` : "none"} of ${total}. ${b.zone ?? ""}`.trim(),
+            block,
+            next === null ? "End of the call." : `nextCursor: ${next}`,
+          ].join("\n"),
+          data: {
+            call: String(b.call),
+            state,
+            layer: a.layer,
+            total,
+            from: offset,
+            lines: lines.length,
+            nextCursor: next === null ? null : String(next),
+            callText: block,
+          },
+        };
+      });
     },
   );
 

@@ -12,6 +12,9 @@
  *   wall-clock times only. The JSON form also carries the call's state and, while it is live, the
  *   provisional line (marked `draft`), which is what `akou_read` follows a call with.
  *   `format=export` is the export file's `## Transcript` section, what the window copies.
+ *   `limitTokens` alone keeps the newest lines that fit (`omitted` counts the rest); with `offset`
+ *   it pages from that line, oldest first, and `nextOffset` is where the next page starts, which
+ *   is how `akou_get_call` reads a long call (PG-M5).
  */
 
 import { formatWall, formatZone } from "../../../core/log/clock.ts";
@@ -341,6 +344,7 @@ export function followRoutes(r: Router<ApiApp>): void {
     const format = enumParam(c.url, "format", ["json", "md", "txt", "export"] as const, "json");
     const since = intParam(c.url, "since", 0, 0, Number.MAX_SAFE_INTEGER) as number;
     const limitTokens = intParam(c.url, "limitTokens", undefined, 1, 1_000_000);
+    const offset = intParam(c.url, "offset", undefined, 0, Number.MAX_SAFE_INTEGER);
     const from = timeParam(c.url, "from");
     const to = timeParam(c.url, "to");
     const speaker = c.url.searchParams.get("speaker")?.toLowerCase() ?? null;
@@ -362,7 +366,23 @@ export function followRoutes(r: Router<ApiApp>): void {
         : format === "md"
           ? `**${formatWall(l.w0, tz)} ${l.speaker}:** ${l.annotated}`
           : renderLine(l, { tz });
-    if (limitTokens !== undefined) {
+    const total = lines.length;
+    let omitted = 0;
+    let nextOffset: number | null = null;
+    if (offset !== undefined) {
+      // A page, oldest first: the lines from `offset` that fit, at least one, and where the next
+      // page starts (null at the end).
+      let used = 0;
+      let end = offset;
+      while (end < lines.length) {
+        const t = estimateTokens(rendered(lines[end] as Line)) + 1;
+        if (limitTokens !== undefined && used + t > limitTokens && end > offset) break;
+        used += t;
+        end++;
+      }
+      nextOffset = end < lines.length ? end : null;
+      lines = lines.slice(offset, end);
+    } else if (limitTokens !== undefined) {
       // The newest lines that fit.
       let used = 0;
       let start = lines.length;
@@ -373,6 +393,7 @@ export function followRoutes(r: Router<ApiApp>): void {
         start--;
       }
       lines = lines.slice(start);
+      omitted = start;
     }
     if (format === "export") {
       return new Response(`${renderTranscriptSection(lines, tz)}\n`, {
@@ -418,6 +439,11 @@ export function followRoutes(r: Router<ApiApp>): void {
       // The memo slot as a pack reports it, so a follower learns it is due without a pack.
       memoStale: (await c.app.query(call.id)).memoStale(c.app.now()),
       provisional,
+      // Lines that matched before paging or trimming, those `limitTokens` left out (the oldest),
+      // and where the page after this one starts.
+      total,
+      omitted,
+      nextOffset,
       lines: lines.map((l) => ({
         id: l.id,
         seq: l.seq,

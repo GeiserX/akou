@@ -163,7 +163,8 @@ export function sampleApi(n = 3): ApiClient {
     if (path.endsWith("/search")) {
       return {
         call: "c1",
-        hits: lines.map((l) => ({
+        // The route returns at most `k` hits.
+        hits: lines.slice(0, Number(o.query?.k ?? 6)).map((l) => ({
           citation: `[15:36 Ben]`,
           ids: [l.id],
           lines: [`#${l.id} ${l.text}`],
