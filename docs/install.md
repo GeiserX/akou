@@ -82,6 +82,40 @@ akou skill install
 
 It copies the akou skills into each harness's skills folder (`~/.claude/skills`, and `$CODEX_HOME/skills`, by default `~/.codex/skills`) and registers the akou tools with each harness through its own `claude mcp add` and `codex mcp add`. If a harness's program is not on your `PATH`, it prints the exact `mcp add` command to run instead. An `akou` entry that runs another akou, such as a source checkout or an older install, is replaced by the akou you ran, and the output names the command it replaced. An `akou` entry in Claude Code's local or project config wins over the user one akou writes, so akou leaves it alone and prints the commands to replace it. `akou skill uninstall` removes both again.
 
+## The server
+
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
+
+Pull the models into their volume first, so the first start is not a 2.5 GB download. No server needs to run for this:
+
+```sh
+docker run --rm -v akou-models:/models geiserx/akou:<version> models pull fast
+```
+
+`fast` is the only preset with an engine today. It fetches Parakeet TDT 0.6B v3 and the voice-activity model. A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows. Speaker labels need `nemotron-3-diarization`.
+
+Then start it:
+
+```sh
+docker run -d --name akou -p 8476:8476 -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
+```
+
+The server runs as an unprivileged user, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly.
+
+Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That is `akou serve`, the same server in the foreground. The single-file `akou` CLI runs `akou serve` too, on Linux x64 and arm64 and on macOS. It carries no speech engine, so it answers the API but cannot transcribe, and it says so when it starts.
+
+### The command line against a server
+
+The CLI and `akou mcp` talk to a remote akou when `AKOU_URL` is set. The key comes from `AKOU_API_KEY`, or from a file named by `AKOU_API_KEY_FILE`, never from a flag:
+
+```sh
+export AKOU_URL=https://akou.example
+export AKOU_API_KEY_FILE=~/.config/akou/remote.key
+akou jobs list
+```
+
+With `AKOU_URL` set, akou never looks for the app on this machine and never starts it. A server that does not answer exits 69; a wrong key exits 77.
+
 ## Uninstalling
 
 1. If you turned on "Open at login", turn it off in akou's menu bar item first, or delete `~/Library/LaunchAgents/io.github.geiserx.akou.login.plist`.
