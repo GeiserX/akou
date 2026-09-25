@@ -4,8 +4,9 @@
  * hotwords.
  *
  * Every listed word is pushed at every frame, so the list must be short and the boost gentle:
- * - The global boost is a constant, 3. A per-entry boost (up to 5, the entry's `decode` value in
- *   its vocabulary file) exists for a word the engine keeps missing.
+ * - The global boost is a constant, 1.5: at 3 it put names into speech that never said them. A
+ *   per-entry boost (up to 5, the entry's `decode` value in its vocabulary file) exists for a word
+ *   the engine keeps missing.
  * - The list is capped at 24 entries, filled in priority order, with a warning when it truncates:
  *   1. words added to this call while it runs (`vocab.add`, "Fix this word");
  *   2. the people and title of this call: the words `akou start --vocab` wrote before capture
@@ -17,6 +18,8 @@
  * - Unconfirmed entries and entries with `decode: false` are never in it.
  * - Only transducer models (Parakeet) take hotwords. sherpa-onnx exits the process when Moonshine
  *   or Whisper are given any, so for those the list is empty and the words are read-time only.
+ * - Parakeet uses the list only with beam search (`asr.parakeet.decoding` `beam`). Greedy, the
+ *   default, takes no hotwords, so the model set drops the list and records none (`sherpa.ts`).
  *
  * The list in force is written to the log as `vocab.used`.
  */
@@ -26,8 +29,8 @@ import type { CallVocabEntry } from "../../core/log/fold.ts";
 import { MAX_ENTRY_BOOST, type MergedEntry, termKey } from "./files.ts";
 
 export const DECODE_CAP = 24;
-/** The global boost. A constant, never a setting. */
-export const DEFAULT_BOOST = 3;
+/** The global boost, used only with beam decoding. A constant, never a setting. */
+export const DEFAULT_BOOST = 1.5;
 
 export type ModelKind = "transducer" | "other";
 

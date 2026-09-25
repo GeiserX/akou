@@ -179,6 +179,23 @@ describe("the speaker-label engine", () => {
   });
 });
 
+describe("how Parakeet decodes", () => {
+  test("greedy is the default; beam is the other choice; anything else is refused", () => {
+    const paths = resolvePaths({ AKOU_HOME: "/t" });
+    expect(buildSettings(paths, {}, {}).settings["asr.parakeet.decoding"]).toBe("greedy");
+    expect(validateSetting("asr.parakeet.decoding", "beam").ok).toBe(true);
+    expect(patchConfig({}, { "asr.parakeet.decoding": "beam" }, paths).ok).toBe(true);
+    for (const bad of ["modified_beam_search", "Beam", "", 1]) {
+      expect(validateSetting("asr.parakeet.decoding", bad).ok).toBe(false);
+    }
+    const h = home({ "asr.parakeet.decoding": "fast" });
+    const c = loadConfig(h.env);
+    expect(c.settings["asr.parakeet.decoding"]).toBe("greedy");
+    expect(c.issues.map((i) => i.key)).toEqual(["asr.parakeet.decoding"]);
+    h.cleanup();
+  });
+});
+
 describe("the API may not name a program to run", () => {
   test("capture.helper is read from the file but refused over PATCH /config", () => {
     const paths = resolvePaths({ AKOU_HOME: "/t" });

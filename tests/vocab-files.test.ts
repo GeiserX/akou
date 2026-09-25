@@ -132,8 +132,8 @@ describe("vocabulary files: format (REQUIREMENTS V1)", () => {
     expect(parseVocab("").file).toEqual(emptyVocab());
   });
 
-  test("[spike] The boost is a slider: per-entry boosts are whole numbers 1 to 5, the default is the constant 3", () => {
-    expect(DEFAULT_BOOST).toBe(3);
+  test("[spike] The boost is a slider: per-entry boosts are whole numbers 1 to 5, the default is the constant 1.5", () => {
+    expect(DEFAULT_BOOST).toBe(1.5);
     const row = (d: string) =>
       `version: 1\nentries:\n  - {term: "X", heard: [], source: "user", confirmed: true, added_at: "2026-09-23", decode: ${d}}`;
     expect(parseVocab(row("5")).file.entries[0]?.decode).toBe(5);
@@ -460,14 +460,14 @@ describe("the per-call decode list (DESIGN 3)", () => {
       files,
     });
     expect(list.entries.map((e) => [e.term, e.tier, e.boost])).toEqual([
-      ["FixedWord", 1, 3],
-      ["Attendee", 2, 3],
-      ["Ben Ortiz", 2, 3],
+      ["FixedWord", 1, 1.5],
+      ["Attendee", 2, 1.5],
+      ["Ben Ortiz", 2, 1.5],
       ["Missed", 3, 5],
-      ["New", 3, 3],
-      ["RepoWord", 3, 3],
-      ["Old", 3, 3],
-      ["GlobalOn", 4, 3],
+      ["New", 3, 1.5],
+      ["RepoWord", 3, 1.5],
+      ["Old", 3, 1.5],
+      ["GlobalOn", 4, 1.5],
     ]);
     expect(list.dropped.map((d) => d.term).sort()).toEqual(["GlobalDefault", "ReadOnly"]);
     expect(hotwordsArg(list)).toBe(
