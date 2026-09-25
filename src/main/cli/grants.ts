@@ -50,11 +50,33 @@ function regValue(key: string): string | null {
   return /Value\s+REG_SZ\s+(\w+)/.exec(r.stdout)?.[1] ?? null;
 }
 
-function openPane(url: string): void {
-  if (process.platform === "darwin") spawnSync("/usr/bin/open", [url], { timeout: 5000 });
-  else if (process.platform === "win32") {
-    spawnSync("cmd", ["/c", "start", "", url], { timeout: 5000, windowsHide: true });
-  }
+/** Opens a settings URL; false when the opener failed, timed out or this OS has none. */
+function openPane(url: string): boolean {
+  const r =
+    process.platform === "darwin"
+      ? spawnSync("/usr/bin/open", [url], { timeout: 5000 })
+      : process.platform === "win32"
+        ? spawnSync("cmd", ["/c", "start", "", url], { timeout: 5000, windowsHide: true })
+        : null;
+  return r !== null && r.error === undefined && r.status === 0;
+}
+
+/**
+ * Opens the settings pane for one grant, and says whether it opened: a terminal with no desktop
+ * session, or an opener that timed out, must not read as a pane the user can answer.
+ */
+export async function requestGrant(
+  name: string,
+  platform: NodeJS.Platform = process.platform,
+  open: (url: string) => boolean = openPane,
+): Promise<"settings opened" | "not opened"> {
+  const pane =
+    platform === "darwin"
+      ? MAC_PANES[name]
+      : platform === "win32" && name === "mic"
+        ? "ms-settings:privacy-microphone"
+        : undefined;
+  return pane !== undefined && open(pane) ? "settings opened" : "not opened";
 }
 
 export const systemGrants: GrantChecker = {
@@ -88,13 +110,5 @@ export const systemGrants: GrantChecker = {
       { name: "system audio", state: "n/a", detail: none },
     ];
   },
-  async request(name: string) {
-    if (process.platform === "darwin") {
-      const pane = MAC_PANES[name];
-      if (pane) openPane(pane);
-    } else if (process.platform === "win32" && name === "mic") {
-      openPane("ms-settings:privacy-microphone");
-    }
-    return "settings opened";
-  },
+  request: (name) => requestGrant(name),
 };

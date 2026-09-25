@@ -175,7 +175,7 @@ export function diarizeHelperCheck(local: HelperFound, app: HelperFound | null):
 /** A grant after `doctor` looked at it, and asked for it when `--grant` ran on a terminal. */
 export interface GrantState {
   name: string;
-  state: Grant["state"] | "requested" | "settings opened";
+  state: Grant["state"] | "requested" | "settings opened" | "not opened";
   detail: string;
   /** Not asked for this run: `--grant` asks for one grant per run. */
   next?: boolean;
@@ -219,7 +219,7 @@ function grantCheck(g: GrantState): Check {
       ? "ok"
       : g.state === "missing"
         ? "fail"
-        : g.state === "requested"
+        : g.state === "requested" || g.state === "not opened"
           ? "warn"
           : "info";
   const what = g.next
@@ -228,7 +228,9 @@ function grantCheck(g: GrantState): Check {
       ? "missing; run `akou doctor --grant` in a terminal to ask for it"
       : g.state === "requested"
         ? "requested; answer the system's prompt, then run `akou doctor` again"
-        : g.state;
+        : g.state === "not opened"
+          ? "not opened; open its settings pane by hand"
+          : g.state;
   return { name: g.name, state, detail: `${what} (${g.detail})` };
 }
 

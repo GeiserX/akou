@@ -70,8 +70,11 @@ export interface Grant {
 
 export interface GrantChecker {
   check(): Promise<Grant[]>;
-  /** Asks the OS for one grant, or opens its settings pane. Returns what was done, in words. */
-  request(name: string): Promise<"requested" | "settings opened">;
+  /**
+   * Asks the OS for one grant, or opens its settings pane. Returns what was done, in words:
+   * `not opened` when the pane failed to open.
+   */
+  request(name: string): Promise<"requested" | "settings opened" | "not opened">;
 }
 
 export interface Command {

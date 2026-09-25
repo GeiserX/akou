@@ -292,6 +292,16 @@ describe("with a running app", () => {
       expect(g.requested).toEqual(["mic", "system audio"]);
     });
 
+    test("a settings pane that did not open is a warning that says so, never `settings opened`", async () => {
+      const checker: GrantChecker = {
+        check: async () => [{ name: "mic", state: "unknown", detail: "fake" }],
+        request: async () => "not opened",
+      };
+      const r = await doctor(["--grant"], checker, true);
+      expect(r.out).toMatch(/^warn {2}mic: not opened; open its settings pane by hand/m);
+      expect(r.out).not.toContain("settings opened");
+    });
+
     test("on macOS every grant reads unknown on every run, so `--grant NAME` reaches the later ones", async () => {
       const g = fakeGrants({ mic: "unknown", "system audio": "unknown", accessibility: "unknown" });
       const first = await doctor(["--grant"], g.checker, true);
