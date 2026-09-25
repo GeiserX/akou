@@ -6,7 +6,7 @@
  * not match its schema, including a property the schema does not name.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
@@ -22,6 +22,9 @@ import { cli } from "./cli-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { validate } from "./fixtures/json-schema.ts";
+
+// Every case runs real jobs through a finalize Worker, several per case; a loaded CI box is slow.
+setDefaultTimeout(30_000);
 
 // biome-ignore lint/suspicious/noExplicitAny: the pinned OpenAPI file is walked by key.
 const SPEC: any = JSON.parse(

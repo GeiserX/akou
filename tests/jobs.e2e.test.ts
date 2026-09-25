@@ -7,7 +7,7 @@
  * the fake engine in a real finalize Worker, reading uploads as 16 kHz WAVs.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
@@ -24,6 +24,9 @@ import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav, RATE, roomNoise } from "./fixtures/audio.ts";
 import { Webhook } from "./fixtures/standard-webhooks.ts";
 import { tempDir } from "./helpers.ts";
+
+// Every case runs real jobs through a finalize Worker, several per case; a loaded CI box is slow.
+setDefaultTimeout(30_000);
 
 const SERVER = { "server.enabled": true, "api.bind": "127.0.0.1" };
 

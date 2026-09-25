@@ -345,6 +345,40 @@ describe("SV-E4: the retry schedule", () => {
 });
 
 describe("SV-E5: the outbox survives a restart", () => {
+  test("the last try is pending while it is in flight, and failed only after it", async () => {
+    let release = () => {};
+    const held = new Promise<number>((r) => {
+      release = () => r(500);
+    });
+    const r = receiver((n) => (n === 2 ? held : 500) as number | Promise<never>);
+    const s = store();
+    const e = deliveredJob(s, r.url);
+    const { d } = deliverer(s, { schedule: [0, 10, 10] });
+    d.kick();
+    await until(() => r.hits.length === 3, 3000, "the last try to reach the receiver");
+    expect(s.delivery(e.id)).toMatchObject({ attempts: 3, state: "pending" });
+    release();
+    await until(() => s.delivery(e.id)?.state === "failed", 3000, "the last try's outcome");
+  });
+
+  test("a deliverer closed during a try writes nothing after it", async () => {
+    let release = () => {};
+    const held = new Promise<number>((r) => {
+      release = () => r(500);
+    });
+    const r = receiver(() => held as unknown as Promise<never>);
+    const s = store();
+    const e = deliveredJob(s, r.url);
+    const { d } = deliverer(s);
+    d.kick();
+    await until(() => r.hits.length === 1, 3000, "the try to reach the receiver");
+    const before = s.delivery(e.id);
+    d.close();
+    release();
+    await Bun.sleep(100);
+    expect(s.delivery(e.id)).toEqual(before);
+  });
+
   test("killed between try 2 and 3, the delivery goes out once more with the same id on restart", async () => {
     const r = receiver([500, 500, 204]);
     const t = tempDir("akou-outbox-");

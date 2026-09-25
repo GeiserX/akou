@@ -327,10 +327,12 @@ export class Deliverer {
     const after = this.delay(n + 1);
     const nextAt = after === null ? null : this.now() + after;
     // On disk before the try: a server killed while it waits for the receiver tries again then.
+    // The last try has no next one, so it is resumed once, after its own timeout, if the process
+    // dies during it; it is marked failed only when its answer is in.
     store.recordAttempt(d.event_id, {
       attempts: n + 1,
-      state: nextAt === null ? "failed" : "pending",
-      next_at: nextAt,
+      state: "pending",
+      next_at: nextAt ?? this.now() + (this.o.timeoutMs ?? DELIVERY_TIMEOUT_MS),
       status: d.last_status,
       error: d.last_error,
     });
@@ -356,6 +358,8 @@ export class Deliverer {
       const publicOnly = !this.o.hostListed(d.key_id, host);
       status = await sendWebhook(d.url, headers, body, { ...this.o, publicOnly });
     } catch (err) {
+      // Closed while the try was out: the store may be closed too, and the next process owns it.
+      if (this.closed) return;
       if (err instanceof CallbackRefused) {
         store.recordAttempt(d.event_id, {
           attempts: n + 1,
@@ -369,6 +373,7 @@ export class Deliverer {
       }
       error = (err as Error).message;
     }
+    if (this.closed) return;
     if (status !== null && status >= 200 && status < 300) {
       store.recordAttempt(d.event_id, {
         attempts: n + 1,
