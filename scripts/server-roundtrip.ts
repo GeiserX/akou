@@ -127,6 +127,9 @@ export async function tamperedRefused(r: Receiver, delivery: Delivery): Promise<
 // ---------------------------------------------------------------------------
 // The round trip
 
+// biome-ignore lint/suspicious/noExplicitAny: API answers are read field by field.
+type Json = any;
+
 /** The fields every path must agree on (SV-J4). */
 // biome-ignore lint/suspicious/noExplicitAny: results are compared field by field.
 export function projection(r: any): Record<string, unknown> {
@@ -161,7 +164,7 @@ async function main(): Promise<void> {
     return JSON.parse(text);
   };
 
-  const server = await (await fetch(`${base}/v1/server`)).json();
+  const server: Json = await (await fetch(`${base}/v1/server`)).json();
   const available = (name: string) =>
     (server.presets ?? []).some(
       (p: { name?: string; available?: boolean }) => p.name === name && p.available === true,
@@ -181,12 +184,12 @@ async function main(): Promise<void> {
       form.set("callback_url", `http://${callbackHost}:${receiver.port}/hook`);
       form.set("metadata", JSON.stringify({ ci: preset }));
       const sub = await fetch(`${base}/v1/jobs`, { method: "POST", headers: auth, body: form });
-      const job = await sub.json();
+      const job: Json = await sub.json();
       if (sub.status !== 202)
         throw new Error(`${preset}: submit answered ${sub.status} ${JSON.stringify(job)}`);
 
       // 1. The long-poll, then the result route.
-      let state = job;
+      let state: Json = job;
       for (let i = 0; i < 5 && (state.status === "queued" || state.status === "running"); i++) {
         state = await get(`/v1/jobs/${job.id}?wait=60`);
       }
