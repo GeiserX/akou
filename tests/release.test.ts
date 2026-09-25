@@ -190,6 +190,31 @@ describe("signing is a seam, not a code change", () => {
   });
 });
 
+describe("signing secrets reach tag builds only", () => {
+  /** Every line of the workflow that reads a secret, and whether that read is gated on a tag push. */
+  function ungatedSecretReads(workflow: string): string[] {
+    return workflow
+      .split("\n")
+      .map((line, i) => ({ line: line.trim(), n: i + 1 }))
+      .filter(({ line }) => line.includes("secrets.") && !line.startsWith("#"))
+      .filter(({ line }) => !line.includes("github.event_name == 'push' &&"))
+      .map(({ line, n }) => `${n}: ${line}`);
+  }
+
+  test("a pull request or a dry run never loads a signing secret; only a pushed tag does", () => {
+    // The dry run on a pull request runs the branch's own build scripts, so a secret in its
+    // environment is a secret those scripts can read. GitHub withholds secrets from forks, not from
+    // branches of this repository.
+    const workflow = readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8");
+    expect(workflow).toContain("pull_request:");
+    expect(ungatedSecretReads(workflow)).toEqual([]);
+    // Positive control: an ungated read is reported.
+    const ungated = `      X: $${"{{"} secrets.MACOS_CERTIFICATE_P12 }}`;
+    expect(ungatedSecretReads(ungated)).toHaveLength(1);
+    expect(ungatedSecretReads(ungated.replace("secrets.", "github.event_name == 'push' && secrets."))).toEqual([]);
+  });
+});
+
 describe("what the bundle carries beside the main process", () => {
   test("the helper and the built pieces are copied once built, and only then", () => {
     const none = () => false;
