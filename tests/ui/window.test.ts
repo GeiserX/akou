@@ -9,7 +9,7 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Page } from "playwright-core";
+import type { Page, Route } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
 import { renderExport } from "../../src/main/handoff/export.ts";
@@ -634,6 +634,99 @@ describe("the notepad (DESIGN 5.1)", () => {
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "[W6.2] a note save that fails keeps the edit open with its text, the saves after it still go through, and a note deleted elsewhere closes its edit",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const made = await rig.api("POST", `/calls/${id}/notes`, { text: "budget review" });
+          const nid = made.body.note.id as string;
+          const noteTexts = async () =>
+            (await events(rig, id))
+              .filter((e) => e.type === "note")
+              .map((e) => (e as { text: string }).text);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const row = `#notes li.note[data-id="${nid}"]`;
+          await page.waitForSelector(row);
+          // The next note request fails: "net" as a transport error, "500" as a refusal.
+          let fail: "net" | "500" | null = null;
+          await page.route("**/api/v1/calls/*/notes**", (r) => {
+            const f = fail;
+            fail = null;
+            if (f === "net") return r.abort("failed");
+            if (f === "500")
+              return r.fulfill({
+                status: 500,
+                contentType: "application/json",
+                body: JSON.stringify({ error: "io", message: "the disk is full" }),
+              });
+            return r.fallback();
+          });
+          const toastSays = (msg: string) =>
+            until(async () => (await text(page, "#toast")) === msg, 5000, `the toast "${msg}"`);
+
+          // A transport error on the save when focus leaves: a toast, and the text stays to retry.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" first");
+          fail = "net";
+          await page.click('#lines .row[data-id="l000002"] .text');
+          await toastSays("the note was not saved");
+          expect(await page.inputValue(`${row} .note-edit`)).toBe("budget review first");
+          await page.click(`${row} .note-edit`);
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("budget review first"),
+            5000,
+            "the retried edit",
+          );
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+
+          // A refused save on Enter: the app's message, and the editor stays open with its text.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" again");
+          fail = "500";
+          await page.keyboard.press("Enter");
+          await toastSays("the disk is full");
+          expect(await page.inputValue(`${row} .note-edit`)).toBe("budget review first again");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("budget review first again"),
+            5000,
+            "the edit saved after a refusal",
+          );
+
+          // A new note whose request fails does not stop the next one.
+          await page.click("#note-input");
+          await page.keyboard.type("lost line");
+          fail = "net";
+          await page.keyboard.press("Enter");
+          await toastSays("the note was not saved");
+          await page.keyboard.type("fresh line");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("fresh line"),
+            5000,
+            "the next new note",
+          );
+
+          // Deleted through another door while it is being edited: the row goes, edit and all.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          expect((await rig.api("DELETE", `/calls/${id}/notes/${nid}`, {})).status).toBe(200);
+          await page.waitForSelector(row, { state: "detached", timeout: 5000 });
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
 });
 
 describe("the ask box (DESIGN 5.3, 5.4)", () => {
@@ -1164,6 +1257,52 @@ describe("playback and Fix this word", () => {
   );
 
   test(
+    "[W5.2] a line's audio that arrives after another call opened is not loaded into the player",
+    async () => {
+      let a = "";
+      let b = "";
+      await withRig(
+        {
+          seed: (home) => {
+            a = seedCall(home, (x) => standardCall(x)).id;
+            b = seedCall(home, (x) => standardCall(x, "01J8Z6Q4M2VX0K7B3D4E5SECND")).id;
+          },
+        },
+        async (rig) => {
+          const folder = (await rig.api("GET", `/calls/${a}`)).body.folder as string;
+          writeFileSync(
+            join(folder, "audio", "part-001.opus"),
+            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
+          );
+          const page = await rig.open(a);
+          await page.waitForSelector("#lines .row >> nth=3");
+          // Hold the first call's audio until the other call is open.
+          const held: Route[] = [];
+          await page.route("**/api/v1/calls/*/audio/*", (r) => void held.push(r));
+          await page.hover('#lines .row[data-id="l000003"]');
+          await page.click('#lines .row[data-id="l000003"] .play');
+          await until(async () => held.length === 1, 5000, "the audio request");
+          await page.click(`#calls li[data-id="${b}"] button`);
+          expect(await page.getAttribute(`#calls li[data-id="${b}"] button`, "aria-current")).toBe(
+            "true",
+          );
+          const arrived = page.waitForResponse("**/api/v1/calls/*/audio/*");
+          await held[0]?.fallback();
+          await (await arrived).finished();
+          await page.waitForTimeout(500);
+          const player = await page.evaluate(() => {
+            const p = document.getElementById("player") as HTMLAudioElement;
+            return { src: p.getAttribute("src"), line: p.dataset.line ?? null, paused: p.paused };
+          });
+          expect(player).toEqual({ src: null, line: null, paused: true });
+          expect(await page.locator("#play").isDisabled()).toBe(true);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[decision] File vocabulary that silently corrects nothing: a workspace file entry corrects the window's line, and a change to the files reaches the open window",
     async () => {
       let id = "";
@@ -1339,12 +1478,11 @@ describe("copy the transcript so far (W12.2)", () => {
           const page = await rig.open(id);
           await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
           await page.waitForSelector("#lines .row");
+          // The clipboard can outlive a browser context (Chromium on Linux keeps the earlier
+          // test's copy), so wait for this click's write, not for any transcript.
+          await page.evaluate(() => navigator.clipboard.writeText("before"));
           await page.click("#copy-transcript");
-          await until(
-            async () => (await clipboard(page)).startsWith("## Transcript"),
-            5000,
-            "the copy",
-          );
+          await until(async () => (await clipboard(page)) !== "before", 5000, "the copy");
           const copied = await clipboard(page);
           expect(copied).toBe(await section(rig, id));
           expect(copied).toContain("final words");

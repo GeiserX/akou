@@ -709,6 +709,8 @@ class App {
         return;
       }
       this.blobs.set(k, url);
+      // Another call opened while the audio downloaded: it stays cached, and does not play.
+      if (call !== this.callId) return;
     }
     const p = this.player;
     if (p.src !== url) p.src = url;

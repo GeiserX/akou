@@ -78,17 +78,21 @@ export class NotepadPane {
       const call = this.d.call();
       if (!call || !draft || text === "" || text === draft.saved) return;
       if (draft.id) {
-        const r = await this.d.t.request("PATCH", `/calls/${call}/notes/${draft.id}`, { text });
-        if (r.status >= 400) toast(message(r.body, "the note was not saved"));
+        const r = await this.d.t
+          .request("PATCH", `/calls/${call}/notes/${draft.id}`, { text })
+          .catch(() => null);
+        if (!r || r.status >= 400) toast(message(r?.body, "the note was not saved"));
         else draft.saved = text;
         return;
       }
-      const r = await this.d.t.request<{ note?: { id: string }; message?: string }>(
-        "POST",
-        `/calls/${call}/notes`,
-        { text, w: draft.w, afterSeq: draft.afterSeq },
-      );
-      if (r.status >= 400 || !r.body.note) toast(message(r.body, "the note was not saved"));
+      const r = await this.d.t
+        .request<{ note?: { id: string }; message?: string }>("POST", `/calls/${call}/notes`, {
+          text,
+          w: draft.w,
+          afterSeq: draft.afterSeq,
+        })
+        .catch(() => null);
+      if (!r || r.status >= 400 || !r.body.note) toast(message(r?.body, "the note was not saved"));
       else {
         draft.id = r.body.note.id;
         draft.saved = text;
@@ -106,18 +110,21 @@ export class NotepadPane {
     }
     const tz = v.call.tz;
     const rows = v.notes().map((n) => this.noteRow(n, tz));
-    const kept = this.editing
-      ? this.list.querySelector<HTMLElement>(`li.note[data-id="${CSS.escape(this.editing)}"]`)
-      : null;
+    const at = rows.findIndex((r) => r.dataset.id === this.editing);
+    const kept =
+      this.editing && at >= 0
+        ? this.list.querySelector<HTMLElement>(`li.note[data-id="${CSS.escape(this.editing)}"]`)
+        : null;
     if (!kept) {
+      // Nothing is being edited, or the edited note was deleted elsewhere and its edit goes with it.
+      this.editing = null;
       replace(this.list, ...rows);
       return;
     }
     // Moving the edited row would take focus from its input, which closes the edit: the other
     // notes are drawn around it instead.
-    const at = rows.findIndex((r) => r.dataset.id === this.editing);
     for (const el of [...this.list.children]) if (el !== kept) el.remove();
-    kept.before(...rows.slice(0, Math.max(at, 0)));
+    kept.before(...rows.slice(0, at));
     kept.after(...rows.slice(at + 1));
   }
 
@@ -174,27 +181,38 @@ export class NotepadPane {
     input.focus();
     this.editing = id;
     // An edit is saved on Enter, when focus leaves it and after a 2 s pause (WINDOW W6.2), each
-    // save a new revision; Escape closes it without saving what was not saved yet.
+    // save a new revision; Escape closes it without saving what was not saved yet. A save that
+    // fails is a toast and leaves the editor open with its text, to try again.
     let saved = span.textContent ?? "";
     let pause: ReturnType<typeof setTimeout> | null = null;
     let open = true;
-    const save = (): Promise<void> => {
+    const save = (): Promise<boolean> => {
       if (pause) clearTimeout(pause);
       pause = null;
       const text = input.value.trim();
-      this.saving = this.saving.then(async () => {
-        if (text === "" || text === saved) return;
-        const r = await this.d.t.request("PATCH", `/calls/${call}/notes/${id}`, { text });
-        if (r.status >= 400) toast(message(r.body, "the note was not saved"));
-        else saved = text;
+      const run = this.saving.then(async () => {
+        if (text === "" || text === saved) return true;
+        const r = await this.d.t
+          .request("PATCH", `/calls/${call}/notes/${id}`, { text })
+          .catch(() => null);
+        if (!r || r.status >= 400) {
+          toast(message(r?.body, "the note was not saved"));
+          return false;
+        }
+        saved = text;
+        return true;
       });
-      return this.saving;
+      this.saving = run.then(() => {});
+      return run;
     };
     const done = async (keep: boolean) => {
       if (!open) return;
       open = false;
       if (pause) clearTimeout(pause);
-      if (keep) await save();
+      if (keep && !(await save())) {
+        open = true;
+        return;
+      }
       if (this.editing === id) this.editing = null;
       this.render();
     };
