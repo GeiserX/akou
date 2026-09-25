@@ -21,3 +21,4 @@ One line per document, in the order to read them.
 - [CI-CD.md](CI-CD.md): the pipeline, branch protection, nightly jobs and releases.
 - [gates/M0-results.md](gates/M0-results.md): what each M0 gate measured on the reference Mac mini, with the raw outputs beside it.
 - [research/asr-benchmark.md](research/asr-benchmark.md): why akou ships the fp32 Parakeet build and stays on Parakeet rather than Qwen3-ASR, with the FLEURS numbers and the method.
+- [research/service-interface.md](research/service-interface.md): what a hosted akou exposes to Executor, services with signed callbacks, agents and OpenAI-speaking tools, all from one OpenAPI contract; why OAuth and remote MCP wait; and the SI- plan.
