@@ -474,6 +474,52 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
     expect(await installCli(SRC, none.ops)).toEqual({ state: "missing" });
   });
 
+  test("a live link to another tool's akou is left alone; a live link into an older app is repointed", async () => {
+    // Homebrew links its own formulae into /usr/local/bin on Intel Macs.
+    const brew = "/usr/local/Cellar/akou/1.0/bin/akou";
+    const f = memoryOps();
+    f.files.add(SRC);
+    f.files.add(brew);
+    f.links.set(`${CLI_DIR}/akou`, brew);
+    expect(await installCli(SRC, f.ops)).toEqual({ state: "in-the-way", path: `${CLI_DIR}/akou` });
+    expect(f.links.get(`${CLI_DIR}/akou`)).toBe(brew);
+    expect(f.admin).toEqual([]);
+    // Positive controls: a live link into another copy of the app, and a dangling link to
+    // anything, are ours to replace.
+    const older = "/Users/x/Downloads/akou.app/Contents/Resources/app/bun/akou";
+    const o = memoryOps();
+    o.files.add(SRC);
+    o.files.add(older);
+    o.links.set(`${CLI_DIR}/akou`, older);
+    expect((await installCli(SRC, o.ops)).state).toBe("installed");
+    expect(o.links.get(`${CLI_DIR}/akou`)).toBe(SRC);
+    const d = memoryOps();
+    d.files.add(SRC);
+    d.links.set(`${CLI_DIR}/akou`, brew);
+    expect((await installCli(SRC, d.ops)).state).toBe("installed");
+  });
+
+  test("an app run from a mounted disk image or a translocated copy installs nothing", async () => {
+    // Both paths vanish at eject, quit or reboot, and the link would dangle.
+    for (const src of [
+      "/Volumes/akou/akou.app/Contents/Resources/app/bun/akou",
+      "/private/var/folders/x1/abc/T/AppTranslocation/0F1E2D3C/d/akou.app/Contents/Resources/app/bun/akou",
+    ]) {
+      const m = memoryOps();
+      m.files.add(src);
+      expect(await installCli(src, m.ops)).toEqual({ state: "not-in-place" });
+      expect(m.links.size).toBe(0);
+      expect(m.admin).toEqual([]);
+    }
+    expect(installMessage({ state: "not-in-place" }).detail).toBe(
+      "Move akou to Applications, open it from there, then choose Install Command-Line Tool… again.",
+    );
+    // Positive control: the same app in /Applications installs.
+    const m = memoryOps();
+    m.files.add(SRC);
+    expect((await installCli(SRC, m.ops)).state).toBe("installed");
+  });
+
   test(
     "the admin script quotes paths with spaces and quotes",
     () => {

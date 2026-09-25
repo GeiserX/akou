@@ -8,9 +8,12 @@
  *   directly; otherwise (the folder is root's, or missing on a clean Apple silicon Mac) macOS asks
  *   through `osascript ... with administrator privileges`.
  * - A second run finds the link already pointing at this app and says so.
- * - Something else already called `akou` there (a copy from the release tarball, another tool) is
- *   left alone: the menu says what is in the way. A dangling link, or one into an older copy of the
- *   app, is replaced.
+ * - Something else already called `akou` there (a copy from the release tarball, another tool's
+ *   link, Homebrew's on an Intel Mac) is left alone: the menu says what is in the way. A dangling
+ *   link, or one into another copy of the app, is replaced.
+ * - An app run from its disk image (`/Volumes/…`) or from a translocated copy (a quarantined app
+ *   opened where it was downloaded) installs nothing: that path vanishes at eject, quit or reboot,
+ *   and the link would dangle.
  */
 
 import {
@@ -22,7 +25,7 @@ import {
   symlinkSync,
   unlinkSync,
 } from "node:fs";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 /** The folder the link goes into. */
 export const CLI_DIR = "/usr/local/bin";
@@ -30,11 +33,14 @@ export const CLI_DIR = "/usr/local/bin";
 export const CLI_NAME = "akou";
 /** Where the app carries it: beside the bundled main process (in a checkout, nothing is there). */
 export const BUNDLED_CLI = join(import.meta.dir, CLI_NAME);
+/** How the path of any copy of the app's binary ends: a link to one is ours to repoint. */
+const APP_CLI_TAIL = `.app/Contents/Resources/app/bun/${CLI_NAME}`;
 
 export type InstallOutcome =
   | { state: "installed"; path: string }
   | { state: "already"; path: string }
   | { state: "missing" }
+  | { state: "not-in-place" }
   | { state: "in-the-way"; path: string }
   | { state: "refused" }
   | { state: "failed"; error: string };
@@ -58,11 +64,15 @@ export async function installCli(
   dir: string = CLI_DIR,
 ): Promise<InstallOutcome> {
   if (!ops.exists(source)) return { state: "missing" };
-  const path = join(dir, CLI_NAME);
+  if (source.startsWith("/Volumes/") || source.includes("/AppTranslocation/"))
+    return { state: "not-in-place" };
+  // macOS paths: POSIX joins, so the tests read the same on a Windows runner.
+  const path = posix.join(dir, CLI_NAME);
   const current = ops.readlink(path);
   if (current === source) return { state: "already", path };
-  // A regular file (or anything not a link) is someone else's; a link is ours to repoint.
-  if (current === null && ops.exists(path)) return { state: "in-the-way", path };
+  // A regular file is someone else's, and so is a live link to anything but a copy of this app.
+  if (current === null ? ops.exists(path) : !ours(current, dir, ops))
+    return { state: "in-the-way", path };
   try {
     if (ops.writable(dir)) ops.link(source, path);
     else if (!(await ops.linkAsAdmin(source, path))) return { state: "refused" };
@@ -72,6 +82,12 @@ export async function installCli(
   return ops.readlink(path) === source
     ? { state: "installed", path }
     : { state: "failed", error: `${path} does not point at ${source}` };
+}
+
+/** A link target this app may replace: one that is gone, or any copy of the app's binary. */
+function ours(target: string, dir: string, ops: InstallOps): boolean {
+  const abs = posix.resolve(dir, target);
+  return !ops.exists(abs) || abs.endsWith(APP_CLI_TAIL);
 }
 
 /** What the menu shows for an outcome: a title and one line. */
@@ -93,10 +109,16 @@ export function installMessage(o: InstallOutcome): { title: string; detail: stri
         detail:
           "Only the released app carries it. Install the command line from its release archive (docs/install.md).",
       };
+    case "not-in-place":
+      return {
+        title: "akou is not running from Applications.",
+        detail:
+          "Move akou to Applications, open it from there, then choose Install Command-Line Tool… again.",
+      };
     case "in-the-way":
       return {
         title: "Another akou is in the way.",
-        detail: `${o.path} is a file this app did not make. Remove it, then choose Install Command-Line Tool… again.`,
+        detail: `${o.path} is not this app's. Remove it, then choose Install Command-Line Tool… again.`,
       };
     case "refused":
       return { title: "Nothing was installed.", detail: "The password was not given." };
