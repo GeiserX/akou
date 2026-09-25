@@ -173,6 +173,8 @@ export interface AkouRpc {
       status: AppStatus;
       /** The tray, the hotkey or `akou open` asks the page to show a call. */
       showCall: { call?: string };
+      /** The application menu's Settings… asks the page to open its settings. */
+      showSettings: Record<string, never>;
     };
   };
 }

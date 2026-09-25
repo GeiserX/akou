@@ -85,7 +85,7 @@ ElectroBun 2.0.1 decides most of what is cheap and what is hard. These facts com
 
 ## 4. Tray and menu bar
 
-Today the tray has no image anywhere in the repo, and its title is an empty string while idle (`trayTitle` in `shell.ts`). On macOS the idle status item is likely invisible, and on Linux it shows nothing useful. The menu has Record or Stop, Show akou, Open at login and Quit.
+Today the tray always has an image: one idle icon per OS, drawn by `scripts/tray-icons.ts` (a template PNG on macOS, an ICO on Windows, a PNG for the AppIndicator), and a text title while recording or sharing (`trayTitle` in `shell.ts`). The menu has Record or Stop, Show akou, Open at login and Quit. A tray or hotkey start that is refused says why in a notification.
 
 The design is a monochrome template icon per state, a text title only as an extra (the elapsed time while recording), and a menu that controls a running call without the window.
 
@@ -113,11 +113,11 @@ While idle the first item is `● Record` with a submenu `Record in workspace �
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| DK-T1 | A template tray icon, shipped as image assets per OS (template PNG on macOS, ICO on Windows, PNG for AppIndicator), always set, including idle. One image is enough for this line; the existing text title keeps showing recording state | P0 | gap: no image in the repo, empty idle title; Apple HIG menu bar extras | A shell unit test asserts `createTray` receives an image, and a positive control with no image fails it. On the reference Mac, the idle item is visible in a dark and a light menu bar (screenshots recorded in the release checklist). On Ubuntu with the AppIndicator extension, the icon shows | missing |
+| DK-T1 | A template tray icon, shipped as image assets per OS (template PNG on macOS, ICO on Windows, PNG for AppIndicator), always set, including idle. One image is enough for this line; the existing text title keeps showing recording state | P0 | gap: no image in the repo, empty idle title; Apple HIG menu bar extras | A shell unit test asserts `createTray` receives an image, and a positive control with no image fails it. On the reference Mac, the idle item is visible in a dark and a light menu bar (screenshots recorded in the release checklist). On Ubuntu with the AppIndicator extension, the icon shows | has (unit test); the menu bar and Ubuntu checks are in the release checklist |
 | DK-T2 | One icon per state (dead, shared, recording, paused, final pass, update, idle) with `setImage`, plus a tooltip in words | P1 | intent: glanceable state; DESIGN 8.3 promises "a changed tray icon" while sharing | A table-driven test over `AppStatus` fixtures asserts the icon and tooltip for each state and the priority when several hold. A positive control feeds a dead-and-shared status and expects the dead icon | partial (text title only) |
 | DK-T3 | Elapsed time in the title while recording, updated once a second on macOS; off with `app.trayTimer` set to false | P2 | Granola floating timer; tray apps | A fake-clock test advances 61 s and sees `1:01`; with the setting off, the title stays empty | missing |
 | DK-T4 | Menu items Mute, Pause, Copy last 5 minutes, Stop sharing, Recent calls, Record in workspace, Check for updates | P1 | gap vs hark controls; SYS-03; intent: every action through every door | Unit test of `trayMenu` per state lists the items. Clicking each through the fake calls the same app method the window calls (one parity test). Copy last 5 minutes on a fake call puts exactly the lines of the last 5 minutes, with times of day, on the fake clipboard | partial (Record, Stop, Show, Login, Quit) |
-| DK-T5 | A tray start that fails says why: a notification with the reason, and the window shown on its models or permission card | P0 | gap: a failed tray or hotkey start only writes a log line | With models missing, the fake tray's Record produces one notification whose body names the window's download card, and the window opens on it | missing |
+| DK-T5 | A tray start that fails says why: a notification with the reason, and the window shown on its models or permission card | P0 | gap: a failed tray or hotkey start only writes a log line | With models missing, the fake tray's Record produces one notification whose body names the window's download card, and the window opens on it | has (models card; a refused start for a permission names the privacy pane, since the window's permission banner shows only during a call) |
 | DK-T6 | Linux without a tray: the window, the hotkey and the CLI reach every tray action; [install.md](../install.md) names the GNOME AppIndicator extension | P1 (M4) | GNOME Shell shows no tray by default | The parity test from DK-T4 also runs with the tray disabled and finds each action in the window; the install doc line exists | missing |
 
 ## 5. Global hotkeys
@@ -140,11 +140,11 @@ In-window shortcuts (focus notes, focus ask, mark a moment, play and pause, the 
 
 ## 6. The application menu, the Dock and quitting
 
-akou sets no application menu today. ElectroBun documents that its Edit roles are what give editable web content the system copy, paste, undo and select-all shortcuts, so the notepad and the ask box may lack them. Closing the window leaves the app running, by design, but the Dock icon's `reopen` event has no handler, so clicking it after closing the window likely does nothing. Quit from the tray ends a live call with no question.
+On macOS akou sets the application menu with ElectroBun's Edit roles, which are what give editable web content the system copy, paste, undo and select-all shortcuts. Quit is the `quit` role, which runs the same before-quit path as the tray. Windows and Linux have no application menu to set, and their webviews handle the clipboard keys themselves. "Check for updates…" joins the menu with DK-U1, and "Show logs folder" once the app writes a log file: an item with nothing behind it would be a control that does nothing. Closing the window leaves the app running, by design, but the Dock icon's `reopen` event has no handler, so clicking it after closing the window likely does nothing. Quit from the tray ends a live call with no question.
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| DK-M1 | An application menu with the system roles: akou (About, Settings… `⌘,`, Check for updates…, Hide, Quit `⌘Q`), Edit (undo, redo, cut, copy, paste, select all), Window (minimize, zoom, close `⌘W`), Help (Open the docs, Show logs folder). On Windows and Linux, the same items where the platform has a menu | P0 | ElectroBun Edit roles; Apple HIG menu bar | On the packaged macOS app, `⌘C` and `⌘V` copy and paste in the notepad and the ask box (hardware check recorded). Unit test: the menu passed to the fake contains the Edit roles | missing |
+| DK-M1 | An application menu with the system roles: akou (About, Settings… `⌘,`, Check for updates…, Hide, Quit `⌘Q`), Edit (undo, redo, cut, copy, paste, select all), Window (minimize, zoom, close `⌘W`), Help (Open the docs, Show logs folder). On Windows and Linux, the same items where the platform has a menu | P0 | ElectroBun Edit roles; Apple HIG menu bar | On the packaged macOS app, `⌘C` and `⌘V` copy and paste in the notepad and the ask box (hardware check recorded). Unit test: the menu passed to the fake contains the Edit roles | partial: the Edit roles and the rest of the menu (unit test); Check for updates… waits for DK-U1 and Show logs folder for a log file; the keyboard check is in the release checklist |
 | DK-M2 | Handle `reopen`: clicking the Dock icon with no window shows the window | P1 | ElectroBun `reopen` event | Shell test: a fake `reopen` with no window calls `openWindow`; with a window, it brings it forward | missing |
 | DK-M3 | Quitting while a call records asks first: "A call is recording. Stop it and quit?" with Cancel as the default. What `akou quit` does during a call is in [CLI.md](CLI.md) | P0 | intent: recording never stops by accident | Shell test: quit with a live fake call shows the fake message box, and on Cancel the call is still recording. On Stop and quit, the log gets `part.ended {reason: user}` before exit | missing |
 | DK-M4 | Remember the window's frame and restore it inside the visible work area | P1 | gap: the window always opens at 1280 by 820 | Close at a frame, reopen, same frame. A saved frame off every display is clamped into the primary work area (unit test on the clamp function) | missing |
@@ -183,7 +183,7 @@ Native notifications carry information only. Any action goes through the tray, t
 | Recovered after a crash | akou recovered a call | "The recording up to the crash is saved" | At the next launch |
 | Final pass done or failed | Transcript ready / Final pass failed | Nothing more | Window not focused |
 | Hand-off failed (export, hook, webhook) | Hand-off failed | Which stage | Window not focused |
-| A share link started by an agent | This call is shared live | "Stop it from the tray" | Always |
+| A share link started by an agent | This call is shared live | "Stop it from the akou window" (the tray too, once DK-T4 adds Stop sharing) | Always |
 
 Rules:
 
@@ -194,10 +194,10 @@ Rules:
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| DK-N1 | `notifyFor` and the rows marked Always: started-not-from-window, start refused, agent-started share | P0 | intent: an agent-started recording is announced; gap: nothing calls `showNotification` | Table test over `notifyFor`. Shell test: `POST /calls` with `by: "agent"` and the window closed produces exactly one notification through the fake. Positive control: the same start from the focused window produces none | missing |
-| DK-N2 | Capture dead and permission-suspect while the window is not focused | P0 | intent: recording never stops silently | A fake helper emitting `health {state: dead}` with the window closed produces one notification, and a second within a minute produces none | missing |
+| DK-N1 | `notifyFor` and the rows marked Always: started-not-from-window, start refused, agent-started share | P0 | intent: an agent-started recording is announced; gap: nothing calls `showNotification` | Table test over `notifyFor`. Shell test: `POST /calls` with `by: "agent"` and the window closed produces exactly one notification through the fake. Positive control: the same start from the focused window produces none | has |
+| DK-N2 | Capture dead and permission-suspect while the window is not focused | P0 | intent: recording never stops silently | A fake helper emitting `health {state: dead}` with the window closed produces one notification, and a second within a minute produces none | has |
 | DK-N3 | Recovered call, final pass done or failed, hand-off failed, stopping or stopped by a rule | P1 | Granola, Wispr Flow post-call notices; REC-02 | One table row per event. A fake final-pass failure notifies with the window closed and stays quiet with it focused | missing |
-| DK-N4 | The content scan: no rendered notification contains the call's title, workspace, speaker names or any segment text | P0 | intent: private by default | A test renders every row with a call whose title, names and text are unique markers and greps the output for them. A positive control injects the title and the test fails | missing |
+| DK-N4 | The content scan: no rendered notification contains the call's title, workspace, speaker names or any segment text | P0 | intent: private by default | A test renders every row with a call whose title, names and text are unique markers and greps the output for them. A positive control injects the title and the test fails | has |
 | DK-N5 | `app.notifications` with `all`, `errors`, `off` | P1 | per-app notification settings in every competitor | Table test over the three values and every event | missing |
 | DK-N6 | Notifications verified per OS: macOS Notification Center, Windows toast, Linux notification daemon | P1 (M3, M4) | ElectroBun behaviour per OS not verified | A shell-gate run per OS shows one notification and records a screenshot under `docs/gates/` | missing |
 
@@ -381,10 +381,8 @@ The content rule for notifications is DK-N4. The start and stop cue is in the pa
 Failures this design found that are not yet in [TRAPS.md](../TRAPS.md). Each becomes a trap entry and a test named after it when its line is built.
 
 - **A hotkey that registers and never fires.** Given macOS without the Accessibility grant, ElectroBun's global monitor registers and receives nothing. akou must not treat a successful register as a working hotkey. It must check the grant, in the process the grant applies to, and say so (DK-K1).
-- **An invisible tray.** Given no tray image and an empty title, the idle macOS status item has nothing to show. akou must always set an image (DK-T1).
 - **A setting that says saved and does nothing.** Given a key that applies only at the next start, every door must say so for that key. Given a key that can apply at once, it must (DK-S1, DK-K3, DK-L2).
 - **akou cannot test the call channel with its own sound.** Given the call tap excludes akou's own audio by design, a capture test that plays its own tone would always read silent. The test must ask for other audio (DK-O1).
-- **Lock-screen leaks.** Given notifications appear on lock screens and in screenshots, no notification may carry a title, a name or transcript text (DK-N4).
 - **The transcript on top of a screen share.** Given the floating indicator stays on top while the user shares their screen, it must carry no transcript text, names or answers (DK-F1).
 - **AltGr swallowed by a global hotkey.** Given a Spanish or other AltGr layout, a `Ctrl+Alt` global hotkey can eat a typed character (DK-K4).
 - **A URL scheme that never registers.** Given ElectroBun registers `urlSchemes` only for an app in `/Applications`, an install in `~/Applications` gets no `akou://` handler. The API must not hand out a link that opens nothing ([PROGRAMMABILITY.md](PROGRAMMABILITY.md) PG-U1).

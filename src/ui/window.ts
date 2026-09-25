@@ -7,7 +7,7 @@
 
 import { Electroview } from "electrobun/view";
 import type { LogEvent } from "../core/log/events.ts";
-import { boot, showCall } from "./app.ts";
+import { boot, showCall, showSettings } from "./app.ts";
 import type {
   AkouRpc,
   AppStatus,
@@ -64,6 +64,7 @@ const rpc = Electroview.defineRPC<AkouRpc>({
         for (const fn of statusWatchers) fn(s);
       },
       showCall: (m: { call?: string }) => showCall(m.call),
+      showSettings: () => showSettings(),
     },
   },
 });
