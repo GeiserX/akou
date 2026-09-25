@@ -1653,7 +1653,7 @@ export class AkouApp implements ApiApp {
               onRefused: (r) =>
                 this.log(
                   "warn",
-                  `key.refused ${r.keyPrefix === "" ? "(no key)" : `${r.keyPrefix}…`} from ${r.source} on ${r.path}`,
+                  `key.refused ${r.keyPrefix === "" ? "(not an akou key)" : `${r.keyPrefix}…`} from ${r.source} on ${r.path}`,
                 ),
             })
           : undefined),

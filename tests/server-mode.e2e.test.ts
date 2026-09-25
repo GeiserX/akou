@@ -185,6 +185,23 @@ describe("SV-P5: the bind address and the source address", () => {
     }
   });
 
+  test("key.refused names only an ak_ key's first bytes, and a request with no key is not logged", async () => {
+    const lines = () => server.logs.filter((l) => l.msg.startsWith("key.refused"));
+    const before = lines().length;
+    const r = await get(server, "/v1/keys/me", { authorization: "Bearer sk-live-secret-value" });
+    expect(r.status).toBe(401);
+    const foreign = lines().slice(before);
+    expect(foreign.length).toBe(1);
+    expect(foreign[0]?.msg).toContain("(not an akou key)");
+    expect(foreign[0]?.msg).not.toContain("sk-");
+    // No key at all, many times: nothing is written per request.
+    for (let i = 0; i < 5; i++) expect((await get(server, "/v1/status")).status).toBe(401);
+    expect(lines().length).toBe(before + 1);
+    // Positive control: an ak_ key that is wrong is logged by its prefix.
+    await get(server, "/v1/keys/me", { authorization: "Bearer ak_nothere" });
+    expect(lines().at(-1)?.msg).toStartWith("key.refused ak_noth");
+  });
+
   test("X-Forwarded-For is read from the right, past trusted hops only", () => {
     const trusted = ["10.0.0.0/8", "fd00::/8"].map((c) => parseCidr(c)).filter((c) => c !== null);
     expect(sourceAddress("192.0.2.1", "203.0.113.9", trusted)).toBe("192.0.2.1");

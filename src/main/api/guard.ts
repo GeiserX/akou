@@ -166,7 +166,11 @@ export interface ServerGuardOptions {
   /** `server.behind_proxy`: with no public host, any Host is accepted. */
   behindProxy: boolean;
   keys: { authenticate(bearer: string): Identity | null; touch(id: string): void };
-  /** A request refused for its key, for the audit (SV-K6): where from, and the key's first bytes. */
+  /**
+   * A request refused for the key it carried, for the audit (SV-K6): where from, and the key's
+   * first bytes when it is an `ak_` key (else ""; a client may send another service's secret). A
+   * request with no key is not reported: a scanner would grow the log by a line a request.
+   */
   onRefused?(r: { source: string; keyPrefix: string; path: string }): void;
 }
 
@@ -215,11 +219,13 @@ export function serverGuard(o: ServerGuardOptions): Guard {
       }
     }
     if (identity === null && ctx.route.access !== "open") {
-      o.onRefused?.({
-        source: ctx.source,
-        keyPrefix: (given ?? "").slice(0, 7),
-        path: new URL(req.url).pathname,
-      });
+      if (given !== null) {
+        o.onRefused?.({
+          source: ctx.source,
+          keyPrefix: given.startsWith("ak_") ? given.slice(0, 7) : "",
+          path: new URL(req.url).pathname,
+        });
+      }
       return unauthorized();
     }
     return scopeRule(req, identity, ctx) ?? bodyRule(req, ctx) ?? { identity };
