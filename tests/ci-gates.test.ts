@@ -192,3 +192,65 @@ describe("[T4.20] a focused or skipped test fails the lint", () => {
     expect(gated.code).toBe(0);
   });
 });
+
+describe("a ci.yml step that reads $NAME never falls to PowerShell by default", () => {
+  type Step = { name?: string; run?: string; shell?: string };
+  type Job = {
+    "runs-on"?: unknown;
+    strategy?: unknown;
+    defaults?: { run?: { shell?: string } };
+    steps?: Step[];
+  };
+
+  /**
+   * Steps of a job that can run on Windows whose script reads an environment variable the POSIX
+   * way (`$NAME`, `"$NAME"`) but would run in PowerShell, where `$NAME` is an unset PowerShell
+   * variable and expands to nothing. Windows' default shell is pwsh unless the step, the job or
+   * the workflow names one; a step that names pwsh means PowerShell's `$env:NAME` on purpose.
+   */
+  function posixStepsOutsideBash(yaml: string): string[] {
+    const wf = Bun.YAML.parse(yaml) as {
+      defaults?: { run?: { shell?: string } };
+      jobs: Record<string, Job>;
+    };
+    const out: string[] = [];
+    for (const [id, job] of Object.entries(wf.jobs)) {
+      const where = JSON.stringify([job["runs-on"], job.strategy]);
+      if (!where.includes("windows")) continue;
+      for (const step of job.steps ?? []) {
+        if (!step.run || !/\$[A-Za-z_]/.test(step.run)) continue;
+        const shell = step.shell ?? job.defaults?.run?.shell ?? wf.defaults?.run?.shell;
+        if (shell === undefined) out.push(`${id}: ${step.name ?? step.run.split("\n")[0]}`);
+      }
+    }
+    return out;
+  }
+
+  test("every such step in ci.yml names its shell, itself or through its job", () => {
+    const yaml = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    expect(posixStepsOutsideBash(yaml)).toEqual([]);
+  });
+
+  test("positive control: a $NAME step on a Windows leg with no shell is caught", () => {
+    const yaml = `
+jobs:
+  check:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: \${{ matrix.os }}
+    steps:
+      - run: bun test --rerun-each "$TEST_REPEAT"
+      - run: bun run check
+      - shell: bash
+        run: echo "$TEST_REPEAT"
+      - shell: pwsh
+        run: echo $env:TEST_REPEAT
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "$HOME"
+`;
+    expect(posixStepsOutsideBash(yaml)).toEqual(['check: bun test --rerun-each "$TEST_REPEAT"']);
+  });
+});

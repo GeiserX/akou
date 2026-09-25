@@ -78,7 +78,10 @@ jobs:
       - run: bun run check
       # A dispatch with `repeat` proves the flake fixes that live in the check: the capture traps
       # against the fake helper (the helper crash and [T0.9], docs/TESTING.md TS-1), that many times.
+      # bash on every OS: Windows' default shell, pwsh, reads "$TEST_REPEAT" as an unset
+      # PowerShell variable.
       - if: inputs.repeat > 1
+        shell: bash
         env:
           TEST_REPEAT: ${{ inputs.repeat }}
         run: |
