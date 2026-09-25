@@ -1,7 +1,8 @@
 /**
  * ROADMAP G6, recognizer speed, live half: how long after an utterance ends its line is committed
- * to the log, through the real app's live path (VAD, provisional re-decodes, `modified_beam_search`
- * with the call's decode list).
+ * to the log, through the real app's live path (VAD, provisional re-decodes, then the decoding the
+ * app runs: greedy by default, or `modified_beam_search` with the call's decode list when
+ * `asr.parakeet.decoding` is `beam`). The result records the mode as `decoding`.
  *
  * It lays speech clips out on a stereo timeline (left = mic, right = call, overlapping so both
  * channels load the recognizer at once), writes it as a 48 kHz WAV plus a manifest of where each
@@ -106,6 +107,8 @@ async function cli(...args: string[]) {
 const started = await cli("start", "-t", "g6-live", "--vocab", words);
 if (started.code !== 0) throw new Error(`start failed: ${started.out}`);
 const folder = JSON.parse(started.out).folder as string;
+const status = await cli("status");
+const decoding = status.code === 0 ? (JSON.parse(status.out).asr?.decoding ?? null) : null;
 await sleep((total + 8) * 1000);
 const stopped = await cli("stop");
 if (stopped.code !== 0) throw new Error(`stop failed, the call may still be live: ${stopped.out}`);
@@ -142,6 +145,7 @@ const lat = rows
 const q = (p: number) => lat[Math.min(lat.length - 1, Math.floor(p * (lat.length - 1)))];
 const result = {
   folder,
+  decoding,
   seconds: Math.round(total * 10) / 10,
   utterances: utterances.length,
   committed: lat.length,

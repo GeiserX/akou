@@ -19,6 +19,7 @@ import {
   WorkerSide,
 } from "../src/main/asr/live-worker.ts";
 import { MIN_SPAN_SECONDS, padSpan, prepareSpan } from "../src/main/asr/pad.ts";
+import { GREEDY_NO_HOTWORDS } from "../src/main/asr/sherpa.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { buildDecodeList, type DecodeList } from "../src/main/vocab/decode-list.ts";
 import type { MergedEntry } from "../src/main/vocab/files.ts";
@@ -574,6 +575,18 @@ describe("the decode list and vocab.used", () => {
       level: "error",
       msg: 'hotword "Kubernetes" dropped: pieces not in the model: <unk>',
     });
+  });
+
+  test("under greedy decoding a non-empty decode list is logged at warn, and vocab.used is empty", async () => {
+    const r = rig({
+      fake: { greedy: true },
+      vocab: { entries: [entry("Hetzner")], files: [] },
+    });
+    await startCall(r);
+    r.engine.last.play(silence(1), silence(1));
+    await settle(r, () => ofType(r.events, "vocab.used").length > 0);
+    expect(ofType(r.events, "vocab.used")[0]?.entries).toEqual([]);
+    expect(r.logs).toContainEqual({ level: "warn", msg: GREEDY_NO_HOTWORDS });
   });
 
   test("a vocab.add mid-call writes a new vocab.used and biases the next segment", async () => {

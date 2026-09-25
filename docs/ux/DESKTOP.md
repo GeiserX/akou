@@ -316,6 +316,7 @@ Their exact names can still move with the engine design. What this section fixes
 | `asr.language` | `auto` or a language code | the union of the chosen engines' languages | next call |
 | `asr.diarizer` | one engine id | registry entries with role `diarize` | next final pass |
 | `asr.liveLabels` | `clusters` (live speaker clustering, the default) or `channels` (You and Them only) | fixed; a live diarizer, if the engine design adds one, becomes a third value | next call |
+| `asr.parakeet.decoding` | `greedy` (the default) or `beam`; only `beam` takes the decode list, at boost 1.5 | fixed | next app start; the final pass keeps the running recognizer's mode until then |
 
 `asr.liveLabels` replaces the name `asr.liveSpeakers` WINDOW.md used for W4.3.
 

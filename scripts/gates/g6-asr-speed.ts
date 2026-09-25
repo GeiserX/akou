@@ -1,7 +1,7 @@
 /**
  * ROADMAP G6, recognizer speed, offline half: Parakeet TDT v3 (fp32) through the app's own
- * `SherpaModels`, in the production setting (`modified_beam_search`, a 12-word decode list at the
- * default boost, `asr.threads` threads), over a folder of speech clips.
+ * `SherpaModels`, with beam search (`asr.parakeet.decoding` `beam`, the slower of the two modes), a
+ * 12-word decode list at the default boost and `asr.threads` threads, over a folder of speech clips.
  *
  * The real-time factor for both channels assumes the worst case, speech on both sides all the
  * time: the live Worker decodes both channels with one recognizer, so it spends twice the
@@ -54,6 +54,7 @@ const models = new SherpaModels({
   dir: modelsDir,
   cacheDir: mkdtempSync(join(tmpdir(), "akou-g6-")),
   threads,
+  decoding: "beam",
 });
 const prepared = models.prepare(list);
 const loadMs = performance.now() - tLoad;

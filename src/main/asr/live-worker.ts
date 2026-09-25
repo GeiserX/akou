@@ -1247,6 +1247,7 @@ export class LiveAsr {
       }
       case "vocab": {
         if (!c || m.version !== c.version) return;
+        for (const w of m.warnings) this.log("warn", w);
         // `vocab.used` lists what decoding really uses: the words that passed the tokenization
         // check, not the list the host asked for.
         const files = this.o.vocab?.(c.id).files ?? [];

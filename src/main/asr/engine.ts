@@ -60,6 +60,9 @@ export interface Diarizer {
 /** Which speaker-label engine a model set runs (`asr.diarizer`). */
 export type DiarizerKind = "nemotron" | "embeddings";
 
+/** How Parakeet decodes (`asr.parakeet.decoding`); only `beam` takes hotwords. */
+export type ParakeetDecoding = "greedy" | "beam";
+
 /** One speaker active over `[start, end)`, in samples on a stream diarizer's own timeline. */
 export interface SpeakerTurn {
   /** The model's speaker index in this stream, numbered by first appearance from 0. */
@@ -98,7 +101,9 @@ export interface PreparedHotwords {
   arg: string | undefined;
   /** Entries in force, in the `vocab.used` form (`term` or `term :N`). */
   entries: string[];
+  /** Each logged as an error by the pipelines. */
   dropped: { term: string; reason: string }[];
+  /** Anything else about the list the pipelines log at warn (a greedy recognizer takes none). */
   warnings: string[];
   /** Per-term results of the tokenization check, for the log and `akou vocab check`. */
   checks: TermCheck[];
@@ -139,6 +144,8 @@ export type ModelSpec =
       threads?: number;
       /** Default `nemotron`, the setting's default. */
       diarizer?: DiarizerKind;
+      /** Default `greedy`, the setting's default. */
+      decoding?: ParakeetDecoding;
       /** The `akou-diarize` command, program first (`locateHelper`). */
       diarizeHelper?: readonly string[];
     }
