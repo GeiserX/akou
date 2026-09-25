@@ -8,7 +8,7 @@
 
 import { formatWall } from "../../core/log/clock.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
-import type { FlagSpecs, Parsed } from "./args.ts";
+import { type FlagSpec, type FlagSpecs, type Parsed, UsageError } from "./args.ts";
 import { type ApiClient, type ApiResponse, EXIT, exitFor, type RequestOptions } from "./client.ts";
 
 /** An API body as a command reads it, field by field. */
@@ -23,6 +23,21 @@ export interface Io {
   write?(text: string): void;
   /** Ends `tail -f` and the MCP server. */
   signal?: AbortSignal;
+  /** stdout is a terminal: colour and redraws are allowed there only (CLI-20). */
+  tty?: boolean;
+  /** Everything on stdin, for `config set KEY -` (CLI-06). Absent: stdin is empty. */
+  readStdin?(): Promise<string>;
+  /** Keys typed at a terminal, for `akou watch`. Absent: stdin is not a terminal. */
+  keys?: Keys;
+}
+
+/** A terminal's keyboard in raw mode: each chunk as typed, Ctrl-C and Ctrl-D included. */
+export interface Keys {
+  /** Starts raw mode and yields what is typed until `close`. */
+  read(): AsyncIterable<string>;
+  close(): void;
+  /** The terminal's width in columns. */
+  columns(): number;
 }
 
 export interface Ctx {
@@ -37,6 +52,29 @@ export interface Ctx {
   self?: readonly string[];
   /** The app's version; the skill must carry the same one. */
   version: string;
+  /** Colour is on: stdout is a terminal, `NO_COLOR` is unset or empty and `TERM` is not `dumb`. */
+  color?: boolean;
+  /** Test seam: what `doctor` asks about the OS grants (CLI-38). */
+  grants?: GrantChecker;
+  /**
+   * Runs another command in this process with other streams (`akou watch`'s lines), as `client`
+   * when given (`user` for a person typing at a terminal).
+   */
+  run?(argv: readonly string[], io: Io, client?: string): Promise<number>;
+}
+
+/** The OS grants akou needs, as `doctor` reads them (CLI-38). */
+export interface Grant {
+  name: string;
+  /** `n/a`: this OS asks for no such grant. `unknown`: this process cannot read it. */
+  state: "granted" | "missing" | "unknown" | "n/a";
+  detail: string;
+}
+
+export interface GrantChecker {
+  check(): Promise<Grant[]>;
+  /** Asks the OS for one grant, or opens its settings pane. Returns what was done, in words. */
+  request(name: string): Promise<"requested" | "settings opened">;
 }
 
 export interface Command {
@@ -44,6 +82,8 @@ export interface Command {
   summary: string;
   usage: string;
   flags?: FlagSpecs;
+  /** At least one runnable example, printed in help (CLI-05). */
+  examples: readonly string[];
   /**
    * Designed but not built: why. The command says so and exits 69, and no message may send anyone
    * to it (CLI-17).
@@ -112,10 +152,33 @@ export function notBuilt(ctx: Ctx, what: string): number {
   return EXIT.unavailable;
 }
 
+/** `-c/--call`, the one way to name a call on every command that touches one (CLI-03). */
+export function callFlag(fallback: string): FlagSpec {
+  return {
+    type: "string",
+    short: "c",
+    value: "CALL",
+    desc: `live, last or a call id (default: ${fallback})`,
+  };
+}
+
 /** `live` unless a call is named. */
 export function ref(p: Parsed, fallback = "live"): string {
   const v = p.flags.call;
   return typeof v === "string" && v !== "" ? encodeURIComponent(v) : fallback;
+}
+
+/**
+ * The call of a command whose object is a call (`show`, `open`, `finalize`, `export`): its first
+ * word or `-c`, which name the same thing. Both at once must agree. Returns it unencoded.
+ */
+export function objectCall(p: Parsed, word: string | undefined): string | undefined {
+  const flag = p.flags.call;
+  const c = typeof flag === "string" && flag !== "" ? flag : undefined;
+  if (word !== undefined && c !== undefined && word !== c) {
+    throw new UsageError(`the call is named twice, as ${word} and as -c ${c}`);
+  }
+  return word ?? c;
 }
 
 export function enc(s: string): string {

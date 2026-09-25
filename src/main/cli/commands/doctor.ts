@@ -16,7 +16,9 @@
  *   rule (configured, else bundled, else PATH), the running app's answer winning the same way;
  * - harness: `claude` or `codex` found, first on PATH, then through the login shell the way the
  *   app looks for them;
- * - permissions: what the operating system must grant, as a hint (`--grant` is not built yet).
+ * - grants: the microphone, system-audio and (macOS) Accessibility grants, each with its state
+ *   (`grants.ts`). With `--grant`, on a terminal, each missing or unreadable one is asked for once,
+ *   or its settings pane is opened (CLI-38); without a terminal nothing is asked.
  *
  * Exit 0 when nothing failed, 69 otherwise. Not here yet: the 3 s capture test the design lists,
  * which needs the real helper.
@@ -32,7 +34,8 @@ import { loadConfig } from "../../config/schema.ts";
 import { findProgram } from "../../llm/harness.ts";
 import { bool } from "../args.ts";
 import { EXIT } from "../client.ts";
-import type { Command, Ctx } from "../context.ts";
+import type { Command, Ctx, Grant } from "../context.ts";
+import { systemGrants } from "../grants.ts";
 
 export interface Check {
   name: string;
@@ -167,18 +170,47 @@ export function diarizeHelperCheck(local: HelperFound, app: HelperFound | null):
   };
 }
 
-function permissionHint(): string {
-  switch (process.platform) {
-    case "darwin":
-      return "macOS asks for the microphone and for system audio the first time akou records; both grants belong to the akou app (System Settings, Privacy & Security)";
-    case "win32":
-      return "Windows needs microphone access for desktop apps (Settings, Privacy, Microphone)";
-    default:
-      return "Linux needs PipeWire or PulseAudio running for the call audio";
-  }
+/** A grant after `doctor` looked at it, and asked for it when `--grant` ran on a terminal. */
+export interface GrantState {
+  name: string;
+  state: Grant["state"] | "requested" | "settings opened";
+  detail: string;
 }
 
-export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
+/** Reads the grants; with `ask`, asks for each one missing or unreadable, once. */
+export async function grantStates(ctx: Ctx, ask: boolean): Promise<GrantState[]> {
+  const checker = ctx.grants ?? systemGrants;
+  const out: GrantState[] = [];
+  for (const g of await checker.check()) {
+    if (ask && (g.state === "missing" || g.state === "unknown")) {
+      out.push({ ...g, state: await checker.request(g.name) });
+    } else out.push(g);
+  }
+  return out;
+}
+
+function grantCheck(g: GrantState): Check {
+  const state: Check["state"] =
+    g.state === "granted"
+      ? "ok"
+      : g.state === "missing"
+        ? "fail"
+        : g.state === "requested"
+          ? "warn"
+          : "info";
+  const what =
+    g.state === "missing"
+      ? "missing; run `akou doctor --grant` in a terminal to ask for it"
+      : g.state === "requested"
+        ? "requested; answer the system's prompt, then run `akou doctor` again"
+        : g.state;
+  return { name: g.name, state, detail: `${what} (${g.detail})` };
+}
+
+export async function doctor(
+  ctx: Ctx,
+  grant: boolean,
+): Promise<{ checks: Check[]; grants: GrantState[] }> {
   const env = ctx.io.env;
   const cfg = loadConfig(env);
   const checks: Check[] = [];
@@ -268,26 +300,35 @@ export async function doctor(ctx: Ctx, grant: boolean): Promise<Check[]> {
         },
   );
 
-  checks.push({ name: "permissions", state: "info", detail: permissionHint() });
-  if (grant) {
+  // A prompt from the OS belongs in front of a person, never in a script's run.
+  const ask = grant && ctx.io.tty === true;
+  const grants = await grantStates(ctx, ask);
+  checks.push(...grants.map(grantCheck));
+  if (grant && !ask) {
     checks.push({
       name: "grant",
-      state: "warn",
-      detail: "--grant (prompting for the grants now) is not built yet",
+      state: "info",
+      detail: "--grant asks only on a terminal, so nothing was asked",
     });
   }
-  return checks;
+  return { checks, grants };
 }
 
 export const doctorCommand: Command = {
   name: "doctor",
   summary: "Check models, the helper, the token, the API, permissions and harness discovery",
   usage: "akou doctor [--grant] [--json]",
-  flags: { grant: { type: "boolean" } },
+  flags: {
+    grant: {
+      type: "boolean",
+      desc: "on a terminal, ask the OS for each missing grant or open its settings pane",
+    },
+  },
+  examples: ["akou doctor", "akou doctor --grant"],
   run: async (ctx, p) => {
-    const checks = await doctor(ctx, bool(p, "grant"));
+    const { checks, grants } = await doctor(ctx, bool(p, "grant"));
     const failed = checks.some((c) => c.state === "fail");
-    if (ctx.json) ctx.io.out(JSON.stringify({ ok: !failed, checks }));
+    if (ctx.json) ctx.io.out(JSON.stringify({ ok: !failed, checks, grants }));
     else for (const c of checks) ctx.io.out(`${c.state.padEnd(4)}  ${c.name}: ${c.detail}`);
     return failed ? EXIT.unavailable : EXIT.ok;
   },

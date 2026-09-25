@@ -21,7 +21,7 @@ import {
   sha256File,
   verifyModels,
 } from "../../asr/models.ts";
-import { loadConfig } from "../../config/schema.ts";
+import { isSettingKey, loadConfig, SETTINGS, type SettingSpec } from "../../config/schema.ts";
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
 import { api, type Body, type Command, type Ctx, finish, notBuilt } from "../context.ts";
@@ -39,7 +39,14 @@ export function parseValue(raw: string): unknown {
 const config: Command = {
   name: "config",
   summary: "Show, set or unset a setting (validated by the settings registry)",
-  usage: "akou config show | akou config set KEY VALUE | akou config unset KEY   [--json]",
+  usage:
+    "akou config show | akou config set KEY VALUE | akou config set KEY - (the value on stdin; required for secrets) | akou config unset KEY   [--json]",
+  examples: [
+    "akou config show",
+    "akou config set asr.threads 4",
+    "printf '%s' \"$KEY\" | akou config set provider.apiKey -",
+    "akou config unset asr.threads",
+  ],
   run: async (ctx, p) => {
     const [sub, key, ...rest] = p.positional;
     if (sub === "show") {
@@ -55,9 +62,22 @@ const config: Command = {
     }
     if (sub === "set") {
       if (!key || rest.length === 0) return usage(ctx, "config set needs a key and a value");
-      const r = await api(ctx, "PATCH", "/config", {
-        body: { [key]: parseValue(rest.join(" ")) },
-      });
+      const secret = isSettingKey(key) && (SETTINGS[key] as SettingSpec).secret === true;
+      const fromStdin = rest.length === 1 && rest[0] === "-";
+      if (secret && !fromStdin) {
+        // A secret on the command line lands in shell history and in `ps` (CLI-06).
+        return refuseSecretArg(ctx, key);
+      }
+      let value: unknown;
+      if (fromStdin) {
+        // One trailing newline is the shell's (`echo`), not the value's.
+        const raw = (await (ctx.io.readStdin?.() ?? Promise.resolve(""))).replace(/\r?\n$/, "");
+        if (raw === "") return usage(ctx, `config set ${key} - read nothing from stdin`);
+        value = secret ? raw : parseValue(raw);
+      } else {
+        value = parseValue(rest.join(" "));
+      }
+      const r = await api(ctx, "PATCH", "/config", { body: { [key]: value } });
       return finish(ctx, r, (b) => `${key} = ${JSON.stringify(b.settings[key])}\n${b.note}`);
     }
     if (sub === "unset") {
@@ -69,10 +89,20 @@ const config: Command = {
   },
 };
 
+/** Refuses a secret given as an argument: exit 64, nothing stored, and the stdin form to use. */
+function refuseSecretArg(ctx: Ctx, key: string): number {
+  const message = `${key} is a secret, so akou never takes it from the command line, where shell history and ps would keep it`;
+  const hint = `printf '%s' "$VALUE" | akou config set ${key} -`;
+  if (ctx.json) ctx.io.out(JSON.stringify({ error: "usage", message, hint }));
+  else ctx.io.err(`akou: ${message}\n  try: ${hint}`);
+  return EXIT.usage;
+}
+
 const token: Command = {
   name: "token",
   summary: "Where the API token is, or rotate it (the running app follows at once)",
   usage: "akou token path | akou token rotate   [--json]",
+  examples: ["akou token path", "akou token rotate"],
   run: async (ctx, p) => {
     const sub = p.positional[0];
     if (sub === "path") {
@@ -153,6 +183,7 @@ const models: Command = {
   name: "models",
   summary: "The speech models: list, pull (download, checksummed) or import from a folder",
   usage: "akou models list | akou models pull | akou models import DIR   [--json]",
+  examples: ["akou models list", "akou models pull", "akou models import /Volumes/usb/akou-models"],
   run: async (ctx, p) => {
     const [sub, arg] = p.positional;
     const dir = modelsDir(ctx);
@@ -243,7 +274,12 @@ const share: Command = {
   name: "share",
   summary: "A read-only live link to the call",
   usage: "akou share on|off|status [--bind tailnet|lan|IP] [--notes] [--expires 3h] [--json]",
-  flags: { bind: { type: "string" }, notes: { type: "boolean" }, expires: { type: "string" } },
+  flags: {
+    bind: { type: "string", value: "WHERE", desc: "tailnet, lan or an address (default: tailnet)" },
+    notes: { type: "boolean", desc: "share the notepad too" },
+    expires: { type: "string", value: "3h", desc: "turn the link off after this long" },
+  },
+  examples: ["akou share on --bind tailnet --expires 3h", "akou share status", "akou share off"],
   run: async (ctx, p) => {
     const sub = p.positional[0];
     if (sub === "status") {
@@ -280,6 +316,7 @@ function unbuilt(
     summary,
     usage: cmdUsage,
     flags,
+    examples: [cmdUsage],
     unbuilt: why,
     run: async (ctx) => notBuilt(ctx, why),
   };
