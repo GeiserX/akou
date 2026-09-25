@@ -2,10 +2,11 @@
  * One recording through the real path for the capture gates (G3-lite, G4): quit the app, run
  * `akou start` cold and time it, sample the app's and the helper's memory every 30 s, stop after
  * `--seconds`, and wait for `part.ended`. Prints the start's timing and answer and the call folder,
- * for `scripts/drift-test.ts`.
+ * for `scripts/drift-test.ts`. `--without-models` passes the same flag to `akou start`, so the app
+ * records audio only, with no recognizer loaded, and starts on a machine without the models.
  *
  *   AKOU_HOME=… bun scripts/gates/record-call.ts --cli <cli.ts> --seconds N [--tag T]
- *     [--memory memory.csv] [--out result.json]
+ *     [--without-models] [--memory memory.csv] [--out result.json]
  */
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -74,7 +75,12 @@ if (old && alive(old)) {
   if (alive(old)) throw new Error(`the app (pid ${old}) did not quit`);
 }
 
-const start = await cli("start", "-t", opt("--tag") ?? "gate-recording");
+const start = await cli(
+  "start",
+  "-t",
+  opt("--tag") ?? "gate-recording",
+  ...(argv.includes("--without-models") ? ["--without-models"] : []),
+);
 if (start.code !== 0) throw new Error(`start failed: ${start.out}`);
 const body = JSON.parse(start.out);
 const app = appPid();

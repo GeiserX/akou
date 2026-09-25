@@ -1,0 +1,182 @@
+{
+  "parts": 1,
+  "partEnded": {
+    "reason": "stop",
+    "fileSeconds": 127.384
+  },
+  "wallSeconds": 127.666,
+  "helperMessages": [
+    {
+      "type": "hello",
+      "protocol": "akou-capture/1",
+      "version": "0.0.0",
+      "caps": ["tap", "mic", "probe", "exclude-responsible", "app"]
+    },
+    {
+      "type": "capturing",
+      "mic": {
+        "id": "default",
+        "name": "BlackHole 2ch",
+        "rate": 48000
+      },
+      "call": {
+        "mode": "system",
+        "rate": 48000
+      },
+      "exclude": ["pid 65176"],
+      "capture_ns": "227646617111583"
+    },
+    {
+      "type": "first_audio",
+      "ch": "mic",
+      "capture_ns": "227646617111583"
+    },
+    {
+      "type": "first_audio",
+      "ch": "call",
+      "capture_ns": "227649877111583"
+    },
+    {
+      "type": "device",
+      "ch": "call",
+      "event": "rebuilt",
+      "name": "requested"
+    },
+    {
+      "type": "device",
+      "ch": "call",
+      "event": "rebuilt",
+      "name": "requested"
+    },
+    {
+      "type": "device",
+      "ch": "call",
+      "event": "rebuilt",
+      "name": "requested"
+    },
+    {
+      "type": "stopped",
+      "file_seconds": 127.384,
+      "reason": "stop"
+    }
+  ],
+  "fileMinusWallMs": -282,
+  "leftSeconds": 127.384,
+  "leftGaps": {
+    "scannedSeconds": 0,
+    "over5ms": 0,
+    "over20ms": 0,
+    "longestMs": 0,
+    "worst": []
+  },
+  "rightSeconds": 127.384,
+  "rightGaps": {
+    "scannedSeconds": 123.3,
+    "over5ms": 3,
+    "over20ms": 3,
+    "longestMs": 87.8,
+    "worst": [
+      {
+        "at": 32.307,
+        "ms": 87.8
+      },
+      {
+        "at": 92.338,
+        "ms": 77.3
+      },
+      {
+        "at": 62.328,
+        "ms": 72.3
+      }
+    ]
+  },
+  "quietWindows": [
+    {
+      "from": 0.5,
+      "to": 3.1,
+      "callRmsDbfs": null,
+      "callPeakDbfs": null
+    }
+  ],
+  "firstWords": [
+    {
+      "at": 3.542,
+      "speechOnsetMs": 140,
+      "lagMs": -0.06,
+      "headScore": 0.969,
+      "lostMs": 0,
+      "scoresPer20msFromOnset": [
+        0.98, 0.99, 0.98, 0.98, 0.98, 0.99, 0.98, 0.96, 0.57, 0.52, 0.56, 0.42, 0.54, 0.02, 0.8
+      ]
+    }
+  ],
+  "levels": {
+    "left_rms_dbfs": -100.1,
+    "left_peak_dbfs": -52.5,
+    "right_rms_dbfs": -34.3,
+    "right_peak_dbfs": -3.3
+  },
+  "chirps": {
+    "mic@left": {
+      "found": 0
+    },
+    "call@left": {
+      "found": 0
+    },
+    "mic@right": {
+      "found": 0
+    },
+    "call@right": {
+      "found": 13,
+      "expected": 13,
+      "missing": [],
+      "latencyMs": {
+        "n": 13,
+        "min": 8.329,
+        "median": 8.383,
+        "max": 8.401,
+        "spread": 0.07199999999999918
+      },
+      "slopeMsPerHour": 0.37,
+      "minScore": 0.988,
+      "firstRows": [
+        {
+          "k": 0,
+          "t": 6.27,
+          "ms": 8.329
+        },
+        {
+          "k": 1,
+          "t": 16.27,
+          "ms": 8.401
+        },
+        {
+          "k": 2,
+          "t": 26.27,
+          "ms": 8.397
+        },
+        {
+          "k": 3,
+          "t": 36.27,
+          "ms": 8.383
+        }
+      ],
+      "lastRows": [
+        {
+          "k": 11,
+          "t": 116.27,
+          "ms": 8.386
+        },
+        {
+          "k": 12,
+          "t": 126.27,
+          "ms": 8.386
+        }
+      ]
+    }
+  },
+  "leftRight": {
+    "pairs": 0,
+    "note": "no mic chirps on the left channel to pair with"
+  }
+}
