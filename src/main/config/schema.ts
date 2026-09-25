@@ -11,8 +11,9 @@
  *
  * A key that is unknown, of the wrong type or out of range is refused with a message and its
  * default is used; the rest of the file still applies. A file that is not JSON is refused whole.
- * There is deliberately no `vocab.boost`: the global boost is the constant 3 (TRAPS "The boost is a
- * slider"), and a file that tries to set one is told so.
+ * There is deliberately no `vocab.boost`: the global boost is the constant 1.5, used only when
+ * Parakeet decodes with beam search (TRAPS "The boost is a slider"), and a file that tries to set
+ * one is told so.
  *
  * Environment: only `AKOU_HEADLESS`, `AKOU_SERVER`, `AKOU_MODELS_DIR` and `AKOU_HOME` exist.
  * `AKOU_HOME` is not a setting: it moves the home folder itself (config and recordings), for tests.
@@ -286,6 +287,12 @@ export const SETTINGS = {
     default: "nemotron",
     doc: "Who speaks when on the call channel: `nemotron` (NVIDIA Nemotron 3 Diarization, live at 2 s latency and in the final pass, through the akou-diarize helper) or `embeddings` (voice-embedding clusters live, pyannote in the final pass). `akou models pull` fetches what the choice needs; takes effect at the next start.",
   },
+  "asr.parakeet.decoding": {
+    type: "string",
+    values: ["greedy", "beam"],
+    default: "greedy",
+    doc: "How Parakeet decodes, live and in the final pass: `greedy` (the default) or `beam`. Beam search also steers decoding toward the call's vocabulary at boost 1.5, but on some meeting audio it returns whole spans empty. Vocabulary correction when reading and after the call applies with either. Takes effect at the next start.",
+  },
   "asr.diarizeHelper": {
     type: "string[]",
     default: [],
@@ -421,7 +428,7 @@ export type Settings = { -readonly [K in SettingKey]: ValueOf<(typeof SETTINGS)[
 /** Keys refused with a reason of their own, beyond "unknown key". */
 const FORBIDDEN: Readonly<Record<string, string>> = {
   "vocab.boost":
-    "there is no global boost setting: it is the constant 3; a word the engine keeps missing gets its own boost, up to 5, as `decode` in its vocabulary file entry",
+    "there is no global boost setting: it is the constant 1.5, used only when `asr.parakeet.decoding` is `beam`; a word the engine keeps missing gets its own boost, up to 5, as `decode` in its vocabulary file entry",
 };
 
 export const SETTING_KEYS = Object.keys(SETTINGS) as SettingKey[];

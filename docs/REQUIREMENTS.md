@@ -216,7 +216,7 @@ Status words:
 The predecessors had a read-time word list (they called it a glossary) applied by the user's own scripts after the call. akou makes the list a product feature, calls it vocabulary everywhere, and builds it in three layers. The design is in DESIGN.md, section 3 and the read path.
 
 - V1 one user-owned word list, global plus per workspace plus extra files, YAML, each entry with term, heard forms, source, confirmed flag and date: **new (M1)**.
-- V2 decode-time biasing of the live and final recognizer with a short per-call list: **new (M1)**, Parakeet only (sherpa-onnx hotwords, boost 3, cap 24, `bpe.vocab` built by akou from the model's tokenizer). Moonshine and Whisper get none.
+- V2 decode-time biasing of the live and final recognizer with a short per-call list: **new (M1)**, Parakeet only, and only with `asr.parakeet.decoding` `beam` (sherpa-onnx hotwords, boost 1.5, cap 24, `bpe.vocab` built by akou from the model's tokenizer). Greedy, the default, and Moonshine and Whisper get none.
 - V3 read-time correction in every view, with the raw text kept in the log and shown beside the correction: **new (M1)**, in the fold, through `vocab.add` events and the files.
 - V4 "Fix this word" in the window, mid-call adds from the CLI, the API and MCP, `--vocab` on start: **new (M1)**.
 - V5 `akou vocab list | add | remove | approve | reject | suggest | check | import`, the `/vocab` routes and the `akou_vocab_*` tools: **new (M1)**.

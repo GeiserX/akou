@@ -6,17 +6,20 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
-import type { LogEvent, Seg } from "../src/core/log/events.ts";
+import type { Channel, LogEvent, Seg } from "../src/core/log/events.ts";
 import { PROVISIONAL_TTL_MS } from "../src/core/log/fold.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import {
   type CallAccess,
+  type FromWorker,
   LiveAsr,
   type LiveOut,
   LivePipeline,
   type VocabSource,
+  WorkerSide,
 } from "../src/main/asr/live-worker.ts";
 import { MIN_SPAN_SECONDS, padSpan, prepareSpan } from "../src/main/asr/pad.ts";
+import { GREEDY_NO_HOTWORDS } from "../src/main/asr/sherpa.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { buildDecodeList, type DecodeList } from "../src/main/vocab/decode-list.ts";
 import type { MergedEntry } from "../src/main/vocab/files.ts";
@@ -140,6 +143,38 @@ describe("segmenting", () => {
     dup.p.audio(1, "call", 16000, a.subarray(0, 16000));
     dup.p.audio(1, "call", 32000, a.subarray(16000));
     expect(texts(dup)).not.toEqual(texts(one));
+  });
+});
+
+describe("a channel the pipeline does not have", () => {
+  test("a Worker message for channel `__proto__` is refused and Object.prototype is untouched", async () => {
+    const replies: FromWorker[] = [];
+    const side = new WorkerSide((m) => replies.push(m));
+    cleanups.push(() => side.close());
+    const before = Object.getOwnPropertyNames(Object.prototype);
+    const spec: ModelSpec = { kind: "module", path: FAKE, model: "fake-parakeet", options: {} };
+    const audio = (ch: Channel) =>
+      side.handle({ type: "audio", part: 1, ch, start: 0, samples: silence(0.1), live: true });
+    side.handle({ type: "init", models: spec, live: {} });
+    audio("__proto__" as Channel);
+    audio("mic");
+    side.handle({ type: "flush", token: 1, call: "" });
+    await until(() => replies.some((r) => r.type === "flushed"), 5000, "the flush");
+    const added = Object.getOwnPropertyNames(Object.prototype).filter((k) => !before.includes(k));
+    // A regression must not leak into the tests after this one.
+    for (const k of added) delete (Object.prototype as Record<string, unknown>)[k];
+    expect(added).toEqual([]);
+    expect(replies).toContainEqual(
+      expect.objectContaining({
+        type: "log",
+        level: "error",
+        msg: expect.stringContaining("unknown channel"),
+      }),
+    );
+    // Only the real channel moved, and it still works after the bad message.
+    expect(
+      replies.filter((r) => r.type === "progress").map((r) => r.type === "progress" && r.ch),
+    ).toEqual(["mic"]);
   });
 });
 
@@ -540,6 +575,18 @@ describe("the decode list and vocab.used", () => {
       level: "error",
       msg: 'hotword "Kubernetes" dropped: pieces not in the model: <unk>',
     });
+  });
+
+  test("under greedy decoding a non-empty decode list is logged at warn, and vocab.used is empty", async () => {
+    const r = rig({
+      fake: { greedy: true },
+      vocab: { entries: [entry("Hetzner")], files: [] },
+    });
+    await startCall(r);
+    r.engine.last.play(silence(1), silence(1));
+    await settle(r, () => ofType(r.events, "vocab.used").length > 0);
+    expect(ofType(r.events, "vocab.used")[0]?.entries).toEqual([]);
+    expect(r.logs).toContainEqual({ level: "warn", msg: GREEDY_NO_HOTWORDS });
   });
 
   test("a vocab.add mid-call writes a new vocab.used and biases the next segment", async () => {

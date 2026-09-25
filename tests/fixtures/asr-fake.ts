@@ -28,6 +28,7 @@ import type {
   Vad,
 } from "../../src/main/asr/engine.ts";
 import type { FinalAudio } from "../../src/main/asr/finalize-worker.ts";
+import { GREEDY_NO_HOTWORDS } from "../../src/main/asr/sherpa.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../../src/main/vocab/decode-list.ts";
 
 export const RATE = 16000;
@@ -168,6 +169,8 @@ export interface FakeOptions {
   refuseOver?: number;
   /** Terms the tokenization check would drop. */
   unencodable?: string[];
+  /** Decodes like `asr.parakeet.decoding` greedy: no hotwords, whatever the list. */
+  greedy?: boolean;
   /** The engine prints a warning on every decode. */
   noisy?: boolean;
   /** Consecutive loud windows before the fake VAD reports speech (Silero's min speech). */
@@ -438,6 +441,22 @@ export class FakeModels implements ModelSet {
   }
 
   prepare(list: DecodeList | null): PreparedHotwords {
+    if (this.o.greedy) {
+      if (!this.rec) {
+        this.rec = new FakeRecognizer(this.recognizerModel, this.o);
+        this.recognizers.push(this.rec);
+        this.count(this.recognizerModel);
+      }
+      const warnings = list?.entries.length ? [GREEDY_NO_HOTWORDS] : [];
+      return {
+        recognizer: this.rec,
+        arg: undefined,
+        entries: [],
+        dropped: [],
+        warnings,
+        checks: [],
+      };
+    }
     // No model-kind filter here on purpose: the pipelines must keep a list away from a model that
     // takes none, whatever the model set hands them.
     const entries = list ? list.entries : [];
@@ -460,7 +479,7 @@ export class FakeModels implements ModelSet {
       arg: arg === "" ? undefined : arg,
       entries: kept.map((e) => (e.boost === DEFAULT_BOOST ? e.term : `${e.term} :${e.boost}`)),
       dropped,
-      warnings: dropped.map((d) => `hotword "${d.term}" dropped: ${d.reason}`),
+      warnings: [],
       checks: [],
     };
   }

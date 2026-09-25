@@ -384,6 +384,7 @@ export async function runFinalPass(
       model: hw.recognizer.model,
     });
     for (const d of hw.dropped) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
+    for (const w of hw.warnings) log("warn", w);
 
     // 3. Diarization over the call channel of all parts, concatenated.
     step = "diarize";
