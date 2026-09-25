@@ -237,6 +237,8 @@ describe("what the bundle carries beside the main process", () => {
     expect(builtCopies(none)).toEqual({});
     expect(builtCopies(all)).toEqual({
       "dist/ui": `${MAIN_OUT}/ui`,
+      // The command line the akou menu links into PATH (DK-M6).
+      "dist/app-cli/akou": `${MAIN_OUT}/akou`,
       "dist/workers/live-worker.js": `${MAIN_OUT}/live-worker.js`,
       "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
     });
