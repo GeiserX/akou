@@ -105,6 +105,7 @@ describe("the window's RPC handlers (main side)", () => {
         showCall: () => {},
         showSettings: () => {},
         focusAsk: () => {},
+        askQuit: () => {},
       };
       const rpc = windowRpc(
         new Bridge(rig.app),

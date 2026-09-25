@@ -99,6 +99,15 @@ export interface Transport {
   openSettingsPane(pane: "microphone" | "system-audio"): Promise<boolean>;
 }
 
+/** The question the shell asks in the window before a quit stops a recording (DK-M3). */
+export interface QuitQuestion {
+  id: number;
+  message: string;
+  detail: string;
+  /** The label of the button that quits; Cancel is the other, and the default. */
+  confirm: string;
+}
+
 /** The parts of `GET /status` the window reads. */
 export interface AppStatus {
   app: { version: string; headless: boolean };
@@ -158,6 +167,8 @@ export interface AkouRpc {
       audio: { params: { call: string; part: number }; response: { type: string; base64: string } };
       status: { params: Record<string, never>; response: AppStatus };
       openSettingsPane: { params: { pane: "microphone" | "system-audio" }; response: boolean };
+      /** The page's answer to `askQuit`: true for the confirm button, false for Cancel. */
+      answerQuit: { params: { id: number; go: boolean }; response: boolean };
     };
     messages: Record<string, never>;
   };
@@ -177,6 +188,8 @@ export interface AkouRpc {
       showSettings: Record<string, never>;
       /** The floating indicator's Ask: the ask box, focused (DK-F1). */
       focusAsk: Record<string, never>;
+      /** Quit during a recording (DK-M3): a question with Cancel the default; answered by `answerQuit`. */
+      askQuit: QuitQuestion;
     };
   };
 }

@@ -19,7 +19,7 @@ import { Follower } from "./follow.ts";
 import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from "./model.ts";
 import { ModelsCard } from "./models-card.ts";
 import { message, NotepadPane } from "./notepad.ts";
-import type { AppStatus, Levels, Transport } from "./protocol.ts";
+import type { AppStatus, Levels, QuitQuestion, Transport } from "./protocol.ts";
 import { ReviewPane } from "./review.ts";
 import { SettingsPane } from "./settings.ts";
 import { TranscriptPane } from "./transcript.ts";
@@ -54,6 +54,39 @@ export function showCall(call?: string): void {
 export function focusAsk(): void {
   document.getElementById("tab-ask")?.click();
   document.getElementById("ask-input")?.focus();
+}
+
+/**
+ * The quit question (DK-M3), asked here because the SDK's message box would block the main
+ * process. Cancel has the focus, so Return and Escape both keep the call; true only for the
+ * confirm button.
+ */
+export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
+  return new Promise((resolve) => {
+    const cancel = h("button", { type: "button", id: "quit-cancel" }, "Cancel");
+    const go = h("button", { type: "button", id: "quit-go" }, q.confirm);
+    const dialog = h(
+      "dialog",
+      { id: "quit-question", class: "question", attrs: { "aria-labelledby": "quit-message" } },
+      h("h2", { id: "quit-message" }, q.message),
+      h("p", {}, q.detail),
+      h("div", { class: "bar" }, cancel, go),
+    );
+    let done = false;
+    const finish = (quit: boolean) => {
+      if (done) return;
+      done = true;
+      if (dialog.open) dialog.close();
+      dialog.remove();
+      resolve(quit);
+    };
+    cancel.addEventListener("click", () => finish(false));
+    go.addEventListener("click", () => finish(true));
+    dialog.addEventListener("close", () => finish(false));
+    document.body.append(dialog);
+    dialog.showModal();
+    cancel.focus();
+  });
 }
 
 /** The application menu's Settings… opens the settings pane, as its button does. */

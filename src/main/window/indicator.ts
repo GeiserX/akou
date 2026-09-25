@@ -39,6 +39,7 @@ export function indicatorRpc(
       showCall: drop,
       showSettings: drop,
       focusAsk: drop,
+      askQuit: drop,
     }),
     async () => false,
   );

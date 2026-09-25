@@ -23,6 +23,7 @@ export interface WindowSend {
   showCall(m: Messages["showCall"]): void;
   showSettings(m: Messages["showSettings"]): void;
   focusAsk(m: Messages["focusAsk"]): void;
+  askQuit(m: Messages["askQuit"]): void;
 }
 
 export interface WindowRpc {
@@ -39,6 +40,7 @@ export interface WindowRpc {
     audio(p: { call: string; part: number }): Promise<{ type: string; base64: string }>;
     status(p: Record<string, never>): Promise<AppStatus>;
     openSettingsPane(p: { pane: SettingsPane }): Promise<boolean>;
+    answerQuit(p: { id: number; go: boolean }): Promise<boolean>;
   };
   /** Stops every stream (the window closed). */
   close(): void;
@@ -50,6 +52,8 @@ export function windowRpc(
   openSettings: (pane: SettingsPane) => Promise<boolean>,
   /** The page pulled the status, which it does once its message handlers are registered. */
   booted: () => void = () => {},
+  /** The page answered the quit question `id` (DK-M3). */
+  answerQuit: (id: number, go: boolean) => void = () => {},
 ): WindowRpc {
   const follows = new Map<string, () => void>();
   const asks = new Map<string, AbortController>();
@@ -140,6 +144,11 @@ export function windowRpc(
       },
 
       openSettingsPane: async ({ pane }) => openSettings(pane),
+
+      answerQuit: async ({ id, go }) => {
+        answerQuit(id, go === true);
+        return true;
+      },
     },
     close: () => {
       unwatch();

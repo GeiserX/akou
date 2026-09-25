@@ -26,6 +26,7 @@ import {
   hotkeyFor,
   INDICATOR_SIZE,
   placeFrame,
+  QUIT_QUESTION,
   type Rect,
   Shell,
   type ShellApp,
@@ -210,15 +211,15 @@ describe("[DK-M3] quitting during a recording asks first", () => {
           .map((l) => JSON.parse(l) as LogEvent);
       await until(() => events().some((e) => e.type === "part.started"), 10_000, "recording");
 
-      // Cmd+Q (the menu's quit role) with Cancel, the default.
+      // Cmd+Q (the menu's quit role): the window opens and asks once its page has booted.
       expect(f.quitRequested()).toBe(true);
-      await until(() => f.boxes.length === 1, 2000, "the question");
-      expect(f.boxes[0]).toEqual({
-        message: "A call is recording. Stop it and quit?",
-        buttons: ["Cancel", "Stop and quit"],
-        defaultId: 0,
-        cancelId: 0,
-      });
+      await until(() => f.log.includes(`window ${WINDOW_URL}`), 2000, "the window");
+      expect(f.questions).toEqual([]);
+      await f.boot();
+      await until(() => f.questions.length === 1, 2000, "the question");
+      expect(f.questions[0]).toEqual({ id: 1, ...QUIT_QUESTION });
+      expect(QUIT_QUESTION.message).toBe("A call is recording. Stop it and quit?");
+      // The fake page answered Cancel.
       await Bun.sleep(200);
       expect(f.log).not.toContain("quit");
       expect((await rig.api("GET", "/calls/live")).body.state).toBe("recording");
@@ -229,10 +230,10 @@ describe("[DK-M3] quitting during a recording asks first", () => {
       f.onQuit = () => {
         atExit = events();
       };
-      f.answer = (m) => (m.startsWith("A call is recording") ? 1 : undefined);
+      f.answer = () => true;
       f.tray("quit");
       await until(() => f.log.includes("quit"), 15_000, "the quit");
-      expect(f.boxes).toHaveLength(2);
+      expect(f.questions).toHaveLength(2);
       const ended = atExit.filter((e) => e.type === "part.ended");
       expect(ended.map((e) => (e as Extract<LogEvent, { type: "part.ended" }>).reason)).toEqual([
         "stop",
@@ -250,44 +251,120 @@ describe("[DK-M3] quitting during a recording asks first", () => {
       platform: "darwin",
       setLoginItem: async () => {},
     });
+    a.bind(shell);
     await shell.start();
     expect(f.quitRequested()).toBe(true);
     await until(() => f.log.includes("quit"), 1000, "the quit");
-    expect(f.boxes).toEqual([]);
+    expect(f.questions).toEqual([]);
+    expect(a.state).toMatchObject({ quits: 1, windows: 0 });
+    await shell.close();
+  });
+
+  /** A shell over a fake app with a call recording, its page booted, the question left up. */
+  async function asking() {
+    const f = fakeUi();
+    const a = fakeApp({ live: true });
+    f.answer = () => undefined;
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    a.bind(shell);
+    await shell.start();
+    shell.show();
+    await f.boot();
+    return { f, a, shell };
+  }
+
+  test("two quits while the question is up ask once, and bring the window forward", async () => {
+    const { f, a, shell } = await asking();
+    f.quitRequested();
+    await until(() => f.questions.length === 1, 1000, "the question");
+    const windows = a.state.windows;
+    f.tray("quit");
+    await Bun.sleep(50);
+    expect(f.questions).toHaveLength(1);
+    expect(a.state.windows).toBe(windows + 1);
+    await f.answerQuit(false);
+    await Bun.sleep(50);
+    expect(a.state).toMatchObject({ live: true, quits: 0 });
+    // Asked again after Cancel: a new question, and a stale answer to the old one does nothing.
+    f.quitRequested();
+    await until(() => f.questions.length === 2, 1000, "asked again");
+    expect(f.questions[1]?.id).not.toBe(f.questions[0]?.id);
+    await f.answerQuit(true, f.questions[0]?.id);
+    await Bun.sleep(50);
+    expect(a.state.quits).toBe(0);
+    await f.answerQuit(true);
+    await until(() => f.log.includes("quit"), 1000, "the quit");
     expect(a.state.quits).toBe(1);
     await shell.close();
   });
 
-  test("two quits while the question is up ask once", async () => {
+  test("closing the window with the question up is Cancel", async () => {
+    const { f, a, shell } = await asking();
+    f.quitRequested();
+    await until(() => f.questions.length === 1, 1000, "the question");
+    f.closeWindow();
+    await Bun.sleep(50);
+    expect(a.state).toMatchObject({ live: true, quits: 0 });
+    expect(f.log).not.toContain("quit");
+    // Positive control: the next quit asks again, and answering it quits.
+    f.quitRequested();
+    await until(() => f.log.filter((l) => l.startsWith("window ")).length === 2, 1000, "reopened");
+    await f.boot();
+    await until(() => f.questions.length === 2, 1000, "asked again");
+    await f.answerQuit(true);
+    await until(() => f.log.includes("quit"), 1000, "the quit");
+    await shell.close();
+  });
+
+  test("a status that cannot be read asks instead of doing nothing", async () => {
     const f = fakeUi();
     const a = fakeApp({ live: true });
-    let release: (n: number) => void = () => {};
-    f.ui.showMessageBox = (o) => {
-      f.boxes.push({ message: o.message, buttons: o.buttons, defaultId: 0, cancelId: 0 });
-      return new Promise((r) => {
-        release = r;
-      });
+    const status = a.app.status;
+    let broken = true;
+    a.app.status = async () => {
+      if (broken) throw new Error("the status is gone");
+      return status();
     };
     const shell = new Shell(a.app, bridgeStub, f.ui, {
       platform: "darwin",
       setLoginItem: async () => {},
     });
+    a.bind(shell);
+    broken = false;
     await shell.start();
+    shell.show();
+    await f.boot();
+    broken = true;
+    f.answer = () => true;
     f.quitRequested();
-    f.tray("quit");
-    await until(() => f.boxes.length === 1, 1000, "the question");
-    await Bun.sleep(50);
-    expect(f.boxes).toHaveLength(1);
-    release(0);
-    await Bun.sleep(50);
-    expect(a.state).toMatchObject({ live: true, quits: 0 });
-    // Asked again after Cancel: a new question.
-    f.quitRequested();
-    await until(() => f.boxes.length === 2, 1000, "asked again");
-    release(1);
     await until(() => f.log.includes("quit"), 1000, "the quit");
+    expect(f.questions).toHaveLength(1);
     expect(a.state.quits).toBe(1);
     await shell.close();
+  });
+
+  test("[TRAPS: a synchronous SDK dialog] the main process never calls a blocking SDK dialog", () => {
+    // ElectroBun 2.0.1's Utils.showMessageBox and openFileDialog are synchronous FFI calls behind
+    // an async name: the Bun thread, and the capture it pumps, waits until someone clicks.
+    const BLOCKING = /\b(showMessageBox|openFileDialog)\s*\(/;
+    const root = join(import.meta.dir, "..", "src");
+    const hits: string[] = [];
+    for (const rel of new Bun.Glob("**/*.ts").scanSync(root)) {
+      if (rel.endsWith(".d.ts")) continue;
+      readFileSync(join(root, rel), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (BLOCKING.test(line)) hits.push(`${rel}:${i + 1}`);
+        });
+    }
+    expect(hits).toEqual([]);
+    // Positive control: the line this change removed is caught.
+    expect(
+      BLOCKING.test("showMessageBox: async (o) => (await Utils.showMessageBox(o)).response,"),
+    ).toBe(true);
   });
 });
 
@@ -599,7 +676,7 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
     expect(basename(BUNDLED_CLI)).toBe("akou");
   });
 
-  test("the menu item runs the install and shows what happened", async () => {
+  test("the menu item runs the install and says what happened in a notification", async () => {
     const f = fakeUi();
     const runs: string[] = [];
     let next: InstallOutcome = { state: "installed", path: `${CLI_DIR}/akou` };
@@ -618,12 +695,15 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
       "Install Command-Line Tool…",
     );
     f.menu("install-cli");
-    await until(() => f.boxes.length === 1, 1000, "the result");
-    expect(f.boxes[0]?.message).toBe("The akou command is installed.");
+    await until(() => f.notices.length === 1, 1000, "the result");
+    expect(f.notices[0]).toEqual({
+      title: "The akou command is installed.",
+      body: installMessage({ state: "installed", path: `${CLI_DIR}/akou` }).detail,
+    });
     next = { state: "already", path: `${CLI_DIR}/akou` };
     f.menu("install-cli");
-    await until(() => f.boxes.length === 2, 1000, "the second result");
-    expect(f.boxes[1]?.message).toBe("The akou command is already installed.");
+    await until(() => f.notices.length === 2, 1000, "the second result");
+    expect(f.notices[1]?.title).toBe("The akou command is already installed.");
     expect(runs).toHaveLength(2);
     await shell.close();
   });

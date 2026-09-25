@@ -15,6 +15,7 @@ import {
   Shell,
   type ShellOptions,
 } from "../src/main/window/shell.ts";
+import type { QuitQuestion } from "../src/ui/protocol.ts";
 import type { AppRig } from "./api-helpers.ts";
 
 export interface FakeUi {
@@ -39,10 +40,12 @@ export interface FakeUi {
   quitRequested: () => boolean;
   /** Clicks the Dock icon (`reopen`). */
   reopen: () => void;
-  /** Every message box shown, in order, with the button the fake pressed. */
-  boxes: { message: string; buttons: string[]; defaultId: number; cancelId: number }[];
-  /** The button the next message box answers with; by default its cancel button. */
-  answer: (message: string) => number | undefined;
+  /** Every quit question the booted page was shown, in order (DK-M3). */
+  questions: QuitQuestion[];
+  /** How the page answers a question: true quits, false is Cancel (the default), undefined leaves it up. */
+  answer: (q: QuitQuestion) => boolean | undefined;
+  /** The page answers the last question shown, or question `id`. */
+  answerQuit: (go: boolean, id?: number) => Promise<unknown>;
   /** Runs when the shell asks the process to exit, before `quit` is logged. */
   onQuit: () => void;
   /** Every frame a window was opened at, in order. */
@@ -125,6 +128,12 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
           showCall: (m) => page(`call ${m.call}`),
           showSettings: () => page("settings"),
           focusAsk: () => page("ask"),
+          askQuit: (q) => {
+            if (!booted) return;
+            f.questions.push(q);
+            const go = f.answer(q);
+            if (go !== undefined) void rpc?.handlers.answerQuit({ id: q.id, go });
+          },
         },
       };
     },
@@ -164,16 +173,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     },
     onReopen: (fn) => {
       reopenFn = fn;
-    },
-    showMessageBox: async (o) => {
-      const pressed = f.answer(o.message) ?? o.cancelId;
-      f.boxes.push({
-        message: o.message,
-        buttons: [...o.buttons],
-        defaultId: o.defaultId,
-        cancelId: o.cancelId,
-      });
-      return pressed;
     },
     workAreas: () => f.areas,
     openIndicator: (o) => {
@@ -232,8 +231,13 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       return cancelled;
     },
     reopen: () => reopenFn(),
-    boxes: [],
-    answer: () => undefined,
+    questions: [],
+    answer: () => false,
+    answerQuit: async (go, id) => {
+      const q = f.questions.at(-1);
+      if (!q || !rpc) throw new Error("no question is up");
+      return rpc.handlers.answerQuit({ id: id ?? q.id, go });
+    },
     onQuit: () => {},
     frames: [],
     moveWindow: (r) => {

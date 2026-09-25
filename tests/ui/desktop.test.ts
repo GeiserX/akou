@@ -141,6 +141,66 @@ describe("[DK-F1] the floating indicator", () => {
   );
 });
 
+describe("[DK-M3] the quit question is asked in the window", () => {
+  test(
+    "Cancel has the focus: Return and Escape keep the call; Stop and quit quits",
+    async () => {
+      await withDesktop(async (rig) => {
+        const id = await rig.startCall({ title: "Sync" });
+        // The app's quit is counted, not run: the rig's own close runs it.
+        let quits = 0;
+        const realQuit = rig.app.quit;
+        rig.app.quit = async () => {
+          quits++;
+        };
+        await using _restore = {
+          [Symbol.asyncDispose]: async () => {
+            rig.app.quit = realQuit;
+          },
+        };
+        const question = async () => {
+          const main = rig.main() as Page;
+          await main.waitForSelector("#quit-question[open]");
+          return main;
+        };
+        const recording = async () =>
+          (await rig.api("GET", `/calls/${id}`)).body?.state === "recording";
+
+        expect(rig.quitRequested()).toBe(true);
+        await until(() => rig.main() !== null, 10_000, "the main window");
+        let main = await question();
+        expect(await main.textContent("#quit-message")).toBe(
+          "A call is recording. Stop it and quit?",
+        );
+        expect(await main.evaluate(() => document.activeElement?.id)).toBe("quit-cancel");
+        // While the question is up, the app still answers: nothing blocks the main process.
+        expect((await rig.api("GET", "/status")).status).toBe(200);
+        await main.keyboard.press("Enter");
+        await main.waitForSelector("#quit-question", { state: "detached" });
+        await Bun.sleep(100);
+        expect(await recording()).toBe(true);
+        expect([quits, rig.exits()]).toEqual([0, 0]);
+
+        expect(rig.quitRequested()).toBe(true);
+        main = await question();
+        await main.keyboard.press("Escape");
+        await main.waitForSelector("#quit-question", { state: "detached" });
+        await Bun.sleep(100);
+        expect(await recording()).toBe(true);
+        expect([quits, rig.exits()]).toEqual([0, 0]);
+
+        // Positive control: the confirm button does quit.
+        expect(rig.quitRequested()).toBe(true);
+        main = await question();
+        await main.click("#quit-go");
+        await until(() => rig.exits() === 1, 5000, "the exit");
+        expect(quits).toBe(1);
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("[DK-K4] Settings warns about a Control+Alt hotkey", () => {
   /** The page as it runs on another OS: the pane reads the OS from the browser. */
   const as = (platform: string, ua: string) => (page: Page) =>

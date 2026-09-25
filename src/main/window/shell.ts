@@ -13,6 +13,9 @@
  *   page resumes from its cursor. Closing it never quits the app; the tray does.
  * - **Quit.** ElectroBun's `before-quit` cannot wait for a promise, so the first quit is cancelled,
  *   the app's one quit path runs (stop the helper, fsync the log), and the quit is asked again.
+ *   During a recording the question is asked in the window, never in the SDK's message box: that
+ *   is a synchronous FFI call that blocks this process, and with it the capture's packets, the
+ *   API, MCP and the CLI, for as long as the box is up (TRAPS "A synchronous SDK dialog").
  * - **Single instance** is the app's own lock; `main.ts` asks a running app to show its window.
  * - **The tray always has an image** (DK-T1): the idle item has no text, so without one it is
  *   invisible on macOS. The files are drawn by `scripts/tray-icons.ts`.
@@ -24,7 +27,7 @@
  */
 
 import { join } from "node:path";
-import type { AppStatus } from "../../ui/protocol.ts";
+import type { AppStatus, QuitQuestion } from "../../ui/protocol.ts";
 import type { AkouApp, Announcement, WindowShell } from "../index.ts";
 import type { Bridge } from "./bridge.ts";
 import { hotkeyFor } from "./hotkey.ts";
@@ -81,19 +84,6 @@ export interface IndicatorWindow {
   onFrame(fn: (frame: Rect) => void): void;
 }
 
-/** A question with buttons; resolves to the index of the one pressed. */
-export interface MessageBox {
-  type: "question" | "warning" | "info";
-  title: string;
-  message: string;
-  detail?: string;
-  buttons: string[];
-  /** The button Return presses. */
-  defaultId: number;
-  /** The button Escape and closing the box press. */
-  cancelId: number;
-}
-
 export type TrayMenuItem =
   | { type: "normal"; label: string; action: string; enabled?: boolean; checked?: boolean }
   | { type: "separator" };
@@ -137,7 +127,6 @@ export interface NativeUi {
   openExternal(url: string): boolean;
   /** The Dock icon was clicked (macOS `reopen`). */
   onReopen(fn: () => void): void;
-  showMessageBox(o: MessageBox): Promise<number>;
   /** Every display's work area (the screen less the menu bar and Dock), the primary first. */
   workAreas(): Rect[];
 }
@@ -196,6 +185,13 @@ export interface ShellOptions {
   /** Where the window's frame is kept between runs. None: forgotten at quit. */
   state?: { load(): ShellState; save(s: ShellState): void };
 }
+
+/** The quit question (DK-M3), asked in the window; Cancel is the default. */
+export const QUIT_QUESTION: Omit<QuitQuestion, "id"> = {
+  message: "A call is recording. Stop it and quit?",
+  detail: "Everything recorded so far is kept.",
+  confirm: "Stop and quit",
+};
 
 /** The window's size the first time it opens. */
 export const DEFAULT_WINDOW = { width: 1280, height: 820 } as const;
@@ -359,6 +355,9 @@ export class Shell implements WindowShell {
   private quitting = false;
   /** The quit question is up; a second quit waits for its answer instead of asking again. */
   private asking = false;
+  /** The quit question the window has not answered yet, and how to resolve it. */
+  private question: { id: number; resolve: (go: boolean) => void } | null = null;
+  private questions = 0;
   /** The window's frame as last reported, saved when it closes and at quit (DK-M4). */
   private frame: Rect | undefined;
   /** The floating indicator while a call records (DK-F1), and where it was last. */
@@ -456,6 +455,7 @@ export class Shell implements WindowShell {
         () => this.sender(),
         (pane) => this.app.openSettingsPane(pane),
         () => this.onPageReady(),
+        (id, go) => this.answerQuit(id, go),
       );
       const frame = placeFrame(this.o.state?.load().window, this.ui.workAreas());
       const w = this.ui.openWindow({ title: "akou", url: WINDOW_URL, rpc: this.rpc, frame });
@@ -476,6 +476,8 @@ export class Shell implements WindowShell {
         this.focused = false;
         this.pageReady = false;
         this.pending = [];
+        // A window closed with the question up answers Cancel.
+        if (this.question) this.answerQuit(this.question.id, false);
         this.showIndicator();
       });
       w.window.onFocus((focused) => {
@@ -511,6 +513,7 @@ export class Shell implements WindowShell {
         showCall: drop,
         showSettings: drop,
         focusAsk: drop,
+        askQuit: drop,
       }
     );
   }
@@ -547,16 +550,9 @@ export class Shell implements WindowShell {
       case "install-cli": {
         const out = (await this.o.installCli?.()) ?? { state: "missing" };
         if (out.state === "failed") this.o.onLog?.("warn", `install the command: ${out.error}`);
+        // A notification, not a message box: the box would block this process (see `quitApp`).
         const m = installMessage(out);
-        await this.ui.showMessageBox({
-          type: out.state === "installed" || out.state === "already" ? "info" : "warning",
-          title: "Install Command-Line Tool",
-          message: m.title,
-          detail: m.detail,
-          buttons: ["OK"],
-          defaultId: 0,
-          cancelId: 0,
-        });
+        this.ui.showNotification({ title: m.title, body: m.detail });
         break;
       }
     }
@@ -602,7 +598,12 @@ export class Shell implements WindowShell {
    * call through the app's quit, so `part.ended` is in the log before the process exits.
    */
   private async quitApp(): Promise<void> {
-    if (this.quitting || this.asking) return;
+    if (this.quitting) return;
+    if (this.asking) {
+      // The question is up, maybe behind the meeting: bring it forward.
+      void this.app.openWindow().catch(() => {});
+      return;
+    }
     this.asking = true;
     let go: boolean;
     try {
@@ -617,18 +618,41 @@ export class Shell implements WindowShell {
   }
 
   private async confirmQuit(): Promise<boolean> {
-    const live = !!((await this.app.status()) as { live?: unknown }).live;
+    let live = true;
+    try {
+      live = !!((await this.app.status()) as { live?: unknown }).live;
+    } catch (err) {
+      // Unknown means ask: a quit must neither stop a call unasked nor do nothing.
+      this.o.onLog?.("warn", `quit: the status could not be read: ${(err as Error).message}`);
+    }
     if (!live) return true;
-    const pressed = await this.ui.showMessageBox({
-      type: "warning",
-      title: "Quit akou",
-      message: "A call is recording. Stop it and quit?",
-      detail: "Everything recorded so far is kept.",
-      buttons: ["Cancel", "Stop and quit"],
-      defaultId: 0,
-      cancelId: 0,
+    return this.askQuit();
+  }
+
+  /** Opens (or brings forward) the window and asks there; true when the user chose to quit. */
+  private askQuit(): Promise<boolean> {
+    const id = ++this.questions;
+    const answer = new Promise<boolean>((resolve) => {
+      this.question = { id, resolve };
     });
-    return pressed === 1;
+    this.app.openWindow().then(
+      () => {
+        if (this.question?.id === id) this.toPage((send) => send.askQuit({ id, ...QUIT_QUESTION }));
+      },
+      (err) => {
+        this.o.onLog?.("warn", `quit: the window did not open: ${(err as Error).message}`);
+        this.answerQuit(id, false);
+      },
+    );
+    return answer;
+  }
+
+  /** The page's answer to question `id`; a stale or unknown id is ignored. */
+  private answerQuit(id: number, go: boolean): void {
+    const q = this.question;
+    if (!q || q.id !== id) return;
+    this.question = null;
+    q.resolve(go);
   }
 
   /**
@@ -712,6 +736,7 @@ export class Shell implements WindowShell {
   }
 
   async close(): Promise<void> {
+    if (this.question) this.answerQuit(this.question.id, false);
     if (this.window) this.saveFrame();
     this.closeIndicator();
     this.unwatch();

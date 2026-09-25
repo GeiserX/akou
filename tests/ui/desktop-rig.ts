@@ -76,6 +76,10 @@ export interface DesktopRig extends AppRig {
   indicatorShown(): boolean;
   /** Pages the rig opened, in order, for the console. */
   pages: Page[];
+  /** Cmd+Q: runs the shell's before-quit; true when the shell cancelled it to ask or clean up. */
+  quitRequested(): boolean;
+  /** How many times the shell asked the process to exit. */
+  exits(): number;
 }
 
 export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
@@ -86,6 +90,8 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
   let main: Page | null = null;
   let indicator: Page | null = null;
   let shown = false;
+  let beforeQuit: (e: { cancel(): void }) => void = () => {};
+  let exits = 0;
 
   /** A page on a view, with `handlers` answering its requests; `send` pushes a message. */
   const open = (view: "main" | "indicator", handlers: object) => {
@@ -150,6 +156,7 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
           showCall: s("showCall"),
           showSettings: s("showSettings"),
           focusAsk: s("focusAsk"),
+          askQuit: s("askQuit"),
         },
       };
     },
@@ -188,11 +195,14 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
     showNotification: () => {},
     registerShortcut: () => true,
     unregisterShortcut: () => {},
-    onBeforeQuit: () => {},
-    quit: () => {},
+    onBeforeQuit: (fn) => {
+      beforeQuit = fn;
+    },
+    quit: () => {
+      exits++;
+    },
     openExternal: () => true,
     onReopen: () => {},
-    showMessageBox: async () => 0,
     workAreas: () => [{ x: 0, y: 0, width: 1440, height: 875 }],
   };
 
@@ -207,6 +217,12 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
   rig.indicator = () => indicator;
   rig.indicatorShown = () => shown;
   rig.pages = pages;
+  rig.exits = () => exits;
+  rig.quitRequested = () => {
+    let cancelled = false;
+    beforeQuit({ cancel: () => (cancelled = true) });
+    return cancelled;
+  };
   const close = rig.close;
   rig.close = async () => {
     await shell.close();

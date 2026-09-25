@@ -58,6 +58,7 @@ export function electrobunUi(): NativeUi {
           showCall: (m) => defined.send.showCall(m),
           showSettings: (m) => defined.send.showSettings(m),
           focusAsk: (m) => defined.send.focusAsk(m),
+          askQuit: (m) => defined.send.askQuit(m),
         },
       };
     },
@@ -136,8 +137,6 @@ export function electrobunUi(): NativeUi {
     openExternal: (url) => Utils.openExternal(url),
 
     onReopen: (fn) => Electrobun.events.on("reopen", () => fn()),
-
-    showMessageBox: async (o) => (await Utils.showMessageBox(o)).response,
 
     workAreas: () => {
       const all = Screen.getAllDisplays();
