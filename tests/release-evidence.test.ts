@@ -7,7 +7,6 @@
 
 import { describe, expect, test } from "bun:test";
 import { cpSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { devNull } from "node:os";
 import { join } from "node:path";
 import {
   gateProblems,
@@ -59,12 +58,11 @@ function check(argv: string[]): { code: number; out: string } {
  * start costs seconds on a loaded laptop.
  */
 function withTags(dir: string, tags: [string, string][]): void {
-  const env = {
-    ...process.env,
-    // The user's own git settings (hooks, signing) never reach these scratch repositories.
-    GIT_CONFIG_GLOBAL: devNull,
-    GIT_CONFIG_NOSYSTEM: "1",
-  };
+  // The user's own git settings (hooks, signing) never reach these scratch repositories. The
+  // global config is an empty file, not the null device: git on Windows cannot open `\\.\nul`.
+  const empty = join(dir, "empty.gitconfig");
+  writeFileSync(empty, "");
+  const env = { ...process.env, GIT_CONFIG_GLOBAL: empty, GIT_CONFIG_NOSYSTEM: "1" };
   const run = (args: string[], stdin?: string) => {
     const r = Bun.spawnSync(["git", "-C", dir, ...args], {
       env,
