@@ -57,7 +57,6 @@ export function electrobunUi(): NativeUi {
           status: (s) => defined.send.status(s),
           showCall: (m) => defined.send.showCall(m),
           showSettings: (m) => defined.send.showSettings(m),
-          focusAsk: (m) => defined.send.focusAsk(m),
           askQuit: (m) => defined.send.askQuit(m),
         },
       };

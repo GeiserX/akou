@@ -104,7 +104,6 @@ describe("the window's RPC handlers (main side)", () => {
         status: () => {},
         showCall: () => {},
         showSettings: () => {},
-        focusAsk: () => {},
         askQuit: () => {},
       };
       const rpc = windowRpc(

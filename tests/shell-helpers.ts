@@ -127,7 +127,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
           status: () => {},
           showCall: (m) => page(`call ${m.call}`),
           showSettings: () => page("settings"),
-          focusAsk: () => page("ask"),
           askQuit: (q) => {
             if (!booted) return;
             f.questions.push(q);

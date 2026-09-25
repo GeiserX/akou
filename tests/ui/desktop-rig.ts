@@ -155,7 +155,6 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
           status: s("status"),
           showCall: s("showCall"),
           showSettings: s("showSettings"),
-          focusAsk: s("focusAsk"),
           askQuit: s("askQuit"),
         },
       };

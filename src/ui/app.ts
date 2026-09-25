@@ -50,12 +50,6 @@ export function showCall(call?: string): void {
   if (target) current.openCall(target, call !== undefined);
 }
 
-/** The floating indicator's Ask (DK-F1): the Ask tab, and the focus in its box. */
-export function focusAsk(): void {
-  document.getElementById("tab-ask")?.click();
-  document.getElementById("ask-input")?.focus();
-}
-
 /**
  * The quit question (DK-M3), asked here because the SDK's message box would block the main
  * process. Cancel has the focus, so Return and Escape both keep the call; true only for the

@@ -512,7 +512,6 @@ export class Shell implements WindowShell {
         status: drop,
         showCall: drop,
         showSettings: drop,
-        focusAsk: drop,
         askQuit: drop,
       }
     );
@@ -680,10 +679,6 @@ export class Shell implements WindowShell {
     const liveCall = async () =>
       ((await this.app.status()) as { live?: { call?: string } | null }).live?.call;
     const rpc = indicatorRpc(this.bridge, () => send ?? { followed: () => {}, status: () => {} }, {
-      focusAsk: async () => {
-        await this.app.openWindow(await liveCall());
-        this.toPage((s) => s.focusAsk({}));
-      },
       openMain: async () => {
         await this.app.openWindow(await liveCall());
       },

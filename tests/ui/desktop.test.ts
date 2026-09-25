@@ -1,8 +1,8 @@
 /**
  * The floating indicator on its real page (docs/ux/DESKTOP.md DK-F1), inside the real shell over
- * the real app with the fake capture helper: Stop stops, Mute mutes, Ask focuses the main window's
- * ask box, a dead channel changes the dot, and nothing a call says, is called or is named by ever
- * reaches the page.
+ * the real app with the fake capture helper: Stop stops, Mute mutes, a click opens the main window,
+ * a dead channel changes the dot, and nothing a call says, is called or is named by ever reaches
+ * the page. The quit question (DK-M3) in the main window's page.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -94,7 +94,7 @@ describe("[DK-F1] the floating indicator", () => {
   );
 
   test(
-    "Mute mutes, Ask focuses the main window's ask box, Stop stops and closes it",
+    "Mute mutes, a click opens the main window, Stop stops and closes it; there is no Ask",
     async () => {
       await withDesktop(async (rig) => {
         const id = await rig.startCall({ title: "Sync" });
@@ -117,14 +117,11 @@ describe("[DK-F1] the floating indicator", () => {
           "unmuted",
         );
 
+        // Asking goes through the palette (PRINCIPLES.md), not the indicator.
+        expect(await page.$("#ask")).toBeNull();
         expect(rig.main()).toBeNull();
-        await page.click("#ask");
+        await page.click("#open");
         await until(() => rig.main() !== null, 10_000, "the main window");
-        const main = rig.main() as Page;
-        await main.waitForFunction(() => document.activeElement?.id === "ask-input", undefined, {
-          timeout: 10_000,
-        });
-        expect(await main.getAttribute("#tab-ask", "aria-selected")).toBe("true");
         // The main window has the focus now: the indicator steps aside.
         expect(rig.indicatorShown()).toBe(false);
 

@@ -9,9 +9,10 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, readlinkSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 import { BUILT, builtCopies, MAIN_OUT } from "../electrobun.config.ts";
-import type { LogEvent } from "../src/core/log/events.ts";
-import type { Bridge } from "../src/main/window/bridge.ts";
+import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
+import { Bridge } from "../src/main/window/bridge.ts";
 import { DEFAULT_HOTKEY, hotkeyWarning } from "../src/main/window/hotkey.ts";
+import { indicatorEvent, indicatorRpc, indicatorStatus } from "../src/main/window/indicator.ts";
 import {
   adminScript,
   BUNDLED_CLI,
@@ -22,6 +23,7 @@ import {
   installMessage,
   nodeOps,
 } from "../src/main/window/install-cli.ts";
+import { windowRpc } from "../src/main/window/rpc.ts";
 import {
   hotkeyFor,
   INDICATOR_SIZE,
@@ -35,6 +37,7 @@ import {
   WINDOW_URL,
 } from "../src/main/window/shell.ts";
 import { fileState, SHELL_STATE_FILE } from "../src/main/window/state.ts";
+import { recordedMs } from "../src/ui/indicator-clock.ts";
 import { appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -822,21 +825,178 @@ describe("[DK-F1] the floating indicator, in the shell", () => {
     await on.shell.close();
   });
 
-  test("Ask brings the main window forward with its ask box focused; a click opens it", async () => {
+  test("a click on it opens the main window; it offers no Ask (PRINCIPLES: asking is the palette)", async () => {
     const f = fakeUi();
     const { shell, a, feed } = await eventShell(f);
     feed("call.created");
     await until(() => f.indicator() !== null, 1000, "the indicator");
-    const rpc = f.indicator()?.rpc;
-    expect(await rpc?.handlers.focusAsk({})).toBe(true);
-    // No window was open: it opens, and the page is told once it has booted.
+    const handlers = f.indicator()?.rpc.handlers as Record<string, unknown>;
+    expect(await (handlers.openMain as () => Promise<boolean>)()).toBe(true);
     expect(a.state.windows).toBe(1);
-    expect(f.log).not.toContain("ask");
-    await f.boot();
-    await until(() => f.log.includes("ask"), 1000, "the ask box");
-    expect(await rpc?.handlers.openMain({})).toBe(true);
-    expect(a.state.windows).toBe(2);
+    expect(Object.keys(handlers).sort()).toEqual([
+      "control",
+      "follow",
+      "openMain",
+      "status",
+      "unfollow",
+    ]);
     await shell.close();
+  });
+});
+
+/** Markers carried by everything a call holds that the indicator must never receive. */
+const MARKS = {
+  title: "TITLEMARK-q7x",
+  workspace: "wsmark-k2p",
+  line: "SEGMARK-z9k",
+  name: "NAMEMARK-w3v",
+} as const;
+
+describe("[DK-F1] the indicator's RPC carries no call content", () => {
+  test(
+    "every push and answer to the indicator page is free of the call's title, words and names",
+    async () => {
+      const rig = await appRig();
+      const bridge = new Bridge(rig.app);
+      const id = await rig.startCall({
+        title: `Weekly ${MARKS.title}`,
+        workspace: MARKS.workspace,
+      });
+      const pushes: unknown[] = [];
+      const answers: unknown[] = [];
+      let opened = 0;
+      const ind = indicatorRpc(
+        bridge,
+        () => ({ followed: (m) => pushes.push(m), status: (m) => pushes.push(m) }),
+        { openMain: async () => void opened++ },
+      );
+      // The same call through the main window's RPC: the positive control.
+      const winPushes: unknown[] = [];
+      const win = windowRpc(
+        bridge,
+        () => ({
+          followed: (m) => winPushes.push(m),
+          status: (m) => winPushes.push(m),
+          asked: () => {},
+          showCall: () => {},
+          showSettings: () => {},
+          askQuit: () => {},
+        }),
+        async () => false,
+      );
+      answers.push(await ind.handlers.status({}));
+      answers.push(await ind.handlers.follow({ stream: "i1", call: id, after: 0 }));
+      winPushes.push(await win.handlers.status({}));
+      await win.handlers.follow({ stream: "w1", call: id, after: 0 });
+      const wall = Date.now();
+      await rig.app.write(id, {
+        type: "seg",
+        id: "l000001",
+        rev: 1,
+        layer: "live",
+        part: 1,
+        ch: "call",
+        spk: "c1",
+        a0: 1,
+        a1: 2,
+        w0: wall,
+        w1: wall + 900,
+        text: `we ship ${MARKS.line} on friday`,
+        model: "fake",
+      } as EventDraft);
+      await rig.app.write(id, {
+        type: "speaker.name",
+        spk: "c1",
+        name: MARKS.name,
+        by: "user",
+      } as EventDraft);
+      answers.push(await ind.handlers.control({ action: "mute" }));
+      answers.push(await ind.handlers.status({}));
+      await until(
+        () => JSON.stringify(winPushes).includes(MARKS.name),
+        5000,
+        "the window saw the name",
+      );
+      await Bun.sleep(200);
+      const all = JSON.stringify([pushes, answers]);
+      const leaks = (text: string) => Object.values(MARKS).filter((m) => text.includes(m));
+      expect(leaks(all)).toEqual([]);
+      // It did get what it needs: the part, the mute, the state.
+      expect(all).toContain('"part.started"');
+      expect(answers.at(-1)).toEqual({ live: { call: id, state: "recording", muted: true } });
+      // Positive control: the main window's RPC over the same call carries the markers.
+      expect(leaks(JSON.stringify(winPushes))).toEqual([
+        MARKS.title,
+        MARKS.workspace,
+        MARKS.line,
+        MARKS.name,
+      ]);
+      expect(await ind.handlers.control({ action: "stop" })).toBe(true);
+      await until(
+        async () => (await rig.api("GET", `/calls/${id}`)).body?.state !== "recording",
+        10_000,
+        "stopped",
+      );
+      // Nothing to control once the call ended.
+      expect(await ind.handlers.control({ action: "mute" })).toBe(false);
+      expect(opened).toBe(0);
+      ind.close();
+      win.close();
+      await rig.close();
+    },
+    LONG,
+  );
+
+  test("the relayed events are rebuilt from a list of fields, never passed through", () => {
+    const e = {
+      seq: 3,
+      t: 1000,
+      type: "part.started",
+      part: 1,
+      file: `/calls/${MARKS.title}/part-1.opus`,
+      wallStart: 900,
+      monoStart: 1,
+      mic: `${MARKS.name}'s AirPods`,
+      call: { mode: "system" },
+      capture: "fake",
+    } as unknown as LogEvent;
+    expect(indicatorEvent(e)).toEqual({ type: "part.started", part: 1, wallStart: 900 });
+    expect(
+      indicatorEvent({ seq: 4, t: 5, type: "seg", text: MARKS.line } as unknown as LogEvent),
+    ).toBeNull();
+    expect(
+      indicatorStatus({
+        live: { call: "c1", title: MARKS.title, workspace: "w", state: "paused", muted: false },
+      }),
+    ).toEqual({ live: { call: "c1", state: "paused", muted: false } });
+    expect(indicatorStatus({ live: null })).toEqual({ live: null });
+  });
+});
+
+describe("[DK-F1] the indicator's elapsed time is the call's recorded time", () => {
+  const started = (part: number, wallStart: number) =>
+    ({ type: "part.started", part, wallStart }) as const;
+  test("counts from the call's first part, across a new part, and stands still while paused", () => {
+    const ev = [started(1, 0)];
+    expect(recordedMs(ev, 60_000)).toEqual({ ms: 60_000, since: 0 });
+    // Paused at 60 s: the time stands still until the resume.
+    const paused = [...ev, { type: "pause", wall: 60_000 } as const];
+    expect(recordedMs(paused, 90_000).ms).toBe(60_000);
+    const resumed = [...paused, { type: "resume", wall: 100_000 } as const];
+    expect(recordedMs(resumed, 110_000).ms).toBe(70_000);
+    // A capture rebuild ends part 1 and starts part 2: the time carries on, never back to 0:00.
+    const rebuilt = [
+      ...resumed,
+      { type: "part.ended", part: 1, at: 120_000 } as const,
+      started(2, 121_000),
+    ];
+    expect(recordedMs(rebuilt, 131_000)).toEqual({ ms: 90_000, since: 0 });
+    // Ended: nothing runs.
+    expect(
+      recordedMs([...rebuilt, { type: "part.ended", part: 2, at: 131_000 } as const], 500_000).ms,
+    ).toBe(90_000);
+    // Positive control: the same clock reads 0 with no part started.
+    expect(recordedMs([], 5000)).toEqual({ ms: 0, since: null });
   });
 });
 
