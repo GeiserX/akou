@@ -37,6 +37,7 @@ function repoCopy(): { dir: string; cleanup(): void } {
     "src/main/app-info.ts",
     "skills/akou/SKILL.md",
     "skills/akou-vocab/SKILL.md",
+    ".claude-plugin/plugin.json",
   ]) {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
@@ -77,6 +78,7 @@ describe("one version everywhere", () => {
         "src/main/app-info.ts",
         "skills/akou/SKILL.md",
         "skills/akou-vocab/SKILL.md",
+        ".claude-plugin/plugin.json",
       ]),
     );
   });
@@ -112,11 +114,26 @@ describe("one version everywhere", () => {
     t.cleanup();
   });
 
+  test("[PG-K2] the plugin's version is the app's: a drifted plugin.json is reported, stamping repairs it", () => {
+    const t = repoCopy();
+    const manifest = join(t.dir, ".claude-plugin", "plugin.json");
+    const original = readFileSync(manifest, "utf8");
+    writeFileSync(manifest, original.replace(`"version": "${pkg.version}"`, '"version": "9.9.7"'));
+    expect(drift(t.dir, pkg.version)).toEqual([
+      { file: ".claude-plugin/plugin.json", version: "9.9.7" },
+    ]);
+    expect(quiet(() => main(["--check", "--root", t.dir]))).toBe(1);
+    expect(stamp(t.dir, pkg.version)).toEqual([".claude-plugin/plugin.json"]);
+    // Stamping changes the version and nothing else in the manifest.
+    expect(readFileSync(manifest, "utf8")).toBe(original);
+    t.cleanup();
+  });
+
   test("[T0.30] --set moves every place, and the tag must equal package.json", () => {
     const t = repoCopy();
     expect(quiet(() => main(["--set", "0.1.0", "--root", t.dir]))).toBe(0);
     expect(readAll(t.dir).every((f) => f.version === "0.1.0")).toBe(true);
-    expect(readAll(t.dir)).toHaveLength(6);
+    expect(readAll(t.dir)).toHaveLength(7);
     expect(quiet(() => main(["--check", "--tag", "v0.1.0", "--root", t.dir]))).toBe(0);
     expect(quiet(() => main(["--check", "--tag", "v0.1.1", "--root", t.dir]))).toBe(1);
     expect(tagVersion("refs/tags/v1.2.3-rc.1")).toBe("1.2.3-rc.1");

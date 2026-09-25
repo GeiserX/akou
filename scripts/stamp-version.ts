@@ -6,6 +6,8 @@
  *   API report.
  * - `skills/akou/SKILL.md` and `skills/akou-vocab/SKILL.md`: `metadata.version`, which `akou skill
  *   install` requires to equal the app's.
+ * - `.claude-plugin/plugin.json`: the Claude Code plugin's version (PG-K2), which Claude Code
+ *   compares to decide whether an installed plugin is out of date.
  * - `native/akou-capture/Cargo.toml` and `Cargo.lock`: the helper's version, reported by
  *   `akou-capture --version` and in its `hello` packet. Skipped while `native/` is absent.
  * - `native/akou-diarize/Cargo.toml` and `Cargo.lock`: the diarization helper's version, reported
@@ -55,6 +57,10 @@ export const PLACES: readonly Place[] = [
   {
     file: "skills/akou-vocab/SKILL.md",
     pattern: /^(\s+version:\s*")([^"]*)(")$/m,
+  },
+  {
+    file: ".claude-plugin/plugin.json",
+    pattern: /^(\s*"version":\s*")([^"]*)(",?)$/m,
   },
   {
     file: "native/akou-capture/Cargo.toml",
