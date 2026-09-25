@@ -206,6 +206,9 @@ export const INDICATOR_SIZE = { width: 330, height: 40 } as const;
 /** Its distance from the work area's edge the first time it shows. */
 const INDICATOR_MARGIN = 16;
 
+/** A frame with an area. The SDK reports {0,0,0,0} for a window that is already gone. */
+const hasArea = (r: Rect) => r.width > 0 && r.height > 0;
+
 const overlap = (a: Rect, b: Rect) =>
   Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) *
   Math.max(0, Math.min(a.y + a.height, b.y + b.height) - Math.max(a.y, b.y));
@@ -462,7 +465,7 @@ export class Shell implements WindowShell {
       this.pageReady = false;
       this.pending = [];
       w.window.onFrame((f) => {
-        this.frame = f;
+        if (hasArea(f)) this.frame = f;
       });
       w.window.onClose(() => {
         this.saveFrame();
@@ -666,7 +669,7 @@ export class Shell implements WindowShell {
     const ind = { window: w.window, rpc, frame };
     this.indicator = ind;
     w.window.onFrame((f) => {
-      ind.frame = f;
+      if (hasArea(f)) ind.frame = f;
     });
     w.window.onClose(() => {
       if (this.indicator === ind) this.closeIndicator();

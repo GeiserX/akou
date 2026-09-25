@@ -345,6 +345,31 @@ describe("[DK-M4] the window reopens where it was left", () => {
     expect(store.load().window).toEqual({ x: 40, y: 60, width: 900, height: 600 });
   });
 
+  test("a zero frame from a closing window never replaces the last real one", async () => {
+    // The SDK answers {0,0,0,0} once the window is gone; a late move or resize carries it.
+    const store = memoryState();
+    const f = fakeUi();
+    const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+      state: store,
+    });
+    await shell.start();
+    shell.show();
+    const good = { x: 40, y: 60, width: 900, height: 600 };
+    f.moveWindow(good);
+    f.moveWindow({ x: 0, y: 0, width: 0, height: 0 });
+    f.moveWindow({ x: 10, y: 10, width: 900, height: -1 });
+    f.closeWindow();
+    expect(store.load().window).toEqual(good);
+    // Positive control: a real frame after it is kept.
+    shell.show();
+    const next = { x: 50, y: 70, width: 800, height: 500 };
+    f.moveWindow(next);
+    await shell.close();
+    expect(store.load().window).toEqual(next);
+  });
+
   test("placeFrame: kept on its display, clamped into the primary work area when off every display", () => {
     // On the second display: unchanged.
     const onSecond = { x: 1600, y: 100, width: 1000, height: 700 };
@@ -665,6 +690,8 @@ describe("[DK-F1] the floating indicator, in the shell", () => {
     // Dragged, then the call ends: closed, and its place kept.
     const moved = { x: 200, y: 300, ...INDICATOR_SIZE };
     f.moveIndicator(moved);
+    // A late event from the closing window reports no frame at all.
+    f.moveIndicator({ x: 0, y: 0, width: 0, height: 0 });
     feed("part.ended", { part: 1, reason: "stop" });
     expect(f.indicator()).toMatchObject({ closed: true, visible: false });
     expect(store.load().indicator).toEqual(moved);
