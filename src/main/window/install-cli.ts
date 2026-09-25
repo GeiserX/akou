@@ -129,17 +129,22 @@ export function installMessage(o: InstallOutcome): { title: string; detail: stri
 
 const shQuote = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 
-/** The AppleScript that makes the link as root: a shell command in an AppleScript string. */
+/**
+ * The AppleScript that makes the link as root: a shell command in an AppleScript string. Like
+ * `nodeOps.link` it removes only a link and never forces, so a command that appeared at `dst`
+ * while macOS asked for the password makes `ln` fail with "File exists" and stays.
+ */
 export function adminScript(src: string, dst: string): string {
   const dir = dst.slice(0, dst.lastIndexOf("/")) || "/";
-  const cmd = `/bin/mkdir -p ${shQuote(dir)} && /bin/ln -sfn ${shQuote(src)} ${shQuote(dst)}`;
+  const [d, s] = [shQuote(dst), shQuote(src)];
+  const cmd = `/bin/mkdir -p ${shQuote(dir)} && { [ ! -L ${d} ] || /bin/rm ${d}; } && /bin/ln -s ${s} ${d}`;
   const asString = `"${cmd.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
   return `do shell script ${asString} with administrator privileges`;
 }
 
 export const nodeOps: InstallOps = {
-  // Only ENOENT is absence. A path it cannot look at (EACCES) may hold another command, and the
-  // password path's `ln -sfn` would replace it.
+  // Only ENOENT is absence. A path it cannot look at (EACCES) may hold another command: the menu
+  // says it is in the way instead of asking for a password to reach it.
   exists: (p) => {
     try {
       lstatSync(p);

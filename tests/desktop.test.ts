@@ -12,6 +12,8 @@ import {
   mkdirSync,
   readFileSync,
   readlinkSync,
+  symlinkSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { basename, dirname, join } from "node:path";
@@ -654,27 +656,44 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
   });
 
   test(
-    "the admin script quotes paths with spaces and quotes",
+    "the admin script quotes paths, and as root replaces only a link: a file that appeared stays",
     () => {
-      const src = `/Applications/a k"o'u.app/akou`;
-      const s = adminScript(src, "/usr/local/bin/akou");
-      const head = 'do shell script "';
-      const tail = '" with administrator privileges';
-      expect(s.startsWith(head) && s.endsWith(tail)).toBe(true);
-      // Unescaped once as AppleScript reads its string, it is the command sh gets.
-      const cmd = s.slice(head.length, -tail.length).replace(/\\(.)/g, "$1");
       if (process.platform === "win32") return;
-      // sh with the two programs swapped for printf prints the arguments they would get.
-      const probe = cmd
-        .replace("/bin/mkdir -p", "printf '%s\\n'")
-        .replace("/bin/ln -sfn", "printf '%s\\n'");
-      const r = Bun.spawnSync(["/bin/sh", "-c", probe]);
-      expect(r.stdout.toString().split("\n")).toEqual([
-        "/usr/local/bin",
-        src,
-        "/usr/local/bin/akou",
-        "",
-      ]);
+      // The command root runs, run here as the user in a scratch folder: paths with spaces and quotes.
+      const t = tempDir();
+      const src = join(t.dir, `a k"o'u.app`, "akou");
+      const bin = join(t.dir, `b i"n'`, "bin");
+      const dst = join(bin, "akou");
+      mkdirSync(dirname(src));
+      writeFileSync(src, "#!/bin/sh\n");
+      const run = () => {
+        const s = adminScript(src, dst);
+        const head = 'do shell script "';
+        const tail = '" with administrator privileges';
+        expect(s.startsWith(head) && s.endsWith(tail)).toBe(true);
+        // Unescaped once as AppleScript reads its string, it is the command sh gets.
+        const cmd = s.slice(head.length, -tail.length).replace(/\\(.)/g, "$1");
+        return Bun.spawnSync(["/bin/sh", "-c", cmd]);
+      };
+      try {
+        // A missing folder is made and the link goes in.
+        expect(run().exitCode).toBe(0);
+        expect(readlinkSync(dst)).toBe(src);
+        // A link (an older copy of the app) is replaced.
+        unlinkSync(dst);
+        symlinkSync("/Applications/old/akou.app/Contents/Resources/app/bun/akou", dst);
+        expect(run().exitCode).toBe(0);
+        expect(readlinkSync(dst)).toBe(src);
+        // Another command that appeared during the password prompt is left alone.
+        unlinkSync(dst);
+        writeFileSync(dst, "someone else's\n");
+        const r = run();
+        expect(r.exitCode).not.toBe(0);
+        expect(r.stderr.toString()).toContain("File exists");
+        expect(readFileSync(dst, "utf8")).toBe("someone else's\n");
+      } finally {
+        t.cleanup();
+      }
     },
     LONG,
   );
@@ -701,7 +720,7 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
 
   test("a destination it cannot look at counts as something in the way (POSIX)", () => {
     // Only ENOENT means absent. Any other error, here EACCES on a folder with no search bit,
-    // must not send the install down the password path, where `ln -sfn` would replace the file.
+    // is something in the way, not a reason to ask for a password.
     if (process.platform === "win32") return;
     const t = tempDir();
     const bin = join(t.dir, "bin");
