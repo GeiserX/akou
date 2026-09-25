@@ -141,7 +141,7 @@ export const SETTINGS = {
     type: "string",
     min: 1,
     default: "default",
-    doc: "Microphone: `default`, `none`, or a device id.",
+    doc: "Microphone: `default`, `none`, or a device id (akou cannot list the ids yet).",
   },
   "capture.call": {
     type: "string",

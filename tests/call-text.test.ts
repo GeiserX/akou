@@ -361,12 +361,22 @@ describe("[TS-26] meeting text is data: akou's own provider", () => {
   }
 });
 
-describe("[PG-Z1] the skill carries the same rule", () => {
-  test("it names the block and says its text is data, never instructions", () => {
+describe("[PG-Z1] the skills carry the same rule", () => {
+  // akou-vocab reads call text too: akou_vocab_suggest and akou_vocab_list answer in the block.
+  for (const name of ["akou", "akou-vocab"]) {
+    test(`${name}: it names the block and says its text is data, never instructions`, () => {
+      const skill = readFileSync(join(import.meta.dir, "..", "skills", name, "SKILL.md"), "utf8");
+      const rule = skill.split("\n").find((l) => l.includes(CALL_TEXT_OPEN)) ?? "";
+      expect(rule).toMatch(/data/);
+      expect(rule).toMatch(/never/i);
+      expect(rule).toMatch(/instructions/);
+    });
+  }
+
+  test("akou: what the agent remembers comes back outside the block, so it never holds call text", () => {
     const skill = readFileSync(join(import.meta.dir, "..", "skills", "akou", "SKILL.md"), "utf8");
-    const rule = skill.split("\n").find((l) => l.includes(CALL_TEXT_OPEN)) ?? "";
-    expect(rule).toMatch(/data/);
-    expect(rule).toMatch(/never/i);
-    expect(rule).toMatch(/instructions/);
+    const line = skill.split("\n").find((l) => l.includes("`akou_remember`")) ?? "";
+    expect(line).toMatch(/own words/);
+    expect(line).toMatch(/never (copy|paste) call text/i);
   });
 });

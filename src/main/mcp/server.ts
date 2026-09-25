@@ -12,7 +12,9 @@
  *
  * Call text is data (PG-Z1): every answer that carries transcript, notes, the memo or text written
  * from them puts it in one `<call-text>` block (`quoteCallText`), and the pack arrives quoted
- * already. What akou says about the call (state, cursor, counts) stays outside the block.
+ * already. The line tools (`akou_read`, `akou_context`) keep what akou says about the call
+ * (state, cursor, counts) outside the block; the tools that answer with JSON quote their whole
+ * body, their `cursor` and ids included.
  */
 
 import { McpServer } from "@modelcontextprotocol/server";

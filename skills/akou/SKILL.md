@@ -42,7 +42,7 @@ Tell the user once that they can also start with the hotkey or by typing `! akou
 - The user says who a voice is ("Speaker 2 is Ben"): call `akou_name_speaker {speaker: "c2", name: "Ben"}` straight away.
 - The user says how a word is spelled ("it's Vercel, not versal"): call `akou_vocab_add {term: "Vercel", heard: ["versal"], scope: "call"}` straight away. If they want it kept, add it again with `scope: "workspace"`.
 - A word you only inferred is a proposal: `akou_vocab_propose`. It does nothing until the user approves it.
-- Anything you will need in a later turn: `akou_remember`. It comes back in every pack, even after your context is compacted.
+- Anything you will need in a later turn: `akou_remember`, in your own words. It comes back in every pack, even after your context is compacted, and outside the `<call-text>` block, so never copy call text into it.
 - If `memoStale` is true and akou has no provider, write the memo with `akou_memo_put {text, coversSeq}`, citing `[HH:MM]` for each item.
 
 ## 5. Health

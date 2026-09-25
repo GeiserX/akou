@@ -88,5 +88,5 @@ An earlier run with two probe skills of different names, one in each folder of t
 ## Summary
 
 - Codex 0.151.0 reads user skills from `$CODEX_HOME/skills` and from `~/.agents/skills`. akou writes the first, and Codex lists the akou skills from there, with `CODEX_HOME` unset and set.
-- The acceptance's control, the other folder, also shows, so it cannot fail. The control that did fail is a copy that ignores `CODEX_HOME`.
+- The other folder also shows, so it cannot be the control. The control that fails is a copy that ignores `CODEX_HOME`, and PG-K1's acceptance now names it.
 - Still open: the same run on the reference Mac mini. Re-run this check when the pinned Codex version changes.
