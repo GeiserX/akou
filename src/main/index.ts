@@ -50,7 +50,7 @@ import { ensureToken, type Guard, makePrivateDir, TokenSource } from "./api/guar
 import { HttpError } from "./api/http.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
-import type { DiarizerKind, ModelSpec } from "./asr/engine.ts";
+import type { DiarizerKind, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import {
@@ -529,6 +529,7 @@ export class AkouApp implements ApiApp {
       cacheDir: join(s["asr.modelsDir"], ".cache"),
       threads: s["asr.threads"],
       diarizer,
+      decoding: s["asr.parakeet.decoding"] as ParakeetDecoding,
       diarizeHelper: locateHelper(s["asr.diarizeHelper"], { name: DIARIZE_HELPER_NAME }).command,
     };
   }

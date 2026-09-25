@@ -5,12 +5,17 @@
  * pyannote plus TitaNet in the final pass (`embeddings`). Loaded only inside a Worker, lazily, each
  * model once per app run (the final pass's Nemotron helper once per pass).
  *
- * Hotwords: sherpa-onnx fixes a recognizer's hotword tokenizer (`bpeVocab`) when it is created, and
- * a per-stream list is tokenized with it. The recognizer is therefore created with
- * `modified_beam_search`, `modelingUnit: "bpe"` and a canonical-pieces `bpe.vocab` for the current
- * list (`bpe-vocab.ts`). A later list whose pieces that file does not hold needs a new file and a new
- * recognizer; `prepare` does that once per such change and counts it as a load. Hotwords are
- * never passed to a model that is not a transducer: sherpa-onnx exits the process on that call.
+ * Decoding (`asr.parakeet.decoding`): greedy by default. Beam search (`modified_beam_search`) is the
+ * only mode that takes hotwords, but on meeting audio it returns whole spans empty that greedy
+ * decodes (14 of 200 AMI chunks in the benchmark, none under greedy). Greedy gets no `bpe.vocab`
+ * and no hotwords; the vocabulary still applies at read time and in the post-call pass.
+ *
+ * Hotwords, with beam: sherpa-onnx fixes a recognizer's hotword tokenizer (`bpeVocab`) when it is
+ * created, and a per-stream list is tokenized with it. The recognizer is therefore created with
+ * `modelingUnit: "bpe"` and a canonical-pieces `bpe.vocab` for the current list (`bpe-vocab.ts`). A
+ * later list whose pieces that file does not hold needs a new file and a new recognizer; `prepare`
+ * does that once per such change and counts it as a load. Hotwords are never passed to a model that
+ * is not a transducer: sherpa-onnx exits the process on that call.
  */
 
 import { createHash, randomUUID } from "node:crypto";
@@ -32,6 +37,7 @@ import {
   type DiarizerKind,
   type Embedder,
   type ModelSet,
+  type ParakeetDecoding,
   type PreparedHotwords,
   type Recognized,
   type Recognizer,
@@ -56,13 +62,15 @@ const VAD_RESET_AFTER_SECONDS = 15;
 
 /**
  * One recognizer. The guard in `decode` is the last line before sherpa-onnx, which exits the
- * process on hotwords to a non-transducer or on an empty hotword string; exported for its test.
+ * process on hotwords to a non-transducer or on an empty hotword string, and has no use for them
+ * under greedy decoding; exported for its test.
  */
 export class SherpaRecognizer implements Recognizer {
   readonly kind;
   constructor(
     readonly model: string,
     private readonly rec: Sherpa,
+    private readonly decoding: ParakeetDecoding,
   ) {
     this.kind = modelKind(model);
   }
@@ -70,6 +78,9 @@ export class SherpaRecognizer implements Recognizer {
   decode(samples: Float32Array, hotwords?: string): Recognized {
     if (hotwords !== undefined && (this.kind !== "transducer" || hotwords === "")) {
       throw new Error(`refusing hotwords for ${this.model}: sherpa-onnx would exit the process`);
+    }
+    if (hotwords !== undefined && this.decoding !== "beam") {
+      throw new Error(`refusing hotwords for ${this.model}: greedy decoding takes none`);
     }
     const s = hotwords === undefined ? this.rec.createStream() : this.rec.createStream(hotwords);
     s.acceptWaveform({ samples, sampleRate: ASR_RATE });
@@ -134,6 +145,8 @@ export interface SherpaSpec {
   cacheDir: string;
   threads?: number;
   diarizer?: DiarizerKind;
+  /** Default `greedy`, the setting's default. */
+  decoding?: ParakeetDecoding;
   diarizeHelper?: readonly string[];
 }
 
@@ -161,20 +174,56 @@ export function writeBpeVocab(dir: string, text: string): string {
   return path;
 }
 
+/**
+ * The Parakeet recognizer's sherpa-onnx config. Greedy has no hotword score and no `bpe.vocab`;
+ * beam search biases toward the decode list at the constant boost. Exported for its test.
+ */
+export function recognizerConfig(
+  file: (name: string) => string,
+  threads: number,
+  mode: { decoding: "greedy" } | { decoding: "beam"; bpeVocab: string },
+): Record<string, unknown> {
+  const featConfig = { sampleRate: ASR_RATE, featureDim: 80 };
+  const modelConfig = {
+    transducer: {
+      encoder: file("encoder.onnx"),
+      decoder: file("decoder.onnx"),
+      joiner: file("joiner.onnx"),
+    },
+    tokens: file("tokens.txt"),
+    numThreads: threads,
+    provider: "cpu",
+    debug: 0,
+    modelType: "nemo_transducer",
+  };
+  if (mode.decoding === "greedy") {
+    return { featConfig, modelConfig, decodingMethod: "greedy_search" };
+  }
+  return {
+    featConfig,
+    modelConfig: { ...modelConfig, modelingUnit: "bpe", bpeVocab: mode.bpeVocab },
+    decodingMethod: "modified_beam_search",
+    maxActivePaths: 4,
+    hotwordsScore: DEFAULT_BOOST,
+  };
+}
+
 export class SherpaModels implements ModelSet {
   readonly recognizerModel = RECOGNIZER;
   readonly loads: Record<string, number> = {};
-  private rec: { r: SherpaRecognizer; vocab: ScoreVocab } | null = null;
+  private rec: { r: SherpaRecognizer; vocab: ScoreVocab | null } | null = null;
   private tok: BpeTokenizer | null = null;
   private tokens: Set<string> | null = null;
   private emb: SherpaEmbedder | null = null;
   private dia: Diarizer | null = null;
   private readonly threads: number;
   readonly diarizerKind: DiarizerKind;
+  readonly decoding: ParakeetDecoding;
 
   constructor(private readonly spec: SherpaSpec) {
     this.threads = spec.threads ?? 2;
     this.diarizerKind = spec.diarizer ?? "nemotron";
+    this.decoding = spec.decoding ?? "greedy";
   }
 
   private nemotron() {
@@ -201,38 +250,46 @@ export class SherpaModels implements ModelSet {
     return { tok: this.tok, tokens: this.tokens };
   }
 
-  private loadRecognizer(terms: readonly string[]): { r: SherpaRecognizer; vocab: ScoreVocab } {
-    const { tok } = this.tokenizer();
-    const built = buildBpeVocab(tok, terms);
-    const vocabPath = writeBpeVocab(this.spec.cacheDir, built.text);
+  private loadRecognizer(terms: readonly string[]): {
+    r: SherpaRecognizer;
+    vocab: ScoreVocab | null;
+  } {
+    const built = this.decoding === "beam" ? buildBpeVocab(this.tokenizer().tok, terms) : null;
+    const file = (name: string) => this.file(RECOGNIZER, name);
+    const config = built
+      ? recognizerConfig(file, this.threads, {
+          decoding: "beam",
+          bpeVocab: writeBpeVocab(this.spec.cacheDir, built.text),
+        })
+      : recognizerConfig(file, this.threads, { decoding: "greedy" });
     // Drop the previous recognizer before creating the next, so two never sit in memory at once.
     this.rec = null;
     Bun.gc(true);
-    const rec = new (sherpa().OfflineRecognizer)({
-      featConfig: { sampleRate: ASR_RATE, featureDim: 80 },
-      modelConfig: {
-        transducer: {
-          encoder: this.file(RECOGNIZER, "encoder.onnx"),
-          decoder: this.file(RECOGNIZER, "decoder.onnx"),
-          joiner: this.file(RECOGNIZER, "joiner.onnx"),
-        },
-        tokens: this.file(RECOGNIZER, "tokens.txt"),
-        numThreads: this.threads,
-        provider: "cpu",
-        debug: 0,
-        modelType: "nemo_transducer",
-        modelingUnit: "bpe",
-        bpeVocab: vocabPath,
-      },
-      decodingMethod: "modified_beam_search",
-      maxActivePaths: 4,
-      hotwordsScore: DEFAULT_BOOST,
-    });
+    const rec = new (sherpa().OfflineRecognizer)(config);
     this.count(RECOGNIZER);
-    return { r: new SherpaRecognizer(RECOGNIZER, rec), vocab: built.pieces };
+    return {
+      r: new SherpaRecognizer(RECOGNIZER, rec, this.decoding),
+      vocab: built?.pieces ?? null,
+    };
   }
 
   prepare(list: DecodeList | null): PreparedHotwords {
+    if (this.decoding === "greedy") {
+      // Greedy takes no hotwords: nothing is tokenized, and `vocab.used` records an empty list.
+      this.rec ??= this.loadRecognizer([]);
+      return {
+        recognizer: this.rec.r,
+        arg: undefined,
+        entries: [],
+        dropped: [],
+        warnings: list?.entries.length
+          ? [
+              "greedy decoding takes no hotwords; the vocabulary applies when reading and after the call",
+            ]
+          : [],
+        checks: [],
+      };
+    }
     const entries =
       list && modelKind(list.model) === "transducer" && modelKind(RECOGNIZER) === "transducer"
         ? list.entries

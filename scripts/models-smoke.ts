@@ -1,7 +1,8 @@
 /**
  * Downloads the pinned recognizer (every file checked against `models.ts`) and transcribes one
- * upstream test clip with it through the app's own `SherpaModels`, in the production setting
- * (`modified_beam_search`, a one-word decode list). The `models` workflow runs it on Linux,
+ * upstream test clip with it through the app's own `SherpaModels`, with beam search and a one-word
+ * decode list: the mode that also loads a `bpe.vocab` (greedy, the default, loads a subset of what
+ * beam does). The `models` workflow runs it on Linux,
  * Windows and macOS whenever the pins change, so a build that does not load in sherpa-onnx-node on
  * one of them fails before it ships. `bun run check` never downloads; this script does, on purpose.
  *
@@ -58,7 +59,11 @@ function readClip(path: string): Float32Array {
 }
 
 const t1 = performance.now();
-const models = new SherpaModels({ dir, cacheDir: mkdtempSync(join(tmpdir(), "akou-smoke-")) });
+const models = new SherpaModels({
+  dir,
+  cacheDir: mkdtempSync(join(tmpdir(), "akou-smoke-")),
+  decoding: "beam",
+});
 const prepared = models.prepare({
   model: RECOGNIZER,
   entries: [{ term: "Kubernetes", boost: DEFAULT_BOOST, tier: 1, source: "call" }],

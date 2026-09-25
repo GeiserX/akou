@@ -524,7 +524,7 @@ describe("settings over the API", () => {
     expect(helper.status).toBe(400);
     expect(helper.body.message).toContain("not writable over the API");
     const boost = await rig.api("PATCH", "/config", { "vocab.boost": 4 });
-    expect(boost.body.message).toContain("constant 3");
+    expect(boost.body.message).toContain("constant 1.5");
     const ok = await rig.api("PATCH", "/config", { "asr.segmentPause": 0.9 });
     expect(ok.status).toBe(200);
     expect(ok.body.settings["asr.segmentPause"]).toBe(0.9);
