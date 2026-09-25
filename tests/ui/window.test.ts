@@ -9,13 +9,15 @@
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Page } from "playwright-core";
+import type { Page, Route } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
+import { renderExport } from "../../src/main/handoff/export.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
 import {
   FakeProvider,
+  hiddenOffenders,
   launch,
   requestLog,
   seedCall,
@@ -28,6 +30,7 @@ import {
   type UiRig,
   uiRig,
   until,
+  watchedOffenders,
 } from "./rig.ts";
 
 const XSS = `<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>`;
@@ -362,6 +365,92 @@ describe("keyboard access", () => {
   );
 });
 
+describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
+  test(
+    "[W1.1] for each tab, the other two panes have computed display none and are skipped by Tab",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const panes = ["notes", "ask", "enhanced"];
+          for (const tab of panes) {
+            await page.click(`#tab-${tab}`);
+            const display = await page.evaluate(
+              (ids) =>
+                Object.fromEntries(
+                  ids.map((p) => [
+                    p,
+                    getComputedStyle(document.getElementById(`pane-${p}`) as Element).display,
+                  ]),
+                ),
+              panes,
+            );
+            for (const p of panes) {
+              if (p === tab) expect(display[p]).not.toBe("none");
+              else expect(display[p]).toBe("none");
+            }
+            // Tab from the selected tab walks into its own pane and on, never into the others.
+            await page.focus(`#tab-${tab}`);
+            const reached: string[] = [];
+            for (let i = 0; i < 12; i++) {
+              await page.keyboard.press("Tab");
+              reached.push(
+                await page.evaluate(
+                  () => document.activeElement?.closest("[role=tabpanel]")?.id ?? "",
+                ),
+              );
+            }
+            expect(reached).toContain(`pane-${tab}`);
+            for (const p of panes.filter((x) => x !== tab)) {
+              expect(reached).not.toContain(`pane-${p}`);
+            }
+            expect(await hiddenOffenders(page)).toEqual([]);
+          }
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[TS-15] positive control: a hidden pane forced to show is reported, by the check and by the watch on every screen",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          expect(await hiddenOffenders(page)).toEqual([]);
+          // The rule broken on purpose: every tab panel forced to show (through the CSSOM, which
+          // the page's Content-Security-Policy allows where a style tag is refused).
+          const force = (on: boolean) =>
+            page.evaluate((show) => {
+              for (const p of document.querySelectorAll<HTMLElement>('[role="tabpanel"]')) {
+                if (show) p.style.setProperty("display", "flex", "important");
+                else p.style.removeProperty("display");
+              }
+            }, on);
+          await force(true);
+          expect(await hiddenOffenders(page)).toEqual(["#pane-ask shows", "#pane-enhanced shows"]);
+          await page.click("#tab-ask");
+          expect(await watchedOffenders(page, { clear: true })).toEqual(
+            expect.arrayContaining(["#pane-notes shows", "#pane-enhanced shows"]),
+          );
+          // Put right, so this test's own close has nothing to report.
+          await force(false);
+          expect(await hiddenOffenders(page)).toEqual([]);
+          expect(await watchedOffenders(page)).toEqual([]);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("keyboard access to a row's tools", () => {
   test(
     "Play and Fix are reachable with Tab on every row, one that continues the same speaker included",
@@ -502,6 +591,210 @@ describe("the notepad (DESIGN 5.1)", () => {
           // The time gutter scrolls to the transcript there.
           await page.click("#notes li.note.human .gutter");
           await page.waitForSelector("#lines .row.flash");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W6.2] an edit to a note is kept when you click away, and after a 2 s pause; Escape still discards it",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const made = await rig.api("POST", `/calls/${id}/notes`, { text: "budget review" });
+          const nid = made.body.note.id as string;
+          const revs = async () =>
+            (await events(rig, id))
+              .filter((e) => e.type === "note" && (e as { id: string }).id === nid)
+              .map((e) => ({
+                rev: (e as { rev: number }).rev,
+                text: (e as { text: string }).text,
+              }));
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const row = `#notes li.note[data-id="${nid}"]`;
+          await page.waitForSelector(row);
+          const edit = async (typed: string) => {
+            await page.click(`${row} .edit`);
+            await page.waitForSelector(`${row} .note-edit`);
+            await page.keyboard.press("End");
+            await page.keyboard.type(typed);
+          };
+          // Type, then click the transcript: the edit is saved as rev 2 and the editor closes.
+          await edit(" first");
+          await page.click('#lines .row[data-id="l000002"] .text');
+          await until(async () => (await revs()).length === 2, 5000, "the edit saved on blur");
+          expect((await revs())[1]).toEqual({ rev: 2, text: "budget review first" });
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          await until(
+            async () => (await text(page, `${row} .note-text`)) === "budget review first",
+            5000,
+            "the notepad showing the edit",
+          );
+          // Type and stop: the pause saves it while the editor stays open.
+          await edit(" today");
+          await until(async () => (await revs()).length === 3, 5000, "the edit saved on a pause");
+          expect((await revs())[2]).toEqual({ rev: 3, text: "budget review first today" });
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          // A note written meanwhile through another door shows at once; the edit stays open as it was.
+          const aside = (await rig.api("POST", `/calls/${id}/notes`, { text: "an aside" })).body
+            .note.id as string;
+          await page.waitForSelector(`#notes li.note[data-id="${aside}"]`, { timeout: 5000 });
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          expect(await page.inputValue(`${row} .note-edit`)).toBe("budget review first today");
+          // Enter saves what came after; neither the pause timer nor the blur saves it again.
+          await page.keyboard.type("!");
+          await page.keyboard.press("Enter");
+          await until(async () => (await revs()).length === 4, 5000, "the edit saved on Enter");
+          expect((await revs())[3]).toEqual({ rev: 4, text: "budget review first today!" });
+          // Escape discards: nothing is written, now or after the pause.
+          await edit(" nope");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          await page.waitForTimeout(2500);
+          expect((await revs()).length).toBe(4);
+          expect(await text(page, `${row} .note-text`)).toBe("budget review first today!");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W6.2] a note save that fails keeps the edit open with its text, the saves after it still go through, and a note deleted elsewhere closes its edit",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const made = await rig.api("POST", `/calls/${id}/notes`, { text: "budget review" });
+          const nid = made.body.note.id as string;
+          const other = (await rig.api("POST", `/calls/${id}/notes`, { text: "second note" })).body
+            .note.id as string;
+          const otherRow = `#notes li.note[data-id="${other}"]`;
+          const noteTexts = async () =>
+            (await events(rig, id))
+              .filter((e) => e.type === "note")
+              .map((e) => (e as { text: string }).text);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const row = `#notes li.note[data-id="${nid}"]`;
+          await page.waitForSelector(row);
+          // The next note request fails: "net" as a transport error, "500" as a refusal.
+          let fail: "net" | "500" | null = null;
+          await page.route("**/api/v1/calls/*/notes**", (r) => {
+            const f = fail;
+            fail = null;
+            if (f === "net") return r.abort("failed");
+            if (f === "500")
+              return r.fulfill({
+                status: 500,
+                contentType: "application/json",
+                body: JSON.stringify({ error: "io", message: "the disk is full" }),
+              });
+            return r.fallback();
+          });
+          const toastSays = (msg: string) =>
+            until(async () => (await text(page, "#toast")) === msg, 5000, `the toast "${msg}"`);
+
+          // A transport error on the save when focus leaves: a toast, and the text stays to retry.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" first");
+          fail = "net";
+          await page.click('#lines .row[data-id="l000002"] .text');
+          await toastSays("the note was not saved");
+          expect(await page.inputValue(`${row} .note-edit`)).toBe("budget review first");
+          await page.click(`${row} .note-edit`);
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("budget review first"),
+            5000,
+            "the retried edit",
+          );
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+
+          // A refused save on Enter: the app's message, and the editor stays open with its text.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" again");
+          fail = "500";
+          await page.keyboard.press("Enter");
+          await toastSays("the disk is full");
+          expect(await page.inputValue(`${row} .note-edit`)).toBe("budget review first again");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("budget review first again"),
+            5000,
+            "the edit saved after a refusal",
+          );
+
+          // Edit on another note while this edit's save fails: this edit stays open and tracked,
+          // the other waits until this one is saved.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" third");
+          fail = "net";
+          await page.click(`${otherRow} .edit`);
+          await toastSays("the note was not saved");
+          await page.waitForTimeout(300);
+          expect(await page.locator(`${otherRow} .note-edit`).count()).toBe(0);
+          expect(await page.inputValue(`${row} .note-edit`)).toBe(
+            "budget review first again third",
+          );
+          await page.click(`${row} .note-edit`);
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("budget review first again third"),
+            5000,
+            "the edit saved before the other opens",
+          );
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          // Once it is saved, Edit on the other note opens it as usual, even straight from an edit.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" fourth");
+          await page.click(`${otherRow} .edit`);
+          await page.waitForSelector(`${otherRow} .note-edit`, { timeout: 5000 });
+          await until(
+            async () => (await noteTexts()).includes("budget review first again third fourth"),
+            5000,
+            "the first edit saved on the way",
+          );
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(`${otherRow} .note-edit`, {
+            state: "detached",
+            timeout: 5000,
+          });
+
+          // A new note whose request fails does not stop the next one.
+          await page.click("#note-input");
+          await page.keyboard.type("lost line");
+          fail = "net";
+          await page.keyboard.press("Enter");
+          await toastSays("the note was not saved");
+          await page.keyboard.type("fresh line");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("fresh line"),
+            5000,
+            "the next new note",
+          );
+
+          // Deleted through another door while it is being edited: the row goes, edit and all.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          expect((await rig.api("DELETE", `/calls/${id}/notes/${nid}`, {})).status).toBe(200);
+          await page.waitForSelector(row, { state: "detached", timeout: 5000 });
         },
       );
     },
@@ -931,6 +1224,158 @@ describe("playback and Fix this word", () => {
   );
 
   test(
+    "[W5.2] Space pauses a playing line and resumes it from the same position; the Play button does the same; Space in a text field types",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const folder = (await rig.api("GET", `/calls/${id}`)).body.folder as string;
+          writeFileSync(
+            join(folder, "audio", "part-001.opus"),
+            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
+          );
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const player = () =>
+            page.evaluate(() => {
+              const p = document.getElementById("player") as HTMLAudioElement;
+              return { paused: p.paused, at: p.currentTime };
+            });
+          expect(await page.locator("#play").isDisabled()).toBe(true);
+          await page.hover('#lines .row[data-id="l000003"]');
+          await page.click('#lines .row[data-id="l000003"] .play');
+          await until(async () => (await player()).at > 0.3, 8000, "the line playing");
+          expect(await text(page, "#play")).toBe("❚❚ Pause");
+          // Space, with focus still on the row's Play button, pauses: it does not restart the line.
+          await page.keyboard.press("Space");
+          const paused = await player();
+          expect(paused.paused).toBe(true);
+          expect(paused.at).toBeGreaterThan(0.3);
+          expect(await text(page, "#play")).toBe("▶ Play");
+          await page.waitForTimeout(400);
+          expect((await player()).at).toBe(paused.at);
+          await page.keyboard.press("Space");
+          expect((await player()).paused).toBe(false);
+          await until(async () => (await player()).at > paused.at, 5000, "playing on");
+          // It went on from where it stopped, not from the line's start.
+          expect((await player()).at).toBeGreaterThanOrEqual(paused.at);
+          // The button pauses and resumes too.
+          await page.click("#play");
+          expect((await player()).paused).toBe(true);
+          const at = (await player()).at;
+          await page.click("#play");
+          expect((await player()).paused).toBe(false);
+          expect((await player()).at).toBeGreaterThanOrEqual(at);
+          // In a text field, Space is a space.
+          await page.click("#note-input");
+          await page.keyboard.type("a b");
+          expect(await page.inputValue("#note-input")).toBe("a b");
+          expect((await player()).paused).toBe(false);
+          // On any other button, Space presses that button and leaves the audio alone.
+          await page.focus("#tab-ask");
+          await page.keyboard.press("Space");
+          expect(await page.getAttribute("#tab-ask", "aria-selected")).toBe("true");
+          expect((await player()).paused).toBe(false);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W5.2] opening another call stops the first call's audio: Play is disabled and Space plays nothing",
+    async () => {
+      let a = "";
+      let b = "";
+      await withRig(
+        {
+          seed: (home) => {
+            a = seedCall(home, (x) => standardCall(x)).id;
+            b = seedCall(home, (x) => standardCall(x, "01J8Z6Q4M2VX0K7B3D4E5SECND")).id;
+          },
+        },
+        async (rig) => {
+          const folder = (await rig.api("GET", `/calls/${a}`)).body.folder as string;
+          writeFileSync(
+            join(folder, "audio", "part-001.opus"),
+            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
+          );
+          const page = await rig.open(a);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const player = () =>
+            page.evaluate(() => {
+              const p = document.getElementById("player") as HTMLAudioElement;
+              return { paused: p.paused, at: p.currentTime };
+            });
+          await page.hover('#lines .row[data-id="l000003"]');
+          await page.click('#lines .row[data-id="l000003"] .play');
+          await until(async () => (await player()).at > 0.3, 8000, "the line playing");
+          await page.click(`#calls li[data-id="${b}"] button`);
+          await until(
+            async () => (await page.locator("#play").isDisabled()) && (await player()).paused,
+            5000,
+            "the player cleared",
+          );
+          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.locator("#player").getAttribute("data-line")).toBeNull();
+          await page.click("#scroller");
+          await page.keyboard.press("Space");
+          await page.waitForTimeout(300);
+          expect((await player()).paused).toBe(true);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W5.2] a line's audio that arrives after another call opened is not loaded into the player",
+    async () => {
+      let a = "";
+      let b = "";
+      await withRig(
+        {
+          seed: (home) => {
+            a = seedCall(home, (x) => standardCall(x)).id;
+            b = seedCall(home, (x) => standardCall(x, "01J8Z6Q4M2VX0K7B3D4E5SECND")).id;
+          },
+        },
+        async (rig) => {
+          const folder = (await rig.api("GET", `/calls/${a}`)).body.folder as string;
+          writeFileSync(
+            join(folder, "audio", "part-001.opus"),
+            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
+          );
+          const page = await rig.open(a);
+          await page.waitForSelector("#lines .row >> nth=3");
+          // Hold the first call's audio until the other call is open.
+          const held: Route[] = [];
+          await page.route("**/api/v1/calls/*/audio/*", (r) => void held.push(r));
+          await page.hover('#lines .row[data-id="l000003"]');
+          await page.click('#lines .row[data-id="l000003"] .play');
+          await until(async () => held.length === 1, 5000, "the audio request");
+          await page.click(`#calls li[data-id="${b}"] button`);
+          expect(await page.getAttribute(`#calls li[data-id="${b}"] button`, "aria-current")).toBe(
+            "true",
+          );
+          const arrived = page.waitForResponse("**/api/v1/calls/*/audio/*");
+          await held[0]?.fallback();
+          await (await arrived).finished();
+          await page.waitForTimeout(500);
+          const player = await page.evaluate(() => {
+            const p = document.getElementById("player") as HTMLAudioElement;
+            return { src: p.getAttribute("src"), line: p.dataset.line ?? null, paused: p.paused };
+          });
+          expect(player).toEqual({ src: null, line: null, paused: true });
+          expect(await page.locator("#play").isDisabled()).toBe(true);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[decision] File vocabulary that silently corrects nothing: a workspace file entry corrects the window's line, and a change to the files reaches the open window",
     async () => {
       let id = "";
@@ -1010,6 +1455,123 @@ describe("playback and Fix this word", () => {
               ),
             5000,
             "the workspace entry",
+          );
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("copy the transcript so far (W12.2)", () => {
+  /** The export's `## Transcript` section for the call as the app sees it now. */
+  const section = async (rig: UiRig, id: string) => {
+    const view = (await rig.app.call(id)).view;
+    const md = renderExport({ view, version: "0.0.0", enhanced: null, audio: [], rev: 1 });
+    return md.slice(md.indexOf("## Transcript"));
+  };
+  const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
+
+  test(
+    "[W12.2] during a call, Mod+Shift+C copies the transcript as the export's Transcript section",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const id = await rig.startCall({ title: "Copy live" });
+        const page = await rig.open(id);
+        await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+        await page.evaluate(() => navigator.clipboard.writeText("before"));
+        await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
+        await rig.write(id, seg("l000002", "which region", { spk: "c2" }));
+        await until(async () => (await rowIds(page)).length === 2, 5000, "two rows");
+        await page.click("#scroller");
+        await page.keyboard.press("ControlOrMeta+Shift+C");
+        await until(async () => (await clipboard(page)) !== "before", 5000, "the copy");
+        const copied = await clipboard(page);
+        expect(copied).toBe(await section(rig, id));
+        expect(copied).toStartWith("## Transcript\n");
+        expect(copied).toContain("which region");
+        // The key's scope is the window: it copies while a note is being typed too.
+        await page.evaluate(() => navigator.clipboard.writeText("before"));
+        await page.click("#note-input");
+        await page.keyboard.press("ControlOrMeta+Shift+C");
+        await until(
+          async () => (await clipboard(page)) !== "before",
+          5000,
+          "the copy from a field",
+        );
+        expect(await clipboard(page)).toBe(copied);
+        // On a layout where the key is not "c" (Cyrillic "с" here), the physical C key still copies.
+        await page.evaluate(() => navigator.clipboard.writeText("before"));
+        await page.evaluate(() => {
+          const mac = /mac/i.test(navigator.platform);
+          document.getElementById("scroller")?.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "С",
+              code: "KeyC",
+              shiftKey: true,
+              metaKey: mac,
+              ctrlKey: !mac,
+              bubbles: true,
+            }),
+          );
+        });
+        await until(async () => (await clipboard(page)) !== "before", 5000, "the copy on Cyrillic");
+        expect(await clipboard(page)).toBe(copied);
+        // The button names the chord with the keys this computer has, never the doc's "Mod".
+        const chord = await page.evaluate(() =>
+          /mac/i.test(navigator.platform) ? "⌘⇧C" : "Ctrl+Shift+C",
+        );
+        expect(await page.getAttribute("#copy-transcript", "title")).toBe(
+          `Copy the transcript so far as Markdown (${chord})`,
+        );
+        await rig.api("POST", "/calls/live/stop");
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W12.2] after the final pass, the header's Copy transcript copies the final layer",
+    async () => {
+      let id = "";
+      await withRig(
+        {
+          seed: (home) =>
+            (id = seedCall(home, (b) => {
+              standardCall(b);
+              b.add({ type: "final.started", pid: 1 });
+              b.seg({ id: "f000001", ch: "call", spk: "c1", w0: T0 + 3000, text: "final words" });
+              b.add({ type: "final.part.done", part: 1 });
+              b.add({ type: "final.done", parts: [1], skipped: [] });
+            }).id),
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.waitForSelector("#lines .row");
+          // The clipboard can outlive a browser context (Chromium on Linux keeps the earlier
+          // test's copy), so wait for this click's write, not for any transcript.
+          await page.evaluate(() => navigator.clipboard.writeText("before"));
+          await page.click("#copy-transcript");
+          await until(async () => (await clipboard(page)) !== "before", 5000, "the copy");
+          const copied = await clipboard(page);
+          expect(copied).toBe(await section(rig, id));
+          expect(copied).toContain("final words");
+          expect(copied).not.toContain("hello everyone");
+          // A clipboard that refuses says so in plain words, without the browser's own message.
+          await page.evaluate(() => {
+            const refuse = () =>
+              Promise.reject(new DOMException("Write permission denied.", "NotAllowedError"));
+            navigator.clipboard.write = refuse;
+            navigator.clipboard.writeText = refuse;
+          });
+          await page.click("#copy-transcript");
+          await until(
+            async () => (await text(page, "#toast")) === "The clipboard is not available here.",
+            5000,
+            "the refusal",
           );
         },
       );

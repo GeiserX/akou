@@ -139,6 +139,7 @@ class App {
     this.wireControls();
     this.wireTabs();
     this.wirePopover();
+    this.wirePlayer();
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
@@ -182,6 +183,7 @@ class App {
     this.notepad.reset();
     this.askPane.reset();
     this.enhanced.reset();
+    this.stopAudio();
     this.meters(null);
     if (this.t.kind === "browser")
       history.replaceState(null, "", `?call=${encodeURIComponent(id)}`);
@@ -330,6 +332,7 @@ class App {
       pill.title = `${share.url}${share.warning ? `\n${share.warning}` : ""}`;
     }
     byId("share-start").hidden = !!share || !v?.call;
+    byId("copy-transcript").hidden = !v?.call;
   }
 
   private controls(v: CallView | null): void {
@@ -528,6 +531,20 @@ class App {
       }
     });
     byId("share-start").addEventListener("click", () => void this.share());
+    const copy = byId("copy-transcript");
+    copy.title += this.platform === "mac" ? " (⌘⇧C)" : " (Ctrl+Shift+C)";
+    copy.addEventListener("click", () => void this.copyTranscript());
+    document.addEventListener("keydown", (e) => {
+      const mod = this.platform === "mac" ? e.metaKey : e.ctrlKey;
+      // The letter on the key, or the C key's place when the layout has no Latin letters.
+      const k = e.key.toLowerCase();
+      const c = k === "c" || (!/^[a-z]$/.test(k) && e.code === "KeyC");
+      if (!mod || !e.shiftKey || e.altKey || !c) return;
+      // The key's scope is the window (WINDOW 14), text fields included; Settings keeps its own.
+      if ((e.target as HTMLElement | null)?.closest("dialog")) return;
+      e.preventDefault();
+      void this.copyTranscript();
+    });
     byId("share-stop").addEventListener("click", () => {
       void this.t.request("DELETE", "/share", { call: this.callId }).then((r) => {
         if (r.status >= 400) toast(message(r.body, "the share could not be stopped"));
@@ -574,6 +591,38 @@ class App {
           .writeText(url)
           .catch(() => toast("The clipboard is not available here.")),
     );
+  }
+
+  /**
+   * Copy transcript so far (WINDOW W12.2): the export's `## Transcript` section as the app renders
+   * it, names and vocabulary applied; the final layer once the final pass is done. The text is
+   * handed to the clipboard as a promise, so WebKit still counts the click or key as the gesture
+   * that allows the write.
+   */
+  private async copyTranscript(): Promise<void> {
+    const call = this.callId;
+    if (!call || !this.view()?.call) return;
+    const text = this.t
+      .request<string>("GET", `/calls/${encodeURIComponent(call)}/transcript?format=export`)
+      .then((r) => {
+        if (r.status >= 400 || typeof r.body !== "string") {
+          throw new Error(message(r.body, `the transcript could not be read (${r.status})`));
+        }
+        return r.body;
+      });
+    try {
+      if (typeof ClipboardItem === "function") {
+        const blob = text.then((s) => new Blob([s], { type: "text/plain" }));
+        await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
+      } else await navigator.clipboard.writeText(await text);
+      toast("Transcript copied.", "info");
+    } catch {
+      const failed = await text.then(
+        () => null,
+        (e: Error) => e.message,
+      );
+      toast(failed ?? "The clipboard is not available here.");
+    }
   }
 
   /** The consent reminder, once per call started here, with notice text to copy. */
@@ -660,12 +709,7 @@ class App {
     const v = this.view();
     const call = this.callId;
     const line = v?.resolve(id);
-    if (!v || !call || !line) return;
-    if (this.platform === "linux" && v.live) {
-      // PipeWire cannot keep the window's audio out of the recording (DESIGN 2.3).
-      toast("akou does not play audio while a call is recording on Linux.");
-      return;
-    }
+    if (!v || !call || !line || !this.mayPlay()) return;
     const k = `${call}:${line.part}`;
     let url = this.blobs.get(k);
     if (!url) {
@@ -676,6 +720,8 @@ class App {
         return;
       }
       this.blobs.set(k, url);
+      // Another call opened while the audio downloaded: it stays cached, and does not play.
+      if (call !== this.callId) return;
     }
     const p = this.player;
     if (p.src !== url) p.src = url;
@@ -685,9 +731,68 @@ class App {
       p.currentTime = line.a0;
       this.balance();
       void p.play().catch(() => {});
+      this.drawPlay();
     };
     if (p.readyState >= 1) seek();
     else p.addEventListener("loadedmetadata", seek, { once: true });
+  }
+
+  private mayPlay(): boolean {
+    if (this.platform === "linux" && this.view()?.live) {
+      // PipeWire cannot keep the window's audio out of the recording (DESIGN 2.3).
+      toast("akou does not play audio while a call is recording on Linux.");
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * Play and pause (WINDOW W5.2): the player bar's button, and Space outside text fields. Resuming
+   * goes on from where the pause left it. Until a line has been played there is nothing to pause,
+   * so Space keeps its usual meaning.
+   */
+  private wirePlayer(): void {
+    const p = this.player;
+    for (const ev of ["play", "pause", "ended", "emptied"]) {
+      p.addEventListener(ev, () => this.drawPlay());
+    }
+    byId("play").addEventListener("click", () => this.togglePlay());
+    document.addEventListener("keydown", (e) => {
+      if (e.key !== " " || e.metaKey || e.ctrlKey || e.altKey || !p.src) return;
+      const t = e.target as HTMLElement | null;
+      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
+      // Any other focused control keeps Space as its own key. A line's Play is taken, so the key
+      // pauses what it started instead of starting the line again.
+      if (t?.closest("button, a[href], summary, [role=tab]") && !t.closest(".row .play, #play"))
+        return;
+      e.preventDefault();
+      if (!e.repeat) this.togglePlay();
+    });
+  }
+
+  private togglePlay(): void {
+    const p = this.player;
+    if (!p.src) return;
+    if (!p.paused) p.pause();
+    else if (this.mayPlay()) void p.play().catch(() => {});
+    this.drawPlay();
+  }
+
+  /** Another call opened: the last one's audio stops and is let go, so nothing can resume it. */
+  private stopAudio(): void {
+    const p = this.player;
+    p.pause();
+    p.removeAttribute("src");
+    delete p.dataset.line;
+    delete p.dataset.seek;
+    p.load();
+  }
+
+  private drawPlay(): void {
+    const p = this.player;
+    const btn = byId<HTMLButtonElement>("play");
+    btn.disabled = !p.src;
+    btn.textContent = p.paused ? "▶ Play" : "❚❚ Pause";
   }
 
   /** Mic and call balance: the file keeps them on the left and the right channel. */

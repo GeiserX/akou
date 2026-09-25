@@ -236,6 +236,19 @@ export function renderTranscript(lines: readonly Line[], tz: string): string {
   return out.join("\n");
 }
 
+/**
+ * The export's `## Transcript` section. The window's "Copy transcript so far" (WINDOW W12.2) copies
+ * exactly this, through `GET /calls/{id}/transcript?format=export`.
+ */
+export function renderTranscriptSection(lines: readonly Line[], tz: string): string {
+  return [
+    "## Transcript",
+    `_Times are ${tz}._`,
+    "",
+    renderTranscript(lines, tz) || "_No transcript lines._",
+  ].join("\n");
+}
+
 /** A bracketed group of citations, as the model writes them: `[#l000031 #l000045]`. */
 const BRACKETED = /\[\s*(#[lf]\d{6,}(?:\s+#[lf]\d{6,})*)\s*\]/g;
 
@@ -295,7 +308,6 @@ export function renderExport(o: RenderInput): string {
   const meta = callMeta(o.view, o.version);
   const tz = meta.tz;
   const notes = renderNotes(o.view, tz);
-  const transcript = renderTranscript(o.view.lines("best"), tz);
   const sections = [
     "## Notes",
     o.enhanced ? renderEnhanced(o.enhanced, o.view, tz) : "_Not enhanced yet._",
@@ -303,10 +315,7 @@ export function renderExport(o: RenderInput): string {
     "## Your raw notes",
     notes || "_No notes._",
     "",
-    "## Transcript",
-    `_Times are ${tz}._`,
-    "",
-    transcript || "_No transcript lines._",
+    renderTranscriptSection(o.view.lines("best"), tz),
   ];
   return `${frontmatter(meta, o.audio, o.rev)}${sections.join("\n")}\n`;
 }

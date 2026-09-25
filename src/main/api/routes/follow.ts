@@ -11,11 +11,13 @@
  * - `GET /calls/{id}/transcript`: the rendered transcript, names and vocabulary applied, local
  *   wall-clock times only. The JSON form also carries the call's state and, while it is live, the
  *   provisional line (marked `draft`), which is what `akou_read` follows a call with.
+ *   `format=export` is the export file's `## Transcript` section, what the window copies.
  */
 
 import { formatWall, formatZone } from "../../../core/log/clock.ts";
 import type { LogEvent } from "../../../core/log/events.ts";
 import type { Line, View } from "../../../core/log/fold.ts";
+import { renderTranscriptSection } from "../../handoff/export.ts";
 import { estimateTokens, renderLine } from "../../query/render.ts";
 import { enumParam, HttpError, intParam, json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
@@ -336,7 +338,7 @@ export function followRoutes(r: Router<ApiApp>): void {
     const v = call.view;
     const tz = v.call?.tz ?? "UTC";
     const layer = enumParam<View>(c.url, "layer", ["best", "live", "final"], "best");
-    const format = enumParam(c.url, "format", ["json", "md", "txt"] as const, "json");
+    const format = enumParam(c.url, "format", ["json", "md", "txt", "export"] as const, "json");
     const since = intParam(c.url, "since", 0, 0, Number.MAX_SAFE_INTEGER) as number;
     const limitTokens = intParam(c.url, "limitTokens", undefined, 1, 1_000_000);
     const from = timeParam(c.url, "from");
@@ -371,6 +373,11 @@ export function followRoutes(r: Router<ApiApp>): void {
         start--;
       }
       lines = lines.slice(start);
+    }
+    if (format === "export") {
+      return new Response(`${renderTranscriptSection(lines, tz)}\n`, {
+        headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" },
+      });
     }
     const zone = `Times are local, ${formatZone(tz, v.parts()[0]?.wallStart ?? c.app.now())}.`;
     if (format !== "json") {

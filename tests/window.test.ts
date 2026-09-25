@@ -7,7 +7,8 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import type { LogEvent } from "../src/core/log/events.ts";
+import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
+import { renderExport } from "../src/main/handoff/export.ts";
 import { Bridge, checkPath } from "../src/main/window/bridge.ts";
 import { buildUi, nodeImport, UI_DIR } from "../src/main/window/bundle.ts";
 import {
@@ -235,6 +236,55 @@ describe("the page server: the window in a browser, with a session of its own", 
         const r = await reader.read();
         if (r.done) break;
       }
+      await rig.api("POST", "/calls/live/stop");
+    },
+    LONG,
+  );
+
+  test(
+    "[W12.2] the transcript as the export's `## Transcript` section reaches the window as a string, through the bridge and the page",
+    async () => {
+      const id = await rig.startCall({ title: "Copy me" });
+      const w0 = Date.now();
+      for (const [n, spk, text] of [
+        [1, "c1", "we should move the build"],
+        [2, "c1", "- to the new box"],
+        [3, "c2", "which region"],
+      ] as const) {
+        await rig.app.write(id, {
+          type: "seg",
+          id: `l00000${n}`,
+          rev: 1,
+          layer: "live",
+          part: 1,
+          ch: "call",
+          spk,
+          a0: n,
+          a1: n + 1,
+          w0: w0 + n * 1000,
+          w1: w0 + n * 1000 + 900,
+          text,
+          model: "fake",
+        } as EventDraft);
+      }
+      const view = (await rig.app.call(id)).view;
+      const md = renderExport({ view, version: "0.0.0", enhanced: null, audio: [], rev: 1 });
+      const section = md.slice(md.indexOf("## Transcript"));
+      expect(section).toContain("\\- to the new box");
+      const viaBridge = await new Bridge(rig.app).json(
+        "GET",
+        `/calls/${id}/transcript?format=export`,
+      );
+      expect(viaBridge).toEqual({ status: 200, body: section });
+      const res = await fetch(`${page.origin}/api/v1/calls/${id}/transcript?format=export`, {
+        headers: { authorization: `Bearer ${await session()}` },
+      });
+      expect(res.headers.get("content-type")).toContain("text/markdown");
+      expect(await res.text()).toBe(section);
+      // A JSON reply still arrives parsed.
+      const detail = await new Bridge(rig.app).json("GET", `/calls/${id}`);
+      expect(typeof detail.body).toBe("object");
+      expect(detail.body).not.toBeNull();
       await rig.api("POST", "/calls/live/stop");
     },
     LONG,
