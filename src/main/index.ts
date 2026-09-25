@@ -1587,6 +1587,10 @@ export class AkouApp implements ApiApp {
     return this.keyStore;
   }
 
+  recognizer(): "loading" | "ready" | "unavailable" {
+    return this.asrState.state;
+  }
+
   /**
    * The web UI's admin login (SV-U1): the password against `server.admin_password_hash`, read
    * from the file at each try so `akou admin set-password` works without a restart, or an `admin`

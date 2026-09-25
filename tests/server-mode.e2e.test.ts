@@ -459,6 +459,8 @@ describe("SV-K1: GET /v1/server", () => {
 describe("SV-P4: GET /healthz", () => {
   test("curl with no header gets 200 with the four fields, in both modes", async () => {
     for (const rig of [app, server]) {
+      // The fake recognizer loads in a moment; until then the answer is 503 (the test below).
+      await until(() => rig.app.recognizer() === "ready", 10_000, "recognizer ready");
       const r = await get(rig, "/healthz");
       expect(r.status).toBe(200);
       expect(JSON.parse(r.body)).toEqual({
@@ -520,6 +522,46 @@ describe("SV-P4: GET /healthz", () => {
       release();
       await rig.close();
       files.stop(true);
+    }
+  });
+});
+
+describe("SV-P4: GET /healthz follows the recognizer, not only the files", () => {
+  test("503 while the recognizer loads; models_ready only once it is ready", async () => {
+    let recognizer: "loading" | "ready" | "unavailable" = "loading";
+    const s = startApiServer({
+      app: { ...fakeApp(), recognizer: () => recognizer } as ApiApp,
+      port: 0,
+      token: () => "t".repeat(64),
+    });
+    const health = async () => {
+      const r = await fetch(`http://127.0.0.1:${s.port}/healthz`);
+      return { status: r.status, body: (await r.json()) as Record<string, unknown> };
+    };
+    const installed = async () => {
+      const r = await fetch(`http://127.0.0.1:${s.port}/v1/server`);
+      return ((await r.json()) as { engines: { installed: boolean }[] }).engines[0]?.installed;
+    };
+    try {
+      // The files are there (`fakeApp`), and the recognizer is still loading them.
+      const loading = await health();
+      expect(loading.status).toBe(503);
+      expect(loading.body).toMatchObject({ ok: false, models_ready: false });
+      expect(await installed()).toBe(false);
+      // It failed to load: the API answers, but nothing is ready to transcribe.
+      recognizer = "unavailable";
+      const failed = await health();
+      expect(failed.status).toBe(200);
+      expect(failed.body).toMatchObject({ ok: true, models_ready: false });
+      expect(await installed()).toBe(false);
+      // Positive control: loaded, it is healthy and ready.
+      recognizer = "ready";
+      const ready = await health();
+      expect(ready.status).toBe(200);
+      expect(ready.body).toMatchObject({ ok: true, models_ready: true });
+      expect(await installed()).toBe(true);
+    } finally {
+      await s.stop();
     }
   });
 });

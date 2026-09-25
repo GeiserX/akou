@@ -3,7 +3,8 @@
  * docs/research/service-interface.md SI-3). They answer in both modes.
  *
  * - `GET /healthz`, no key: `{ok, version, models_ready, queue_depth}`, 200 when the API answers,
- *   503 while the models download. Docker's `HEALTHCHECK` calls it.
+ *   503 while the models load: while the files download, and while the recognizer loads them.
+ *   `models_ready` is true only once the recognizer is ready. Docker's `HEALTHCHECK` calls it.
  * - `GET /v1/server`, no key: what this akou is and can do, so a client tells akou from a plain
  *   OpenAI-compatible server and lists the presets before offering them. A capability is true only
  *   once its route exists, so the flags follow the code; a client ignores flags it does not know.
@@ -17,17 +18,26 @@ import { caller } from "../caller.ts";
 import { json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 
+/** The models load (files downloading, or the recognizer reading them), and are ready to use. */
+function modelState(app: ApiApp): { loading: boolean; ready: boolean } {
+  const files = app.models().state;
+  const recognizer = app.recognizer?.() ?? "ready";
+  return {
+    loading: files === "downloading" || recognizer === "loading",
+    ready: files === "ready" && recognizer === "ready",
+  };
+}
+
 export function rootRoutes(r: Router<ApiApp>): void {
   r.add(
     "GET",
     "/healthz",
     (c) => {
-      const models = c.app.models();
-      const loading = models.state === "downloading";
+      const { loading, ready } = modelState(c.app);
       return json(loading ? 503 : 200, {
         ok: !loading,
         version: c.app.version,
-        models_ready: models.state === "ready",
+        models_ready: ready,
         queue_depth: c.app.queueDepth?.() ?? 0,
       });
     },
@@ -40,7 +50,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "GET",
     "/server",
     (c) => {
-      const ready = c.app.models().state === "ready";
+      const { ready } = modelState(c.app);
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
       return json(200, {

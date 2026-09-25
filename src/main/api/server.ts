@@ -130,6 +130,11 @@ export interface ApiApp {
   quit(): void;
   /** The API keys of server mode (SV-K2); none in app mode. */
   keys?(): KeyStore | null;
+  /**
+   * The recognizer's state, for `/healthz` and `GET /v1/server`: the model files can be on disk
+   * while it is still loading them, or after it failed to. Absent: ready once the files are.
+   */
+  recognizer?(): "loading" | "ready" | "unavailable";
   /** Jobs waiting or running, for `/healthz`; 0 until the job queue exists. */
   queueDepth?(): number;
 }
