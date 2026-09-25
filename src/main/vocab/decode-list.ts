@@ -4,8 +4,8 @@
  * hotwords.
  *
  * Every listed word is pushed at every frame, so the list must be short and the boost gentle:
- * - The global boost is a constant, 3. A per-entry boost (up to 5) exists for a word the engine
- *   keeps missing, and only `akou vocab check --boost` sets one above 3.
+ * - The global boost is a constant, 3. A per-entry boost (up to 5, the entry's `decode` value in
+ *   its vocabulary file) exists for a word the engine keeps missing.
  * - The list is capped at 24 entries, filled in priority order, with a warning when it truncates:
  *   1. words added to this call while it runs (`vocab.add`, "Fix this word");
  *   2. the people and title of this call: the words `akou start --vocab` wrote before capture

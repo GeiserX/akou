@@ -33,6 +33,8 @@ export interface Ctx {
   models?: readonly ModelSpecEntry[];
   /** Where `skill install` copies from (`skills/akou` in the repository). */
   skillSource?: string;
+  /** Test seam: the akou command `skill install` registers, before `mcp`. */
+  self?: readonly string[];
   /** The app's version; the skill must carry the same one. */
   version: string;
 }
@@ -42,6 +44,11 @@ export interface Command {
   summary: string;
   usage: string;
   flags?: FlagSpecs;
+  /**
+   * Designed but not built: why. The command says so and exits 69, and no message may send anyone
+   * to it (CLI-17).
+   */
+  unbuilt?: string;
   run(ctx: Ctx, p: Parsed): Promise<number>;
 }
 
