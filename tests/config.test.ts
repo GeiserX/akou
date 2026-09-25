@@ -169,12 +169,29 @@ describe("the environment", () => {
   });
 });
 
+describe("the speaker-label engine", () => {
+  test("Nemotron is the default; embeddings is the other choice; anything else is refused", () => {
+    const paths = resolvePaths({ AKOU_HOME: "/t" });
+    expect(buildSettings(paths, {}, {}).settings["asr.diarizer"]).toBe("nemotron");
+    expect(validateSetting("asr.diarizer", "embeddings").ok).toBe(true);
+    expect(validateSetting("asr.diarizer", "pyannote").ok).toBe(false);
+    expect(patchConfig({}, { "asr.diarizer": "embeddings" }, paths).ok).toBe(true);
+  });
+});
+
 describe("the API may not name a program to run", () => {
   test("capture.helper is read from the file but refused over PATCH /config", () => {
     const paths = resolvePaths({ AKOU_HOME: "/t" });
     expect(patchConfig({}, { "capture.helper": ["/bin/sh"] }, paths).ok).toBe(false);
     const c = buildSettings(paths, { "capture.helper": ["/opt/akou-capture"] }, {});
     expect(c.settings["capture.helper"]).toEqual(["/opt/akou-capture"]);
+  });
+
+  test("asr.diarizeHelper, like capture.helper, is read from the file but refused over PATCH", () => {
+    const paths = resolvePaths({ AKOU_HOME: "/t" });
+    expect(patchConfig({}, { "asr.diarizeHelper": ["/bin/sh"] }, paths).ok).toBe(false);
+    const c = buildSettings(paths, { "asr.diarizeHelper": ["/opt/akou-diarize"] }, {});
+    expect(c.settings["asr.diarizeHelper"]).toEqual(["/opt/akou-diarize"]);
   });
 
   test("null resets a key to its default", () => {

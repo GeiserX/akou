@@ -148,6 +148,12 @@ async function main(argv: string[]): Promise<void> {
     );
   }
 
+  // The diarization helper (Nemotron on ONNX Runtime). cargo fetches ONNX Runtime's prebuilt
+  // static library for the target the first time.
+  const diarize = join(ROOT, "native", "akou-diarize", "Cargo.toml");
+  if (existsSync(diarize))
+    run(["cargo", "build", "--locked", "--release", "--manifest-path", diarize]);
+
   // 3. The pieces Hutch's bundler does not make.
   rmSync(join(ROOT, "dist", "ui"), { recursive: true, force: true });
   await writeUi(join(ROOT, BUILT.ui));
