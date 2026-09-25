@@ -1,0 +1,142 @@
+/**
+ * The floating indicator on its real page (docs/ux/DESKTOP.md DK-F1), inside the real shell over
+ * the real app with the fake capture helper: Stop stops, Mute mutes, Ask focuses the main window's
+ * ask box, a dead channel changes the dot, and nothing a call says, is called or is named by ever
+ * reaches the page.
+ */
+
+import { describe, expect, test } from "bun:test";
+import type { Page } from "playwright-core";
+import type { EventDraft } from "../../src/core/log/events.ts";
+import { tempDir } from "../helpers.ts";
+import { type DesktopRig, desktopRig } from "./desktop-rig.ts";
+import { seg, silentWav, UI_TIMEOUT, until } from "./rig.ts";
+
+/** Markers carried by the call's title, its lines and its speaker's name. */
+const MARKS = ["TITLEMARK-q7x", "SEGMARK-z9k", "NAMEMARK-w3v"] as const;
+
+/** The markers the page shows anywhere: its text, its attributes, its title. */
+function leaked(page: Page): Promise<string[]> {
+  return page.evaluate((marks) => {
+    const all = `${document.title}\n${document.documentElement.outerHTML}`;
+    return marks.filter((m) => all.includes(m));
+  }, MARKS);
+}
+
+async function withDesktop(fn: (rig: DesktopRig, dir: string) => Promise<void>): Promise<void> {
+  const t = tempDir("akou-ui-desk-");
+  const wav = silentWav(t.dir);
+  const rig = await desktopRig({ home: t.dir, helperArgs: ["--from-wav", wav] });
+  try {
+    await fn(rig, t.dir);
+  } finally {
+    await rig.close();
+    t.cleanup();
+  }
+}
+
+const indicatorPage = async (rig: DesktopRig): Promise<Page> => {
+  await until(() => rig.indicator() !== null, 10_000, "the indicator page");
+  const page = rig.indicator() as Page;
+  await page.waitForFunction(() => document.getElementById("state")?.textContent === "Recording");
+  return page;
+};
+
+describe("[DK-F1] the floating indicator", () => {
+  test(
+    "shows the state and no call content; a dead channel changes the dot",
+    async () => {
+      await withDesktop(async (rig) => {
+        const id = await rig.startCall({ title: `Weekly ${MARKS[0]}` });
+        const page = await indicatorPage(rig);
+        expect(rig.indicatorShown()).toBe(true);
+        await rig.app.write(id, seg("l000001", `we ship ${MARKS[1]} on friday`));
+        await rig.app.write(id, {
+          type: "speaker.name",
+          spk: "c1",
+          name: MARKS[2],
+          by: "user",
+        } as EventDraft);
+        // Wait for the page to have had the events, then read it.
+        await until(
+          async () => (await rig.api("GET", `/calls/${id}`)).body?.state === "recording",
+          5000,
+          "recording",
+        );
+        await Bun.sleep(400);
+        expect(await leaked(page)).toEqual([]);
+        // Positive control: a marker put on the page is found by the same check.
+        await page.evaluate((m) => {
+          const s = document.createElement("span");
+          s.id = "control";
+          s.textContent = m;
+          document.body.append(s);
+        }, MARKS[1] as string);
+        expect(await leaked(page)).toEqual([MARKS[1]]);
+        await page.evaluate(() => document.getElementById("control")?.remove());
+
+        expect(await page.getAttribute("#dot", "data-state")).toBe("recording");
+        await rig.app.write(id, {
+          type: "health",
+          part: 1,
+          ch: "call",
+          state: "dead",
+          silentFor: 12,
+          rebuilds: 1,
+          detail: "no call audio",
+        } as EventDraft);
+        await page.waitForFunction(() => document.getElementById("dot")?.dataset.state === "warn");
+        expect(await page.textContent("#state")).toBe("call side silent");
+        expect(await page.textContent("#dot")).toBe("⚠");
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Mute mutes, Ask focuses the main window's ask box, Stop stops and closes it",
+    async () => {
+      await withDesktop(async (rig) => {
+        const id = await rig.startCall({ title: "Sync" });
+        const page = await indicatorPage(rig);
+
+        await page.click("#mute");
+        await until(
+          async () => (await rig.api("GET", `/calls/${id}`)).body?.muted === true,
+          5000,
+          "muted",
+        );
+        await page.waitForFunction(
+          () => document.getElementById("mute")?.getAttribute("aria-pressed") === "true",
+        );
+        expect(await page.textContent("#mute")).toBe("Unmute");
+        await page.click("#mute");
+        await until(
+          async () => (await rig.api("GET", `/calls/${id}`)).body?.muted === false,
+          5000,
+          "unmuted",
+        );
+
+        expect(rig.main()).toBeNull();
+        await page.click("#ask");
+        await until(() => rig.main() !== null, 10_000, "the main window");
+        const main = rig.main() as Page;
+        await main.waitForFunction(() => document.activeElement?.id === "ask-input", undefined, {
+          timeout: 10_000,
+        });
+        expect(await main.getAttribute("#tab-ask", "aria-selected")).toBe("true");
+        // The main window has the focus now: the indicator steps aside.
+        expect(rig.indicatorShown()).toBe(false);
+
+        await page.click("#stop");
+        await until(
+          async () => (await rig.api("GET", `/calls/${id}`)).body?.state !== "recording",
+          10_000,
+          "stopped",
+        );
+        await until(() => rig.indicator() === null, 5000, "the indicator closed");
+      });
+    },
+    UI_TIMEOUT,
+  );
+});

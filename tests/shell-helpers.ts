@@ -5,6 +5,7 @@
  */
 
 import { Bridge } from "../src/main/window/bridge.ts";
+import type { IndicatorRpcHandlers } from "../src/main/window/indicator.ts";
 import type { WindowRpc } from "../src/main/window/rpc.ts";
 import {
   type AppMenuItem,
@@ -52,6 +53,18 @@ export interface FakeUi {
   closeWindow: () => void;
   /** The displays' work areas, the primary first. */
   areas: Rect[];
+  /** The floating indicator: what it was opened with and whether it shows; null before the first. */
+  indicator: () => {
+    frame: Rect;
+    rpc: IndicatorRpcHandlers;
+    visible: boolean;
+    closed: boolean;
+    opened: number;
+  } | null;
+  /** The user dragged the indicator. */
+  moveIndicator: (r: Rect) => void;
+  /** What the shell pushed to the indicator page. */
+  indicatorPushes: unknown[];
 }
 
 /**
@@ -65,6 +78,9 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
   let frameFn: (r: Rect) => void = () => {};
   let closeFn: () => void = () => {};
   let current: Rect | undefined;
+  let ind: ReturnType<FakeUi["indicator"]> = null;
+  let indFrame: (r: Rect) => void = () => {};
+  let indCurrent: Rect | undefined;
   const log: string[] = [];
   let action: (a: string) => void = () => {};
   let beforeQuit: (e: { cancel(): void }) => void = () => {};
@@ -112,6 +128,7 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
           status: () => {},
           showCall: (m) => page(`call ${m.call}`),
           showSettings: () => page("settings"),
+          focusAsk: () => page("ask"),
         },
       };
     },
@@ -163,6 +180,37 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       return pressed;
     },
     workAreas: () => f.areas,
+    openIndicator: (o) => {
+      log.push("indicator open");
+      const opened = (ind?.opened ?? 0) + 1;
+      const me = { frame: o.frame, rpc: o.rpc, visible: false, closed: false, opened };
+      ind = me;
+      indCurrent = o.frame;
+      return {
+        window: {
+          showInactive: () => {
+            me.visible = true;
+          },
+          hide: () => {
+            me.visible = false;
+          },
+          close: () => {
+            me.visible = false;
+            me.closed = true;
+            log.push("indicator close");
+          },
+          onClose: () => {},
+          frame: () => indCurrent,
+          onFrame: (fn) => {
+            indFrame = fn;
+          },
+        },
+        send: {
+          followed: (m) => f.indicatorPushes.push(m),
+          status: (m) => f.indicatorPushes.push(m),
+        },
+      };
+    },
     openExternal: (url) => {
       log.push(`open ${url}`);
       return true;
@@ -203,6 +251,12 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       closeFn();
     },
     areas: [{ x: 0, y: 0, width: 1440, height: 875 }],
+    indicator: () => ind,
+    moveIndicator: (r) => {
+      indCurrent = r;
+      indFrame(r);
+    },
+    indicatorPushes: [],
   };
   return f;
 }

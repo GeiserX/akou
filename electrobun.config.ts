@@ -6,7 +6,7 @@
  *
  * - The main process is `src/main/window/main.ts` (the app plus the tray, hotkey and window); the
  *   window's view is `src/ui/window.ts` with the same `index.html` and `theme.css` the browser
- *   loads.
+ *   loads, and the floating indicator's is `src/ui/indicator-window.ts` with `indicator.html`.
  * - Hutch bundles the main process into `Resources/app/bun/index.js` and copies nothing else the
  *   app reads at run time, so everything it loads by path is listed in `build.copy`, beside that
  *   file (TRAPS "Native libraries missing from the bundle"):
@@ -146,10 +146,16 @@ export default {
   build: {
     mainProcess: "bun",
     bun: { entrypoint: "src/main/window/main.ts" },
-    views: { main: { entrypoint: "src/ui/window.ts", format: "esm" } },
+    views: {
+      main: { entrypoint: "src/ui/window.ts", format: "esm" },
+      // The floating indicator (DK-F1): its own small page, no transcript.
+      indicator: { entrypoint: "src/ui/indicator-window.ts", format: "esm" },
+    },
     copy: {
       "src/ui/index.html": "views/main/index.html",
       "src/ui/theme.css": "views/main/theme.css",
+      "src/ui/indicator.html": "views/indicator/index.html",
+      "src/ui/indicator.css": "views/indicator/indicator.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
       "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
       "src/main/window/tray": `${MAIN_OUT}/tray`,

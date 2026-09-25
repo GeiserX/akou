@@ -13,6 +13,7 @@ import Electrobun, {
   Tray,
   Utils,
 } from "electrobun/main";
+import type { IndicatorRpc } from "../../ui/indicator-protocol.ts";
 import type { AkouRpc } from "../../ui/protocol.ts";
 import type { NativeTray, NativeUi, NativeWindow, TrayMenuItem } from "./shell.ts";
 
@@ -57,6 +58,41 @@ export function electrobunUi(): NativeUi {
           status: (s) => defined.send.status(s),
           showCall: (m) => defined.send.showCall(m),
           showSettings: (m) => defined.send.showSettings(m),
+          focusAsk: (m) => defined.send.focusAsk(m),
+        },
+      };
+    },
+
+    openIndicator({ url, rpc, frame }) {
+      const defined = BrowserView.defineRPC<IndicatorRpc>({
+        maxRequestTime: MAX_REQUEST_MS,
+        handlers: { requests: rpc.handlers, messages: {} },
+      });
+      // Hidden until the shell shows it, and never activated: it must not take the focus from
+      // the meeting app.
+      const win = new BrowserWindow({
+        title: "akou",
+        url,
+        rpc: defined,
+        frame,
+        titleBarStyle: "hidden",
+        hidden: true,
+        activate: false,
+      });
+      win.setAlwaysOnTop(true);
+      win.setVisibleOnAllWorkspaces(true);
+      return {
+        window: {
+          showInactive: () => win.showInactive(),
+          hide: () => win.hide(),
+          close: () => win.close(),
+          onClose: (fn) => win.on("close", fn),
+          frame: () => win.getFrame(),
+          onFrame: (fn) => win.on("move", () => fn(win.getFrame())),
+        },
+        send: {
+          followed: (m) => defined.send.followed(m),
+          status: (s) => defined.send.status(s),
         },
       };
     },

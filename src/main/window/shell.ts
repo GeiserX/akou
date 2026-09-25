@@ -28,6 +28,7 @@ import type { AppStatus } from "../../ui/protocol.ts";
 import type { AkouApp, Announcement, WindowShell } from "../index.ts";
 import type { Bridge } from "./bridge.ts";
 import { hotkeyFor } from "./hotkey.ts";
+import { type IndicatorRpcHandlers, type IndicatorSend, indicatorRpc } from "./indicator.ts";
 import { type InstallOutcome, installMessage } from "./install-cli.ts";
 import { DEDUP_MS, type NotifyEvent, notifyFor, originOf } from "./notify.ts";
 import type { SettingsPane } from "./page-server.ts";
@@ -36,6 +37,7 @@ import { type WindowRpc, type WindowSend, windowRpc } from "./rpc.ts";
 export { hotkeyFor };
 
 export const WINDOW_URL = "views://main/index.html";
+export const INDICATOR_URL = "views://indicator/index.html";
 
 /** Where the tray images are: beside the main process in the bundle, beside this file in a checkout. */
 export const TRAY_DIR = join(import.meta.dir, "tray");
@@ -68,6 +70,17 @@ export interface NativeWindow {
   /** The frame now, when the OS says. */
   frame(): Rect | undefined;
   /** The window moved or was resized. */
+  onFrame(fn: (frame: Rect) => void): void;
+}
+
+/** The floating indicator's window: always on top, never takes the focus when shown. */
+export interface IndicatorWindow {
+  /** Shows it without taking the focus from the app in front (the meeting). */
+  showInactive(): void;
+  hide(): void;
+  close(): void;
+  onClose(fn: () => void): void;
+  frame(): Rect | undefined;
   onFrame(fn: (frame: Rect) => void): void;
 }
 
@@ -108,6 +121,11 @@ export interface NativeUi {
   openWindow(o: { title: string; url: string; rpc: WindowRpc; frame?: Rect }): {
     window: NativeWindow;
     send: WindowSend;
+  };
+  /** The floating indicator (DK-F1): a small window with no title bar, above every other. */
+  openIndicator(o: { url: string; rpc: IndicatorRpcHandlers; frame: Rect }): {
+    window: IndicatorWindow;
+    send: IndicatorSend;
   };
   /** `image` is a file path; `template` lets macOS recolour it for the menu bar. */
   createTray(o: { title: string; image: string; template: boolean }): NativeTray;
@@ -186,6 +204,10 @@ export interface ShellOptions {
 export const DEFAULT_WINDOW = { width: 1280, height: 820 } as const;
 /** No window is restored smaller than this. */
 const MIN_WINDOW = { width: 480, height: 360 } as const;
+/** The floating indicator's size: one row, never resized. */
+export const INDICATOR_SIZE = { width: 330, height: 40 } as const;
+/** Its distance from the work area's edge the first time it shows. */
+const INDICATOR_MARGIN = 16;
 
 const overlap = (a: Rect, b: Rect) =>
   Math.max(0, Math.min(a.x + a.width, b.x + b.width) - Math.max(a.x, b.x)) *
@@ -198,15 +220,37 @@ const overlap = (a: Rect, b: Rect) =>
  * With no display reported (the SDK answers zeros when it cannot tell), the saved frame as it was.
  */
 export function placeFrame(saved: Rect | undefined, areas: readonly Rect[]): Rect {
-  const real = areas.filter((a) => a.width > 0 && a.height > 0);
-  const primary = real[0];
+  const primary = areas.find((a) => a.width > 0 && a.height > 0);
   if (!primary) return saved ?? { x: 0, y: 0, ...DEFAULT_WINDOW };
   const want = saved ?? {
     x: primary.x + Math.round((primary.width - DEFAULT_WINDOW.width) / 2),
     y: primary.y + Math.round((primary.height - DEFAULT_WINDOW.height) / 2),
     ...DEFAULT_WINDOW,
   };
-  let area = primary;
+  return fitInto(want, areas, MIN_WINDOW);
+}
+
+/**
+ * Where the floating indicator shows (DK-F1): where it was dragged last, pulled onto a display the
+ * same way as the window; the first time, the top right of the primary work area.
+ */
+export function placeIndicator(saved: Rect | undefined, areas: readonly Rect[]): Rect {
+  const primary = areas.find((a) => a.width > 0 && a.height > 0);
+  const at = saved ?? {
+    x:
+      (primary ? primary.x + primary.width : INDICATOR_SIZE.width) -
+      INDICATOR_SIZE.width -
+      INDICATOR_MARGIN,
+    y: (primary?.y ?? 0) + INDICATOR_MARGIN,
+  };
+  const want = { x: at.x, y: at.y, ...INDICATOR_SIZE };
+  return primary ? fitInto(want, areas, INDICATOR_SIZE) : want;
+}
+
+/** `want` on the display it overlaps most (the primary when none), whole and no bigger than it. */
+function fitInto(want: Rect, areas: readonly Rect[], min: { width: number; height: number }): Rect {
+  const real = areas.filter((a) => a.width > 0 && a.height > 0);
+  let area = real[0] as Rect;
   let best = 0;
   for (const a of real) {
     const o = overlap(want, a);
@@ -215,8 +259,8 @@ export function placeFrame(saved: Rect | undefined, areas: readonly Rect[]): Rec
       area = a;
     }
   }
-  const width = Math.min(Math.max(want.width, MIN_WINDOW.width), area.width);
-  const height = Math.min(Math.max(want.height, MIN_WINDOW.height), area.height);
+  const width = Math.min(Math.max(want.width, min.width), area.width);
+  const height = Math.min(Math.max(want.height, min.height), area.height);
   const clamp = (v: number, lo: number, hi: number) => Math.min(Math.max(v, lo), hi);
   return {
     x: clamp(want.x, area.x, area.x + area.width - width),
@@ -317,6 +361,14 @@ export class Shell implements WindowShell {
   private asking = false;
   /** The window's frame as last reported, saved when it closes and at quit (DK-M4). */
   private frame: Rect | undefined;
+  /** The floating indicator while a call records (DK-F1), and where it was last. */
+  private indicator: {
+    window: IndicatorWindow;
+    rpc: IndicatorRpcHandlers;
+    frame: Rect;
+  } | null = null;
+  /** Bumped by every close, so an open still reading the status knows it is stale. */
+  private indicatorGen = 0;
   private unwatch: () => void = () => {};
   private live = false;
   /** Only the window's focus and blur events set this: a shown window may not have the focus. */
@@ -361,6 +413,10 @@ export class Shell implements WindowShell {
     const unannounce = this.app.onAnnounce((a) => this.onAnnounce(a));
     const unhealth = this.bridge.app.watch((call, e) => {
       if (e.type === "health") this.notify({ type: "capture", call, ch: e.ch, state: e.state });
+      // The indicator lives with the recording: from the call's start (or a new part) to its end.
+      if (e.type === "call.created" || e.type === "part.started") this.openIndicator();
+      else if (e.type === "part.ended" || e.type === "call.ended" || e.type === "call.failed")
+        this.closeIndicator();
     });
     this.unwatch = () => {
       unwatchLifecycle();
@@ -420,9 +476,11 @@ export class Shell implements WindowShell {
         this.focused = false;
         this.pageReady = false;
         this.pending = [];
+        this.showIndicator();
       });
       w.window.onFocus((focused) => {
         this.focused = focused;
+        this.showIndicator();
       });
     }
     this.window.show();
@@ -445,7 +503,16 @@ export class Shell implements WindowShell {
   private sender(): WindowSend {
     const s = this.send;
     const drop = () => {};
-    return s ?? { followed: drop, asked: drop, status: drop, showCall: drop, showSettings: drop };
+    return (
+      s ?? {
+        followed: drop,
+        asked: drop,
+        status: drop,
+        showCall: drop,
+        showSettings: drop,
+        focusAsk: drop,
+      }
+    );
   }
 
   /**
@@ -564,6 +631,75 @@ export class Shell implements WindowShell {
     return pressed === 1;
   }
 
+  /**
+   * Opens the indicator when a call records, unless it is open or switched off
+   * (`app.floatingIndicator`). A `call.created` that records nothing (an import) opens none: the
+   * app's status decides. An end that arrives while the status is read cancels the open.
+   */
+  private openIndicator(): void {
+    if (this.indicator || this.quitting) return;
+    if (this.app.config().settings["app.floatingIndicator"] === false) return;
+    const gen = this.indicatorGen;
+    void this.app.status().then(
+      (s) => {
+        const live = !!(s as { live?: unknown }).live;
+        if (live && gen === this.indicatorGen && !this.indicator && !this.quitting)
+          this.createIndicator();
+      },
+      () => {},
+    );
+  }
+
+  private createIndicator(): void {
+    const frame = placeIndicator(this.o.state?.load().indicator, this.ui.workAreas());
+    let send: IndicatorSend | null = null;
+    const liveCall = async () =>
+      ((await this.app.status()) as { live?: { call?: string } | null }).live?.call;
+    const rpc = indicatorRpc(this.bridge, () => send ?? { followed: () => {}, status: () => {} }, {
+      focusAsk: async () => {
+        await this.app.openWindow(await liveCall());
+        this.toPage((s) => s.focusAsk({}));
+      },
+      openMain: async () => {
+        await this.app.openWindow(await liveCall());
+      },
+    });
+    const w = this.ui.openIndicator({ url: INDICATOR_URL, rpc, frame });
+    send = w.send;
+    const ind = { window: w.window, rpc, frame };
+    this.indicator = ind;
+    w.window.onFrame((f) => {
+      ind.frame = f;
+    });
+    w.window.onClose(() => {
+      if (this.indicator === ind) this.closeIndicator();
+    });
+    this.showIndicator();
+  }
+
+  /** Shown while the main window does not have the focus, without taking it. */
+  private showIndicator(): void {
+    const ind = this.indicator;
+    if (!ind) return;
+    if (this.focused) ind.window.hide();
+    else ind.window.showInactive();
+  }
+
+  private closeIndicator(): void {
+    this.indicatorGen++;
+    const ind = this.indicator;
+    if (!ind) return;
+    this.indicator = null;
+    const store = this.o.state;
+    try {
+      if (store) store.save({ ...store.load(), indicator: ind.window.frame() ?? ind.frame });
+    } catch (err) {
+      this.o.onLog?.("warn", `the indicator's place was not saved: ${(err as Error).message}`);
+    }
+    ind.rpc.close();
+    ind.window.close();
+  }
+
   private saveFrame(): void {
     const store = this.o.state;
     const frame = this.window?.frame() ?? this.frame;
@@ -577,6 +713,7 @@ export class Shell implements WindowShell {
 
   async close(): Promise<void> {
     if (this.window) this.saveFrame();
+    this.closeIndicator();
     this.unwatch();
     this.rpc?.close();
     this.window?.close();

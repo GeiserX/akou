@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' views:; style-src 'self' views:; connect-src 'self' views: ws://127.0.0.1:*; img-src 'self' views: data:; base-uri 'none'; form-action 'none'">
+<title>akou</title>
+<link rel="stylesheet" href="indicator.css">
+<script type="module" src="index.js"></script>
+</head>
+<body>
+<div id="bar" role="toolbar" aria-label="Recording">
+  <span id="grip" class="electrobun-webkit-app-region-drag" title="Drag to move" aria-hidden="true">⋮⋮</span>
+  <button id="open" type="button" title="Show akou"><span id="dot" data-state="idle" aria-hidden="true">○</span> <span id="state" role="status" aria-live="polite">Not recording</span> <span id="elapsed"></span></button>
+  <span id="levels" aria-hidden="true"><meter id="lvl-mic" min="-60" max="0" value="-60"></meter><meter id="lvl-call" min="-60" max="0" value="-60"></meter></span>
+  <button id="mute" type="button" aria-pressed="false" disabled>Mute</button>
+  <button id="ask" type="button" title="Ask about the call in the main window">Ask</button>
+  <button id="stop" type="button" disabled>Stop</button>
+</div>
+</body>
+</html>

@@ -175,6 +175,8 @@ export interface AkouRpc {
       showCall: { call?: string };
       /** The application menu's Settings… asks the page to open its settings. */
       showSettings: Record<string, never>;
+      /** The floating indicator's Ask: the ask box, focused (DK-F1). */
+      focusAsk: Record<string, never>;
     };
   };
 }

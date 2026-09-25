@@ -24,6 +24,7 @@ import {
 } from "../src/main/window/install-cli.ts";
 import {
   hotkeyFor,
+  INDICATOR_SIZE,
   placeFrame,
   type Rect,
   Shell,
@@ -41,7 +42,7 @@ import { fakeUi, shellOn } from "./shell-helpers.ts";
 const LONG = 30_000;
 
 /** An app that records what the shell asks of it; `live` says whether a call records. */
-function fakeApp(o: { live?: boolean } = {}) {
+function fakeApp(o: { live?: boolean; settings?: Record<string, unknown> } = {}) {
   const state = { live: o.live ?? false, quits: 0, windows: 0, stops: 0 };
   let shell: Shell | null = null;
   const app: ShellApp = {
@@ -57,7 +58,9 @@ function fakeApp(o: { live?: boolean } = {}) {
       state.stops++;
       state.live = false;
     },
-    config: () => ({ settings: { "app.hotkey": "", "app.openAtLogin": false } }),
+    config: () => ({
+      settings: { "app.hotkey": "", "app.openAtLogin": false, ...o.settings },
+    }),
     saveSetting: async () => {},
     quit: async () => {
       state.quits++;
@@ -551,6 +554,135 @@ describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
     await until(() => f.boxes.length === 2, 1000, "the second result");
     expect(f.boxes[1]?.message).toBe("The akou command is already installed.");
     expect(runs).toHaveLength(2);
+    await shell.close();
+  });
+});
+
+/** A shell whose bridge hands the test the app's event feed, to play a call's lifecycle. */
+async function eventShell(
+  f: ReturnType<typeof fakeUi>,
+  o: {
+    settings?: Record<string, unknown>;
+    state?: ReturnType<typeof memoryState>;
+    live?: boolean;
+  } = {},
+) {
+  let watcher: (call: string, e: LogEvent) => void = () => {};
+  const bridge = {
+    watchLifecycle: () => () => {},
+    app: {
+      status: async () => ({}),
+      watch: (fn: typeof watcher) => {
+        watcher = fn;
+        return () => {};
+      },
+      onStatusChange: () => () => {},
+    },
+  } as unknown as Bridge;
+  const a = fakeApp({ live: o.live ?? true, settings: o.settings });
+  const shell = new Shell(a.app, bridge, f.ui, {
+    platform: "darwin",
+    setLoginItem: async () => {},
+    state: o.state,
+  });
+  a.bind(shell);
+  await shell.start();
+  const feed = (type: string, extra: Record<string, unknown> = {}) =>
+    watcher("c1", { type, ...extra } as unknown as LogEvent);
+  return { shell, a, feed };
+}
+
+describe("[DK-F1] the floating indicator, in the shell", () => {
+  test("created on call.created, hidden while the main window has the focus, closed on part.ended", async () => {
+    const f = fakeUi();
+    const store = memoryState();
+    const { shell, feed } = await eventShell(f, { state: store });
+    expect(f.indicator()).toBeNull();
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    const ind = f.indicator();
+    expect(ind).toMatchObject({ visible: true, closed: false, opened: 1 });
+    // At the top right of the primary work area the first time.
+    expect(ind?.frame).toEqual({ x: 1440 - INDICATOR_SIZE.width - 16, y: 16, ...INDICATOR_SIZE });
+    // The main window comes forward with the focus: the indicator steps aside.
+    shell.show();
+    expect(f.indicator()?.visible).toBe(false);
+    f.focus(false);
+    expect(f.indicator()?.visible).toBe(true);
+    f.focus(true);
+    f.closeWindow();
+    expect(f.indicator()?.visible).toBe(true);
+    // part.started of the same call does not open a second one.
+    feed("part.started", { part: 1 });
+    await Bun.sleep(20);
+    expect(f.indicator()?.opened).toBe(1);
+    // Dragged, then the call ends: closed, and its place kept.
+    const moved = { x: 200, y: 300, ...INDICATOR_SIZE };
+    f.moveIndicator(moved);
+    feed("part.ended", { part: 1, reason: "stop" });
+    expect(f.indicator()).toMatchObject({ closed: true, visible: false });
+    expect(store.load().indicator).toEqual(moved);
+    // The next call's indicator opens where the last one was left.
+    feed("call.created");
+    await until(() => f.indicator()?.opened === 2, 1000, "the second indicator");
+    expect(f.indicator()).toMatchObject({ opened: 2, frame: moved, visible: true });
+    await shell.close();
+    expect(f.indicator()?.closed).toBe(true);
+  });
+
+  test("a call.created that records nothing (an import) opens no indicator", async () => {
+    const f = fakeUi();
+    const { shell, a, feed } = await eventShell(f, { live: false });
+    feed("call.created");
+    await Bun.sleep(20);
+    expect(f.indicator()).toBeNull();
+    // Positive control: the same event while a call records opens it.
+    a.state.live = true;
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    await shell.close();
+  });
+
+  test("an end while the status is still being read cancels the open", async () => {
+    const f = fakeUi();
+    const { shell, feed } = await eventShell(f);
+    feed("call.created");
+    feed("part.ended", { part: 1, reason: "cancelled" });
+    await Bun.sleep(30);
+    expect(f.indicator()).toBeNull();
+    await shell.close();
+  });
+
+  test("app.floatingIndicator off: no indicator", async () => {
+    const f = fakeUi();
+    const { shell, feed } = await eventShell(f, { settings: { "app.floatingIndicator": false } });
+    feed("call.created");
+    feed("part.started", { part: 1 });
+    await Bun.sleep(20);
+    expect(f.indicator()).toBeNull();
+    // Positive control: the same feed with the setting on opens it.
+    const g = fakeUi();
+    const on = await eventShell(g, { settings: { "app.floatingIndicator": true } });
+    on.feed("call.created");
+    await until(() => g.indicator() !== null, 1000, "the indicator");
+    await shell.close();
+    await on.shell.close();
+  });
+
+  test("Ask brings the main window forward with its ask box focused; a click opens it", async () => {
+    const f = fakeUi();
+    const { shell, a, feed } = await eventShell(f);
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    const rpc = f.indicator()?.rpc;
+    expect(await rpc?.handlers.focusAsk({})).toBe(true);
+    // No window was open: it opens, and the page is told once it has booted.
+    expect(a.state.windows).toBe(1);
+    expect(f.log).not.toContain("ask");
+    await f.boot();
+    await until(() => f.log.includes("ask"), 1000, "the ask box");
+    expect(await rpc?.handlers.openMain({})).toBe(true);
+    expect(a.state.windows).toBe(2);
     await shell.close();
   });
 });
