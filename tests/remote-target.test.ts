@@ -53,7 +53,18 @@ function record(into: Seen[]) {
   };
 }
 
+// A proxy in the shell running the tests would carry the requests to the non-loopback address
+// elsewhere. Bun reads the proxy variables once at start, so deleting them later does nothing, and
+// it reads no CIDR range in NO_PROXY; naming the address in NO_PROXY is what keeps it direct. The
+// client names a proxy in its message instead (tests/remote-edges.test.ts).
+const savedNoProxy = { NO_PROXY: process.env.NO_PROXY, no_proxy: process.env.no_proxy };
+
 beforeAll(() => {
+  if (outward) {
+    const list = [process.env.NO_PROXY ?? process.env.no_proxy, outward].filter(Boolean).join(",");
+    process.env.NO_PROXY = list;
+    process.env.no_proxy = list;
+  }
   if (outward) remote = Bun.serve({ hostname: outward, port: 0, fetch: record(remoteSeen) });
   decoy = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch: record(decoySeen) });
   home = tempDir();
@@ -77,6 +88,10 @@ afterAll(() => {
   remote?.stop(true);
   decoy.stop(true);
   home.cleanup();
+  for (const [k, v] of Object.entries(savedNoProxy)) {
+    if (v === undefined) delete process.env[k];
+    else process.env[k] = v;
+  }
 });
 
 function env(extra: Record<string, string | undefined>): Record<string, string | undefined> {
