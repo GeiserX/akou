@@ -59,18 +59,21 @@ describe("[T0.9] the hang check can fail", () => {
   );
 
   test(
-    "positive control: a stop that holds the loop for most of the budget, not all of it, fails too",
+    "positive control: a stop that holds the loop for more than half the budget, not all of it, fails too",
     async () => {
-      const budget = 300;
+      const budget = 1_000;
       const r = rig(fakeHelper, () => ({ hangOnStop: true }), { stopMs: budget });
       expect((await r.mgr.start({ workspace: "work" })).ok).toBe(true);
-      // Just after the ask, the loop is held for nine tenths of the budget, then let go: one
-      // turn fits before the kill.
+      // Just after the ask, the loop is held for six tenths of the budget, then let go, so turns
+      // come again before the kill. The hold alone is past the bound whatever the runner does.
+      // The 400 ms left before the kill is the room a slow runner has to start the hold late
+      // and turn late after it: a macOS runner took 130 ms more than asked, which a hold of
+      // nine tenths of 300 ms, 25 ms from the kill, did not survive.
       const s = r.sessions[0];
       if (!s) throw new Error("no session");
       const stop = s.stop.bind(s);
       s.stop = (b) => {
-        setTimeout(() => Bun.sleepSync(budget * 0.9), 5);
+        setTimeout(() => Bun.sleepSync(budget * 0.6), 5);
         return stop(b);
       };
       const turns: number[] = [];
