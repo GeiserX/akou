@@ -13,6 +13,7 @@
  * came from, and the files they live in.
  */
 
+import { hotkeyWarning } from "../main/window/hotkey.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
@@ -139,6 +140,7 @@ export class SettingsPane {
         spec.env ? ` (environment: ${spec.env})` : "",
       ),
       issue ? h("small", { class: "issue" }, issue) : null,
+      key === "app.hotkey" ? hotkeyHint(input) : null,
     );
   }
 
@@ -240,4 +242,21 @@ export class SettingsPane {
           ),
     );
   }
+}
+
+/**
+ * The hotkey's warning (DK-K4), under the field while you type: off macOS, `Control+Alt` is AltGr
+ * on many layouts. A warning, never a refusal: the key is yours to choose.
+ */
+function hotkeyHint(input: HTMLInputElement | HTMLTextAreaElement): HTMLElement {
+  const mac = `${navigator.platform} ${navigator.userAgent}`.toLowerCase().includes("mac");
+  const hint = h("small", { class: "issue", attrs: { role: "status" } });
+  const draw = () => {
+    const w = hotkeyWarning(input.value, mac ? "darwin" : "other");
+    hint.textContent = w ?? "";
+    hint.hidden = w === null;
+  };
+  input.addEventListener("input", draw);
+  draw();
+  return hint;
 }

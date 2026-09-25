@@ -108,7 +108,7 @@ On Linux, a CLI-only tarball (M4) packages the same app code with `bun build --c
 
 The slow starts of the past (minutes, while people waited) came from the first agent request after a context compaction: the prompt cache was cold, so the harness reprocessed its whole context (instruction files, memory, the skill, re-injected skills) before it did anything. A skill that starts first still pays that cost on the first turn after a compaction. akou answers it three ways:
 
-- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Alt+R`, `Option+Cmd+R` on macOS), the Record button and `! akou start` typed into a harness all start a call directly.
+- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Shift+F9`, `Option+Cmd+R` on macOS; never `Ctrl+Alt`, which is AltGr on many layouts, DK-K4), the Record button and `! akou start` typed into a harness all start a call directly.
 - **Start first in the skill.** The skill makes `akou start` its first tool call, with no status check first, so the one unavoidable model turn is the start itself.
 - **A short turn.** `akou start --json` returns the `201` within 1 s, so that turn ends quickly.
 

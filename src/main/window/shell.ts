@@ -27,9 +27,12 @@ import { join } from "node:path";
 import type { AppStatus } from "../../ui/protocol.ts";
 import type { AkouApp, Announcement, WindowShell } from "../index.ts";
 import type { Bridge } from "./bridge.ts";
+import { hotkeyFor } from "./hotkey.ts";
 import { DEDUP_MS, type NotifyEvent, notifyFor, originOf } from "./notify.ts";
 import type { SettingsPane } from "./page-server.ts";
 import { type WindowRpc, type WindowSend, windowRpc } from "./rpc.ts";
+
+export { hotkeyFor };
 
 export const WINDOW_URL = "views://main/index.html";
 
@@ -192,12 +195,6 @@ export function appMenu(platform: string): AppMenuItem[] | null {
     },
     { label: "Help", submenu: [{ label: "Open the docs", action: "docs" }] },
   ];
-}
-
-/** The hotkey from the settings, or the platform's default. */
-export function hotkeyFor(setting: string, platform: string): string {
-  if (setting.trim() !== "") return setting.trim();
-  return platform === "darwin" ? "Alt+Command+R" : "Control+Alt+R";
 }
 
 /** The tray's menu for the app's state. */
