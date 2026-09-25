@@ -264,8 +264,11 @@ describe("notifications carry no call content", () => {
     "[DK-N4] Lock-screen leaks: no notification carries the call's title, workspace, names, notes or words",
     async () => {
       const wav = tempDir();
+      // The share binds to loopback: the default (tailnet) is refused with 409 on a machine
+      // without a tailnet address, which every CI runner is.
       const rig = await appRig({
         helperArgs: ["--wav", speechWav(wav.dir), "--call-dead-at", "1.5"],
+        settings: { "share.bind": "127.0.0.1", "share.port": 0 },
       });
       const { shell, f } = await shellOn(rig);
       const title = "Qz9 Titlemarker";
