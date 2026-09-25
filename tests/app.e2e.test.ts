@@ -5,11 +5,13 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { type ModelSpecEntry, NEMOTRON } from "../src/main/asr/models.ts";
 import { AlreadyRunningError, APP_LOCK, startApp } from "../src/main/index.ts";
-import { appRig, FAKE_HELPER, writeSettings } from "./api-helpers.ts";
+import { appRig, FAKE_HELPER, FAKE_MODELS, writeSettings } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
+import { silence } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
 
 const LONG = 30_000;
@@ -95,23 +97,68 @@ describe("the final pass without readable audio", () => {
 });
 
 describe("asr.diarizer changed while the app runs", () => {
+  /** One tiny file per model: the recognizer, and each speaker-label engine's own. */
+  const entry = (id: string): ModelSpecEntry => ({
+    id,
+    job: "test",
+    licence: "MIT",
+    source: "test",
+    files: [{ name: "m.onnx", url: "http://127.0.0.1:9/m.onnx", sha256: "0".repeat(64), size: 1 }],
+  });
+  const registry = [entry("tiny-recognizer"), entry(NEMOTRON), entry("pyannote-segmentation-3.0")];
+
   test(
-    "the running engine stays until the next start, so the final pass never asks for the other engine's models",
+    "the running engine stays until the next start: recording and the final pass never ask for the other engine's models",
     async () => {
       const home = tempDir("akou-app-");
-      const rig = await appRig({ home: home.dir });
+      // This machine has the Nemotron set only.
+      const models = join(home.dir, "models");
+      for (const id of ["tiny-recognizer", NEMOTRON]) {
+        mkdirSync(join(models, id), { recursive: true });
+        writeFileSync(join(models, id, "m.onnx"), "x");
+      }
+      const rig = await appRig({
+        home: home.dir,
+        modelRegistry: registry,
+        settings: { "asr.modelsDir": models },
+        finalAudio: ({ parts }) => ({
+          kind: "module",
+          path: FAKE_MODELS,
+          options: {
+            parts: Object.fromEntries(parts.map((p) => [p, { mic: silence(1), call: silence(1) }])),
+          },
+        }),
+      });
+      await until(
+        async () => (await rig.api("GET", "/status")).body.asr.state === "ready",
+        10_000,
+        "the recognizer",
+      );
       expect((await rig.api("GET", "/status")).body.asr.diarizer).toBe("nemotron");
       expect((await rig.api("PATCH", "/config", { "asr.diarizer": "embeddings" })).status).toBe(
         200,
       );
-      expect(rig.app.config().settings["asr.diarizer"]).toBe("embeddings");
-      // The recognizer runs on with Nemotron, and the final pass with it (finalModels reads the
-      // same engine), so a machine without the pyannote files keeps its final pass.
-      expect((await rig.api("GET", "/status")).body.asr.diarizer).toBe("nemotron");
+      const st = (await rig.api("GET", "/status")).body;
+      // The download card follows the setting, so the next start's files can be fetched now...
+      expect(st.models.state).toBe("missing");
+      // ...while the recognizer runs on with Nemotron, until the next start.
+      expect(st.asr.diarizer).toBe("nemotron");
+      const id = await rig.startCall();
+      await rig.api("POST", "/calls/live/stop");
+      await until(
+        async () => (await rig.api("GET", `/calls/${id}`)).body.final.state === "done",
+        10_000,
+        "the final pass",
+      );
       await rig.close();
-      // Positive control: the next start runs what the setting says.
-      const next = await appRig({ home: home.dir, settings: { "asr.diarizer": "embeddings" } });
+      // Positive control: the next start runs what the setting says, and waits for its files.
+      const next = await appRig({
+        home: home.dir,
+        modelRegistry: registry,
+        settings: { "asr.modelsDir": models, "asr.diarizer": "embeddings" },
+      });
       expect((await next.api("GET", "/status")).body.asr.diarizer).toBe("embeddings");
+      expect((await next.api("POST", "/calls", {})).body.error).toBe("models_missing");
       await next.close();
       home.cleanup();
     },

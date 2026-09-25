@@ -175,11 +175,15 @@ const ONLY: Readonly<Record<DiarizerKind, readonly string[]>> = {
 
 /**
  * The models a machine needs for its `asr.diarizer`: the recognizer, the VAD and TitaNet always,
- * then Nemotron or pyannote. `akou models pull` fetches these and `akou doctor` checks them.
+ * then Nemotron or pyannote. `akou models pull` fetches these and `akou doctor` checks them. Tests
+ * pass their own registry, which loses the other engine's entries the same way.
  */
-export function modelsFor(diarizer: DiarizerKind): readonly ModelSpecEntry[] {
+export function modelsFor(
+  diarizer: DiarizerKind,
+  registry: readonly ModelSpecEntry[] = MODELS,
+): readonly ModelSpecEntry[] {
   const other = diarizer === "nemotron" ? ONLY.embeddings : ONLY.nemotron;
-  return MODELS.filter((m) => !other.includes(m.id));
+  return registry.filter((m) => !other.includes(m.id));
 }
 
 export function modelEntry(id: string): ModelSpecEntry {

@@ -56,6 +56,7 @@ import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts
 import {
   DownloadRefused,
   downloadModels,
+  MODELS,
   type ModelSpecEntry,
   type ModelsStatus,
   modelFile,
@@ -487,9 +488,26 @@ export class AkouApp implements ApiApp {
     return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
   }
 
-  /** The models this machine needs: the registry given (tests), else what `asr.diarizer` needs. */
+  /** The models the next start needs (`asr.diarizer`): what the download card offers. */
   private registry(): readonly ModelSpecEntry[] {
-    return this.o.modelRegistry ?? modelsFor(this.cfg.settings["asr.diarizer"] as DiarizerKind);
+    return modelsFor(
+      this.cfg.settings["asr.diarizer"] as DiarizerKind,
+      this.o.modelRegistry ?? MODELS,
+    );
+  }
+
+  /** The speaker-label engine running now: the one the recognizer started with, else the setting. */
+  private runningDiarizer(): DiarizerKind {
+    return this.asrDiarizer ?? (this.cfg.settings["asr.diarizer"] as DiarizerKind);
+  }
+
+  /**
+   * Whether the running engine's model files are there: what a start and the final pass need. A
+   * change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
+   */
+  private runningModelsPresent(): boolean {
+    const registry = modelsFor(this.runningDiarizer(), this.o.modelRegistry ?? MODELS);
+    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
   /** The real engines on the models folder, with the speaker-label engine the settings choose. */
@@ -1239,7 +1257,9 @@ export class AkouApp implements ApiApp {
     if (this.quitting) return fail(503, "quitting", "akou is quitting");
     this.recognizerOnNewModels();
     // Without the speech models a call records audio that nothing transcribes: only when asked.
-    if (!req.withoutModels && this.models().state !== "ready") {
+    const ready =
+      (this.o.models !== undefined && !this.o.modelRegistry) || this.runningModelsPresent();
+    if (!req.withoutModels && !ready) {
       return fail(
         503,
         "models_missing",
@@ -1339,7 +1359,7 @@ export class AkouApp implements ApiApp {
       asr: {
         ...this.asrState,
         loads: this.asr?.loads ?? {},
-        diarizer: this.asrDiarizer ?? s["asr.diarizer"],
+        diarizer: this.runningDiarizer(),
       },
       models: this.models(),
       // The helper this app spawns, resolved from inside the bundle: `akou doctor` from the
@@ -1378,12 +1398,12 @@ export class AkouApp implements ApiApp {
 
   /** The recognizer models for the final pass, or null when there are none. */
   private finalModels(): ModelSpec | null {
-    if (this.o.models !== undefined) return this.o.models;
-    const s = this.cfg.settings;
-    // A change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
-    const diarizer = this.asrDiarizer ?? (s["asr.diarizer"] as DiarizerKind);
-    const registry = this.o.modelRegistry ?? modelsFor(diarizer);
-    return modelsPresent(s["asr.modelsDir"], registry) ? this.sherpaSpec(s, diarizer) : null;
+    // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
+    if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
+    if (!this.runningModelsPresent()) return null;
+    return this.o.models !== undefined
+      ? this.o.models
+      : this.sherpaSpec(this.cfg.settings, this.runningDiarizer());
   }
 
   /** Starts the final pass in the background. Returns why it cannot run, or null once started. */
