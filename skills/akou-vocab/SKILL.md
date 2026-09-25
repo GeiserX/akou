@@ -2,7 +2,7 @@
 name: akou-vocab
 description: Teach akou the names and terms of the user's world, so recordings spell them right. Use before a call when the user shares an invite, when the user asks to prepare akou's vocabulary, or after a call to turn the words it got wrong into entries. Every word you find ends as a proposal the user approves; you never confirm one yourself.
 metadata:
-  version: "0.0.0"
+  version: "0.1.0"
 ---
 
 # akou-vocab
