@@ -194,9 +194,27 @@ describe("following a live call", () => {
       await withRig({ helperArgs: ["--call-dead-at", "0.5"] }, async (rig) => {
         const id = await rig.startCall();
         const page = await rig.open(id);
+        // The call's health dot as it was when the banner turned red: read in the same turn as
+        // the banner's change, so a dot drawn by a later update (a level packet) cannot count.
+        await page.evaluate(() => {
+          const w = window as unknown as { __dotAtBanner?: string };
+          const b = document.getElementById("banner") as HTMLElement;
+          const seen = () => {
+            if (w.__dotAtBanner === undefined && b.classList.contains("dead")) {
+              w.__dotAtBanner = document.getElementById("health-call")?.dataset.state ?? "";
+            }
+          };
+          seen();
+          new MutationObserver(seen).observe(b, { attributes: true, attributeFilter: ["class"] });
+        });
         await page.waitForSelector("#banner.dead", { timeout: 25_000 });
         expect(await text(page, "#banner-text")).toContain("CALL AUDIO LOST");
         expect((await events(rig, id)).some((e) => e.type === "health")).toBe(true);
+        expect(
+          await page.evaluate(
+            () => (window as unknown as { __dotAtBanner?: string }).__dotAtBanner,
+          ),
+        ).toBe("dead");
         expect(await page.locator("#health-call").getAttribute("data-state")).toBe("dead");
       });
     },
