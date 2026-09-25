@@ -1,0 +1,115 @@
+/**
+ * `akou serve` (docs/ux/SERVER.md SV-P8): the real CLI entry as a child process runs the server in
+ * the foreground, answers the API, and takes the one quit path on SIGTERM, which is what
+ * `docker stop` sends to the image's pid 1. The compiled binary is checked the same way by
+ * `scripts/smoke-cli.ts` on each release runner, linux-arm64 included.
+ */
+
+import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { serverEnv } from "../src/main/cli/commands/serve.ts";
+import { until } from "./capture-helpers.ts";
+import { CLI } from "./cli-helpers.ts";
+import { tempDir } from "./helpers.ts";
+
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => {
+  for (const c of cleanups.splice(0).reverse()) await c();
+});
+
+/** A fresh home whose config picks a free port, so the test never collides with a real app. */
+function home(): { dir: string; configDir: string; env: Record<string, string> } {
+  const t = tempDir();
+  cleanups.push(t.cleanup);
+  const configDir = join(t.dir, ".config", "akou");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ "api.port": 0 }));
+  const env: Record<string, string> = {};
+  for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
+  delete env.AKOU_URL;
+  Object.assign(env, {
+    AKOU_HOME: t.dir,
+    AKOU_MODELS_DIR: join(t.dir, "models"),
+    AKOU_NO_DOWNLOAD: "1",
+  });
+  return { dir: t.dir, configDir, env };
+}
+
+function serve(env: Record<string, string>) {
+  const proc = Bun.spawn([process.execPath, CLI, "serve"], {
+    env,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  cleanups.push(() => {
+    proc.kill("SIGKILL");
+  });
+  return proc;
+}
+
+function runtime(configDir: string): { pid: number; port: number; headless: boolean } | null {
+  try {
+    return JSON.parse(readFileSync(join(configDir, "runtime.json"), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+describe("[SV-P8] akou serve", () => {
+  test("serverEnv adds server mode and headless to the caller's environment, and keeps the rest", () => {
+    expect(serverEnv({ AKOU_HOME: "/data", AKOU_HEADLESS: "0" })).toEqual({
+      AKOU_HOME: "/data",
+      AKOU_SERVER: "1",
+      AKOU_HEADLESS: "1",
+    });
+  });
+
+  test("runs the server in the foreground, answers the API, and quits cleanly on SIGTERM", async () => {
+    const h = home();
+    const proc = serve(h.env);
+    await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
+    const rt = runtime(h.configDir) as { pid: number; port: number; headless: boolean };
+    // The server is this process, not a launched app: the foreground command is pid 1 in a container.
+    expect(rt.pid).toBe(proc.pid);
+    expect(rt.headless).toBe(true);
+    const token = readFileSync(join(h.configDir, "token"), "utf8").trim();
+    const res = await fetch(`http://127.0.0.1:${rt.port}/v1/status`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { app: { pid: number } }).app.pid).toBe(proc.pid);
+
+    proc.kill("SIGTERM");
+    const code = await proc.exited;
+    const err = await new Response(proc.stderr).text();
+    expect(err).toContain(`serving on http://127.0.0.1:${rt.port}/v1`);
+    expect(code).toBe(0);
+    // The one quit path ran: runtime.json and the lock are gone.
+    expect(existsSync(join(h.configDir, "runtime.json"))).toBe(false);
+    expect(existsSync(join(h.configDir, "akou.lock"))).toBe(false);
+  }, 30_000);
+
+  test("a second akou serve on the same home is refused with 69 and names the running one", async () => {
+    const h = home();
+    serve(h.env);
+    await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
+    const rt = runtime(h.configDir) as { pid: number; port: number };
+    const second = serve(h.env);
+    const code = await second.exited;
+    const err = await new Response(second.stderr).text();
+    expect(code).toBe(69);
+    expect(err).toContain(`akou is already running (pid ${rt.pid}, port ${rt.port})`);
+  }, 30_000);
+
+  test("takes no arguments: settings come from the config file", async () => {
+    const h = home();
+    const proc = Bun.spawn([process.execPath, CLI, "serve", "--port", "9"], {
+      env: h.env,
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    expect(await proc.exited).toBe(64);
+    expect(runtime(h.configDir)).toBeNull();
+  });
+});

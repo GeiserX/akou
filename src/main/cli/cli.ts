@@ -24,6 +24,7 @@ import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { handoffCommands } from "./commands/handoff.ts";
 import { noteCommands } from "./commands/notes.ts";
+import { serveCommand } from "./commands/serve.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
 import { vocab } from "./commands/vocab.ts";
@@ -51,6 +52,7 @@ export const COMMANDS: readonly Command[] = [
   ...setupCommands,
   skillCommand,
   mcp,
+  serveCommand,
 ];
 
 function help(): string {
@@ -145,6 +147,8 @@ if (import.meta.main) {
     if (ac.signal.aborted) process.exit(130);
     ac.abort();
   });
+  // `docker stop` and systemd send SIGTERM; as pid 1 in a container nothing else would handle it.
+  process.on("SIGTERM", () => ac.abort());
   const code = await runCli(process.argv.slice(2), {
     env: process.env,
     out: (t) => process.stdout.write(`${t}\n`),
