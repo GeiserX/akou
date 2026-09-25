@@ -16,7 +16,7 @@ import {
 
 // The example in the Standard Webhooks specification.
 const SPEC = {
-  secret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw",
+  secret: "whsec_MfKQ9r8GKYqrTwjUPD8ILPZIo2LaLaSw", // ggignore: the spec's public example
   id: "msg_p5jXN8AQM9LWM0D4loKWxJek",
   timestamp: "1614265330",
   body: '{"test": 2432232314}',
