@@ -23,6 +23,13 @@ export interface DecodeOptions {
   signal?: AbortSignal;
 }
 
+/**
+ * The containers a job may send (SV-P6), by ffmpeg's demuxer names: `mov` is M4A and MP4,
+ * `matroska` is WebM and MKV. A playlist or a concat list is none of them, so a file that names
+ * another file (another job's audio, beside it) is refused instead of read.
+ */
+export const AUDIO_FORMATS = ["ogg", "matroska", "mov", "mp3", "wav", "flac", "aac"] as const;
+
 /** The arguments after the program: first audio stream, one channel, 16 kHz, f32le to stdout. */
 export function decodeArgs(path: string): string[] {
   return [
@@ -30,6 +37,11 @@ export function decodeArgs(path: string): string[] {
     "-hide_banner",
     "-loglevel",
     "error",
+    // Input options: the input is read from a local file, never a URL, and only as audio.
+    "-protocol_whitelist",
+    "file,pipe",
+    "-format_whitelist",
+    AUDIO_FORMATS.join(","),
     "-i",
     path,
     "-map",

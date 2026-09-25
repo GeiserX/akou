@@ -48,6 +48,11 @@ describe("[SV-P6] decoding through ffmpeg to 16 kHz mono float", () => {
     expect(pair("-ar")).toBe("16000");
     expect(pair("-f")).toBe("f32le");
     expect(argv).toContain("-nostdin");
+    // Input options, so they bind the file a job sent: only local files, only audio containers.
+    expect(argv.indexOf("-protocol_whitelist")).toBeLessThan(argv.indexOf("-i"));
+    expect(pair("-protocol_whitelist")).toBe("file,pipe");
+    expect(argv.indexOf("-format_whitelist")).toBeLessThan(argv.indexOf("-i"));
+    expect(pair("-format_whitelist")?.split(",")).not.toContain("concat");
     t.cleanup();
   });
 
@@ -132,6 +137,35 @@ describe("[SV-P6] decoding through ffmpeg to 16 kHz mono float", () => {
       const text = join(t.dir, "notes.txt");
       writeFileSync(text, "this is not audio\n");
       await expect(decodeAudio(text)).rejects.toBeInstanceOf(DecodeError);
+      t.cleanup();
+    },
+    30_000,
+  );
+
+  test.skipIf(!real)(
+    "an uploaded 'audio' file that is a playlist or a concat list naming another file is a DecodeError, never that file's audio; positive control: the named file itself decodes (skipped when ffmpeg is not installed)",
+    async () => {
+      const t = tempDir();
+      const sibling = join(t.dir, "someone-elses.wav");
+      const r = Bun.spawnSync([
+        real as string,
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:sample_rate=16000:duration=1",
+        sibling,
+      ]);
+      expect(r.exitCode).toBe(0);
+      expect((await decodeAudio(sibling)).length).toBeGreaterThan(15_000);
+      const concat = join(t.dir, "note.ogg");
+      writeFileSync(concat, "ffconcat version 1.0\nfile someone-elses.wav\n");
+      await expect(decodeAudio(concat)).rejects.toBeInstanceOf(DecodeError);
+      const playlist = join(t.dir, "voice.ogg");
+      writeFileSync(playlist, "#EXTM3U\n#EXTINF:1,\nsomeone-elses.wav\n#EXT-X-ENDLIST\n");
+      await expect(decodeAudio(playlist)).rejects.toBeInstanceOf(DecodeError);
       t.cleanup();
     },
     30_000,
