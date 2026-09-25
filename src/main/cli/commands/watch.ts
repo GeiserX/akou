@@ -17,13 +17,14 @@
 
 import { formatWall } from "../../../core/log/clock.ts";
 import { readSse } from "../../llm/provider.ts";
-import { EXIT } from "../client.ts";
+import { EXIT, exitFor } from "../client.ts";
 import { dim, healthWord, paint, SpeakerColors } from "../color.ts";
 import {
   api,
   type Body,
   type Command,
   callFlag,
+  describeError,
   enc,
   finish,
   type Io,
@@ -54,15 +55,28 @@ const BACKLOG = 20;
 /** Log events after which the rendered transcript may have new or changed lines. */
 const LINE_EVENTS = new Set(["seg", "speaker.name", "speaker.merge", "speaker.unmerge"]);
 
-/** The terminal's bottom two rows: the in-progress line and the prompt. */
-class Screen {
+/**
+ * The terminal's bottom two rows: the in-progress line and the prompt. Each stays inside one row,
+ * counted in columns (a wide character takes two), so a redraw that erases one row erases all of
+ * it: a question longer than the row scrolls within it, keeping its end in view.
+ */
+export class Screen {
   partial = "";
   input = "";
   prompt = PROMPT;
-  constructor(private readonly write: (t: string) => void) {}
+  constructor(
+    private readonly write: (t: string) => void,
+    private readonly columns: () => number,
+  ) {}
+
+  /** The prompt row: the prompt, then as much of the end of the input as fits. */
+  private inputRow(): string {
+    const room = this.columns() - Bun.stringWidth(this.prompt);
+    return `${this.prompt}${fit(this.input, room)}`;
+  }
 
   private bottom(): string {
-    return `\x1b[2K${this.partial}\r\n\x1b[2K${this.prompt}${this.input}`;
+    return `\x1b[2K${this.partial}\r\n\x1b[2K${this.inputRow()}`;
   }
 
   /** Draws both rows from the start of an empty line. */
@@ -86,11 +100,24 @@ class Screen {
   redrawPartial(text: string): void {
     if (text === this.partial) return;
     this.partial = text;
-    this.write(`\r\x1b[1A\x1b[2K${text}\r\x1b[1B\x1b[2K${this.prompt}${this.input}`);
+    this.write(`\r\x1b[1A\x1b[2K${text}\r\x1b[1B\x1b[2K${this.inputRow()}`);
   }
 
   redrawInput(): void {
-    this.write(`\r\x1b[2K${this.prompt}${this.input}`);
+    this.write(`\r\x1b[2K${this.inputRow()}`);
+  }
+
+  /** One typed character: echoed while the row has room, else the row is redrawn scrolled. */
+  type(ch: string): void {
+    this.input += ch;
+    const width = Bun.stringWidth(this.prompt) + Bun.stringWidth(this.input);
+    if (width < this.columns()) this.write(ch);
+    else this.redrawInput();
+  }
+
+  backspace(): void {
+    this.input = [...this.input].slice(0, -1).join("");
+    this.redrawInput();
   }
 }
 
@@ -109,10 +136,21 @@ function words(line: string): string[] {
   );
 }
 
-/** Keeps the end of an in-progress line inside one terminal row, so a redraw clears all of it. */
-function fit(text: string, columns: number): string {
+/**
+ * Keeps the end of `text` inside `columns` terminal columns less one, so the cursor never reaches
+ * the row's end and wraps; a cut start shows as `…`. A wide character (CJK, most emoji) counts two.
+ */
+export function fit(text: string, columns: number): string {
   const max = Math.max(10, columns - 1);
-  return text.length <= max ? text : `…${text.slice(text.length - max + 1)}`;
+  if (Bun.stringWidth(text) <= max) return text;
+  const chars = [...text];
+  let width = 1; // the `…`
+  let start = chars.length;
+  while (start > 0 && width + Bun.stringWidth(chars[start - 1] as string) <= max) {
+    start -= 1;
+    width += Bun.stringWidth(chars[start] as string);
+  }
+  return `…${chars.slice(start).join("")}`;
 }
 
 export const watch: Command = {
@@ -174,7 +212,7 @@ export const watch: Command = {
     }
     write(`${out.join("\r\n")}\r\n`);
 
-    const screen = new Screen(write);
+    const screen = new Screen(write, () => keys.columns());
     screen.open();
     /** Output that arrives while a command runs waits until it is done. */
     let busy = null as AbortController | null;
@@ -238,7 +276,14 @@ export const watch: Command = {
           // A follow lasts as long as the call; the longest timer a runtime keeps is about 24 days.
           timeoutMs: 2_147_483_647,
         });
-        if (!res.ok || !res.body) return;
+        if (!res.ok || !res.body) {
+          // Refused (a rotated token answers 401): say why and leave, rather than sit on a
+          // transcript that stopped moving.
+          const body = (await res.json().catch(() => null)) as Body;
+          above(`akou: ${describeError({ status: res.status, body, text: "", contentType: "" })}`);
+          stopAll(exitFor(res.status, body?.error));
+          return;
+        }
         for await (const ev of readSse(res.body)) {
           if (done) break;
           if (ev.event === "partial") {
@@ -321,7 +366,7 @@ export const watch: Command = {
       ].join("\n");
 
     /** A yes-or-no question on the prompt row; Enter alone is no. */
-    let confirm: ((answer: string) => void) | null = null;
+    let confirm: ((answer: string) => Promise<void> | undefined) | null = null;
 
     const submit = async (line: string): Promise<void> => {
       const text = line.trim();
@@ -329,8 +374,8 @@ export const watch: Command = {
         const answer = confirm;
         confirm = null;
         screen.prompt = PROMPT;
-        answer(text);
-        return;
+        // What the answer runs is what watch waits for before it leaves.
+        return answer(text);
       }
       if (text === "") return screen.redrawInput();
       screen.above(`${PROMPT}${text}`);
@@ -345,8 +390,8 @@ export const watch: Command = {
         screen.prompt = `Stop recording "${call.title}"? [y/N] `;
         screen.redrawInput();
         confirm = (answer) => {
-          if (/^y(es)?$/i.test(answer)) current = runLine(["stop", "-c", id], false);
-          else screen.above(indent("still recording"));
+          if (/^y(es)?$/i.test(answer)) return runLine(["stop", "-c", id], false);
+          screen.above(indent("still recording"));
         };
         return;
       }
@@ -374,13 +419,8 @@ export const watch: Command = {
             screen.input = "";
             // Not awaited: Ctrl-C must still reach a running question to cancel it.
             current = submit(line);
-          } else if (ch === "\x7f" || ch === "\b") {
-            screen.input = [...screen.input].slice(0, -1).join("");
-            screen.redrawInput();
-          } else if (ch >= " ") {
-            screen.input += ch;
-            write(ch);
-          }
+          } else if (ch === "\x7f" || ch === "\b") screen.backspace();
+          else if (ch >= " ") screen.type(ch);
           if (done) break;
         }
       }
