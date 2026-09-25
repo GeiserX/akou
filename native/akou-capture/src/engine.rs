@@ -288,6 +288,13 @@ impl Part {
         }
     }
 
+    /// The `crash-at` fault: exit 70 without `stopped`, after the packets already queued for
+    /// stdout are out, so a simulated crash comes after exactly the packets before it.
+    fn crash(&mut self) -> Outcome {
+        self.out.finish();
+        Outcome::Exit(exit::SOFTWARE)
+    }
+
     /// Audio that arrived after its slot went out is dropped and that slot is zero-filled, which
     /// the app cannot tell from a silent device; so it is said on stderr.
     fn report_late(&mut self, at_stop: bool) {
@@ -865,7 +872,7 @@ pub fn run(
                         match p.emit(fe.as_mut(), s, false) {
                             Flow::Continue => {}
                             Flow::Stop(r) => break 'run r,
-                            Flow::Crash => return Outcome::Exit(exit::SOFTWARE),
+                            Flow::Crash => return p.crash(),
                         }
                     }
                     p.aligner.pause(now.awake_ns);
@@ -924,7 +931,7 @@ pub fn run(
             match p.emit(fe.as_mut(), s, false) {
                 Flow::Continue => {}
                 Flow::Stop(r) => break 'run r,
-                Flow::Crash => return Outcome::Exit(exit::SOFTWARE),
+                Flow::Crash => return p.crash(),
             }
         }
         p.report_late(false);
@@ -944,10 +951,10 @@ pub fn run(
                 }
                 tail = Some(t);
                 if let Flow::Crash = p.emit(fe.as_mut(), s, true) {
-                    return Outcome::Exit(exit::SOFTWARE);
+                    return p.crash();
                 }
             } else if let Flow::Crash = p.emit(fe.as_mut(), s, false) {
-                return Outcome::Exit(exit::SOFTWARE);
+                return p.crash();
             }
         }
     }

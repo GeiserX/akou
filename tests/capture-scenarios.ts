@@ -490,7 +490,10 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
     test(
       "helper crash: part.ended {helper-exit}, automatic restart; after stop the next start answers fast",
       async () => {
-        const r = rig(h, (o) => (o.part === 1 ? { crashAt: 0.3 } : {}));
+        // The helper crashes after 15 packets of 20 ms: every packet it wrote before the crash
+        // reaches the app, so the part ends at 0.3 s of audio, whatever the wall clock did.
+        const crashAt = 0.3;
+        const r = rig(h, (o) => (o.part === 1 ? { crashAt } : {}));
         const a = await r.mgr.start({ workspace: "work" });
         expect(a.ok).toBe(true);
         await until(
@@ -500,7 +503,11 @@ export function captureTrapScenarios(h: HelperUnderTest): void {
         );
         const ended = ofType(r.events, "part.ended")[0];
         expect(ended).toMatchObject({ part: 1, reason: "helper-exit" });
-        expect(ended?.fileSeconds).toBeGreaterThan(0.2);
+        const mic = r.packets.filter((x) => x.part === 1 && x.p.ch === "mic");
+        const packet = (mic[0]?.p.samples.length ?? 0) / 16000;
+        expect(packet).toBeGreaterThan(0);
+        expect(mic.length).toBe(Math.round(crashAt / packet));
+        expect(Math.abs((ended?.fileSeconds ?? 0) - crashAt)).toBeLessThanOrEqual(packet);
         expect(r.mgr.live()?.status).toBe("recording");
         await r.mgr.stop("live");
         const t0 = performance.now();
