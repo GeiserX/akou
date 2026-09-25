@@ -18,8 +18,9 @@
  *   app looks for them;
  * - grants: the microphone, system-audio and (macOS) Accessibility grants, each with its state
  *   (`grants.ts`). With `--grant`, on a terminal, the first missing or unreadable one is asked
- *   for, or its settings pane is opened, and the rest wait for the next run (CLI-38); without a
- *   terminal nothing is asked.
+ *   for, or its settings pane is opened, and the rest wait for another run; `--grant NAME` asks
+ *   for that one, which is how the later panes are reached on macOS, where every grant reads
+ *   `unknown` (CLI-38); without a terminal nothing is asked.
  *
  * Exit 0 when nothing failed, 69 otherwise. Not here yet: the 3 s capture test the design lists,
  * which needs the real helper.
@@ -33,7 +34,7 @@ import { DIARIZE_HELPER_NAME } from "../../asr/nemotron.ts";
 import { findHelper, type HelperFound } from "../../capture/helper.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { findProgram } from "../../llm/harness.ts";
-import { bool } from "../args.ts";
+import { bool, UsageError } from "../args.ts";
 import { EXIT } from "../client.ts";
 import type { Command, Ctx, Grant } from "../context.ts";
 import { systemGrants } from "../grants.ts";
@@ -180,18 +181,31 @@ export interface GrantState {
   next?: boolean;
 }
 
+/** A grant's name as one word on the command line: `system audio` is `system-audio`. */
+export function grantWord(name: string): string {
+  return name.replace(/ /g, "-");
+}
+
 /**
- * Reads the grants; with `ask`, asks for the first one missing or unreadable and leaves the rest
- * for the next run. One per run, because asking can open a settings pane and each pane opened
- * replaces the one before: three in a row show only the last.
+ * Reads the grants; with `ask`, asks for the named one (`only`), or else the first one missing or
+ * unreadable, and leaves the rest for another run. One per run, because asking can open a settings
+ * pane and each pane opened replaces the one before: three in a row show only the last. On macOS
+ * every grant reads `unknown` on every run, so a plain `--grant` always asks for the first; the
+ * name is how the later ones are reached.
  */
-export async function grantStates(ctx: Ctx, ask: boolean): Promise<GrantState[]> {
+export async function grantStates(ctx: Ctx, ask: boolean, only?: string): Promise<GrantState[]> {
   const checker = ctx.grants ?? systemGrants;
+  const grants = await checker.check();
+  if (only !== undefined && !grants.some((g) => grantWord(g.name) === grantWord(only)))
+    throw new UsageError(
+      `${only} is not a grant; name one of ${grants.map((g) => grantWord(g.name)).join(", ")}`,
+    );
   const out: GrantState[] = [];
   let asked = false;
-  for (const g of await checker.check()) {
+  for (const g of grants) {
+    const named = only === undefined || grantWord(g.name) === grantWord(only);
     if (!ask || (g.state !== "missing" && g.state !== "unknown")) out.push(g);
-    else if (!asked) {
+    else if (!asked && named) {
       asked = true;
       out.push({ ...g, state: await checker.request(g.name) });
     } else out.push({ ...g, next: true });
@@ -209,7 +223,7 @@ function grantCheck(g: GrantState): Check {
           ? "warn"
           : "info";
   const what = g.next
-    ? `${g.state}; run \`akou doctor --grant\` again to ask for it next`
+    ? `${g.state}; run \`akou doctor --grant ${grantWord(g.name)}\` to ask for it`
     : g.state === "missing"
       ? "missing; run `akou doctor --grant` in a terminal to ask for it"
       : g.state === "requested"
@@ -221,6 +235,7 @@ function grantCheck(g: GrantState): Check {
 export async function doctor(
   ctx: Ctx,
   grant: boolean,
+  only?: string,
 ): Promise<{ checks: Check[]; grants: GrantState[] }> {
   const env = ctx.io.env;
   const cfg = loadConfig(env);
@@ -313,7 +328,7 @@ export async function doctor(
 
   // A prompt from the OS belongs in front of a person, never in a script's run.
   const ask = grant && ctx.io.tty === true;
-  const grants = await grantStates(ctx, ask);
+  const grants = await grantStates(ctx, ask, only);
   checks.push(...grants.map(grantCheck));
   if (grant && !ask) {
     checks.push({
@@ -328,16 +343,19 @@ export async function doctor(
 export const doctorCommand: Command = {
   name: "doctor",
   summary: "Check models, the helper, the token, the API, permissions and harness discovery",
-  usage: "akou doctor [--grant] [--json]",
+  usage: "akou doctor [--grant [GRANT]] [--json]",
   flags: {
     grant: {
       type: "boolean",
-      desc: "on a terminal, ask the OS for each missing grant or open its settings pane",
+      desc: "on a terminal, ask the OS for the first missing grant, or the one named (mic, system-audio, accessibility), or open its settings pane",
     },
   },
-  examples: ["akou doctor", "akou doctor --grant"],
+  examples: ["akou doctor", "akou doctor --grant", "akou doctor --grant system-audio"],
   run: async (ctx, p) => {
-    const { checks, grants } = await doctor(ctx, bool(p, "grant"));
+    const grant = bool(p, "grant");
+    if (p.positional.length > (grant ? 1 : 0))
+      throw new UsageError("doctor takes one word, the grant to ask for, and only after --grant");
+    const { checks, grants } = await doctor(ctx, grant, p.positional[0]);
     const failed = checks.some((c) => c.state === "fail");
     if (ctx.json) ctx.io.out(JSON.stringify({ ok: !failed, checks, grants }));
     else for (const c of checks) ctx.io.out(`${c.state.padEnd(4)}  ${c.name}: ${c.detail}`);

@@ -283,11 +283,39 @@ describe("with a running app", () => {
       const first = await doctor(["--grant"], g.checker, true);
       expect(g.requested).toEqual(["mic"]);
       expect(first.out).toMatch(/^warn {2}mic: requested/m);
-      expect(first.out).toMatch(/^fail {2}system audio: missing; run `akou doctor --grant` again/m);
+      expect(first.out).toMatch(
+        /^fail {2}system audio: missing; run `akou doctor --grant system-audio` to ask for it/m,
+      );
       // The next run asks for the next one.
       states.mic = "granted";
       await doctor(["--grant"], g.checker, true);
       expect(g.requested).toEqual(["mic", "system audio"]);
+    });
+
+    test("on macOS every grant reads unknown on every run, so `--grant NAME` reaches the later ones", async () => {
+      const g = fakeGrants({ mic: "unknown", "system audio": "unknown", accessibility: "unknown" });
+      const first = await doctor(["--grant"], g.checker, true);
+      expect(g.requested).toEqual(["mic"]);
+      // The hint names the grant, since a plain `--grant` would ask for the microphone again.
+      expect(first.out).toMatch(
+        /^info {2}system audio: unknown; run `akou doctor --grant system-audio` to ask for it/m,
+      );
+      expect(first.out).toMatch(
+        /^info {2}accessibility: unknown; run `akou doctor --grant accessibility`/m,
+      );
+      const second = await doctor(["--grant", "system-audio"], g.checker, true);
+      expect(g.requested).toEqual(["mic", "system audio"]);
+      expect(second.out).toMatch(/^warn {2}system audio: requested/m);
+      // Only the named grant is asked for; each other one names itself for a later run.
+      expect(second.out).toMatch(
+        /^info {2}mic: unknown; run `akou doctor --grant mic` to ask for it/m,
+      );
+      await doctor(["--grant", "accessibility"], g.checker, true);
+      expect(g.requested).toEqual(["mic", "system audio", "accessibility"]);
+      // A name that is not a grant asks for nothing and is a usage error.
+      expect((await doctor(["--grant", "camera"], g.checker, true)).code).toBe(64);
+      expect((await doctor(["mic"], g.checker, true)).code).toBe(64);
+      expect(g.requested).toEqual(["mic", "system audio", "accessibility"]);
     });
 
     test("positive controls: plain doctor and --grant without a terminal ask nothing, and a missing grant fails", async () => {
