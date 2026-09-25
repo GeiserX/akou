@@ -30,7 +30,8 @@
  */
 
 import { randomBytes } from "node:crypto";
-import { tokenMatches } from "../api/guard.ts";
+import { MAX_BODY_BYTES, tokenMatches } from "../api/guard.ts";
+import { HttpError, readCapped } from "../api/http.ts";
 import type { Bridge, Method } from "./bridge.ts";
 import { METHODS } from "./bridge.ts";
 import type { UiBundle } from "./bundle.ts";
@@ -278,6 +279,11 @@ export class PageServer {
       return refuse(403, "cross_site", "requests from another origin are refused");
     }
     if (req.method === "OPTIONS") return refuse(405, "method_not_allowed", "no CORS here");
+    // Mounted on the API's listener, Bun's body limit is the upload cap (SV-D3); the page takes
+    // JSON only, 64 KB as the API does, refused by its declared size before a byte is read.
+    if (Number(req.headers.get("content-length") ?? "0") > MAX_BODY_BYTES) {
+      return refuse(413, "body_too_large", `bodies are capped at ${MAX_BODY_BYTES} bytes`);
+    }
     const url = new URL(req.url);
     const path = url.pathname;
 
@@ -300,8 +306,10 @@ export class PageServer {
       }
       let body: { code?: unknown; password?: unknown; key?: unknown } = {};
       try {
-        body = (await req.json()) as typeof body;
-      } catch {}
+        body = JSON.parse(await readCapped(req)) as typeof body;
+      } catch (err) {
+        if (err instanceof HttpError) return refuse(err.status, err.code, err.message);
+      }
       if (mounted && (typeof body.password === "string" || typeof body.key === "string")) {
         const ok = await mounted.login({
           password: typeof body.password === "string" ? body.password : undefined,
@@ -339,8 +347,10 @@ export class PageServer {
     if (path === "/app/open-settings" && req.method === "POST") {
       let pane = "";
       try {
-        pane = String(((await req.json()) as { pane?: unknown }).pane ?? "");
-      } catch {}
+        pane = String((JSON.parse(await readCapped(req)) as { pane?: unknown }).pane ?? "");
+      } catch (err) {
+        if (err instanceof HttpError) return refuse(err.status, err.code, err.message);
+      }
       if (!(SETTINGS_PANES as readonly string[]).includes(pane)) {
         return refuse(400, "bad_pane", `pane must be one of ${SETTINGS_PANES.join(", ")}`);
       }
@@ -361,7 +371,13 @@ export class PageServer {
         if (type !== "application/json") {
           return refuse(415, "json_required", "requests that change something need JSON");
         }
-        const text = await req.text();
+        let text: string;
+        try {
+          text = await readCapped(req);
+        } catch (err) {
+          if (err instanceof HttpError) return refuse(err.status, err.code, err.message);
+          throw err;
+        }
         if (text.trim() !== "") {
           try {
             body = JSON.parse(text);

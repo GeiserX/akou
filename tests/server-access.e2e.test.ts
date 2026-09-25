@@ -10,11 +10,10 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { connect } from "node:net";
 import type { Access } from "../src/main/api/access.ts";
 import { json } from "../src/main/api/http.ts";
 import { type ApiApp, type ApiServer, startApiServer } from "../src/main/api/server.ts";
-import { type AppRig, appRig, rawRequest } from "./api-helpers.ts";
+import { type AppRig, appRig, declare, rawRequest } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 
 /** Who may call each route. Adding a route means adding its row here. */
@@ -257,43 +256,6 @@ function multipart(size: number): {
       },
     }),
   };
-}
-
-/** Headers declaring a body, then at most 2 MiB of it: the answer comes from the headers. */
-function declare(
-  port: number,
-  path: string,
-  headers: Record<string, string>,
-  length: number,
-): Promise<number> {
-  return new Promise((resolve, reject) => {
-    const sock = connect({ host: "127.0.0.1", port });
-    let buf = "";
-    sock.on("connect", () => {
-      const lines = [
-        `POST ${path} HTTP/1.1`,
-        `Host: 127.0.0.1:${port}`,
-        "Connection: close",
-        ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
-        `Content-Length: ${length}`,
-        "",
-        "",
-      ];
-      sock.write(lines.join("\r\n"));
-      // The whole of a small body; 2 MiB of a large one, past the server's drain cap, so the
-      // refusal is sent at once rather than after the drain's 2 s wait for bytes that never come.
-      sock.write("x".repeat(Math.min(length, 2 * MB)));
-    });
-    sock.on("data", (d) => {
-      buf += d.toString("latin1");
-      const m = /^HTTP\/1\.1 (\d{3})/.exec(buf);
-      if (m) {
-        sock.destroy();
-        resolve(Number(m[1]));
-      }
-    });
-    sock.on("error", reject);
-  });
 }
 
 describe("SV-D3: the 64 KB cap applies to JSON routes only", () => {

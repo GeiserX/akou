@@ -115,8 +115,11 @@ export async function drainBody(
   }
 }
 
-/** Reads at most `MAX_BODY_BYTES`, whatever `Content-Length` claimed (or did not claim). */
-async function readCapped(req: Request): Promise<string> {
+/**
+ * Reads at most `MAX_BODY_BYTES`, whatever `Content-Length` claimed (or did not claim); past it,
+ * throws 413. The API's body parser and the web UI's page (`page-server.ts`) both read through it.
+ */
+export async function readCapped(req: Request): Promise<string> {
   if (!req.body) return "";
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];

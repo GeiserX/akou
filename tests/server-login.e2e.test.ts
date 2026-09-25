@@ -9,7 +9,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runCli } from "../src/main/cli/cli.ts";
 import { LOGIN_FAIL_MS } from "../src/main/window/page-server.ts";
-import { type AppRig, appRig, rawRequest } from "./api-helpers.ts";
+import { type AppRig, appRig, declare, rawRequest } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 
 const PASSWORD = "correct horse battery staple";
@@ -119,6 +119,34 @@ describe("SV-U1: the admin login", () => {
       { origin: `https://${HOST}`, "sec-fetch-site": "same-origin" },
     );
     expect(own.status).toBe(200);
+  });
+
+  test("the page holds bodies to 64 KB on the API's listener: a 2 MB login gets 413", async () => {
+    const json = { "content-type": "application/json" };
+    expect(await declare(rig.port, "/session", json, 2 * 1024 * 1024)).toBe(413);
+    // A body with no length is cut off at the same 64 KB, at the login and behind a session.
+    const big = JSON.stringify({ password: "x".repeat(200 * 1024) });
+    const chunked = await rawRequest(rig.port, {
+      method: "POST",
+      path: "/session",
+      host: HOST,
+      headers: json,
+      body: big,
+      chunked: true,
+    });
+    expect(chunked.status).toBe(413);
+    const s = JSON.parse((await session({ password: PASSWORD })).body).session as string;
+    const api = await rawRequest(rig.port, {
+      method: "PATCH",
+      path: "/api/v1/config",
+      host: HOST,
+      headers: { ...json, authorization: `Bearer ${s}` },
+      body: JSON.stringify({ "user.name": "x".repeat(200 * 1024) }),
+      chunked: true,
+    });
+    expect(api.status).toBe(413);
+    // Positive control: a small body is read, and its bad code is refused as such.
+    expect(await declare(rig.port, "/session", json, 20)).toBe(403);
   });
 
   test("set-password stores a hash, never the password, and refuses a short one", async () => {

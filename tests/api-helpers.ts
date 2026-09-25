@@ -272,3 +272,40 @@ function chunkEncode(body: string): string {
   }
   return `${out}0\r\n\r\n`;
 }
+
+/** Headers declaring a body, then at most 2 MiB of it: the answer comes from the headers. */
+export function declare(
+  port: number,
+  path: string,
+  headers: Record<string, string>,
+  length: number,
+): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const sock = connect({ host: "127.0.0.1", port });
+    let buf = "";
+    sock.on("connect", () => {
+      const lines = [
+        `POST ${path} HTTP/1.1`,
+        `Host: 127.0.0.1:${port}`,
+        "Connection: close",
+        ...Object.entries(headers).map(([k, v]) => `${k}: ${v}`),
+        `Content-Length: ${length}`,
+        "",
+        "",
+      ];
+      sock.write(lines.join("\r\n"));
+      // The whole of a small body; 2 MiB of a large one, past the server's drain cap, so the
+      // refusal is sent at once rather than after the drain's 2 s wait for bytes that never come.
+      sock.write("x".repeat(Math.min(length, 2 * 1024 * 1024)));
+    });
+    sock.on("data", (d) => {
+      buf += d.toString("latin1");
+      const m = /^HTTP\/1\.1 (\d{3})/.exec(buf);
+      if (m) {
+        sock.destroy();
+        resolve(Number(m[1]));
+      }
+    });
+    sock.on("error", reject);
+  });
+}
