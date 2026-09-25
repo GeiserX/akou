@@ -199,27 +199,34 @@ describe("[DK-M3] the quit question is asked in the window", () => {
 });
 
 describe("[DK-K4] Settings warns about a Control+Alt hotkey", () => {
-  /** The page as it runs on another OS: the pane reads the OS from the browser. */
-  const as = (platform: string, ua: string) => (page: Page) =>
-    page.addInitScript(
-      ([p, u]) => {
-        Object.defineProperty(navigator, "platform", { get: () => p });
-        Object.defineProperty(navigator, "userAgent", { get: () => u });
-      },
-      [platform, ua],
-    );
+  /**
+   * The page in one OS's browser, over an app on another: the browser's platform is faked, and
+   * the app's `/status` answers the host's.
+   */
+  const as = (browser: string, host: string) => async (page: Page) => {
+    await page.addInitScript((p) => {
+      Object.defineProperty(navigator, "platform", { get: () => p });
+    }, browser);
+    await page.route("**/api/v1/status", async (route) => {
+      const res = await route.fetch();
+      const body = await res.json();
+      body.app.platform = host;
+      await route.fulfill({ response: res, json: body });
+    });
+  };
 
   test(
-    "off macOS the field warns while you type; on macOS it does not",
+    "the host's OS decides, not the browser's: a Windows host warns in a Mac browser, a Mac host never",
     async () => {
       const t = tempDir("akou-ui-hk-");
       const rig = await uiRig({ home: t.dir });
       try {
-        for (const [platform, ua, warns] of [
-          ["Win32", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", true],
-          ["MacIntel", "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_4)", false],
+        for (const [browser, host, warns] of [
+          ["MacIntel", "win32", true],
+          ["Win32", "darwin", false],
+          ["Linux x86_64", "linux", true],
         ] as const) {
-          const page = await rig.open(undefined, { before: as(platform, ua) });
+          const page = await rig.open(undefined, { before: as(browser, host) });
           await page.click("#settings-open");
           const field = page.locator("#set-app-hotkey");
           await field.waitFor();

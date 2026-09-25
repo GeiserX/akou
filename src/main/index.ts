@@ -1369,6 +1369,8 @@ export class AkouApp implements ApiApp {
     return {
       app: {
         version: this.version,
+        // The host's OS: a page in another machine's browser must not read its own (DK-K4).
+        platform: process.platform,
         pid: process.pid,
         port: this.server?.port ?? null,
         headless: this.headless,

@@ -43,6 +43,8 @@ export class SettingsPane {
   private readonly fields = byId("settings-fields");
   private readonly vocab = byId("settings-vocab");
   private schema: Record<string, SchemaEntry> = {};
+  /** The OS of the machine akou runs on, from its status: not the browser's (DK-K4). */
+  private platform = "";
   private shown: Record<string, string> = {};
 
   constructor(
@@ -68,7 +70,11 @@ export class SettingsPane {
   }
 
   private async load(): Promise<void> {
-    const r = await this.t.request<ConfigReply>("GET", "/config");
+    const [r, st] = await Promise.all([
+      this.t.request<ConfigReply>("GET", "/config"),
+      this.t.request<{ app?: { platform?: string } }>("GET", "/status"),
+    ]);
+    this.platform = String(st.body?.app?.platform ?? "");
     if (r.status >= 400) {
       toast(message(r.body, "the settings could not be read"));
       return;
@@ -140,7 +146,7 @@ export class SettingsPane {
         spec.env ? ` (environment: ${spec.env})` : "",
       ),
       issue ? h("small", { class: "issue" }, issue) : null,
-      key === "app.hotkey" ? hotkeyHint(input) : null,
+      key === "app.hotkey" ? hotkeyHint(input, this.platform) : null,
     );
   }
 
@@ -248,11 +254,11 @@ export class SettingsPane {
  * The hotkey's warning (DK-K4), under the field while you type: off macOS, `Control+Alt` is AltGr
  * on many layouts. A warning, never a refusal: the key is yours to choose.
  */
-function hotkeyHint(input: HTMLInputElement | HTMLTextAreaElement): HTMLElement {
-  const mac = `${navigator.platform} ${navigator.userAgent}`.toLowerCase().includes("mac");
+function hotkeyHint(input: HTMLInputElement | HTMLTextAreaElement, platform: string): HTMLElement {
   const hint = h("small", { class: "issue", attrs: { role: "status" } });
   const draw = () => {
-    const w = hotkeyWarning(input.value, mac ? "darwin" : "other");
+    // An app too old to say its OS: no warning rather than a guess from the browser.
+    const w = platform ? hotkeyWarning(input.value, platform) : null;
     hint.textContent = w ?? "";
     hint.hidden = w === null;
   };
