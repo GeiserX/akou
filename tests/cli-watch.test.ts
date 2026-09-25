@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import type { ApiClient, ApiResponse } from "../src/main/cli/client.ts";
 import { EXIT } from "../src/main/cli/client.ts";
-import { fit, Screen, watch } from "../src/main/cli/commands/watch.ts";
+import { fitRow, Screen, watch } from "../src/main/cli/commands/watch.ts";
 import type { Ctx, Io, Keys } from "../src/main/cli/context.ts";
 
 /** An escape sequence such as `ESC[2K` or `ESC[1A`: it moves no column. */
@@ -69,7 +69,9 @@ describe("[CLI-24] watch's two bottom rows stay one row each", () => {
     screen.open();
     for (const ch of "会議の議題はリリースの日程と移行の担当者です".repeat(2)) screen.type(ch);
     // watch fits the in-progress line to the terminal's columns before it draws it.
-    screen.redrawPartial(fit(`14:32 Speaker 2  ${"来週の木曜日にリリースします".repeat(3)}`, 40));
+    screen.redrawPartial(
+      fitRow(`14:32 Speaker 2  ${"来週の木曜日にリリースします".repeat(3)}`, 40),
+    );
     expect(maxColumn(bytes())).toBeLessThanOrEqual(39);
   });
 

@@ -72,7 +72,7 @@ export class Screen {
   /** The prompt row: the prompt, then as much of the end of the input as fits. */
   private inputRow(): string {
     const room = this.columns() - Bun.stringWidth(this.prompt);
-    return `${this.prompt}${fit(this.input, room)}`;
+    return `${this.prompt}${fitRow(this.input, room)}`;
   }
 
   private bottom(): string {
@@ -140,7 +140,7 @@ function words(line: string): string[] {
  * Keeps the end of `text` inside `columns` terminal columns less one, so the cursor never reaches
  * the row's end and wraps; a cut start shows as `…`. A wide character (CJK, most emoji) counts two.
  */
-export function fit(text: string, columns: number): string {
+export function fitRow(text: string, columns: number): string {
   const max = Math.max(10, columns - 1);
   if (Bun.stringWidth(text) <= max) return text;
   const chars = [...text];
@@ -263,7 +263,7 @@ export const watch: Command = {
         ? ""
         : dim(
             color,
-            fit(
+            fitRow(
               lines
                 .map((x) => {
                   const spk = x.ch === "mic" ? "you" : (x.spk ?? "call");
