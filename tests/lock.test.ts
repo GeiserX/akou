@@ -239,8 +239,8 @@ describe("SI-4: a lock that survives a container restart", () => {
       a.kill("SIGKILL");
       await a.exited;
       await until(async () => !refused(tryB), stale + beat + 2000, "B takes the lock");
-      // Within the scaled 40 s: the threshold plus one heartbeat.
-      expect(Date.now() - killedAt).toBeLessThan(stale + beat + 1000);
+      // Within the scaled 40 s: the threshold plus one heartbeat, as the acceptance says.
+      expect(Date.now() - killedAt).toBeLessThan(stale + beat);
       expect(readFileSync(lock, "utf8").trim()).toBe(`${process.pid} b0b0b0b0b0b0b0b0`);
     } finally {
       a.kill("SIGKILL");
