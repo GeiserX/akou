@@ -98,7 +98,7 @@ class App {
       speakerMenu: (spk, anchor) => this.speakerMenu(spk, anchor),
       fixWord: (id, anchor, sel) => this.fixWord(id, anchor, sel),
     });
-    new LineMenu(byId("lines"), () => this.lineActions());
+    new LineMenu(byId("lines"), byId("scroller"), () => this.lineActions());
     this.player = new Player({
       view,
       mayPlay: () => this.mayPlay(),

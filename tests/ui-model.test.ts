@@ -411,7 +411,7 @@ describe("[W4.2] live speaker labels look provisional until named or final", () 
     speaker: "Speaker 3",
     ...o,
   });
-  const open = { named: false, finalDone: false };
+  const open = { named: false };
 
   test("an unnamed live cluster reads c3? and is provisional", () => {
     expect(speakerChip(line(), open)).toEqual({ label: "c3?", provisional: true });
@@ -427,14 +427,51 @@ describe("[W4.2] live speaker labels look provisional until named or final", () 
   });
 
   test("after final.done the same speaker is solid, on either layer", () => {
-    const done = { named: false, finalDone: true };
-    expect(speakerChip(line(), done)).toEqual({ label: "Speaker 3", provisional: false });
+    // The line was written (seq 10) before the pass finished (seq 20).
+    const done = { named: false, finalDoneSeq: 20 };
+    expect(speakerChip({ ...line(), seq: 10 }, done)).toEqual({
+      label: "Speaker 3",
+      provisional: false,
+    });
     expect(speakerChip(line({ layer: "final" }), done)).toEqual({
       label: "Speaker 3",
       provisional: false,
     });
     // A final-layer line is the final pass's own label even before the whole pass is done.
     expect(speakerChip(line({ layer: "final" }), open).provisional).toBe(false);
+  });
+
+  test("a call reopened after final.done: its new live lines are guesses again, the old ones stay solid, and a re-run does not flip them back", () => {
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    b.seg({ id: "l000001", spk: "c1", w0: T0 + 1000, text: "before the pass" });
+    b.partEnded(1, "stop", 10);
+    b.add({ type: "call.ended", reason: "stop" });
+    b.add({ type: "final.started", pid: 1 });
+    b.add({ type: "final.done", parts: [], skipped: [1] });
+    // Call.restart() reopens the ended call as part 2; nothing about the final pass changes.
+    b.partStarted(2, T0 + 60_000);
+    b.seg({ id: "l000002", part: 2, spk: "c3", w0: T0 + 61_000, text: "after the reopen" });
+    const chip = (v: ReturnType<typeof fold>, id: string) => {
+      const l = v.resolve(id);
+      if (!l) throw new Error(`no line ${id}`);
+      return speakerChip(l, { named: false, finalDoneSeq: v.final.done?.seq });
+    };
+    const reopened = fold(b.events);
+    expect(reopened.final.state).toBe("done");
+    expect(chip(reopened, "l000001")).toEqual({ label: "Speaker 1", provisional: false });
+    expect(chip(reopened, "l000002")).toEqual({ label: "c3?", provisional: true });
+    // A second pass starts: the lines the first one finished stay solid.
+    b.add({ type: "final.started", pid: 2 });
+    const rerun = fold(b.events);
+    expect(rerun.final.state).toBe("running");
+    expect(chip(rerun, "l000001").provisional).toBe(false);
+    expect(chip(rerun, "l000002").provisional).toBe(true);
+    // A line with no seq (the grey line still being spoken) is newer than any finished pass.
+    expect(
+      speakerChip(line(), { named: false, finalDoneSeq: reopened.final.done?.seq }).provisional,
+    ).toBe(true);
   });
 
   test("you, on the mic, is never a guess", () => {

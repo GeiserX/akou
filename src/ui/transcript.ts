@@ -88,7 +88,7 @@ export function fillRow(
   who.setAttribute(
     "aria-label",
     l.provisional
-      ? `${l.who ?? l.speaker}, a guess until the final pass: rename, merge or unmerge`
+      ? `${l.speaker} (${l.who ?? l.speaker}, a guess until the final pass): rename, merge or unmerge`
       : `${l.speaker}: rename, merge or unmerge`,
   );
   const text = body.querySelector(".text") as HTMLElement;
@@ -199,17 +199,24 @@ export class TranscriptPane {
     const s = this.scroller;
     s.addEventListener("wheel", () => this.byHand(), { passive: true });
     s.addEventListener("touchmove", () => this.byHand(), { passive: true });
+    // A focused button (a line's Play, after a click) lets these keys scroll; a text control or
+    // a picker keeps them.
     s.addEventListener("keydown", (e) => {
       const t = e.target as HTMLElement;
-      if (
-        SCROLL_KEYS.has(e.key) &&
-        !t.closest("input, textarea, select, button, [contenteditable]")
-      )
+      if (SCROLL_KEYS.has(e.key) && !t.closest("input, textarea, select, [contenteditable]"))
         this.byHand();
     });
-    // The scrollbar: a press on the scroller itself, right of its content box.
+    // The scrollbar: a press lands on the scroller itself, and the scroll it drives while held is
+    // by hand. An overlay scrollbar (macOS) takes no width, so where the press is tells nothing.
+    let held = false;
     s.addEventListener("mousedown", (e) => {
-      if (e.target === s && e.offsetX >= s.clientWidth) this.byHand();
+      held = e.target === s;
+    });
+    document.addEventListener("mouseup", () => {
+      held = false;
+    });
+    s.addEventListener("scroll", () => {
+      if (held) this.byHand();
     });
     byId("jump").addEventListener("click", () => this.byHand());
     this.followBtn.addEventListener("click", () => {
@@ -245,7 +252,7 @@ export class TranscriptPane {
           .filter((s) => s.name)
           .map((s) => s.spk),
       ),
-      finalDone: v.final.state === "done",
+      finalDoneSeq: v.final.done?.seq,
     };
     for (const id of ids) {
       const line = v.visibleIn(id, "best") ? v.resolve(id) : null;
@@ -288,12 +295,15 @@ export class TranscriptPane {
     row: HTMLElement,
     l: Line,
     v: CallView,
-    chips: { named: ReadonlySet<string>; finalDone: boolean },
+    chips: { named: ReadonlySet<string>; finalDoneSeq?: number },
   ): void {
     const tz = v.call?.tz ?? "UTC";
     const shown = this.shownText(l);
     const first = v.parts()[0]?.wallStart ?? l.w0;
-    const chip = speakerChip(l, { named: chips.named.has(l.spk), finalDone: chips.finalDone });
+    const chip = speakerChip(l, {
+      named: chips.named.has(l.spk),
+      finalDoneSeq: chips.finalDoneSeq,
+    });
     fillRow(
       row,
       {
@@ -448,7 +458,7 @@ export class TranscriptPane {
         const root = v.resolveSpeaker(spk);
         const chip = speakerChip(
           { layer: "live", ch: p.ch, spk: root, speaker },
-          { named: named.has(root), finalDone: v.final.state === "done" },
+          { named: named.has(root), finalDoneSeq: v.final.done?.seq },
         );
         fillRow(
           r,

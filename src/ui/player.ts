@@ -128,12 +128,15 @@ export class Player {
 
   /**
    * Keys outside text fields: Space plays or pauses (W5.2), `[` and `]` change the speed (W5.4),
-   * `Shift+←` and `Shift+→` seek 5 s (W5.5).
+   * `Shift+←` and `Shift+→` seek 5 s (W5.5). They work from the scrubber and the speed picker too,
+   * where the scrubber's plain arrows also seek 5 s and Space stays the picker's own key.
    */
   private onKey(e: KeyboardEvent): void {
-    if (inField(e.target)) return;
-    const p = this.el;
     const t = e.target as HTMLElement | null;
+    // The player's own controls are no text field: its keys work from them too (principle 11).
+    const bar = t?.closest?.("#scrub, #speed") ?? null;
+    if (!bar && inField(e.target)) return;
+    const p = this.el;
     if (e.key === "[" || e.key === "]") {
       // Some layouts type a bracket with Option or AltGr (Ctrl+Alt on Windows): those still count.
       if (e.metaKey || (e.ctrlKey && !e.altKey)) return;
@@ -143,15 +146,21 @@ export class Player {
     }
     if (e.metaKey || e.ctrlKey || e.altKey || !p.src) return;
     if (e.key === " ") {
-      // Any other focused control keeps Space as its own key. A line's Play is taken, so the key
-      // pauses what it started instead of starting the line again.
-      if (t?.closest("button, a[href], summary, [role=tab]") && !t.closest(".row .play, #play"))
+      // Any other focused control keeps Space as its own key, the speed picker too (Space opens
+      // its list). A line's Play is taken, so the key pauses what it started instead of starting
+      // the line again; the scrubber has no Space of its own.
+      if (
+        t?.closest("button, a[href], summary, [role=tab], select") &&
+        !t.closest(".row .play, #play")
+      )
         return;
       e.preventDefault();
       if (!e.repeat) this.toggle();
       return;
     }
-    if (e.shiftKey && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+    const arrow = e.key === "ArrowLeft" || e.key === "ArrowRight";
+    // On the scrubber the plain arrows take the same 5 s, not the input's 0.1 s step.
+    if (arrow && (e.shiftKey || bar?.id === "scrub")) {
       // The tabs move with the arrows themselves.
       if (t?.closest("[role=tab]")) return;
       e.preventDefault();

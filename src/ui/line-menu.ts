@@ -5,6 +5,8 @@
  *
  * It is a WAI-ARIA menu: focus moves to the first item, `↑` `↓` `Home` `End` move between items,
  * `Enter` or `Space` runs one, `Esc` or `Tab` closes it, and focus goes back to where it was.
+ * It stays beside its line: a scroll of the transcript (new lines, the reader) moves it with the
+ * line, and it closes once the line leaves the view, the window loses focus or is resized.
  */
 
 import { byId, h, replace } from "./dom.ts";
@@ -19,9 +21,12 @@ export interface LineAction {
 export class LineMenu {
   private readonly menu = byId("line-menu");
   private from: HTMLElement | null = null;
+  /** The line the open menu acts on, and the menu's distance below the line's top. */
+  private at: { row: HTMLElement; dy: number } | null = null;
 
   constructor(
     list: HTMLElement,
+    private readonly scroller: HTMLElement,
     private readonly actions: () => readonly LineAction[],
   ) {
     list.addEventListener("contextmenu", (e) => {
@@ -41,9 +46,29 @@ export class LineMenu {
       this.open(row, null);
     });
     this.menu.addEventListener("keydown", (e) => this.onKey(e));
+    // A contextmenu the platform sends on the menu itself (WebView2 on the Menu key's release)
+    // must not open the webview's own menu over ours.
+    this.menu.addEventListener("contextmenu", (e) => e.preventDefault());
     document.addEventListener("mousedown", (e) => {
       if (!this.menu.hidden && !this.menu.contains(e.target as Node)) this.close(false);
     });
+    scroller.addEventListener("scroll", () => this.follow());
+    // Focus in a hidden menu would be lost, so these give it back to the line.
+    addEventListener("blur", () => this.close(true));
+    addEventListener("resize", () => this.close(true));
+  }
+
+  /** Moves the open menu with its line, or closes it once the line is out of the view. */
+  private follow(): void {
+    const at = this.at;
+    if (this.menu.hidden || !at) return;
+    const r = at.row.getBoundingClientRect();
+    const s = this.scroller.getBoundingClientRect();
+    if (!at.row.isConnected || r.bottom <= s.top || r.top >= s.bottom) {
+      this.close(true);
+      return;
+    }
+    this.menu.style.top = `${r.top + at.dy}px`;
   }
 
   private open(row: HTMLElement, at: { x: number; y: number } | null): void {
@@ -79,7 +104,9 @@ export class LineMenu {
     const y = at?.y ?? r.bottom;
     const box = this.menu.getBoundingClientRect();
     this.menu.style.left = `${Math.max(8, Math.min(innerWidth - box.width - 8, x))}px`;
-    this.menu.style.top = `${Math.max(8, Math.min(innerHeight - box.height - 8, y))}px`;
+    const top = Math.max(8, Math.min(innerHeight - box.height - 8, y));
+    this.menu.style.top = `${top}px`;
+    this.at = { row, dy: top - row.getBoundingClientRect().top };
     this.items()[0]?.focus();
   }
 
@@ -90,8 +117,10 @@ export class LineMenu {
   private close(restore: boolean): void {
     if (this.menu.hidden) return;
     this.menu.hidden = true;
-    if (restore) this.from?.focus();
+    // Never scrolled to: the line may have just left the view.
+    if (restore) this.from?.focus({ preventScroll: true });
     this.from = null;
+    this.at = null;
   }
 
   private onKey(e: KeyboardEvent): void {

@@ -423,14 +423,19 @@ export function noteKind(text: string): "text" | "bullet" | "action" | "question
 
 /**
  * A live cluster is a guess until someone names it or the final pass lands (DESIGN 3.2), so its
- * chip reads `c3?` and is drawn provisional. A name, the final layer, or `final.done` makes it
- * solid; you, on the mic, are never a guess.
+ * chip reads `c3?` and is drawn provisional. A name, the final layer, or a `final.done` written
+ * after the line (`finalDoneSeq`, the fold's `final.done.seq`) makes it solid; you, on the mic,
+ * are never a guess. Going by `seq` keeps a call reopened after its pass honest (its new lines
+ * are guesses again) and keeps a re-run from turning finished lines back into guesses. A line
+ * with no `seq` (the grey line still being spoken) is newer than any finished pass.
  */
 export function speakerChip(
-  line: { layer: "live" | "final"; ch: "mic" | "call"; spk: string; speaker: string },
-  o: { named: boolean; finalDone: boolean },
+  line: { layer: "live" | "final"; ch: "mic" | "call"; spk: string; speaker: string; seq?: number },
+  o: { named: boolean; finalDoneSeq?: number },
 ): { label: string; provisional: boolean } {
-  const provisional = line.ch === "call" && line.layer === "live" && !o.named && !o.finalDone;
+  const passed =
+    o.finalDoneSeq !== undefined && line.seq !== undefined && line.seq < o.finalDoneSeq;
+  const provisional = line.ch === "call" && line.layer === "live" && !o.named && !passed;
   if (!provisional) return { label: line.speaker, provisional };
   return { label: line.spk.endsWith("?") ? line.spk : `${line.spk}?`, provisional };
 }

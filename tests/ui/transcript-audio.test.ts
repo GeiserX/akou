@@ -82,6 +82,28 @@ const seekTo = (page: Page, t: number) =>
     await done;
   }, t);
 
+/** One part of `n` call lines, one second each: enough to scroll. */
+function manyLines(b: LogBuilder, n: number): void {
+  b.created();
+  b.partStarted(1, T0);
+  for (let i = 0; i < n; i++) {
+    b.seg({
+      id: `l${String(i + 1).padStart(6, "0")}`,
+      ch: "call",
+      spk: "c1",
+      a0: i,
+      a1: i + 1,
+      w0: T0 + i * 1000,
+      text: `line number ${i + 1} of the call`,
+    });
+  }
+  b.partEnded(1, "stop", n);
+  b.add({ type: "call.ended", reason: "stop" });
+}
+
+const scrollerTop = (page: Page) =>
+  page.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
+
 const chip = (page: Page, lid: string) =>
   page.evaluate((l) => {
     const who = document.querySelector(`#lines .row[data-id="${l}"] .who`) as HTMLElement | null;
@@ -119,7 +141,8 @@ describe("[W4.2] live speaker labels look provisional until named or final", () 
         expect(await chip(page, "l000002")).toEqual({
           label: "c1?",
           provisional: true,
-          aria: "Speaker 1, a guess until the final pass: rename, merge or unmerge",
+          // The accessible name starts with the text shown, so "click c1?" finds it (WCAG 2.5.3).
+          aria: "c1? (Speaker 1, a guess until the final pass): rename, merge or unmerge",
         });
         expect((await chip(page, "l000004"))?.label).toBe("c3?");
         // You, on the mic, are never a guess.
@@ -176,6 +199,70 @@ describe("[W4.2] live speaker labels look provisional until named or final", () 
           "the solid chip after final.done",
         );
         expect((await chip(page, "l000004"))?.provisional).toBe(false);
+
+        // The call is reopened after the pass (Call.restart makes part 3): its new live speaker is
+        // a guess again, and what the pass finished stays solid.
+        await rig.write(id, {
+          type: "part.started",
+          part: 3,
+          file: "audio/part-003.opus",
+          wallStart: T0 + 60_000,
+          monoStart: 2_000_000,
+          mic: "Built-in Microphone",
+          call: { mode: "system", exclude: [] },
+          capture: "akou-capture 0.1.0",
+        });
+        await rig.write(id, {
+          type: "seg",
+          id: "l000005",
+          rev: 1,
+          layer: "live",
+          part: 3,
+          ch: "call",
+          spk: "c4",
+          a0: 1,
+          a1: 2,
+          w0: T0 + 61_000,
+          w1: T0 + 62_000,
+          text: "back again",
+          model: "fake",
+        });
+        await page.waitForSelector('#lines .row[data-id="l000005"]');
+        expect(await chip(page, "l000005")).toMatchObject({ label: "c4?", provisional: true });
+        expect(await chip(page, "l000004")).toMatchObject({
+          label: "Speaker 3",
+          provisional: false,
+        });
+        // A second pass starting does not turn the finished lines back into guesses.
+        await rig.write(id, { type: "final.started", pid: 2 });
+        await rig.write(id, {
+          type: "seg",
+          id: "l000006",
+          rev: 1,
+          layer: "live",
+          part: 3,
+          ch: "call",
+          spk: "c4",
+          a0: 2,
+          a1: 3,
+          w0: T0 + 62_000,
+          w1: T0 + 63_000,
+          text: "still here",
+          model: "fake",
+        });
+        await page.waitForSelector('#lines .row[data-id="l000006"]');
+        // A name redraws every row, so each chip is worked out again while the re-run runs.
+        await rig.api("POST", `/calls/${id}/speakers`, { spk: "c1", name: "Cleo" });
+        await until(
+          async () => (await chip(page, "f000001"))?.label === "Cleo",
+          5000,
+          "every row redrawn with the name",
+        );
+        expect(await chip(page, "l000004")).toMatchObject({
+          label: "Speaker 3",
+          provisional: false,
+        });
+        expect((await chip(page, "l000006"))?.label).toBe("c4?");
       });
     },
     UI_TIMEOUT,
@@ -299,6 +386,16 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
             items: ITEMS,
             focused: "Play from here",
           });
+          // The platform may send its own contextmenu when the key is let go (WebView2 on the
+          // Menu key): it lands on our menu, and the webview's menu must not open over it.
+          expect(
+            await page.evaluate(() => {
+              const e = new MouseEvent("contextmenu", { bubbles: true, cancelable: true });
+              document.activeElement?.dispatchEvent(e);
+              return e.defaultPrevented;
+            }),
+          ).toBe(true);
+          expect((await menu(page)).focused).toBe("Play from here");
           await page.keyboard.press("ArrowDown");
           expect((await menu(page)).focused).toBe("Copy line");
           await page.keyboard.press("ArrowUp");
@@ -324,6 +421,65 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
           await page.focus("#note-input");
           await page.keyboard.press("Shift+F10");
           expect((await menu(page)).open).toBe(false);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("[W4.4] the line menu stays with its line", () => {
+  test(
+    "a scroll moves the menu with its line; the line leaving the view, a window blur or a resize close it",
+    async () => {
+      const N = 40;
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => manyLines(b, N)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector(`#lines .row >> nth=${N - 1}`);
+          const row = '#lines .row[data-id="l000020"]';
+          const state = () =>
+            page.evaluate((sel) => {
+              const m = document.getElementById("line-menu") as HTMLElement;
+              const r = (document.querySelector(sel) as HTMLElement).getBoundingClientRect();
+              return { open: !m.hidden, gap: m.getBoundingClientRect().top - r.top };
+            }, row);
+          const scrollBy = (dy: number) =>
+            page.evaluate((d) => {
+              const s = document.getElementById("scroller") as HTMLElement;
+              s.scrollTo({ top: s.scrollTop + d, behavior: "instant" });
+            }, dy);
+          const open = async () => {
+            await page.$eval(row, (el) => el.scrollIntoView({ block: "center" }));
+            await page.click(`${row} .text`, { button: "right" });
+            expect((await state()).open).toBe(true);
+          };
+          const closes = async (what: string) =>
+            await until(async () => !(await state()).open, 5000, `the menu closed by ${what}`);
+
+          await open();
+          const gap = (await state()).gap;
+          // New lines or the reader move the transcript: the menu goes with the line it acts on.
+          await scrollBy(-60);
+          await until(
+            async () => Math.abs((await state()).gap - gap) < 1,
+            5000,
+            "the menu beside its line",
+          );
+          expect((await state()).open).toBe(true);
+          await scrollBy(4000);
+          await closes("the line leaving the view");
+
+          await open();
+          await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+          await closes("a blur");
+
+          await open();
+          const size = page.viewportSize() ?? { width: 1200, height: 800 };
+          await page.setViewportSize({ width: size.width - 40, height: size.height });
+          await closes("a resize");
         },
       );
     },
@@ -470,24 +626,7 @@ describe("the player bar (W5.3 to W5.6)", () => {
       let id = "";
       await withRig(
         {
-          seed: (home) =>
-            (id = seedCall(home, (b) => {
-              b.created();
-              b.partStarted(1, T0);
-              for (let i = 0; i < N; i++) {
-                b.seg({
-                  id: `l${String(i + 1).padStart(6, "0")}`,
-                  ch: "call",
-                  spk: "c1",
-                  a0: i,
-                  a1: i + 1,
-                  w0: T0 + i * 1000,
-                  text: `line number ${i + 1} of the call`,
-                });
-              }
-              b.partEnded(1, "stop", N);
-              b.add({ type: "call.ended", reason: "stop" });
-            }).id),
+          seed: (home) => (id = seedCall(home, (b) => manyLines(b, N)).id),
         },
         async (rig) => {
           await audio(rig, id, N);
@@ -508,8 +647,7 @@ describe("the player bar (W5.3 to W5.6)", () => {
               };
             });
           const index = (lid: string) => Number(lid.slice(1)) - 1;
-          const top = () =>
-            page.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
+          const top = () => scrollerTop(page);
           /** Pauses and checks the rule at that exact instant: a0 <= t < a1 (here a0 = index). */
           const check = async () => {
             const t = await pauseNow(page);
@@ -577,6 +715,155 @@ describe("the player bar (W5.3 to W5.6)", () => {
           expect(await page.locator("#follow").isHidden()).toBe(true);
           await until(async () => (await player(page)).at > 20, 10000, "later lines");
           expect((await check()).inView).toBe(true);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W5.6] PageUp with focus on a line's Play, and a drag of an overlay scrollbar, stop auto-scroll too",
+    async () => {
+      const N = 40;
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => manyLines(b, N)).id) },
+        async (rig) => {
+          await audio(rig, id, N);
+          const page = await rig.open(id);
+          await page.waitForSelector(`#lines .row >> nth=${N - 1}`);
+          const following = () => page.locator("#follow").isHidden();
+          /** Plays long enough for the pane to have kept the line in view a few times. */
+          const playFor = async (s: number) => {
+            const from = (await player(page)).at;
+            await until(async () => (await player(page)).at > from + s, 8000, `${s} s played`);
+          };
+
+          // Clicking a line's Play leaves focus on that button: the most common state.
+          await playRow(page, "l000030");
+          await playFor(1);
+          expect(await following()).toBe(true);
+          expect(
+            await page.evaluate(() => document.activeElement?.classList.contains("play")),
+          ).toBe(true);
+          await page.keyboard.press("PageUp");
+          await page.keyboard.press("PageUp");
+          await until(async () => await page.locator("#follow").isVisible(), 5000, "Follow shown");
+          // The transcript scrolls smoothly: wait for the keys' scroll to come to rest.
+          let moved = -1;
+          await until(
+            async () => {
+              const now = await scrollerTop(page);
+              const same = now === moved;
+              moved = now;
+              return same;
+            },
+            5000,
+            "the keys' scroll settling",
+          );
+          await playFor(1.5);
+          // Not yanked back to the line being played.
+          expect(await scrollerTop(page)).toBe(moved);
+
+          await page.click("#follow");
+          await until(async () => await following(), 5000, "following again");
+          await playFor(1);
+          expect(await following()).toBe(true);
+
+          // A scrollbar drawn over the content (macOS's default, and headless Chromium's hidden
+          // one) takes no width, so a press on it lands inside the scroller's content box. The
+          // press, then the scroll it drives while held.
+          const dragged = await page.evaluate(() => {
+            const s = document.getElementById("scroller") as HTMLElement;
+            const r = s.getBoundingClientRect();
+            const at = { bubbles: true, clientX: r.right - 3, clientY: r.top + r.height / 2 };
+            s.dispatchEvent(new MouseEvent("mousedown", at));
+            s.scrollTo({ top: 0, behavior: "instant" });
+            return new Promise<number>((done) =>
+              requestAnimationFrame(() =>
+                requestAnimationFrame(() => {
+                  s.dispatchEvent(new MouseEvent("mouseup", at));
+                  done(s.scrollTop);
+                }),
+              ),
+            );
+          });
+          expect(dragged).toBe(0);
+          await until(async () => await page.locator("#follow").isVisible(), 5000, "Follow shown");
+          await playFor(1.5);
+          expect(await scrollerTop(page)).toBe(0);
+
+          // Positive control: the pane's own scrolls never count as by hand. Follow, then the
+          // line being played leaves the view by a scroll nobody made by hand (content moving),
+          // and playing brings it back with Follow still hidden.
+          await page.click("#follow");
+          await until(async () => await following(), 5000, "following again");
+          await page.evaluate(() =>
+            (document.getElementById("scroller") as HTMLElement).scrollTo({
+              top: 0,
+              behavior: "instant",
+            }),
+          );
+          await until(
+            async () => (await scrollerTop(page)) > 0,
+            5000,
+            "the line brought back into view",
+          );
+          expect(await following()).toBe(true);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W5.5] the keys the player bar promises work with focus on the scrubber and the speed picker",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          await audio(rig, id, 12);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await playRow(page, "l000003");
+          await pauseNow(page);
+          await seekTo(page, 1);
+          const at = async () => (await player(page)).at;
+          const press = async (key: string, want: number) => {
+            await page.keyboard.press(key);
+            await until(async () => (await at()) === want, 5000, `${key} to ${want} s`);
+          };
+          // The scrubber's title promises Shift+← and Shift+→; its arrows take the same 5 s.
+          expect(await page.getAttribute("#scrub", "title")).toContain("Shift+→");
+          await page.focus("#scrub");
+          await press("Shift+ArrowRight", 6);
+          await press("ArrowRight", 11);
+          await press("Shift+ArrowLeft", 6);
+          await press("ArrowLeft", 1);
+          // Space plays and pauses from the scrubber, as it does from the transcript.
+          await page.keyboard.press(" ");
+          await until(async () => !(await player(page)).paused, 5000, "playing from the scrubber");
+          await page.keyboard.press(" ");
+          await until(async () => (await player(page)).paused, 5000, "paused from the scrubber");
+          await page.keyboard.press("]");
+          expect(await page.inputValue("#speed")).toBe("1.25");
+
+          // After picking a speed, the brackets and the seeks still work from the picker.
+          await page.selectOption("#speed", "1.5");
+          await page.focus("#speed");
+          await page.keyboard.press("]");
+          expect(await page.inputValue("#speed")).toBe("1.75");
+          await page.keyboard.press("[");
+          expect(await page.inputValue("#speed")).toBe("1.5");
+          const from = await at();
+          await press("Shift+ArrowRight", Math.min(12, from + 5));
+          expect(await page.inputValue("#speed")).toBe("1.5");
+          // Space stays the picker's own key (it opens the list): the player does not start.
+          expect((await player(page)).paused).toBe(true);
+          await page.keyboard.press(" ");
+          await page.waitForTimeout(300);
+          expect((await player(page)).paused).toBe(true);
         },
       );
     },
