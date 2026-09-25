@@ -91,7 +91,9 @@ async function post(
 }
 
 beforeAll(async () => {
-  rig = await appRig({ settings: { "server.enabled": true, "api.bind": "127.0.0.1" } });
+  rig = await appRig({
+    settings: { "server.enabled": true, "api.bind": "127.0.0.1", "server.max_audio_minutes": 1 },
+  });
   const r = await cli({ ...process.env, ...rig.env }, [
     "keys",
     "create",
@@ -302,6 +304,12 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
     const r = await post([["model", "whisper-1"]], null);
     expect(r.status).toBe(422);
     expect(JSON.parse(r.text)).toMatchObject({ error: "missing_field", field: "file" });
+  });
+
+  test("audio past server.max_audio_minutes is 422 too_long, not a server error", async () => {
+    const r = await post([["model", "whisper-1"]], monoWav(silence(61)));
+    expect(r.status).toBe(422);
+    expect(JSON.parse(r.text)).toMatchObject({ error: "too_long" });
   });
 
   test("srt and vtt cues from segments", () => {

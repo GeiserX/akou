@@ -288,7 +288,9 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     if (!job) throw new HttpError(409, "cancelled", "the job was deleted before it finished");
     if (job.status !== "done") {
       const e = job.error ?? { code: "transcription_failed", message: `the job ${job.status}` };
-      throw new HttpError(e.code === "decode_failed" ? 422 : 500, e.code, e.message);
+      // The caller's file is at fault for these two; anything else is the server's.
+      const theirs = e.code === "decode_failed" || e.code === "too_long";
+      throw new HttpError(theirs ? 422 : 500, e.code, e.message);
     }
     const r = rendered(job);
     return stream === "true" && format !== "text" && format !== "srt" && format !== "vtt"
