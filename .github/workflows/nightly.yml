@@ -3,6 +3,11 @@ name: nightly
 # Once a day on main, and by hand (docs/CI-CD.md section 2.2). Nothing here is a required check;
 # a red night shows in the job summary and GitHub emails whoever last changed the schedule.
 #
+# - models-nightly: the real recognizer and the real diarizer on public, openly licensed audio,
+#   through the app's own code, on every OS (docs/TESTING.md TS-19 and TS-20). WER per engine and
+#   language on FLEURS, latency percentiles and the real-time factor, diarization error on a
+#   VoxConverse dev subset, and the replay recall floor, each next to its committed baseline in
+#   docs/gates/nightly-baselines.json (scripts/eval/nightly.ts).
 # - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
 #   WebKitGTK the app ships (TS-14). It moves into ci.yml's `ui` leg, and so under ci-ok, once
 #   it passes: today 8 of its 52 tests fail on WebKit only (docs/TESTING.md TS-14).
@@ -20,6 +25,71 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  models-nightly:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      CARGO_TERM_COLOR: always
+      EXE: ${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+      MODEL_URL: https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/nemotron-3-diarization/nemotron3_diar_v3.onnx
+      MODEL_SHA256: 915e4fa23b0192ed9fadeb1cdd26847df986d50c92012d177be28d0343bbe03a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust 1.97.1
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal
+          rustup default 1.97.1
+      - name: build akou-diarize
+        working-directory: native/akou-diarize
+        run: cargo build --locked --release
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      # The recognizer's files are checked against their pins in src/main/asr/models.ts on every
+      # use, so a stale cache costs a download, never a wrong model.
+      - name: the recognizer, cached by its pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: eval-models
+          key: recognizer-${{ runner.os }}-${{ hashFiles('src/main/asr/models.ts') }}
+      - name: the Nemotron model, by its pinned SHA-256
+        id: nemotron
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: models/nemotron3_diar_v3.onnx
+          key: nemotron3-diar-${{ env.MODEL_SHA256 }}
+      - name: fetch the Nemotron model
+        if: steps.nemotron.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl -fsSL -o models/nemotron3_diar_v3.onnx "$MODEL_URL"
+      - name: the Nemotron model matches its pin
+        run: |
+          got=$( (sha256sum models/nemotron3_diar_v3.onnx 2>/dev/null || shasum -a 256 models/nemotron3_diar_v3.onnx) | cut -d' ' -f1)
+          echo "sha256 $got"
+          test "$got" = "$MODEL_SHA256"
+      # The extracted evaluation audio (about 120 MB), keyed by the script that pins it.
+      - name: the evaluation audio, cached by its pins
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: eval-data
+          key: eval-data-${{ runner.os }}-${{ hashFiles('scripts/eval/nightly.ts', 'docs/research/asr-benchmark.json') }}
+      - name: evaluate against the committed baselines
+        run: |
+          bun scripts/eval/nightly.ts --models eval-models --data eval-data \
+            --diarize "native/akou-diarize/target/release/akou-diarize$EXE" \
+            --nemotron models/nemotron3_diar_v3.onnx --out nightly-results.json
+
   ui-webkit:
     runs-on: ubuntu-latest
     timeout-minutes: 30
