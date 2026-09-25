@@ -1,7 +1,9 @@
 /**
- * The engines on sherpa-onnx-node (docs/DESIGN.md section 3): Parakeet TDT v3 for recognition,
- * Silero for voice activity, TitaNet for speaker embeddings, pyannote plus TitaNet for the final
- * diarization. Loaded only inside a Worker, lazily, each model once per app run.
+ * The real engines (docs/DESIGN.md section 3): on sherpa-onnx-node, Parakeet TDT v3 for recognition
+ * and Silero for voice activity; for speaker labels either Nemotron 3 Diarization through the
+ * `akou-diarize` helper (`asr.diarizer` nemotron, the default) or TitaNet embeddings live and
+ * pyannote plus TitaNet in the final pass (`embeddings`). Loaded only inside a Worker, lazily, each
+ * model once per app run (the final pass's Nemotron helper once per pass).
  *
  * Hotwords: sherpa-onnx fixes a recognizer's hotword tokenizer (`bpeVocab`) when it is created, and
  * a per-stream list is tokenized with it. The recognizer is therefore created with
@@ -27,14 +29,18 @@ import {
   ASR_RATE,
   type DiarizedSpan,
   type Diarizer,
+  type DiarizerKind,
   type Embedder,
   type ModelSet,
   type PreparedHotwords,
   type Recognized,
   type Recognizer,
+  type StreamDiarizer,
+  type StreamListener,
   type Vad,
 } from "./engine.ts";
-import { modelFile, RECOGNIZER } from "./models.ts";
+import { modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
+import { DIARIZE_HELPER_NAME, NemotronDiarizer, NemotronStream } from "./nemotron.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: sherpa-onnx-node ships no TypeScript types.
 type Sherpa = any;
@@ -127,6 +133,8 @@ export interface SherpaSpec {
   dir: string;
   cacheDir: string;
   threads?: number;
+  diarizer?: DiarizerKind;
+  diarizeHelper?: readonly string[];
 }
 
 /**
@@ -160,11 +168,21 @@ export class SherpaModels implements ModelSet {
   private tok: BpeTokenizer | null = null;
   private tokens: Set<string> | null = null;
   private emb: SherpaEmbedder | null = null;
-  private dia: SherpaDiarizer | null = null;
+  private dia: Diarizer | null = null;
   private readonly threads: number;
+  readonly diarizerKind: DiarizerKind;
 
   constructor(private readonly spec: SherpaSpec) {
     this.threads = spec.threads ?? 2;
+    this.diarizerKind = spec.diarizer ?? "nemotron";
+  }
+
+  private nemotron() {
+    return {
+      command: this.spec.diarizeHelper?.length ? this.spec.diarizeHelper : [DIARIZE_HELPER_NAME],
+      model: this.file(NEMOTRON, NEMOTRON_FILE),
+      threads: this.threads,
+    };
   }
 
   private count(model: string): void {
@@ -275,8 +293,17 @@ export class SherpaModels implements ModelSet {
     return this.emb;
   }
 
+  streamDiarizer(listener: StreamListener): StreamDiarizer | null {
+    if (this.diarizerKind !== "nemotron") return null;
+    const s = new NemotronStream(this.nemotron(), listener);
+    this.count(NEMOTRON);
+    return s;
+  }
+
   diarizer(): Diarizer {
-    if (!this.dia) {
+    if (!this.dia && this.diarizerKind === "nemotron") {
+      this.dia = new NemotronDiarizer(this.nemotron(), () => this.count(NEMOTRON));
+    } else if (!this.dia) {
       this.dia = new SherpaDiarizer(
         new (sherpa().OfflineSpeakerDiarization)({
           segmentation: {

@@ -8,6 +8,8 @@
  *   install` requires to equal the app's.
  * - `native/akou-capture/Cargo.toml` and `Cargo.lock`: the helper's version, reported by
  *   `akou-capture --version` and in its `hello` packet. Skipped while `native/` is absent.
+ * - `native/akou-diarize/Cargo.toml` and `Cargo.lock`: the diarization helper's version, reported
+ *   by `akou-diarize --version` and in its `ready` line.
  * - `electrobun.config.ts` reads `package.json` itself, so the bundle's `Info.plist`
  *   (`CFBundleVersion`) and `version.json` follow; `--plist` checks a built one.
  *
@@ -63,6 +65,16 @@ export const PLACES: readonly Place[] = [
     file: "native/akou-capture/Cargo.lock",
     optional: true,
     pattern: /^(name = "akou-capture"\nversion = ")([^"]*)(")$/m,
+  },
+  {
+    file: "native/akou-diarize/Cargo.toml",
+    optional: true,
+    pattern: /^(\[package\][\s\S]*?\nversion = ")([^"]*)(")$/m,
+  },
+  {
+    file: "native/akou-diarize/Cargo.lock",
+    optional: true,
+    pattern: /^(name = "akou-diarize"\nversion = ")([^"]*)(")$/m,
   },
 ];
 

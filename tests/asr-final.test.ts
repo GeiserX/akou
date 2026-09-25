@@ -192,6 +192,74 @@ describe("speakers across the call", () => {
     ]);
   });
 
+  test("a diarizer that answers later (the Nemotron helper) with overlapping turns: each piece once, by who covers it", async () => {
+    const call = concat(
+      silence(0.3),
+      speak(["hello", "world", "we"], { voice: 1 }),
+      silence(0.8),
+      speak(["ok", "great", "today"], { voice: 4 }),
+      silence(0.5),
+    );
+    const t1 = 0.3 + (call.length / RATE - 0.3 - 0.8 - 0.5) / 2;
+    const models = new FakeModels();
+    let asked = 0;
+    models.diarizer = () => ({
+      process: async () => {
+        asked++;
+        await Bun.sleep(5);
+        // The two turns overlap inside the pause between the voices.
+        return [
+          { speaker: 0, start: 0.2, end: t1 + 0.5 },
+          { speaker: 1, start: t1 + 0.3, end: call.length / RATE },
+        ];
+      },
+    });
+    const out: EventDraft[] = [];
+    const res = await runFinalPass(
+      {
+        events: callLog([1]),
+        audio: new MemoryAudio({ 1: { mic: silence(call.length / RATE), call } }),
+        decode: null,
+      },
+      models,
+      (d) => out.push(d),
+    );
+    expect(res.ok).toBe(true);
+    expect(asked).toBe(1);
+    const segs = out.filter((d) => d.type === "seg") as Omit<Seg, "seq" | "t">[];
+    expect(segs.map((x) => [x.spk, x.text])).toEqual([
+      ["s0", "hello world we"],
+      ["s1", "ok great today"],
+    ]);
+  });
+
+  test("a diarizer that fails costs the speaker labels only: the final layer is written, unlabelled", async () => {
+    const call = concat(silence(0.3), speak(["hello", "world"], { voice: 1 }), silence(0.5));
+    const models = new FakeModels();
+    // A helper that crashed, hung past its deadline or refused its model rejects its promise.
+    models.diarizer = () => ({
+      process: () => Promise.reject(new Error("akou-diarize gave no answer within 1 ms")),
+    });
+    const out: EventDraft[] = [];
+    const logs: string[] = [];
+    const res = await runFinalPass(
+      {
+        events: callLog([1]),
+        audio: new MemoryAudio({ 1: { mic: silence(call.length / RATE), call } }),
+        decode: null,
+      },
+      models,
+      (d) => out.push(d),
+      (level, msg) => logs.push(`${level}: ${msg}`),
+    );
+    expect(res.ok).toBe(true);
+    expect(out.some((d) => d.type === "final.failed")).toBe(false);
+    const segs = out.filter((d) => d.type === "seg") as Omit<Seg, "seq" | "t">[];
+    expect(segs.map((x) => [x.ch, x.spk, x.text])).toEqual([["call", "s?", "hello world"]]);
+    expect(out.at(-1)?.type).toBe("final.done");
+    expect(logs.join("\n")).toContain("gave no answer within 1 ms");
+  });
+
   test("final clusters take the live names: a map at 60 % overlap, else a suggestion", async () => {
     const events = callLog([1], (b) => {
       b.seg({

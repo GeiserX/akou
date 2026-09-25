@@ -10,12 +10,13 @@
 import { copyFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { rotateToken } from "../../api/guard.ts";
+import type { DiarizerKind } from "../../asr/engine.ts";
 import {
   DownloadRefused,
   downloadModels,
-  MODELS,
   type ModelSpecEntry,
   modelFile,
+  modelsFor,
   pruneRetiredModels,
   sha256File,
   verifyModels,
@@ -91,8 +92,9 @@ const token: Command = {
   },
 };
 
+/** The models this machine needs for its `asr.diarizer` (or the registry a test gives). */
 function registry(ctx: Ctx): readonly ModelSpecEntry[] {
-  return ctx.models ?? MODELS;
+  return ctx.models ?? modelsFor(loadConfig(ctx.io.env).settings["asr.diarizer"] as DiarizerKind);
 }
 
 function modelsDir(ctx: Ctx): string {

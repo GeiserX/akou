@@ -13,10 +13,24 @@
  *   merged-away cluster stops taking segments. `speaker.unmerge` brings it back, and that pair is
  *   never merged automatically again. Neither touches a segment or runs the recognizer.
  *
+ * Live with a stream diarizer (`asr.diarizer` nemotron, `StreamSpeakers`): the call channel's audio
+ * goes to Nemotron as one stream for the whole call, parts included, so a speaker keeps its index
+ * and its `c<N>` label across parts. A segment is labelled once the model has decided all of it,
+ * with the speaker active longest inside it. The model decides who is who; embeddings only carry
+ * a label across a stream that starts over (the app restarted mid-call, a new Worker, a restarted
+ * helper), which loses the model's speaker state: segments of 1 s or more still add to the
+ * label's centroid, the centroids go to the log as above, and a new stream's speaker takes the
+ * label of the nearest centroid the new stream has not given out yet, at 0.60 or more, else the
+ * next free number. Its lines too short to embed are `c?` until one can be matched, while any
+ * centroid is left to match against. A stream keeps the model's turns back to the start of the
+ * oldest call segment not yet labelled, the open one included.
+ *
  * Final, in the `finalize` Worker: each final cluster maps to the live cluster it overlaps most,
  * jointly across the call (Hungarian assignment). At 60 % overlap or more that is a `speaker.map`;
  * below, a `speaker.suggest` for the user to confirm.
  */
+
+import type { DiarizedSpan, SpeakerTurn } from "./engine.ts";
 
 export const JOIN_SIMILARITY = 0.6;
 export const MERGE_SIMILARITY = 0.8;
@@ -95,6 +109,40 @@ export class LiveSpeakers {
       if (c) c.mergedInto = m.into;
     }
     for (const u of state.unmerged ?? []) this.unmerge(u.from, u.into);
+  }
+
+  /** Adds an embedding to the cluster `spk`, creating it (labels chosen by a stream diarizer). */
+  addTo(spk: string, embedding: Float32Array): void {
+    const c = this.clusters.get(spk);
+    if (!c) {
+      this.clusters.set(spk, { id: spk, n: 1, sum: Float32Array.from(embedding), dirty: true });
+      this.noteId(spk);
+      return;
+    }
+    for (let i = 0; i < c.sum.length; i++)
+      c.sum[i] = (c.sum[i] as number) + (embedding[i] as number);
+    c.n++;
+    c.dirty = true;
+  }
+
+  /** The active cluster nearest `embedding` at `JOIN_SIMILARITY` or more, `exclude` left out. */
+  nearest(embedding: Float32Array, exclude: ReadonlySet<string>): string | null {
+    let best: string | null = null;
+    let bestSim = JOIN_SIMILARITY;
+    for (const c of this.active()) {
+      if (exclude.has(c.id)) continue;
+      const sim = cosine(this.centroid(c), embedding);
+      if (sim >= bestSim) {
+        bestSim = sim;
+        best = c.id;
+      }
+    }
+    return best;
+  }
+
+  /** Whether an active cluster is left outside `exclude`. */
+  hasOther(exclude: ReadonlySet<string>): boolean {
+    return this.active().some((c) => !exclude.has(c.id));
   }
 
   /** Speaker id numbers in use continue after the highest one seen (restored or in segments). */
@@ -202,6 +250,107 @@ export class LiveSpeakers {
   get size(): number {
     return this.clusters.size;
   }
+}
+
+/** The highest `c<N>` among `ids`, or 0. */
+export function highestLabel(ids: Iterable<string>): number {
+  let n = 0;
+  for (const id of ids) {
+    const m = /^c(\d+)$/.exec(id);
+    if (m) n = Math.max(n, Number(m[1]));
+  }
+  return n;
+}
+
+/** Who speaks when on one stream, from a stream diarizer's turns (samples on its timeline). */
+export class StreamSpeakers {
+  private turns: SpeakerTurn[] = [];
+  private decidedTo = 0;
+
+  constructor(private readonly rate = 16000) {}
+
+  get decided(): number {
+    return this.decidedTo;
+  }
+
+  add(turns: readonly SpeakerTurn[], decided: number): void {
+    for (const t of turns) if (t.end > t.start) this.turns.push({ ...t });
+    this.decidedTo = Math.max(this.decidedTo, decided);
+  }
+
+  /**
+   * The speaker of `[s0, s1)`: the one active longest inside it, else the one of a turn within
+   * `INHERIT_GAP_SECONDS`, else -1. Null while the model has not decided all of it.
+   */
+  speakerAt(s0: number, s1: number): number | null {
+    if (this.decidedTo < s1) return null;
+    const active = new Map<number, number>();
+    for (const t of this.turns) {
+      const o = Math.min(s1, t.end) - Math.max(s0, t.start);
+      if (o > 0) active.set(t.speaker, (active.get(t.speaker) ?? 0) + o);
+    }
+    let best = -1;
+    let most = 0;
+    for (const [k, v] of active) {
+      if (v > most || (v === most && k < best)) {
+        most = v;
+        best = k;
+      }
+    }
+    if (best < 0) {
+      let gap = INHERIT_GAP_SECONDS * this.rate;
+      for (const t of this.turns) {
+        const d = Math.max(t.start - s1, s0 - t.end);
+        if (d < gap) {
+          gap = d;
+          best = t.speaker;
+        }
+      }
+    }
+    return best;
+  }
+
+  /** Forgets turns that end before `pos`. */
+  prune(pos: number): void {
+    const keep = pos - INHERIT_GAP_SECONDS * this.rate;
+    this.turns = this.turns.filter((t) => t.end >= keep);
+  }
+}
+
+/** Turns shorter than this are dropped before the final pass cuts at them, seconds. */
+export const MIN_TURN_SECONDS = 0.2;
+/** A speaker's turns closer than this are one turn, seconds. */
+export const MIN_TURN_GAP_SECONDS = 0.5;
+
+/**
+ * Frame-level turns made fit to cut at, the way pyannote's `minDurationOff` and `minDurationOn`
+ * do: one speaker's turns less than `minGap` apart are joined, then turns shorter than `minOn` are
+ * dropped. Turns of different speakers may still overlap. Sorted by start.
+ */
+export function smoothTurns(
+  spans: readonly DiarizedSpan[],
+  minGap = MIN_TURN_GAP_SECONDS,
+  minOn = MIN_TURN_SECONDS,
+): DiarizedSpan[] {
+  const bySpk = new Map<number, DiarizedSpan[]>();
+  for (const s of spans) {
+    if (!(s.end > s.start)) continue;
+    const list = bySpk.get(s.speaker) ?? [];
+    list.push({ start: s.start, end: s.end, speaker: s.speaker });
+    bySpk.set(s.speaker, list);
+  }
+  const out: DiarizedSpan[] = [];
+  for (const list of bySpk.values()) {
+    list.sort((a, b) => a.start - b.start);
+    const joined: DiarizedSpan[] = [];
+    for (const s of list) {
+      const last = joined[joined.length - 1];
+      if (last && s.start - last.end < minGap) last.end = Math.max(last.end, s.end);
+      else joined.push(s);
+    }
+    for (const s of joined) if (s.end - s.start >= minOn) out.push(s);
+  }
+  return out.sort((a, b) => a.start - b.start || a.speaker - b.speaker);
 }
 
 function idNum(spk: string): number {

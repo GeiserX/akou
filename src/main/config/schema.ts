@@ -209,6 +209,18 @@ export const SETTINGS = {
     default: 2,
     doc: "Threads per recognizer.",
   },
+  "asr.diarizer": {
+    type: "string",
+    values: ["nemotron", "embeddings"],
+    default: "nemotron",
+    doc: "Who speaks when on the call channel: `nemotron` (NVIDIA Nemotron 3 Diarization, live at 2 s latency and in the final pass, through the akou-diarize helper) or `embeddings` (voice-embedding clusters live, pyannote in the final pass). `akou models pull` fetches what the choice needs; takes effect at the next start.",
+  },
+  "asr.diarizeHelper": {
+    type: "string[]",
+    default: [],
+    apiWritable: false,
+    doc: "Command that starts the diarization helper, before its own arguments. Empty: the akou-diarize bundled with the app, else the one on PATH.",
+  },
   "asr.segmentPause": {
     type: "number",
     min: 0.2,

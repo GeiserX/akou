@@ -25,6 +25,9 @@ import {
   MODELS,
   type ModelSpecEntry,
   modelFile,
+  modelsFor,
+  NEMOTRON,
+  NEMOTRON_FILE,
   networkForbidden,
   pruneRetiredModels,
   RECOGNIZER,
@@ -76,11 +79,12 @@ describe("the registry", () => {
     expect(MODELS.map((m) => m.id)).toEqual([
       RECOGNIZER,
       "silero-vad",
+      NEMOTRON,
       "pyannote-segmentation-3.0",
       "titanet-small",
     ]);
     for (const m of MODELS) {
-      expect(m.licence).toMatch(/^(MIT|CC-BY-4\.0|Apache-2\.0)$/);
+      expect(m.licence).toMatch(/^(MIT|CC-BY-4\.0|Apache-2\.0|OpenMDW-1\.1)$/);
       expect(m.source).toMatch(/^https:\/\//);
       for (const f of m.files) {
         expect(f.url).toMatch(/^https:\/\//);
@@ -93,6 +97,51 @@ describe("the registry", () => {
     const names = MODELS[0]?.files.map((f) => f.name);
     expect(names).toContain("tokenizer.json");
     expect(names).toContain("tokens.txt");
+  });
+
+  test("Nemotron is the 400 MB ONNX export pinned to a revision, under NVIDIA's OpenMDW licence", () => {
+    const m = MODELS.find((x) => x.id === NEMOTRON);
+    expect(m?.licence).toBe("OpenMDW-1.1");
+    expect(m?.source).toBe("https://huggingface.co/nvidia/Nemotron-3-Diarization");
+    expect(m?.files).toEqual([
+      {
+        name: NEMOTRON_FILE,
+        url: expect.stringMatching(/\/resolve\/[0-9a-f]{40}\/nemotron-3-diarization\//),
+        sha256: "915e4fa23b0192ed9fadeb1cdd26847df986d50c92012d177be28d0343bbe03a",
+        size: 400506656,
+      },
+    ]);
+  });
+
+  test("the diarize CI job smokes the same Nemotron file the registry pins", () => {
+    const pin = (yml: string) => ({
+      url: /^\s*MODEL_URL:\s*(\S+)\s*$/m.exec(yml)?.[1],
+      sha256: /^\s*MODEL_SHA256:\s*(\S+)\s*$/m.exec(yml)?.[1],
+    });
+    const yml = readFileSync(
+      join(import.meta.dir, "..", ".github", "workflows", "diarize.yml"),
+      "utf8",
+    );
+    const f = MODELS.find((x) => x.id === NEMOTRON)?.files[0];
+    expect(pin(yml)).toEqual({ url: f?.url, sha256: f?.sha256 });
+    // Positive control: a pin bumped on one side only is caught.
+    const bumped = yml.replace(f?.sha256 as string, "0".repeat(64));
+    expect(pin(bumped)).not.toEqual({ url: f?.url, sha256: f?.sha256 });
+  });
+
+  test("a machine downloads only what its asr.diarizer needs", () => {
+    const ids = (k: "nemotron" | "embeddings") => modelsFor(k).map((m) => m.id);
+    // TitaNet stays with Nemotron: it carries names across a stream that starts over.
+    expect(ids("nemotron")).toEqual([RECOGNIZER, "silero-vad", NEMOTRON, "titanet-small"]);
+    expect(ids("embeddings")).toEqual([
+      RECOGNIZER,
+      "silero-vad",
+      "pyannote-segmentation-3.0",
+      "titanet-small",
+    ]);
+    // Every model is needed by one choice or the other: none is fetched for nothing.
+    const used = new Set([...ids("nemotron"), ...ids("embeddings")]);
+    expect(MODELS.every((m) => used.has(m.id))).toBe(true);
   });
 
   test("a retired model is never a current one, and pruning removes only the retired folders", () => {

@@ -224,9 +224,15 @@ describe("what the bundle carries beside the main process", () => {
     expect(helperCopies("darwin", none)).toEqual({});
     expect(helperCopies("darwin", all)).toEqual({
       "native/akou-capture/target/release/akou-capture": `${MAIN_OUT}/akou-capture`,
+      "native/akou-diarize/target/release/akou-diarize": `${MAIN_OUT}/akou-diarize`,
     });
     expect(helperCopies("win32", all)).toEqual({
       "native/akou-capture/target/release/akou-capture.exe": `${MAIN_OUT}/akou-capture.exe`,
+      "native/akou-diarize/target/release/akou-diarize.exe": `${MAIN_OUT}/akou-diarize.exe`,
+    });
+    // Each helper is copied once it is built, whatever the other's state.
+    expect(helperCopies("darwin", (p) => p.includes("akou-diarize"))).toEqual({
+      "native/akou-diarize/target/release/akou-diarize": `${MAIN_OUT}/akou-diarize`,
     });
     expect(builtCopies(none)).toEqual({});
     expect(builtCopies(all)).toEqual({

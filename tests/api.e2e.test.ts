@@ -541,7 +541,14 @@ describe("settings over the API", () => {
       .map(([k]) => k)
       .sort();
     expect(fileOnly).toEqual(
-      ["capture.helper", "hooks", "provider.baseUrl", "provider.harnessPath", "webhook.url"].sort(),
+      [
+        "asr.diarizeHelper",
+        "capture.helper",
+        "hooks",
+        "provider.baseUrl",
+        "provider.harnessPath",
+        "webhook.url",
+      ].sort(),
     );
     expect(got.body.schema["api.port"].apiWritable).toBe(true);
   });

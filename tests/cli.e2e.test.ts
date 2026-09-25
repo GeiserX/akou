@@ -13,7 +13,7 @@ import { type ModelSpecEntry, RETIRED_MODELS } from "../src/main/asr/models.ts";
 import type { HelperFound } from "../src/main/capture/helper.ts";
 import { parseArgs } from "../src/main/cli/args.ts";
 import { ApiClient, EXIT, exitFor, type RequestOptions } from "../src/main/cli/client.ts";
-import { helperCheck } from "../src/main/cli/commands/doctor.ts";
+import { diarizeHelperCheck, helperCheck } from "../src/main/cli/commands/doctor.ts";
 import { followCommands } from "../src/main/cli/commands/follow.ts";
 import type { Command } from "../src/main/cli/context.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
@@ -444,6 +444,10 @@ describe("doctor and models", () => {
       const line = alone.json.checks.find((c: { name: string }) => c.name === "helper");
       expect(line.state).toBe("warn");
       expect(line.detail).toContain("ships inside the app");
+      // Nemotron is the default, so its helper is looked for the same way.
+      const diar = alone.json.checks.find((c: { name: string }) => c.name === "diarizer");
+      expect(diar.state).toBe("warn");
+      expect(diar.detail).toContain("akou-diarize ships inside the app");
       t.cleanup();
 
       // A running app answers with the helper it resolved itself.
@@ -456,6 +460,10 @@ describe("doctor and models", () => {
       const seen = withApp.json.checks.find((c: { name: string }) => c.name === "helper");
       expect(seen.state).toBe("ok");
       expect(seen.detail).toContain("the running app");
+      // The diarization helper too: the app runs it, so its lookup is the one reported.
+      expect(status.body.diarizeHelper).toMatchObject({ command: [expect.any(String)] });
+      const diarApp = withApp.json.checks.find((c: { name: string }) => c.name === "diarizer");
+      expect(diarApp.detail).toContain("the running app");
     },
     LONG,
   );
@@ -477,6 +485,36 @@ describe("doctor and models", () => {
     expect(
       helperCheck({ command: ["/nope/helper"], source: "config", found: null }, null),
     ).toMatchObject({ state: "fail", detail: expect.stringContaining("capture.helper") });
+  });
+
+  test("doctor's diarizer line: the running app's answer wins, a missing configured helper fails, else a warning", () => {
+    const path: HelperFound = { command: ["akou-diarize"], source: "path", found: null };
+    const app = (found: string | null): HelperFound => ({
+      command: ["/Applications/akou.app/x/akou-diarize"],
+      source: "bundled",
+      found,
+    });
+    // The CLI finds none beside it, and the app finds its bundled one: ok, the app's.
+    expect(diarizeHelperCheck(path, app("/A/akou-diarize"))).toMatchObject({
+      state: "ok",
+      detail: expect.stringContaining("the running app"),
+    });
+    // Positive control: a helper the CLI sees does not hide that the app cannot find its own.
+    expect(
+      diarizeHelperCheck({ ...path, found: "/usr/local/bin/akou-diarize" }, app(null)),
+    ).toMatchObject({ state: "warn", detail: expect.stringContaining("the running app cannot") });
+    expect(
+      diarizeHelperCheck(path, { command: ["/nope/akou-diarize"], source: "config", found: null })
+        .state,
+    ).toBe("fail");
+    // No app running: this process's own lookup.
+    expect(diarizeHelperCheck({ ...path, found: "/usr/local/bin/akou-diarize" }, null).state).toBe(
+      "ok",
+    );
+    expect(diarizeHelperCheck(path, null).state).toBe("warn");
+    expect(
+      diarizeHelperCheck({ command: ["/nope/akou-diarize"], source: "config", found: null }, null),
+    ).toMatchObject({ state: "fail", detail: expect.stringContaining("asr.diarizeHelper") });
   });
 
   test("doctor verifies checksums: a good file passes, a same-size wrong file fails", async () => {

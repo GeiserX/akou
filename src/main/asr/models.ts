@@ -16,6 +16,7 @@ import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync }
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
+import type { DiarizerKind } from "./engine.ts";
 
 export interface ModelFileSpec {
   name: string;
@@ -40,12 +41,19 @@ const HF_PARAKEET_UPSTREAM =
 const HF_PYANNOTE =
   "https://huggingface.co/csukuangfj/sherpa-onnx-pyannote-segmentation-3-0/resolve/9403a6902bb58e3d5ae8c7e77c3422de279db2e0";
 const GH = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
+// NVIDIA publishes the checkpoint as `.nemo` and safetensors; this is its ONNX export by the
+// parakeet-rs author, which akou-diarize runs. Checked against NeMo on real calls: the same speaker
+// on 99.98 to 100 % of 10 ms frames.
+const HF_NEMOTRON =
+  "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/nemotron-3-diarization";
 
 /**
  * The full-precision (fp32) export: a third fewer word errors in English and a fifth fewer in Spanish
  * than the int8 build on FLEURS, and more names found under biasing (docs/research/asr-benchmark.md).
  */
 export const RECOGNIZER = "parakeet-tdt-0.6b-v3-fp32";
+export const NEMOTRON = "nemotron-3-diarization";
+export const NEMOTRON_FILE = "nemotron3_diar_v3.onnx";
 
 /**
  * Model folders an earlier akou downloaded and nothing reads any more. They are deleted once every
@@ -116,8 +124,22 @@ export const MODELS: readonly ModelSpecEntry[] = [
     ],
   },
   {
+    id: NEMOTRON,
+    job: "speaker labels, live and final (asr.diarizer nemotron)",
+    licence: "OpenMDW-1.1",
+    source: "https://huggingface.co/nvidia/Nemotron-3-Diarization",
+    files: [
+      {
+        name: NEMOTRON_FILE,
+        url: `${HF_NEMOTRON}/${NEMOTRON_FILE}`,
+        sha256: "915e4fa23b0192ed9fadeb1cdd26847df986d50c92012d177be28d0343bbe03a",
+        size: 400506656,
+      },
+    ],
+  },
+  {
     id: "pyannote-segmentation-3.0",
-    job: "speaker segmentation for the final pass",
+    job: "speaker segmentation for the final pass (asr.diarizer embeddings)",
     licence: "MIT",
     source: "https://huggingface.co/pyannote/segmentation-3.0",
     files: [
@@ -131,7 +153,7 @@ export const MODELS: readonly ModelSpecEntry[] = [
   },
   {
     id: "titanet-small",
-    job: "speaker embeddings: live clusters and final diarization",
+    job: "speaker embeddings: live clusters, final diarization with pyannote, and names across a restart with Nemotron",
     licence: "CC-BY-4.0",
     source: "https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nemo/models/titanet_small",
     files: [
@@ -144,6 +166,25 @@ export const MODELS: readonly ModelSpecEntry[] = [
     ],
   },
 ];
+
+/** The models only one speaker-label engine needs. */
+const ONLY: Readonly<Record<DiarizerKind, readonly string[]>> = {
+  nemotron: [NEMOTRON],
+  embeddings: ["pyannote-segmentation-3.0"],
+};
+
+/**
+ * The models a machine needs for its `asr.diarizer`: the recognizer, the VAD and TitaNet always,
+ * then Nemotron or pyannote. `akou models pull` fetches these and `akou doctor` checks them. Tests
+ * pass their own registry, which loses the other engine's entries the same way.
+ */
+export function modelsFor(
+  diarizer: DiarizerKind,
+  registry: readonly ModelSpecEntry[] = MODELS,
+): readonly ModelSpecEntry[] {
+  const other = diarizer === "nemotron" ? ONLY.embeddings : ONLY.nemotron;
+  return registry.filter((m) => !other.includes(m.id));
+}
 
 export function modelEntry(id: string): ModelSpecEntry {
   const m = MODELS.find((x) => x.id === id);

@@ -290,16 +290,18 @@ export interface HelperLocation {
  * (`electrobun.config.ts`), where the Workers, the pages and the templates also sit. Not beside
  * `process.execPath`: that is `Contents/MacOS/bun`, where the release puts no helper. Then
  * `akou-capture` on PATH, which the spawn resolves. From source and from the compiled CLI (whose
- * module folder is `/$bunfs/root`) there is no bundled helper.
+ * module folder is `/$bunfs/root`) there is no bundled helper. `name` finds the diarization
+ * helper (`akou-diarize`, `asr.diarizeHelper`) by the same rule.
  */
 export function locateHelper(
   configured: readonly string[],
-  o: { dir?: string; exists?: (path: string) => boolean } = {},
+  o: { dir?: string; exists?: (path: string) => boolean; name?: string } = {},
 ): HelperLocation {
   if (configured.length > 0) return { command: [...configured], source: "config" };
-  const bundled = join(o.dir ?? import.meta.dir, HELPER_NAME);
+  const name = o.name ?? HELPER_NAME;
+  const bundled = join(o.dir ?? import.meta.dir, name);
   if ((o.exists ?? existsSync)(bundled)) return { command: [bundled], source: "bundled" };
-  return { command: [HELPER_NAME], source: "path" };
+  return { command: [name], source: "path" };
 }
 
 export interface HelperFound extends HelperLocation {
@@ -314,7 +316,7 @@ export interface HelperFound extends HelperLocation {
 export function findHelper(
   configured: readonly string[],
   which: (name: string) => string | null = (name) => Bun.which(name),
-  o: { dir?: string; exists?: (path: string) => boolean } = {},
+  o: { dir?: string; exists?: (path: string) => boolean; name?: string } = {},
 ): HelperFound {
   const loc = locateHelper(configured, o);
   const program = loc.command[0] as string;
