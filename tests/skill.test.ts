@@ -241,11 +241,11 @@ describe("[PG-K1] Codex finds the skill where akou writes it", () => {
   });
 
   test("the gate script fails a case whose command fails, never reading its silence as an empty list", () => {
-    const env = { PATH: "/usr/bin:/bin" };
-    expect(run(["/bin/sh", "-c", "echo listed"], env)).toBe("listed\n");
-    expect(() => run(["/bin/sh", "-c", "echo broken >&2; exit 3"], env)).toThrow(
-      /exit 3[\s\S]*broken/,
-    );
+    // Bun itself as the child, so the test runs the same on Windows, which has no /bin/sh.
+    const env = { ...process.env } as Record<string, string>;
+    expect(run([process.execPath, "-e", "console.log('listed')"], env).trim()).toBe("listed");
+    const broken = "console.error('broken'); process.exit(3)";
+    expect(() => run([process.execPath, "-e", broken], env)).toThrow(/exit 3[\s\S]*broken/);
   });
 
   test("the gate script asks Codex with CODEX_HOME unset for case A, even when the shell has one", () => {
