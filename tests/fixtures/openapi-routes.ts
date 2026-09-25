@@ -4,8 +4,8 @@
  * those routes are not built. Each route answers 501; only its `RouteDoc` matters here.
  */
 
-import { json, type RouteDoc, type Router } from "../../src/main/api/http.ts";
-import type { ApiApp } from "../../src/main/api/server.ts";
+import { json, type RouteDoc, type RouteEntry, type Router } from "../../src/main/api/http.ts";
+import { type ApiApp, buildRouter } from "../../src/main/api/server.ts";
 
 export const FIXTURE_ROUTES: { method: string; path: string; doc: RouteDoc }[] = [
   {
@@ -99,3 +99,26 @@ export function addFixtureRoutes(r: Router<ApiApp>): string[] {
   }
   return added;
 }
+
+/** The real route table plus the fixture routes it lacks: the table the server-mode file describes. */
+export function withFixtureRoutes(): RouteEntry[] {
+  const r = buildRouter();
+  addFixtureRoutes(r);
+  return r.entries();
+}
+
+/**
+ * A route no real table has, for the positive controls that add one route more. A fixture route
+ * would not do: once its real route lands, adding it again is a duplicate, not one more.
+ */
+export const CONTROL_ROUTE: RouteEntry = {
+  method: "GET",
+  path: "/positive-control",
+  doc: {
+    id: "keys.control",
+    doc: "Not a route: a test adds it to prove a check fails.",
+    access: "jobs",
+    modes: ["app", "server"],
+    ok: 200,
+  },
+};

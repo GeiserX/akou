@@ -85,13 +85,19 @@ interface Run {
 type Text = string | Uint8Array;
 const text = (t: Text) => (typeof t === "string" ? t : new TextDecoder().decode(t));
 
-class Executor {
+/**
+ * One Executor in a throwaway folder. `cmd` runs its CLI (`[path]`, or a runtime and a script in
+ * the tests). The daemon's output goes to `daemonOut`, the job log by default, so a failed round
+ * trip shows what the daemon said.
+ */
+export class Executor {
   readonly env: Record<string, string>;
   private daemon: ReturnType<typeof Bun.spawn> | null = null;
 
   constructor(
-    readonly bin: string,
+    readonly cmd: string[],
     readonly dir: string,
+    readonly daemonOut: "inherit" | number = "inherit",
   ) {
     for (const d of ["home", "data", "scope"]) mkdirSync(join(dir, d), { recursive: true });
     this.env = {
@@ -107,7 +113,7 @@ class Executor {
   }
 
   async run(args: string[]): Promise<Run> {
-    const p = Bun.spawn([this.bin, ...args], { env: this.env, stdout: "pipe", stderr: "pipe" });
+    const p = Bun.spawn([...this.cmd, ...args], { env: this.env, stdout: "pipe", stderr: "pipe" });
     const timer = setTimeout(() => p.kill(), STEP_MS);
     const [out, err] = await Promise.all([
       new Response(p.stdout).text(),
@@ -122,11 +128,14 @@ class Executor {
     const probe = Bun.listen({ hostname: "127.0.0.1", port: 0, socket: { data() {} } });
     const port = probe.port;
     probe.stop(true);
-    this.daemon = Bun.spawn([this.bin, "daemon", "run", "--port", String(port), "--foreground"], {
-      env: this.env,
-      stdout: "pipe",
-      stderr: "pipe",
-    });
+    this.daemon = Bun.spawn(
+      [...this.cmd, "daemon", "run", "--port", String(port), "--foreground"],
+      {
+        env: this.env,
+        stdout: this.daemonOut,
+        stderr: this.daemonOut,
+      },
+    );
     const url = `http://localhost:${port}`;
     const until = Date.now() + STEP_MS;
     for (;;) {
@@ -223,7 +232,7 @@ async function main(): Promise<number> {
     return 2;
   }
   const dir = mkdtempSync(join(tmpdir(), "akou-executor-"));
-  const exe = new Executor(bin, dir);
+  const exe = new Executor([bin], dir);
   const open = akou();
   // The positive control: the guard with the file's `access: "open"` ignored.
   const strict = akou((req, ctx) => guard(req, { ...ctx, route: { access: "admin" } }));

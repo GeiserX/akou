@@ -11,9 +11,19 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { controlFailure } from "../scripts/ci/executor-roundtrip.ts";
+import { controlFailure, Executor } from "../scripts/ci/executor-roundtrip.ts";
 import { OPENAPI_FILE, openApiDrifted, renderOpenApi } from "../scripts/openapi.ts";
 import { SCOPES } from "../src/main/api/access.ts";
 import { type Guard, guard } from "../src/main/api/guard.ts";
@@ -29,7 +39,12 @@ import {
 } from "../src/main/api/openapi.ts";
 import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
-import { addFixtureRoutes, FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
+import {
+  addFixtureRoutes,
+  CONTROL_ROUTE,
+  FIXTURE_ROUTES,
+  withFixtureRoutes,
+} from "./fixtures/openapi-routes.ts";
 
 process.env.NO_PROXY = "127.0.0.1,localhost";
 
@@ -94,7 +109,7 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
     const missing = entries.filter((e) => e.path !== "/calls/:id/memo" || e.method !== "GET");
     expect(missing.length).toBe(entries.length - 1);
     expect(openApiDrifted(committedText(), renderOpenApi(missing))).toBe(true);
-    const more: RouteEntry[] = [...entries, FIXTURE_ROUTES[0] as RouteEntry];
+    const more: RouteEntry[] = [...entries, CONTROL_ROUTE];
     expect(openApiDrifted(committedText(), renderOpenApi(more))).toBe(true);
     // A changed description is a diff too: the file carries the route's doc, not just its path.
     const changed = entries.map((e, i) => (i === 0 ? { ...e, doc: { ...e.doc, doc: "x" } } : e));
@@ -156,8 +171,12 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
 
 describe("[SV-C4] the file covers the server-mode routes as they are added", () => {
   test("job, event, key and OpenAI routes added to the table fail the check until regenerated, then appear", () => {
-    const entries = [...buildRouter().entries(), ...(FIXTURE_ROUTES as RouteEntry[])];
-    expect(openApiDrifted(committedText(), renderOpenApi(entries))).toBe(true);
+    // Real routes land lane by lane; the fixture stands in only for the ones not built yet, and
+    // those are not in the committed file until the lane that builds them regenerates it.
+    const router = buildRouter();
+    const added = addFixtureRoutes(router);
+    const entries = router.entries();
+    expect(openApiDrifted(committedText(), renderOpenApi(entries))).toBe(added.length > 0);
     const doc = buildOpenApi(entries, { version: APP_VERSION });
     for (const p of ["/v1/jobs", "/v1/jobs/{id}", "/v1/events", "/v1/keys/me", "/v1/keys"]) {
       expect(doc.paths[p]).toBeDefined();
@@ -168,7 +187,8 @@ describe("[SV-C4] the file covers the server-mode routes as they are added", () 
 
   test("a real route the fixture also has wins: the fixture fills only what is missing", async () => {
     // The jobs routes may land before `keys.me`; the file must then describe the real upload.
-    const router = buildRouter();
+    // A table of its own, so the stand-in real route never meets the one its lane builds.
+    const router = new Router<ApiApp>();
     const real = { ...(FIXTURE_ROUTES[0] as RouteEntry).doc, doc: "The real one." };
     router.add("POST", "/jobs", { ...real, body: { multipart: { audio: "file" } } }, () =>
       json(202, { real: true }),
@@ -182,7 +202,7 @@ describe("[SV-C4] the file covers the server-mode routes as they are added", () 
     expect(JSON.stringify(op?.requestBody)).toContain('"audio"');
     expect(JSON.stringify(op?.requestBody)).not.toContain('"file"');
     // With nothing real in the way, the fixture adds every one of its routes.
-    expect(addFixtureRoutes(buildRouter()).length).toBe(FIXTURE_ROUTES.length);
+    expect(addFixtureRoutes(new Router<ApiApp>()).length).toBe(FIXTURE_ROUTES.length);
   });
 
   test("two routes of the same method and path are refused: the second would be served by the first", () => {
@@ -196,10 +216,7 @@ describe("[SV-C4] the file covers the server-mode routes as they are added", () 
 });
 
 describe("[SI-2] Executor's rules over the file", () => {
-  const fixtureDoc = () =>
-    buildOpenApi([...buildRouter().entries(), ...(FIXTURE_ROUTES as RouteEntry[])], {
-      version: APP_VERSION,
-    });
+  const fixtureDoc = () => buildOpenApi(withFixtureRoutes(), { version: APP_VERSION });
 
   test("the committed file keeps every rule", () => {
     const doc = committed();
@@ -444,9 +461,7 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
   });
 
   test("the view filter itself: mode and scope decide, and nothing else is dropped", () => {
-    const full = buildOpenApi([...buildRouter().entries(), ...(FIXTURE_ROUTES as RouteEntry[])], {
-      version: APP_VERSION,
-    });
+    const full = buildOpenApi(withFixtureRoutes(), { version: APP_VERSION });
     const count = (d: OpenApiDoc) => operations(d).length;
     const app = servedOpenApi(full, { mode: "app", serverUrl: "http://x" });
     const server = servedOpenApi(full, { mode: "server", serverUrl: "http://x" });
@@ -519,6 +534,34 @@ describe("[PG-A2] a route reads only the body and query it declares, so the file
 });
 
 describe("[SI-2] the Executor job's positive control", () => {
+  test("the daemon's log reaches the job log, all of it", async () => {
+    // A stand-in daemon writes 1 MiB before it listens, more than an OS pipe holds.
+    const dir = mkdtempSync(join(tmpdir(), "akou-fake-executor-"));
+    const fake = join(dir, "fake-executor.ts");
+    writeFileSync(
+      fake,
+      `import { writeSync } from "node:fs";
+const [cmd, sub, ...rest] = process.argv.slice(2);
+if (cmd === "daemon" && sub === "run") {
+  const line = Buffer.alloc(1024, "x");
+  for (let i = 0; i < 1024; i++) writeSync(1, line);
+  Bun.serve({ hostname: "127.0.0.1", port: Number(rest[rest.indexOf("--port") + 1]), fetch: () => Response.json({}) });
+}
+`,
+    );
+    const log = join(dir, "daemon.log");
+    const fd = openSync(log, "w");
+    const exe = new Executor([process.execPath, fake], join(dir, "exe"), fd);
+    try {
+      await exe.start();
+      expect(statSync(log).size).toBe(1024 * 1024);
+    } finally {
+      await exe.stop();
+      closeSync(fd);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   test("only Executor's 401 on the file counts as the control refusing; any other failure fails the job", () => {
     expect(
       controlFailure({ ok: false, error: { message: "Failed to fetch spec: HTTP 401" } }),

@@ -15,7 +15,6 @@ import { readFileSync } from "node:fs";
 import { OPENAPI_FILE } from "../scripts/openapi.ts";
 import type { Access } from "../src/main/api/access.ts";
 import { type Guard, guard } from "../src/main/api/guard.ts";
-import type { RouteEntry } from "../src/main/api/http.ts";
 import { HttpError } from "../src/main/api/http.ts";
 import {
   buildOpenApi,
@@ -25,7 +24,7 @@ import {
 } from "../src/main/api/openapi.ts";
 import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
-import { FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
+import { CONTROL_ROUTE } from "./fixtures/openapi-routes.ts";
 
 process.env.NO_PROXY = "127.0.0.1,localhost";
 
@@ -197,10 +196,8 @@ describe("[SV-T5] one table of who may call each route", () => {
   });
 
   test("positive control: a route added without a row fails", () => {
-    const doc = buildOpenApi([...buildRouter().entries(), FIXTURE_ROUTES[3] as RouteEntry], {
-      version: APP_VERSION,
-    });
-    expect(rowDrift(doc, TABLE)).toEqual({ noRow: ["GET /v1/keys/me"], noOperation: [] });
+    const doc = buildOpenApi([...buildRouter().entries(), CONTROL_ROUTE], { version: APP_VERSION });
+    expect(rowDrift(doc, TABLE)).toEqual({ noRow: ["GET /v1/positive-control"], noOperation: [] });
   });
 
   test("each row agrees with the access its route declares", () => {
