@@ -109,8 +109,12 @@ export interface MountedPage {
    * proxy that rewrites `Host` to the upstream's address (nginx's default).
    */
   originAllowed(origin: string): boolean;
-  /** Checks the admin password or an `admin` key. */
-  login(c: { password?: string; key?: string }): Promise<boolean>;
+  /**
+   * Checks the admin password or an `admin` key. Null when it is wrong; else a check that the
+   * credential still holds (the key not revoked, the password not changed), run on every use of
+   * the session it opens.
+   */
+  login(c: { password?: string; key?: string }): Promise<(() => boolean) | null>;
 }
 
 export interface PageServerOptions {
@@ -153,7 +157,8 @@ export class PageServer {
   readonly origin: string;
   private readonly server: ReturnType<typeof Bun.serve> | null;
   private readonly codes = new Map<string, number>();
-  private readonly sessions = new Set<string>();
+  /** Each session, and for an admin login the check that its key or password still holds. */
+  private readonly sessions = new Map<string, (() => boolean) | null>();
   /** Open streams, so a quit (or a test) can close them all at once. */
   private readonly streams = new Set<AbortController>();
   /**
@@ -236,7 +241,13 @@ export class PageServer {
   private authorized(req: Request): boolean {
     const m = /^Bearer (\S+)$/.exec(req.headers.get("authorization") ?? "");
     if (!m) return false;
-    for (const s of this.sessions) if (tokenMatches(m[1] as string, s)) return true;
+    for (const [s, holds] of this.sessions) {
+      if (!tokenMatches(m[1] as string, s)) continue;
+      if (holds === null || holds()) return true;
+      // The key was revoked or the password changed: the session ends with it.
+      this.sessions.delete(s);
+      return false;
+    }
     return false;
   }
 
@@ -317,14 +328,15 @@ export class PageServer {
           key: typeof body.key === "string" ? body.key : undefined,
         };
         const attempt = this.logins.then(async () => {
-          const ok = await mounted.login(credentials).catch(() => false);
-          if (!ok) await Bun.sleep(this.o.loginFailMs ?? LOGIN_FAIL_MS);
-          return ok;
+          const holds = await mounted.login(credentials).catch(() => null);
+          if (!holds) await Bun.sleep(this.o.loginFailMs ?? LOGIN_FAIL_MS);
+          return holds;
         });
         this.logins = attempt;
-        if (!(await attempt)) return refuse(401, "bad_login", "wrong admin password or key");
+        const holds = await attempt;
+        if (!holds) return refuse(401, "bad_login", "wrong admin password or key");
         const session = randomBytes(32).toString("hex");
-        this.sessions.add(session);
+        this.sessions.set(session, holds);
         return Response.json({ session });
       }
       const code = String(body.code ?? "");
@@ -335,7 +347,7 @@ export class PageServer {
         return refuse(403, "bad_code", "this link was used already or has expired; open a new one");
       }
       const session = randomBytes(32).toString("hex");
-      this.sessions.add(session);
+      this.sessions.set(session, null);
       return Response.json({ session });
     }
 

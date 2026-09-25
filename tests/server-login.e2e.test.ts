@@ -193,6 +193,57 @@ describe("SV-U1: the admin login", () => {
     }
   });
 
+  test("a session ends with the key that opened it, and password sessions end with a new password", async () => {
+    const own = await appRig({
+      settings: { "server.enabled": true, "api.bind": "127.0.0.1", "server.behind_proxy": true },
+    });
+    try {
+      const env = { ...process.env, ...own.env };
+      expect((await setPassword(env, PASSWORD)).code).toBe(0);
+      const mk = async (name: string) =>
+        (await cli(env, ["keys", "create", "--name", name, "--scope", "admin", "--json"])).json;
+      const doomed = await mk("doomed");
+      const kept = await mk("kept");
+      const open = async (body: unknown) => {
+        const r = await rawRequest(own.port, {
+          method: "POST",
+          path: "/session",
+          host: HOST,
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        expect(r.status).toBe(200);
+        return JSON.parse(r.body).session as string;
+      };
+      const reads = async (s: string) =>
+        (
+          await rawRequest(own.port, {
+            method: "GET",
+            path: "/api/v1/status",
+            host: HOST,
+            headers: { authorization: `Bearer ${s}` },
+          })
+        ).status;
+      const byDoomed = await open({ key: doomed.key });
+      const byKept = await open({ key: kept.key });
+      const byPassword = await open({ password: PASSWORD });
+      for (const s of [byDoomed, byKept, byPassword]) expect(await reads(s)).toBe(200);
+
+      expect((await cli(env, ["keys", "revoke", doomed.id, "--json"])).code).toBe(0);
+      expect(await reads(byDoomed)).toBe(401);
+      // Positive control: a session of a key that still exists goes on working.
+      expect(await reads(byKept)).toBe(200);
+      expect(await reads(byPassword)).toBe(200);
+
+      expect((await setPassword(env, `${PASSWORD} again`)).code).toBe(0);
+      expect(await reads(byPassword)).toBe(401);
+      expect(await reads(byKept)).toBe(200);
+      expect(await reads(await open({ password: `${PASSWORD} again` }))).toBe(200);
+    } finally {
+      await own.close();
+    }
+  });
+
   test("set-password stores a hash, never the password, and refuses a short one", async () => {
     const file = readFileSync(`${rig.app.configDir}/config.json`, "utf8");
     expect(file).not.toContain(PASSWORD);
@@ -289,7 +340,7 @@ describe("SV-U1: failed logins are one at a time across the process", () => {
         most = Math.max(most, running);
         await Bun.sleep(5);
         running--;
-        return false;
+        return null;
       },
     });
     const t0 = performance.now();
@@ -304,7 +355,10 @@ describe("SV-U1: failed logins are one at a time across the process", () => {
 
   test("positive control: one wrong login takes one delay, and a right one waits for none", async () => {
     const failMs = 100;
-    const page = loginPage({ failMs, login: async (c) => c.password === "right" });
+    const page = loginPage({
+      failMs,
+      login: async (c) => (c.password === "right" ? () => true : null),
+    });
     const t0 = performance.now();
     expect((await post(page, { password: "wrong" })).status).toBe(401);
     const one = performance.now() - t0;

@@ -273,6 +273,11 @@ export class KeyStore {
     };
   }
 
+  /** Does the key with this id still exist with this scope? (An admin login's session, SV-U1.) */
+  has(id: string, scope: Scope): boolean {
+    return this.load().some((k) => k.id === id && k.scopes.includes(scope));
+  }
+
   /** The webhook secret of a key, for signing its deliveries (SV-E2). */
   secretOf(id: string): string | null {
     return this.load().find((k) => k.id === id)?.secret ?? null;

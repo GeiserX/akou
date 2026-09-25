@@ -32,6 +32,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -1608,26 +1609,46 @@ export class AkouApp implements ApiApp {
     return this.asrState.state;
   }
 
+  /** `server.admin_password_hash` as the file holds it now, read again only when the file changes. */
+  private passwordHash = { stamp: "", hash: "" };
+
+  private currentPasswordHash(): string {
+    let stamp = "";
+    try {
+      const st = statSync(this.cfg.paths.configFile);
+      stamp = `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
+    } catch {}
+    if (stamp !== this.passwordHash.stamp || stamp === "") {
+      const hash = loadConfig(this.o.env ?? process.env, this.o.platform).settings[
+        "server.admin_password_hash"
+      ];
+      this.passwordHash = { stamp, hash };
+    }
+    return this.passwordHash.hash;
+  }
+
   /**
    * The web UI's admin login (SV-U1): the password against `server.admin_password_hash`, read
-   * from the file at each try so `akou admin set-password` works without a restart, or an `admin`
-   * key pasted once.
+   * from the file so `akou admin set-password` works without a restart, or an `admin` key pasted
+   * once. A right one answers the check its session runs on every use: the key still there with
+   * `admin`, or the password hash unchanged, so a revoke or a new password ends the session.
    */
-  async adminLogin(c: { password?: string; key?: string }): Promise<boolean> {
+  async adminLogin(c: { password?: string; key?: string }): Promise<(() => boolean) | null> {
+    const keys = this.keyStore;
     if (c.key !== undefined) {
-      const id = this.keyStore?.authenticate(c.key);
-      return id?.scopes.includes("admin") ?? false;
+      const id = keys?.authenticate(c.key);
+      if (!keys || !id?.scopes.includes("admin")) return null;
+      return () => keys.has(id.id, "admin");
     }
-    if (c.password === undefined || c.password === "") return false;
-    const hash = loadConfig(this.o.env ?? process.env, this.o.platform).settings[
-      "server.admin_password_hash"
-    ];
-    if (hash === "") return false;
+    if (c.password === undefined || c.password === "") return null;
+    const hash = this.currentPasswordHash();
+    if (hash === "") return null;
     try {
-      return await Bun.password.verify(c.password, hash);
+      if (!(await Bun.password.verify(c.password, hash))) return null;
     } catch {
-      return false;
+      return null;
     }
+    return () => this.currentPasswordHash() === hash;
   }
 
   async listen(): Promise<void> {
