@@ -32,7 +32,7 @@ export class NotepadPane {
   private draft: { w: number; afterSeq: number; id?: string; saved?: string } | null = null;
   private pause: ReturnType<typeof setTimeout> | null = null;
   private saving: Promise<void> = Promise.resolve();
-  /** The note being edited in place. The list is not redrawn under it, which would drop the edit. */
+  /** The note being edited in place. Its row stays put on a redraw, which would drop the edit. */
   private editing: string | null = null;
 
   constructor(private readonly d: NotepadDeps) {
@@ -99,14 +99,26 @@ export class NotepadPane {
 
   /** Draws the notepad from the fold. */
   render(): void {
-    if (this.editing) return;
     const v = this.d.view();
     if (!v?.call) {
       replace(this.list);
       return;
     }
     const tz = v.call.tz;
-    replace(this.list, ...v.notes().map((n) => this.noteRow(n, tz)));
+    const rows = v.notes().map((n) => this.noteRow(n, tz));
+    const kept = this.editing
+      ? this.list.querySelector<HTMLElement>(`li.note[data-id="${CSS.escape(this.editing)}"]`)
+      : null;
+    if (!kept) {
+      replace(this.list, ...rows);
+      return;
+    }
+    // Moving the edited row would take focus from its input, which closes the edit: the other
+    // notes are drawn around it instead.
+    const at = rows.findIndex((r) => r.dataset.id === this.editing);
+    for (const el of [...this.list.children]) if (el !== kept) el.remove();
+    kept.before(...rows.slice(0, Math.max(at, 0)));
+    kept.after(...rows.slice(at + 1));
   }
 
   private noteRow(n: NoteView, tz: string): HTMLElement {

@@ -183,6 +183,7 @@ class App {
     this.notepad.reset();
     this.askPane.reset();
     this.enhanced.reset();
+    this.stopAudio();
     this.meters(null);
     if (this.t.kind === "browser")
       history.replaceState(null, "", `?call=${encodeURIComponent(id)}`);
@@ -519,12 +520,17 @@ class App {
       }
     });
     byId("share-start").addEventListener("click", () => void this.share());
-    byId("copy-transcript").addEventListener("click", () => void this.copyTranscript());
+    const copy = byId("copy-transcript");
+    copy.title += this.platform === "mac" ? " (⌘⇧C)" : " (Ctrl+Shift+C)";
+    copy.addEventListener("click", () => void this.copyTranscript());
     document.addEventListener("keydown", (e) => {
       const mod = this.platform === "mac" ? e.metaKey : e.ctrlKey;
-      if (!mod || !e.shiftKey || e.altKey || e.key.toLowerCase() !== "c") return;
-      const t = e.target as HTMLElement | null;
-      if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
+      // The letter on the key, or the C key's place when the layout has no Latin letters.
+      const k = e.key.toLowerCase();
+      const c = k === "c" || (!/^[a-z]$/.test(k) && e.code === "KeyC");
+      if (!mod || !e.shiftKey || e.altKey || !c) return;
+      // The key's scope is the window (WINDOW 14), text fields included; Settings keeps its own.
+      if ((e.target as HTMLElement | null)?.closest("dialog")) return;
       e.preventDefault();
       void this.copyTranscript();
     });
@@ -599,12 +605,12 @@ class App {
         await navigator.clipboard.write([new ClipboardItem({ "text/plain": blob })]);
       } else await navigator.clipboard.writeText(await text);
       toast("Transcript copied.", "info");
-    } catch (err) {
+    } catch {
       const failed = await text.then(
         () => null,
         (e: Error) => e.message,
       );
-      toast(failed ?? `The clipboard is not available here (${(err as Error).message}).`);
+      toast(failed ?? "The clipboard is not available here.");
     }
   }
 
@@ -742,7 +748,10 @@ class App {
       if (e.key !== " " || e.metaKey || e.ctrlKey || e.altKey || !p.src) return;
       const t = e.target as HTMLElement | null;
       if (t?.closest("input, textarea, select, [contenteditable], dialog")) return;
-      // Also keeps a focused button (a line's Play) from being pressed by the same key.
+      // Any other focused control keeps Space as its own key. A line's Play is taken, so the key
+      // pauses what it started instead of starting the line again.
+      if (t?.closest("button, a[href], summary, [role=tab]") && !t.closest(".row .play, #play"))
+        return;
       e.preventDefault();
       if (!e.repeat) this.togglePlay();
     });
@@ -754,6 +763,16 @@ class App {
     if (!p.paused) p.pause();
     else if (this.mayPlay()) void p.play().catch(() => {});
     this.drawPlay();
+  }
+
+  /** Another call opened: the last one's audio stops and is let go, so nothing can resume it. */
+  private stopAudio(): void {
+    const p = this.player;
+    p.pause();
+    p.removeAttribute("src");
+    delete p.dataset.line;
+    delete p.dataset.seek;
+    p.load();
   }
 
   private drawPlay(): void {

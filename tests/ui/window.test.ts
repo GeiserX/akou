@@ -611,6 +611,12 @@ describe("the notepad (DESIGN 5.1)", () => {
           await until(async () => (await revs()).length === 3, 5000, "the edit saved on a pause");
           expect((await revs())[2]).toEqual({ rev: 3, text: "budget review first today" });
           expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          // A note written meanwhile through another door shows at once; the edit stays open as it was.
+          const aside = (await rig.api("POST", `/calls/${id}/notes`, { text: "an aside" })).body
+            .note.id as string;
+          await page.waitForSelector(`#notes li.note[data-id="${aside}"]`, { timeout: 5000 });
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          expect(await page.inputValue(`${row} .note-edit`)).toBe("budget review first today");
           // Enter saves what came after; neither the pause timer nor the blur saves it again.
           await page.keyboard.type("!");
           await page.keyboard.press("Enter");
@@ -1100,6 +1106,57 @@ describe("playback and Fix this word", () => {
           await page.keyboard.type("a b");
           expect(await page.inputValue("#note-input")).toBe("a b");
           expect((await player()).paused).toBe(false);
+          // On any other button, Space presses that button and leaves the audio alone.
+          await page.focus("#tab-ask");
+          await page.keyboard.press("Space");
+          expect(await page.getAttribute("#tab-ask", "aria-selected")).toBe("true");
+          expect((await player()).paused).toBe(false);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W5.2] opening another call stops the first call's audio: Play is disabled and Space plays nothing",
+    async () => {
+      let a = "";
+      let b = "";
+      await withRig(
+        {
+          seed: (home) => {
+            a = seedCall(home, (x) => standardCall(x)).id;
+            b = seedCall(home, (x) => standardCall(x, "01J8Z6Q4M2VX0K7B3D4E5SECND")).id;
+          },
+        },
+        async (rig) => {
+          const folder = (await rig.api("GET", `/calls/${a}`)).body.folder as string;
+          writeFileSync(
+            join(folder, "audio", "part-001.opus"),
+            stereoWav(new Float32Array(16000 * 12), new Float32Array(16000 * 12)),
+          );
+          const page = await rig.open(a);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const player = () =>
+            page.evaluate(() => {
+              const p = document.getElementById("player") as HTMLAudioElement;
+              return { paused: p.paused, at: p.currentTime };
+            });
+          await page.hover('#lines .row[data-id="l000003"]');
+          await page.click('#lines .row[data-id="l000003"] .play');
+          await until(async () => (await player()).at > 0.3, 8000, "the line playing");
+          await page.click(`#calls li[data-id="${b}"] button`);
+          await until(
+            async () => (await page.locator("#play").isDisabled()) && (await player()).paused,
+            5000,
+            "the player cleared",
+          );
+          expect(await text(page, "#play")).toBe("▶ Play");
+          expect(await page.locator("#player").getAttribute("data-line")).toBeNull();
+          await page.click("#scroller");
+          await page.keyboard.press("Space");
+          await page.waitForTimeout(300);
+          expect((await player()).paused).toBe(true);
         },
       );
     },
@@ -1222,12 +1279,40 @@ describe("copy the transcript so far (W12.2)", () => {
         expect(copied).toBe(await section(rig, id));
         expect(copied).toStartWith("## Transcript\n");
         expect(copied).toContain("which region");
-        // The key does nothing in a text field, where it is the field's own.
+        // The key's scope is the window: it copies while a note is being typed too.
         await page.evaluate(() => navigator.clipboard.writeText("before"));
         await page.click("#note-input");
         await page.keyboard.press("ControlOrMeta+Shift+C");
-        await page.waitForTimeout(500);
-        expect(await clipboard(page)).toBe("before");
+        await until(
+          async () => (await clipboard(page)) !== "before",
+          5000,
+          "the copy from a field",
+        );
+        expect(await clipboard(page)).toBe(copied);
+        // On a layout where the key is not "c" (Cyrillic "с" here), the physical C key still copies.
+        await page.evaluate(() => navigator.clipboard.writeText("before"));
+        await page.evaluate(() => {
+          const mac = /mac/i.test(navigator.platform);
+          document.getElementById("scroller")?.dispatchEvent(
+            new KeyboardEvent("keydown", {
+              key: "С",
+              code: "KeyC",
+              shiftKey: true,
+              metaKey: mac,
+              ctrlKey: !mac,
+              bubbles: true,
+            }),
+          );
+        });
+        await until(async () => (await clipboard(page)) !== "before", 5000, "the copy on Cyrillic");
+        expect(await clipboard(page)).toBe(copied);
+        // The button names the chord with the keys this computer has, never the doc's "Mod".
+        const chord = await page.evaluate(() =>
+          /mac/i.test(navigator.platform) ? "⌘⇧C" : "Ctrl+Shift+C",
+        );
+        expect(await page.getAttribute("#copy-transcript", "title")).toBe(
+          `Copy the transcript so far as Markdown (${chord})`,
+        );
         await rig.api("POST", "/calls/live/stop");
       });
       t.cleanup();
@@ -1264,6 +1349,19 @@ describe("copy the transcript so far (W12.2)", () => {
           expect(copied).toBe(await section(rig, id));
           expect(copied).toContain("final words");
           expect(copied).not.toContain("hello everyone");
+          // A clipboard that refuses says so in plain words, without the browser's own message.
+          await page.evaluate(() => {
+            const refuse = () =>
+              Promise.reject(new DOMException("Write permission denied.", "NotAllowedError"));
+            navigator.clipboard.write = refuse;
+            navigator.clipboard.writeText = refuse;
+          });
+          await page.click("#copy-transcript");
+          await until(
+            async () => (await text(page, "#toast")) === "The clipboard is not available here.",
+            5000,
+            "the refusal",
+          );
         },
       );
     },
