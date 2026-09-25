@@ -415,6 +415,8 @@ export function followRoutes(r: Router<ApiApp>): void {
       tz,
       zone,
       cursor: v.lastSeq,
+      // The memo slot as a pack reports it, so a follower learns it is due without a pack.
+      memoStale: (await c.app.query(call.id)).memoStale(c.app.now()),
       provisional,
       lines: lines.map((l) => ({
         id: l.id,
