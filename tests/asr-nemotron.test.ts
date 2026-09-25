@@ -121,6 +121,15 @@ describe("the final pass's diarizer", () => {
       await expect(d.process(tone(1, 0.1))).rejects.toThrow(/cannot load/);
     },
   );
+  test.skipIf(process.platform === "win32")(
+    "a helper that exits while its audio is still being sent is judged by its own words, not the broken pipe",
+    async () => {
+      // 70 s is more than the pipe holds, so the write is still pending when the helper exits.
+      const d = new NemotronDiarizer(spec(["--late-error"], join("/nonexistent", "model.onnx")));
+      await expect(d.process(tone(70, 0.1))).rejects.toThrow(/cannot load/);
+    },
+    30_000,
+  );
 
   test("a helper that crashes mid-pass rejects; it never hangs the pass", async () => {
     const d = new NemotronDiarizer(spec(["--die-after", "1"]));

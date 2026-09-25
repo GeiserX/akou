@@ -268,8 +268,9 @@ export class NemotronDiarizer implements Diarizer {
           for (let at = 0; at < samples.length; at += FRAME_SAMPLES)
             await h.sendAll(frame("a", samples.subarray(at, at + FRAME_SAMPLES)));
           await h.sendAll(frame("f"));
-        } catch (err) {
-          settle(new Error(`sending audio to akou-diarize failed: ${(err as Error).message}`));
+        } catch {
+          // The helper is gone or going: its exit, read to the end, says why, and the deadline
+          // stops one that stays up. Settling here would put the broken pipe in its place.
         }
       })();
     });
