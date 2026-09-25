@@ -84,12 +84,18 @@ export function decodeAudio(path: string, o: DecodeOptions = {}): Promise<Float3
         return;
       }
       const bytes = Buffer.concat(chunks);
+      chunks.length = 0;
       const n = Math.floor(bytes.length / 4);
       if (n === 0) {
         reject(new DecodeError(`${basename(path)} has no audio to transcribe`));
         return;
       }
-      // Copied into a fresh, aligned buffer: a Node Buffer's offset need not be a multiple of 4.
+      // A view when aligned, so a two-hour upload is not held three times over; a copy only when
+      // the Buffer's offset is not a multiple of 4, which a Float32Array cannot start at.
+      if (bytes.byteOffset % 4 === 0) {
+        resolve(new Float32Array(bytes.buffer, bytes.byteOffset, n));
+        return;
+      }
       const out = new Float32Array(n);
       new Uint8Array(out.buffer).set(bytes.subarray(0, n * 4));
       resolve(out);
