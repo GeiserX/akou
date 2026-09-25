@@ -22,6 +22,7 @@ import {
   tokenFileAccess,
   tokenMatches,
 } from "../src/main/api/guard.ts";
+import { DRAIN_BODY_BYTES, DRAIN_BODY_MS, drainBody } from "../src/main/api/http.ts";
 import { type AppRig, appRig, type RawResponse, rawRequest } from "./api-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -550,6 +551,42 @@ describe("bodies", () => {
       chunked: true,
     });
     expect(ok.status).toBe(201);
+  });
+
+  test("the drain is bounded in bytes and in time, so a trickled body cannot hold a refusal open", async () => {
+    /** A reader that yields `size` bytes per read and moves a fake clock `tick` ms each time. */
+    const trickle = (size: number, tick: number, ends?: number) => {
+      let clock = 0;
+      let reads = 0;
+      let cancelled = false;
+      const reader = {
+        read: async () => {
+          reads++;
+          clock += tick;
+          if (ends !== undefined && reads > ends) return { done: true as const, value: undefined };
+          return { done: false as const, value: new Uint8Array(size) };
+        },
+        cancel: async () => {
+          cancelled = true;
+        },
+      };
+      return { reader, now: () => clock, reads: () => reads, cancelled: () => cancelled };
+    };
+    // Time: one byte every half second is cut off once the clock passes the bound, not at 1 MB.
+    const slow = trickle(1, 500);
+    await drainBody(slow.reader, 0, slow.now);
+    expect(slow.reads()).toBe(DRAIN_BODY_MS / 500);
+    expect(slow.cancelled()).toBe(true);
+    // Bytes: a fast firehose is cut off at the cap, with the clock never moving.
+    const fast = trickle(256 * 1024, 0);
+    await drainBody(fast.reader, 0, fast.now);
+    expect(fast.reads()).toBe(DRAIN_BODY_BYTES / (256 * 1024) + 1);
+    expect(fast.cancelled()).toBe(true);
+    // Positive control: a body that ends inside both bounds is read to its end and never cancelled.
+    const short = trickle(1024, 10, 3);
+    await drainBody(short.reader, 0, short.now);
+    expect(short.reads()).toBe(4);
+    expect(short.cancelled()).toBe(false);
   });
 
   test("any refusal of a request with a large body reaches the client: a bad token is 401", async () => {

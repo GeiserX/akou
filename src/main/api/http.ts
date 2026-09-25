@@ -84,14 +84,26 @@ function typeOk(v: unknown, t: FieldType): boolean {
  */
 export const DRAIN_BODY_BYTES = 16 * MAX_BODY_BYTES;
 
-/** Reads and discards the rest of a body, up to `DRAIN_BODY_BYTES` counting `read` so far. */
+/**
+ * How long the drain may take. Bun's `idleTimeout` is an inactivity limit that every chunk resets,
+ * so without this a client trickling a chunked body could hold a refused request open for as long
+ * as it liked; past this the socket is closed with the rest unread.
+ */
+export const DRAIN_BODY_MS = 2_000;
+
+/**
+ * Reads and discards the rest of a body, up to `DRAIN_BODY_BYTES` counting `read` so far, and for
+ * at most `DRAIN_BODY_MS` on `now`'s clock.
+ */
 export async function drainBody(
   reader: Pick<ReadableStreamDefaultReader<Uint8Array>, "read" | "cancel">,
   read = 0,
+  now: () => number = () => performance.now(),
 ): Promise<void> {
   let n = read;
+  const until = now() + DRAIN_BODY_MS;
   try {
-    while (n <= DRAIN_BODY_BYTES) {
+    while (n <= DRAIN_BODY_BYTES && now() < until) {
       const { done, value } = await reader.read();
       if (done) return;
       n += value.byteLength;

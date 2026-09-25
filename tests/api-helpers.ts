@@ -251,7 +251,8 @@ export function rawRequest(
         finish({ status, headers, body: rest.toString("utf8") });
       }
     };
-    sock.on("connect", () => sock.write(lines.join("\r\n")));
+    // A chunked body is already bytes spelled as Latin-1; UTF-8 would widen them past the lengths.
+    sock.on("connect", () => sock.write(lines.join("\r\n"), o.chunked ? "latin1" : "utf8"));
     sock.on("data", (d) => {
       buf = Buffer.concat([buf, Buffer.from(d)]);
       tryParse(false);
