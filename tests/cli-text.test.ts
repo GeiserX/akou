@@ -89,8 +89,12 @@ export function checkMention(mention: string): string | null {
   }
   const subs = subcommands(name, cmd.usage);
   const sub = parsed.positional[0];
-  if (subs.size > 0 && sub !== undefined && !isPlaceholder(sub) && !subs.has(sub)) {
-    return `${name} has no subcommand "${sub}" (it has ${[...subs].join(", ")})`;
+  // `on|off` was parsed as `on`; every alternative has to be a subcommand.
+  const alternatives = rest.find((w) => w.split("|")[0] === sub)?.split("|") ?? [sub];
+  for (const s of sub === undefined ? [] : alternatives) {
+    if (subs.size > 0 && s !== undefined && !isPlaceholder(s) && !subs.has(s)) {
+      return `${name} has no subcommand "${s}" (it has ${[...subs].join(", ")})`;
+    }
   }
   const key = parsed.positional[1];
   if (
@@ -108,7 +112,8 @@ export function checkMention(mention: string): string | null {
 /** A line that offers `akou start` as the way to launch or open the app. */
 export function startAsLaunch(line: string): boolean {
   return (
-    /`akou start`/.test(line.replace(/\\`/g, "`")) && /launch|not running|open akou/i.test(line)
+    /`akou start(?:\s[^`]*)?`/.test(line.replace(/\\`/g, "`")) &&
+    /launch|not running|open akou/i.test(line)
   );
 }
 
@@ -137,6 +142,8 @@ describe("[CLI-17] Honest text", () => {
     expect(checkMention("akou vocab check --boost")).toBe("vocab: unknown option --boost");
     expect(checkMention("akou vocab frobnicate")).toContain('no subcommand "frobnicate"');
     expect(checkMention("akou launch")).toBe('there is no command "launch"');
+    // Every alternative of a subcommand is checked, not only the first.
+    expect(checkMention("akou share on|bogus")).toContain('no subcommand "bogus"');
     expect(checkMention("akou config set asr.segmentPuase 5")).toBe(
       'there is no setting "asr.segmentPuase"',
     );
@@ -178,6 +185,8 @@ describe("[CLI-17] Honest text", () => {
     expect(startAsLaunch('detail: "akou is not running; `akou start` launches it headless"')).toBe(
       true,
     );
+    // With arguments it still offers the recording command as the way to launch.
+    expect(startAsLaunch("akou is not running; launch with `akou start --vocab foo`")).toBe(true);
     expect(startAsLaunch("Record with `akou start -w work`")).toBe(false);
   });
 });
