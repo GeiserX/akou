@@ -73,7 +73,7 @@ What we deliberately did not take:
 | `akou` app | TypeScript on Bun, inside ElectroBun 2.0.1 with `build.mainProcess: "bun"` (Bun 1.4.0) | From login (optional) or first use until quit. Runs with or without a window. | Call state machine, the event log (single writer), speech recognition workers, speaker clustering, query engine, LLM providers, notes and enhancement, local HTTP API, share server, export, hooks, webhook, tray, hotkey, window | Open an audio device |
 | `akou-capture` helper | Rust, one binary per OS | One per recording part, child of the app | Mic and call streams, alignment, Opus file, health monitors, keep-awake | Write the event log, talk HTTP, load a model |
 | `akou-diarize` helper | Rust, one binary per OS, ONNX Runtime linked statically | One per live transcriber and one per final pass, child of the Worker that uses it | Nemotron 3 Diarization: who speaks when on the call channel (section 3.4) | Touch audio devices, write the event log, talk HTTP |
-| `akou` CLI and `akou mcp` | TypeScript on the bundled Bun (a shim), or a compiled binary in the Linux CLI tarball | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
+| `akou` CLI and `akou mcp` | One compiled binary (`bun build --compile`): the release ships it on its own, and the macOS app carries a copy (section 6.1) | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
 
 Inside the app, work is split across threads so the user interface and the API never wait on a model:
 

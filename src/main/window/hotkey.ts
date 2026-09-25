@@ -8,6 +8,9 @@
  *   character; `Control+R` and `Control+Shift+R` reload a browser, where most meetings run; the
  *   Game Bar holds `Win+Alt+R`; and the meeting apps bind `Alt+Shift+<letter>` (Zoom) and
  *   `Control+Shift+<letter>` (Teams). A function key with two modifiers is clear of all of them.
+ *   It is not free: while akou runs it takes `Control+Shift+F9` from Visual Studio (delete all
+ *   breakpoints) and Word (unlink fields), and on laptops whose F-row is media keys by default it
+ *   needs Fn as well. Accepted knowingly: no meeting app or browser uses it, and Settings changes it.
  */
 
 export const MAC_HOTKEY = "Alt+Command+R";
