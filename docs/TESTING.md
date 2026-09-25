@@ -23,7 +23,7 @@ Measured at `a8d92e5`: 54 Bun test files with 841 tests, 131 Rust tests, 43 UI t
 
 | Layer | What it proves | Runs with | Where | When | Today |
 |---|---|---|---|---|---|
-| L0 static | Types, lint, format, generated docs match the code | Biome, `tsc` twice, `cargo fmt`, `cargo clippy -D warnings` | `bun run check`, `capture.yml` | every PR, three OSes | has, except the generated references (TS-9, TS-12) |
+| L0 static | Types, lint, format, generated docs match the code | Biome, `tsc` twice, `cargo fmt`, `cargo clippy -D warnings` | `bun run check`, `ci.yml` | every PR, three OSes | has, except the generated references (TS-9, TS-12) |
 | L1 unit | Pure logic: fold, clocks, BM25, packs, vocabulary, converter, aligner, config validation | fake clocks, generated events | `tests/*.test.ts`, `native/akou-capture` `cargo test` | every PR, three OSes | has |
 | L2 in-process integration | The call state machine, live and final pipelines, notes, hand-off, driven end to end inside one process | fake engine, fake recognizer, fake provider | `tests/call-machine.test.ts`, `asr-*.test.ts`, `notes*.test.ts`, `handoff-*.test.ts` | every PR | has |
 | L3 process e2e | The real app (`bun src/main/index.ts`, headless) through its three doors: CLI, HTTP `/v1`, MCP; the API guards | fake helper, fake ASR, fake harness | `tests/*.e2e.test.ts` | every PR | has |

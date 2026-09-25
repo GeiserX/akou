@@ -1,29 +1,119 @@
-name: capture
+name: ci
 
-# The capture helper (native/akou-capture) on every OS: format, lint, unit and engine tests, both
-# release builds, then the app's capture trap scenarios against the real binary in file mode.
-# Nothing here opens an audio device: the e2e runs the helper with --from-wav and
-# AKOU_CAPTURE_FILE_ONLY=1. Device capture runs on hardware in the release checklist.
+# Every pull request and every push to main (docs/CI-CD.md section 2.1): the checks, the window in
+# a headless browser, and the capture helper on every OS. One job, `ci-ok`, is the required check.
+# It fails when any leg failed or was cancelled and passes when a leg was skipped on purpose, which
+# is how a docs-only pull request skips the heavy legs without leaving a required check pending.
+#
+# Every test job ends with its floor (scripts/ci/test-floor.ts, tests/floors.json): fewer passes
+# or more skips than the floor fail the job. Bun is the version in .bun-version, everywhere.
+#
+# Run by hand with `repeat` to prove a flake fix: the ui and capture legs run every test that many
+# times (`--rerun-each`) in one dispatch, and their floors scale with it.
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+    inputs:
+      repeat:
+        description: "Run every ui and capture test this many times (--rerun-each)"
+        type: number
+        default: 1
 
 permissions:
   contents: read
 
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
+  # What a pull request needs. `code` is false only when every changed file is documentation
+  # (under docs/ or a Markdown file at the top); then only the Linux `check` leg runs, because
+  # some tests read the docs. A push to main and a dispatch run everything.
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          # The pull request's merge commit and its first parent, the base branch.
+          fetch-depth: 2
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          git diff --name-only HEAD^1 HEAD > changed.txt
+          cat changed.txt
+          if grep -qvE '^(docs/|[^/]+\.md$)' changed.txt; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  check:
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJSON(needs.changes.outputs.code == 'true' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      # The pinned Bun, Biome, tsc twice, bun test, then the job's floor.
+      - run: bun run check
+
+  # The window in a headless browser (docs/DESIGN.md sections 7 and 9): Playwright drives the real
+  # page over the real headless app with the fake capture helper, the fake recognizer and a fake
+  # provider. Only Chromium's headless shell is installed; nothing plays audio or opens a window.
+  ui:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.repeat > 1 && 180 || 20 }}
+    env:
+      TEST_REPEAT: ${{ inputs.repeat || 1 }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      # The browser build pinned by playwright-core, headless shell only, with its system libraries.
+      - run: bunx playwright-core install --with-deps --only-shell chromium
+      - run: bun run test:ui --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-ui.xml
+      - run: bun scripts/ci/test-floor.ts ui .junit-ui.xml
+
+  # The capture helper (native/akou-capture) on every OS: format, lint, unit and engine tests, both
+  # release builds, then the app's capture trap scenarios against the real binary in file mode.
+  # Nothing here opens an audio device: the e2e runs the helper with --from-wav and
+  # AKOU_CAPTURE_FILE_ONLY=1. Device capture runs on hardware in the release checklist.
   helper:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
         os: [macos-latest, ubuntu-latest, windows-latest]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.repeat > 1 && 90 || 30 }}
     env:
       CARGO_TERM_COLOR: always
       EXE: ${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+      TEST_REPEAT: ${{ inputs.repeat || 1 }}
     defaults:
       run:
         shell: bash
@@ -64,20 +154,15 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - name: capture traps against the built helper
         env:
           AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}
           AKOU_CAPTURE_BIN_SHIPPING: ${{ github.workspace }}/native/akou-capture/target/shipping/akou-capture${{ env.EXE }}
-        run: |
-          set -euo pipefail
-          bun test tests/capture-rust.e2e.test.ts 2>&1 | tee e2e.log
-          # A skipped test is not a pass here: with both binaries set, every test must run.
-          if grep -Eq '^ *[1-9][0-9]* skip' e2e.log; then
-            echo "capture e2e tests were skipped"
-            exit 1
-          fi
+        run: bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-capture-e2e.xml tests/capture-rust.e2e.test.ts
+      # With both binaries set every test runs: the floor allows no skip.
+      - run: bun scripts/ci/test-floor.ts capture-e2e .junit-capture-e2e.xml
 
   # ROADMAP M4: the real helper on Linux against virtual devices, through both sound servers it
   # talks to. The PipeWire rig links one stereo stimulus into the mic (left) and the call output
@@ -86,6 +171,8 @@ jobs:
   # checked and the skew is only reported.
   capture-linux:
     name: capture-linux (${{ matrix.server }})
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -99,10 +186,11 @@ jobs:
             play: paplay -d akou_micbus "$STIM_MIC" & paplay -d akou_call "$STIM_CALL"; wait
             max_skew_ms: ""
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.repeat > 1 && 60 || 30 }}
     env:
       CARGO_TERM_COLOR: always
       XDG_RUNTIME_DIR: /tmp/akou-rig
+      TEST_REPEAT: ${{ inputs.repeat || 1 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Rust 1.97.1
@@ -131,7 +219,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - name: left = mic tone, right = call tone
         env:
@@ -141,7 +229,7 @@ jobs:
           AKOU_CAPTURE_LIVE_MAX_SKEW_MS: ${{ matrix.max_skew_ms }}
         run: |
           set -euo pipefail
-          bun test tests/capture-live.e2e.test.ts 2>&1 | tee live.log
+          bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-live.xml tests/capture-live.e2e.test.ts 2>&1 | tee live.log
           # The live test must have run and passed; a skip is not a pass.
           if ! grep -q '(pass) akou-capture against real devices > left = mic tone' live.log; then
             echo "the live capture test did not run"
@@ -152,6 +240,7 @@ jobs:
             echo
             grep -E '^left|"type":"(capturing|warn)"' live.log | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
+      - run: bun scripts/ci/test-floor.ts capture-live-${{ matrix.server }} .junit-live.xml
       - name: sound server logs
         if: failure()
         run: tail -n 50 "$XDG_RUNTIME_DIR"/*.log || true
@@ -164,10 +253,13 @@ jobs:
   # nothing would claim the exclusion was checked. Which processes the real app's tree holds
   # (ElectroBun's launcher, the WebView2 processes) is the M3 real-call check, not this job.
   capture-windows:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.repeat > 1 && 60 || 30 }}
     env:
       CARGO_TERM_COLOR: always
+      TEST_REPEAT: ${{ inputs.repeat || 1 }}
     defaults:
       run:
         shell: bash
@@ -227,7 +319,7 @@ jobs:
           fi
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
-          bun-version: 1.4.2
+          bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
       - name: process loopback hears a player and leaves out the excluded tree
         env:
@@ -238,7 +330,7 @@ jobs:
           AKOU_CAPTURE_LIVE_PLAY: (New-Object Media.SoundPlayer $env:STIM_CALL).PlaySync()
         run: |
           set -euo pipefail
-          bun test tests/capture-live.e2e.test.ts 2>&1 | tee live.log
+          bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-live.xml tests/capture-live.e2e.test.ts 2>&1 | tee live.log
           # Both live tests must have run and passed; a skip is not a pass.
           for t in 'left = mic tone' 'Own audio in the call channel'; do
             if ! grep -q "(pass) akou-capture against real devices > .*$t" live.log; then
@@ -250,3 +342,22 @@ jobs:
             echo
             grep -E '"type":"(capturing|warn)"|call-only|excluded take' live.log | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
+      - run: bun scripts/ci/test-floor.ts capture-live-windows .junit-live.xml
+
+  # The one required check. `if: always()` so it reports even when a leg failed; it fails when any
+  # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.
+  ci-ok:
+    if: always()
+    needs: [changes, check, ui, helper, capture-linux, capture-windows]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: every leg passed or was skipped on purpose
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          if echo "$RESULTS" | jq -e '[.[] | .result] | any(. == "failure" or . == "cancelled")' > /dev/null; then
+            echo "a leg failed or was cancelled"
+            exit 1
+          fi
