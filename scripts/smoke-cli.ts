@@ -179,6 +179,12 @@ async function serveCheck(): Promise<void> {
     child.kill("SIGTERM");
     const code = await Promise.race([exited, Bun.sleep(15_000).then(() => "timeout" as const)]);
     check(code === 0, "akou serve exits 0 on SIGTERM", String(code));
+    // Read once the process is gone, so every line it wrote has arrived.
+    check(
+      stderr.includes("cannot transcribe"),
+      "akou serve from the single-file CLI says it cannot transcribe",
+      stderr.trim(),
+    );
     if (code !== 0) child.kill("SIGKILL");
   }
 }

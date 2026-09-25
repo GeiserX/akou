@@ -8,7 +8,7 @@
  * recording is refused later by the call routes, not here.
  */
 
-import { EXIT } from "../client.ts";
+import { EXIT, isCompiled } from "../client.ts";
 import type { Command } from "../context.ts";
 
 /** The environment the server runs with: the caller's, plus server mode and headless. */
@@ -16,6 +16,17 @@ export function serverEnv(
   env: Record<string, string | undefined>,
 ): Record<string, string | undefined> {
   return { ...env, AKOU_SERVER: "1", AKOU_HEADLESS: "1" };
+}
+
+/**
+ * What the single-file CLI must say when it serves: it carries no speech engine (sherpa-onnx's
+ * native addon and the recognizer Workers are not inside a `bun build --compile` binary), so it
+ * answers the API and cannot transcribe. Null from source and in the image, which have both.
+ */
+export function compiledServeWarning(compiled: boolean): string | null {
+  return compiled
+    ? "akou serve: this single-file CLI carries no speech engine, so it answers the API but cannot transcribe; for transcription run the geiserx/akou image, or `bun src/main/cli/cli.ts serve` from a checkout"
+    : null;
 }
 
 export const serveCommand: Command = {
@@ -48,6 +59,8 @@ export const serveCommand: Command = {
     }
     for (const i of app.config().issues) ctx.io.err(`akou: setting refused: ${i.message}`);
     ctx.io.err(`akou ${app.version}: serving on ${app.server?.url} (pid ${process.pid})`);
+    const warning = compiledServeWarning(isCompiled());
+    if (warning) ctx.io.err(warning);
     const quit = () => void app.quit();
     if (ctx.io.signal?.aborted) quit();
     ctx.io.signal?.addEventListener("abort", quit, { once: true });

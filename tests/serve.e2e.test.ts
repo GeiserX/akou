@@ -8,7 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { serverEnv } from "../src/main/cli/commands/serve.ts";
+import { compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
 import { until } from "./capture-helpers.ts";
 import { CLI } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -65,6 +65,12 @@ describe("[SV-P8] akou serve", () => {
     });
   });
 
+  test("the single-file CLI says it cannot transcribe; from source nothing is said", () => {
+    expect(compiledServeWarning(true)).toContain("cannot transcribe");
+    expect(compiledServeWarning(true)).toContain("geiserx/akou");
+    expect(compiledServeWarning(false)).toBeNull();
+  });
+
   test("runs the server in the foreground, answers the API, and quits cleanly on SIGTERM", async () => {
     const h = home();
     const proc = serve(h.env);
@@ -84,6 +90,8 @@ describe("[SV-P8] akou serve", () => {
     const code = await proc.exited;
     const err = await new Response(proc.stderr).text();
     expect(err).toContain(`serving on http://127.0.0.1:${rt.port}/v1`);
+    // From source the engine is there, so no warning.
+    expect(err).not.toContain("cannot transcribe");
     expect(code).toBe(0);
     // The one quit path ran: runtime.json and the lock are gone.
     expect(existsSync(join(h.configDir, "runtime.json"))).toBe(false);
