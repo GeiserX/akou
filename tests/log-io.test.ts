@@ -12,6 +12,7 @@ import {
 } from "../src/core/log/reader.ts";
 import {
   EVENTS_FILE,
+  INSTANCE_ID,
   LOCK_FILE,
   LockError,
   LogWriteError,
@@ -236,7 +237,8 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
   test("[Two writers]: the lock holds the writer's pid", () => {
     const dir = callDir();
     open(dir, { pid: 4242, isAlive: () => true });
-    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe("4242");
+    // The pid, then the id of the process start (SI-4).
+    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(`4242 ${INSTANCE_ID}`);
   });
 
   test("a lock left by a dead process is taken over (crash recovery)", async () => {
@@ -247,7 +249,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     writeFileSync(join(dir, LOCK_FILE), `${child.pid}\n`);
     const w = open(dir);
     expect(w.report.staleLockPid).toBe(child.pid);
-    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(String(process.pid));
+    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(`${process.pid} ${INSTANCE_ID}`);
   });
 
   test("[Two writers]: two writers taking over the same stale lock at once cannot both win", () => {
@@ -268,7 +270,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
       });
     expect(openB).toThrow(LockError);
     expect(first).not.toBeNull();
-    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe("1001");
+    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(`1001 ${INSTANCE_ID}`);
     expect(readdirSync(dir).sort()).toEqual([LOCK_FILE, EVENTS_FILE].sort());
   });
 
@@ -279,7 +281,7 @@ describe("writer (DESIGN 4.1, 4.2)", () => {
     const b = open(dir, { pid: 1002, isAlive: () => false });
     expect(b.report.staleLockPid).toBe(1001);
     a.close();
-    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe("1002");
+    expect(readFileSync(join(dir, LOCK_FILE), "utf8").trim()).toBe(`1002 ${INSTANCE_ID}`);
     // Positive control: the holder's own close does remove it.
     b.close();
     expect(readdirSync(dir)).not.toContain(LOCK_FILE);
