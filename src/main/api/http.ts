@@ -292,9 +292,14 @@ export class Router<A> {
   }
 }
 
-/** `X-Akou-Client: claude-code` names the agent in `by`; anything odd is replaced. */
+/**
+ * `X-Akou-Client: claude-code` names the agent in `by`; anything odd is replaced. `user` is a
+ * person typing at a terminal (`akou watch`, which runs only on one), so it writes `by: "user"`,
+ * as the window does.
+ */
 export function authorOf(req: Request): string {
   const raw = (req.headers.get("x-akou-client") ?? "").trim().toLowerCase();
+  if (raw === "user") return "user";
   const client = /^[a-z0-9][a-z0-9._-]{0,39}$/.test(raw) ? raw : "api";
   return `agent:${client}`;
 }
