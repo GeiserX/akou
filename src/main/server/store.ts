@@ -387,8 +387,8 @@ export class JobStore {
 
   /**
    * Removes a job (SV-J6). A job still queued or running first gets its `transcription.cancelled`
-   * event; every event of the job then keeps its id and final state only. Returns the job as it
-   * was, and its state after (`cancelled` for one that had not ended).
+   * event; every event of the job then keeps its id and final state only, marked deleted. Returns
+   * the job as it was, and its state after (`cancelled` for one that had not ended).
    */
   remove(id: string): { job: Job; final: JobStatus } | null {
     return this.db.transaction(() => {
@@ -409,7 +409,7 @@ export class JobStore {
         const status = (JSON.parse(e.data as string) as { status?: string }).status ?? final;
         this.db
           .query("UPDATE events SET data = ? WHERE seq = ?")
-          .run(JSON.stringify({ job_id: id, status }), e.seq as number);
+          .run(JSON.stringify({ job_id: id, status, deleted: true }), e.seq as number);
       }
       // A delivery not yet made carries the text; it is dropped with the job.
       this.db

@@ -462,7 +462,7 @@ describe("SV-J6: delete and retention", () => {
     expect(audioFiles(server).length).toBe(0);
     const feed = await call(server, k.key, "GET", "/events");
     expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
-      { job_id: id, status: "done" },
+      { job_id: id, status: "done", deleted: true },
     ]);
     expect((await call(server, k.key, "DELETE", `/jobs/${id}`)).status).toBe(404);
   });
@@ -546,7 +546,7 @@ describe("SV-J6: delete and retention", () => {
       expect((await call(rig, k.key, "GET", `/jobs/${id}/result`)).status).toBe(404);
       const feed = await call(rig, k.key, "GET", "/events");
       expect(feed.body.events.map((e: { data: unknown }) => e.data)).toEqual([
-        { job_id: id, status: "done" },
+        { job_id: id, status: "done", deleted: true },
       ]);
     } finally {
       await rig.close();
