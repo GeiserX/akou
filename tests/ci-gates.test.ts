@@ -1,13 +1,14 @@
 /**
  * The gates that keep the suite honest (docs/TESTING.md TS-2, TRAPS T4.20), each with the positive
  * control that proves it can fail: a job that ran too few tests or skipped too many fails its
- * floor, and a committed `test.only` or `test.skip` fails `bun run check`.
+ * floor, a `test.todo` fails its job, and a committed `test.only` or `test.skip` fails
+ * `bun run check`.
  */
 
 import { describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { countsOf, judge, scaled } from "../scripts/ci/test-floor.ts";
+import { countsOf, judge, scaled, skippedOf } from "../scripts/ci/test-floor.ts";
 import { tempDir } from "./helpers.ts";
 
 const ROOT = join(import.meta.dir, "..");
@@ -20,11 +21,26 @@ function run(argv: string[]) {
   return { code: r.exitCode, out: r.stdout.toString() + r.stderr.toString() };
 }
 
-/** A JUnit file as `bun test --reporter=junit` writes it, with these totals. */
-function junit(tests: number, failures: number, skipped: number): string {
+/**
+ * A JUnit file as `bun test --reporter=junit` writes it, with these totals and these skipped test
+ * cases (a `test.todo` is written as `<skipped message="TODO" />`, a skip as `<skipped />`).
+ */
+function junit(
+  tests: number,
+  failures: number,
+  skipped: number,
+  cases: { name: string; todo?: boolean }[] = [],
+): string {
+  const body = cases
+    .map(
+      (c) =>
+        `    <testcase name="${c.name}" classname="gates" time="0" file="a.test.ts" line="1" assertions="0">\n      <skipped${c.todo ? ' message="TODO"' : ""} />\n    </testcase>`,
+    )
+    .join("\n");
   return `<?xml version="1.0" encoding="UTF-8"?>
 <testsuites name="bun test" tests="${tests}" assertions="${tests}" failures="${failures}" skipped="${skipped}" time="0.1">
   <testsuite name="a.test.ts" file="a.test.ts" tests="${tests}" assertions="${tests}" failures="${failures}" skipped="${skipped}" time="0.1">
+${body}
   </testsuite>
 </testsuites>
 `;
@@ -32,24 +48,48 @@ function junit(tests: number, failures: number, skipped: number): string {
 
 describe("[T4.20] a job that runs too few tests fails", () => {
   test("the totals are read from the run's root element", () => {
-    expect(countsOf(junit(846, 0, 9))).toEqual({ tests: 846, failures: 0, skipped: 9, pass: 837 });
+    expect(countsOf(junit(846, 0, 9))).toEqual({
+      tests: 846,
+      failures: 0,
+      skipped: 9,
+      todo: 0,
+      pass: 837,
+    });
     expect(() => countsOf("<testsuite tests='1'/>")).toThrow("no <testsuites>");
   });
 
   test("at the floor passes; one below it, or one skip too many, fails", () => {
     const c = countsOf(junit(846, 0, 9));
     expect(judge("check:linux", c, { minPass: 837, maxSkip: 9 })).toEqual([]);
+    // Each message says what to do, not only what is wrong.
     expect(judge("check:linux", c, { minPass: 838, maxSkip: 9 })).toEqual([
-      "check:linux: 837 tests passed, the floor is 838",
+      "check:linux: 837 tests passed, the floor is 838. A test stopped running or was removed; if that is intended, lower minPass in tests/floors.json in the same diff",
     ]);
     expect(judge("check:linux", c, { minPass: 837, maxSkip: 8 })).toEqual([
-      "check:linux: 9 tests skipped, at most 8 may be",
+      "check:linux: 9 tests skipped, at most 8 may be. A new skip raises maxSkip in tests/floors.json in the same diff; the floor counts CI's skips, so a machine without a model, device or network skips more (the skipped tests are listed below)",
     ]);
     expect(judge("check:linux", c, undefined)).toEqual([
-      "no floor for check:linux in tests/floors.json",
+      'no floor for check:linux: add { "minPass": <passed>, "maxSkip": <skipped> } for it to tests/floors.json',
     ]);
     // A dispatch that ran every test 50 times is held to 50 times the floor.
     expect(scaled({ minPass: 837, maxSkip: 9 }, 50)).toEqual({ minPass: 41_850, maxSkip: 450 });
+  });
+
+  test("a test.todo fails the job however much room the skip floor has", () => {
+    const xml = junit(3, 0, 2, [{ name: "gated (no model)" }, { name: "later", todo: true }]);
+    const c = countsOf(xml);
+    expect(c).toMatchObject({ skipped: 2, todo: 1, pass: 1 });
+    expect(skippedOf(xml)).toEqual([
+      { name: "a.test.ts: gates > gated (no model)", todo: false },
+      { name: "a.test.ts: gates > later", todo: true },
+    ]);
+    // Names are unescaped from the XML.
+    expect(skippedOf(junit(1, 0, 1, [{ name: "the &quot;x&quot; &amp; &lt;y&gt; case" }]))).toEqual(
+      [{ name: 'a.test.ts: gates > the "x" & <y> case', todo: false }],
+    );
+    expect(judge("check:linux", c, { minPass: 1, maxSkip: 5 })).toEqual([
+      "check:linux: 1 test.todo placeholder; write the test or delete it",
+    ]);
   });
 
   test("positive control: the script fails a job whose floor is one above the real count", () => {
@@ -69,6 +109,17 @@ describe("[T4.20] a job that runs too few tests fails", () => {
       const above = run([process.execPath, FLOOR, "capture-e2e", xml, floors(21)]);
       expect(above.code).toBe(1);
       expect(above.out).toContain("20 tests passed, the floor is 21");
+      // Too many skips, or a todo, fails and names every skipped test.
+      writeFileSync(
+        xml,
+        junit(22, 0, 2, [{ name: "gated (no model)" }, { name: "later", todo: true }]),
+      );
+      const todo = run([process.execPath, FLOOR, "capture-e2e", xml, floors(20)]);
+      expect(todo.code).toBe(1);
+      expect(todo.out).toContain("2 tests skipped, at most 0 may be");
+      expect(todo.out).toContain("1 test.todo placeholder");
+      expect(todo.out).toContain("skipped: a.test.ts: gates > gated (no model)");
+      expect(todo.out).toContain("skipped: a.test.ts: gates > later (test.todo)");
       // A job with no floor, and a run that wrote no JUnit file, fail too.
       expect(run([process.execPath, FLOOR, "no-such-job", xml, floors(20)]).code).toBe(1);
       expect(run([process.execPath, FLOOR, "capture-e2e", join(t.dir, "none.xml")]).code).toBe(1);
