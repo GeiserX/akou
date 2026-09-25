@@ -33,6 +33,8 @@ export interface Ctx {
   models?: readonly ModelSpecEntry[];
   /** Where `skill install` copies from (`skills/akou` in the repository). */
   skillSource?: string;
+  /** Test seam: the akou command `skill install` registers, before `mcp`. */
+  self?: readonly string[];
   /** The app's version; the skill must carry the same one. */
   version: string;
 }

@@ -6,19 +6,22 @@
 
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
 import { APP_VERSION } from "../src/main/app-info.ts";
 import { COMMANDS } from "../src/main/cli/cli.ts";
 import type { ApiClient, ApiResponse } from "../src/main/cli/client.ts";
 import {
+  akouCommand,
   harnessSkillsDir,
   installSkill,
   SKILL_SOURCE,
+  SKILLS_HOME,
   SKILLS_ROOT,
   SkillVersionError,
   skillName,
+  skillsDirSpec,
   skillVersion,
 } from "../src/main/cli/commands/skill.ts";
 import { createMcpServer } from "../src/main/mcp/server.ts";
@@ -215,5 +218,197 @@ describe("akou skill install", () => {
     expect(existsSync(join(t.dir, ".claude", "skills", "akou", "SKILL.md"))).toBe(true);
     expect((await cli(env, ["skill", "install", "--harness", "cursor"])).code).toBe(64);
     t.cleanup();
+  });
+});
+
+describe("[PG-K1] Codex finds the skill where akou writes it", () => {
+  test("the Codex folder is `$CODEX_HOME/skills`, the folder the recorded check proved Codex loads", () => {
+    const gate = readFileSync(
+      join(import.meta.dir, "..", "docs", "gates", "pg-k1-codex-skills.md"),
+      "utf8",
+    );
+    const checked = /^Checked folder: `([^`]+)`/m.exec(gate)?.[1];
+    expect(gate).toMatch(/^Result: pass/m);
+    expect(checked).toBe(skillsDirSpec(SKILLS_HOME.codex));
+    expect(checked).toBe("$CODEX_HOME/skills (default ~/.codex/skills)");
+    expect(harnessSkillsDir("codex", { HOME: "/h" })).toBe(join("/h", ".codex", "skills"));
+    // Positive control: the folder Codex's docs name (`~/.agents/skills`) is not the checked one.
+    expect(skillsDirSpec({ env: "HOME", home: ".agents" })).not.toBe(checked);
+  });
+});
+
+/** Fake `claude` and `codex` programs on a PATH of their own; see fixtures/fake-mcp-cli.ts. */
+function fakeHarnesses(root: string, which: readonly ("claude" | "codex")[] = ["claude", "codex"]) {
+  const bin = join(root, "fake-bin");
+  const state = join(root, "fake-state");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(state, { recursive: true });
+  const fake = join(import.meta.dir, "fixtures", "fake-mcp-cli.ts");
+  for (const kind of which) {
+    if (process.platform === "win32") {
+      // Windows finds a program through PATHEXT, so there it is `claude.cmd`.
+      writeFileSync(
+        join(bin, `${kind}.cmd`),
+        `@"${process.execPath}" "${fake}" ${kind} "${state}" %*\r\n`,
+      );
+    } else {
+      writeFileSync(
+        join(bin, kind),
+        `#!/bin/sh\nexec "${process.execPath}" "${fake}" ${kind} "${state}" "$@"\n`,
+        { mode: 0o755 },
+      );
+    }
+  }
+  const calls = (kind: string): string[][] => {
+    const f = join(state, `${kind}.log`);
+    return existsSync(f)
+      ? readFileSync(f, "utf8")
+          .trim()
+          .split("\n")
+          .map((l) => JSON.parse(l))
+      : [];
+  };
+  const entries = (kind: string): Record<string, { command: string; args: string[] }> => {
+    const f = join(state, `${kind}.json`);
+    return existsSync(f) ? JSON.parse(readFileSync(f, "utf8")) : {};
+  };
+  const adds = (kind: string) => calls(kind).filter((a) => a[0] === "mcp" && a[1] === "add");
+  // SHELL is empty so the login shell can never find the real programs. Windows needs its own
+  // few variables to start cmd.exe at all.
+  const win =
+    process.platform === "win32"
+      ? {
+          SystemRoot: process.env.SystemRoot,
+          ComSpec: process.env.ComSpec,
+          PATHEXT: process.env.PATHEXT,
+        }
+      : {};
+  return { bin, state, calls, entries, adds, env: { HOME: root, PATH: bin, SHELL: "", ...win } };
+}
+
+describe("[PG-M1] akou skill install registers the akou tools with the harness", () => {
+  test("calls each harness's own `mcp add` once with the absolute akou path and `mcp`; twice adds nothing; a moved akou is updated; uninstall removes both (TS-25)", async () => {
+    const t = tempDir();
+    try {
+      mkdirSync(join(t.dir, ".claude"));
+      mkdirSync(join(t.dir, ".codex"));
+      const f = fakeHarnesses(t.dir);
+      const akou = join(t.dir, "bin", "akou");
+      const first = await cli(f.env, ["skill", "install", "--json"], { self: [akou] });
+      expect([first.code, first.err]).toEqual([0, ""]);
+      expect(f.adds("claude")).toEqual([["mcp", "add", "-s", "user", "akou", "--", akou, "mcp"]]);
+      expect(f.adds("codex")).toEqual([["mcp", "add", "akou", "--", akou, "mcp"]]);
+      expect(f.entries("claude")).toEqual({ akou: { command: akou, args: ["mcp"] } });
+      expect(f.entries("codex")).toEqual({ akou: { command: akou, args: ["mcp"] } });
+      expect(first.json.mcp.map((m: { harness: string; action: string }) => m.action)).toEqual([
+        "added",
+        "added",
+      ]);
+      expect(existsSync(join(t.dir, ".codex", "skills", "akou", "SKILL.md"))).toBe(true);
+
+      // Run twice: nothing is added again.
+      const second = await cli(f.env, ["skill", "install"], { self: [akou] });
+      expect(second.code).toBe(0);
+      expect(f.adds("claude")).toHaveLength(1);
+      expect(f.adds("codex")).toHaveLength(1);
+      expect(second.out).toContain("Claude Code: the akou tools are already registered");
+      expect(second.out).toContain("Codex: the akou tools are already registered");
+
+      // akou moved: the entry is replaced, still one.
+      const moved = join(t.dir, "elsewhere", "akou");
+      const third = await cli(f.env, ["skill", "install", "--json"], { self: [moved] });
+      expect(third.code).toBe(0);
+      expect(third.json.mcp.map((m: { action: string }) => m.action)).toEqual([
+        "updated",
+        "updated",
+      ]);
+      expect(f.entries("claude")).toEqual({ akou: { command: moved, args: ["mcp"] } });
+      expect(f.entries("codex")).toEqual({ akou: { command: moved, args: ["mcp"] } });
+
+      // Uninstall removes both entries and the skills.
+      const gone = await cli(f.env, ["skill", "uninstall", "--json"], { self: [moved] });
+      expect([gone.code, gone.err]).toEqual([0, ""]);
+      expect(f.entries("claude")).toEqual({});
+      expect(f.entries("codex")).toEqual({});
+      expect(existsSync(join(t.dir, ".claude", "skills", "akou"))).toBe(false);
+      expect(existsSync(join(t.dir, ".codex", "skills", "akou-vocab"))).toBe(false);
+      // Uninstalling again finds nothing to remove and still succeeds.
+      const again = await cli(f.env, ["skill", "uninstall"], { self: [moved] });
+      expect(again.code).toBe(0);
+      expect(f.calls("claude").filter((a) => a[1] === "remove")).toHaveLength(2);
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
+
+  test("with neither program on PATH it prints the exact commands and exits 0", async () => {
+    const t = tempDir();
+    try {
+      mkdirSync(join(t.dir, ".claude"));
+      mkdirSync(join(t.dir, ".codex"));
+      const empty = join(t.dir, "empty-bin");
+      mkdirSync(empty);
+      const akou = join(t.dir, "bin", "akou");
+      const r = await cli({ HOME: t.dir, PATH: empty, SHELL: "" }, ["skill", "install"], {
+        self: [akou],
+      });
+      expect(r.code).toBe(0);
+      expect(r.out).toContain(`claude mcp add -s user akou -- ${akou} mcp`);
+      expect(r.out).toContain(`codex mcp add akou -- ${akou} mcp`);
+      expect(existsSync(join(t.dir, ".claude", "skills", "akou", "SKILL.md"))).toBe(true);
+      const j = await cli({ HOME: t.dir, PATH: empty, SHELL: "" }, ["skill", "install", "--json"], {
+        self: [akou],
+      });
+      expect(j.json.mcp).toEqual([
+        {
+          harness: "claude",
+          action: "manual",
+          command: ["claude", "mcp", "add", "-s", "user", "akou", "--", akou, "mcp"],
+        },
+        {
+          harness: "codex",
+          action: "manual",
+          command: ["codex", "mcp", "add", "akou", "--", akou, "mcp"],
+        },
+      ]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("--harness registers that harness only, --dir none, and a failed add exits 70 with the command", async () => {
+    const t = tempDir();
+    try {
+      const f = fakeHarnesses(t.dir);
+      const akou = join(t.dir, "bin", "akou");
+      const one = await cli(f.env, ["skill", "install", "--harness", "codex"], { self: [akou] });
+      expect(one.code).toBe(0);
+      expect(f.calls("claude")).toEqual([]);
+      expect(f.adds("codex")).toHaveLength(1);
+      const dir = await cli(f.env, ["skill", "install", "--dir", join(t.dir, "other")], {
+        self: [akou],
+      });
+      expect(dir.code).toBe(0);
+      expect(f.calls("claude")).toEqual([]);
+      expect(f.adds("codex")).toHaveLength(1);
+      writeFileSync(join(f.state, "fail"), "");
+      const bad = await cli(f.env, ["skill", "install", "--harness", "claude"], { self: [akou] });
+      expect(bad.code).toBe(70);
+      expect(bad.err).toContain("fake add failed on purpose");
+      expect(bad.err).toContain(`claude mcp add -s user akou -- ${akou} mcp`);
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
+
+  test("the command registered is this akou: the compiled binary, or Bun on the CLI source", () => {
+    const src = akouCommand();
+    expect(src).toEqual([
+      process.execPath,
+      join(import.meta.dir, "..", "src", "main", "cli", "cli.ts"),
+    ]);
+    expect(src.every((p) => isAbsolute(p))).toBe(true);
+    expect(existsSync(src[1] as string)).toBe(true);
+    expect(akouCommand("/$bunfs/root", "/usr/local/bin/akou")).toEqual(["/usr/local/bin/akou"]);
   });
 });

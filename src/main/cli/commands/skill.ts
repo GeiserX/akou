@@ -8,17 +8,28 @@
  * that do not exist (the predecessor's skill drifted exactly that way). Installing the same version
  * twice changes nothing; a new version replaces the old files atomically.
  *
- * Where it goes:
+ * Where it goes (`SKILLS_HOME`):
  *
  * - Claude Code: `$CLAUDE_CONFIG_DIR/skills/<name>`, by default `~/.claude/skills/<name>`.
- * - Codex: `$CODEX_HOME/skills/<name>`, by default `~/.codex/skills/<name>`.
+ * - Codex: `$CODEX_HOME/skills/<name>`, by default `~/.codex/skills/<name>`. Codex 0.151.0 loads
+ *   user skills from this folder and from `~/.agents/skills`; the recorded check is
+ *   `docs/gates/pg-k1-codex-skills.md` (PG-K1). This one follows `CODEX_HOME` and is where
+ *   Codex's own skill installer writes.
  * - `--dir DIR`: `DIR/<name>`, for any other skills folder.
  *
  * `<name>` is the skill's own `name:` from its front matter.
  *
  * With neither `--harness` nor `--dir`, it installs for every harness whose folder exists.
+ *
+ * The skill drives the `akou_*` MCP tools, so installing for a harness also registers `akou mcp`
+ * with it through the harness's own command (PG-M1): `claude mcp add -s user akou -- AKOU mcp`
+ * and `codex mcp add akou -- AKOU mcp`, where AKOU is this akou's absolute path. An entry that
+ * already runs this akou is left alone, one that runs another is replaced, and a harness that is
+ * not installed gets the exact command printed instead. `akou skill uninstall` removes the skills
+ * and the entries again (TS-25). `--dir` is for another harness, so it registers nothing.
  */
 
+import { spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -26,14 +37,16 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import EMBEDDED_SKILL from "../../../../skills/akou/SKILL.md" with { type: "text" };
 import EMBEDDED_VOCAB_SKILL from "../../../../skills/akou-vocab/SKILL.md" with { type: "text" };
+import { findProgram } from "../../llm/harness.ts";
 import { str } from "../args.ts";
-import { EXIT } from "../client.ts";
+import { EXIT, isCompiled } from "../client.ts";
 import type { Command, Ctx } from "../context.ts";
 import { usage } from "./calls.ts";
 
@@ -83,10 +96,174 @@ export function skillVersion(text: string): string | null {
   return m ? (m[1] as string) : null;
 }
 
+/**
+ * Where each harness reads user skills: `skills` in the folder the variable names, or in the home
+ * folder's default. The Codex line is the folder the PG-K1 check proved Codex loads.
+ */
+export const SKILLS_HOME = {
+  claude: { env: "CLAUDE_CONFIG_DIR", home: ".claude" },
+  codex: { env: "CODEX_HOME", home: ".codex" },
+} as const satisfies Record<Harness, { env: string; home: string }>;
+
+/** `$CODEX_HOME/skills (default ~/.codex/skills)`: how the gate records a folder. */
+export function skillsDirSpec(s: { env: string; home: string }): string {
+  return `$${s.env}/skills (default ~/${s.home}/skills)`;
+}
+
 export function harnessSkillsDir(h: Harness, env: Record<string, string | undefined>): string {
-  const home = env.HOME ?? homedir();
-  if (h === "claude") return join(env.CLAUDE_CONFIG_DIR ?? join(home, ".claude"), "skills");
-  return join(env.CODEX_HOME ?? join(home, ".codex"), "skills");
+  const s = SKILLS_HOME[h];
+  return join(env[s.env] ?? join(env.HOME ?? homedir(), s.home), "skills");
+}
+
+// ---------------------------------------------------------------------------
+// Registering `akou mcp` with the harness (PG-M1)
+
+const MCP_NAME = "akou";
+const LABEL: Record<Harness, string> = { claude: "Claude Code", codex: "Codex" };
+const RUN_TIMEOUT_MS = 30_000;
+
+/** The akou a harness runs for `akou mcp`: this compiled binary, or Bun on the CLI source. */
+export function akouCommand(dir: string = import.meta.dir, execPath = process.execPath): string[] {
+  return isCompiled(dir) ? [execPath] : [execPath, join(dir, "..", "cli.ts")];
+}
+
+/** A harness's own command for akou's entry, without the program. */
+function mcpArgs(h: Harness, verb: "get" | "add" | "remove", server: readonly string[] = []) {
+  if (h === "claude") {
+    if (verb === "get") return ["mcp", "get", MCP_NAME];
+    if (verb === "remove") return ["mcp", "remove", "-s", "user", MCP_NAME];
+    return ["mcp", "add", "-s", "user", MCP_NAME, "--", ...server];
+  }
+  if (verb === "get") return ["mcp", "get", MCP_NAME, "--json"];
+  if (verb === "remove") return ["mcp", "remove", MCP_NAME];
+  return ["mcp", "add", MCP_NAME, "--", ...server];
+}
+
+/** The command a harness has registered as `akou`, as `command args…`, from its `mcp get`. */
+function registeredCommand(h: Harness, out: string): string | null {
+  if (h === "codex") {
+    try {
+      const t = JSON.parse(out).transport;
+      return [t.command, ...(t.args ?? [])].join(" ");
+    } catch {
+      return null;
+    }
+  }
+  const cmd = /^\s*Command:[ \t]*(.*)$/m.exec(out)?.[1]?.trim();
+  const args = /^\s*Args:[ \t]*(.*)$/m.exec(out)?.[1]?.trim();
+  return cmd ? [cmd, ...(args ? [args] : [])].join(" ") : null;
+}
+
+/** One command line a person can paste: words with spaces or shell characters are quoted. */
+export function shellLine(argv: readonly string[]): string {
+  return argv
+    .map((a) => (/^[\w@%+=:,./\\~-]+$/.test(a) ? a : `"${a.replace(/(["\\$`])/g, "\\$1")}"`))
+    .join(" ");
+}
+
+interface Ran {
+  code: number;
+  out: string;
+  err: string;
+}
+
+/** Runs a found program; a `.cmd` or `.bat` on Windows runs through cmd.exe, as the shell would. */
+function runProgram(path: string, args: string[], env: Record<string, string | undefined>): Ran {
+  const opts = {
+    env: env as NodeJS.ProcessEnv,
+    encoding: "utf8" as const,
+    timeout: RUN_TIMEOUT_MS,
+  };
+  const r =
+    process.platform === "win32" && /\.(cmd|bat)$/i.test(path)
+      ? spawnSync(
+          env.ComSpec ?? process.env.ComSpec ?? "cmd.exe",
+          ["/d", "/s", "/c", `"${[path, ...args].map((a) => `"${a}"`).join(" ")}"`],
+          { ...opts, windowsVerbatimArguments: true },
+        )
+      : spawnSync(path, args, opts);
+  return {
+    code: r.status ?? -1,
+    out: r.stdout ?? "",
+    err: `${r.stderr ?? ""}${r.error ? r.error.message : ""}`,
+  };
+}
+
+export interface McpResult {
+  harness: Harness;
+  action: "added" | "updated" | "unchanged" | "manual" | "failed" | "removed" | "absent";
+  /** The harness command that does (or would do) it, with the program's name. */
+  command: string[];
+  error?: string;
+}
+
+function firstLine(text: string): string {
+  return (
+    text
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l !== "") ?? ""
+  );
+}
+
+/** Registers `akou mcp` with a harness once; see the file comment. */
+export function registerMcp(
+  h: Harness,
+  server: readonly string[],
+  env: Record<string, string | undefined>,
+): McpResult {
+  const command = [h, ...mcpArgs(h, "add", server)];
+  const path = findProgram(h, env);
+  if (!path) return { harness: h, action: "manual", command };
+  const got = runProgram(path, mcpArgs(h, "get"), env);
+  const current = got.code === 0 ? registeredCommand(h, got.out) : null;
+  if (current === server.join(" ")) return { harness: h, action: "unchanged", command };
+  if (got.code === 0) runProgram(path, mcpArgs(h, "remove"), env);
+  const added = runProgram(path, mcpArgs(h, "add", server), env);
+  if (added.code !== 0) {
+    const why = firstLine(added.err) || firstLine(added.out) || `exit ${added.code}`;
+    return { harness: h, action: "failed", command, error: why };
+  }
+  return { harness: h, action: got.code === 0 ? "updated" : "added", command };
+}
+
+/** Removes akou's entry from a harness, when it has one. */
+export function unregisterMcp(h: Harness, env: Record<string, string | undefined>): McpResult {
+  const command = [h, ...mcpArgs(h, "remove")];
+  const path = findProgram(h, env);
+  if (!path) return { harness: h, action: "manual", command };
+  if (runProgram(path, mcpArgs(h, "get"), env).code !== 0) {
+    return { harness: h, action: "absent", command };
+  }
+  const r = runProgram(path, mcpArgs(h, "remove"), env);
+  if (r.code !== 0) {
+    const why = firstLine(r.err) || firstLine(r.out) || `exit ${r.code}`;
+    return { harness: h, action: "failed", command, error: why };
+  }
+  return { harness: h, action: "removed", command };
+}
+
+function mcpText(r: McpResult): string {
+  const who = LABEL[r.harness];
+  const line = shellLine(r.command);
+  switch (r.action) {
+    case "added":
+      return `${who}: registered the akou tools (${line})`;
+    case "updated":
+      return `${who}: registered the akou tools for this akou, replacing another path (${line})`;
+    case "unchanged":
+      return `${who}: the akou tools are already registered`;
+    case "removed":
+      return `${who}: removed the akou tools (${line})`;
+    case "absent":
+      return `${who}: the akou tools were not registered`;
+    case "manual":
+      return r.command.includes("add")
+        ? `${who} was not found; to give it the akou tools, run: ${line}`
+        : `${who} was not found; if it has the akou tools, run: ${line}`;
+    case "failed":
+      return `${who} refused (${r.error}); run: ${line}`;
+  }
 }
 
 export class SkillVersionError extends Error {
@@ -141,28 +318,55 @@ export function installSkill(source: string, skillsDir: string, version: string)
   };
 }
 
+/** A skills folder, and the harness it belongs to (none for `--dir`). */
+interface Target {
+  dir: string;
+  harness?: Harness;
+}
+
+/** Removes the shipped skills from a folder: only folders whose `SKILL.md` names that skill. */
+function removeSkills(skillsDir: string): string[] {
+  const removed: string[] = [];
+  for (const name of SKILL_NAMES) {
+    const dest = join(skillsDir, name);
+    const main = join(dest, "SKILL.md");
+    if (!existsSync(main) || skillName(readFileSync(main, "utf8")) !== name) continue;
+    rmSync(dest, { recursive: true, force: true });
+    removed.push(dest);
+  }
+  return removed;
+}
+
 export const skillCommand: Command = {
   name: "skill",
-  summary: "Install the akou skills into Claude Code's or Codex's skills folder",
-  usage: "akou skill install [--harness claude|codex] [--dir DIR] [--json]",
+  summary:
+    "Install the akou skills into Claude Code's or Codex's skills folder and register the akou tools with it, or uninstall both",
+  usage: "akou skill install|uninstall [--harness claude|codex] [--dir DIR] [--json]",
   flags: { harness: { type: "string" }, dir: { type: "string" } },
   run: async (ctx: Ctx, p) => {
-    if (p.positional[0] !== "install" || p.positional.length > 1) {
-      return usage(ctx, "skill needs install");
+    const sub = p.positional[0];
+    if ((sub !== "install" && sub !== "uninstall") || p.positional.length > 1) {
+      return usage(ctx, "skill needs install or uninstall");
     }
     const harness = str(p, "harness");
     const dir = str(p, "dir");
     if (harness !== undefined && harness !== "claude" && harness !== "codex") {
       return usage(ctx, "--harness is claude or codex");
     }
-    let targets: string[];
-    if (dir !== undefined) targets = [dir];
-    else if (harness !== undefined) targets = [harnessSkillsDir(harness, ctx.io.env)];
+    const env = ctx.io.env;
+    let targets: Target[];
+    if (dir !== undefined) targets = [{ dir }];
+    else if (harness !== undefined) targets = [{ dir: harnessSkillsDir(harness, env), harness }];
     else {
       targets = (["claude", "codex"] as const)
-        .map((h) => harnessSkillsDir(h, ctx.io.env))
-        .filter((d) => existsSync(join(d, "..")));
+        .map((h) => ({ dir: harnessSkillsDir(h, env), harness: h }))
+        .filter((t) => existsSync(join(t.dir, "..")));
       if (targets.length === 0) {
+        if (sub === "uninstall") {
+          if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, removed: [], mcp: [] }));
+          else ctx.io.out("neither Claude Code nor Codex was found; nothing to remove");
+          return EXIT.ok;
+        }
         const msg =
           "neither Claude Code (~/.claude) nor Codex (~/.codex) was found; pass --harness or --dir";
         if (ctx.json) ctx.io.out(JSON.stringify({ error: "no_harness", message: msg }));
@@ -170,6 +374,18 @@ export const skillCommand: Command = {
         return EXIT.unavailable;
       }
     }
+    const harnesses = targets.flatMap((t) => (t.harness ? [t.harness] : []));
+    const server = [...(ctx.self ?? akouCommand()), "mcp"];
+
+    if (sub === "uninstall") {
+      const removed = targets.flatMap((t) => removeSkills(t.dir));
+      const mcp = harnesses.map((h) => unregisterMcp(h, env));
+      return report(ctx, { ok: true, removed, mcp }, [
+        ...removed.map((r) => `${r}: removed`),
+        ...mcp.map(mcpText),
+      ]);
+    }
+
     const results: InstallResult[] = [];
     const sources = ctx.skillSource ? [ctx.skillSource] : skillSources();
     try {
@@ -178,7 +394,7 @@ export const skillCommand: Command = {
         checkVersion(src, readFileSync(join(src, "SKILL.md"), "utf8"), ctx.version);
       }
       for (const t of targets) {
-        for (const src of sources) results.push(installSkill(src, t, ctx.version));
+        for (const src of sources) results.push(installSkill(src, t.dir, ctx.version));
       }
     } catch (err) {
       const msg = (err as Error).message;
@@ -187,18 +403,29 @@ export const skillCommand: Command = {
       else ctx.io.err(`akou: ${msg}`);
       return (err as NodeJS.ErrnoException).code === "EACCES" ? EXIT.permission : EXIT.software;
     }
-    if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, installed: results }));
-    else {
-      for (const r of results) {
-        ctx.io.out(
-          r.action === "unchanged"
-            ? `${r.path}: already version ${r.version}`
-            : r.action === "updated"
-              ? `${r.path}: updated from ${r.previous ?? "an unversioned copy"} to ${r.version}`
-              : `${r.path}: installed version ${r.version}`,
-        );
-      }
-    }
-    return EXIT.ok;
+    const mcp = harnesses.map((h) => registerMcp(h, server, env));
+    return report(ctx, { ok: true, installed: results, mcp }, [
+      ...results.map((r) =>
+        r.action === "unchanged"
+          ? `${r.path}: already version ${r.version}`
+          : r.action === "updated"
+            ? `${r.path}: updated from ${r.previous ?? "an unversioned copy"} to ${r.version}`
+            : `${r.path}: installed version ${r.version}`,
+      ),
+      ...mcp.map(mcpText),
+    ]);
   },
 };
+
+/** Prints the result; a harness that refused goes to stderr and makes the exit 70. */
+function report(ctx: Ctx, body: { mcp: McpResult[] } & Record<string, unknown>, lines: string[]) {
+  const failed = body.mcp.some((m) => m.action === "failed");
+  if (ctx.json) ctx.io.out(JSON.stringify(failed ? { ...body, ok: false } : body));
+  else {
+    const bad = new Set(body.mcp.filter((m) => m.action === "failed").map(mcpText));
+    const ok = lines.filter((l) => !bad.has(l));
+    if (ok.length > 0) ctx.io.out(ok.join("\n"));
+    for (const l of bad) ctx.io.err(`akou: ${l}`);
+  }
+  return failed ? EXIT.software : EXIT.ok;
+}
