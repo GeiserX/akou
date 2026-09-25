@@ -67,9 +67,7 @@ export interface NativeWindow {
   onClose(fn: () => void): void;
   /** The window gained (true) or lost (false) the focus. */
   onFocus(fn: (focused: boolean) => void): void;
-  /** The frame now, when the OS says. */
-  frame(): Rect | undefined;
-  /** The window moved or was resized. */
+  /** The window moved or was resized. The shell keeps the last, so it never reads a closed one. */
   onFrame(fn: (frame: Rect) => void): void;
 }
 
@@ -80,7 +78,6 @@ export interface IndicatorWindow {
   hide(): void;
   close(): void;
   onClose(fn: () => void): void;
-  frame(): Rect | undefined;
   onFrame(fn: (frame: Rect) => void): void;
 }
 
@@ -692,7 +689,7 @@ export class Shell implements WindowShell {
     this.indicator = null;
     const store = this.o.state;
     try {
-      if (store) store.save({ ...store.load(), indicator: ind.window.frame() ?? ind.frame });
+      if (store) store.save({ ...store.load(), indicator: ind.frame });
     } catch (err) {
       this.o.onLog?.("warn", `the indicator's place was not saved: ${(err as Error).message}`);
     }
@@ -702,7 +699,7 @@ export class Shell implements WindowShell {
 
   private saveFrame(): void {
     const store = this.o.state;
-    const frame = this.window?.frame() ?? this.frame;
+    const frame = this.frame;
     if (!store || !frame) return;
     try {
       store.save({ ...store.load(), window: frame });

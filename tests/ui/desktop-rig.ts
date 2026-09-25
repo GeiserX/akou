@@ -138,7 +138,6 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
         onFocus: (fn) => {
           focusFn = fn;
         },
-        frame: () => w.frame,
         onFrame: () => {},
       };
       const s = p.send;
@@ -175,7 +174,6 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
           });
         },
         onClose: () => {},
-        frame: () => w.frame,
         onFrame: () => {},
       };
       return { window, send: { followed: p.send("followed"), status: p.send("status") } };

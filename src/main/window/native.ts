@@ -44,7 +44,6 @@ export function electrobunUi(): NativeUi {
           win.on("focus", () => fn(true));
           win.on("blur", () => fn(false));
         },
-        frame: () => win.getFrame(),
         onFrame: (fn) => {
           win.on("move", () => fn(win.getFrame()));
           win.on("resize", () => fn(win.getFrame()));
@@ -87,7 +86,6 @@ export function electrobunUi(): NativeUi {
           hide: () => win.hide(),
           close: () => win.close(),
           onClose: (fn) => win.on("close", fn),
-          frame: () => win.getFrame(),
           onFrame: (fn) => win.on("move", () => fn(win.getFrame())),
         },
         send: {

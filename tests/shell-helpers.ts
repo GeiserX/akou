@@ -77,10 +77,8 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
   let reopenFn: () => void = () => {};
   let frameFn: (r: Rect) => void = () => {};
   let closeFn: () => void = () => {};
-  let current: Rect | undefined;
   let ind: ReturnType<FakeUi["indicator"]> = null;
   let indFrame: (r: Rect) => void = () => {};
-  let indCurrent: Rect | undefined;
   const log: string[] = [];
   let action: (a: string) => void = () => {};
   let beforeQuit: (e: { cancel(): void }) => void = () => {};
@@ -98,7 +96,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     openWindow: (o) => {
       log.push(`window ${o.url}`);
       f.frames.push(o.frame);
-      current = o.frame;
       rpc = o.rpc;
       booted = false;
       const page = (line: string) => {
@@ -114,7 +111,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
           onClose: (fn) => {
             closeFn = fn;
           },
-          frame: () => current,
           onFrame: (fn) => {
             frameFn = fn;
           },
@@ -185,7 +181,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       const opened = (ind?.opened ?? 0) + 1;
       const me = { frame: o.frame, rpc: o.rpc, visible: false, closed: false, opened };
       ind = me;
-      indCurrent = o.frame;
       return {
         window: {
           showInactive: () => {
@@ -200,7 +195,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
             log.push("indicator close");
           },
           onClose: () => {},
-          frame: () => indCurrent,
           onFrame: (fn) => {
             indFrame = fn;
           },
@@ -243,7 +237,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     onQuit: () => {},
     frames: [],
     moveWindow: (r) => {
-      current = r;
       frameFn(r);
     },
     closeWindow: () => {
@@ -253,7 +246,6 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     areas: [{ x: 0, y: 0, width: 1440, height: 875 }],
     indicator: () => ind,
     moveIndicator: (r) => {
-      indCurrent = r;
       indFrame(r);
     },
     indicatorPushes: [],
