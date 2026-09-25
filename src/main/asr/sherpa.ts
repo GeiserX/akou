@@ -57,6 +57,10 @@ function sherpa(): Sherpa {
   return sherpaModule;
 }
 
+/** Logged at warn when a decode list meets a greedy recognizer, which takes no hotwords. */
+export const GREEDY_NO_HOTWORDS =
+  "greedy decoding takes no hotwords; the vocabulary applies when reading and after the call";
+
 /** Silero keeps a copy of the open segment and re-copies it every window; bound it. */
 const VAD_RESET_AFTER_SECONDS = 15;
 
@@ -282,11 +286,7 @@ export class SherpaModels implements ModelSet {
         arg: undefined,
         entries: [],
         dropped: [],
-        warnings: list?.entries.length
-          ? [
-              "greedy decoding takes no hotwords; the vocabulary applies when reading and after the call",
-            ]
-          : [],
+        warnings: list?.entries.length ? [GREEDY_NO_HOTWORDS] : [],
         checks: [],
       };
     }
@@ -310,7 +310,7 @@ export class SherpaModels implements ModelSet {
       arg: arg === "" ? undefined : arg,
       entries: kept.map((e) => (e.boost === DEFAULT_BOOST ? e.term : `${e.term} :${e.boost}`)),
       dropped: plan.dropped,
-      warnings: plan.dropped.map((d) => `hotword "${d.term}" dropped: ${d.reason}`),
+      warnings: [],
       checks: plan.checks,
     };
   }

@@ -1456,9 +1456,15 @@ export class AkouApp implements ApiApp {
     // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
     if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
     if (!this.runningModelsPresent()) return null;
-    return this.o.models !== undefined
-      ? this.o.models
-      : this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
+    return this.o.models !== undefined ? this.o.models : this.finalSherpaSpec();
+  }
+
+  /**
+   * The real engines the final pass runs: the running recognizer's speaker-label engine and
+   * decoding, whatever the settings say now. Public so a test can read it without real models.
+   */
+  finalSherpaSpec(): ModelSpec {
+    return this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
   }
 
   /** Starts the final pass in the background. Returns why it cannot run, or null once started. */

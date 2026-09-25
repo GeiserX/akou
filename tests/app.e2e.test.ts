@@ -9,7 +9,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { type ModelSpecEntry, NEMOTRON } from "../src/main/asr/models.ts";
 import { AlreadyRunningError, APP_LOCK, startApp } from "../src/main/index.ts";
-import { appRig, FAKE_HELPER, FAKE_MODELS, writeSettings } from "./api-helpers.ts";
+import { type AppRig, appRig, FAKE_HELPER, FAKE_MODELS, writeSettings } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { silence } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
@@ -177,14 +177,22 @@ describe("asr.parakeet.decoding changed while the app runs", () => {
         10_000,
         "the recognizer",
       );
+      const decoding = (app: AppRig["app"]) => {
+        const spec = app.finalSherpaSpec();
+        return spec.kind === "sherpa" ? spec.decoding : undefined;
+      };
       expect((await rig.api("GET", "/status")).body.asr.decoding).toBe("greedy");
+      expect(decoding(rig.app)).toBe("greedy");
       const patched = await rig.api("PATCH", "/config", { "asr.parakeet.decoding": "beam" });
       expect(patched.status).toBe(200);
       expect((await rig.api("GET", "/status")).body.asr.decoding).toBe("greedy");
+      // The final pass's recognizer spec keeps the mode live started with.
+      expect(decoding(rig.app)).toBe("greedy");
       await rig.close();
-      // Positive control: the next start runs what the setting says.
+      // Positive control: the next start runs what the setting says, and the spec carries it.
       const next = await appRig({ home: home.dir, settings: { "asr.parakeet.decoding": "beam" } });
       expect((await next.api("GET", "/status")).body.asr.decoding).toBe("beam");
+      expect(decoding(next.app)).toBe("beam");
       await next.close();
       home.cleanup();
     },

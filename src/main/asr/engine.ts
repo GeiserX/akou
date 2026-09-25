@@ -101,7 +101,9 @@ export interface PreparedHotwords {
   arg: string | undefined;
   /** Entries in force, in the `vocab.used` form (`term` or `term :N`). */
   entries: string[];
+  /** Each logged as an error by the pipelines. */
   dropped: { term: string; reason: string }[];
+  /** Anything else about the list the pipelines log at warn (a greedy recognizer takes none). */
   warnings: string[];
   /** Per-term results of the tokenization check, for the log and `akou vocab check`. */
   checks: TermCheck[];

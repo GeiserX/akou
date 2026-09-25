@@ -1,8 +1,8 @@
 /**
  * Downloads the pinned recognizer (every file checked against `models.ts`) and transcribes one
- * upstream test clip with it through the app's own `SherpaModels`, with beam search and a one-word
- * decode list: the mode that also loads a `bpe.vocab` (greedy, the default, loads a subset of what
- * beam does). The `models` workflow runs it on Linux,
+ * upstream test clip with it through the app's own `SherpaModels` twice, with a one-word decode list:
+ * once with beam search, which also loads a `bpe.vocab` and takes the list, and once greedy, the
+ * default, which takes none. Both must hear the phrase. The `models` workflow runs it on Linux,
  * Windows and macOS whenever the pins change, so a build that does not load in sherpa-onnx-node on
  * one of them fails before it ships. `bun run check` never downloads; this script does, on purpose.
  *
@@ -58,34 +58,43 @@ function readClip(path: string): Float32Array {
   return out;
 }
 
-const t1 = performance.now();
-const models = new SherpaModels({
-  dir,
-  cacheDir: mkdtempSync(join(tmpdir(), "akou-smoke-")),
-  decoding: "beam",
+const samples = readClip(clip);
+const runs = (["beam", "greedy"] as const).map((decoding) => {
+  const t1 = performance.now();
+  const models = new SherpaModels({
+    dir,
+    cacheDir: mkdtempSync(join(tmpdir(), "akou-smoke-")),
+    decoding,
+  });
+  const prepared = models.prepare({
+    model: RECOGNIZER,
+    entries: [{ term: "Kubernetes", boost: DEFAULT_BOOST, tier: 1, source: "call" }],
+    dropped: [],
+    warnings: [],
+  });
+  const loadS = (performance.now() - t1) / 1000;
+  const t2 = performance.now();
+  const { text } = prepared.recognizer.decode(samples, prepared.arg);
+  const decodeS = (performance.now() - t2) / 1000;
+  const heard = text.toLowerCase().replace(/[^a-z ]/g, "");
+  return {
+    decoding,
+    ok: heard.includes("ask not what your country can do for you"),
+    hotwords: prepared.arg !== undefined,
+    loadS: Math.round(loadS * 100) / 100,
+    decodeS: Math.round(decodeS * 100) / 100,
+    text,
+  };
 });
-const prepared = models.prepare({
-  model: RECOGNIZER,
-  entries: [{ term: "Kubernetes", boost: DEFAULT_BOOST, tier: 1, source: "call" }],
-  dropped: [],
-  warnings: [],
-});
-const loadS = (performance.now() - t1) / 1000;
-const t2 = performance.now();
-const { text } = prepared.recognizer.decode(readClip(clip), prepared.arg);
-const decodeS = (performance.now() - t2) / 1000;
-
-const heard = text.toLowerCase().replace(/[^a-z ]/g, "");
-const ok = heard.includes("ask not what your country can do for you");
+// Beam must take the list and greedy must not, or the run did not test the two modes it names.
+const ok = runs.every((r) => r.ok && r.hotwords === (r.decoding === "beam"));
 console.log(
   JSON.stringify({
     ok,
     model: RECOGNIZER,
     platform: `${process.platform}-${process.arch}`,
     downloadS: Math.round(downloadS),
-    loadS: Math.round(loadS * 100) / 100,
-    decodeS: Math.round(decodeS * 100) / 100,
-    text,
+    runs,
   }),
 );
 if (!ok) process.exit(1);
