@@ -91,6 +91,8 @@ export const guard: Guard = (req, ctx) => {
       );
     }
   }
+  // A declared size over the limit is refused before a byte of the body is read; a body that is
+  // chunked, or lies about its size, is cut off at the same limit by `readBody`.
   const length = Number(req.headers.get("content-length") ?? "0");
   if (length > MAX_BODY_BYTES) {
     return refuse(413, "body_too_large", `bodies are capped at ${MAX_BODY_BYTES} bytes`);

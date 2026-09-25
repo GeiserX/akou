@@ -494,7 +494,75 @@ describe("bodies", () => {
     expect(r.status).toBe(400);
     expect(JSON.parse(r.body)).toMatchObject({ error: "unknown_field", field: "by" });
     const big = JSON.stringify({ text: "x".repeat(70 * 1024) });
-    expect((await post(guarded, j, big)).status).toBe(413);
+    const refused = await post(guarded, j, big);
+    expect(refused.status).toBe(413);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: "body_too_large" });
+  });
+
+  /** A valid note padded with JSON whitespace to exactly `bytes` bytes. */
+  const padded = (bytes: number) => {
+    const note = '{"text":"x"';
+    return `${note}${" ".repeat(bytes - note.length - 1)}}`;
+  };
+
+  test("the limit is exactly 64 KB: one byte over is 413, at the limit is accepted", async () => {
+    await recording(guarded);
+    const j = { "Content-Type": "application/json" };
+    const over = await post(guarded, j, padded(64 * 1024 + 1));
+    expect(over.status).toBe(413);
+    expect(JSON.parse(over.body)).toMatchObject({ error: "body_too_large" });
+    // Positive control: the same request one byte shorter is inside the limit and lands.
+    expect((await post(guarded, j, padded(64 * 1024))).status).toBe(201);
+  });
+
+  test("the 413 reaches the client whole even when the body is still arriving", async () => {
+    // The server answers before the body has been sent; if it then closed the socket with the
+    // rest unread, the kernel would reset the connection and the client would read ECONNRESET
+    // instead of the 413 (measured at 5 to 67 % of requests before the drain, growing with size).
+    await recording(guarded);
+    const j = { "Content-Type": "application/json" };
+    const big = JSON.stringify({ text: "x".repeat(512 * 1024) });
+    for (let i = 0; i < 10; i++) {
+      const refused = await post(guarded, j, big);
+      expect(refused.status).toBe(413);
+      expect(JSON.parse(refused.body)).toMatchObject({ error: "body_too_large" });
+    }
+  });
+
+  test("a chunked body with no Content-Length is cut off at the same 64 KB", async () => {
+    await recording(guarded);
+    const big = JSON.stringify({ text: "x".repeat(512 * 1024) });
+    const refused = await rawRequest(guarded.port, {
+      method: "POST",
+      path: "/v1/calls/live/notes",
+      headers: { Authorization: `Bearer ${guarded.token}`, "Content-Type": "application/json" },
+      body: big,
+      chunked: true,
+    });
+    expect(refused.status).toBe(413);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: "body_too_large" });
+    // Positive control: chunked and inside the limit is an ordinary request.
+    const ok = await rawRequest(guarded.port, {
+      method: "POST",
+      path: "/v1/calls/live/notes",
+      headers: { Authorization: `Bearer ${guarded.token}`, "Content-Type": "application/json" },
+      body: '{"text":"chunked"}',
+      chunked: true,
+    });
+    expect(ok.status).toBe(201);
+  });
+
+  test("any refusal of a request with a large body reaches the client: a bad token is 401", async () => {
+    await recording(guarded);
+    const big = JSON.stringify({ text: "x".repeat(512 * 1024) });
+    const refused = await rawRequest(guarded.port, {
+      method: "POST",
+      path: "/v1/calls/live/notes",
+      headers: { Authorization: "Bearer nope", "Content-Type": "application/json" },
+      body: big,
+    });
+    expect(refused.status).toBe(401);
+    expect(JSON.parse(refused.body)).toMatchObject({ error: "unauthorized" });
   });
 });
 

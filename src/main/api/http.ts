@@ -73,6 +73,35 @@ function typeOk(v: unknown, t: FieldType): boolean {
   }
 }
 
+/**
+ * How much of a request body the server reads and discards before answering a request whose body
+ * it did not consume: a 413, or any refusal of a request that carried a body. An answer sent while
+ * the body is still arriving closes the socket with unread bytes on it, the kernel resets the
+ * connection instead of closing it, and on macOS and Windows a reset drops what the client had
+ * not read yet, so it sees `ECONNRESET` in place of the 413. Bun 1.4 closes at once, so the server
+ * reads the rest out first (up to this cap, 16 times the body limit) and only then answers. This
+ * is also Bun's `maxRequestBodySize`: past it Bun refuses on its own and the socket may reset.
+ */
+export const DRAIN_BODY_BYTES = 16 * MAX_BODY_BYTES;
+
+/** Reads and discards the rest of a body, up to `DRAIN_BODY_BYTES` counting `read` so far. */
+export async function drainBody(
+  reader: Pick<ReadableStreamDefaultReader<Uint8Array>, "read" | "cancel">,
+  read = 0,
+): Promise<void> {
+  let n = read;
+  try {
+    while (n <= DRAIN_BODY_BYTES) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      n += value.byteLength;
+    }
+    await reader.cancel();
+  } catch {
+    // A body that ended early or errored is nothing left to wait for.
+  }
+}
+
 /** Reads at most `MAX_BODY_BYTES`, whatever `Content-Length` claimed (or did not claim). */
 async function readCapped(req: Request): Promise<string> {
   if (!req.body) return "";
@@ -84,7 +113,8 @@ async function readCapped(req: Request): Promise<string> {
     if (done) break;
     n += value.byteLength;
     if (n > MAX_BODY_BYTES) {
-      await reader.cancel().catch(() => {});
+      // The rest is read out before the refusal, or the refusal may never reach the client.
+      await drainBody(reader, n);
       throw new HttpError(413, "body_too_large", `bodies are capped at ${MAX_BODY_BYTES} bytes`);
     }
     chunks.push(value);
