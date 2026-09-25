@@ -11,5 +11,13 @@ One line per document, in the order to read them.
 - [providers.md](providers.md): what answers questions and writes notes (your own Claude Code or Codex, an API, a local model), when each runs on its own, session reuse and how it is measured, and the open terms-of-service risk.
 - [knowledge-handoff.md](knowledge-handoff.md): how a finished call leaves akou (export folder, hooks, signed webhook, pull) and how the vocabulary grows only by what you approve.
 - [ROADMAP.md](ROADMAP.md): M0 gates with pass criteria, then M1 to M4 with checkable exit criteria, and what waits for demand.
+- [ux/PRINCIPLES.md](ux/PRINCIPLES.md): the rules every screen, command and tool follows, the one priority scale, the ranked P0 list, rulings where the UX docs disagree, the docs that still lag, and the open decisions.
+- [ux/COMPETITOR-MATRIX.md](ux/COMPETITOR-MATRIX.md): every nicety we found in competing tools, where it was seen, and which doc owns it.
+- [ux/WINDOW.md](ux/WINDOW.md): the main window, its states, controls, keys, accessibility and languages.
+- [ux/DESKTOP.md](ux/DESKTOP.md): the tray, hotkeys, menus, floating indicator, notifications, first run, updates, the model manager and the settings registry.
+- [ux/CLI.md](ux/CLI.md): the command line: naming a call, output, exit codes, errors, help, `akou watch`, and parity with the other doors.
+- [ux/PROGRAMMABILITY.md](ux/PROGRAMMABILITY.md): the API, the event stream, MCP, skills, hooks, the webhook, `akou://` and the security model.
+- [TESTING.md](TESTING.md): which suite proves what, the fakes, the model-gated and hardware tests, and the flake policy.
+- [CI-CD.md](CI-CD.md): the pipeline, branch protection, nightly jobs and releases.
 - [gates/M0-results.md](gates/M0-results.md): what each M0 gate measured on the reference Mac mini, with the raw outputs beside it.
 - [research/asr-benchmark.md](research/asr-benchmark.md): why akou ships the fp32 Parakeet build and stays on Parakeet rather than Qwen3-ASR, with the FLEURS numbers and the method.
