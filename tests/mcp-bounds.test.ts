@@ -14,6 +14,7 @@ import { join } from "node:path";
 import type { LogEvent } from "../src/core/log/events.ts";
 import { ApiClient } from "../src/main/cli/client.ts";
 import { capAnswer, MAX_ANSWER_TOKENS } from "../src/main/mcp/bound.ts";
+import { TOOLS } from "../src/main/mcp/server.ts";
 import {
   CALL_TEXT_CLOSE,
   CALL_TEXT_OPEN,
@@ -198,6 +199,57 @@ describe("[PG-M5] every tool stays under the ceiling", () => {
         expect([name, answers[name]?.isError]).toEqual([name, false]);
       }
       expect(answers.akou_list_calls?.text).toMatch(/\d+ more calls not shown/);
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("at a realistic size (300 notes, words and lines) every read tool answers, none refuses", async () => {
+    const c = await mcpClient(sampleApi(300));
+    try {
+      const read = Object.keys(TOOL_ARGS).filter((n) => TOOLS[n]?.hints.readOnlyHint);
+      expect(read).toContain("akou_get_notes");
+      expect(read).toContain("akou_enhance_context");
+      const answers: Record<string, ToolAnswer> = {};
+      for (const name of read) answers[name] = await c.call(name, { ...TOOL_ARGS[name] });
+      expect(overCeiling(answers)).toEqual([]);
+      const refused = read.filter((n) => answers[n]?.isError);
+      expect(refused).toEqual([]);
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("akou_enhance_context cuts a long input on a line and says how to read the rest", async () => {
+    const c = await mcpClient(sampleApi(2000));
+    try {
+      const r = await c.call("akou_enhance_context", {});
+      expect(r.isError).toBe(false);
+      expect(size(r).text).toBeLessThanOrEqual(MAX_ANSWER_TOKENS);
+      expect(r.text).toContain("[15:36:20 Ben]");
+      expect(r.text).toContain("page by page with akou_get_call");
+    } finally {
+      await c.close();
+    }
+  });
+
+  test("akou_get_notes pages a long notepad: following nextOffset reads every note once", async () => {
+    const c = await mcpClient(sampleApi(300));
+    try {
+      const seen: string[] = [];
+      let offset: number | undefined = 0;
+      let pages = 0;
+      while (offset !== undefined) {
+        const r = await c.call("akou_get_notes", { offset });
+        expect(r.isError).toBe(false);
+        expect(size(r).text).toBeLessThanOrEqual(MAX_ANSWER_TOKENS);
+        expect(r.structured.notes).toBe(300);
+        seen.push(...[...r.text.matchAll(/"id":"(n\d+)"/g)].map((m) => m[1] as string));
+        offset = r.structured.nextOffset;
+        pages++;
+      }
+      expect(pages).toBeGreaterThan(1);
+      expect(seen).toEqual(Array.from({ length: 300 }, (_, i) => `n${i}`));
     } finally {
       await c.close();
     }

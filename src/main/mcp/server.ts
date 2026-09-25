@@ -31,6 +31,9 @@ import { type Body, describeError, wall } from "../cli/context.ts";
 import { estimateTokens, type PackState, packState, quoteCallText } from "../query/render.ts";
 import { capAnswer, type ToolResult } from "./bound.ts";
 
+/** One page of `akou_get_notes`: well under the 8,000-token ceiling with the quoting around it. */
+const NOTES_PAGE_TOKENS = 6000;
+
 const CALL = z
   .string()
   .default("live")
@@ -98,13 +101,32 @@ function asResult(r: ApiResponse, ok: (b: Body) => Answer): ToolResult {
 /** akou's own JSON, no call text in it: the body is both the text and the structured result. */
 const compact = (b: Body): Answer => ({ text: JSON.stringify(b), data: b });
 /**
+ * A body as JSON with one top-level field per line and one array item per line, so the ceiling's
+ * cut (`capAnswer`) falls between items instead of refusing one long line.
+ */
+export function linedJson(b: Body): string {
+  const fields = Object.entries(b).filter(([, v]) => v !== undefined);
+  const out = ["{"];
+  fields.forEach(([k, v], i) => {
+    const comma = i < fields.length - 1 ? "," : "";
+    if (Array.isArray(v) && v.length > 0) {
+      out.push(`${JSON.stringify(k)}:[`);
+      out.push(v.map((x) => JSON.stringify(x)).join(",\n"));
+      out.push(`]${comma}`);
+    } else out.push(`${JSON.stringify(k)}:${JSON.stringify(v)}${comma}`);
+  });
+  out.push("}");
+  return out.join("\n");
+}
+
+/**
  * The whole body is call text: quoted as one block, and the structured result carries that same
  * block as `callText` beside the facts akou states about it.
  */
 const quotedWith =
   (facts: (b: Body) => Data) =>
   (b: Body): Answer => {
-    const t = quoteCallText(JSON.stringify(b));
+    const t = quoteCallText(linedJson(b));
     return { text: t, data: { ...facts(b), callText: t } };
   };
 
@@ -181,7 +203,12 @@ const OUT = {
   merge: z.object({ from: z.string(), into: z.string() }),
   unmerge: z.object({ spk: z.string() }),
   id: z.object({ id: z.string() }),
-  notes: z.object({ call: z.string().nullable(), notes: INT.min(0), callText: CALL_TEXT }),
+  notes: z.object({
+    call: z.string().nullable(),
+    notes: INT.min(0),
+    nextOffset: INT.min(0).optional().describe("More notes follow: pass it as `offset`."),
+    callText: CALL_TEXT,
+  }),
   memo: z.object({
     call: z.string().nullable(),
     cursor: CURSOR,
@@ -259,7 +286,7 @@ const PROVIDER: Hints = { ...WRITE, openWorldHint: true };
  * Every tool's title and annotations (PG-M2): one row per tool, and registering a tool without a
  * row throws, so a new tool cannot ship without saying whether it is safe to auto-approve.
  */
-export const TOOLS: Readonly<Record<string, { title: string; hints: Hints }>> = {
+export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?: string }>> = {
   akou_start: { title: "Start recording", hints: WRITE },
   akou_stop: { title: "Stop recording", hints: DESTRUCTIVE },
   akou_pause: { title: "Pause recording", hints: WRITE },
@@ -276,7 +303,7 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints }>> = 
   akou_merge_speakers: { title: "Merge two speakers", hints: WRITE },
   akou_unmerge_speaker: { title: "Undo a speaker merge", hints: WRITE },
   akou_add_note: { title: "Add a note", hints: WRITE },
-  akou_get_notes: { title: "Read the notepad", hints: READ },
+  akou_get_notes: { title: "Read the notepad", hints: READ, less: "page with `offset`" },
   akou_remember: { title: "Remember a fact", hints: WRITE },
   akou_forget: { title: "Forget a fact", hints: WRITE },
   akou_memo_get: { title: "Read the memo", hints: READ },
@@ -285,10 +312,18 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints }>> = 
   akou_vocab_propose: { title: "Propose words", hints: WRITE },
   akou_vocab_approve: { title: "Approve proposed words", hints: WRITE },
   akou_vocab_reject: { title: "Reject proposed words", hints: WRITE },
-  akou_vocab_list: { title: "List the vocabulary", hints: READ },
-  akou_vocab_suggest: { title: "Suggest words", hints: READ },
+  akou_vocab_list: {
+    title: "List the vocabulary",
+    hints: READ,
+    less: "name one `call` or one `workspace`",
+  },
+  akou_vocab_suggest: { title: "Suggest words", hints: READ, less: "a smaller `k`" },
   akou_vocab_check: { title: "Check a word", hints: READ },
-  akou_enhance_context: { title: "Context for enhanced notes", hints: READ },
+  akou_enhance_context: {
+    title: "Context for enhanced notes",
+    hints: READ,
+    less: "read the rest of the transcript page by page with akou_get_call",
+  },
   akou_enhanced_put: { title: "Save enhanced notes", hints: WRITE },
   akou_enhance: { title: "Enhance notes with akou's provider", hints: PROVIDER },
   akou_list_calls: { title: "List past calls", hints: READ },
@@ -328,7 +363,6 @@ export function createMcpServer(o: McpOptions): McpServer {
   const req = (method: string, path: string, ro: RequestOptions = {}) =>
     call(method, path, { ...ro, client: tag() });
   const id = (c: string) => encodeURIComponent(c);
-  /** `registerTool` with the tool's title and annotations from `TOOLS`. */
   /**
    * `registerTool` with the tool's title and annotations from `TOOLS`, and every answer held to
    * the 8,000-token ceiling (`capAnswer`).
@@ -339,7 +373,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     return server.registerTool(
       name,
       { ...config, title: row.title, annotations: row.hints } as never,
-      (async (...a: unknown[]) => capAnswer(await cb(...a))) as never,
+      (async (...a: unknown[]) => capAnswer(await cb(...a), undefined, row.less)) as never,
     );
   }) as typeof server.registerTool;
 
@@ -624,16 +658,29 @@ export function createMcpServer(o: McpOptions): McpServer {
   tool(
     "akou_get_notes",
     {
-      description: "The live call's notepad: the user's lines and yours.",
-      inputSchema: z.object({}),
+      description:
+        "The live call's notepad: the user's lines and yours, oldest first. A long notepad comes in pages: pass `nextOffset` as `offset` for the next.",
+      inputSchema: z.object({ offset: INT.min(0).default(0) }),
       outputSchema: OUT.notes,
     },
-    async () => {
+    async (a) => {
       const r = await req("GET", "/calls/live/notes");
-      return asResult(
-        r,
-        quotedWith((b) => ({ call: b.call ?? null, notes: (b.notes ?? []).length })),
-      );
+      return asResult(r, (b) => {
+        const all: unknown[] = b.notes ?? [];
+        const page: unknown[] = [];
+        let used = 0;
+        for (const n of all.slice(a.offset)) {
+          used += estimateTokens(JSON.stringify(n)) + 1;
+          if (page.length > 0 && used > NOTES_PAGE_TOKENS) break;
+          page.push(n);
+        }
+        const next = a.offset + page.length;
+        return quotedWith(() => ({
+          call: b.call ?? null,
+          notes: all.length,
+          ...(next < all.length ? { nextOffset: next } : {}),
+        }))({ ...b, notes: page });
+      });
     },
   );
 
@@ -882,10 +929,10 @@ export function createMcpServer(o: McpOptions): McpServer {
       const r = await req("GET", "/calls/last/enhance/context", {
         query: { template: a.template },
       });
-      return asResult(
-        r,
-        quotedWith((b) => ({ call: b.call ?? null })),
-      );
+      // The input one line per item, so a long one is cut on a line with the rest readable by page.
+      const lined = (b: Body): Body =>
+        typeof b.input === "string" ? { ...b, input: b.input.split("\n") } : b;
+      return asResult(r, (b) => quotedWith(() => ({ call: b.call ?? null }))(lined(b)));
     },
   );
 

@@ -133,7 +133,7 @@ export function sampleApi(n = 3): ApiClient {
       return { call: "c1", state: "recording" };
     }
     if (path.endsWith("/restart")) return { call: "c1", part: 2 };
-    if (path.endsWith("/context")) {
+    if (path.endsWith("/context") && !path.endsWith("/enhance/context")) {
       return {
         call: "c1",
         // The pack arrives quoted already (PG-Z1).
@@ -209,7 +209,15 @@ export function sampleApi(n = 3): ApiClient {
       };
     }
     if (path.endsWith("/enhance/context")) {
-      return { call: "c1", template: "general", pack: lines.map((l) => l.text).join("\n") };
+      // Shaped like the real route: the input is one prompt, the user's notes beside it.
+      return {
+        call: "c1",
+        template: "general",
+        instructions: "Write the notes.",
+        input: lines.map((l) => `[${l.time} ${l.speaker}] ${l.text}`).join("\n"),
+        coversSeq: n,
+        notes: lines.map((l, i) => ({ id: `n${i}`, text: l.text, w: i })),
+      };
     }
     if (path === "/calls/last") return { id: "c1" };
     if (path.endsWith("/enhanced")) return { ok: true, rev: 1 };
