@@ -123,9 +123,11 @@ describe("SV-U1: the admin login", () => {
     expect(own.status).toBe(200);
   });
 
-  test("the page holds bodies to 64 KB on the API's listener: a 2 MB login gets 413", async () => {
+  test("the page holds bodies to 64 KB on the API's listener: a 200 KB login gets 413", async () => {
     const json = { "content-type": "application/json" };
-    expect(await declare(rig.port, "/session", json, 2 * 1024 * 1024)).toBe(413);
+    // Under the drain cap (`DRAIN_BODY_BYTES`), so the 413 always reaches the client; before the
+    // fix the whole body was read and answered 403 for its bad code.
+    expect(await declare(rig.port, "/session", json, 200 * 1024)).toBe(413);
     // A body with no length is cut off at the same 64 KB, at the login and behind a session.
     const big = JSON.stringify({ password: "x".repeat(200 * 1024) });
     const chunked = await rawRequest(rig.port, {
@@ -149,6 +151,46 @@ describe("SV-U1: the admin login", () => {
     expect(api.status).toBe(413);
     // Positive control: a small body is read, and its bad code is refused as such.
     expect(await declare(rig.port, "/session", json, 20)).toBe(403);
+  });
+
+  test("behind a proxy that rewrites Host, an Origin naming server.public_host still logs in", async () => {
+    const pub = await appRig({
+      settings: {
+        "server.enabled": true,
+        "api.bind": "127.0.0.1",
+        "server.behind_proxy": true,
+        "server.public_host": HOST,
+      },
+    });
+    try {
+      expect((await setPassword({ ...process.env, ...pub.env }, PASSWORD)).code).toBe(0);
+      // nginx's default: `Host: $proxy_host`, the upstream's own address; the browser's Origin.
+      const login = (origin: string) =>
+        rawRequest(pub.port, {
+          method: "POST",
+          path: "/session",
+          headers: {
+            "content-type": "application/json",
+            origin,
+            "sec-fetch-site": "same-origin",
+          },
+          body: JSON.stringify({ password: PASSWORD }),
+        });
+      expect((await login(`https://${HOST}`)).status).toBe(200);
+      expect((await login(`https://${HOST}:8443`)).status).toBe(200);
+      // Another site's page is still refused.
+      expect((await login("https://evil.example")).status).toBe(403);
+      // Positive control: with no public host set, the rewritten Host leaves nothing to match.
+      const plain = await rawRequest(rig.port, {
+        method: "POST",
+        path: "/session",
+        headers: { "content-type": "application/json", origin: `https://${HOST}` },
+        body: JSON.stringify({ password: PASSWORD }),
+      });
+      expect(plain.status).toBe(403);
+    } finally {
+      await pub.close();
+    }
   });
 
   test("set-password stores a hash, never the password, and refuses a short one", async () => {
@@ -194,6 +236,7 @@ function loginPage(o: { failMs: number; login: MountedPage["login"] }): PageServ
     mounted: {
       origin: "http://127.0.0.1:8476",
       hostAllowed: () => true,
+      originAllowed: () => false,
       pageAllowed: true,
       login: o.login,
     },

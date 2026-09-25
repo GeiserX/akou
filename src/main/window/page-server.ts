@@ -104,6 +104,11 @@ export interface MountedPage {
   origin: string;
   /** The server-mode Host rule (`serverHostAllowed`). */
   hostAllowed(host: string | null): boolean;
+  /**
+   * An `Origin` accepted besides the request's own `Host`: one naming `server.public_host`, for a
+   * proxy that rewrites `Host` to the upstream's address (nginx's default).
+   */
+  originAllowed(origin: string): boolean;
   /** Checks the admin password or an `admin` key. */
   login(c: { password?: string; key?: string }): Promise<boolean>;
   /**
@@ -281,7 +286,7 @@ export class PageServer {
     // On the network a browser is a client (SV-D2), so the cross-origin refusal is here: a page on
     // another origin may not use this one's session or open one.
     const origin = req.headers.get("origin");
-    if (mounted && origin !== null && !sameOrigin(origin, host)) {
+    if (mounted && origin !== null && !sameOrigin(origin, host) && !mounted.originAllowed(origin)) {
       return refuse(403, "cross_site", "requests from another origin are refused");
     }
     if (req.method === "OPTIONS") return refuse(405, "method_not_allowed", "no CORS here");

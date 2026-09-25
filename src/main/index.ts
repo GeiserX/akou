@@ -1219,6 +1219,17 @@ export class AkouApp implements ApiApp {
                     publicHost: s["server.public_host"],
                     behindProxy: s["server.behind_proxy"],
                   }),
+                originAllowed: (origin) => {
+                  if (s["server.public_host"] === "") return false;
+                  try {
+                    return serverHostAllowed(new URL(origin).host, this.server?.port ?? 0, {
+                      publicHost: s["server.public_host"],
+                      behindProxy: false,
+                    });
+                  } catch {
+                    return false;
+                  }
+                },
                 login: (c) => this.adminLogin(c),
                 pageAllowed: isLoopback(apiBind(s)) || s["server.behind_proxy"],
               }
