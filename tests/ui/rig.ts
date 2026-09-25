@@ -126,7 +126,7 @@ export function watchedOffenders(page: Page, o: { clear?: boolean } = {}): Promi
 export interface UiRig extends AppRig {
   opened: string[];
   /** Opens the window in a new page, on a call when one is named. */
-  open(call?: string, o?: { before?: (page: Page) => void }): Promise<Page>;
+  open(call?: string, o?: { before?: (page: Page) => unknown }): Promise<Page>;
   /** Writes an event into a call through its one writer (a line, a note, a health change). */
   write(call: string, draft: EventDraft): Promise<LogEvent>;
 }
@@ -147,7 +147,7 @@ export async function uiRig(
   const pages: Page[] = [];
   const ui = rig as UiRig;
   ui.opened = opened;
-  ui.open = async (call?: string, oo: { before?: (page: Page) => void } = {}) => {
+  ui.open = async (call?: string, oo: { before?: (page: Page) => unknown } = {}) => {
     const r = await rig.api("POST", "/window", call ? { call } : {});
     if (r.status !== 200 || !r.body.url)
       throw new Error(`POST /window answered ${r.status}: ${r.text}`);
@@ -162,7 +162,7 @@ export async function uiRig(
       if (m.type() === "error") console.error(`page console: ${m.text()}`);
     });
     await page.addInitScript(watchHidden);
-    oo.before?.(page);
+    await oo.before?.(page);
     await page.goto(r.body.url as string);
     await page.waitForFunction(() => document.body.dataset.transport === "browser");
     return page;
