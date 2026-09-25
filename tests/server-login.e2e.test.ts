@@ -209,6 +209,30 @@ describe("SV-U1: the admin login", () => {
     expect((await session({ password: PASSWORD })).status).toBe(200);
   });
 
+  test("set-password at a terminal says to pipe the password in, and never waits on it", async () => {
+    const err: string[] = [];
+    let read = false;
+    const code = await runCli(
+      ["admin", "set-password"],
+      {
+        env: { ...process.env, ...rig.env },
+        out: () => {},
+        err: (t) => err.push(t),
+        stdinIsTTY: true,
+        stdin: async () => {
+          read = true;
+          return `${PASSWORD}\n`;
+        },
+      },
+      { launch: null },
+    );
+    expect(code).toBe(64);
+    expect(read).toBe(false);
+    expect(err.join("\n")).toContain("pipe the password in: akou admin set-password < file");
+    // Positive control: piped, the same call sets it.
+    expect((await setPassword({ ...process.env, ...rig.env }, PASSWORD)).code).toBe(0);
+  });
+
   test("positive control: app mode serves no page and no login on the API's port", async () => {
     const app = await appRig();
     try {

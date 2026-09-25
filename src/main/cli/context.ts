@@ -25,6 +25,8 @@ export interface Io {
   signal?: AbortSignal;
   /** Reads standard input to its end (a password, never an argument). Absent: nothing to read. */
   stdin?(): Promise<string>;
+  /** Standard input is a terminal: a secret read from it would echo and wait with no prompt. */
+  stdinIsTTY?: boolean;
 }
 
 export interface Ctx {

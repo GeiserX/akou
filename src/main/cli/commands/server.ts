@@ -111,6 +111,14 @@ const admin: Command = {
     if (sub !== "set-password" || rest.length > 0) {
       return usage(ctx, "admin needs set-password, with the password on standard input");
     }
+    if (ctx.io.stdinIsTTY) {
+      return refused(
+        ctx,
+        "stdin_is_terminal",
+        "pipe the password in: akou admin set-password < file (typed here it would show on screen)",
+        EXIT.usage,
+      );
+    }
     const input = (await ctx.io.stdin?.()) ?? "";
     const password = input.replace(/\r?\n$/, "");
     if (password.length < MIN_PASSWORD || password.includes("\n")) {

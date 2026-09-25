@@ -154,6 +154,7 @@ if (import.meta.main) {
     write: (t) => process.stdout.write(t),
     signal: ac.signal,
     stdin: () => Bun.stdin.text(),
+    stdinIsTTY: process.stdin.isTTY === true,
   });
   process.exit(code);
 }
