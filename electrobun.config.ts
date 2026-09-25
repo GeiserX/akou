@@ -15,7 +15,8 @@
  *     `@loader_path` rpath, so they sit beside it in the platform package;
  *   - the two recognition Workers and the browser pages, which `build-app.ts` builds first;
  *   - the shipped note templates;
- *   - the capture helper from `native/akou-capture`.
+ *   - the capture helper from `native/akou-capture` and the diarization helper from
+ *     `native/akou-diarize` (Nemotron on a statically linked ONNX Runtime; no library beside it).
  *   Built pieces are listed only once built; `build-app.ts` builds them and the smoke check proves
  *   each is in the bundle.
  * - Hutch writes `Info.plist` from a fixed table without `NSAudioCaptureUsageDescription`. The app
@@ -65,18 +66,28 @@ type Exists = (path: string) => boolean;
 const projectFileExists: Exists = (path) =>
   existsSync(fileURLToPath(new URL(path, import.meta.url)));
 
-/** Where `cargo build --release` puts the capture helper. */
-export function helperBuildPath(platform: string = process.platform): string {
-  return `native/akou-capture/target/release/akou-capture${platform === "win32" ? ".exe" : ""}`;
+/** The Rust helpers the app runs, each its own crate under `native/`. */
+export const HELPERS = ["akou-capture", "akou-diarize"] as const;
+
+/** Where `cargo build --release` puts a helper. */
+export function helperBuildPath(
+  platform: string = process.platform,
+  name: (typeof HELPERS)[number] = "akou-capture",
+): string {
+  return `native/${name}/target/release/${name}${platform === "win32" ? ".exe" : ""}`;
 }
 
-/** The helper beside the main process, when it has been built. */
+/** The helpers beside the main process, each once it has been built. */
 export function helperCopies(
   platform: string = process.platform,
   exists: Exists = projectFileExists,
 ): Record<string, string> {
-  const src = helperBuildPath(platform);
-  return exists(src) ? { [src]: `${MAIN_OUT}/${src.split("/").pop()}` } : {};
+  const out: Record<string, string> = {};
+  for (const name of HELPERS) {
+    const src = helperBuildPath(platform, name);
+    if (exists(src)) out[src] = `${MAIN_OUT}/${src.split("/").pop()}`;
+  }
+  return out;
 }
 
 /** The Workers and the browser pages beside the main process, when they have been built. */
