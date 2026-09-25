@@ -4,9 +4,10 @@
  * each run's arguments to `STATE_DIR/<kind>.log`, one JSON array per line, and answers the way the
  * real programs did against a throwaway config folder (claude 2.1.281, codex-cli 0.151.0):
  *
- * - claude: `mcp get NAME` prints `Command:` and `Args:` lines, or exits 1 when there is none;
- *   `mcp add -s user NAME -- CMD ARGS…` exits 1 when NAME exists; `mcp remove -s user NAME` exits 1
- *   when there is none.
+ * - claude: `mcp get NAME` prints `Scope:`, `Command:` and `Args:` lines, or exits 1 when there is
+ *   none; a local-scope entry wins over a user-scope one of the same name. `mcp add -s SCOPE NAME
+ *   -- CMD ARGS…` exits 1 when NAME exists in that scope; `mcp remove -s SCOPE NAME` exits 1 when
+ *   there is none in it. User-scope entries are in `claude.json`, local ones in `claude-local.json`.
  * - codex: `mcp get NAME --json` prints `{name, transport: {type, command, args}}`, or exits 1;
  *   `mcp add NAME -- CMD ARGS…` replaces an entry of the same name; `mcp remove NAME` exits 0
  *   either way.
@@ -21,12 +22,15 @@ import { join } from "node:path";
 
 const [kind, dir, ...args] = process.argv.slice(2) as [string, string, ...string[]];
 appendFileSync(join(dir, `${kind}.log`), `${JSON.stringify(args)}\n`);
-const file = join(dir, `${kind}.json`);
 type Entry = { command: string; args: string[] };
-const entries: Record<string, Entry> = existsSync(file)
-  ? JSON.parse(readFileSync(file, "utf8"))
-  : {};
-const save = () => writeFileSync(file, JSON.stringify(entries));
+type Entries = Record<string, Entry>;
+const s = args.indexOf("-s");
+const scope = s >= 0 ? (args[s + 1] as string) : "user";
+const fileOf = (sc: string) => join(dir, sc === "user" ? `${kind}.json` : `${kind}-${sc}.json`);
+const load = (sc: string): Entries =>
+  existsSync(fileOf(sc)) ? JSON.parse(readFileSync(fileOf(sc), "utf8")) : {};
+const entries = load(scope);
+const save = () => writeFileSync(fileOf(scope), JSON.stringify(entries));
 
 function fail(message: string): never {
   process.stderr.write(`${message}\n`);
@@ -39,7 +43,8 @@ const rest = args.slice(2).filter((a, i, all) => a !== "-s" && all[i - 1] !== "-
 const name = rest.find((a) => !a.startsWith("-")) as string;
 
 if (verb === "get") {
-  const e = entries[name];
+  const local = kind === "claude" ? load("local")[name] : undefined;
+  const e = local ?? load("user")[name];
   if (!e) fail(`No MCP server named "${name}".`);
   if (kind === "codex") {
     process.stdout.write(
@@ -47,7 +52,7 @@ if (verb === "get") {
     );
   } else {
     process.stdout.write(
-      `${name}:\n  Scope: User config\n  Type: stdio\n  Command: ${e.command}\n  Args: ${e.args.join(" ")}\n`,
+      `${name}:\n  Scope: ${local ? "Local config (private to you in this project)" : "User config (available in all your projects)"}\n  Type: stdio\n  Command: ${e.command}\n  Args: ${e.args.join(" ")}\n`,
     );
   }
 } else if (verb === "add") {
@@ -55,12 +60,13 @@ if (verb === "get") {
   const dash = args.indexOf("--");
   const [command, ...cmdArgs] = args.slice(dash + 1);
   if (dash < 0 || command === undefined) fail("add needs -- COMMAND");
-  if (kind === "claude" && entries[name]) fail(`MCP server ${name} already exists in user config`);
+  if (kind === "claude" && entries[name])
+    fail(`MCP server ${name} already exists in ${scope} config`);
   entries[name] = { command, args: cmdArgs };
   save();
 } else if (verb === "remove") {
   if (!entries[name]) {
-    if (kind === "claude") fail(`No MCP server named "${name}" in user scope`);
+    if (kind === "claude") fail(`No MCP server named "${name}" in ${scope} scope`);
   } else {
     delete entries[name];
     save();

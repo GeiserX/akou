@@ -203,9 +203,12 @@ describe("akou skill install", () => {
       join("/x/c", "skills"),
     );
     expect(harnessSkillsDir("codex", { ...env, CODEX_HOME: "/x/o" })).toBe(join("/x/o", "skills"));
-    // Neither harness is here: say so rather than guess.
+    // Neither harness is here: say so rather than guess, naming the folders looked for.
     const none = await cli(env, ["skill", "install"]);
     expect(none.code).toBe(69);
+    expect((await cli(env, ["skill", "uninstall"])).out).toBe(
+      "neither Claude Code (~/.claude) nor Codex (~/.codex) was found; nothing to remove",
+    );
     mkdirSync(join(t.dir, ".codex"));
     const found = await cli(env, ["skill", "install", "--json"]);
     expect(found.code).toBe(0);
@@ -324,6 +327,15 @@ describe("[PG-M1] akou skill install registers the akou tools with the harness",
       ]);
       expect(f.entries("claude")).toEqual({ akou: { command: moved, args: ["mcp"] } });
       expect(f.entries("codex")).toEqual({ akou: { command: moved, args: ["mcp"] } });
+      // The replaced command is named, so a checkout repointing an installed app's entry shows.
+      expect(third.json.mcp.map((m: { previous?: string }) => m.previous)).toEqual([
+        `${akou} mcp`,
+        `${akou} mcp`,
+      ]);
+      const back = await cli(f.env, ["skill", "install"], { self: [akou] });
+      expect(back.out).toContain(
+        `Claude Code: registered the akou tools for this akou, replacing ${moved} mcp (`,
+      );
 
       // Uninstall removes both entries and the skills.
       const gone = await cli(f.env, ["skill", "uninstall", "--json"], { self: [moved] });
@@ -332,10 +344,12 @@ describe("[PG-M1] akou skill install registers the akou tools with the harness",
       expect(f.entries("codex")).toEqual({});
       expect(existsSync(join(t.dir, ".claude", "skills", "akou"))).toBe(false);
       expect(existsSync(join(t.dir, ".codex", "skills", "akou-vocab"))).toBe(false);
-      // Uninstalling again finds nothing to remove and still succeeds.
+      // Uninstalling again finds nothing to remove, runs no remove, and still succeeds.
+      const removes = () => f.calls("claude").filter((a) => a[1] === "remove").length;
+      const before = removes();
       const again = await cli(f.env, ["skill", "uninstall"], { self: [moved] });
       expect(again.code).toBe(0);
-      expect(f.calls("claude").filter((a) => a[1] === "remove")).toHaveLength(2);
+      expect(removes()).toBe(before);
     } finally {
       t.cleanup();
     }
@@ -355,6 +369,11 @@ describe("[PG-M1] akou skill install registers the akou tools with the harness",
       expect(r.code).toBe(0);
       expect(r.out).toContain(`claude mcp add -s user akou -- ${akou} mcp`);
       expect(r.out).toContain(`codex mcp add akou -- ${akou} mcp`);
+      // The folder was there, so only the program is missing, and the text says so.
+      expect(r.out).toContain(
+        "the `claude` program is not on your PATH; to give Claude Code the akou tools, run:",
+      );
+      expect(r.out).not.toContain("was not found");
       expect(existsSync(join(t.dir, ".claude", "skills", "akou", "SKILL.md"))).toBe(true);
       const j = await cli({ HOME: t.dir, PATH: empty, SHELL: "" }, ["skill", "install", "--json"], {
         self: [akou],
@@ -376,7 +395,7 @@ describe("[PG-M1] akou skill install registers the akou tools with the harness",
     }
   });
 
-  test("--harness registers that harness only, --dir none, and a failed add exits 70 with the command", async () => {
+  test("--harness registers that harness only, --dir none, and a failed add exits 69 with the command", async () => {
     const t = tempDir();
     try {
       const f = fakeHarnesses(t.dir);
@@ -393,9 +412,66 @@ describe("[PG-M1] akou skill install registers the akou tools with the harness",
       expect(f.adds("codex")).toHaveLength(1);
       writeFileSync(join(f.state, "fail"), "");
       const bad = await cli(f.env, ["skill", "install", "--harness", "claude"], { self: [akou] });
-      expect(bad.code).toBe(70);
+      // The harness, a program outside akou, refused: unavailable (69), not an akou bug (70).
+      expect(bad.code).toBe(69);
       expect(bad.err).toContain("fake add failed on purpose");
       expect(bad.err).toContain(`claude mcp add -s user akou -- ${akou} mcp`);
+    } finally {
+      t.cleanup();
+    }
+  }, 30_000);
+
+  test("an akou entry in Claude Code's local scope is left alone and named, on install and uninstall", async () => {
+    const t = tempDir();
+    try {
+      const f = fakeHarnesses(t.dir, ["claude"]);
+      const akou = join(t.dir, "bin", "akou");
+      const other = join(t.dir, "checkout", "akou");
+      // A local entry wins over the user one, so replacing the user entry would change nothing.
+      writeFileSync(
+        join(f.state, "claude-local.json"),
+        JSON.stringify({ akou: { command: other, args: ["mcp"] } }),
+      );
+      for (let i = 0; i < 2; i++) {
+        const r = await cli(f.env, ["skill", "install", "--harness", "claude", "--json"], {
+          self: [akou],
+        });
+        expect([r.code, r.err]).toEqual([0, ""]);
+        expect(r.json.mcp).toEqual([
+          {
+            harness: "claude",
+            action: "other-scope",
+            scope: "local",
+            previous: `${other} mcp`,
+            command: ["claude", "mcp", "add", "-s", "user", "akou", "--", akou, "mcp"],
+          },
+        ]);
+      }
+      const text = await cli(f.env, ["skill", "install", "--harness", "claude"], { self: [akou] });
+      expect(text.out).toContain("claude mcp remove -s local akou");
+      expect(text.out).toContain(`claude mcp add -s user akou -- ${akou} mcp`);
+      expect(f.calls("claude").filter((a) => a[1] !== "get")).toEqual([]);
+      expect(f.entries("claude")).toEqual({});
+
+      // Uninstall does not report a failure for an entry it never added, and leaves it.
+      const gone = await cli(f.env, ["skill", "uninstall", "--harness", "claude"], {
+        self: [akou],
+      });
+      expect([gone.code, gone.err]).toEqual([0, ""]);
+      expect(gone.out).toContain("claude mcp remove -s local akou");
+      expect(JSON.parse(readFileSync(join(f.state, "claude-local.json"), "utf8"))).toEqual({
+        akou: { command: other, args: ["mcp"] },
+      });
+
+      // The same local entry running this akou is already registered.
+      writeFileSync(
+        join(f.state, "claude-local.json"),
+        JSON.stringify({ akou: { command: akou, args: ["mcp"] } }),
+      );
+      const same = await cli(f.env, ["skill", "install", "--harness", "claude", "--json"], {
+        self: [akou],
+      });
+      expect(same.json.mcp[0].action).toBe("unchanged");
     } finally {
       t.cleanup();
     }
