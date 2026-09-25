@@ -167,7 +167,15 @@ export class NotepadPane {
       void this.d.t.request("DELETE", `/calls/${call}/notes/${id}`, {}).then((r) => {
         if (r.status >= 400) toast(message(r.body, "the note was not deleted"));
       });
-    } else if (t.closest(".edit")) this.edit(li, call, id);
+    } else if (t.closest(".edit")) {
+      // An open edit closes first: its save runs on the blur this click caused, and its close runs
+      // before this. If that save fails, it stays open and this one does not start, so its text is
+      // not lost.
+      void this.saving.then(() => {
+        const row = this.list.querySelector<HTMLElement>(`li.note[data-id="${CSS.escape(id)}"]`);
+        if (!this.editing && row && this.d.call() === call) this.edit(row, call, id);
+      });
+    }
   }
 
   private edit(li: HTMLElement, call: string, id: string): void {

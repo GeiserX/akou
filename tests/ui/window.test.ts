@@ -644,6 +644,9 @@ describe("the notepad (DESIGN 5.1)", () => {
         async (rig) => {
           const made = await rig.api("POST", `/calls/${id}/notes`, { text: "budget review" });
           const nid = made.body.note.id as string;
+          const other = (await rig.api("POST", `/calls/${id}/notes`, { text: "second note" })).body
+            .note.id as string;
+          const otherRow = `#notes li.note[data-id="${other}"]`;
           const noteTexts = async () =>
             (await events(rig, id))
               .filter((e) => e.type === "note")
@@ -702,6 +705,48 @@ describe("the notepad (DESIGN 5.1)", () => {
             5000,
             "the edit saved after a refusal",
           );
+
+          // Edit on another note while this edit's save fails: this edit stays open and tracked,
+          // the other waits until this one is saved.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" third");
+          fail = "net";
+          await page.click(`${otherRow} .edit`);
+          await toastSays("the note was not saved");
+          await page.waitForTimeout(300);
+          expect(await page.locator(`${otherRow} .note-edit`).count()).toBe(0);
+          expect(await page.inputValue(`${row} .note-edit`)).toBe(
+            "budget review first again third",
+          );
+          await page.click(`${row} .note-edit`);
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await noteTexts()).includes("budget review first again third"),
+            5000,
+            "the edit saved before the other opens",
+          );
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          // Once it is saved, Edit on the other note opens it as usual, even straight from an edit.
+          await page.click(`${row} .edit`);
+          await page.waitForSelector(`${row} .note-edit`);
+          await page.keyboard.press("End");
+          await page.keyboard.type(" fourth");
+          await page.click(`${otherRow} .edit`);
+          await page.waitForSelector(`${otherRow} .note-edit`, { timeout: 5000 });
+          await until(
+            async () => (await noteTexts()).includes("budget review first again third fourth"),
+            5000,
+            "the first edit saved on the way",
+          );
+          await page.waitForSelector(`${row} .note-edit`, { state: "detached", timeout: 5000 });
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe("note-edit");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector(`${otherRow} .note-edit`, {
+            state: "detached",
+            timeout: 5000,
+          });
 
           // A new note whose request fails does not stop the next one.
           await page.click("#note-input");
