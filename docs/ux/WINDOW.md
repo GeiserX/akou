@@ -176,7 +176,7 @@ The player bar gets real controls. Line-level sync comes first, because it needs
 |---|---|---|---|---|---|
 | W5.1 | Play from any line, mic/call balance | done | DESIGN 7 | Existing tests | has |
 | W5.2 | Play and pause: a button and `Space` (outside text fields) | P0 | Audit: the player has no controls and nothing can pause it | Start a line, press Space: `player.paused` is true; press again: it resumes from the same position | has |
-| W5.3 | Position shown as wall time, a scrubber over the call | P1 | Buzz, MacWhisper, VoiceInk | Seeking to 50 % shows the wall time of that instant, never a bare offset (TRAPS time rule) | has: the scrubber spans the part being played, the unit the audio route serves |
+| W5.3 | Position shown as wall time, a scrubber over the call | P1 | Buzz, MacWhisper, VoiceInk | Seeking to 50 % shows the wall time of that instant, never a bare offset (TRAPS time rule) | partial: the wall-time position and a scrubber over the part being played (the unit the audio route serves) are built; left: one scrubber across every part of the call, and scrubbing before a line has been played |
 | W5.4 | Speed 0.75x to 2x in 0.25 steps, `[` and `]`, remembered | P1 | Buzz, MacWhisper | `]` twice sets 1.5x; reload keeps it | has |
 | W5.5 | Seek back or forward 5 s: `Shift+←` / `Shift+→` | P1 | Otter, MacWhisper | Position moves 5 s; clamps at the part bounds | has |
 | W5.6 | Follow audio: the line being played is highlighted and kept in view; scrolling by hand pauses following until "Follow" is pressed | P1 | Buzz | With playback running, the highlighted row's `a0 ≤ t < a1`; a manual scroll stops auto-scroll | has |
