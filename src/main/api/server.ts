@@ -23,12 +23,14 @@ import type { CallQuery } from "../query/context.ts";
 import type { ShareHandle, ShareStatus } from "../share/transport.ts";
 import { guard as defaultGuard, type Guard } from "./guard.ts";
 import {
+  type Access,
   authorOf,
   DRAIN_BODY_BYTES,
   drainBody,
   errorResponse,
   HttpError,
   json,
+  type Mode,
   Router,
 } from "./http.ts";
 import { callRoutes } from "./routes/calls.ts";
@@ -36,6 +38,7 @@ import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
 import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
+import { openapiRoutes } from "./routes/openapi.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
 import { queryRoutes } from "./routes/query.ts";
 import { settingsRoutes } from "./routes/settings.ts";
@@ -56,6 +59,8 @@ export interface ApiApp {
   readonly version: string;
   readonly manager: CallManager;
   readonly configDir: string;
+  /** Which akou this is; the served OpenAPI file lists this mode's routes. Default `app`. */
+  mode?(): Mode;
   now(): number;
   status(): Promise<Record<string, unknown>>;
   /** The provider the settings name (a fake in tests). */
@@ -133,6 +138,11 @@ export interface ServerOptions {
    * no setting, variable or argument reaches this.
    */
   guard?: Guard;
+  /**
+   * The route table. Only tests pass another one: `buildRouter()` with routes added, to show that
+   * a route added to the table reaches the served OpenAPI file and the guard.
+   */
+  router?: Router<ApiApp>;
   onError?(err: unknown, req: Request): void;
 }
 
@@ -156,6 +166,7 @@ export function buildRouter(): Router<ApiApp> {
   vocabRoutes(r);
   postCallRoutes(r);
   handoffRoutes(r);
+  openapiRoutes(r);
   return r;
 }
 
@@ -202,8 +213,16 @@ export async function routeRequest(
   }
 }
 
+/** Who may call the route a request names, from the route table; undefined when none matches. */
+export function routeAccess(router: Router<ApiApp>, req: Request): Access | undefined {
+  const { pathname } = new URL(req.url);
+  if (!pathname.startsWith(`${API_PREFIX}/`)) return undefined;
+  const m = router.match(req.method, pathname.slice(API_PREFIX.length));
+  return "doc" in m ? m.doc.access : undefined;
+}
+
 export function startApiServer(o: ServerOptions): ApiServer {
-  const router = buildRouter();
+  const router = o.router ?? buildRouter();
   const check = o.guard ?? defaultGuard;
   const server = Bun.serve({
     // IPv4 loopback only, by address, so no name is resolved at bind (DESIGN 6.3 rule 1).
@@ -215,7 +234,11 @@ export function startApiServer(o: ServerOptions): ApiServer {
     // Long polls wait up to 30 s; streams send a keep-alive every 15 s.
     idleTimeout: 60,
     fetch: async (req, srv) => {
-      const refused = check(req, { port: srv.port as number, token: o.token() });
+      const refused = check(req, {
+        port: srv.port as number,
+        token: o.token(),
+        anonymous: routeAccess(router, req) === "none",
+      });
       const res =
         refused ??
         (await routeRequest(router, o.app, req, {

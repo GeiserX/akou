@@ -238,17 +238,166 @@ export interface RouteContext<A> {
 
 export type Handler<A> = (c: RouteContext<A>) => Response | Promise<Response>;
 
+/** Which akou serves a route: the desktop app, server mode, or both (docs/ux/SERVER.md). */
+export type Mode = "app" | "server";
+export const MODES: readonly Mode[] = ["app", "server"];
+
+/**
+ * Who may call a route: anyone (`none`, no key at all), a key with the `jobs` scope, or only an
+ * `admin` key and the app's own token (SERVER.md SV-K3).
+ */
+export type Access = "none" | "jobs" | "admin";
+
+/** One query parameter a route reads. A route reads only the parameters it declares. */
+export type QueryParam =
+  | { type: "integer"; min: number; max: number; default?: number; doc: string }
+  | {
+      type: "string";
+      values?: readonly string[];
+      default?: string;
+      /** The route refuses a request without it. */
+      required?: true;
+      doc: string;
+    }
+  | { type: "boolean"; doc: string };
+
+/** A `multipart/form-data` body: its parts, `file` for an uploaded file. */
+export interface MultipartSpec {
+  multipart: Readonly<Record<string, FieldType | "file">>;
+}
+
+/** A body spec's values are type names, so only a multipart spec has an object under a key. */
+export function isMultipart(spec: BodySpec | MultipartSpec): spec is MultipartSpec {
+  return typeof (spec as MultipartSpec).multipart === "object";
+}
+
+/**
+ * What the OpenAPI file says about a route (docs/ux/PROGRAMMABILITY.md PG-A2 and
+ * docs/research/service-interface.md section 2). It sits beside the handler in the one route
+ * table, and the body and query specs here are the ones the handler validates with, so the file
+ * cannot describe a request the route would refuse.
+ */
+export interface RouteDoc {
+  /** The `operationId`, `<tag>.<verb>`: the tag is the resource, and becomes the tool group. */
+  id: string;
+  /** What the route does, written for an agent: the only text a tool built from it carries. */
+  doc: string;
+  access: Access;
+  modes: readonly Mode[];
+  /**
+   * `compat`: a route that speaks another tool's dialect (the OpenAI endpoint), a second way into
+   * the same pipeline. `spec`: the OpenAPI file itself. Neither is in the `?scope=jobs` view.
+   */
+  door?: "compat" | "spec";
+  /** The body the handler reads with `c.body()`. Absent: the route reads no body. */
+  body?: BodySpec | MultipartSpec;
+  /** The query parameters the handler reads through `c.query`. */
+  query?: Readonly<Record<string, QueryParam>>;
+  /** The path parameters, `:name` in the pattern, described. */
+  params?: Readonly<Record<string, string>>;
+  /** The status of a success. */
+  ok: number;
+  /** What a success carries. Default `json`. */
+  type?: "json" | "sse" | "text" | "markdown" | "audio";
+}
+
+/** The query parameters of one request, read through the route's declared `query`. */
+export interface Query {
+  /** A declared `integer` parameter: its value, checked against the range, or the default. */
+  int(name: string): number | undefined;
+  /** A declared `string` parameter with `values`: one of them, or the default. */
+  oneOf<T extends string>(name: string): T;
+  /** Any declared parameter as sent, `null` when absent. The route checks it. */
+  raw(name: string): string | null;
+}
+
+/** The context a routed handler sees: the request, plus its declared body and query. */
+export interface RoutedContext<A> extends RouteContext<A> {
+  /** The body, parsed against the route's declared `body` (`readBody`). */
+  body<T = Record<string, unknown>>(): Promise<T>;
+  query: Query;
+}
+
+export type RoutedHandler<A> = (c: RoutedContext<A>) => Response | Promise<Response>;
+
 export interface Route<A> {
   method: string;
   pattern: string;
   handler: Handler<A>;
 }
 
-export class Router<A> {
-  private readonly routes: { method: string; parts: string[]; handler: Handler<A> }[] = [];
+/** A route as the OpenAPI generator sees it. */
+export interface RouteEntry {
+  method: string;
+  /** `/calls/:id`, relative to `/v1`. */
+  path: string;
+  doc: RouteDoc;
+}
 
-  add(method: string, pattern: string, handler: Handler<A>): this {
-    this.routes.push({ method, parts: pattern.split("/").filter(Boolean), handler });
+function declared(doc: RouteDoc, name: string, type?: QueryParam["type"]): QueryParam {
+  const p = doc.query?.[name];
+  // A programming error, not a client's: the file would not list what the route reads.
+  if (!p) throw new Error(`${doc.id} reads the query parameter "${name}" it does not declare`);
+  if (type && p.type !== type) throw new Error(`${doc.id}: "${name}" is declared ${p.type}`);
+  return p;
+}
+
+function queryOf(doc: RouteDoc, url: URL): Query {
+  return {
+    int(name) {
+      const p = declared(doc, name, "integer") as Extract<QueryParam, { type: "integer" }>;
+      return intParam(url, name, p.default, p.min, p.max);
+    },
+    oneOf<T extends string>(name: string): T {
+      const p = declared(doc, name, "string") as Extract<QueryParam, { type: "string" }>;
+      if (!p.values || p.default === undefined) {
+        throw new Error(`${doc.id}: "${name}" is declared with no values or no default`);
+      }
+      return enumParam(url, name, p.values as readonly T[], p.default as T);
+    },
+    raw(name) {
+      declared(doc, name);
+      return url.searchParams.get(name);
+    },
+  };
+}
+
+function bodyOf(doc: RouteDoc, req: Request) {
+  return <T>(): Promise<T> => {
+    const spec = doc.body;
+    // Programming errors, not a client's: the file would not describe what the route reads.
+    if (!spec) throw new Error(`${doc.id} reads a body it does not declare`);
+    if (isMultipart(spec)) {
+      throw new Error(`${doc.id}: a multipart body is read by the route itself`);
+    }
+    return readBody<T>(req, spec, { open: spec === OPEN_BODY });
+  };
+}
+
+/**
+ * A body of any keys, checked by the route itself (`PATCH /config`, whose keys the settings
+ * registry checks). In the file it is an open object.
+ */
+export const OPEN_BODY: BodySpec = Object.freeze({});
+
+/**
+ * The route table. Every route is added with its `RouteDoc`, and `entries()` is what the OpenAPI
+ * file is generated from (`scripts/openapi.ts`), so a route added here is in the file with no
+ * other step, and CI fails until the committed file is regenerated. Routes of both modes live in
+ * this one table, each marked with the modes that serve it.
+ */
+export class Router<A> {
+  private readonly routes: {
+    method: string;
+    parts: string[];
+    handler: Handler<A>;
+    doc: RouteDoc;
+  }[] = [];
+
+  add(method: string, pattern: string, doc: RouteDoc, handler: RoutedHandler<A>): this {
+    const routed: Handler<A> = (c) =>
+      handler({ ...c, body: bodyOf(doc, c.req), query: queryOf(doc, c.url) });
+    this.routes.push({ method, parts: pattern.split("/").filter(Boolean), handler: routed, doc });
     return this;
   }
 
@@ -256,7 +405,9 @@ export class Router<A> {
   match(
     method: string,
     path: string,
-  ): { handler: Handler<A>; params: Record<string, string> } | { status: 404 | 405 } {
+  ):
+    | { handler: Handler<A>; params: Record<string, string>; doc: RouteDoc }
+    | { status: 404 | 405 } {
     const segs = path.split("/").filter(Boolean);
     let pathMatched = false;
     for (const r of this.routes) {
@@ -281,7 +432,7 @@ export class Router<A> {
       if (!ok) continue;
       pathMatched = true;
       if (r.method === method || (method === "HEAD" && r.method === "GET")) {
-        return { handler: r.handler, params };
+        return { handler: r.handler, params, doc: r.doc };
       }
     }
     return { status: pathMatched ? 405 : 404 };
@@ -289,6 +440,15 @@ export class Router<A> {
 
   list(): { method: string; path: string }[] {
     return this.routes.map((r) => ({ method: r.method, path: `/${r.parts.join("/")}` }));
+  }
+
+  /** Every route with its doc, in the order added. */
+  entries(): RouteEntry[] {
+    return this.routes.map((r) => ({
+      method: r.method,
+      path: `/${r.parts.join("/")}`,
+      doc: r.doc,
+    }));
   }
 }
 

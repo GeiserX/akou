@@ -46,3 +46,7 @@ export function callId(c: RouteContext<ApiApp>, opts: ResolveOptions = {}): stri
 export function nextItemId(prefix: string, lastSeq: number): string {
   return `${prefix}${String(lastSeq + 1).padStart(4, "0")}`;
 }
+
+/** The `{id}` of a call route, as the OpenAPI file describes it. */
+export const CALL_ID =
+  "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.";

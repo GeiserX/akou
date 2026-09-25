@@ -11,6 +11,9 @@
  * 2. Any `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Mode` header is refused: our clients never send
  *    them, and browsers always do on a cross-origin request.
  * 3. `Authorization: Bearer <token>` on every request, GETs included, compared in constant time.
+ *    The one exception is a route the route table marks `access: "none"`: the OpenAPI file,
+ *    which holds no secrets and which Executor fetches with no credentials. Its tests, with their
+ *    positive control, are in `tests/openapi.test.ts` and `tests/scopes.test.ts`.
  * 4. Every method but GET and HEAD needs `Content-Type: application/json`; bodies are capped at
  *    64 KB. (Unknown body fields are refused by each route's body spec.)
  *
@@ -44,6 +47,8 @@ export interface GuardContext {
   port: number;
   /** The bearer token. */
   token: string;
+  /** The route asked for needs no key (`access: "none"` in the route table). */
+  anonymous?: boolean;
 }
 
 /** Answers a refused request, or null to let it through. */
@@ -72,7 +77,7 @@ export const guard: Guard = (req, ctx) => {
   }
   const auth = req.headers.get("authorization") ?? "";
   const m = /^Bearer (\S+)$/.exec(auth);
-  if (!m || !tokenMatches(m[1] as string, ctx.token)) {
+  if (!ctx.anonymous && (!m || !tokenMatches(m[1] as string, ctx.token))) {
     return new Response(
       JSON.stringify({ error: "unauthorized", message: "a valid bearer token is required" }),
       {
