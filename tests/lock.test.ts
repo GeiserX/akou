@@ -26,6 +26,7 @@ import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
 const WRITER = join(import.meta.dir, "..", "src", "core", "log", "writer.ts");
+const ENTRY = join(import.meta.dir, "..", "src", "main", "index.ts");
 
 function aged(path: string, seconds: number): void {
   const t = new Date(Date.now() - seconds * 1000);
@@ -61,6 +62,42 @@ describe("SI-4: a lock that survives a container restart", () => {
       } finally {
         await app.quit();
       }
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  /** The real entry point on a home, as a container's `CMD` runs it: its exit code and stderr. */
+  async function entry(home: string): Promise<{ code: number; err: string }> {
+    const proc = Bun.spawn([process.execPath, ENTRY], {
+      env: { ...process.env, AKOU_HOME: home, AKOU_HEADLESS: "1" },
+      stdout: "ignore",
+      stderr: "pipe",
+    });
+    const [err, code] = await Promise.all([new Response(proc.stderr).text(), proc.exited]);
+    return { code, err };
+  }
+
+  test("the entry point in server mode exits 75 on a lock too fresh to take, never 0 as if running", async () => {
+    const t = tempDir("akou-lock-");
+    try {
+      writeSettings(t.dir, { "api.port": 0, "server.enabled": true, "api.bind": "127.0.0.1" });
+      const lock = join(t.dir, ".config", "akou", APP_LOCK);
+      // A holder this process cannot see: after a restart, pid 1 with the earlier start's id.
+      const child = Bun.spawn([process.execPath, "--version"], { stdout: "ignore" });
+      await child.exited;
+      writeFileSync(lock, `${child.pid} 0123456789abcdef\n`);
+      aged(lock, 12);
+      const fresh = await entry(t.dir);
+      // 75 (EX_TEMPFAIL): Docker's restart policies start it again, and the lock ages meanwhile.
+      expect(fresh.code).toBe(75);
+      expect(fresh.err).toMatch(/lock from an earlier start is 1\d s old; it frees in 1\d s/);
+      expect(fresh.err).not.toContain("already running");
+      // Positive control: a holder alive here is a running akou, and that is still exit 0.
+      writeFileSync(lock, `${process.pid} 0123456789abcdef\n`);
+      const running = await entry(t.dir);
+      expect(running.code).toBe(0);
+      expect(running.err).toContain("already running");
     } finally {
       t.cleanup();
     }

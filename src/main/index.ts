@@ -249,6 +249,22 @@ export function apiBind(s: LoadedConfig["settings"]): string {
   return bind;
 }
 
+/**
+ * The app lock names a holder this process cannot see, and is too fresh to take (SI-4): after a
+ * container restart, the earlier start's lock until it is 30 s old, or another container on the
+ * same volume that keeps it fresh. The entry point exits 75 (EX_TEMPFAIL), so a restart policy
+ * starts it again, never 0, which would tell Docker the service finished.
+ */
+export class LockAgingError extends Error {
+  override name = "LockAgingError";
+  constructor(pid: number, aging: { ageMs: number; staleMs: number }) {
+    const s = (ms: number) => Math.max(0, Math.round(ms / 1000));
+    super(
+      `a lock from an earlier start is ${s(aging.ageMs)} s old; it frees in ${s(aging.staleMs - aging.ageMs)} s, unless another akou on this volume (pid ${pid} in its own namespace) keeps it fresh`,
+    );
+  }
+}
+
 export class AlreadyRunningError extends Error {
   constructor(
     readonly pid: number,
@@ -1731,6 +1747,7 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
     acquireLock(lockPath, process.pid, processAlive, { serverMode });
   } catch (err) {
     if (err instanceof LockError) {
+      if (err.aging) throw new LockAgingError(err.holderPid, err.aging);
       throw new AlreadyRunningError(err.holderPid, readRuntime(cfg.paths.configDir));
     }
     throw err;
@@ -1766,6 +1783,10 @@ if (import.meta.main) {
     if (err instanceof StartRefused) {
       console.error(`akou: cannot start: ${err.message}`);
       process.exit(78);
+    }
+    if (err instanceof LockAgingError) {
+      console.error(`akou: cannot start yet: ${err.message}`);
+      process.exit(75);
     }
     console.error(`akou: cannot start: ${(err as Error).message}`);
     process.exit(70);

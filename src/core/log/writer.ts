@@ -52,6 +52,11 @@ export class LockError extends Error {
   constructor(
     readonly lockPath: string,
     readonly holderPid: number,
+    /**
+     * Set when the lock was refused only for its age (rule 4 of `acquireLock`): its holder cannot
+     * be seen, and the lock is taken once `ageMs` reaches `staleMs`.
+     */
+    readonly aging?: { ageMs: number; staleMs: number },
   ) {
     super(`another writer (pid ${holderPid}) holds ${lockPath}`);
     this.name = "LockError";
@@ -197,7 +202,8 @@ export function acquireLock(
       try {
         age = (o.now ?? Date.now)() - statSync(lockPath).mtimeMs;
       } catch {}
-      if (age < (o.staleMs ?? LOCK_STALE_MS)) throw new LockError(lockPath, holder);
+      const staleMs = o.staleMs ?? LOCK_STALE_MS;
+      if (age < staleMs) throw new LockError(lockPath, holder, { ageMs: age, staleMs });
     }
   }
   // The holder is gone (a crash): take the lock over. Two writers may both have read the same
