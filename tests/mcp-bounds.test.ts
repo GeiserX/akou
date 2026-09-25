@@ -23,7 +23,7 @@ import {
 } from "../src/main/query/render.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { jsonl, tempDir } from "./helpers.ts";
-import { mcpClient, sampleApi, TOOL_ARGS, type ToolAnswer } from "./mcp-helpers.ts";
+import { fakeApi, mcpClient, sampleApi, TOOL_ARGS, type ToolAnswer } from "./mcp-helpers.ts";
 import { synthCall } from "./synth.ts";
 
 const LONG = 60_000;
@@ -272,6 +272,36 @@ describe("[PG-M5] every tool stays under the ceiling", () => {
     }
   });
 
+  test("akou_get_call's text names the call's state as the structured result does", async () => {
+    for (const [state, word] of [
+      ["interrupted", "INTERRUPTED"],
+      ["failed", "FAILED"],
+      ["recording", "LIVE"],
+      ["ended", "ENDED"],
+    ] as const) {
+      const c = await mcpClient(
+        fakeApi((_m, path) =>
+          path.endsWith("/transcript")
+            ? {
+                call: "c1",
+                state,
+                live: state === "recording",
+                lines: [],
+                total: 0,
+                nextOffset: null,
+              }
+            : {},
+        ),
+      );
+      try {
+        const r = await c.call("akou_get_call", { call: "c1" });
+        expect([state, r.structured.state, r.text.split(":")[0]]).toEqual([state, word, word]);
+      } finally {
+        await c.close();
+      }
+    }
+  });
+
   test("akou_get_notes pages a long notepad: following nextOffset reads every note once", async () => {
     const c = await mcpClient(sampleApi(300));
     try {
@@ -351,4 +381,98 @@ describe("capAnswer, the last guard every tool answer passes", () => {
     expect(out.structuredContent).toBeUndefined();
     expect(out.content[0]?.text).toMatch(/^answer_too_large: /);
   });
+});
+
+describe("[PG-M5] akou_get_call's cursor on a call that changed between pages", () => {
+  // One call three ways: as read, with a line before the cursor retracted, with a final layer.
+  const ASIS = "01J8Z6Q4M2VX0K7B3D4E5F6G7A";
+  const RETRACTED = "01J8Z6Q4M2VX0K7B3D4E5F6G7B";
+  const FINAL = "01J8Z6Q4M2VX0K7B3D4E5F6G7C";
+  let rig: AppRig;
+  let home: { dir: string; cleanup: () => void };
+  let api: ApiClient;
+
+  beforeAll(async () => {
+    const syn = synthCall({ hours: 1, seed: 7, facts: 5 });
+    const base: LogEvent[] = [...syn.events];
+    const add = (events: LogEvent[], d: Record<string, unknown>) =>
+      events.push({ seq: events.length + 1, t: syn.end + events.length, ...d } as LogEvent);
+    const part = ([...base].reverse().find((e) => e.type === "part.started") as { part: number })
+      .part;
+    add(base, { type: "part.ended", part, reason: "stop", fileSeconds: 3600 });
+    add(base, { type: "call.ended", reason: "stop" });
+    const segs = base.filter((e) => e.type === "seg") as { id: string; part: number }[];
+    const as = (id: string, events: LogEvent[]) =>
+      events.map((e) => (e.type === "call.created" ? { ...e, id } : e)) as LogEvent[];
+    const retracted = as(RETRACTED, base);
+    add(retracted, { type: "seg", id: (segs[2] as { id: string }).id, rev: 2, text: null });
+    const final = as(FINAL, base);
+    const parts = [...new Set(segs.map((s) => s.part))];
+    for (const p of parts) {
+      add(final, {
+        type: "seg",
+        id: `f${String(p).padStart(6, "0")}`,
+        rev: 1,
+        layer: "final",
+        part: p,
+        ch: "call",
+        spk: "c1",
+        a0: 0,
+        a1: 1,
+        w0: syn.end - 1000,
+        w1: syn.end,
+        text: "the final layer",
+        model: "parakeet-tdt-0.6b-v3-fp32",
+      });
+      add(final, { type: "final.part.done", part: p });
+    }
+    add(final, { type: "final.done", parts, skipped: [] });
+    home = tempDir("akou-app-");
+    for (const [slug, events] of [
+      ["asis", as(ASIS, base)],
+      ["retracted", retracted],
+      ["final", final],
+    ] as const) {
+      const dir = join(home.dir, "Recordings", "akou", "work", `2026-09-23_153612_${slug}`);
+      mkdirSync(join(dir, "audio"), { recursive: true });
+      writeFileSync(join(dir, "events.jsonl"), jsonl(events));
+    }
+    rig = await appRig({ home: home.dir });
+    api = new ApiClient({ env: { ...process.env, ...rig.env }, client: "mcp", launch: null });
+  });
+
+  afterAll(async () => {
+    await rig?.close();
+    home?.cleanup();
+  });
+
+  test(
+    "a line retracted before the cursor neither skips nor repeats one; a switched layer says the cursor is stale",
+    async () => {
+      const c = await mcpClient(api);
+      try {
+        const first = await c.call("akou_get_call", { call: ASIS });
+        expect(first.isError).toBe(false);
+        expect(first.text).toStartWith("ENDED: call");
+        const cursor = first.structured.nextCursor as string;
+        expect(typeof cursor).toBe("string");
+        const next = await c.call("akou_get_call", { call: ASIS, cursor });
+        expect(idsIn(next.text).length).toBeGreaterThan(0);
+        // The same cursor on the call with an earlier line retracted continues at the same line.
+        const moved = await c.call("akou_get_call", { call: RETRACTED, cursor });
+        expect(moved.isError).toBe(false);
+        expect(idsIn(moved.text)).toEqual(idsIn(next.text));
+        // The line it points after is gone from the final layer: never a silent skip.
+        const stale = await c.call("akou_get_call", { call: FINAL, cursor });
+        expect(stale.isError).toBe(true);
+        expect(stale.text).toStartWith("cursor_stale");
+        // Positive control: the final call reads from its first page.
+        const fresh = await c.call("akou_get_call", { call: FINAL });
+        expect(fresh.text).toContain("the final layer");
+      } finally {
+        await c.close();
+      }
+    },
+    LONG,
+  );
 });

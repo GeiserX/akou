@@ -575,7 +575,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
 | `GET /calls/{id}/events?after=SEQ&wait=25` | Raw log, long-poll |
 | `GET /calls/{id}/stream?after=SEQ` | SSE: events plus ephemeral `partial`, `level` and `read` (the app's text and `heard` for every line its vocabulary corrects, after the backlog and again whenever that changes) |
-| `GET /calls/{id}/transcript?layer=best&since&from&to&speaker&format=json\|md\|txt\|export&limitTokens` | Rendered, names and vocabulary applied; JSON rows carry `text` (corrected) and `heard` (raw, only when different); `export` is the export file's `## Transcript` section, what the window's Copy transcript copies |
+| `GET /calls/{id}/transcript?layer=best&since&from&to&speaker&format=json\|md\|txt\|export&limitTokens&offset&afterLine` | Rendered, names and vocabulary applied; JSON rows carry `text` (corrected) and `heard` (raw, only when different); `export` is the export file's `## Transcript` section, what the window's Copy transcript copies. `limitTokens` keeps the newest lines that fit; with `since`, the earliest changed after it and a `cursor` covering exactly them (`more` counts the rest); with `offset` or `afterLine` (the line a page ends on), one page oldest first, and `409 cursor_stale` when that line is gone |
 | `POST /calls/{id}/context` `{question, budget}` | The pack, `cursor`, `state`, `memoStale`, `provisional` |
 | `POST /calls/{id}/ask` `{question, stream}` | Needs a provider. Streams tokens when `stream` |
 | `GET /calls/{id}/search?q=&k=` | Hits |

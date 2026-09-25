@@ -13,8 +13,10 @@
  *   provisional line (marked `draft`), which is what `akou_read` follows a call with.
  *   `format=export` is the export file's `## Transcript` section, what the window copies.
  *   `limitTokens` alone keeps the newest lines that fit (`omitted` counts the rest); with `offset`
- *   it pages from that line, oldest first, and `nextOffset` is where the next page starts, which
- *   is how `akou_get_call` reads a long call (PG-M5). With `since` it takes the lines changed
+ *   it pages from that line, oldest first, and `nextOffset` is where the next page starts;
+ *   `afterLine=ID` pages from the line after that one instead, so a line retracted or added before
+ *   it moves nothing, and answers 409 `cursor_stale` when the line is gone (the final layer replaced
+ *   it). That is how `akou_get_call` reads a long call (PG-M5). With `since` it takes the lines changed
  *   earliest after the cursor that fit, and `cursor` then covers exactly those, so a follower that
  *   reads again from it gets the rest (`more` counts them) and never skips a line: `akou_read`.
  */
@@ -346,7 +348,8 @@ export function followRoutes(r: Router<ApiApp>): void {
     const format = enumParam(c.url, "format", ["json", "md", "txt", "export"] as const, "json");
     const since = intParam(c.url, "since", 0, 0, Number.MAX_SAFE_INTEGER) as number;
     const limitTokens = intParam(c.url, "limitTokens", undefined, 1, 1_000_000);
-    const offset = intParam(c.url, "offset", undefined, 0, Number.MAX_SAFE_INTEGER);
+    let offset = intParam(c.url, "offset", undefined, 0, Number.MAX_SAFE_INTEGER);
+    const afterLine = c.url.searchParams.get("afterLine");
     const from = timeParam(c.url, "from");
     const to = timeParam(c.url, "to");
     const speaker = c.url.searchParams.get("speaker")?.toLowerCase() ?? null;
@@ -374,6 +377,18 @@ export function followRoutes(r: Router<ApiApp>): void {
     let cursor = v.lastSeq;
     let nextOffset: number | null = null;
     const lastSeqOf = (l: Line) => v.segment(l.id)?.lastSeq ?? 0;
+    if (afterLine) {
+      const at = lines.findIndex((l) => l.id === afterLine);
+      if (at < 0) {
+        throw new HttpError(
+          409,
+          "cursor_stale",
+          `line ${afterLine} is no longer in the ${layer} layer (the call changed since that page); read it again from the first page`,
+          { line: afterLine, layer },
+        );
+      }
+      offset = at + 1;
+    }
     if (offset !== undefined) {
       // A page, oldest first: the lines from `offset` that fit, at least one, and where the next
       // page starts (null at the end).
@@ -468,6 +483,7 @@ export function followRoutes(r: Router<ApiApp>): void {
       total,
       omitted,
       more,
+      offset: offset ?? 0,
       nextOffset,
       lines: lines.map((l) => ({
         id: l.id,

@@ -1061,25 +1061,34 @@ export function createMcpServer(o: McpOptions): McpServer {
       outputSchema: OUT.getCall,
     },
     async (a) => {
-      const offset =
-        a.cursor === undefined ? 0 : /^\d{1,15}$/.test(a.cursor) ? Number(a.cursor) : -1;
-      if (offset < 0) {
+      // The cursor is the id of the last line read, so the next page starts after that line even
+      // when lines before it were retracted or added; a line that is gone answers cursor_stale.
+      if (a.cursor !== undefined && !/^[a-z]\d{1,12}$/.test(a.cursor)) {
         return errorText(`bad_cursor: "${a.cursor}" is not a nextCursor from akou_get_call`);
       }
       const r = await req("GET", `/calls/${id(a.call)}/transcript`, {
-        query: { layer: a.layer, format: "json", offset, limitTokens: PAGE_TOKENS },
+        query: {
+          layer: a.layer,
+          format: "json",
+          ...(a.cursor === undefined ? { offset: 0 } : { afterLine: a.cursor }),
+          limitTokens: PAGE_TOKENS,
+        },
       });
       return asResult(r, (b) => {
         const lines = b.lines as Body[];
         const total: number = b.total ?? lines.length;
-        const next: number | null = b.nextOffset ?? null;
+        const offset: number = b.offset ?? 0;
+        const next: string | null =
+          b.nextOffset === null || b.nextOffset === undefined
+            ? null
+            : String((lines.at(-1) as Body).id);
         const block = quoteCallText(
           lines.map((l) => `#${l.id} ${l.time} ${l.speaker}: ${l.annotated ?? l.text}`).join("\n"),
         );
         const state = packState(b.state);
         return {
           text: [
-            `${state === "LIVE" ? "LIVE" : "ENDED"}: call ${b.call}, lines ${lines.length > 0 ? `${offset + 1} to ${offset + lines.length}` : "none"} of ${total}. ${b.zone ?? ""}`.trim(),
+            `${state}: call ${b.call}, lines ${lines.length > 0 ? `${offset + 1} to ${offset + lines.length}` : "none"} of ${total}. ${b.zone ?? ""}`.trim(),
             block,
             next === null ? "End of the call." : `nextCursor: ${next}`,
           ].join("\n"),
@@ -1090,7 +1099,7 @@ export function createMcpServer(o: McpOptions): McpServer {
             total,
             from: offset,
             lines: lines.length,
-            nextCursor: next === null ? null : String(next),
+            nextCursor: next,
             callText: block,
           },
         };
