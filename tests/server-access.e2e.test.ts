@@ -312,6 +312,7 @@ describe("SV-D3: the 64 KB cap applies to JSON routes only", () => {
         "/v1/jobs",
         { ...auth, "content-type": "multipart/form-data; boundary=x" },
         513 * MB,
+        0,
       );
       expect(over).toBe(413);
     } finally {
@@ -323,7 +324,7 @@ describe("SV-D3: the 64 KB cap applies to JSON routes only", () => {
     const s = uploadServer(2 * MB);
     try {
       const auth = { authorization: `Bearer ${TOKEN}`, "content-type": "multipart/form-data" };
-      expect(await declare(s.port, "/v1/jobs", auth, 3 * MB)).toBe(413);
+      expect(await declare(s.port, "/v1/jobs", auth, 3 * MB, 0)).toBe(413);
       const m = multipart(MB);
       const r = await fetch(`http://127.0.0.1:${s.port}/v1/jobs`, {
         method: "POST",

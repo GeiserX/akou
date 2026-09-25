@@ -8,6 +8,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { connect } from "node:net";
 import { join } from "node:path";
 import type { Guard } from "../src/main/api/guard.ts";
+import { DRAIN_BODY_BYTES } from "../src/main/api/http.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import type { FinalAudioSpec } from "../src/main/asr/finalize-worker.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
@@ -273,12 +274,20 @@ function chunkEncode(body: string): string {
   return `${out}0\r\n\r\n`;
 }
 
-/** Headers declaring a body, then at most 2 MiB of it: the answer comes from the headers. */
+/**
+ * Headers declaring a body of `length` bytes, then `sent` bytes of it: the answer comes from the
+ * headers. The default is the whole of a small body and, of a large one, one byte past the
+ * server's drain cap (`DRAIN_BODY_BYTES`): the drain stops at that byte and answers at once with
+ * nothing left unread. A byte more and the server closes on unread bytes, and the reset can reach
+ * this socket before the answer. A length past Bun's own limit (`maxRequestBodySize`) is refused by
+ * Bun at the headers, before any drain: send 0 then, or the write races the close.
+ */
 export function declare(
   port: number,
   path: string,
   headers: Record<string, string>,
   length: number,
+  sent = Math.min(length, DRAIN_BODY_BYTES + 1),
 ): Promise<number> {
   return new Promise((resolve, reject) => {
     const sock = connect({ host: "127.0.0.1", port });
@@ -294,9 +303,7 @@ export function declare(
         "",
       ];
       sock.write(lines.join("\r\n"));
-      // The whole of a small body; 2 MiB of a large one, past the server's drain cap, so the
-      // refusal is sent at once rather than after the drain's 2 s wait for bytes that never come.
-      sock.write("x".repeat(Math.min(length, 2 * 1024 * 1024)));
+      if (sent > 0) sock.write("x".repeat(sent));
     });
     sock.on("data", (d) => {
       buf += d.toString("latin1");
