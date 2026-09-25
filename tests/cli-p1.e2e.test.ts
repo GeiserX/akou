@@ -1,7 +1,7 @@
 /**
  * CLI rules checked end to end against a headless app (docs/ux/CLI.md): probes that never launch
  * the app (CLI-23), one way to name a call (CLI-03), secrets only from stdin (CLI-06), the OS
- * grants in `doctor` (CLI-38), and the `user` author `akou watch` writes as (CLI-24).
+ * grants in `doctor` (CLI-38), and no header making a request the user's (CLI-24).
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -14,8 +14,10 @@ import { runCli } from "../src/main/cli/cli.ts";
 import { EXIT } from "../src/main/cli/client.ts";
 import type { Grant, GrantChecker } from "../src/main/cli/context.ts";
 import { type AppRig, appRig, FAKE_HELPER, writeSettings } from "./api-helpers.ts";
+import { until } from "./capture-helpers.ts";
 import { cliChild, rigCli } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
+import { shellOn } from "./shell-helpers.ts";
 
 const LONG = 60_000;
 
@@ -254,33 +256,33 @@ describe("with a running app", () => {
     });
   });
 
-  describe("[CLI-24] what akou watch types is the user's", () => {
-    test("X-Akou-Client: user writes by user; any other client stays an agent", async () => {
+  describe("[CLI-24] no header makes a request the user's", () => {
+    test("X-Akou-Client: user, in any case, writes as an agent; `cli` and odd names keep theirs", async () => {
       const live = await rig.startCall({ title: "Authors", withoutModels: true });
       try {
-        await rig.api(
-          "POST",
-          `/calls/${live}/notes`,
-          { text: "typed" },
-          { "x-akou-client": "user" },
-        );
-        await rig.api(
-          "POST",
-          `/calls/${live}/notes`,
-          { text: "scripted" },
-          { "x-akou-client": "cli" },
-        );
-        await rig.api(
-          "POST",
-          `/calls/${live}/notes`,
-          { text: "odd" },
-          { "x-akou-client": "User!" },
-        );
+        const clients = {
+          typed: "user",
+          shouted: "USER",
+          title: "User",
+          scripted: "cli",
+          odd: "User!",
+        };
+        for (const [text, client] of Object.entries(clients)) {
+          const r = await rig.api(
+            "POST",
+            `/calls/${live}/notes`,
+            { text },
+            { "x-akou-client": client },
+          );
+          expect(r.status).toBe(201);
+        }
         const notes = (await rig.api("GET", `/calls/${live}/events`)).body.events
           .filter((e: { type: string }) => e.type === "note")
           .map((e: { text: string; by: string }) => [e.text, e.by]);
         expect(notes).toEqual([
-          ["typed", "user"],
+          ["typed", "agent:user"],
+          ["shouted", "agent:user"],
+          ["title", "agent:user"],
           ["scripted", "agent:cli"],
           ["odd", "agent:api"],
         ]);
@@ -289,4 +291,38 @@ describe("with a running app", () => {
       }
     });
   });
+});
+
+describe("[CLI-24] a start or share sent as `user` is still announced (PRINCIPLES 10)", () => {
+  test(
+    "with the window in front, X-Akou-Client: user on POST /calls and POST /share notifies; the window's own start does not",
+    async () => {
+      const rig = await appRig({ settings: { "share.bind": "127.0.0.1", "share.port": 0 } });
+      const { shell, f, bridge } = await shellOn(rig);
+      try {
+        shell.show();
+        // Positive control: the window's own start, with the window in front, is silent.
+        expect((await bridge.json("POST", "/calls", {})).status).toBe(201);
+        await Bun.sleep(300);
+        expect(f.notices).toEqual([]);
+        expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+
+        const user = { "x-akou-client": "user" };
+        expect((await rig.api("POST", "/calls", {}, user)).status).toBe(201);
+        await until(() => f.notices.length >= 1, 5000, "the start notice");
+        expect((await rig.api("POST", "/share", {}, { "x-akou-client": "User" })).status).toBe(201);
+        await until(() => f.notices.length >= 2, 5000, "the share notice");
+        expect(f.notices).toEqual([
+          { title: "Recording started", body: "Started by an agent" },
+          { title: "This call is shared live", body: "Stop it from the akou window." },
+        ]);
+      } finally {
+        await rig.api("DELETE", "/share", {});
+        await rig.api("POST", "/calls/live/stop");
+        await shell.close();
+        await rig.close();
+      }
+    },
+    LONG,
+  );
 });

@@ -56,11 +56,8 @@ export interface Ctx {
   color?: boolean;
   /** Test seam: what `doctor` asks about the OS grants (CLI-38). */
   grants?: GrantChecker;
-  /**
-   * Runs another command in this process with other streams (`akou watch`'s lines), as `client`
-   * when given (`user` for a person typing at a terminal).
-   */
-  run?(argv: readonly string[], io: Io, client?: string): Promise<number>;
+  /** Runs another command in this process with other streams (`akou watch`'s lines). */
+  run?(argv: readonly string[], io: Io): Promise<number>;
 }
 
 /** The OS grants akou needs, as `doctor` reads them (CLI-38). */

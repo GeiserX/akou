@@ -84,8 +84,6 @@ export interface CliOptions {
   skillSource?: string;
   self?: readonly string[];
   version?: string;
-  /** Sent as `X-Akou-Client`: `cli` by default; `akou watch` sends `user`, a person at a terminal. */
-  client?: string;
   grants?: GrantChecker;
 }
 
@@ -133,7 +131,7 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     json,
     client: new ApiClient({
       env: io.env,
-      client: o.client ?? "cli",
+      client: "cli",
       launch: o.launch,
       launchBudgetMs: o.launchBudgetMs,
     }),
@@ -143,7 +141,7 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     version: o.version ?? APP_VERSION,
     color: !json && colorOn(io),
     grants: o.grants,
-    run: (args, sub, client) => runCli(args, sub, { ...o, client: client ?? o.client }),
+    run: (args, sub) => runCli(args, sub, o),
   };
   try {
     return await cmd.run(ctx, parsed);

@@ -7,8 +7,9 @@
  *   erase-line, never a newline; a line gets its newline when it commits. No alternate screen and
  *   no layout library, so it works in any terminal, in tmux and over SSH.
  * - Plain text asks the watched call (`akou ask`); a line that starts with `/` runs that CLI
- *   command with `-c` set to the watched call, in this process. What is typed here is typed by a
- *   person, so it is sent as the user, not as an agent.
+ *   command with `-c` set to the watched call, in this process, as the CLI (`by: agent:cli`), the
+ *   same as that command typed in a shell: the API cannot tell a person from an agent holding the
+ *   same token, so only the window writes as the user.
  * - It never stops the recording on the way out: Ctrl-C clears the line, Ctrl-C on an empty line,
  *   Ctrl-D or `/quit` exit 0. `/stop` asks first, and Enter answers no.
  * - Only on a terminal: piped, it exits 64 and names `akou tail -f`.
@@ -269,7 +270,7 @@ export const watch: Command = {
       }
     })();
 
-    /** Runs one CLI command in this process, as the user, printing its output above the prompt. */
+    /** Runs one CLI command in this process, printing its output above the prompt. */
     const runLine = async (argv: string[], stream: boolean): Promise<void> => {
       const ac = new AbortController();
       busy = ac;
@@ -297,7 +298,7 @@ export const watch: Command = {
         tty: ctx.io.tty,
       };
       try {
-        await ctx.run?.(argv, sub, "user");
+        await ctx.run?.(argv, sub);
       } catch (err) {
         sub.err(`akou: ${(err as Error).message}`);
       }

@@ -250,7 +250,7 @@ describe("[CLI-24] Follow and ask a live call in the terminal with akou watch", 
         );
         expect(provider.questions.length).toBe(1);
 
-        // `/note` is the CLI's `note`, bound to this call, typed by the user.
+        // `/note` is the CLI's `note`, bound to this call, written as the CLI: no header is the user.
         t.type("/note hello\r");
         await until(
           async () =>
@@ -260,9 +260,9 @@ describe("[CLI-24] Follow and ask a live call in the terminal with akou watch", 
                 text?: string;
                 by?: string;
               }[]
-            ).some((e) => e.type === "note" && e.text === "hello" && e.by === "user"),
+            ).some((e) => e.type === "note" && e.text === "hello" && e.by === "agent:cli"),
           10_000,
-          "a note by the user",
+          "a note by the CLI",
         );
 
         // `/stop` asks first; Enter alone is no.
