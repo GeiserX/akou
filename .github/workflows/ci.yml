@@ -9,7 +9,8 @@ name: ci
 # or more skips than the floor fail the job. Bun is the version in .bun-version, everywhere.
 #
 # Run by hand with `repeat` to prove a flake fix: the ui and capture legs run every test that many
-# times (`--rerun-each`) in one dispatch, and their floors scale with it.
+# times (`--rerun-each`) in one dispatch, the check leg runs the capture traps against the fake
+# helper that many times after the one full check, and every floor scales with it.
 
 on:
   push:
@@ -18,7 +19,7 @@ on:
   workflow_dispatch:
     inputs:
       repeat:
-        description: "Run every ui and capture test this many times (--rerun-each)"
+        description: "Run every ui and capture test, and check's capture traps, this many times (--rerun-each)"
         type: number
         default: 1
 
@@ -66,7 +67,7 @@ jobs:
       matrix:
         os: ${{ fromJSON(needs.changes.outputs.code == 'true' && '["ubuntu-latest", "macos-latest", "windows-latest"]' || '["ubuntu-latest"]') }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: ${{ inputs.repeat > 1 && 180 || 30 }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -75,6 +76,14 @@ jobs:
       - run: bun install --frozen-lockfile
       # The pinned Bun, Biome, tsc twice, bun test, then the job's floor.
       - run: bun run check
+      # A dispatch with `repeat` proves the flake fixes that live in the check: the capture traps
+      # against the fake helper (the helper crash and [T0.9], docs/TESTING.md TS-1), that many times.
+      - if: inputs.repeat > 1
+        env:
+          TEST_REPEAT: ${{ inputs.repeat }}
+        run: |
+          bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-traps.xml tests/capture-traps.test.ts
+          bun scripts/ci/test-floor.ts capture-traps .junit-traps.xml
 
   # The window in a headless browser (docs/DESIGN.md sections 7 and 9): Playwright drives the real
   # page over the real headless app with the fake capture helper, the fake recognizer and a fake

@@ -128,6 +128,25 @@ describe("[T4.20] a job that runs too few tests fails", () => {
     }
   });
 
+  test("every job ci.yml hands to the floor script has a floor", () => {
+    const yaml = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+    const floors = Object.keys(
+      JSON.parse(readFileSync(join(ROOT, "tests", "floors.json"), "utf8")),
+    );
+    const jobs = [...yaml.matchAll(/test-floor\.ts ((?:\$\{\{[^}]*\}\}|[^\s$])+) /g)].map(
+      (m) => m[1] as string,
+    );
+    expect(jobs.length).toBeGreaterThan(0);
+    for (const job of jobs) {
+      // A job named from the matrix (`capture-live-${{ matrix.server }}`) matches any value.
+      const name = new RegExp(`^${job.replace(/\$\{\{[^}]*\}\}/g, "[a-z0-9-]+")}:`);
+      expect({ job, floors: floors.filter((k) => name.test(k)).length > 0 }).toEqual({
+        job,
+        floors: true,
+      });
+    }
+  });
+
   test("every floor names a job and a platform, with whole counts", () => {
     const floors = JSON.parse(readFileSync(join(ROOT, "tests", "floors.json"), "utf8"));
     for (const [key, f] of Object.entries(floors as Record<string, Record<string, unknown>>)) {
