@@ -23,6 +23,11 @@
  * MCP caller asking for a budget of 12k or more) is the header plus the whole transcript, capped
  * at 14k tokens. Speaker ids go in a stable prefix; the roster, vocabulary hits, memo and "now" go
  * in a dynamic tail, so naming a speaker does not invalidate a provider's prompt cache.
+ *
+ * Call text is data (PG-Z1): in both modes, everything taken from the call (earlier questions and
+ * answers, vocabulary hits, the memo, the lines and the draft line) sits in one `<call-text>`
+ * block under a fixed header, with any marker inside it escaped. The status, the header, the
+ * agent's own remembered lines, the rules and akou's notes to the agent stay outside it.
  */
 
 import { formatLocalDate, formatWall } from "../../core/log/clock.ts";
@@ -39,12 +44,16 @@ import {
   renderMemo,
 } from "./memo.ts";
 import {
+  CALL_TEXT_CLOSE,
+  CALL_TEXT_START,
+  escapeCallText,
   estimateTokens,
   formatAgo,
   formatCitation,
   nowLine,
   type PackState,
   packState,
+  quoteCallText,
   renderLine,
   renderProvisional,
   statusLine,
@@ -711,8 +720,12 @@ export class CallQuery {
     const lines = this.index.allLines();
     const status = this.status(o.now);
     const header = [status, ...this.headerLines(o.now, o.ref, false)];
-    // What the header and rules leave: the optional blocks shrink with a small budget.
-    const avail = Math.max(0, o.budget - cost([...header, this.rules()]) - BLOCK_CAPS.analysis);
+    // What the header, the rules and the call-text markers leave: the optional blocks shrink with
+    // a small budget.
+    const avail = Math.max(
+      0,
+      o.budget - cost([...header, this.rules()]) - BLOCK_CAPS.analysis - QUOTE_COST,
+    );
     const capOf = (name: keyof typeof BLOCK_SHARE) =>
       Math.min(BLOCK_CAPS[name], Math.floor(avail * BLOCK_SHARE[name]));
     const remember = this.rememberLines(
@@ -736,8 +749,10 @@ export class CallQuery {
     } else {
       memoBlock.push("Memo: none yet.");
     }
+    // akou's notes to the agent: outside the call-text block, so they read as akou's.
+    const notes: string[] = [];
     if (memo.stale) {
-      memoBlock.push(
+      notes.push(
         `The memo is stale: ${memo.uncovered.lines} lines are not covered. Write one with akou_memo_put.`,
       );
     }
@@ -758,6 +773,8 @@ export class CallQuery {
     const fixed =
       cost(header) +
       cost([analysis]) +
+      cost(notes) +
+      QUOTE_COST +
       cost(qa) +
       cost(memoBlock) +
       cost(provBlock) +
@@ -892,6 +909,7 @@ export class CallQuery {
     const sections: { name: string; rows: string[] }[] = [
       { name: "header", rows: header },
       { name: "analysis", rows: [analysis] },
+      { name: "notes", rows: notes },
     ];
     const push = (name: string, block: string[]) => {
       if (block.length > 0) sections.push({ name, rows: [...block] });
@@ -933,7 +951,17 @@ export class CallQuery {
     }
     push("provisional", provBlock);
 
-    const join = () => sections.map((x) => x.rows.join("\n")).join("\n\n");
+    const join = () => {
+      const text = (xs: typeof sections) =>
+        xs
+          .filter((x) => x.rows.length > 0)
+          .map((x) => x.rows.join("\n"))
+          .join("\n\n");
+      const outside = text(sections.filter((x) => !QUOTED.has(x.name)));
+      const quoted = text(sections.filter((x) => QUOTED.has(x.name)));
+      // A pack squeezed down to its header has no call text left to quote.
+      return quoted === "" ? outside : `${outside}\n\n${quoteCallText(quoted)}`;
+    };
     let text = join();
     let tokens = estimateTokens(text);
     // The estimate of the parts can differ from the whole; trim until the pack fits: the oldest
@@ -947,18 +975,27 @@ export class CallQuery {
           if (i >= 0) x.rows.splice(i, 1);
         }
       } else {
-        const drop = ["qa", "vocab", "memo"].map((n) => sections.findIndex((x) => x.name === n));
-        const at = drop.find((i) => i >= 0);
-        if (at === undefined) break;
-        const x = sections[at] as (typeof sections)[number];
-        // The memo first shrinks to a pointer, then goes.
-        if (x.name === "memo" && x.rows[0] !== MEMO_OMITTED) x.rows = [MEMO_OMITTED];
-        else sections.splice(at, 1);
+        // Then the Q&A, the vocabulary and the memo, which leaves a pointer among akou's notes;
+        // then that pointer; then the titles left of the line blocks, and with them the block.
+        const notes = sections.find((x) => x.name === "notes");
+        const at = ["qa", "vocab", "memo"]
+          .map((n) => sections.findIndex((x) => x.name === n))
+          .find((i) => i >= 0);
+        const pointer = notes?.rows.indexOf(MEMO_OMITTED) ?? -1;
+        const rest = sections.findIndex((x) => QUOTED.has(x.name));
+        if (at !== undefined) {
+          const x = sections.splice(at, 1)[0];
+          if (x?.name === "memo") notes?.rows.push(MEMO_OMITTED);
+        } else if (pointer >= 0) notes?.rows.splice(pointer, 1);
+        else if (rest >= 0) sections.splice(rest, 1);
+        else break;
       }
       text = join();
       tokens = estimateTokens(text);
     }
-    const blocks: PackBlock[] = sections.map((x) => ({ name: x.name, tokens: cost(x.rows) }));
+    const blocks: PackBlock[] = sections
+      .filter((x) => x.rows.length > 0)
+      .map((x) => ({ name: x.name, tokens: cost(x.rows) }));
 
     return {
       text,
@@ -993,7 +1030,7 @@ export class CallQuery {
     const transcript: string[] = [];
     let used = 0;
     for (const c of lines) {
-      const r = renderLine(c.line, { tz, speakerIds: true });
+      const r = escapeCallText(renderLine(c.line, { tz, speakerIds: true }));
       used += estimateTokens(r) + 1;
       if (used > WHOLE_CALL_FITS) return null;
       transcript.push(r);
@@ -1010,6 +1047,7 @@ export class CallQuery {
       this.rules(),
       "Speaker ids are used below; the roster after the transcript gives their names.",
       "",
+      ...CALL_TEXT_START,
       "Transcript:",
     ];
     const prefix = [...head, ...transcript];
@@ -1019,17 +1057,21 @@ export class CallQuery {
     const analysis = this.analysisLine(cls, "whole");
     const memoText = renderMemo(memo, BLOCK_CAPS.memo);
     const all = lines.map((c) => c.line);
+    // The rest of the call text closes the block the head opened; akou's own lines follow it.
     const tail = [
+      ...[
+        ...this.vocabHits(question, all, BLOCK_CAPS.vocab),
+        ...(memoText ? ["Memo:", memoText] : []),
+        ...this.qaLines(BLOCK_CAPS.qa),
+        ...(prov ? ["Being said now:", prov.rendered] : []),
+      ].map(escapeCallText),
+      CALL_TEXT_CLOSE,
       "",
       ...(this.status(o.now) !== status ? [`Status now: ${this.status(o.now)}.`] : []),
       ...this.dynamicHeader(o.now, o.ref),
       ...this.rememberLines(BLOCK_CAPS.remember),
-      ...this.vocabHits(question, all, BLOCK_CAPS.vocab),
-      ...(memoText ? ["Memo:", memoText] : []),
       ...(memo.stale ? ["The memo is stale. Write one with akou_memo_put."] : []),
-      ...this.qaLines(BLOCK_CAPS.qa),
       analysis,
-      ...(prov ? ["Being said now:", prov.rendered] : []),
     ];
     const text = [...prefix, ...tail].join("\n");
     const tokens = estimateTokens(text);
@@ -1058,6 +1100,19 @@ export class CallQuery {
 }
 
 const MEMO_OMITTED = "Memo: not shown, over the budget; read it with akou_memo_get.";
+
+/** The sections of a retrieval pack that come from the call, quoted in one block (PG-Z1). */
+const QUOTED: ReadonlySet<string> = new Set([
+  "qa",
+  "vocab",
+  "memo",
+  "retrieved",
+  "recency",
+  "provisional",
+]);
+
+/** What the call-text header and markers cost. */
+const QUOTE_COST = estimateTokens(quoteCallText("")) + 2;
 
 const HEALTHY = new Set(["ok", "alive", "healthy", "recovered", "running"]);
 
