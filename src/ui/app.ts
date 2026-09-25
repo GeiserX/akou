@@ -276,6 +276,7 @@ class App {
     this.pills(v, now);
     this.controls(v);
     this.drawBanner(v, now);
+    this.drawHealth(v);
     this.drawFinal(v);
     const empty = byId("empty");
     const shown = this.transcript.count > 0 || !byId("partial").hidden;
@@ -405,7 +406,17 @@ class App {
       const m = byId<HTMLMeterElement>(`meter-${ch}`);
       m.value = l ? Math.max(-60, Math.min(0, l[ch])) : -60;
       m.title = l ? `${ch}: ${Math.round(l[ch])} dBFS` : `${ch}: no level`;
-      const hState = this.view()?.channelHealth(ch)?.state ?? (l ? "ok" : "none");
+    }
+    this.drawHealth(this.view());
+  }
+
+  /**
+   * The health dots. Drawn with the banner on every view update, so a health event turns both red
+   * at once, and again on each level packet, which is what turns a dot from none to ok.
+   */
+  private drawHealth(v: CallView | null): void {
+    for (const ch of ["mic", "call"] as const) {
+      const hState = v?.channelHealth(ch)?.state ?? (this.levelAt !== null ? "ok" : "none");
       const dot = byId(`health-${ch}`);
       dot.dataset.state = hState;
       dot.title = `${ch}: ${hState}`;

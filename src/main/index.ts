@@ -50,7 +50,7 @@ import { ensureToken, type Guard, makePrivateDir, TokenSource } from "./api/guar
 import { HttpError } from "./api/http.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
-import type { ModelSpec } from "./asr/engine.ts";
+import type { DiarizerKind, ModelSpec } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import {
@@ -60,8 +60,10 @@ import {
   type ModelSpecEntry,
   type ModelsStatus,
   modelFile,
+  modelsFor,
   pruneRetiredModels,
 } from "./asr/models.ts";
+import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import type { CallController, StartOk } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartRequest } from "./call/manager.ts";
@@ -242,7 +244,7 @@ function writePrivate(path: string, text: string): void {
   }
 }
 
-function modelsPresent(dir: string, registry: readonly ModelSpecEntry[] = MODELS): boolean {
+function modelsPresent(dir: string, registry: readonly ModelSpecEntry[]): boolean {
   return registry.every((m) => m.files.every((f) => existsSync(modelFile(dir, m.id, f.name))));
 }
 
@@ -286,6 +288,11 @@ export class AkouApp implements ApiApp {
   private modelsPull: ModelsPull = { running: null, done: new Map() };
   /** The recognizer waits for its model files (`startAsr`). */
   private asrAwaitingModels = false;
+  /**
+   * The speaker-label engine the running recognizer started with. `asr.diarizer` takes effect at
+   * the next start, and the final pass runs this one until then.
+   */
+  private asrDiarizer: DiarizerKind | null = null;
 
   private cfg: LoadedConfig;
   private readonly clock: Clock;
@@ -492,8 +499,38 @@ export class AkouApp implements ApiApp {
     return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
   }
 
+  /** The models the next start needs (`asr.diarizer`): what the download card offers. */
   private registry(): readonly ModelSpecEntry[] {
-    return this.o.modelRegistry ?? MODELS;
+    return modelsFor(
+      this.cfg.settings["asr.diarizer"] as DiarizerKind,
+      this.o.modelRegistry ?? MODELS,
+    );
+  }
+
+  /** The speaker-label engine running now: the one the recognizer started with, else the setting. */
+  private runningDiarizer(): DiarizerKind {
+    return this.asrDiarizer ?? (this.cfg.settings["asr.diarizer"] as DiarizerKind);
+  }
+
+  /**
+   * Whether the running engine's model files are there: what a start and the final pass need. A
+   * change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
+   */
+  private runningModelsPresent(): boolean {
+    const registry = modelsFor(this.runningDiarizer(), this.o.modelRegistry ?? MODELS);
+    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
+  }
+
+  /** The real engines on the models folder, with the speaker-label engine the settings choose. */
+  private sherpaSpec(s: Settings, diarizer = s["asr.diarizer"] as DiarizerKind): ModelSpec {
+    return {
+      kind: "sherpa",
+      dir: s["asr.modelsDir"],
+      cacheDir: join(s["asr.modelsDir"], ".cache"),
+      threads: s["asr.threads"],
+      diarizer,
+      diarizeHelper: locateHelper(s["asr.diarizeHelper"], { name: DIARIZE_HELPER_NAME }).command,
+    };
   }
 
   /**
@@ -603,19 +640,12 @@ export class AkouApp implements ApiApp {
       };
       return;
     }
-    const spec: ModelSpec | null =
-      this.o.models !== undefined
-        ? this.o.models
-        : {
-            kind: "sherpa",
-            dir: s["asr.modelsDir"],
-            cacheDir: join(s["asr.modelsDir"], ".cache"),
-            threads: s["asr.threads"],
-          };
+    const spec: ModelSpec | null = this.o.models !== undefined ? this.o.models : this.sherpaSpec(s);
     if (!spec) {
       this.asrState = { state: "unavailable", reason: "no recognizer configured" };
       return;
     }
+    this.asrDiarizer = s["asr.diarizer"] as DiarizerKind;
     const asr = new LiveAsr(
       {
         models: spec,
@@ -1268,7 +1298,9 @@ export class AkouApp implements ApiApp {
     if (this.quitting) return fail(503, "quitting", "akou is quitting");
     this.recognizerOnNewModels();
     // Without the speech models a call records audio that nothing transcribes: only when asked.
-    if (!req.withoutModels && this.models().state !== "ready") {
+    const ready =
+      (this.o.models !== undefined && !this.o.modelRegistry) || this.runningModelsPresent();
+    if (!req.withoutModels && !ready) {
       return fail(
         503,
         "models_missing",
@@ -1365,11 +1397,16 @@ export class AkouApp implements ApiApp {
       last: last
         ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
         : null,
-      asr: { ...this.asrState, loads: this.asr?.loads ?? {} },
+      asr: {
+        ...this.asrState,
+        loads: this.asr?.loads ?? {},
+        diarizer: this.runningDiarizer(),
+      },
       models: this.models(),
       // The helper this app spawns, resolved from inside the bundle: `akou doctor` from the
       // standalone CLI, which has no helper beside it, reads its answer here.
       helper: findHelper(s["capture.helper"]),
+      diarizeHelper: findHelper(s["asr.diarizeHelper"], undefined, { name: DIARIZE_HELPER_NAME }),
       provider: await this.providerStatus(),
       harnesses: this.discovery,
       share: { active: this.sharing.status().length > 0, shares: this.sharing.status() },
@@ -1402,16 +1439,12 @@ export class AkouApp implements ApiApp {
 
   /** The recognizer models for the final pass, or null when there are none. */
   private finalModels(): ModelSpec | null {
-    if (this.o.models !== undefined) return this.o.models;
-    const dir = this.cfg.settings["asr.modelsDir"];
-    return modelsPresent(dir)
-      ? {
-          kind: "sherpa",
-          dir,
-          cacheDir: join(dir, ".cache"),
-          threads: this.cfg.settings["asr.threads"],
-        }
-      : null;
+    // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
+    if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
+    if (!this.runningModelsPresent()) return null;
+    return this.o.models !== undefined
+      ? this.o.models
+      : this.sherpaSpec(this.cfg.settings, this.runningDiarizer());
   }
 
   /** Starts the final pass in the background. Returns why it cannot run, or null once started. */
