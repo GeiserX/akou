@@ -260,8 +260,9 @@ jobs:
           docker buildx imagetools create --tag "docker.io/geiserx/akou:$version" $refs
           docker buildx imagetools inspect "docker.io/geiserx/akou:$version"
 
+  # The image of the tag is part of the release: no GitHub release goes out while it failed.
   release:
-    needs: [app, cli]
+    needs: [app, cli, image-manifest]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10

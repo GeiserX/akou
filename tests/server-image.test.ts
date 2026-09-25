@@ -126,6 +126,8 @@ describe("[SV-P1] the server image", () => {
     expect(script).toContain('--tag "docker.io/geiserx/akou:$version"');
     // The version is the tag without its v: a shell expansion, spelled out so it is not a template.
     expect(script).toContain(`version="$${"{"}TAG#v}"`);
+    // A GitHub release never goes out while the image of the same tag failed.
+    expect((wf.jobs.release as { needs?: string[] }).needs).toContain("image-manifest");
   });
 
   test("the build context holds what the image copies and leaves the rest out", () => {
@@ -149,7 +151,7 @@ describe("[SV-T1] the server job in ci.yml", () => {
       {
         needs?: string[];
         strategy?: { matrix?: { os?: string[] } };
-        steps?: { name?: string; run?: string; if?: string }[];
+        steps?: { id?: string; name?: string; run?: string; if?: string }[];
       }
     >;
   }
@@ -165,7 +167,10 @@ describe("[SV-T1] the server job in ci.yml", () => {
     for (const want of [
       "docker build",
       "models pull fast",
-      "-p 8476:8476",
+      // The container binds 0.0.0.0, which SV-P5 refuses without the operator's word that a proxy
+      // is in front; install.md publishes the port on loopback and says so in the data volume.
+      '"server.behind_proxy": true',
+      "-p 127.0.0.1:8476:8476",
       "http://127.0.0.1:8476/healthz",
       "http://127.0.0.1:8476/v1/server",
       "id -u",
@@ -174,10 +179,20 @@ describe("[SV-T1] the server job in ci.yml", () => {
     ]) {
       if (!runs.includes(want)) gaps.push(`no step runs ${want}`);
     }
-    const roundTrip = (job.steps ?? []).find((st) => st.run?.includes("server-roundtrip.ts"));
-    if (!roundTrip?.if?.includes("src/main/api/routes/jobs.ts")) {
-      gaps.push("the round trip is not gated on the job routes");
+    // The round trip runs on what the running server says it can do, never on a file name that a
+    // rename would turn into a step that never runs, and a skip is a warning on the run.
+    const steps = job.steps ?? [];
+    const caps = steps.find((st) => st.run?.includes("capabilities.jobs"));
+    const roundTrip = steps.find((st) => st.run?.includes("server-roundtrip.ts"));
+    if (
+      !caps?.id ||
+      roundTrip?.if !== `steps.${caps.id}.outputs.roundtrip == 'true'` ||
+      !caps.run?.includes("::warning::")
+    ) {
+      gaps.push("the round trip is not gated on the server's own capabilities, loudly");
     }
+    if (steps.some((st) => st.if?.includes("hashFiles")))
+      gaps.push("a step is gated on a file name");
     return gaps;
   }
 
@@ -193,5 +208,12 @@ describe("[SV-T1] the server job in ci.yml", () => {
     const notRequired = structuredClone(wf);
     (notRequired.jobs["ci-ok"] as { needs: string[] }).needs = ["changes", "check"];
     expect(serverJobGaps(notRequired)).toEqual(["ci-ok does not need it"]);
+    const byFile = structuredClone(wf);
+    const rt = byFile.jobs.server?.steps?.find((st) => st.run?.includes("server-roundtrip.ts"));
+    (rt as { if: string }).if = "hashFiles('src/main/api/routes/jobs.ts') != ''";
+    expect(serverJobGaps(byFile)).toEqual([
+      "the round trip is not gated on the server's own capabilities, loudly",
+      "a step is gated on a file name",
+    ]);
   });
 });

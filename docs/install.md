@@ -94,10 +94,17 @@ docker run --rm -v akou-models:/models geiserx/akou:<version> models pull fast
 
 `fast` is the only preset with an engine today. It fetches Parakeet TDT 0.6B v3 and the voice-activity model. A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows. Speaker labels need `nemotron-3-diarization`.
 
-Then start it:
+Inside a container akou listens on every address, and it refuses to start that way until you say a reverse proxy with TLS is in front of it (`server.behind_proxy`), because akou has no TLS of its own. Say it once, in the data volume:
 
 ```sh
-docker run -d --name akou -p 8476:8476 -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
+docker run --rm -v akou-data:/data --entrypoint sh geiserx/akou:<version> -c \
+  'mkdir -p /data/.config/akou && echo "{ \"server.behind_proxy\": true }" > /data/.config/akou/config.json'
+```
+
+Then start it, with the port published on this machine's loopback only, for the proxy to reach:
+
+```sh
+docker run -d --name akou -p 127.0.0.1:8476:8476 -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
 ```
 
 The server runs as an unprivileged user, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly.
@@ -114,7 +121,7 @@ export AKOU_API_KEY_FILE=~/.config/akou/remote.key
 akou jobs list
 ```
 
-With `AKOU_URL` set, akou never looks for the app on this machine and never starts it. A server that does not answer exits 69; a wrong key exits 77.
+With `AKOU_URL` set, akou never looks for the app on this machine and never starts it. A server that refuses the connection, or answers nothing within the request's time, exits 69 and names `AKOU_URL`; a wrong key exits 77. `akou quit` refuses to run, since it stops only the app on this machine, and `akou doctor` reports the server it reaches. `AKOU_API_KEY_FILE` may start with `~/`, as `docker -e` and a systemd unit pass it unexpanded.
 
 ## Uninstalling
 
