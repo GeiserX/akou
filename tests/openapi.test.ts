@@ -12,6 +12,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
+import { controlFailure } from "../scripts/ci/executor-roundtrip.ts";
 import { OPENAPI_FILE, openApiDrifted, renderOpenApi } from "../scripts/openapi.ts";
 import { SCOPES } from "../src/main/api/access.ts";
 import { type Guard, guard } from "../src/main/api/guard.ts";
@@ -499,5 +500,19 @@ describe("[PG-A2] a route reads only the body and query it declares, so the file
     await expect(async () => call(r, "/b", { method: "POST", body: '{"other":1}' })).toThrow(
       'unknown field "other"',
     );
+  });
+});
+
+describe("[SI-2] the Executor job's positive control", () => {
+  test("only Executor's 401 on the file counts as the control refusing; any other failure fails the job", () => {
+    expect(
+      controlFailure({ ok: false, error: { message: "Failed to fetch spec: HTTP 401" } }),
+    ).toBeNull();
+    // Positive controls: a spec that was added, and a failure for any other reason.
+    expect(controlFailure({ ok: true })).toBe("the control added a spec that demands a key");
+    expect(controlFailure({ ok: false, error: { message: "slug already exists" } })).toBe(
+      "the control failed, but not with HTTP 401: slug already exists",
+    );
+    expect(controlFailure({ ok: false })).toBe("the control failed, but not with HTTP 401: ?");
   });
 });

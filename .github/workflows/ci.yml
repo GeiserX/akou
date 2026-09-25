@@ -356,11 +356,12 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
       - run: bun scripts/ci/test-floor.ts capture-live-windows .junit-live.xml
 
-  # docs/research/service-interface.md SI-2: a real Executor (executor@1.6.8 from npm, in a
-  # throwaway home) adds akou from the served `GET /v1/openapi.json?scope=jobs` and must see the
-  # tools jobs.create, jobs.get and keys.me, no openai.transcribe and one auth template; the same
-  # against a server that wants a key on the file must fail. Until the jobs routes are built, the
-  # route table carries their test fixture, and the job summary says so.
+  # docs/research/service-interface.md SI-2: a real Executor (executor@1.6.8, pinned by the
+  # lockfile in scripts/ci/executor/, in a throwaway home) adds akou from the served
+  # `GET /v1/openapi.json?scope=jobs` and must see the tools jobs.create, jobs.get and keys.me, no
+  # openai.transcribe and one auth template; the same against a server that wants a key on the
+  # file must fail with Executor's HTTP 401. A route not built yet comes from the test fixture,
+  # only where the table has none, and the job summary names it.
   executor:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -372,9 +373,9 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - name: executor 1.6.8 from npm
-        run: npm install --no-save --no-audit --no-fund --prefix "$RUNNER_TEMP/executor" executor@1.6.8
-      - run: bun scripts/ci/executor-roundtrip.ts --executor "$RUNNER_TEMP/executor/node_modules/.bin/executor"
+      - name: executor 1.6.8 from npm, from its lockfile
+        run: npm ci --no-audit --no-fund --prefix scripts/ci/executor
+      - run: bun scripts/ci/executor-roundtrip.ts --executor scripts/ci/executor/node_modules/.bin/executor
 
   # The one required check. `if: always()` so it reports even when a leg failed; it fails when any
   # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.

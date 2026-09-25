@@ -5,9 +5,15 @@
  *
  *   bun scripts/ci/executor-roundtrip.ts --executor PATH
  *
- * `PATH` is the `executor` program, `executor@1.6.8` from npm. Everything Executor writes goes to
- * a throwaway home and data folder, and its daemon listens on a free port, so no Executor the
- * machine already runs is touched.
+ * `PATH` is the `executor` program, `executor@1.6.8` from npm, installed by the CI job from the
+ * lockfile in `scripts/ci/executor/`. Everything Executor writes goes to a throwaway home and data
+ * folder, and its daemon listens on a free port, so no Executor the machine already runs is
+ * touched.
+ *
+ * Step 3 reads Executor's own SQLite store (the `integration` and `plugin_storage` tables, and the
+ * `ToolFile` marker on a file argument), because the CLI prints no tool list. That layout is
+ * 1.6.8's and is private to Executor: bumping the version means checking `stored()` and
+ * `takesFile()` against the new one.
  *
  * 1. An akou API server in server mode starts over an inert app, with the real route table. Each
  *    server-mode route not built yet (SERVER.md SV-J, SI-3) comes from the test fixture
@@ -17,7 +23,8 @@
  * 2. `openapi addSpec` against the `?scope=jobs` URL, then `executor resume --action accept`.
  * 3. Executor's own store must hold the tools `jobs.create`, `jobs.get` and `keys.me`, no
  *    `openai.transcribe`, exactly one auth template, and `jobs.create` must take a file argument.
- * 4. Positive control: the same against a server that demands a key on the file must fail.
+ * 4. Positive control: the same against a server that demands a key on the file must fail, and
+ *    with Executor's `HTTP 401`, not for any other reason.
  *
  * Exits 0 when the round trip passes and the control fails as it should.
  */
@@ -44,7 +51,10 @@ function arg(name: string): string | undefined {
   return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
-/** The OpenAPI route reads only these; anything else a request reaches refuses with 418. */
+/**
+ * The OpenAPI route reads only these. Nothing else reaches the app: Executor fetches the file and
+ * calls no tool, and any other route would fail on the missing method with a 500.
+ */
 function inertApp(): ApiApp {
   return {
     version: APP_VERSION,
@@ -183,6 +193,21 @@ class Executor {
   }
 }
 
+/**
+ * Why the positive control did not refuse as it should, or null when it did: the spec must not be
+ * added, and the reason must be the 401 on the file, not a broken daemon or a slug clash.
+ */
+export function controlFailure(control: {
+  ok: boolean;
+  error?: { message?: string };
+}): string | null {
+  if (control.ok) return "the control added a spec that demands a key";
+  const message = control.error?.message ?? "?";
+  return /\bHTTP 401\b/.test(message)
+    ? null
+    : `the control failed, but not with HTTP 401: ${message}`;
+}
+
 /** Whether `jobs.create` takes its `file` part as a file argument. */
 function takesFile(op: unknown): boolean {
   const props = (
@@ -234,7 +259,8 @@ async function main(): Promise<number> {
         control.ok ? "added (wrong)" : `refused: ${control.error?.message ?? "?"}`
       }`,
     );
-    if (control.ok) failures.push("the control added a spec that demands a key");
+    const wrong = controlFailure(control);
+    if (wrong) failures.push(wrong);
   } catch (err) {
     failures.push((err as Error).message);
   } finally {
