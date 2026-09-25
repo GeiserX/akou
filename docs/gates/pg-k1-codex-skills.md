@@ -87,7 +87,7 @@ An earlier run with two probe skills of different names, one in each folder of t
 
 ## Re-running it
 
-`bun scripts/gates/pg-k1-codex-skills.ts` runs the five cases above in one command, prints the machine, the Codex version, the commit and each case's list with the temporary root as `$T`, and exits 1 when case A or B does not list both akou skills from akou's folder, or case C or D lists any. A copy of the install that ignored `CODEX_HOME` made it fail on case B. On 2026-09-25 it passed on the development Mac with Codex 0.151.0 at commit `96a39ee`, with the lists above. Run it on the reference Mac mini and paste its output here to close this gate.
+`bun scripts/gates/pg-k1-codex-skills.ts` runs the five cases above in one command, prints the machine, the Codex version, the commit and each case's list with the temporary root as `$T`, and exits 1 when case A or B does not list both akou skills from akou's folder, or case C or D lists any. A copy of the install that ignored `CODEX_HOME` made it fail on case B. It runs case A's Codex with `CODEX_HOME` removed from the environment, so the case proves Codex finds `~/.codex/skills` by its own default (the shell cases above set it to that same folder), and a `codex` command that fails stops the run instead of reading as an empty list. On 2026-09-25 it passed on the development Mac with Codex 0.151.0 at commit `96a39ee`, with the lists above, and again at `920b52b` with case A's `CODEX_HOME` unset and the same lists. Run it on the reference Mac mini and paste its output here to close this gate.
 
 ## Summary
 
