@@ -62,7 +62,7 @@ Under 900 px wide the calls column collapses to a button in the header. Under 64
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W1.1 | The Notes, Ask and Enhanced tabs show one pane at a time | P0 | Audit: `[role="tabpanel"]{display:flex}` in `theme.css` beats `[hidden]`, so all three panes show stacked | For each tab, the other two panes have computed `display: none` and are skipped by Tab. The general "hidden means hidden" invariant with its positive control is TESTING TS-15; this row is the fix that turns it green | partial (broken) |
+| W1.1 | The Notes, Ask and Enhanced tabs show one pane at a time | P0 | Audit: `[role="tabpanel"]{display:flex}` in `theme.css` beats `[hidden]`, so all three panes show stacked | For each tab, the other two panes have computed `display: none` and are skipped by Tab. The general "hidden means hidden" invariant with its positive control is TESTING TS-15; this row is the fix that turns it green | has |
 | W1.3 | Narrow layouts: calls column collapses under 900 px, side pane becomes a drawer under 640 px | P2 | Audit: at 800 px the sidebar keeps its width | Screenshots at 1280, 800 and 600 px show the described layout; no horizontal scroll | missing |
 
 Moved: W1.2 (tests assert computed visibility) is TESTING TS-15. W1.4 (remember the window frame) is DESKTOP DK-M4.

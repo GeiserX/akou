@@ -16,6 +16,7 @@ import { stereoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
 import {
   FakeProvider,
+  hiddenOffenders,
   launch,
   requestLog,
   seedCall,
@@ -28,6 +29,7 @@ import {
   type UiRig,
   uiRig,
   until,
+  watchedOffenders,
 } from "./rig.ts";
 
 const XSS = `<img src=x onerror="window.__xss=1"><script>window.__xss=2</script>`;
@@ -329,6 +331,92 @@ describe("keyboard access", () => {
         expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-ask");
         expect(await page.locator("#pane-ask").isVisible()).toBe(true);
       });
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
+  test(
+    "[W1.1] for each tab, the other two panes have computed display none and are skipped by Tab",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          const panes = ["notes", "ask", "enhanced"];
+          for (const tab of panes) {
+            await page.click(`#tab-${tab}`);
+            const display = await page.evaluate(
+              (ids) =>
+                Object.fromEntries(
+                  ids.map((p) => [
+                    p,
+                    getComputedStyle(document.getElementById(`pane-${p}`) as Element).display,
+                  ]),
+                ),
+              panes,
+            );
+            for (const p of panes) {
+              if (p === tab) expect(display[p]).not.toBe("none");
+              else expect(display[p]).toBe("none");
+            }
+            // Tab from the selected tab walks into its own pane and on, never into the others.
+            await page.focus(`#tab-${tab}`);
+            const reached: string[] = [];
+            for (let i = 0; i < 12; i++) {
+              await page.keyboard.press("Tab");
+              reached.push(
+                await page.evaluate(
+                  () => document.activeElement?.closest("[role=tabpanel]")?.id ?? "",
+                ),
+              );
+            }
+            expect(reached).toContain(`pane-${tab}`);
+            for (const p of panes.filter((x) => x !== tab)) {
+              expect(reached).not.toContain(`pane-${p}`);
+            }
+            expect(await hiddenOffenders(page)).toEqual([]);
+          }
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[TS-15] positive control: a hidden pane forced to show is reported, by the check and by the watch on every screen",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          expect(await hiddenOffenders(page)).toEqual([]);
+          // The rule broken on purpose: every tab panel forced to show (through the CSSOM, which
+          // the page's Content-Security-Policy allows where a style tag is refused).
+          const force = (on: boolean) =>
+            page.evaluate((show) => {
+              for (const p of document.querySelectorAll<HTMLElement>('[role="tabpanel"]')) {
+                if (show) p.style.setProperty("display", "flex", "important");
+                else p.style.removeProperty("display");
+              }
+            }, on);
+          await force(true);
+          expect(await hiddenOffenders(page)).toEqual(["#pane-ask shows", "#pane-enhanced shows"]);
+          await page.click("#tab-ask");
+          expect(await watchedOffenders(page, { clear: true })).toEqual(
+            expect.arrayContaining(["#pane-notes shows", "#pane-enhanced shows"]),
+          );
+          // Put right, so this test's own close has nothing to report.
+          await force(false);
+          expect(await hiddenOffenders(page)).toEqual([]);
+          expect(await watchedOffenders(page)).toEqual([]);
+        },
+      );
     },
     UI_TIMEOUT,
   );
