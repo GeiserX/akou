@@ -140,6 +140,45 @@ describe("[PG-M5] a three-hour call through the MCP tools", () => {
   );
 
   test(
+    "akou_read following from a cursor after a long gap loses no line: oldest first, a cursor per page",
+    async () => {
+      const since = 5;
+      const all = await rig.api("GET", `/calls/${CALL_ID}/transcript?layer=best&since=${since}`);
+      // akou_read shows lines as `[15:41:07 Ben] text`, without ids.
+      const every: string[] = all.body.lines.map(
+        (l: { time: string; speaker: string; text: string; annotated?: string }) =>
+          `[${l.time} ${l.speaker}] ${l.annotated ?? l.text}`,
+      );
+      expect(every.length).toBeGreaterThan(1200);
+      const c = await mcpClient(api);
+      try {
+        const seen: string[] = [];
+        const pages: Record<string, ToolAnswer> = {};
+        let cursor = since;
+        for (let page = 1; page <= 100; page++) {
+          const r = await c.call("akou_read", { call: CALL_ID, since: cursor });
+          expect(r.isError).toBe(false);
+          pages[`page ${page}`] = r;
+          const text = r.text.split("\n");
+          seen.push(...text.slice(text.indexOf(CALL_TEXT_OPEN) + 1, text.indexOf(CALL_TEXT_CLOSE)));
+          expect(r.structured.cursor).toBeGreaterThan(cursor);
+          cursor = r.structured.cursor;
+          if (r.structured.more === 0) break;
+          expect(r.text).toContain(`since: ${cursor}`);
+        }
+        expect(Object.keys(pages).length).toBeGreaterThan(2);
+        expect(overCeiling(pages)).toEqual([]);
+        expect(seen.length).toBe(every.length);
+        expect([...seen].sort()).toEqual([...every].sort());
+        expect(cursor).toBe(all.body.cursor);
+      } finally {
+        await c.close();
+      }
+    },
+    LONG,
+  );
+
+  test(
     "the other tools that read a finished call stay under the ceiling on it",
     async () => {
       const c = await mcpClient(api);

@@ -14,7 +14,9 @@
  *   `format=export` is the export file's `## Transcript` section, what the window copies.
  *   `limitTokens` alone keeps the newest lines that fit (`omitted` counts the rest); with `offset`
  *   it pages from that line, oldest first, and `nextOffset` is where the next page starts, which
- *   is how `akou_get_call` reads a long call (PG-M5).
+ *   is how `akou_get_call` reads a long call (PG-M5). With `since` it takes the lines changed
+ *   earliest after the cursor that fit, and `cursor` then covers exactly those, so a follower that
+ *   reads again from it gets the rest (`more` counts them) and never skips a line: `akou_read`.
  */
 
 import { formatWall, formatZone } from "../../../core/log/clock.ts";
@@ -368,7 +370,10 @@ export function followRoutes(r: Router<ApiApp>): void {
           : renderLine(l, { tz });
     const total = lines.length;
     let omitted = 0;
+    let more = 0;
+    let cursor = v.lastSeq;
     let nextOffset: number | null = null;
+    const lastSeqOf = (l: Line) => v.segment(l.id)?.lastSeq ?? 0;
     if (offset !== undefined) {
       // A page, oldest first: the lines from `offset` that fit, at least one, and where the next
       // page starts (null at the end).
@@ -382,6 +387,25 @@ export function followRoutes(r: Router<ApiApp>): void {
       }
       nextOffset = end < lines.length ? end : null;
       lines = lines.slice(offset, end);
+    } else if (limitTokens !== undefined && since > 0) {
+      // Following from a cursor: the lines changed earliest that fit, at least one, and a cursor
+      // at the last change they cover. Lines sharing that change come too, so none is split.
+      const bySeq = [...lines].sort((a, b) => lastSeqOf(a) - lastSeqOf(b));
+      let used = 0;
+      let n = 0;
+      while (n < bySeq.length) {
+        const t = estimateTokens(rendered(bySeq[n] as Line)) + 1;
+        if (used + t > limitTokens && n > 0) break;
+        used += t;
+        n++;
+      }
+      if (n < bySeq.length) {
+        const upTo = lastSeqOf(bySeq[n - 1] as Line);
+        const kept = lines.filter((l) => lastSeqOf(l) <= upTo);
+        more = lines.length - kept.length;
+        lines = kept;
+        cursor = upTo;
+      }
     } else if (limitTokens !== undefined) {
       // The newest lines that fit.
       let used = 0;
@@ -435,7 +459,7 @@ export function followRoutes(r: Router<ApiApp>): void {
       layer,
       tz,
       zone,
-      cursor: v.lastSeq,
+      cursor,
       // The memo slot as a pack reports it, so a follower learns it is due without a pack.
       memoStale: (await c.app.query(call.id)).memoStale(c.app.now()),
       provisional,
@@ -443,6 +467,7 @@ export function followRoutes(r: Router<ApiApp>): void {
       // and where the page after this one starts.
       total,
       omitted,
+      more,
       nextOffset,
       lines: lines.map((l) => ({
         id: l.id,

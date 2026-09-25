@@ -191,6 +191,7 @@ const OUT = {
     provisional: PROVISIONAL,
     lines: INT.min(0).describe("Committed lines in this answer."),
     omitted: INT.min(0).describe("Older new lines left out to keep the answer small."),
+    more: INT.min(0).describe("New lines after this page: read them with `since` set to `cursor`."),
     callText: CALL_TEXT.nullable(),
   }),
   search: z.object({
@@ -498,7 +499,8 @@ export function createMcpServer(o: McpOptions): McpServer {
           format: "json",
           since: a.since,
           from: a.lastSeconds !== undefined ? Date.now() - a.lastSeconds * 1000 : undefined,
-          // The newest lines that fit; the rest are counted in `omitted` (PG-M5).
+          // From a cursor, the earliest new lines that fit and a cursor after them (`more` counts
+          // the rest); without one, the newest that fit (`omitted` counts the rest). PG-M5.
           limitTokens: PAGE_TOKENS,
         },
       });
@@ -510,6 +512,7 @@ export function createMcpServer(o: McpOptions): McpServer {
         }
         const block = lines.length > 0 ? quoteCallText(lines.join("\n")) : null;
         const omitted: number = b.omitted ?? 0;
+        const more: number = b.more ?? 0;
         return {
           text: [
             b.live ? "LIVE, recording now" : `ENDED (state: ${b.state}); this call is not live`,
@@ -520,6 +523,9 @@ export function createMcpServer(o: McpOptions): McpServer {
               : []),
             block ?? "(no new lines)",
             `cursor: ${b.cursor}`,
+            ...(more > 0
+              ? [`${more} more new lines: call akou_read again with since: ${b.cursor}.`]
+              : []),
           ].join("\n"),
           data: {
             call: b.call ?? a.call,
@@ -530,6 +536,7 @@ export function createMcpServer(o: McpOptions): McpServer {
             provisional: drafts.length > 0,
             lines: (b.lines as Body[]).length,
             omitted,
+            more,
             callText: block,
           },
         };
