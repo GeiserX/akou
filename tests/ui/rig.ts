@@ -88,9 +88,10 @@ export function hiddenOffenders(page: Page): Promise<string[]> {
 }
 
 /**
- * The same check, run on every screen a test reaches: after each change to the page's DOM, what
- * breaks the rule is kept in `window.__hiddenOffenders`, and the rig fails the test at close.
- * A new pane is covered without a new test.
+ * The display half of the same check, run on every screen a test reaches: after each change to
+ * the page's DOM, what breaks the rule is kept in `window.__hiddenOffenders`, and the rig fails
+ * the test at close. A new pane is covered without a new test. Focus is checked only where a test
+ * calls `hiddenOffenders` itself.
  */
 function watchHidden(): void {
   const found = new Set<string>();
@@ -170,6 +171,8 @@ export async function uiRig(
   const close = rig.close;
   ui.close = async () => {
     const hidden = new Set<string>();
+    // Blind spots: a page the test closed itself is skipped, and a page not opened through
+    // `open` (the share viewer, opened on a browser of its own) was never watched.
     for (const p of pages) {
       if (p.isClosed()) continue;
       for (const o of await watchedOffenders(p).catch(() => [])) hidden.add(o);
