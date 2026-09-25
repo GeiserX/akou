@@ -6,8 +6,9 @@
  *   first time it records; the Accessibility grant is the global hotkey's (DK-K1). A command line
  *   is another process and cannot read another app's grants, so each reads `unknown`, and asking
  *   opens its pane in System Settings.
- * - Windows: the microphone switch for desktop apps is read from the registry; asking opens its
- *   Settings page. System audio (loopback) needs no grant.
+ * - Windows: three registry switches can turn the microphone off: the device-wide one (HKLM), the
+ *   user's, and the user's desktop apps (HKCU); asking opens its Settings page. System audio
+ *   (loopback) needs no grant.
  * - Linux: no grants; PipeWire or PulseAudio has to be running, which `doctor` cannot ask for.
  */
 
@@ -20,8 +21,27 @@ const MAC_PANES: Readonly<Record<string, string>> = {
   accessibility: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
 };
 
-const WINDOWS_MIC_KEY =
-  "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone";
+const CONSENT_MIC =
+  "Software\\Microsoft\\Windows\\CurrentVersion\\CapabilityAccessManager\\ConsentStore\\microphone";
+
+/** The Windows microphone switches, each a `Value` of `Allow` or `Deny`. */
+export const WINDOWS_MIC_KEYS = {
+  /** Settings, Privacy & security, Microphone, "Microphone access": the whole device. */
+  device: `HKLM\\${CONSENT_MIC}`,
+  /** "Let apps access your microphone", for this user. */
+  user: `HKCU\\${CONSENT_MIC}`,
+  /** "Let desktop apps access your microphone", for this user: akou is a desktop app. */
+  desktop: `HKCU\\${CONSENT_MIC}\\NonPackaged`,
+} as const;
+
+/** The microphone grant from the three switches: any `Deny` is missing. */
+export function windowsMicState(read: (key: string) => string | null): Grant["state"] {
+  const device = read(WINDOWS_MIC_KEYS.device);
+  const user = read(WINDOWS_MIC_KEYS.user);
+  const desktop = read(WINDOWS_MIC_KEYS.desktop);
+  if (device === "Deny" || user === "Deny" || desktop === "Deny") return "missing";
+  return user === "Allow" && desktop !== null ? "granted" : "unknown";
+}
 
 /** `Allow` or `Deny` from one registry value, or null when it cannot be read. */
 function regValue(key: string): string | null {
@@ -53,18 +73,10 @@ export const systemGrants: GrantChecker = {
       ];
     }
     if (process.platform === "win32") {
-      const all = regValue(WINDOWS_MIC_KEY);
-      const desktop = regValue(`${WINDOWS_MIC_KEY}\\NonPackaged`);
-      const state: Grant["state"] =
-        all === "Deny" || desktop === "Deny"
-          ? "missing"
-          : all === "Allow" && desktop !== null
-            ? "granted"
-            : "unknown";
       return [
         {
           name: "mic",
-          state,
+          state: windowsMicState(regValue),
           detail: "Settings, Privacy & security, Microphone, for desktop apps",
         },
         { name: "system audio", state: "n/a", detail: "Windows asks for no grant to record it" },
