@@ -85,6 +85,8 @@ export interface ClientOptions {
 
 export interface RequestOptions {
   body?: unknown;
+  /** A multipart body instead of JSON: an upload route (`akou transcribe`). */
+  form?: FormData;
   query?: Record<string, string | number | boolean | undefined>;
   /** Launch the app if it is not running. Default true. */
   launch?: boolean;
@@ -180,9 +182,9 @@ export class ApiClient {
       headers: {
         authorization: `Bearer ${this.token()}`,
         "x-akou-client": o.client ?? this.o.client,
-        ...(hasBody ? { "content-type": "application/json" } : {}),
+        ...(hasBody && !o.form ? { "content-type": "application/json" } : {}),
       },
-      body: hasBody ? JSON.stringify(o.body ?? {}) : undefined,
+      body: o.form ?? (hasBody ? JSON.stringify(o.body ?? {}) : undefined),
       signal: o.signal
         ? AbortSignal.any([o.signal, AbortSignal.timeout(o.timeoutMs ?? 60_000)])
         : AbortSignal.timeout(o.timeoutMs ?? 60_000),

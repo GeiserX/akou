@@ -8,7 +8,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync, readdirSync } from "node:fs";
+import { existsSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
@@ -765,4 +765,74 @@ describe("SV-R5: silence through every preset", () => {
       expect(result.duration_s).toBe(10);
     });
   }
+});
+
+describe("SV-D1: transcribing a file is a product feature", () => {
+  function noteFile(): { path: string; cleanup: () => void } {
+    const t = tempDir("akou-transcribe-");
+    const path = join(t.dir, "note.wav");
+    writeFileSync(path, NOTE);
+    return { path, cleanup: t.cleanup };
+  }
+
+  test("akou transcribe FILE against a server prints the transcript and exits 0", async () => {
+    const f = noteFile();
+    try {
+      const r = await cli({ ...process.env, ...server.env }, ["transcribe", f.path]);
+      expect(`${r.code} ${r.out}`).toBe("0 hello world");
+      const j = await cli({ ...process.env, ...server.env }, ["transcribe", f.path, "--json"]);
+      expect(j.code).toBe(0);
+      expect(j.json).toMatchObject({
+        status: "done",
+        text: "hello world",
+        engine: { name: "akou" },
+      });
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("a preset that is not built is refused with the reason", async () => {
+    const f = noteFile();
+    try {
+      const r = await cli({ ...process.env, ...server.env }, [
+        "transcribe",
+        f.path,
+        "--preset",
+        "best",
+      ]);
+      expect(r.code).not.toBe(0);
+      expect(r.err).toContain("not built");
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("the desktop app has no file jobs: exit 69, naming the setting", async () => {
+    const f = noteFile();
+    try {
+      const r = await cli({ ...process.env, ...app.env }, ["transcribe", f.path]);
+      expect(r.code).toBe(69);
+      expect(r.err).toContain("server.enabled");
+    } finally {
+      f.cleanup();
+    }
+  });
+
+  test("with nothing running it exits 69, and a missing file is a usage error", async () => {
+    const f = noteFile();
+    const empty = tempDir("akou-transcribe-none-");
+    try {
+      const r = await cli({ ...process.env, AKOU_HOME: empty.dir }, ["transcribe", f.path]);
+      expect(r.code).toBe(69);
+      const missing = await cli({ ...process.env, ...server.env }, [
+        "transcribe",
+        join(empty.dir, "nope.ogg"),
+      ]);
+      expect(missing.code).toBe(64);
+    } finally {
+      f.cleanup();
+      empty.cleanup();
+    }
+  });
 });
