@@ -54,6 +54,8 @@ export interface Job {
   audio: string | null;
   created_at: number;
   running_at: number | null;
+  /** How many times a process started this job; a job left running is queued again once. */
+  starts: number;
   done_at: number | null;
   failed_at: number | null;
   cancelled_at: number | null;
@@ -131,6 +133,7 @@ CREATE TABLE IF NOT EXISTS jobs (
   audio TEXT,
   created_at INTEGER NOT NULL,
   running_at INTEGER,
+  starts INTEGER NOT NULL DEFAULT 0,
   done_at INTEGER,
   failed_at INTEGER,
   cancelled_at INTEGER,
@@ -183,6 +186,7 @@ function jobOf(r: Row): Job {
     audio: (r.audio as string | null) ?? null,
     created_at: r.created_at as number,
     running_at: (r.running_at as number | null) ?? null,
+    starts: (r.starts as number | null) ?? 0,
     done_at: (r.done_at as number | null) ?? null,
     failed_at: (r.failed_at as number | null) ?? null,
     cancelled_at: (r.cancelled_at as number | null) ?? null,
@@ -321,10 +325,17 @@ export class JobStore {
   markRunning(id: string): Job | null {
     this.db
       .query(
-        "UPDATE jobs SET status = 'running', running_at = ? WHERE id = ? AND status = 'queued'",
+        "UPDATE jobs SET status = 'running', running_at = ?, starts = starts + 1 WHERE id = ? AND status = 'queued'",
       )
       .run(this.now(), id);
     return this.job(id);
+  }
+
+  /** Jobs left running, as the last process left them. */
+  running(): Job[] {
+    return (
+      this.db.query("SELECT * FROM jobs WHERE status = 'running' ORDER BY seq").all() as Row[]
+    ).map(jobOf);
   }
 
   /**

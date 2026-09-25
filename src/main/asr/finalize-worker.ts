@@ -912,7 +912,8 @@ export class JobWorker {
         diarize: input.diarize,
         options: input.options,
       };
-      w.postMessage(msg);
+      // Transferred, not cloned: a long job's audio is held once, by the Worker.
+      w.postMessage(msg, [input.samples.buffer as ArrayBuffer]);
     });
   }
 

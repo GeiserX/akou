@@ -6,7 +6,8 @@
  */
 
 import { closeSync, fstatSync, openSync, readSync } from "node:fs";
-import { decodeAudio } from "../asr/decode.ts";
+import { basename } from "node:path";
+import { decodeAudio, tooLong } from "../asr/decode.ts";
 import { ASR_RATE } from "../asr/engine.ts";
 
 /** The WAV's layout when it is 16-bit PCM at 16 kHz, else null. */
@@ -76,9 +77,13 @@ function readPcm(path: string, w: { data: number; bytes: number; channels: numbe
 /** The upload at `path` as 16 kHz mono samples; ffmpeg for anything but a 16 kHz PCM WAV. */
 export async function readUploadAudio(
   path: string,
-  o: { signal?: AbortSignal; ffmpeg?: readonly string[] } = {},
+  o: { signal?: AbortSignal; ffmpeg?: readonly string[]; maxSamples?: number } = {},
 ): Promise<Float32Array> {
   const wav = pcm16k(path);
-  if (wav) return readPcm(path, wav);
+  if (wav) {
+    if (o.maxSamples !== undefined && Math.floor(wav.bytes / (2 * wav.channels)) > o.maxSamples)
+      throw tooLong(basename(path), o.maxSamples);
+    return readPcm(path, wav);
+  }
   return decodeAudio(path, o);
 }

@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { DecodeError, decodeAudio } from "../src/main/asr/decode.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { monoWav, RATE, tone } from "./fixtures/audio.ts";
 import { tempDir } from "./helpers.ts";
@@ -52,3 +53,76 @@ describe("SV-P6: a 16 kHz PCM WAV is read without ffmpeg", () => {
     expect(got.length).toBe(2 * RATE);
   });
 });
+
+/** A stand-in for ffmpeg: writes `bytes` of float zeros to stdout (forever for -1), then exits 0. */
+function fakeFfmpeg(bytes: number): string[] {
+  const script = `
+    const chunk = new Uint8Array(65536);
+    let left = ${bytes};
+    const out = Bun.stdout.writer();
+    while (left !== 0) {
+      const n = left < 0 ? chunk.length : Math.min(chunk.length, left);
+      out.write(chunk.subarray(0, n));
+      await out.flush();
+      if (left > 0) left -= n;
+    }
+    await out.end();
+  `;
+  return [process.execPath, "-e", script, "--"];
+}
+
+async function refusal(p: Promise<unknown>): Promise<DecodeError> {
+  try {
+    await p;
+  } catch (err) {
+    if (err instanceof DecodeError) return err;
+    throw err;
+  }
+  throw new Error("the decode did not fail");
+}
+
+describe("SV-E3: a job's audio has a length cap, checked before it is held in memory", () => {
+  test("a WAV longer than the cap fails as too_long", async () => {
+    const err = await refusal(
+      readUploadAudio(wavWithDataSize(null), { ...NO_FFMPEG, maxSamples: RATE }),
+    );
+    expect(err.code).toBe("too_long");
+  });
+
+  test("positive control: a WAV exactly at the cap is read", async () => {
+    const got = await readUploadAudio(wavWithDataSize(null), {
+      ...NO_FFMPEG,
+      maxSamples: 2 * RATE,
+    });
+    expect(got.length).toBe(2 * RATE);
+  });
+
+  test("ffmpeg's output past the cap stops the decode as too_long", async () => {
+    const path = join(tempDirFor(), "in.ogg");
+    writeFileSync(path, "not read by the fake");
+    // The fake never stops writing: only the cap ends it.
+    const err = await refusal(decodeAudio(path, { ffmpeg: fakeFfmpeg(-1), maxSamples: RATE }));
+    expect(err.code).toBe("too_long");
+  });
+
+  test("positive control: ffmpeg's output at the cap is every sample", async () => {
+    const path = join(tempDirFor(), "in.ogg");
+    writeFileSync(path, "not read by the fake");
+    const got = await decodeAudio(path, { ffmpeg: fakeFfmpeg(RATE * 4), maxSamples: RATE });
+    expect(got.length).toBe(RATE);
+  });
+
+  test("a machine with no ffmpeg is a decode_failed error that says so", async () => {
+    const path = join(tempDirFor(), "in.ogg");
+    writeFileSync(path, "x");
+    const err = await refusal(decodeAudio(path, NO_FFMPEG));
+    expect(err.code).toBe("decode_failed");
+    expect(err.message).toContain("ffmpeg is not installed");
+  });
+});
+
+function tempDirFor(): string {
+  const t = tempDir("akou-audio-");
+  cleanups.push(t.cleanup);
+  return t.dir;
+}

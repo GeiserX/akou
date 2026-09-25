@@ -180,6 +180,13 @@ export const SETTINGS = {
     default: 512,
     doc: "Largest upload an upload route takes, in MiB. Every other route keeps the 64 KB JSON cap.",
   },
+  "server.max_audio_minutes": {
+    type: "integer",
+    min: 1,
+    max: 1440,
+    default: 240,
+    doc: "Longest audio a file job transcribes, in minutes. A longer file fails as `too_long` before it is held in memory.",
+  },
   "server.retain_days": {
     type: "integer",
     min: 1,

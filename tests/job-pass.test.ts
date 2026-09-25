@@ -138,6 +138,17 @@ describe("SV-J7: a mono path through the finalize worker", () => {
     await w.run({ samples: concat(speak(["ok"]), silence(0.5)), diarize: false, decode: null });
     expect(w.loads()["fake-parakeet"]).toBe(1);
   });
+
+  test("the samples move into the Worker, so a job's audio is not held twice", async () => {
+    const w = new JobWorker({ kind: "module", path: FAKE, model: "fake-parakeet", options: {} });
+    cleanups.push(() => w.close());
+    const samples = concat(speak(["ok"]), silence(0.5));
+    expect(samples.length).toBeGreaterThan(0);
+    const r = await w.run({ samples, diarize: false, decode: null });
+    expect(r.segments.map((s) => s.text)).toEqual(["ok"]);
+    // Transferred, not cloned: the caller's buffer is detached.
+    expect(samples.length).toBe(0);
+  });
 });
 
 describe("SV-R5: silence and hallucination guards on every job", () => {

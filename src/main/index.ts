@@ -1634,6 +1634,7 @@ export class AkouApp implements ApiApp {
       hostListed: (id, host) =>
         keys.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
       retainDays: () => this.cfg.settings["server.retain_days"],
+      maxAudioMinutes: () => this.cfg.settings["server.max_audio_minutes"],
       ...this.o.jobs,
       log: (level, msg) => this.log(level, msg),
     });

@@ -14,6 +14,13 @@ import { ASR_RATE } from "./engine.ts";
 
 export class DecodeError extends Error {
   override name = "DecodeError";
+  /** A job's error code: `too_long` for audio past the length cap, else `decode_failed`. */
+  constructor(
+    message: string,
+    readonly code: "decode_failed" | "too_long" = "decode_failed",
+  ) {
+    super(message);
+  }
 }
 
 export interface DecodeOptions {
@@ -21,7 +28,20 @@ export interface DecodeOptions {
   ffmpeg?: readonly string[];
   /** Stops the decode (a cancelled job): ffmpeg is killed and the promise rejects. */
   signal?: AbortSignal;
+  /**
+   * The most samples a decode may give. Past it ffmpeg is killed and the decode fails `too_long`,
+   * so a long file is refused before it is held in memory.
+   */
+  maxSamples?: number;
 }
+
+/** The refusal for audio longer than `maxSamples`. */
+export function tooLong(name: string, maxSamples: number): DecodeError {
+  const minutes = Math.round((maxSamples / ASR_RATE / 60) * 10) / 10;
+  return new DecodeError(`${name} is longer than the ${minutes} minute limit`, "too_long");
+}
+
+const EMPTY = Buffer.alloc(0);
 
 /**
  * The containers a job may send (SV-P6), by ffmpeg's demuxer names: `mov` is M4A and MP4,
@@ -66,8 +86,20 @@ export function decodeAudio(path: string, o: DecodeOptions = {}): Promise<Float3
       signal: o.signal,
     });
     const chunks: Buffer[] = [];
+    let bytes = 0;
+    let over = false;
     let stderr = "";
-    child.stdout.on("data", (b: Buffer) => chunks.push(b));
+    child.stdout.on("data", (b: Buffer) => {
+      if (over) return;
+      bytes += b.length;
+      if (o.maxSamples !== undefined && bytes > o.maxSamples * 4) {
+        over = true;
+        chunks.length = 0;
+        child.kill("SIGKILL");
+        return;
+      }
+      chunks.push(b);
+    });
     child.stderr.on("data", (b: Buffer) => {
       stderr = (stderr + String(b)).slice(-4000);
     });
@@ -78,20 +110,31 @@ export function decodeAudio(path: string, o: DecodeOptions = {}): Promise<Float3
     });
     child.on("close", (code) => {
       if (o.signal?.aborted) return;
+      if (over) {
+        reject(tooLong(basename(path), o.maxSamples as number));
+        return;
+      }
       if (code !== 0) {
         const why = stderr.trim().split("\n").at(-1) ?? `exit ${code}`;
         reject(new DecodeError(`ffmpeg could not decode ${basename(path)}: ${why}`));
         return;
       }
-      const bytes = Buffer.concat(chunks);
-      const n = Math.floor(bytes.length / 4);
+      const n = Math.floor(bytes / 4);
       if (n === 0) {
         reject(new DecodeError(`${basename(path)} has no audio to transcribe`));
         return;
       }
-      // Copied into a fresh, aligned buffer: a Node Buffer's offset need not be a multiple of 4.
+      // Each chunk copied once into a fresh, aligned buffer (a Node Buffer's offset need not be a
+      // multiple of 4), and dropped as it goes: no concatenated copy on top.
       const out = new Float32Array(n);
-      new Uint8Array(out.buffer).set(bytes.subarray(0, n * 4));
+      const view = new Uint8Array(out.buffer);
+      let at = 0;
+      for (let i = 0; i < chunks.length && at < view.length; i++) {
+        const c = chunks[i] as Buffer;
+        view.set(c.subarray(0, view.length - at), at);
+        at += c.length;
+        chunks[i] = EMPTY;
+      }
       resolve(out);
     });
   });

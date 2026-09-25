@@ -16,7 +16,8 @@ import { createHash } from "node:crypto";
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Identity } from "../api/access.ts";
-import type { DiarizerKind, ModelSpec } from "../asr/engine.ts";
+import { DecodeError } from "../asr/decode.ts";
+import { ASR_RATE, type DiarizerKind, type ModelSpec } from "../asr/engine.ts";
 import { type JobPassResult, JobWorker } from "../asr/finalize-worker.ts";
 import { modelNameFor } from "../asr/live-worker.ts";
 import { MODELS, NEMOTRON } from "../asr/models.ts";
@@ -36,6 +37,11 @@ import { completedData, Deliverer, type DelivererOptions } from "./webhooks.ts";
 /** How often retention runs, besides at start. */
 export const RETENTION_SWEEP_MS = 3_600_000;
 export const DAY_MS = 86_400_000;
+/**
+ * Starts a job gets. One left running when the server stopped is queued again once; running at a
+ * second stop, it fails `interrupted`, since the job itself may be what stops the server.
+ */
+export const MAX_JOB_STARTS = 2;
 
 export interface JobServiceOptions {
   /** The folder of `jobs.db` and the uploads. */
@@ -49,8 +55,10 @@ export interface JobServiceOptions {
   /** Does the key list this callback host by name, not only through `*`? (SV-K4) */
   hostListed(keyId: string, host: string): boolean;
   retainDays(): number;
+  /** `server.max_audio_minutes`: longer audio fails `too_long` before it is held in memory. */
+  maxAudioMinutes(): number;
   /** Test seams: the upload decoder and the delivery's network. */
-  decode?: (path: string, signal: AbortSignal) => Promise<Float32Array>;
+  decode?: (path: string, signal: AbortSignal, maxSamples: number) => Promise<Float32Array>;
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
   now?: () => number;
   log(level: "info" | "warn" | "error", msg: string): void;
@@ -173,6 +181,16 @@ export class JobService {
 
   /** Resumes what the last process left: running jobs queued again, the outbox, retention. */
   start(): void {
+    for (const job of this.store.running()) {
+      if (job.starts < MAX_JOB_STARTS) continue;
+      this.conclude(job, {
+        status: "failed",
+        error: {
+          code: "interrupted",
+          message: `the server stopped ${job.starts} times while this job ran, so it is not run again`,
+        },
+      });
+    }
     const requeued = this.store.requeueRunning();
     if (requeued > 0)
       this.o.log("info", `jobs: ${requeued} left running at the last stop are queued again`);
@@ -381,12 +399,14 @@ export class JobService {
         );
       let samples: Float32Array;
       try {
-        samples = await (this.o.decode ?? ((p, signal) => readUploadAudio(p, { signal })))(
-          job.audio as string,
-          abort.signal,
-        );
+        const maxSamples = this.o.maxAudioMinutes() * 60 * ASR_RATE;
+        samples = await (
+          this.o.decode ?? ((p, signal, max) => readUploadAudio(p, { signal, maxSamples: max }))
+        )(job.audio as string, abort.signal, maxSamples);
       } catch (err) {
-        throw Object.assign(err as Error, { code: "decode_failed" });
+        throw Object.assign(err as Error, {
+          code: err instanceof DecodeError ? err.code : "decode_failed",
+        });
       }
       if (abort.signal.aborted) return;
       const decode: DecodeList | null =
@@ -424,6 +444,16 @@ export class JobService {
     } finally {
       if (this.running?.id === job.id) this.running = null;
     }
+    this.conclude(job, end);
+  }
+
+  /** A running job's end: the store, its event and delivery, its upload deleted, the watchers. */
+  private conclude(
+    job: Job,
+    end:
+      | { status: "done"; result: Record<string, unknown> }
+      | { status: "failed"; error: JobError },
+  ): void {
     const e =
       end.status === "done"
         ? this.store.finish(job.id, end, {
