@@ -323,6 +323,59 @@ describe("SV-K4: callback hosts are an allowlist per key", () => {
     expect((err as HttpError).status).toBe(422);
     expect((err as HttpError).code).toBe("callback_not_allowed");
   });
+
+  test("'*' matches public hosts only: loopback, private and link-local ones must be listed by name", async () => {
+    const any = await newKey(server, "cb-wild", ["--callback-host", "*"]);
+    const listed = await newKey(server, "cb-listed", [
+      "--callback-host",
+      "*",
+      "--callback-host",
+      "10.0.0.5",
+      "--callback-host",
+      "127.0.0.1",
+    ]);
+    const store = new KeyStore(server.app.configDir);
+    const id = (key: string) => store.authenticate(key) as NonNullable<typeof APP_IDENTITY>;
+    const closed = [
+      "http://10.0.0.5/x",
+      "http://127.0.0.1:8476/v1/calls",
+      "http://127.8.9.10/",
+      "http://[::1]/",
+      "http://[::ffff:10.0.0.5]/",
+      "http://[::ffff:127.0.0.1]/",
+      "http://169.254.169.254/latest",
+      "http://172.16.0.1/",
+      "http://172.31.255.255/",
+      "http://192.168.1.2/",
+      "http://100.64.0.1/",
+      "http://0.0.0.0:8476/",
+      "http://[::]/",
+      "http://[fd00::1]/",
+      "http://[fe80::1]/",
+      "http://localhost/",
+      "http://akou.localhost/",
+      // Other spellings the URL parser turns into loopback.
+      "http://2130706433/",
+      "http://0x7f.1/",
+    ];
+    for (const url of closed) {
+      expect([url, callbackAllowed(id(any.key), url)]).toEqual([url, false]);
+    }
+    // Positive control: public hosts pass the wildcard, including the edges of each block.
+    for (const url of [
+      "https://archive.example/api/x",
+      "http://172.32.0.1/",
+      "http://172.15.255.255/",
+      "http://8.8.8.8/",
+      "http://[2001:db8::1]/",
+    ]) {
+      expect([url, callbackAllowed(id(any.key), url)]).toEqual([url, true]);
+    }
+    // Listed by name, a private host is allowed; the one not listed is still refused.
+    expect(callbackAllowed(id(listed.key), "http://10.0.0.5/x")).toBe(true);
+    expect(callbackAllowed(id(listed.key), "http://127.0.0.1:8080/")).toBe(true);
+    expect(callbackAllowed(id(listed.key), "http://10.0.0.6/x")).toBe(false);
+  });
 });
 
 describe("SI-3: GET /v1/keys/me", () => {

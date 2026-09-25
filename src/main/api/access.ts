@@ -12,9 +12,11 @@
  * A route says its level when it is added (`Router.add(..., {access: "jobs"})`); a route that says
  * nothing is `admin`, so a new route is closed until someone opens it on purpose.
  *
- * This module imports nothing: the guard needs it, and the guard is loaded before `http.ts`. The
- * helpers that answer with an HTTP error are in `caller.ts`.
+ * This module imports only `net.ts`, which imports nothing of akou's: the guard needs it, and the
+ * guard is loaded before `http.ts`. The helpers that answer with an HTTP error are in `caller.ts`.
  */
+
+import { isNonPublicHost } from "./net.ts";
 
 export const SCOPES = ["jobs", "admin"] as const;
 export type Scope = (typeof SCOPES)[number];
@@ -41,7 +43,7 @@ export interface Identity {
   scopes: readonly Scope[];
   /** Epoch ms, for a key. */
   created_at?: number;
-  /** The hosts a callback URL may name (SV-K4); `*` is any host. */
+  /** The hosts a callback URL may name (SV-K4); `*` is any public host. */
   callbackHosts: readonly string[];
 }
 
@@ -62,9 +64,10 @@ export function allows(identity: Identity | null, access: Access): boolean {
 }
 
 /**
- * SV-K4: may this identity name `url` as its callback? The URL's host must be on the key's list,
- * or the list holds `*`. The address rules of SV-E7 (link-local and metadata addresses) are
- * checked separately, at submit and at delivery, and apply to `*` too.
+ * SV-K4: may this identity name `url` as its callback? The URL's host must be on the key's list
+ * by name, or the list holds `*` and the host is not a loopback, private, link-local or
+ * unique-local literal (`isNonPublicHost`): those are reached only when a key lists them. A name
+ * that resolves into those blocks is SV-E7's to refuse, at delivery time after DNS.
  */
 export function callbackAllowed(identity: Identity, url: string): boolean {
   let host: string;
@@ -76,5 +79,6 @@ export function callbackAllowed(identity: Identity, url: string): boolean {
     return false;
   }
   if (host === "") return false;
-  return identity.callbackHosts.some((h) => h === "*" || h.toLowerCase() === host);
+  if (identity.callbackHosts.some((h) => h.toLowerCase() === host)) return true;
+  return identity.callbackHosts.includes("*") && !isNonPublicHost(host);
 }

@@ -118,3 +118,33 @@ export function sourceAddress(
   }
   return source;
 }
+
+/**
+ * The blocks a callback-host wildcard never reaches (SV-K4): loopback, unspecified, RFC 1918,
+ * shared (CGNAT, 100.64/10), link-local and unique-local. IPv4 blocks match their IPv4-mapped form
+ * too, since `addressBytes` maps both to the same bytes.
+ */
+const NON_PUBLIC = [
+  "127.0.0.0/8",
+  "0.0.0.0/8",
+  "10.0.0.0/8",
+  "172.16.0.0/12",
+  "192.168.0.0/16",
+  "100.64.0.0/10",
+  "169.254.0.0/16",
+  "::1/128",
+  "::/128",
+  "fc00::/7",
+  "fe80::/10",
+].map((c) => parseCidr(c) as Cidr);
+
+/**
+ * Is `host` (as a URL's hostname gives it) an address in a non-public block, or a loopback name
+ * (`localhost`, `*.localhost`)? A name that resolves to such an address is SV-E7's to refuse, at
+ * delivery time.
+ */
+export function isNonPublicHost(host: string): boolean {
+  const h = unbracket(host.trim().toLowerCase());
+  if (h === "localhost" || h.endsWith(".localhost")) return true;
+  return addressBytes(h) !== null && NON_PUBLIC.some((c) => inCidr(h, c));
+}
