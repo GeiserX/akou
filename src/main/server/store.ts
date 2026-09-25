@@ -116,6 +116,12 @@ export function ulid(now: number): string {
   return time + rand;
 }
 
+/**
+ * The most event data one feed page holds (SV-E1), past its first event: a completed event carries
+ * its result inline up to 256 KB, so a page of a thousand could be hundreds of MB.
+ */
+export const FEED_PAGE_BYTES = 1_048_576;
+
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS jobs (
   seq INTEGER PRIMARY KEY,
@@ -464,13 +470,36 @@ export class JobStore {
 
   /** The key's events after the cursor (every key's for null), oldest first. */
   events(key: string | null, after: number, limit: number): FeedEvent[] {
-    const rows =
+    const where = key === null ? "seq > ?" : "key_id = ? AND seq > ?";
+    const args = key === null ? [after] : [key, after];
+    // The sizes first, then only the rows that fit FEED_PAGE_BYTES: a page of large results is
+    // never loaded whole. (Breaking out of `iterate` leaves Bun's cached statement unusable.)
+    const sizes = this.db
+      .query(`SELECT seq, length(data) AS n FROM events WHERE ${where} ORDER BY seq LIMIT ?`)
+      .all(...args, limit) as { seq: number; n: number }[];
+    let last = after;
+    let bytes = 0;
+    for (const r of sizes) {
+      bytes += r.n;
+      if (last !== after && bytes > FEED_PAGE_BYTES) break;
+      last = r.seq;
+    }
+    if (last === after) return [];
+    const rows = this.db
+      .query(`SELECT * FROM events WHERE ${where} AND seq <= ? ORDER BY seq`)
+      .all(...args, last) as Row[];
+    return rows.map(eventOf);
+  }
+
+  /** Is there any event of the key (any key's for null) after the cursor? */
+  hasEventsAfter(key: string | null, after: number): boolean {
+    const r =
       key === null
-        ? this.db.query("SELECT * FROM events WHERE seq > ? ORDER BY seq LIMIT ?").all(after, limit)
+        ? this.db.query("SELECT 1 FROM events WHERE seq > ? LIMIT 1").get(after)
         : this.db
-            .query("SELECT * FROM events WHERE key_id = ? AND seq > ? ORDER BY seq LIMIT ?")
-            .all(key, after, limit);
-    return (rows as Row[]).map(eventOf);
+            .query("SELECT 1 FROM events WHERE key_id = ? AND seq > ? LIMIT 1")
+            .get(key, after);
+    return r !== null;
   }
 
   event(id: string): FeedEvent | null {

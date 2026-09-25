@@ -9,8 +9,8 @@
  * - `GET /v1/jobs?status=&cursor=&limit=`: the key's jobs, newest first.
  * - `GET /v1/jobs/{id}/result` (SV-J4): the result of a done job.
  * - `DELETE /v1/jobs/{id}` (SV-J6).
- * - `GET /v1/events?after=&wait=0..60` (SV-E1): the key's outcomes after the cursor, oldest first,
- *   as JSON, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
+ * - `GET /v1/events?after=&limit=&wait=0..60` (SV-E1): the key's outcomes after the cursor, oldest
+ *   first, as JSON `{events, cursor, has_more}`, or as Server-Sent Events with `Accept: text/event-stream`, resumable with
  *   `Last-Event-ID`.
  */
 
@@ -331,7 +331,13 @@ export function jobRoutes(r: Router<ApiApp>): void {
         });
         events = jobs.events(who, after, limit);
       }
-      return json(200, { events: events.map(eventView), cursor: events.at(-1)?.seq ?? after });
+      const cursor = events.at(-1)?.seq ?? after;
+      // A page ends at `limit` events or at FEED_PAGE_BYTES of their data, whichever comes first.
+      return json(200, {
+        events: events.map(eventView),
+        cursor,
+        has_more: jobs.hasEventsAfter(who, cursor),
+      });
     },
     { access: "jobs" },
   );
@@ -360,7 +366,8 @@ function sseEvents(jobs: JobService, who: Identity, after: number, signal: Abort
             send(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(eventView(e))}\n\n`);
             cursor = e.seq;
           }
-          if (batch.length < 500) return;
+          // A page may end early by size (FEED_PAGE_BYTES), so only an empty one means caught up.
+          if (batch.length === 0) return;
         }
       };
       const unsubscribe = jobs.onEvent((e) => {

@@ -614,13 +614,18 @@ describe("SV-E1: the per-key event feed", () => {
       all.body.events.every((e: { type: string }) => e.type === "transcription.completed"),
     ).toBe(true);
     expect(all.body.events[0].data.text).toBe("hello world");
+    expect(all.body.has_more).toBe(false);
+    // A page that ends before the key's last event says so.
+    const two = await call(server, k.key, "GET", "/events?after=0&limit=2");
+    expect(two.body.events.map((e: { job_id: string }) => e.job_id)).toEqual(ids.slice(0, 2));
+    expect(two.body.has_more).toBe(true);
     const cursor = all.body.events[0].cursor;
     const later = await call(server, k.key, "GET", `/events?after=${cursor}`);
     expect(later.body.events.map((e: { job_id: string }) => e.job_id)).toEqual(ids.slice(1));
     expect(later.body.cursor).toBe(all.body.cursor);
     // Nothing new: the same cursor comes back.
     const none = await call(server, k.key, "GET", `/events?after=${all.body.cursor}`);
-    expect(none.body).toEqual({ events: [], cursor: all.body.cursor });
+    expect(none.body).toEqual({ events: [], cursor: all.body.cursor, has_more: false });
   });
 
   test("wait holds the request until the key's next outcome", async () => {

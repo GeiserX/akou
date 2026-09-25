@@ -335,6 +335,11 @@ export class JobService {
     return this.store.events(who.scopes.includes("admin") ? null : who.id, after, limit);
   }
 
+  /** Does the key (every key, for an admin) have an event after the cursor? */
+  hasEventsAfter(who: Identity, after: number): boolean {
+    return this.store.hasEventsAfter(who.scopes.includes("admin") ? null : who.id, after);
+  }
+
   /** Told of every new event; the routes filter by key. Returns the unsubscribe function. */
   onEvent(fn: (e: FeedEvent) => void): () => void {
     this.feedWatchers.add(fn);
