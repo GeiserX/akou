@@ -202,7 +202,7 @@ export function der(ref: readonly Turn[], hyp: readonly Turn[], collar = 0.25): 
 
 /** One measured number, which way is better, and its gate. */
 export interface Measure {
-  /** `wer.fleurs_en.parakeet-tdt-0.6b-v3`, `der.voxconverse`, `replay.recall` ... */
+  /** `wer.fleurs_en.parakeet-tdt-0.6b-v3`, `der.ami_test2`, `replay.recall` ... */
   key: string;
   value: number;
   unit: string;

@@ -5,9 +5,9 @@ name: nightly
 #
 # - models-nightly: the real recognizer and the real diarizer on public, openly licensed audio,
 #   through the app's own code, on every OS (docs/TESTING.md TS-19 and TS-20). WER per engine and
-#   language on FLEURS, latency percentiles and the real-time factor, diarization error on a
-#   VoxConverse dev subset, and the replay recall floor, each next to its committed baseline in
-#   docs/gates/nightly-baselines.json (scripts/eval/nightly.ts).
+#   language on FLEURS, latency percentiles and the real-time factor, diarization error on two
+#   AMI Meeting Corpus test meetings, and the replay recall floor, each next to its committed
+#   baseline in docs/gates/nightly-baselines.json (scripts/eval/nightly.ts).
 # - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
 #   WebKitGTK the app ships (TS-14). It moves into ci.yml's `ui` leg, and so under ci-ok, once
 #   it passes: today 8 of its 52 tests fail on WebKit only (docs/TESTING.md TS-14).
@@ -78,7 +78,7 @@ jobs:
           got=$( (sha256sum models/nemotron3_diar_v3.onnx 2>/dev/null || shasum -a 256 models/nemotron3_diar_v3.onnx) | cut -d' ' -f1)
           echo "sha256 $got"
           test "$got" = "$MODEL_SHA256"
-      # The extracted evaluation audio (about 120 MB), keyed by the script that pins it.
+      # The evaluation audio (about 290 MB), keyed by the script that pins it.
       - name: the evaluation audio, cached by its pins
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

@@ -4,7 +4,7 @@
  * compared with the baselines committed in docs/gates/nightly-baselines.json.
  *
  *   bun scripts/eval/nightly.ts --models <dir> --data <dir> --diarize <akou-diarize> --nemotron <onnx>
- *                               [--only fleurs,voxconverse,replay] [--out results.json]
+ *                               [--only fleurs,ami,replay] [--out results.json]
  *
  * What it measures, per OS:
  *
@@ -14,12 +14,13 @@
  * - Latency: each utterance's decode time, p50, p90 and p99, and the real-time factor. Recorded;
  *   the real-time factor of the default engines gates on its budget (0.5 on the 4-core x64 Linux
  *   runner, docs/TESTING.md 4.7) and nowhere else.
- * - Diarization error on a VoxConverse dev subset (RTTM references from the dataset's repository
- *   at a pinned commit, 0.25 s collar, overlap scored). Gated at or below the baseline.
+ * - Diarization error on two AMI Meeting Corpus test meetings, audio and annotations both
+ *   CC-BY-4.0 (the only_words references of the standard AMI diarization setup at a pinned commit,
+ *   0.25 s collar, overlap scored). Gated at or below the baseline.
  * - The replay recall of the query engine on five generated three-hour calls, with its 85 % floor.
  *
- * Every download is pinned by revision and checked by SHA-256 where the host publishes one; the
- * VoxConverse audio is read out of the dataset's zip with range requests and checked by size.
+ * Every download is pinned by revision and checked by SHA-256: the published hash where the host
+ * has one, and otherwise the hash of the file as first fetched (the AMI audio).
  * The job summary lists every number next to its baseline and ends with the licences. It exits 1
  * when any gated number is worse than its baseline, has none, or passes its bound.
  */
@@ -27,7 +28,6 @@
 import { createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { inflateRawSync } from "node:zlib";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 import { downloadModels, RECOGNIZER } from "../../src/main/asr/models.ts";
 import { NemotronDiarizer } from "../../src/main/asr/nemotron.ts";
@@ -67,30 +67,27 @@ export const FLEURS = {
   },
 } as const;
 
-/** VoxConverse dev files with two to five speakers, about 17 minutes in all. */
-export const VOXCONVERSE = {
-  zip: "https://www.robots.ox.ac.uk/~vgg/data/voxconverse/data/voxconverse_dev_wav.zip",
-  zipSize: 1988647478,
-  rttm: "https://raw.githubusercontent.com/joonson/voxconverse/24bf60be297701cd7e4ef18550c6d390c1b87365/dev",
+/**
+ * Two AMI Meeting Corpus test meetings, the headset mix at 16 kHz, four speakers each, about 31
+ * minutes in all. The references are the `only_words` set of the AMI diarization setup (BUT's,
+ * through pyannote's fork at a pinned commit), whose scoring region is the whole recording.
+ */
+export const AMI = {
+  audio: "https://groups.inf.ed.ac.uk/ami/AMICorpusMirror/amicorpus",
+  rttm: "https://raw.githubusercontent.com/pyannote/AMI-diarization-setup/67c2d539286e89f68952d5dcf83912bd9f01dfae/only_words/rttms/test",
   licence:
-    "VoxConverse (dev, RTTM v0.3 at joonson/voxconverse@24bf60b): CC-BY-4.0, for research; the copyright of the audio stays with the original video owners",
-  files: [
-    "tucrg",
-    "qpylu",
-    "whmpa",
-    "bkwns",
-    "szsyz",
-    "fxgvy",
-    "gwtwd",
-    "rtvuw",
-    "syiwe",
-    "cobal",
-    "oenox",
-    "bwzyf",
-    "plbbw",
-    "jiqvr",
-    "wjhgf",
-    "jyirt",
+    "AMI Meeting Corpus (audio and annotations): CC-BY-4.0; references from pyannote/AMI-diarization-setup@67c2d53 (Apache-2.0), derived from the AMI manual annotations 1.6.2",
+  meetings: [
+    {
+      id: "ES2004a",
+      wavSha256: "3e2560b19bee6952c7c7ce041b0f1ea8a7ea9468044c4eea79d2a2c67e24ab0f",
+      rttmSha256: "9869c6146c2fd9595403edb36c2caeda65c12ffa2c0af4ce48d6814b673fd5a9",
+    },
+    {
+      id: "IS1009a",
+      wavSha256: "6eb5a0ede0d9e72794f976ce7bea5b78133eae969f99b4c5418b43c2468d25b1",
+      rttmSha256: "ba38d35ca567f3f1e061d90fdc33579ce60d2060fc8664eaeb77d2e0fcd88b01",
+    },
   ],
 } as const;
 
@@ -216,75 +213,7 @@ async function fleurs(lang: keyof typeof FLEURS.sets, dataDir: string): Promise<
   });
 }
 
-// --- VoxConverse, read out of the zip with range requests -------------------------------------
-
-interface ZipEntry {
-  name: string;
-  method: number;
-  compressed: number;
-  size: number;
-  offset: number;
-}
-
-async function range(url: string, from: number, to: number): Promise<Uint8Array> {
-  const b = await get(url, { range: `bytes=${from}-${to}` });
-  if (b.length !== to - from + 1)
-    throw new Error(`${url}: asked ${to - from + 1} bytes, got ${b.length}`);
-  return b;
-}
-
-/** The central directory of a zip at `url` of `size` bytes (no ZIP64: the file is under 4 GB). */
-export async function zipDirectory(url: string, size: number): Promise<ZipEntry[]> {
-  // The end record sits in the last 22 bytes plus a comment of at most 65,535.
-  const tail = await range(url, Math.max(0, size - 65_557), size - 1);
-  const tv = new DataView(tail.buffer, tail.byteOffset, tail.byteLength);
-  let e = -1;
-  for (let i = tail.length - 22; i >= 0; i--)
-    if (tv.getUint32(i, true) === 0x06054b50) {
-      e = i;
-      break;
-    }
-  if (e < 0) throw new Error(`${url}: no end of central directory`);
-  const cdSize = tv.getUint32(e + 12, true);
-  const cdOffset = tv.getUint32(e + 16, true);
-  const cd = await range(url, cdOffset, cdOffset + cdSize - 1);
-  const v = new DataView(cd.buffer, cd.byteOffset, cd.byteLength);
-  const out: ZipEntry[] = [];
-  for (let o = 0; o + 46 <= cd.length && v.getUint32(o, true) === 0x02014b50; ) {
-    const nameLen = v.getUint16(o + 28, true);
-    const extra = v.getUint16(o + 30, true);
-    const comment = v.getUint16(o + 32, true);
-    out.push({
-      name: new TextDecoder().decode(cd.subarray(o + 46, o + 46 + nameLen)),
-      method: v.getUint16(o + 10, true),
-      compressed: v.getUint32(o + 20, true),
-      size: v.getUint32(o + 24, true),
-      offset: v.getUint32(o + 42, true),
-    });
-    o += 46 + nameLen + extra + comment;
-  }
-  return out;
-}
-
-/** One file out of the zip: its local header, then its data, stored or deflated. */
-export async function zipFile(url: string, entry: ZipEntry): Promise<Uint8Array> {
-  const head = await range(url, entry.offset, entry.offset + 29);
-  const hv = new DataView(head.buffer, head.byteOffset, head.byteLength);
-  if (hv.getUint32(0, true) !== 0x04034b50) throw new Error(`${entry.name}: no local header`);
-  const start = entry.offset + 30 + hv.getUint16(26, true) + hv.getUint16(28, true);
-  const raw = await range(url, start, start + entry.compressed - 1);
-  const data =
-    entry.method === 0
-      ? raw
-      : entry.method === 8
-        ? new Uint8Array(inflateRawSync(raw))
-        : (() => {
-            throw new Error(`${entry.name}: compression method ${entry.method}`);
-          })();
-  if (data.length !== entry.size)
-    throw new Error(`${entry.name}: ${data.length} bytes, want ${entry.size}`);
-  return data;
-}
+// --- AMI ---------------------------------------------------------------------------------------
 
 interface Conversation {
   id: string;
@@ -292,22 +221,16 @@ interface Conversation {
   ref: Turn[];
 }
 
-async function voxconverse(dataDir: string): Promise<Conversation[]> {
-  const dir = join(dataDir, "voxconverse");
+/** The pinned AMI meetings, fetched into `dir` once and checked by SHA-256 on every run. */
+async function ami(dataDir: string): Promise<Conversation[]> {
+  const dir = join(dataDir, "ami");
   mkdirSync(dir, { recursive: true });
-  let entries: ZipEntry[] | null = null;
   const out: Conversation[] = [];
-  for (const id of VOXCONVERSE.files) {
-    const wav = join(dir, `${id}.wav`);
-    if (!existsSync(wav)) {
-      entries ??= await zipDirectory(VOXCONVERSE.zip, VOXCONVERSE.zipSize);
-      const e = entries.find((x) => x.name.endsWith(`/${id}.wav`) || x.name === `${id}.wav`);
-      if (!e) throw new Error(`VoxConverse: ${id}.wav is not in the zip`);
-      writeFileSync(wav, await zipFile(VOXCONVERSE.zip, e));
-    }
-    const rttmPath = join(dir, `${id}.rttm`);
-    if (!existsSync(rttmPath)) writeFileSync(rttmPath, await get(`${VOXCONVERSE.rttm}/${id}.rttm`));
-    out.push({ id, wav, ref: parseRttm(readFileSync(rttmPath, "utf8")) });
+  for (const m of AMI.meetings) {
+    const wav = join(dir, `${m.id}.wav`);
+    await pinned(`${AMI.audio}/${m.id}/audio/${m.id}.Mix-Headset.wav`, wav, m.wavSha256);
+    const rttm = await pinned(`${AMI.rttm}/${m.id}.rttm`, join(dir, `${m.id}.rttm`), m.rttmSha256);
+    out.push({ id: m.id, wav, ref: parseRttm(new TextDecoder().decode(rttm)) });
   }
   return out;
 }
@@ -325,10 +248,10 @@ async function main(argv: string[]): Promise<number> {
   };
   const modelsDir = flag("--models");
   const dataDir = flag("--data");
-  const only = new Set((flag("--only") ?? "fleurs,voxconverse,replay").split(","));
+  const only = new Set((flag("--only") ?? "fleurs,ami,replay").split(","));
   if (!modelsDir || !dataDir) {
     console.error(
-      "usage: bun scripts/eval/nightly.ts --models <dir> --data <dir> [--diarize <akou-diarize> --nemotron <onnx>] [--only fleurs,voxconverse,replay] [--out results.json]",
+      "usage: bun scripts/eval/nightly.ts --models <dir> --data <dir> [--diarize <akou-diarize> --nemotron <onnx>] [--only fleurs,ami,replay] [--out results.json]",
     );
     return 64;
   }
@@ -392,15 +315,15 @@ async function main(argv: string[]): Promise<number> {
     notes.push(FLEURS.licence);
   }
 
-  if (only.has("voxconverse")) {
+  if (only.has("ami")) {
     const helper = flag("--diarize");
     const model = flag("--nemotron");
-    if (!helper || !model) throw new Error("--only voxconverse needs --diarize and --nemotron");
+    if (!helper || !model) throw new Error("--only ami needs --diarize and --nemotron");
     const diarizer = new NemotronDiarizer({ command: [helper], model, threads: 2 });
     let speech = 0;
     let errors = 0;
     let audio = 0;
-    for (const c of await voxconverse(dataDir)) {
+    for (const c of await ami(dataDir)) {
       const x = readWav(new Uint8Array(readFileSync(c.wav)));
       audio += x.length / ASR_RATE;
       const hyp = (await diarizer.process(x)).map((t) => ({ ...t, speaker: String(t.speaker) }));
@@ -409,16 +332,16 @@ async function main(argv: string[]): Promise<number> {
       errors += d.missed + d.falseAlarm + d.confusion;
     }
     measures.push({
-      key: "der.voxconverse_dev16.nemotron-3-diarization",
+      key: "der.ami_test2.nemotron-3-diarization",
       value: (100 * errors) / speech,
       unit: "%",
       better: "lower",
       gate: "baseline",
     });
     notes.push(
-      `VoxConverse: ${VOXCONVERSE.files.length} dev files, ${(audio / 60).toFixed(1)} min, collar 0.25 s, overlap scored`,
+      `AMI: ${AMI.meetings.map((m) => m.id).join(" and ")}, headset mix, ${(audio / 60).toFixed(1)} min, collar 0.25 s, overlap scored`,
     );
-    notes.push(VOXCONVERSE.licence);
+    notes.push(AMI.licence);
   }
 
   if (only.has("replay")) {
