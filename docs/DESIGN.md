@@ -545,6 +545,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 | `akou note "text"` · `akou remember "text"` · `akou remember --del ID` | Notepad line, agent memory, retract a remembered line |
 | `akou vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | The custom vocabulary: entries in force, add a word (mid-call with `--call`), proposals, ranked candidates from a call or text, decode safety of a word, import of older list formats, the post-call pass. |
 | `akou enhance [--template T] [--call ID]` · `akou finalize [CALL] [--force]` | Post-call |
+| `akou wait [CALL] --for final.done\|enhanced\|exported [--timeout 30m]` | Blocks until the call reaches the stage: exit 0, 70 when it failed, 124 at the timeout |
 | `akou calls [-w WS] [--limit N] [--failed]` | Lists calls by date, title, duration, participants. No content search |
 | `akou show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | One call's transcript or notes |
 | `akou export [CALL] [--to DIR]` · `akou hooks run CALL [--stage S]` | Hand-off, re-run |
@@ -556,7 +557,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 | `akou quit` · `akou mcp` | Stops the app cleanly; stdio MCP server |
 | `akou self-update` | CLI tarball only (M4): replaces the binary after verifying its cosign signature |
 
-Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission.
+Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission, 124 `akou wait` timed out.
 
 ### 6.2 HTTP API
 
