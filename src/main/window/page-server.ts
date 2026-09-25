@@ -26,7 +26,7 @@
  * In server mode (docs/ux/SERVER.md SV-U1) there is no listener of its own: the API's listener
  * hands it every path that is not the API (`mounted`), the `Host` rule is server mode's, a request
  * whose `Origin` is not the page's own is refused, and `POST /session` also takes the admin
- * password or an `admin` key; a wrong one is answered after 2 s.
+ * password or an `admin` key; a wrong one is answered after 2 s, and logins run one at a time.
  */
 
 import { randomBytes } from "node:crypto";
@@ -156,6 +156,12 @@ export class PageServer {
   private readonly sessions = new Set<string>();
   /** Open streams, so a quit (or a test) can close them all at once. */
   private readonly streams = new Set<AbortController>();
+  /**
+   * The admin logins, one at a time across the process: a wrong one holds the line for its delay,
+   * so the delay is a rate (one guess per `LOGIN_FAIL_MS`) whatever runs in parallel, and only one
+   * password check runs at once.
+   */
+  private logins: Promise<unknown> = Promise.resolve();
   private readonly now: () => number;
   private stopping = false;
 
@@ -311,14 +317,17 @@ export class PageServer {
         if (err instanceof HttpError) return refuse(err.status, err.code, err.message);
       }
       if (mounted && (typeof body.password === "string" || typeof body.key === "string")) {
-        const ok = await mounted.login({
+        const credentials = {
           password: typeof body.password === "string" ? body.password : undefined,
           key: typeof body.key === "string" ? body.key : undefined,
+        };
+        const attempt = this.logins.then(async () => {
+          const ok = await mounted.login(credentials).catch(() => false);
+          if (!ok) await Bun.sleep(this.o.loginFailMs ?? LOGIN_FAIL_MS);
+          return ok;
         });
-        if (!ok) {
-          await Bun.sleep(this.o.loginFailMs ?? LOGIN_FAIL_MS);
-          return refuse(401, "bad_login", "wrong admin password or key");
-        }
+        this.logins = attempt;
+        if (!(await attempt)) return refuse(401, "bad_login", "wrong admin password or key");
         const session = randomBytes(32).toString("hex");
         this.sessions.add(session);
         return Response.json({ session });

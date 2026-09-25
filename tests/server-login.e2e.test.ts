@@ -8,7 +8,9 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { runCli } from "../src/main/cli/cli.ts";
-import { LOGIN_FAIL_MS } from "../src/main/window/page-server.ts";
+import type { Bridge } from "../src/main/window/bridge.ts";
+import type { UiBundle } from "../src/main/window/bundle.ts";
+import { LOGIN_FAIL_MS, type MountedPage, PageServer } from "../src/main/window/page-server.ts";
 import { type AppRig, appRig, declare, rawRequest } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 
@@ -180,5 +182,70 @@ describe("SV-U1: the admin login", () => {
     } finally {
       await app.close();
     }
+  });
+});
+
+/** A mounted page with no app behind it: only its login is driven. */
+function loginPage(o: { failMs: number; login: MountedPage["login"] }): PageServer {
+  return new PageServer({
+    bridge: {} as Bridge,
+    bundle: { get: () => null } as unknown as UiBundle,
+    loginFailMs: o.failMs,
+    mounted: {
+      origin: "http://127.0.0.1:8476",
+      hostAllowed: () => true,
+      pageAllowed: true,
+      login: o.login,
+    },
+  });
+}
+
+function post(page: PageServer, body: unknown): Promise<Response> {
+  return page.fetch(
+    new Request("http://127.0.0.1:8476/session", {
+      method: "POST",
+      headers: { host: "127.0.0.1:8476", "content-type": "application/json" },
+      body: JSON.stringify(body),
+    }),
+    { timeout: () => {} },
+  );
+}
+
+describe("SV-U1: failed logins are one at a time across the process", () => {
+  test("5 parallel wrong logins take 5 delays, and never two checks at once", async () => {
+    const failMs = 100;
+    let running = 0;
+    let most = 0;
+    const page = loginPage({
+      failMs,
+      login: async () => {
+        running++;
+        most = Math.max(most, running);
+        await Bun.sleep(5);
+        running--;
+        return false;
+      },
+    });
+    const t0 = performance.now();
+    const answers = await Promise.all(
+      Array.from({ length: 5 }, () => post(page, { password: "guess" })),
+    );
+    const took = performance.now() - t0;
+    expect(answers.map((r) => r.status)).toEqual([401, 401, 401, 401, 401]);
+    expect(most).toBe(1);
+    expect(took).toBeGreaterThanOrEqual(5 * failMs - 10);
+  });
+
+  test("positive control: one wrong login takes one delay, and a right one waits for none", async () => {
+    const failMs = 100;
+    const page = loginPage({ failMs, login: async (c) => c.password === "right" });
+    const t0 = performance.now();
+    expect((await post(page, { password: "wrong" })).status).toBe(401);
+    const one = performance.now() - t0;
+    expect(one).toBeGreaterThanOrEqual(failMs - 10);
+    expect(one).toBeLessThan(2 * failMs);
+    const t1 = performance.now();
+    expect((await post(page, { password: "right" })).status).toBe(200);
+    expect(performance.now() - t1).toBeLessThan(failMs);
   });
 });
