@@ -27,7 +27,10 @@ function home(): { dir: string; configDir: string; env: Record<string, string> }
   cleanups.push(t.cleanup);
   const configDir = join(t.dir, ".config", "akou");
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ "api.port": 0, "api.bind": "127.0.0.1" }));
+  writeFileSync(
+    join(configDir, "config.json"),
+    JSON.stringify({ "api.port": 0, "api.bind": "127.0.0.1" }),
+  );
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   delete env.AKOU_URL;
