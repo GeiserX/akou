@@ -11,6 +11,10 @@
  *   retry time from the jobs that ended, and the same numbers give the queue's ETA.
  * - **Every state change is one transaction** in the store: the job's state, its feed event and its
  *   delivery. A job the last process left running is queued again at start, in its place.
+ * - **Remotes** (section 14): a queued job this server cannot run, or one a `server.remotes` entry
+ *   names, is sent to another akou over its job API and followed there; its end is concluded here
+ *   as any job's, so the client reads it under this server's id, feed and webhook. A remote that
+ *   goes away puts the job back in the queue, never fails it.
  * - **Nothing is kept longer than needed** (SV-J6). The upload is deleted when the job ends; a
  *   delete removes the job and its result and leaves the feed the id and the final state; a job
  *   older than `server.retain_days` goes the same way on a timer.
@@ -31,10 +35,13 @@ import {
   hardwareChoice,
   type ModelChoice,
   ModelRefused,
+  type ModelSource,
   type ModelStore,
   resolveModel,
   type Waiting,
 } from "./model-store.ts";
+import { PRESET_NAMES } from "./presets.ts";
+import { REMOTE_WAIT_S, RemoteError, type RemoteJob, Remotes } from "./remotes.ts";
 import {
   type FeedEvent,
   JOBS_DB,
@@ -134,6 +141,13 @@ export interface JobServiceOptions {
   retainDays(): number;
   /** `server.max_audio_minutes`: longer audio fails `too_long` before it is held in memory. */
   maxAudioMinutes(): number;
+  /** `server.remotes` as the settings hold it now (section 14). */
+  remotes?(): readonly string[];
+  /** Where a remote key file's `~/` points. */
+  env?: Record<string, string | undefined>;
+  /** Test seams: how often the remotes are probed, and their network. */
+  remoteProbeMs?: number;
+  remoteFetch?: typeof fetch;
   /** `server.concurrency`: jobs run at once. Default 1. */
   concurrency?(): number;
   /** `server.queue_max`: jobs queued or running across keys; 0 or absent, no limit. */
@@ -233,6 +247,16 @@ function failedData(job: Job, error: JobError): Record<string, unknown> {
 
 type Waiter = (j: { id: string; status: JobStatus }) => void;
 
+/** Where a queued job runs now: here, on a remote, or nowhere yet. */
+type Route = { where: "local" } | { where: "wait" } | { where: "remote"; url: string };
+
+/** A job only a remote can run: the names sent to it (section 14). */
+export interface RemoteChoice {
+  model: string | null;
+  preset: string;
+  source: ModelSource;
+}
+
 export class JobService {
   readonly store: JobStore;
   private readonly deliverer: Deliverer;
@@ -247,12 +271,30 @@ export class JobService {
   private readonly waiters = new Map<string, Set<Waiter>>();
   private readonly feedWatchers = new Set<(e: FeedEvent) => void>();
   private retention: ReturnType<typeof setInterval> | null = null;
+  /** The other akou servers jobs are sent to (section 14). */
+  readonly remotes: Remotes;
+  /** The jobs out on a remote now, and how to stop following one. */
+  private readonly sent = new Map<string, { url: string; abort: AbortController }>();
+  /** A job a remote turned away waits until then (monotonic ms) before it is sent again. */
+  private readonly heldUntil = new Map<string, number>();
+  private dispatching = false;
 
   /** When this process started the service: a job running from before is not timed. */
   private readonly startedAt: number;
 
   constructor(private readonly o: JobServiceOptions) {
     this.now = o.now ?? Date.now;
+    this.remotes = new Remotes({
+      entries: () => o.remotes?.() ?? [],
+      env: o.env,
+      fetch: o.remoteFetch,
+      probeMs: o.remoteProbeMs,
+      onChange: () => {
+        this.dispatch();
+        this.pump();
+      },
+      log: o.log,
+    });
     this.startedAt = this.now();
     mkdirSync(o.dir, { recursive: true, mode: 0o700 });
     this.audioDir = join(o.dir, "audio");
@@ -307,6 +349,8 @@ export class JobService {
     // clock: retention runs hourly; each run reads the store's own times.
     this.retention = setInterval(() => this.sweep(), RETENTION_SWEEP_MS);
     this.deliverer.kick();
+    this.remotes.start();
+    this.dispatch();
     this.pump();
   }
 
@@ -416,11 +460,43 @@ export class JobService {
     return j.model ?? this.defaultRecognizer();
   }
 
+  /** The models a job needs on this server's disk: none for one only a remote can run. */
+  private localNeeds(j: Job): string[] {
+    return j.route === "remote" ? [] : this.o.shelf.needs(this.modelOf(j));
+  }
+
   /** The job as a client sees it, with its download's progress while it waits. */
   view(j: Job): Record<string, unknown> {
     const waiting =
-      j.status === "queued" ? this.o.shelf.waiting(this.o.shelf.needs(this.modelOf(j))) : null;
+      j.status === "queued" && j.route !== "remote"
+        ? this.o.shelf.waiting(this.localNeeds(j))
+        : null;
     return jobView(j, waiting);
+  }
+
+  /**
+   * A job this server cannot run, as a remote that has offered it would take it (section 14): the
+   * request's `model`, its `preset`, `server.default_model`, then the hardware's preset, first
+   * named wins. Null when no remote has offered that name since start.
+   */
+  remoteChoice(ask: { model?: string; preset?: string }): RemoteChoice | null {
+    const named = (v: string | undefined, source: ModelSource) => {
+      const x = (v ?? "").trim();
+      return x === "" || x === "auto" ? null : { name: x, source };
+    };
+    const n = named(ask.model, "request") ??
+      named(ask.preset, "request") ??
+      named(this.o.defaultModel(), "server_default") ?? {
+        name: hardwareChoice().preset,
+        source: "hardware" as const,
+      };
+    if (!this.remotes.offered([n.name])) return null;
+    const preset = (PRESET_NAMES as readonly string[]).includes(n.name);
+    return {
+      model: preset ? null : n.name,
+      preset: preset ? n.name : "custom",
+      source: n.source,
+    };
   }
 
   /** Whether a job on `model` could run now: its files on disk, or allowed to be fetched. */
@@ -441,7 +517,7 @@ export class JobService {
   /** Every queued job waiting on `model` fails: its download failed for good (SV-M3). */
   private failWaiting(model: string, cause: string): void {
     for (const j of this.store.queued()) {
-      if (!this.o.shelf.needs(this.modelOf(j)).includes(model)) continue;
+      if (!this.localNeeds(j).includes(model)) continue;
       this.conclude(j, {
         status: "failed",
         error: {
@@ -482,6 +558,7 @@ export class JobService {
       if (r.job.file_sha256 !== j.file_sha256) return { conflict: r.job };
       return r;
     }
+    this.dispatch();
     this.pump();
     return r;
   }
@@ -567,6 +644,10 @@ export class JobService {
       // The slot is free now: an aborted run touches neither it nor its Worker again.
       slot.job = null;
     }
+    this.heldUntil.delete(id);
+    // A job sent to a remote is deleted there too, so its audio and text do not outlive it.
+    this.sent.get(id)?.abort.abort();
+    if (r.job.remote && r.job.remote_job) this.remotes.cancel(r.job.remote, r.job.remote_job);
     if (r.job.audio) rmSync(r.job.audio, { force: true });
     this.notify(id, r.final);
     if (r.final === "cancelled") this.announce(id);
@@ -590,7 +671,7 @@ export class JobService {
     const defaults = new Set(shelf.needs(this.defaultRecognizer()));
     const inUse = new Set<string>();
     for (const j of [...this.store.queued(), ...this.store.running()]) {
-      for (const id of shelf.needs(this.modelOf(j))) inUse.add(id);
+      for (const id of this.localNeeds(j)) inUse.add(id);
     }
     for (const s of this.slots) {
       if (s.worker && s.model) for (const id of shelf.needs(s.model)) inUse.add(id);
@@ -777,7 +858,8 @@ export class JobService {
    */
   private nextRunnable(): Job | null {
     for (const j of this.store.queued()) {
-      const needs = this.o.shelf.needs(this.modelOf(j));
+      if (this.routeOf(j).where !== "local") continue;
+      const needs = this.localNeeds(j);
       if (this.o.shelf.missing(needs).length === 0) return j;
       this.o.shelf.fetch(needs);
     }
@@ -878,6 +960,7 @@ export class JobService {
     end:
       | { status: "done"; result: Record<string, unknown> }
       | { status: "failed"; error: JobError },
+    remote: string | null = null,
   ): void {
     const e =
       end.status === "done"
@@ -896,11 +979,151 @@ export class JobService {
     this.measure(job, end);
     this.o.log(
       end.status === "done" ? "info" : "warn",
-      `job.${end.status} ${job.id} key ${job.key_id} model ${this.modelOf(job)}`,
+      remote === null
+        ? `job.${end.status} ${job.id} key ${job.key_id} model ${this.modelOf(job)}`
+        : `job.${end.status} ${job.id} key ${job.key_id} model ${job.model ?? job.preset} on ${remote}`,
     );
     this.notify(job.id, end.status);
     for (const fn of [...this.feedWatchers]) fn(e);
     if (job.callback_url) this.deliverer.kick();
+  }
+
+  // -------------------------------------------------------------------------
+  // Remotes (section 14)
+
+  /** The names a remote is asked for: the preset and the model, or what only a remote can run. */
+  private namesOf(j: Job): string[] {
+    if (j.route === "remote") return [j.model ?? j.preset];
+    return [j.preset, j.model].filter((n): n is string => !!n && n !== "custom" && n !== "auto");
+  }
+
+  /**
+   * Where a queued job runs now. A job only a remote can run waits for one that is up and offers
+   * it; a job a remote entry names goes there first while it is up and offers it, and runs here
+   * otherwise; every other job runs here.
+   */
+  private routeOf(j: Job): Route {
+    if (j.route === "local" || !this.remotes.configured()) return { where: "local" };
+    const names = this.namesOf(j);
+    // Back to the remote that already has it, so a returning remote's copy is followed, not redone.
+    if (j.remote && this.remotes.up(j.remote, names)) return { where: "remote", url: j.remote };
+    const url = this.remotes.pick(names, j.route !== "remote");
+    if (url === "busy") return { where: "wait" };
+    if (url !== null) return { where: "remote", url };
+    return j.route === "remote" ? { where: "wait" } : { where: "local" };
+  }
+
+  /** Sends every queued job whose route is a remote to it, while each remote has room. */
+  private dispatch(): void {
+    if (this.closed || this.dispatching || !this.remotes.configured()) return;
+    this.dispatching = true;
+    try {
+      for (const j of this.store.queued()) {
+        if ((this.heldUntil.get(j.id) ?? 0) > performance.now()) continue;
+        const r = this.routeOf(j);
+        if (r.where !== "remote" || !this.store.claim(j.id)) continue;
+        this.heldUntil.delete(j.id);
+        const abort = new AbortController();
+        this.remotes.hold(r.url);
+        this.sent.set(j.id, { url: r.url, abort });
+        this.notify(j.id, "running");
+        void this.runRemote({ ...j, status: "running" }, r.url, abort);
+      }
+    } finally {
+      this.dispatching = false;
+    }
+  }
+
+  /** What a remote is sent: the names, the options, the audio; never the metadata or callback. */
+  private remoteJob(j: Job): RemoteJob {
+    const preset = j.route === "remote" ? (j.model === null ? j.preset : undefined) : j.preset;
+    return {
+      id: j.id,
+      audio: j.audio as string,
+      preset: preset === "custom" ? undefined : preset,
+      model: j.model ?? undefined,
+      language: j.language,
+      keywords: j.keywords,
+      diarize: j.diarize,
+    };
+  }
+
+  /**
+   * Sends one job to a remote, or finds the copy it already has, and follows it there to its end.
+   * The remote's result is this job's result under this job's id and metadata. A remote that stops
+   * answering puts the job back in the queue; one that refuses it sends it elsewhere or here.
+   */
+  private async runRemote(job: Job, url: string, abort: AbortController): Promise<void> {
+    let rid = job.remote === url ? job.remote_job : null;
+    try {
+      if (rid === null) {
+        rid = await this.remotes.submit(url, this.remoteJob(job), abort.signal);
+        this.store.setRemote(job.id, url, rid);
+        this.o.log("info", `job.sent ${job.id} to ${url} as ${rid}`);
+      }
+      for (;;) {
+        const s = await this.remotes.job(url, rid, REMOTE_WAIT_S, abort.signal);
+        if (s.status === "done") {
+          const result = await this.remotes.result(url, rid, abort.signal);
+          if (abort.signal.aborted) return;
+          this.conclude(
+            job,
+            {
+              status: "done",
+              result: { ...result, job_id: job.id, status: "done", metadata: job.metadata },
+            },
+            url,
+          );
+          return;
+        }
+        if (s.status === "failed") {
+          this.conclude(
+            job,
+            {
+              status: "failed",
+              error: s.error ?? { code: "transcription_failed", message: `it failed on ${url}` },
+            },
+            url,
+          );
+          return;
+        }
+        if (s.status === "cancelled") {
+          throw new RemoteError("lost", `${url} no longer has the job (${s.status})`);
+        }
+      }
+    } catch (err) {
+      if (abort.signal.aborted || this.closed) return;
+      const e = err instanceof RemoteError ? err : new RemoteError("down", (err as Error).message);
+      this.o.log("warn", `job.returned ${job.id} from ${url}: ${e.message}`);
+      if (e.kind === "lost") {
+        this.store.setRemote(job.id, null, null);
+      } else if (e.kind === "rejected") {
+        this.store.setRemote(job.id, null, null);
+        if (e.status === 409) {
+          // The remote no longer offers it: asked again after its next probe.
+          this.heldUntil.set(job.id, performance.now() + (this.o.remoteProbeMs ?? 30_000));
+          void this.remotes.probeAll();
+        } else if (job.route === "remote") {
+          this.conclude(job, {
+            status: "failed",
+            error: { code: e.code ?? "remote_refused", message: e.message },
+          });
+          return;
+        } else {
+          this.store.setRoute(job.id, "local");
+        }
+      } else {
+        this.remotes.failed(url, e);
+      }
+      this.store.requeue(job.id);
+    } finally {
+      this.sent.delete(job.id);
+      this.remotes.release(url);
+      if (!this.closed) {
+        this.dispatch();
+        this.pump();
+      }
+    }
   }
 
   /**
@@ -924,6 +1147,8 @@ export class JobService {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    this.remotes.close();
+    for (const s of this.sent.values()) s.abort.abort();
     if (this.retention) clearInterval(this.retention);
     this.deliverer.close();
     for (const s of this.slots) {
