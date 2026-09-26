@@ -2,6 +2,10 @@
  * The speech models akou uses (docs/DESIGN.md section 3): what they are, where they come from, what
  * they weigh, their licences, and a downloader that checks every file against a pinned SHA-256.
  *
+ * `MODELS` is the engine catalog (docs/research/asr-architecture.md section 2.2): each entry also
+ * says which engine roles it serves, the runtime that runs it, the platforms and accelerators it
+ * runs on, and the languages it hears. `modelsFor(settings, platform)` picks a machine's list.
+ *
  * akou never bundles models. First run offers one explicit download into the user's models folder;
  * `akou models import <dir>` covers air-gapped machines. Every file is fetched from a URL pinned to
  * an exact revision, resumed from a `.part` file with an HTTP range request, and moved into place
@@ -34,6 +38,38 @@ export interface ModelSpecEntry {
   files: ModelFileSpec[];
 }
 
+/** The machines akou is released for, as `${process.platform}-${process.arch}`. */
+export const PLATFORMS = ["darwin-arm64", "linux-x64", "linux-arm64", "win32-x64"] as const;
+export type Platform = (typeof PLATFORMS)[number];
+
+/** How an entry runs: in-process sherpa-onnx, or the `akou-diarize` helper. */
+export const RUNTIMES = ["sherpa-onnx", "akou-diarize"] as const;
+export type Runtime = (typeof RUNTIMES)[number];
+
+export const ACCELERATORS = ["cpu", "metal", "cuda", "vulkan"] as const;
+export type Accelerator = (typeof ACCELERATORS)[number];
+
+/** The interfaces of engine.ts an entry serves. */
+export const ROLES = ["final", "live", "vad", "diarizer", "embedder"] as const;
+export type Role = (typeof ROLES)[number];
+
+/** A catalog entry: a model with what runs it, where, and for which languages. */
+export interface CatalogEntry extends ModelSpecEntry {
+  serves: readonly Role[];
+  runtime: Runtime;
+  platforms: readonly Platform[];
+  accelerators: readonly Accelerator[];
+  /** ISO 639-1 codes the model recognizes, or `any` for a model that hears no words. */
+  languages: "any" | readonly string[];
+}
+
+/** Parakeet TDT v3's 25 European languages, from its model card. */
+const PARAKEET_LANGUAGES: readonly string[] =
+  "bg cs da de el en es et fi fr hr hu it lt lv mt nl pl pt ro ru sk sl sv uk".split(" ");
+
+/** Every model today runs on the CPU on every released platform. */
+const EVERYWHERE = { platforms: PLATFORMS, accelerators: ["cpu"] } as const;
+
 const HF_PARAKEET =
   "https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/1a468a35cbba69418f126de829e75261dea4a4e4";
 const HF_PARAKEET_UPSTREAM =
@@ -61,12 +97,16 @@ export const NEMOTRON_FILE = "nemotron3_diar_v3.onnx";
  */
 export const RETIRED_MODELS: readonly string[] = ["parakeet-tdt-0.6b-v3-int8"];
 
-export const MODELS: readonly ModelSpecEntry[] = [
+export const MODELS: readonly CatalogEntry[] = [
   {
     id: RECOGNIZER,
     job: "live and final recognition, 25 European languages",
     licence: "CC-BY-4.0",
     source: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
+    serves: ["final", "live"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: PARAKEET_LANGUAGES,
     files: [
       {
         name: "encoder.onnx",
@@ -114,6 +154,10 @@ export const MODELS: readonly ModelSpecEntry[] = [
     job: "voice activity: cut points only",
     licence: "MIT",
     source: "https://github.com/snakers4/silero-vad",
+    serves: ["vad"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: "any",
     files: [
       {
         name: "silero_vad.onnx",
@@ -128,6 +172,10 @@ export const MODELS: readonly ModelSpecEntry[] = [
     job: "speaker labels, live and final (asr.diarizer nemotron)",
     licence: "OpenMDW-1.1",
     source: "https://huggingface.co/nvidia/Nemotron-3-Diarization",
+    serves: ["diarizer"],
+    runtime: "akou-diarize",
+    ...EVERYWHERE,
+    languages: "any",
     files: [
       {
         name: NEMOTRON_FILE,
@@ -142,6 +190,10 @@ export const MODELS: readonly ModelSpecEntry[] = [
     job: "speaker segmentation for the final pass (asr.diarizer embeddings)",
     licence: "MIT",
     source: "https://huggingface.co/pyannote/segmentation-3.0",
+    serves: ["diarizer"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: "any",
     files: [
       {
         name: "model.onnx",
@@ -156,6 +208,10 @@ export const MODELS: readonly ModelSpecEntry[] = [
     job: "speaker embeddings: live clusters, final diarization with pyannote, and names across a restart with Nemotron",
     licence: "CC-BY-4.0",
     source: "https://catalog.ngc.nvidia.com/orgs/nvidia/teams/nemo/models/titanet_small",
+    serves: ["embedder"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: "any",
     files: [
       {
         name: "nemo_en_titanet_small.onnx",
@@ -173,17 +229,54 @@ const ONLY: Readonly<Record<DiarizerKind, readonly string[]>> = {
   embeddings: ["pyannote-segmentation-3.0"],
 };
 
+/** This machine in the catalog's terms; a machine akou is not released for matches no entry. */
+export function hostPlatform(): string {
+  return `${process.platform}-${process.arch}`;
+}
+
 /**
- * The models a machine needs for its `asr.diarizer`: the recognizer, the VAD and TitaNet always,
- * then Nemotron or pyannote. `akou models pull` fetches these and `akou doctor` checks them. Tests
- * pass their own registry, which loses the other engine's entries the same way.
+ * The models a machine needs for its settings (`asr.diarizer`) on its platform: the recognizer, the
+ * VAD and TitaNet always, then Nemotron or pyannote, each only where it runs. `akou models pull`
+ * fetches these and `akou doctor` checks them. Tests pass their own registry, which loses the other
+ * engine's entries the same way; an entry with no `platforms` (a test's) runs everywhere.
  */
-export function modelsFor(
-  diarizer: DiarizerKind,
-  registry: readonly ModelSpecEntry[] = MODELS,
-): readonly ModelSpecEntry[] {
+export function modelsFor<T extends ModelSpecEntry>(
+  settings: { readonly "asr.diarizer": string },
+  platform: string,
+  registry: readonly T[] = MODELS as unknown as readonly T[],
+): readonly T[] {
+  const diarizer = settings["asr.diarizer"] as DiarizerKind;
   const other = diarizer === "nemotron" ? ONLY.embeddings : ONLY.nemotron;
-  return registry.filter((m) => !other.includes(m.id));
+  return registry.filter((m) => {
+    const platforms = (m as Partial<CatalogEntry>).platforms as readonly string[] | undefined;
+    return !other.includes(m.id) && (platforms === undefined || platforms.includes(platform));
+  });
+}
+
+/** What is wrong with each catalog entry, as `<id>: <problem>`; empty when every entry is whole. */
+export function catalogProblems(registry: readonly CatalogEntry[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  const known = <T extends string>(all: readonly T[], xs: readonly string[]) =>
+    xs.length > 0 && xs.every((x) => (all as readonly string[]).includes(x));
+  for (const m of registry) {
+    const bad = (what: string) => out.push(`${m.id}: ${what}`);
+    if (seen.has(m.id)) bad("duplicate id");
+    seen.add(m.id);
+    if (!m.job?.trim()) bad("no job");
+    if (!m.licence?.trim()) bad("no licence");
+    if (!m.source?.trim()) bad("no source");
+    if (!m.files?.length) bad("no files");
+    if (!(RUNTIMES as readonly string[]).includes(m.runtime)) bad(`unknown runtime ${m.runtime}`);
+    if (!known(PLATFORMS, m.platforms ?? [])) bad("platforms missing or unknown");
+    if (!known(ACCELERATORS, m.accelerators ?? [])) bad("accelerators missing or unknown");
+    if (!known(ROLES, m.serves ?? [])) bad("serves no known role");
+    const langs = m.languages;
+    if (langs !== "any" && !(langs?.length && langs.every((l) => /^[a-z]{2,3}$/.test(l)))) {
+      bad("languages must be `any` or ISO 639 codes");
+    }
+  }
+  return out;
 }
 
 export function modelEntry(id: string): ModelSpecEntry {
