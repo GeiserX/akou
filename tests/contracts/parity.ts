@@ -361,6 +361,25 @@ export const PARITY: readonly Row[] = [
     window: { none: "the window is the app itself" },
   },
   {
+    action: "Transcribe a file as a job (server mode)",
+    cli: ["transcribe"],
+    api: [
+      "POST /jobs",
+      "GET /jobs",
+      "GET /jobs/:id",
+      "GET /jobs/:id/result",
+      "DELETE /jobs/:id",
+      "GET /events",
+      "POST /audio/transcriptions",
+    ],
+    mcp: {
+      none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
+    },
+    window: {
+      none: "the web UI of server mode lists no jobs until its dashboard (SERVER.md SV-U4)",
+    },
+  },
+  {
     action: "Which key is calling",
     cli: { none: "the CLI on the box uses the app's own token, which is admin" },
     api: ["GET /keys/me"],
