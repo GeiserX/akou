@@ -94,6 +94,12 @@ export interface ApiApp {
   engines?(): { id: string; provider: string; installed: boolean }[];
   /** Starts the one download of the missing models and answers at once (`POST /models/pull`). */
   pullModels(): ModelsStatus;
+  /** Every catalog model with its state, scores and last use (SV-M6); both modes. */
+  modelRows?(): import("../server/model-store.ts").ModelView[];
+  /** Fetches one catalog model on purpose. Throws `ModelRefused`. */
+  pullModel?(id: string): import("../server/model-store.ts").ModelView;
+  /** Deletes one model under the sweep's rules. Throws `ModelRefused`. */
+  deleteModel?(id: string, by: string): { id: string; deleted: true; bytes: number };
   /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */
   start(req: StartRequest): Promise<Outcome<StartOk>>;
   /** The controller of a known call id (loaded from disk if needed). Throws 404 otherwise. */

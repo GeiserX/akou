@@ -1,20 +1,17 @@
 /**
- * The Settings and Models pages of server mode (docs/ux/SERVER.md SV-U2, SV-U6).
+ * The Settings page of server mode (docs/ux/SERVER.md SV-U2). The Models page (SV-U6) is
+ * `models-page.ts`, shared with the desktop window.
  *
  * Settings shows the server's own groups, drawn from the one settings registry (`GET /config`) with
  * the window's field code (`settings.ts`), and nothing of the recorder: no device, hotkey or tray.
  * A key the registry does not have in this version is left out, so a group grows as its settings
  * land. Network settings are shown and never editable here: they are the config file's.
- *
- * Models shows the speech models' state from `GET /models` and offers the download; its size and
- * eviction settings are listed with their values once they exist.
  */
 
 import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
-import type { ModelsInfo, Transport } from "./protocol.ts";
+import type { Transport } from "./protocol.ts";
 import { type ServerScreen, section } from "./server-common.ts";
-import { modelsStateText } from "./server-text.ts";
 import {
   type ConfigReply,
   changedSettings,
@@ -172,81 +169,5 @@ export class SettingsPage implements ServerScreen {
     }
     toast(r.body.note ?? "Saved.", "info");
     await this.load();
-  }
-}
-
-export class ModelsPage implements ServerScreen {
-  readonly name = "models" as const;
-  readonly title = "Models";
-  readonly root: HTMLElement;
-  private readonly state = h("p", { id: "models-state", attrs: { role: "status" } });
-  private readonly progress = h("progress", { hidden: true, attrs: { max: "1", value: "0" } });
-  private readonly pull = h(
-    "button",
-    { id: "models-download", class: "go", type: "button", hidden: true },
-    "Download",
-  );
-  private readonly limits = h("ul", { id: "models-limits" });
-  private timer: ReturnType<typeof setInterval> | null = null;
-
-  constructor(private readonly t: Transport) {
-    this.pull.addEventListener("click", () => void this.download());
-    this.root = section(
-      "Models",
-      this.state,
-      h("div", { class: "bar" }, this.progress, this.pull),
-      this.limits,
-    );
-  }
-
-  show(): void {
-    void this.read();
-    void this.readLimits();
-  }
-
-  hide(): void {
-    this.stop();
-  }
-
-  private stop(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
-  }
-
-  private draw(m: ModelsInfo): void {
-    this.state.textContent = modelsStateText(m);
-    this.pull.hidden = m.state === "ready" || m.state === "downloading";
-    this.pull.textContent = m.state === "failed" ? "Try again" : "Download";
-    this.progress.hidden = m.state !== "downloading";
-    this.progress.value = m.total > 0 ? m.bytes / m.total : 0;
-    if (m.state === "downloading") this.timer ??= setInterval(() => void this.read(), 1000);
-    else this.stop();
-  }
-
-  private async read(): Promise<void> {
-    const r = await this.t.request<ModelsInfo>("GET", "/models");
-    if (r.status === 200) this.draw(r.body);
-  }
-
-  private async download(): Promise<void> {
-    const r = await this.t.request<ModelsInfo>("POST", "/models/pull");
-    if (r.status >= 400) {
-      toast(message(r.body, `the download could not start (HTTP ${r.status})`));
-      return;
-    }
-    this.draw(r.body);
-  }
-
-  /** The models' size and eviction settings with their values, those this version has. */
-  private async readLimits(): Promise<void> {
-    const cfg = await readConfig(this.t);
-    if (!cfg) return;
-    const keys = (SERVER_GROUPS.find((g) => g.title === "Models")?.keys ?? []).filter(
-      (k) => k in cfg.schema,
-    );
-    replace(
-      this.limits,
-      ...keys.map((k) => h("li", {}, `${k}: ${JSON.stringify(cfg.settings[k])}`)),
-    );
   }
 }

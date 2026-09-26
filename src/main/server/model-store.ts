@@ -1,7 +1,8 @@
 /**
- * Server mode's models on demand (docs/ux/SERVER.md section 12): which model a job runs, the
- * download of a model a job needs and the disk does not have, and the deletion of models nobody
- * has used for `server.models_unused_days`.
+ * The models on disk (docs/ux/SERVER.md section 12): which model a job runs, the download of a
+ * model a job or a person asks for, the deletion of models nobody has used for
+ * `server.models_unused_days`, and each model's row on the Models page. Server mode and the
+ * desktop app both run one store; only server mode has jobs.
  *
  * - **Which model** (SV-S1): the request's `model`, then its `preset` when it is not `auto`, then
  *   `server.default_model`, then the hardware's choice (`fast` until SV-R2). `auto` anywhere means
@@ -14,8 +15,10 @@
  * - **The ledger** (SV-M4): `usage.json` in the models folder, `{model id: last used}`, written
  *   atomically. A catalog model on disk with no entry is dated at the first sweep that sees it.
  * - **The sweep** (SV-M5): each catalog model whose last use is older than the setting is deleted,
- *   except the ones the caller protects (the default's set, what jobs and the worker need) and the
- *   ones downloading. Each deletion is one `model.evicted` log line.
+ *   except the ones the caller protects (the default's set, what jobs, the worker or the recognizer
+ *   need) and the ones downloading. Each deletion is one `model.evicted` log line.
+ * - **One model at a time** (SV-M6, SV-U6): `list` (state, last use, deletion date, the scores of
+ *   `asr/model-scores.ts`, this machine's measured speed from `speed.json`), `pull` and `delete`.
  *
  * This file is server code on purpose: `asr/models.ts` stays the catalog and the downloader.
  */
@@ -31,7 +34,9 @@ import {
   writeFileSync,
 } from "node:fs";
 import { dirname, join } from "node:path";
+import { FORMULAS, type Measure, type NotMeasured, score, scoresOf } from "../asr/model-scores.ts";
 import {
+  type CatalogEntry,
   DownloadRefused,
   downloadModels,
   type ModelSpecEntry,
@@ -41,6 +46,10 @@ import {
 import { PRESET_NAMES, PRESETS } from "./presets.ts";
 
 export const USAGE_FILE = "usage.json";
+/** This machine's measured speed per model: the real-time factors of its last runs. */
+export const SPEED_FILE = "speed.json";
+/** How many runs per model `speed.json` keeps; the page shows their median. */
+export const SPEED_RUNS = 20;
 export const DAY_MS = 86_400_000;
 /** The waits before the second, third and fourth try of a failed download. */
 export const DOWNLOAD_RETRY_MS: readonly number[] = [60_000, 300_000, 900_000];
@@ -266,15 +275,20 @@ export function readUsage(dir: string): Record<string, number> {
   }
 }
 
-/** Writes the ledger atomically: a private temporary file renamed over it. */
+/** Writes the ledger atomically. */
 function writeUsage(dir: string, l: Record<string, number>): void {
-  if (!existsSync(dir)) return;
-  const path = join(dir, USAGE_FILE);
-  const text = `${JSON.stringify(
+  writeJson(
+    dir,
+    USAGE_FILE,
     Object.fromEntries(Object.entries(l).map(([id, t]) => [id, new Date(t).toISOString()])),
-    null,
-    2,
-  )}\n`;
+  );
+}
+
+/** Writes a JSON file in `dir` atomically: a private temporary file renamed over it. */
+function writeJson(dir: string, name: string, value: unknown): void {
+  if (!existsSync(dir)) return;
+  const path = join(dir, name);
+  const text = `${JSON.stringify(value, null, 2)}\n`;
   const tmp = `${path}.${process.pid}.${Math.random().toString(36).slice(2)}.tmp`;
   try {
     writeFileSync(tmp, text, { flag: "wx" });
@@ -293,6 +307,146 @@ export function touchUsage(dir: string, ids: readonly string[], at = Date.now())
   const l = readUsage(dir);
   for (const id of ids) l[id] = at;
   writeUsage(dir, l);
+}
+
+/** `speed.json` in `dir`: `{model id: [real-time factor, ...]}`, newest last. */
+export function readSpeed(dir: string): Record<string, number[]> {
+  try {
+    const raw = JSON.parse(readFileSync(join(dir, SPEED_FILE), "utf8")) as Record<string, unknown>;
+    const out: Record<string, number[]> = {};
+    for (const [id, v] of Object.entries(raw)) {
+      if (!Array.isArray(v)) continue;
+      const runs = v.filter((x): x is number => typeof x === "number" && x > 0 && x < 1e6);
+      if (runs.length > 0) out[id] = runs;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Records one finished run of `id` on this machine: `audioS` seconds of audio in `wallS` seconds.
+ * The last `SPEED_RUNS` are kept. A run with no audio says nothing about speed and is dropped.
+ */
+export function recordRun(dir: string, id: string, audioS: number, wallS: number): void {
+  if (!(audioS > 0) || !(wallS > 0)) return;
+  const all = readSpeed(dir);
+  const runs = [...(all[id] ?? []), Number((wallS / audioS).toPrecision(4))];
+  all[id] = runs.slice(-SPEED_RUNS);
+  writeJson(dir, SPEED_FILE, all);
+}
+
+/** The median real-time factor of this machine's recorded runs of `id`, or null for none. */
+export function measuredSpeed(
+  speed: Record<string, number[]>,
+  id: string,
+): { rtf: number; runs: number } | null {
+  const runs = [...(speed[id] ?? [])].sort((a, b) => a - b);
+  if (runs.length === 0) return null;
+  const mid = runs.length >> 1;
+  const rtf =
+    runs.length % 2 === 1
+      ? (runs[mid] as number)
+      : ((runs[mid - 1] as number) + (runs[mid] as number)) / 2;
+  return { rtf: Number(rtf.toPrecision(3)), runs: runs.length };
+}
+
+// ---------------------------------------------------------------------------
+// One catalog model as the Models page and `GET /models` show it (SV-M6, SV-U6)
+
+/** What a model is for: speech recognition, speaker labels, or a helper (VAD, a runtime). */
+export type ModelKind = "speech" | "speakers" | "helper";
+
+const SPEAKER_MODELS: ReadonlySet<string> = new Set([
+  NEMOTRON,
+  "pyannote-segmentation-3.0",
+  "titanet-small",
+]);
+
+export function kindOf(m: ModelSpecEntry): ModelKind {
+  const serves = (m as Partial<CatalogEntry>).serves;
+  if (serves) {
+    if (serves.includes("final") || serves.includes("live")) return "speech";
+    if (serves.includes("diarizer") || serves.includes("embedder")) return "speakers";
+    return "helper";
+  }
+  if (SPEAKER_MODELS.has(m.id)) return "speakers";
+  return isRecognizer(m) ? "speech" : "helper";
+}
+
+/** A score as the page draws it: the 0 to 100 bar and the number behind it, or why there is none. */
+export type ScoreView =
+  | {
+      score: number;
+      metric: Measure["metric"];
+      value: number;
+      what: string;
+      source: string;
+      formula: string;
+    }
+  | { score: null; not_measured: string };
+
+/** The host and repository a file URL is published in: `huggingface.co/org/repo`. */
+export function publishedAt(url: string): string {
+  try {
+    const u = new URL(url);
+    return [
+      u.host,
+      ...u.pathname
+        .split("/")
+        .filter((x) => x !== "")
+        .slice(0, 2),
+    ].join("/");
+  } catch {
+    return url;
+  }
+}
+
+function scoreView(m: Measure | NotMeasured | undefined): ScoreView {
+  if (!m) return { score: null, not_measured: "no measurement recorded for this model" };
+  if ("notMeasured" in m) return { score: null, not_measured: m.notMeasured };
+  return {
+    score: score(m),
+    metric: m.metric,
+    value: Math.round(m.value * 100) / 100,
+    what: m.what,
+    source: m.source,
+    formula: FORMULAS[m.metric],
+  };
+}
+
+export interface ModelView {
+  id: string;
+  kind: ModelKind;
+  /** What it does, from the catalog. */
+  job: string;
+  /** ISO 639-1 codes it hears, `any` for a model that hears no words, null when unknown. */
+  languages: "any" | readonly string[] | null;
+  /** It transcribes while the call runs, not only after. */
+  streaming: boolean;
+  /** Where its files are downloaded from: host and repository, for example `huggingface.co/org/repo`. */
+  from: string[];
+  state: "ready" | "downloading" | "missing";
+  bytes: number;
+  size: number;
+  last_used_at: string | null;
+  /** When the sweep deletes it; null when it is kept or not on disk. */
+  evicts_at: string | null;
+  default: boolean;
+  in_use: boolean;
+  accuracy: ScoreView;
+  speed: ScoreView;
+  /** This machine's median real-time factor from its finished runs, or null for none. */
+  measured: { rtf: number; runs: number } | null;
+  /** The setting that makes it the default, or null when no setting chooses it. */
+  set_default: { key: string; value: string } | null;
+}
+
+/** The models the sweep and a delete must not touch: the default's set and what is in use. */
+export interface Held {
+  defaults: ReadonlySet<string>;
+  inUse: ReadonlySet<string>;
 }
 
 export class ModelStore {
@@ -359,11 +513,13 @@ export class ModelStore {
    * Whether the models can be had (SV-M1, SV-M2): present, downloading, or allowed to start. A
    * refusal is 409 `preset_unavailable`, the code the archive keeps a row queued on.
    */
-  admit(ids: readonly string[]): void {
+  admit(ids: readonly string[], o: { explicit?: boolean } = {}): void {
     const miss = this.missing(ids);
     if (miss.length === 0) return;
     const first = miss[0] as string;
-    if (!this.o.autoDownload()) {
+    // `server.auto_download` is about what a client's job may fetch; a person pressing Download
+    // (the Models page, `POST /models/pull`) is asking on purpose. The size and disk limits hold.
+    if (!o.explicit && !this.o.autoDownload()) {
       throw new ModelRefused(
         409,
         "preset_unavailable",
@@ -564,6 +720,90 @@ export class ModelStore {
     const m = this.entry(id);
     const size = m ? m.files.reduce((n, f) => n + f.size, 0) : 0;
     return { bytes: size, size };
+  }
+
+  /** Records one finished run of `id` here, for the page's measured speed. */
+  recordRun(id: string, audioS: number, wallS: number): void {
+    recordRun(this.o.dir(), id, audioS, wallS);
+  }
+
+  /**
+   * Every catalog model as the Models page shows it. `held` is the caller's: the default's set
+   * and what jobs, workers or the recognizer need. `setDefault` names the setting that makes a
+   * model the default in this mode, or null.
+   */
+  list(
+    held: Held,
+    setDefault: (m: ModelSpecEntry) => { key: string; value: string } | null,
+  ): ModelView[] {
+    const ledger = this.ledger();
+    const speed = readSpeed(this.o.dir());
+    const days = this.o.unusedDays();
+    const iso = (t: number | undefined) => (t === undefined ? null : new Date(t).toISOString());
+    return this.o.catalog().map((m) => {
+      const state = this.state(m.id);
+      const last = state === "ready" ? ledger[m.id] : undefined;
+      const kept = held.defaults.has(m.id) || held.inUse.has(m.id);
+      const c = m as Partial<CatalogEntry>;
+      const scores = scoresOf(m);
+      return {
+        id: m.id,
+        kind: kindOf(m),
+        job: m.job,
+        languages: c.languages ?? null,
+        streaming: c.serves?.includes("live") ?? false,
+        from: [...new Set(m.files.map((f) => publishedAt(f.url)))],
+        state,
+        ...this.size(m.id),
+        last_used_at: iso(last),
+        evicts_at: last === undefined || kept || days === 0 ? null : iso(last + days * DAY_MS),
+        default: held.defaults.has(m.id),
+        in_use: held.inUse.has(m.id),
+        accuracy: scoreView(scores?.accuracy),
+        speed: scoreView(scores?.speed),
+        measured: measuredSpeed(speed, m.id),
+        set_default: setDefault(m),
+      };
+    });
+  }
+
+  /**
+   * Fetches one catalog model on purpose (`POST /models/pull {model}`): the size cap and the free
+   * space hold, `server.auto_download` does not, since a person asked.
+   */
+  pull(id: string): void {
+    if (!this.entry(id)) {
+      throw new ModelRefused(422, "unknown_model", `no model ${id} in the catalog`, {
+        field: "model",
+        model: id,
+      });
+    }
+    this.admit([id], { explicit: true });
+    this.fetch([id]);
+  }
+
+  /**
+   * Deletes one model under the sweep's rules (SV-M6): never the default's set, one in use, or one
+   * downloading. Logged as `model.deleted` with who asked.
+   */
+  delete(id: string, held: Held, by: string): { id: string; deleted: true; bytes: number } {
+    if (!this.entry(id) || this.state(id) === "missing") {
+      throw new ModelRefused(404, "not_found", `no model ${id} on disk`, { model: id });
+    }
+    if (held.defaults.has(id) || held.inUse.has(id)) {
+      const isDefault = held.defaults.has(id);
+      throw new ModelRefused(
+        409,
+        "model_in_use",
+        isDefault
+          ? `${id} is part of the default model's set; choose another default first`
+          : `${id} is in use: a job, a worker or the recognizer needs it`,
+        { model: id, default: isDefault },
+      );
+    }
+    const bytes = this.remove(id);
+    this.o.log("info", `model.deleted ${id} key ${by} bytes_freed ${bytes}`);
+    return { id, deleted: true, bytes };
   }
 
   /** Deletes one model's folder and its ledger entry; the caller has checked it is free. */
