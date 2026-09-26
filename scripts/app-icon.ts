@@ -11,7 +11,6 @@
 
 import { mkdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { chromium } from "playwright-core";
 
 const ROOT = join(import.meta.dir, "..");
 export const ICON_SVG = join(ROOT, "assets", "brand", "akou-app-icon.svg");
@@ -28,6 +27,8 @@ export const ICONSET_FILES: Readonly<Record<string, number>> = Object.fromEntrie
 if (import.meta.main) {
   mkdirSync(ICONSET, { recursive: true });
   const svg = readFileSync(ICON_SVG).toString("base64");
+  // Loaded here, not at the top: the tests import this file for the iconset list only.
+  const { chromium } = await import("playwright-core");
   const browser = await chromium.launch({ headless: true });
   try {
     for (const [name, px] of Object.entries(ICONSET_FILES)) {
