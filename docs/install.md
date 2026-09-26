@@ -133,6 +133,33 @@ Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That i
 
 `akou serve` binds every address by default too, so on a plain machine it refuses to start (exit 78) until you choose. Put `{ "api.bind": "127.0.0.1" }` in `~/.config/akou/config.json` to serve this machine only, or set `server.behind_proxy` to `true` once a reverse proxy with TLS is in front of it.
 
+### A large backlog
+
+A client with thousands of files to send, such as Telegram-Archive transcribing a whole archive, leans on three settings:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `server.concurrency` | 1 | Jobs run at once. Each running job loads its own copy of the model and uses `asr.threads` threads (default 2), so keep `server.concurrency` times `asr.threads` under the machine's cores: on a 20-thread box, 4 jobs of 4 threads leaves room for the rest |
+| `server.queue_max` | 1000 | Jobs queued or running at most, across every key. 0 means no limit |
+| `server.queue_max_per_key` | 500 | The same for one key, so one client cannot fill the queue. 0 means no limit |
+
+Set them on the web page's settings, with `PATCH /v1/config` and an admin key, or in `config.json` as above. A new `server.concurrency` applies from the next submit or job end.
+
+A submit past a limit is refused with `429 queue_full` and a `Retry-After` header in seconds, before akou reads the upload; wait that long and send it again. A job may carry `priority`, from -10 to 10 (default 0): a higher one runs first, then the oldest. The queue is kept in `jobs.db` in the data volume, so a restart resumes it in the same order.
+
+`GET /v1/server` and `GET /healthz` answer how the queue is doing, with no key:
+
+```sh
+curl -s http://127.0.0.1:8476/v1/server | jq .queue
+```
+
+```json
+{ "concurrency": 4, "max": 1000, "max_per_key": 500, "depth": 212, "queued": 208, "running": 4,
+  "jobs_last_hour": 610, "audio_seconds_last_hour": 21480, "mean_job_seconds": 23.5, "eta_seconds": 1246 }
+```
+
+`audio_seconds_last_hour` over 3600 is how many hours of audio the box transcribes per hour. `eta_seconds` is the time left at the pace of the last 50 jobs, and `null` until one has ended since the server started.
+
 ### The command line against a server
 
 The CLI and `akou mcp` talk to a remote akou when `AKOU_URL` is set. The key comes from `AKOU_API_KEY`, or from a file named by `AKOU_API_KEY_FILE`, never from a flag:

@@ -200,6 +200,27 @@ export const SETTINGS = {
     default: 7,
     doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends.",
   },
+  "server.concurrency": {
+    type: "integer",
+    min: 1,
+    max: 64,
+    default: 1,
+    doc: "File jobs run at once. Each running job has its own Worker with its models loaded and `asr.threads` threads, so keep this times `asr.threads` under the cores, and the memory for that many copies of the model.",
+  },
+  "server.queue_max": {
+    type: "integer",
+    min: 0,
+    max: 1000000,
+    default: 1000,
+    doc: "File jobs queued or running at most, across keys. A submit past it is refused with 429 `queue_full` and `Retry-After`. 0: no limit.",
+  },
+  "server.queue_max_per_key": {
+    type: "integer",
+    min: 0,
+    max: 1000000,
+    default: 500,
+    doc: "File jobs one key may have queued or running, so one client cannot fill the queue. A submit past it is refused with 429 `queue_full` and `Retry-After`. 0: no limit.",
+  },
   "server.default_language": {
     type: "string",
     min: 2,
