@@ -7,7 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, posix } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
 const read = (...p: string[]) => readFileSync(join(ROOT, ...p), "utf8");
@@ -315,7 +315,8 @@ describe("[akou-5an.94] the GPU image variants", () => {
       if (reached.has(file)) continue;
       reached.add(file);
       for (const m of read(file).matchAll(/^import\s+(?!type\b)[^;]*?from\s+"(\.[^"]+)";/gm)) {
-        todo.push(join(file, "..", m[1] as string));
+        // POSIX paths, as the Dockerfile names them, on Windows too.
+        todo.push(posix.join(file, "..", m[1] as string));
       }
     }
     expect(reached.size).toBeGreaterThan(1);
