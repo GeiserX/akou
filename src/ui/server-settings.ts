@@ -14,6 +14,7 @@ import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { ModelsInfo, Transport } from "./protocol.ts";
 import { type ServerScreen, section } from "./server-common.ts";
+import { modelsStateText } from "./server-text.ts";
 import {
   type ConfigReply,
   changedSettings,
@@ -158,22 +159,6 @@ export class SettingsPage implements ServerScreen {
     toast(r.body.note ?? "Saved.", "info");
     await this.load();
   }
-}
-
-const MB = 1e6;
-
-/** What the Models page says of the speech models. Pure, for the tests. */
-export function modelsStateText(m: ModelsInfo): string {
-  const size = `${Math.round(m.total / MB)} MB`;
-  if (m.state === "ready") return `The speech models are on disk in ${m.dir}.`;
-  if (m.state === "downloading") {
-    const pct = m.total > 0 ? Math.floor((100 * m.bytes) / m.total) : 0;
-    return `Downloading the speech models: ${pct} % of ${size}${m.file ? ` (${m.file})` : ""}. Each file is checked against its published checksum.`;
-  }
-  if (m.state === "failed") {
-    return `The download stopped: ${m.error ?? "unknown error"}. Files already verified are kept.`;
-  }
-  return `The speech models are not downloaded: ${size}, into ${m.dir}. Jobs are refused until they are.`;
 }
 
 export class ModelsPage implements ServerScreen {

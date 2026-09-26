@@ -4,8 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { took } from "../src/ui/server-common.ts";
-import { modelsStateText } from "../src/ui/server-settings.ts";
+import { modelsStateText, took } from "../src/ui/server-text.ts";
 
 describe("the server page's words", () => {
   test("a duration reads as ms, s, min or h", () => {

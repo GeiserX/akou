@@ -12,7 +12,8 @@
 import { byId, h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
-import { type ServerScreen, section, took, twoStep, when } from "./server-common.ts";
+import { type ServerScreen, section, twoStep } from "./server-common.ts";
+import { took, when } from "./server-text.ts";
 
 const POLL_MS = 500;
 /** The column of the elapsed time, the one cell that changes while a job runs. */

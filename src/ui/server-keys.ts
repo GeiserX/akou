@@ -8,7 +8,8 @@
 import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
-import { type ServerScreen, section, twoStep, when } from "./server-common.ts";
+import { type ServerScreen, section, twoStep } from "./server-common.ts";
+import { when } from "./server-text.ts";
 
 interface KeyInfo {
   id: string;
