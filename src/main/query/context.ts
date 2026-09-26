@@ -378,6 +378,12 @@ export class CallQuery {
     });
   }
 
+  /** Whether the memo is due for a refresh: the `memoStale` a pack reports, without the pack. */
+  memoStale(now: number): boolean {
+    this.index.sync();
+    return memoStatus(this.view, this.linesIter(), this.reference(now), this.memoCoverage()).stale;
+  }
+
   // -------------------------------------------------------------------------
   // akou_context: the pack
 

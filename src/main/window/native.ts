@@ -9,9 +9,11 @@ import Electrobun, {
   BrowserView,
   BrowserWindow,
   GlobalShortcut,
+  Screen,
   Tray,
   Utils,
 } from "electrobun/main";
+import type { IndicatorRpc } from "../../ui/indicator-protocol.ts";
 import type { AkouRpc } from "../../ui/protocol.ts";
 import type { NativeTray, NativeUi, NativeWindow, TrayMenuItem } from "./shell.ts";
 
@@ -20,7 +22,7 @@ const MAX_REQUEST_MS = 600_000;
 
 export function electrobunUi(): NativeUi {
   return {
-    openWindow({ title, url, rpc }) {
+    openWindow({ title, url, rpc, frame }) {
       const defined = BrowserView.defineRPC<AkouRpc>({
         maxRequestTime: MAX_REQUEST_MS,
         handlers: { requests: rpc.handlers, messages: {} },
@@ -29,7 +31,7 @@ export function electrobunUi(): NativeUi {
         title,
         url,
         rpc: defined,
-        frame: { width: 1280, height: 820 },
+        frame: frame ?? { width: 1280, height: 820 },
       });
       const window: NativeWindow = {
         show: () => {
@@ -42,6 +44,10 @@ export function electrobunUi(): NativeUi {
           win.on("focus", () => fn(true));
           win.on("blur", () => fn(false));
         },
+        onFrame: (fn) => {
+          win.on("move", () => fn(win.getFrame()));
+          win.on("resize", () => fn(win.getFrame()));
+        },
       };
       return {
         window,
@@ -51,6 +57,40 @@ export function electrobunUi(): NativeUi {
           status: (s) => defined.send.status(s),
           showCall: (m) => defined.send.showCall(m),
           showSettings: (m) => defined.send.showSettings(m),
+          askQuit: (m) => defined.send.askQuit(m),
+        },
+      };
+    },
+
+    openIndicator({ url, rpc, frame }) {
+      const defined = BrowserView.defineRPC<IndicatorRpc>({
+        maxRequestTime: MAX_REQUEST_MS,
+        handlers: { requests: rpc.handlers, messages: {} },
+      });
+      // Hidden until the shell shows it, and never activated: it must not take the focus from
+      // the meeting app.
+      const win = new BrowserWindow({
+        title: "akou",
+        url,
+        rpc: defined,
+        frame,
+        titleBarStyle: "hidden",
+        hidden: true,
+        activate: false,
+      });
+      win.setAlwaysOnTop(true);
+      win.setVisibleOnAllWorkspaces(true);
+      return {
+        window: {
+          showInactive: () => win.showInactive(),
+          hide: () => win.hide(),
+          close: () => win.close(),
+          onClose: (fn) => win.on("close", fn),
+          onFrame: (fn) => win.on("move", () => fn(win.getFrame())),
+        },
+        send: {
+          followed: (m) => defined.send.followed(m),
+          status: (s) => defined.send.status(s),
         },
       };
     },
@@ -94,5 +134,14 @@ export function electrobunUi(): NativeUi {
 
     quit: () => Utils.quit(0),
     openExternal: (url) => Utils.openExternal(url),
+
+    onReopen: (fn) => Electrobun.events.on("reopen", () => fn()),
+
+    workAreas: () => {
+      const all = Screen.getAllDisplays();
+      return [...all.filter((d) => d.isPrimary), ...all.filter((d) => !d.isPrimary)].map(
+        (d) => d.workArea,
+      );
+    },
   };
 }

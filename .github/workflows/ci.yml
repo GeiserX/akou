@@ -437,11 +437,32 @@ jobs:
           bun scripts/diarize-smoke.ts "native/akou-diarize/target/release/akou-diarize$EXE" models/nemotron3_diar_v3.onnx | tee smoke.log
           { echo; sed 's/^/    /' smoke.log; } >> "$GITHUB_STEP_SUMMARY"
 
+  # docs/research/service-interface.md SI-2: a real Executor (executor@1.6.8, pinned by the
+  # lockfile in scripts/ci/executor/, in a throwaway home) adds akou from the served
+  # `GET /v1/openapi.json?scope=jobs` and must see the tools jobs.create, jobs.get and keys.me, no
+  # openai.transcribe and one auth template; the same against a server that wants a key on the
+  # file must fail with Executor's HTTP 401. A route not built yet comes from the test fixture,
+  # only where the table has none, and the job summary names it.
+  executor:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: executor 1.6.8 from npm, from its lockfile
+        run: npm ci --no-audit --no-fund --prefix scripts/ci/executor
+      - run: bun scripts/ci/executor-roundtrip.ts --executor scripts/ci/executor/node_modules/.bin/executor
+
   # The one required check. `if: always()` so it reports even when a leg failed; it fails when any
   # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.
   ci-ok:
     if: always()
-    needs: [changes, check, ui, helper, capture-linux, capture-windows, diarize]
+    needs: [changes, check, ui, helper, capture-linux, capture-windows, diarize, executor]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

@@ -32,22 +32,35 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
-import { type FileVocabEntry, fold } from "../core/log/fold.ts";
+import { type CallView, type FileVocabEntry, fold } from "../core/log/fold.ts";
 import { eventsAfter, readLog } from "../core/log/reader.ts";
 import {
   acquireLock,
   EVENTS_FILE,
+  INSTANCE_ID,
   LockError,
   LogWriteError,
+  lockHeartbeat,
   processAlive,
+  readLock,
 } from "../core/log/writer.ts";
-import { ensureToken, type Guard, makePrivateDir, TokenSource } from "./api/guard.ts";
+import {
+  ensureToken,
+  type Guard,
+  makePrivateDir,
+  serverGuard,
+  serverHostAllowed,
+  TokenSource,
+} from "./api/guard.ts";
 import { HttpError } from "./api/http.ts";
+import { KeyStore } from "./api/keys.ts";
+import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
 import type { DiarizerKind, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
@@ -75,7 +88,10 @@ import {
   type HookStage,
   type LoadedConfig,
   loadConfig,
+  SETTING_KEYS,
+  SETTINGS,
   type SettingKey,
+  type SettingSpec,
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
@@ -213,6 +229,50 @@ export interface AppOptions {
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
+/** The settings forbid a start; the entry point exits 78 (EX_CONFIG) with the message. */
+export class StartRefused extends Error {
+  override name = "StartRefused";
+}
+
+/**
+ * Where the API listens (SV-D2, SV-P5): the app on 127.0.0.1 always, as DESIGN 6.3 rule 1 says;
+ * server mode on `api.bind`, 0.0.0.0 by default, and on an address that is not loopback only with
+ * `server.behind_proxy`, since TLS is the proxy's job and akou has none of its own.
+ */
+export function apiBind(s: LoadedConfig["settings"]): string {
+  if (!s["server.enabled"]) return "127.0.0.1";
+  const bind = s["api.bind"] === "" ? "0.0.0.0" : s["api.bind"];
+  // The CLI and the MCP server on this box dial 127.0.0.1 (`runtime.json` holds the port only),
+  // which reaches these three binds and no other.
+  if (bind !== "127.0.0.1" && bind !== "0.0.0.0" && bind !== "::") {
+    throw new StartRefused(
+      `api.bind is ${bind}; server mode binds 127.0.0.1, 0.0.0.0 or ::, since akou's CLI on this box reaches the server at 127.0.0.1`,
+    );
+  }
+  if (!isLoopback(bind) && !s["server.behind_proxy"]) {
+    throw new StartRefused(
+      `api.bind is ${bind}, which is not loopback, and server.behind_proxy is false: put a reverse proxy with TLS in front of akou and set server.behind_proxy to true, or set api.bind to 127.0.0.1`,
+    );
+  }
+  return bind;
+}
+
+/**
+ * The app lock names a holder this process cannot see, and is too fresh to take (SI-4): after a
+ * container restart, the earlier start's lock until it is 30 s old, or another container on the
+ * same volume that keeps it fresh. The entry point exits 75 (EX_TEMPFAIL), so a restart policy
+ * starts it again, never 0, which would tell Docker the service finished.
+ */
+export class LockAgingError extends Error {
+  override name = "LockAgingError";
+  constructor(pid: number, aging: { ageMs: number; staleMs: number }) {
+    const s = (ms: number) => Math.max(0, Math.round(ms / 1000));
+    super(
+      `a lock from an earlier start is ${s(aging.ageMs)} s old; it frees in ${s(aging.staleMs - aging.ageMs)} s, unless another akou on this volume (pid ${pid} in its own namespace) keeps it fresh`,
+    );
+  }
+}
+
 export class AlreadyRunningError extends Error {
   constructor(
     readonly pid: number,
@@ -254,6 +314,15 @@ interface ModelsPull {
   done: Map<string, number>;
   file?: string;
   error?: string;
+}
+
+/**
+ * Whether the final layer covers the whole call: the pass ran, and no part started after it (a
+ * restarted call is final again only once the pass has run over the new part).
+ */
+function finalCurrent(v: CallView): boolean {
+  const done = v.final.state === "done" ? (v.final.done?.seq ?? 0) : null;
+  return done !== null && v.parts().every((p) => p.startSeq < done);
 }
 
 /** The default final-pass audio: a WAV beside every part's Opus file, or nothing. */
@@ -336,6 +405,10 @@ export class AkouApp implements ApiApp {
   private resolveClosed!: () => void;
   private lockPath: string;
   tokens: TokenSource;
+  /** `server` when `server.enabled` is on (docs/ux/SERVER.md); fixed for the life of the process. */
+  private readonly runMode: "app" | "server";
+  /** The API keys; server mode only (SV-K2). */
+  private readonly keyStore: KeyStore | null;
 
   constructor(
     private readonly o: AppOptions,
@@ -348,6 +421,9 @@ export class AkouApp implements ApiApp {
     this.clock = o.clock ?? realClock;
     this.configDir = cfg.paths.configDir;
     this.headless = o.headless ?? cfg.settings["app.headless"];
+    this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
+    this.keyStore =
+      this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.tokenPath = token.path;
@@ -365,6 +441,7 @@ export class AkouApp implements ApiApp {
       });
     this.manager = new CallManager({
       root: s["recordings.root"],
+      writer: { serverMode: this.runMode === "server" },
       engine,
       clock: this.clock,
       user: s["user.name"],
@@ -709,7 +786,7 @@ export class AkouApp implements ApiApp {
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
       // After the event is out, so the pass starts from a log that has it.
-      queueMicrotask(() => void this.runFinal(id, false));
+      queueMicrotask(() => this.finalAtEnd(id));
     }
     if ((HOOK_STAGES as readonly string[]).includes(e.type)) {
       const stage = e.type as HookStage;
@@ -1161,7 +1238,32 @@ export class AkouApp implements ApiApp {
 
   private pageServer(): Promise<PageServer> {
     this.pageStarting ??= buildUi().then((bundle) => {
+      const s = this.cfg.settings;
       this.page = new PageServer({
+        // Server mode serves the page on the API's own listener, behind the proxy (SV-U1).
+        mounted:
+          this.runMode === "server" && this.server
+            ? {
+                origin: `http://127.0.0.1:${this.server.port}`,
+                hostAllowed: (host) =>
+                  serverHostAllowed(host, this.server?.port ?? 0, {
+                    publicHost: s["server.public_host"],
+                    behindProxy: s["server.behind_proxy"],
+                  }),
+                originAllowed: (origin) => {
+                  if (s["server.public_host"] === "") return false;
+                  try {
+                    return serverHostAllowed(new URL(origin).host, this.server?.port ?? 0, {
+                      publicHost: s["server.public_host"],
+                      behindProxy: false,
+                    });
+                  } catch {
+                    return false;
+                  }
+                },
+                login: (c) => this.adminLogin(c),
+              }
+            : undefined,
         bridge: new Bridge(this, (err) =>
           this.log("error", `window request: ${(err as Error).stack ?? err}`),
         ),
@@ -1211,7 +1313,16 @@ export class AkouApp implements ApiApp {
 
   async saveConfig(file: Partial<Record<SettingKey, SettingValue>>): Promise<LoadedConfig> {
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
-    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(file, null, 2)}\n`);
+    // The keys the API cannot write are the file's: what is on disk now wins over this process's
+    // copy, so a save never drops a value written since the start (`akou admin set-password`).
+    const onDisk = loadConfig(this.o.env ?? process.env, this.o.platform).file;
+    const next: Partial<Record<SettingKey, SettingValue>> = { ...file };
+    for (const k of SETTING_KEYS) {
+      if ((SETTINGS[k] as SettingSpec).apiWritable !== false) continue;
+      if (onDisk[k] === undefined) delete next[k];
+      else next[k] = onDisk[k];
+    }
+    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(next, null, 2)}\n`);
     const before = this.cfg.settings;
     this.cfg = loadConfig(this.o.env ?? process.env, this.o.platform);
     const after = this.cfg.settings;
@@ -1382,6 +1493,8 @@ export class AkouApp implements ApiApp {
     return {
       app: {
         version: this.version,
+        // The host's OS: a page in another machine's browser must not read its own (DK-K4).
+        platform: process.platform,
         pid: process.pid,
         port: this.server?.port ?? null,
         headless: this.headless,
@@ -1441,14 +1554,31 @@ export class AkouApp implements ApiApp {
     }
     if (this.finals.has(id))
       return fail(409, "final_running", "the final pass is running", { call: id });
-    if (c.view.final.state === "done" && !opts.force) {
+    if (finalCurrent(c.view) && !opts.force) {
       return fail(409, "already_final", "the final pass already ran; use force to run it again", {
         call: id,
       });
     }
-    const why = this.runFinal(id, true);
-    if (why) return fail(501, "final_unavailable", why, { call: id });
+    const r = this.runFinal(id, true);
+    if (r) return fail(501, "final_unavailable", r.why, { call: id });
     return { ok: true, call: id, started: true };
+  }
+
+  /**
+   * The final pass at a call's end. A pass that cannot run there (no readable audio, no models) is
+   * recorded as `final.failed {step: unavailable}`, so `akou wait`, the window and the API say why
+   * instead of waiting for a pass that never comes.
+   */
+  private finalAtEnd(id: string): void {
+    const r = this.runFinal(id, false);
+    const c = this.manager.controller(id);
+    if (!r?.unavailable || !c) return;
+    const release = c.holdWriter();
+    try {
+      c.record({ type: "final.failed", step: "unavailable", error: r.why });
+    } finally {
+      release();
+    }
   }
 
   /** The recognizer models for the final pass, or null when there are none. */
@@ -1467,19 +1597,25 @@ export class AkouApp implements ApiApp {
     return this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
   }
 
-  /** Starts the final pass in the background. Returns why it cannot run, or null once started. */
-  private runFinal(id: string, force: boolean): string | null {
-    if (this.quitting) return "akou is quitting";
-    if (this.finals.has(id)) return "the final pass is already running";
+  /**
+   * Starts the final pass in the background. Returns null once started, or why it cannot run;
+   * `unavailable` when the call lacks what the pass needs (readable audio, the models).
+   */
+  private runFinal(id: string, force: boolean): { why: string; unavailable?: true } | null {
+    if (this.quitting) return { why: "akou is quitting" };
+    if (this.finals.has(id)) return { why: "the final pass is already running" };
     const c = this.manager.controller(id);
-    if (!c || c.live) return "the call is not ended";
-    if (!force && c.view.final.state === "done") return "the final pass already ran";
+    if (!c || c.live) return { why: "the call is not ended" };
+    if (!force && finalCurrent(c.view)) return { why: "the final pass already ran" };
     const parts = c.view.parts().map((p) => p.part);
     const audio = (this.o.finalAudio ?? wavBesideParts)({ id, dir: c.dir, parts });
     if (!audio)
-      return "the final pass cannot read this call's audio yet (Opus decoding is not built)";
+      return {
+        why: "the final pass cannot read this call's audio yet (Opus decoding is not built)",
+        unavailable: true,
+      };
     const models = this.finalModels();
-    if (!models) return "the speech models are not downloaded";
+    if (!models) return { why: "the speech models are not downloaded", unavailable: true };
     const ws = c.view.call?.workspace ?? "";
     const p = finalizeCall(c, {
       models,
@@ -1506,7 +1642,7 @@ export class AkouApp implements ApiApp {
       try {
         const { events } = await readLog(join(s.dir, EVENTS_FILE));
         const v = fold(events);
-        if (v.final.state === "done") continue;
+        if (finalCurrent(v)) continue;
         const parts = v.parts().map((p) => p.part);
         if (!(this.o.finalAudio ?? wavBesideParts)({ id: s.id, dir: s.dir, parts })) continue;
         const c = await this.manager.open(s.id);
@@ -1520,12 +1656,93 @@ export class AkouApp implements ApiApp {
   // -------------------------------------------------------------------------
   // Start and quit
 
+  keys(): KeyStore | null {
+    return this.keyStore;
+  }
+
+  mode(): "app" | "server" {
+    return this.runMode;
+  }
+
+  recognizer(): "loading" | "ready" | "unavailable" {
+    return this.asrState.state;
+  }
+
+  /** `server.admin_password_hash` as the file holds it now, read again only when the file changes. */
+  private passwordHash = { stamp: "", hash: "" };
+
+  private currentPasswordHash(): string {
+    let stamp = "";
+    try {
+      const st = statSync(this.cfg.paths.configFile);
+      stamp = `${st.mtimeMs}:${st.ctimeMs}:${st.size}:${st.ino}`;
+    } catch {}
+    if (stamp !== this.passwordHash.stamp || stamp === "") {
+      const hash = loadConfig(this.o.env ?? process.env, this.o.platform).settings[
+        "server.admin_password_hash"
+      ];
+      this.passwordHash = { stamp, hash };
+    }
+    return this.passwordHash.hash;
+  }
+
+  /**
+   * The web UI's admin login (SV-U1): the password against `server.admin_password_hash`, read
+   * from the file so `akou admin set-password` works without a restart, or an `admin` key pasted
+   * once. A right one answers the check its session runs on every use: the key still there with
+   * `admin`, or the password hash unchanged, so a revoke or a new password ends the session.
+   */
+  async adminLogin(c: { password?: string; key?: string }): Promise<(() => boolean) | null> {
+    const keys = this.keyStore;
+    if (c.key !== undefined) {
+      const id = keys?.authenticate(c.key);
+      if (!keys || !id?.scopes.includes("admin")) return null;
+      return () => keys.has(id.id, "admin");
+    }
+    if (c.password === undefined || c.password === "") return null;
+    const hash = this.currentPasswordHash();
+    if (hash === "") return null;
+    try {
+      if (!(await Bun.password.verify(c.password, hash))) return null;
+    } catch {
+      return null;
+    }
+    return () => this.currentPasswordHash() === hash;
+  }
+
   async listen(): Promise<void> {
+    const s = this.cfg.settings;
+    if (this.runMode === "app" && s["api.bind"] !== "" && !isLoopback(s["api.bind"])) {
+      this.log("warn", "api.bind applies in server mode only; the app listens on 127.0.0.1");
+    }
+    const keys = this.keyStore;
     this.server = startApiServer({
       app: this,
-      port: this.cfg.settings["api.port"],
+      port: s["api.port"],
+      hostname: apiBind(s),
+      maxUploadBytes: s["server.max_upload_mb"] * 1024 * 1024,
+      trustedProxies: s["server.trusted_proxies"]
+        .map((c) => parseCidr(c))
+        .filter((c): c is Cidr => c !== null),
       token: () => this.tokens.current(),
-      guard: this.o.guard,
+      page:
+        this.runMode === "server"
+          ? async (req, srv) => (await this.pageServer()).fetch(req, srv)
+          : undefined,
+      guard:
+        this.o.guard ??
+        (keys
+          ? serverGuard({
+              publicHost: s["server.public_host"],
+              behindProxy: s["server.behind_proxy"],
+              keys,
+              onRefused: (r) =>
+                this.log(
+                  "warn",
+                  `key.refused ${r.keyPrefix === "" ? "(not an akou key)" : `${r.keyPrefix}…`} from ${r.source} on ${r.path}`,
+                ),
+            })
+          : undefined),
       onError: (err, req) =>
         this.log(
           "error",
@@ -1597,10 +1814,16 @@ export class AkouApp implements ApiApp {
   }
 }
 
+/** The app lock's heartbeat, stopped when the lock is released. */
+const heartbeats = new Map<string, () => void>();
+
 function releaseLock(path: string): void {
+  heartbeats.get(path)?.();
+  heartbeats.delete(path);
+  const held = readLock(path);
+  if (held?.pid !== process.pid || held.id !== INSTANCE_ID) return;
   try {
-    const pid = Number.parseInt(readFileSync(path, "utf8").trim(), 10);
-    if (pid === process.pid) unlinkSync(path);
+    unlinkSync(path);
   } catch {}
 }
 
@@ -1615,17 +1838,23 @@ function readRuntime(configDir: string): { port?: number; version?: string } | n
 /** Starts the app: settings, the single-instance lock, the token, the API. */
 export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
   const cfg = loadConfig(o.env ?? process.env, o.platform);
+  // A bind the settings forbid stops the start before anything is taken or written.
+  apiBind(cfg.settings);
   // The folder holds the token and runtime.json: the owner's alone.
   makePrivateDir(cfg.paths.configDir);
   const lockPath = join(cfg.paths.configDir, APP_LOCK);
+  const serverMode = cfg.settings["server.enabled"];
   try {
-    acquireLock(lockPath, process.pid, processAlive);
+    acquireLock(lockPath, process.pid, processAlive, { serverMode });
   } catch (err) {
     if (err instanceof LockError) {
+      if (err.aging) throw new LockAgingError(err.holderPid, err.aging);
       throw new AlreadyRunningError(err.holderPid, readRuntime(cfg.paths.configDir));
     }
     throw err;
   }
+  // The heartbeat tells another container on the same volume that this one still runs (SI-4).
+  heartbeats.set(lockPath, lockHeartbeat(lockPath, process.pid));
   let app: AkouApp | null = null;
   try {
     const token = ensureToken(cfg.paths.configDir);
@@ -1651,6 +1880,14 @@ if (import.meta.main) {
     if (err instanceof AlreadyRunningError) {
       console.error(err.message);
       process.exit(0);
+    }
+    if (err instanceof StartRefused) {
+      console.error(`akou: cannot start: ${err.message}`);
+      process.exit(78);
+    }
+    if (err instanceof LockAgingError) {
+      console.error(`akou: cannot start yet: ${err.message}`);
+      process.exit(75);
     }
     console.error(`akou: cannot start: ${(err as Error).message}`);
     process.exit(70);

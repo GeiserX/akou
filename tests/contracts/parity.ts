@@ -90,10 +90,19 @@ export const PARITY: readonly Row[] = [
   },
   {
     action: "Read and follow the transcript",
-    cli: ["tail", "show"],
+    cli: ["tail", "show", "watch"],
     api: ["GET /calls/:id/transcript", "GET /calls/:id/events", "GET /calls/:id/stream"],
     mcp: ["akou_read", "akou_get_call"],
     window: [rpc("follow"), app("/transcript?format=export")],
+  },
+  {
+    action: "Wait for a stage after the call",
+    cli: ["wait"],
+    api: ["GET /calls/:id/events"],
+    mcp: {
+      none: "an agent follows GET /calls/{id}/events or akou_read; there is no akou_wait (PG-S5)",
+    },
+    window: { none: "the window shows each stage as it happens and never blocks on one" },
   },
   {
     action: "One call's record",
@@ -343,6 +352,29 @@ export const PARITY: readonly Row[] = [
     api: { none: "the CLI replaces its own binary; not built yet" },
     mcp: { none: CLI_ONLY },
     window: { none: "the app's update notice is DK-U1" },
+  },
+  {
+    action: "What this akou is and can do",
+    cli: { none: "a program reads it before it offers presets; the CLI already knows its akou" },
+    api: ["GET /server", "GET /openapi.json"],
+    mcp: { none: "the MCP server talks to the akou it was installed with" },
+    window: { none: "the window is the app itself" },
+  },
+  {
+    action: "Which key is calling",
+    cli: { none: "the CLI on the box uses the app's own token, which is admin" },
+    api: ["GET /keys/me"],
+    mcp: { none: "the MCP server uses the app's own token, which is admin" },
+    window: { none: "the window is the user's own, in process" },
+  },
+  {
+    action: "API keys and the admin password (server mode)",
+    cli: ["keys", "admin"],
+    api: {
+      none: "made on the box that runs akou, from its files (SERVER.md SV-K2, SV-U1)",
+    },
+    mcp: { none: "made on the box that runs akou, from its files, not by an agent (SV-K2)" },
+    window: { none: "made on the box that runs akou, from its files (SERVER.md SV-K2)" },
   },
   {
     action: "Token, skill, doctor and the MCP server",

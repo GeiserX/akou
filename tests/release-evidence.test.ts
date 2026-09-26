@@ -29,6 +29,8 @@ function repoCopy(): { dir: string; cleanup(): void } {
     "src/main/app-info.ts",
     "skills/akou/SKILL.md",
     "skills/akou-vocab/SKILL.md",
+    ".claude-plugin/plugin.json",
+    "docs/api/openapi.json",
     PROVIDERS,
     GATES,
   ]) {
