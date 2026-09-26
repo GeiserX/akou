@@ -75,6 +75,15 @@
       "name": "keys"
     },
     {
+      "name": "jobs"
+    },
+    {
+      "name": "events"
+    },
+    {
+      "name": "openai"
+    },
+    {
       "name": "openapi"
     }
   ],
@@ -3193,6 +3202,416 @@
           "server"
         ],
         "x-akou-access": "jobs"
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "operationId": "jobs.create",
+        "tags": [
+          "jobs"
+        ],
+        "description": "Submit an audio file for transcription; answers at once with the queued job. An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  },
+                  "preset": {
+                    "type": "string"
+                  },
+                  "language": {
+                    "type": "string"
+                  },
+                  "keywords[]": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "diarize": {
+                    "type": "boolean"
+                  },
+                  "callback_url": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      },
+      "get": {
+        "operationId": "jobs.list",
+        "tags": [
+          "jobs"
+        ],
+        "description": "The key's jobs, newest first (an admin key sees every key's). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Only jobs in this state.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "done",
+                "failed",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the page before: jobs older than it.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Jobs per page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "operationId": "jobs.get",
+        "tags": [
+          "jobs"
+        ],
+        "description": "One job and its state. `wait` holds the request until the job ends, up to 60 s.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "description": "Seconds to hold the request until the job ends (or an event arrives), up to 60.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      },
+      "delete": {
+        "operationId": "jobs.delete",
+        "tags": [
+          "jobs"
+        ],
+        "description": "Delete a job: a queued one is dropped, a running one stopped within two seconds, and its file and result removed.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/jobs/{id}/result": {
+      "get": {
+        "operationId": "jobs.result",
+        "tags": [
+          "jobs"
+        ],
+        "description": "The transcript of a done job: text, segments with speakers and times, and the engines that made it. 409 `not_done` before the job is done.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "events.list",
+        "tags": [
+          "events"
+        ],
+        "description": "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the answer before: only events after it.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Events per answer.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 500
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "description": "Seconds to hold the request until the job ends (or an event arrives), up to 60.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "operationId": "openai.transcribe",
+        "tags": [
+          "openai"
+        ],
+        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or an engine (anything else is `auto`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "language": {
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "keywords[]": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "response_format": {
+                    "type": "string"
+                  },
+                  "timestamp_granularities[]": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  },
+                  "temperature": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs",
+        "x-akou-door": "compat"
       }
     },
     "/v1/openapi.json": {

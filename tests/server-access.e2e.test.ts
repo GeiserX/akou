@@ -28,6 +28,13 @@ const TABLE: Record<string, Access> = {
   "GET /v1/server": "open",
   "GET /v1/openapi.json": "open",
   "GET /v1/keys/me": "jobs",
+  "POST /v1/jobs": "jobs",
+  "GET /v1/jobs": "jobs",
+  "GET /v1/jobs/:id": "jobs",
+  "GET /v1/jobs/:id/result": "jobs",
+  "DELETE /v1/jobs/:id": "jobs",
+  "GET /v1/events": "jobs",
+  "POST /v1/audio/transcriptions": "jobs",
   "GET /v1/status": "admin",
   "GET /v1/config": "admin",
   "PATCH /v1/config": "admin",
@@ -146,7 +153,8 @@ describe("SV-K3: scopes over every route", () => {
     expect(routes.length).toBe(Object.keys(TABLE).length);
     expect(drift(routes)).toEqual({ missing: [], stale: [] });
     // Positive control: a route added without a row is caught.
-    expect(drift([...routes, "POST /v1/jobs"]).missing).toEqual(["POST /v1/jobs"]);
+    expect(drift([...routes, "POST /v1/nothing"]).missing).toEqual(["POST /v1/nothing"]);
+    expect(drift(routes.filter((r) => r !== "POST /v1/jobs")).stale).toEqual(["POST /v1/jobs"]);
   });
 
   test("the routes declare the access the table says", () => {
@@ -221,7 +229,7 @@ function uploadServer(maxUploadBytes?: number): ApiServer {
     token: () => TOKEN,
     maxUploadBytes,
     // The job route's shape (SV-J1): an upload, for any key. It counts what arrives.
-    router: buildRouter().add("POST", "/jobs", JOBS_CREATE, async (c) => {
+    router: buildRouter("app").add("POST", "/jobs", JOBS_CREATE, async (c) => {
       let bytes = 0;
       for await (const chunk of c.req.body ?? []) bytes += chunk.byteLength;
       return json(202, { bytes });
