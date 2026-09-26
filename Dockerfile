@@ -7,7 +7,7 @@
 # The container binds 0.0.0.0, which server mode refuses until `server.behind_proxy` is true in
 # /data/.config/akou/config.json (SV-P5): the operator states it, the image never does
 # (docs/install.md, "The server").
-#   docker run --rm -v akou-models:/models geiserx/akou:<version> models pull fast
+#   docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version> models pull fast
 #
 # Built for linux/amd64 and linux/arm64, each on its own runner (release.yml), and tagged with the
 # release's version only: there is never a `latest` tag. Both base images are pinned by digest.

@@ -548,6 +548,42 @@ describe("SV-K1: GET /v1/server", () => {
     }
   });
 
+  test("SV-K1b: retain_days is server.retain_days, and follows the setting after a restart", async () => {
+    const retain = async (rig: AppRig) =>
+      JSON.parse((await get(rig, "/v1/server")).body).retain_days;
+    // The default, in both modes: an integer, never absent.
+    expect(await retain(server)).toBe(7);
+    expect(await retain(app)).toBe(7);
+    // Positive control: a changed setting changes the answer once the server starts again on it.
+    const home = tempDir("akou-retain-");
+    try {
+      for (const days of [30, 3]) {
+        const rig = await appRig({
+          home: home.dir,
+          settings: { ...SERVER, "server.retain_days": days },
+        });
+        try {
+          expect(await retain(rig)).toBe(days);
+        } finally {
+          await rig.close();
+        }
+      }
+    } finally {
+      home.cleanup();
+    }
+  });
+
+  test("SV-K1b: the documented retain_days counts from the job's creation, as the sweep does", () => {
+    // The sweep deletes by created_at (jobs.ts `sweep`, store.ts `createdBefore`); a doc that counts
+    // from completion would have a client re-fetch a job akou has already deleted.
+    const doc = buildRouter()
+      .entries()
+      .find((e) => e.doc.id === "server.get")?.doc.doc;
+    expect(doc).toContain("`retain_days`");
+    expect(doc).toContain("counted from the job's creation");
+    expect(doc).not.toContain("finished job");
+  });
+
   test("capabilities.jobs turns true with the route itself", async () => {
     const s = startApiServer({
       app: fakeApp(),
@@ -680,5 +716,6 @@ function fakeApp(): ApiApp {
   return {
     version: "0.0.0-test",
     models: () => ({ state: "ready", dir: "", bytes: 0, total: 0 }),
+    config: () => ({ settings: { "server.retain_days": 7 } }),
   } as unknown as ApiApp;
 }
