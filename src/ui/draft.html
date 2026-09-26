@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' views:; style-src 'self' views:; connect-src 'self' views: ws://127.0.0.1:*; img-src 'self' views: data:; base-uri 'none'; form-action 'none'">
+<title>akou draft</title>
+<link rel="stylesheet" href="draft.css">
+<script type="module" src="index.js"></script>
+</head>
+<body class="draft-page">
+<main id="draft" aria-label="Draft" hidden>
+  <header id="draft-head" class="electrobun-webkit-app-region-drag">
+    <strong>Draft</strong>
+    <span id="draft-to"></span>
+    <button id="draft-close" type="button" aria-label="Discard">×</button>
+  </header>
+  <div id="draft-field">
+    <div id="draft-marks" aria-hidden="true"></div>
+    <textarea id="draft-text" aria-label="Dictated text" rows="4"></textarea>
+  </div>
+  <p id="draft-noconf" class="hint" hidden>no confidence from this engine</p>
+  <div id="draft-alts" role="menu" aria-label="Other readings" hidden></div>
+  <fieldset id="chip" aria-label="Learn a word" hidden></fieldset>
+  <footer id="draft-foot">
+    <span id="draft-engine"></span>
+    <select id="draft-retry-engine" aria-label="Engine to retry with"></select>
+    <button id="draft-retry" type="button">Retry</button>
+    <button id="draft-copy" type="button">Copy</button>
+    <p id="draft-keys" class="hint"></p>
+  </footer>
+</main>
+</body>
+</html>

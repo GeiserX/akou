@@ -38,6 +38,7 @@
     <button class="busy stop" id="stop" type="button">■ Stop</button>
     <button id="share-start" type="button" hidden title="A read-only live link to this call">Share</button>
     <button id="copy-transcript" type="button" hidden title="Copy the transcript so far as Markdown">Copy transcript</button>
+    <button id="dictation-open" type="button" title="Type what you say into any app">Dictation</button>
     <button id="settings-open" type="button">Settings</button>
   </div>
   <fieldset id="meters"><legend>Levels</legend>
@@ -125,6 +126,14 @@
       <button type="submit" class="go">Save</button>
       <button type="button" id="settings-close">Close</button>
     </div>
+  </form>
+</dialog>
+<dialog id="dictation" aria-label="Dictation">
+  <!-- Each change saves its own key (PATCH /config); the registry, not the browser, validates it. -->
+  <form id="dictation-form" novalidate>
+    <h2>Dictation</h2>
+    <div id="dictation-fields"></div>
+    <div class="bar"><button type="button" id="dictation-close">Close</button></div>
   </form>
 </dialog>
 </body>
