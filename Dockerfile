@@ -35,12 +35,12 @@ WORKDIR /src
 COPY native/akou-diarize/ ./
 RUN cargo build --locked --release && ./target/release/akou-diarize --version
 
-# llama-server for the variant's backend, from the release akou pins, by digest. Only the two files
+# llama-server for the variant's backend, from the release akou pins, by digest. Only the files
 # the fetch reads are copied, so a change elsewhere in src/ does not download it again.
 FROM ${BUN_IMAGE} AS llama
 ARG ACCELERATOR=cpu
 WORKDIR /src
-COPY src/main/asr/llama-builds.ts src/main/asr/models.ts src/main/asr/
+COPY src/main/asr/llama-builds.ts src/main/asr/llama-catalog.ts src/main/asr/models.ts src/main/asr/
 RUN bun -e 'await (await import("./src/main/asr/llama-builds.ts")).fetchForHost(process.env.ACCELERATOR, "/opt/llama")'
 
 FROM ${BUN_IMAGE}

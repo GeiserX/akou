@@ -302,6 +302,26 @@ describe("[akou-5an.94] the GPU image variants", () => {
   const dockerfile = read("Dockerfile");
   const last = finalStage(dockerfile);
 
+  test("the llama stage copies every file the fetch imports, so a new import cannot break the image", () => {
+    const copy = instructions(dockerfile).find(
+      (x) => x.op === "COPY" && x.args.startsWith("src/main/asr/llama-builds.ts"),
+    );
+    const copied = (copy?.args ?? "").split(/\s+/).slice(0, -1);
+    // Every file llama-builds.ts reaches through value imports; type imports vanish at run time.
+    const reached = new Set<string>();
+    const todo = ["src/main/asr/llama-builds.ts"];
+    while (todo.length > 0) {
+      const file = todo.pop() as string;
+      if (reached.has(file)) continue;
+      reached.add(file);
+      for (const m of read(file).matchAll(/^import\s+(?!type\b)[^;]*?from\s+"(\.[^"]+)";/gm)) {
+        todo.push(join(file, "..", m[1] as string));
+      }
+    }
+    expect(reached.size).toBeGreaterThan(1);
+    expect(copied.sort()).toEqual([...reached].sort());
+  });
+
   test("one Dockerfile builds every variant from ACCELERATOR, default cpu, with akou's pinned llama-server", () => {
     const all = instructions(dockerfile);
     expect(
