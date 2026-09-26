@@ -21,7 +21,7 @@
 import { readFileSync } from "node:fs";
 import { bool, int, list, str } from "../args.ts";
 import { EXIT } from "../client.ts";
-import { api, type Body, type Command, enc, finish, ref } from "../context.ts";
+import { api, type Body, type Command, callFlag, enc, finish, ref } from "../context.ts";
 import { usage } from "./calls.ts";
 
 function entryLine(e: Body): string {
@@ -73,17 +73,36 @@ export const vocab: Command = {
   summary:
     "The custom vocabulary: list, add, remove, approve, reject, suggest, check, import, pass",
   usage:
-    "akou vocab list|add|remove|approve|reject|suggest|check|import|pass … [--call ID] [-w WS] [--json]",
+    "akou vocab list|add|remove|approve|reject|suggest|check|import|pass … [-c CALL] [-w WS] [--json]",
   flags: {
-    workspace: { type: "string", short: "w" },
-    call: { type: "string" },
-    unconfirmed: { type: "boolean" },
-    heard: { type: "string" },
-    "no-decode": { type: "boolean" },
-    note: { type: "string" },
-    text: { type: "string" },
-    k: { type: "string", short: "k" },
+    workspace: { type: "string", short: "w", value: "WS", desc: "the workspace's list" },
+    call: {
+      ...callFlag("none: the workspace list"),
+      desc: "a call's own words instead of the workspace list (live, last or a call id)",
+    },
+    unconfirmed: { type: "boolean", desc: "list: only the words waiting for your yes" },
+    heard: { type: "string", value: "A,B", desc: "add: how the recognizer mishears it" },
+    "no-decode": {
+      type: "boolean",
+      desc: "add: correct it when read, but do not bias the recognizer",
+    },
+    note: { type: "string", value: "TEXT", desc: "add: a note kept with the entry" },
+    text: { type: "string", value: "TEXT", desc: "suggest: propose words from this text" },
+    k: { type: "string", short: "k", value: "N", desc: "suggest: at most N words" },
   },
+  examples: [
+    "akou vocab list -w work",
+    "akou vocab list -c last --unconfirmed",
+    "akou vocab add Hetzner --heard hetzna,hetsner -w work",
+    "akou vocab add Kubernetes -c live",
+    "akou vocab remove Hetzner -w work",
+    "akou vocab approve Hetzner -c last",
+    "akou vocab reject Hetsner -c last",
+    'akou vocab suggest --text "we deploy on Hetzner with Terraform" -k 5',
+    "akou vocab check Hetzner",
+    "akou vocab import glossary.txt -w work",
+    "akou vocab pass last",
+  ],
   run: async (ctx, p) => {
     const [sub, ...args] = p.positional;
     const ws = str(p, "workspace");

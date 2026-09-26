@@ -14,6 +14,10 @@ export interface FlagSpec {
   type: FlagType;
   /** A one-letter alias, without the dash (`w` for `-w`). */
   short?: string;
+  /** The value's name in help (`CALL` in `--call CALL`); string flags only. */
+  value?: string;
+  /** One line for the command's help page, which lists every flag the parser accepts (CLI-05). */
+  desc: string;
 }
 
 export type FlagSpecs = Readonly<Record<string, FlagSpec>>;
@@ -27,9 +31,10 @@ export class UsageError extends Error {
   override name = "UsageError";
 }
 
-const COMMON: FlagSpecs = {
-  json: { type: "boolean" },
-  help: { type: "boolean", short: "h" },
+/** The flags every command accepts. A command whose `--json` does something else declares its own. */
+export const COMMON: FlagSpecs = {
+  json: { type: "boolean", desc: "print the answer as JSON, errors included" },
+  help: { type: "boolean", short: "h", desc: "show this help" },
 };
 
 /** A word the parser reads as a flag or as `--`, never as a value. */
