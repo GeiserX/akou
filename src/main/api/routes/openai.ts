@@ -6,8 +6,9 @@
  * result (SV-J4), and the job is deleted as soon as the answer is sent, since the caller holds the
  * only copy it asked for. A caller that hangs up cancels its job.
  *
- * - `model`: a preset name, or an engine id from the preset table; any other name (`whisper-1`)
- *   is `auto`.
+ * - `model`: a preset name, or a recognizer id from the model catalog, over `server.default_model`
+ *   as on `POST /v1/jobs` (SV-S1); any other name (`whisper-1`) is no opinion, so the server's
+ *   default decides.
  * - `prompt` and `keywords[]`: hotwords. The prompt is split at commas, semicolons and line ends,
  *   and its terms fill what is left of the 24 after the keywords.
  * - `response_format`: `json`, `text`, `srt`, `vtt`, `verbose_json`, `diarized_json` (which turns on
@@ -19,13 +20,13 @@
  */
 
 import type { JobSegment } from "../../asr/finalize-worker.ts";
-import { PRESET_NAMES, PRESETS } from "../../server/presets.ts";
 import type { Job } from "../../server/store.ts";
 import { caller } from "../caller.ts";
 import { HttpError, json, type RouteContext, type Router } from "../http.ts";
 import type { SpooledFile } from "../multipart.ts";
 import type { ApiApp } from "../server.ts";
 import {
+  chooseModel,
   type Form,
   fileField,
   formOf,
@@ -33,7 +34,6 @@ import {
   keywordsOf,
   languageOf,
   MAX_KEYWORDS,
-  resolvePreset,
   textField,
 } from "./jobs.ts";
 
@@ -75,13 +75,6 @@ function list(form: Form, name: string): string[] {
     if (typeof v !== "string") throw bad(name, `"${name}" is text, not a file`);
     return v;
   });
-}
-
-/** The preset a `model` names: a preset, an engine of one, or `auto`. */
-export function presetForModel(model: string | undefined): string {
-  const m = (model ?? "").trim();
-  if ((PRESET_NAMES as readonly string[]).includes(m)) return m;
-  return PRESETS.find((p) => p.engines.includes(m))?.name ?? "auto";
 }
 
 /** The prompt's terms, after the keywords, up to the 24 the decoder takes. */
@@ -262,10 +255,12 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     list(form, "known_speaker_names");
     list(form, "known_speaker_references");
     textField(form, "chunking_strategy");
-    const preset = resolvePreset(c.app, presetForModel(textField(form, "model")));
+    const choice = chooseModel(jobs, { model: textField(form, "model") }, true);
     const submitted = jobs.submit({
       key_id: who.id,
-      preset,
+      preset: choice.preset,
+      model: choice.model,
+      model_source: choice.source,
       language,
       keywords,
       diarize: format === "diarized_json",
@@ -317,7 +312,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or an engine (anything else is `auto`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
       access: "jobs",
       modes: ["server"],
       door: "compat",
