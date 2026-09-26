@@ -1,8 +1,10 @@
 /**
  * The real capture helper against real audio devices (ROADMAP M3 and M4): it records the default
  * input and the call side while a player sends tone bursts, left channel of the stimulus into
- * the microphone and right channel into the output, and the recording must come back with the
- * mic tone on the left, the call tone on the right, and both bursts starting together.
+ * the microphone and right channel into the output, and the recording must come back with five
+ * bursts of the mic tone on the left, five of the call tone on the right and none of the other
+ * tone on either, read from tone content, and, where one player drives both channels, both
+ * bursts starting together.
  *
  * It opens devices, so it runs only where CI has set up virtual ones, and never on a laptop:
  *
@@ -35,6 +37,7 @@ import {
   measure,
   onsets,
   PERIOD,
+  toneRuns,
 } from "./capture-live.ts";
 import { stereoWav } from "./fixtures/audio.ts";
 
@@ -83,6 +86,46 @@ describe("the live-capture measurements", () => {
     expect(late.maxSkewMs).toBeLessThan(40);
     // Nothing recorded on one side: no pairs, an infinite skew, never a pass.
     expect(measure(mic, new Float32Array(mic.length)).maxSkewMs).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  test("TS-1 (c) each channel carries five bursts of its own tone and none of the other's, read from tone content", () => {
+    const mic = bursts(MIC_HZ, CAPTURE_RATE);
+    const call = bursts(CALL_HZ, CAPTURE_RATE);
+    const left = toneRuns(mic, MIC_HZ, CALL_HZ);
+    expect(left.length).toBe(5);
+    for (const r of left) expect(r).toBeGreaterThan(BURST / 2);
+    expect(toneRuns(mic, CALL_HZ, MIC_HZ)).toEqual([]);
+    expect(toneRuns(call, CALL_HZ, MIC_HZ).length).toBe(5);
+    expect(toneRuns(call, MIC_HZ, CALL_HZ)).toEqual([]);
+    // Blind to timing: two players that start 30 ms apart, as PulseAudio's do, read the same.
+    const late = toneRuns(shifted(call, Math.round(0.03 * CAPTURE_RATE)), CALL_HZ, MIC_HZ);
+    expect(late.length).toBe(5);
+  });
+
+  test("TS-1 (c) positive controls: swapped channels, a lost burst and crosstalk each fail the tone check", () => {
+    const mic = bursts(MIC_HZ, CAPTURE_RATE);
+    const call = bursts(CALL_HZ, CAPTURE_RATE);
+    // The call tone on the mic channel: no mic bursts, five of the other tone.
+    expect(toneRuns(call, MIC_HZ, CALL_HZ)).toEqual([]);
+    expect(toneRuns(call, CALL_HZ, MIC_HZ).length).toBe(5);
+    // The third burst never arrived.
+    const lost = mic.slice();
+    lost.fill(
+      0,
+      Math.round((LEAD + 2 * PERIOD) * CAPTURE_RATE),
+      Math.round((LEAD + 2 * PERIOD + BURST) * CAPTURE_RATE),
+    );
+    expect(toneRuns(lost, MIC_HZ, CALL_HZ).length).toBe(4);
+    // The call bleeding into the mic at the same level: the mic tone never dominates.
+    const mixed = mic.map((v, i) => v + (call[i] as number));
+    expect(toneRuns(mixed, MIC_HZ, CALL_HZ)).toEqual([]);
+    // A burst cut to a sliver is found, and is too short to pass as a burst.
+    const sliver = new Float32Array(mic.length);
+    const at = Math.round(LEAD * CAPTURE_RATE);
+    sliver.set(mic.subarray(at, at + Math.round(0.06 * CAPTURE_RATE)), at);
+    const runs = toneRuns(sliver, MIC_HZ, CALL_HZ);
+    expect(runs.length).toBe(1);
+    expect(runs[0] as number).toBeLessThan(BURST / 2);
   });
 
   test("lays packets out by their file position, gaps as zeros", () => {
@@ -218,10 +261,28 @@ if (!LIVE || !BIN || !PLAY) {
           .map((s) => s.toFixed(1))
           .join(" ")}`,
       );
+      // Separation is read from tone content per channel, never from onset timing (TS-1 c):
+      // PulseAudio's two players start a few milliseconds apart, and that must not matter here.
+      const tones = {
+        leftMic: toneRuns(left, MIC_HZ, CALL_HZ),
+        leftCall: toneRuns(left, CALL_HZ, MIC_HZ),
+        rightCall: toneRuns(right, CALL_HZ, MIC_HZ),
+        rightMic: toneRuns(right, MIC_HZ, CALL_HZ),
+      };
+      console.log(`tone runs, seconds: ${JSON.stringify(tones)}`);
       expect(v.leftDb).toBeGreaterThan(SEPARATION_DB);
       expect(v.rightDb).toBeGreaterThan(SEPARATION_DB);
-      expect(v.skewsMs.length).toBe(5);
-      if (MAX_SKEW) expect(v.maxSkewMs).toBeLessThan(Number(MAX_SKEW));
+      expect(tones.leftMic.length).toBe(5);
+      expect(tones.rightCall.length).toBe(5);
+      for (const r of [...tones.leftMic, ...tones.rightCall]) expect(r).toBeGreaterThan(BURST / 2);
+      expect(tones.leftCall).toEqual([]);
+      expect(tones.rightMic).toEqual([]);
+      // The skew needs both onsets of each burst, so only a player that starts both channels on
+      // one clock (the PipeWire rig) asserts it; elsewhere it is reported above.
+      if (MAX_SKEW) {
+        expect(v.skewsMs.length).toBe(5);
+        expect(v.maxSkewMs).toBeLessThan(Number(MAX_SKEW));
+      }
     }, 60_000);
 
     test.skipIf(!EXCLUDE)(

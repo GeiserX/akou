@@ -4,12 +4,15 @@
  * `akou open` does, in Playwright's headless Chromium shell. Nothing opens on screen, nothing
  * plays through a real output (`--mute-audio`), and no keychain is touched (`--use-mock-keychain`).
  *
+ * `AKOU_UI_BROWSER=webkit` runs the same suite in Playwright's WebKit instead, the closest stand-in
+ * for the WKWebView and WebKitGTK the app ships on macOS and Linux (docs/TESTING.md TS-14).
+ *
  * Run with `bun run test:ui`; `bun run check` leaves these out (bunfig.toml).
  */
 
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Browser, chromium, type Page, type Request } from "playwright-core";
+import { type Browser, chromium, type Page, type Request, webkit } from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
 import { type AppRig, appRig, type RigOptions } from "../api-helpers.ts";
@@ -25,13 +28,36 @@ let browser: Browser | null = null;
 /** Script errors on any page this rig opened; a test with one fails at close. */
 const pageErrors: string[] = [];
 
+/** The engine this run drives: `chromium` unless `AKOU_UI_BROWSER` says `webkit`. */
+export const BROWSER: "chromium" | "webkit" = (() => {
+  const b = process.env.AKOU_UI_BROWSER ?? "chromium";
+  if (b !== "chromium" && b !== "webkit")
+    throw new Error(`AKOU_UI_BROWSER is chromium or webkit, not ${b}`);
+  return b;
+})();
+
+/**
+ * The permissions that let a test read what the page copied. WebKit knows `clipboard-read` only
+ * and lets a page write without asking; asking it for `clipboard-write` throws "Unknown permission".
+ */
+export const CLIPBOARD_PERMISSIONS: readonly string[] =
+  BROWSER === "webkit" ? ["clipboard-read"] : ["clipboard-read", "clipboard-write"];
+
 /** One headless browser for the whole run; Playwright closes it when the process exits. */
 export async function launch(): Promise<Browser> {
   if (!browser?.isConnected()) {
-    browser = await chromium.launch({
-      headless: true,
-      args: ["--mute-audio", "--use-mock-keychain", "--password-store=basic", "--no-first-run"],
-    });
+    browser =
+      BROWSER === "webkit"
+        ? await webkit.launch({ headless: true })
+        : await chromium.launch({
+            headless: true,
+            args: [
+              "--mute-audio",
+              "--use-mock-keychain",
+              "--password-store=basic",
+              "--no-first-run",
+            ],
+          });
   }
   return browser;
 }
