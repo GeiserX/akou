@@ -344,6 +344,28 @@ export const SETTINGS = {
     default: "greedy",
     doc: "How Parakeet decodes, live and in the final pass: `greedy` (the default) or `beam`. Beam search also steers decoding toward the call's vocabulary at boost 1.5, but on some meeting audio it returns whole spans empty. Vocabulary correction when reading and after the call applies with either. Takes effect at the next start.",
   },
+  "asr.accelerator": {
+    type: "string",
+    values: ["auto", "cpu", "metal", "vulkan", "cuda"],
+    default: "auto",
+    env: "AKOU_ACCELERATOR",
+    doc: "Where llama-server runs Qwen3-ASR (the `best` preset): `metal` (Apple silicon), `vulkan` (Intel and AMD GPUs through Mesa; a container needs /dev/dri), `cuda` (NVIDIA), or `cpu`. `auto` is Metal on Apple silicon and the CPU elsewhere. Picks which pinned llama-server build to download; one with no build for this platform runs on the CPU and the server log says so. Applies to the next job that starts llama-server.",
+  },
+  "asr.languages": {
+    type: "string[]",
+    default: [],
+    check: (v) =>
+      (v as readonly string[]).every((c) => /^[a-z]{2,3}$/.test(c))
+        ? null
+        : "is a list of ISO 639 codes, for example en and es",
+    doc: "The languages Qwen3-ASR may choose among when a job's language is `auto`, as ISO 639 codes (for example `en` and `es`). An answer in another language is replaced by the decode, forced into one of these, that the model scores higher; a no-speech answer stays empty. Empty: whatever language the model names.",
+  },
+  "asr.llamaServer": {
+    type: "string[]",
+    default: [],
+    apiWritable: false,
+    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a SYCL or ROCm build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
+  },
   "asr.diarizeHelper": {
     type: "string[]",
     default: [],

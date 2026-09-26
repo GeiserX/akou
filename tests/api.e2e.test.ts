@@ -569,6 +569,7 @@ describe("settings over the API", () => {
       [
         "api.bind",
         "asr.diarizeHelper",
+        "asr.llamaServer",
         "capture.helper",
         "hooks",
         "provider.baseUrl",

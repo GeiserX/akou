@@ -1,10 +1,12 @@
 /**
  * The presets a client names instead of a model (docs/ux/SERVER.md section 8), in the order of the
- * table there. Only Parakeet TDT 0.6B v3 is built, so until the engine registry exists (akou-q4t.1)
- * `fast` runs over it and the other four are listed as unavailable (SV-R1). Every other engine id
- * here is provisional, as the design says.
+ * table there. Two are built: `fast` over Parakeet TDT 0.6B v3 on sherpa-onnx, and `best` over
+ * Qwen3-ASR-1.7B on llama-server (with Nemotron speaker labels when a job asks for them). `lite`,
+ * `fusion` and `auto`'s hardware choice are listed as unavailable (SV-R1); their other engine ids
+ * are provisional, as the design says.
  */
 
+import { QWEN_ASR } from "../asr/llama-catalog.ts";
 import { RECOGNIZER } from "../asr/models.ts";
 
 export const PRESET_NAMES = ["lite", "fast", "best", "fusion", "auto"] as const;
@@ -12,12 +14,12 @@ export type PresetName = (typeof PRESET_NAMES)[number];
 
 export interface Preset {
   name: PresetName;
-  /** The engine chain the design asks for; only `fast`'s is built. */
+  /** The engine chain the design asks for; the first is the recognizer a job runs. */
   engines: readonly string[];
   hardware: string;
   /** `measured` only where a number was measured on a reference box. */
   speed: "measured" | "estimated";
-  /** Built at all: false until the engine registry lands, whatever is installed. */
+  /** Built at all: false until its engines exist, whatever is installed. */
   built: boolean;
 }
 
@@ -38,10 +40,11 @@ export const PRESETS: readonly Preset[] = [
   },
   {
     name: "best",
-    engines: ["qwen3-asr-1.7b", "whisper-large-v3"],
-    hardware: "CUDA, or Apple silicon through the native app",
+    engines: [QWEN_ASR],
+    hardware:
+      "a GPU: Apple silicon (Metal, akou run natively), NVIDIA (CUDA), Intel or AMD (Vulkan); runs on the CPU, slowly",
     speed: "estimated",
-    built: false,
+    built: true,
   },
   {
     name: "fusion",

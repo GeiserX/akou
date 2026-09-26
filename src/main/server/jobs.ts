@@ -294,6 +294,16 @@ export class JobService {
     return jobView(j, waiting);
   }
 
+  /** Whether a job on `model` could run now: its files on disk, or allowed to be fetched. */
+  obtainable(model: string): boolean {
+    try {
+      this.admit(model);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** The recognizer a live worker holds, or null. */
   workerModel(): string | null {
     return this.worker ? this.workerModelId : null;
@@ -657,8 +667,9 @@ export class JobService {
         });
       }
       if (abort.signal.aborted) return;
+      // A llama-server engine (Qwen) takes the keywords as its glossary instead of hotwords.
       const decode: DecodeList | null =
-        job.keywords.length === 0
+        job.keywords.length === 0 || spec.final
           ? null
           : {
               model: modelNameFor(spec),
@@ -676,6 +687,8 @@ export class JobService {
         samples,
         diarize: job.diarize,
         decode: decode && modelKind(decode.model) === "transducer" ? decode : null,
+        language: job.language,
+        glossary: job.keywords,
       });
       const recognizer = pass.model ?? modelNameFor(spec);
       end = {
