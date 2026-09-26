@@ -171,6 +171,9 @@ export default {
       ...signing(),
       bundleCEF: false,
       defaultRenderer: "native",
+      // The app icon, rendered from assets/brand/akou-app-icon.svg by scripts/app-icon.ts; Hutch
+      // turns the iconset into AppIcon.icns with iconutil.
+      icons: "assets/brand/akou.iconset",
       entitlements: { "com.apple.security.device.audio-input": true },
     },
     win: { bundleCEF: false, defaultRenderer: "native" },
