@@ -14,14 +14,20 @@ import { requireCallbackAllowed } from "../src/main/api/caller.ts";
 import { HttpError, json } from "../src/main/api/http.ts";
 import { KeyError, KeyStore } from "../src/main/api/keys.ts";
 import { inCidr, isLoopback, parseCidr, sourceAddress } from "../src/main/api/net.ts";
-import { type ApiApp, startApiServer } from "../src/main/api/server.ts";
+import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import { loadConfig } from "../src/main/config/schema.ts";
 import { apiBind, StartRefused, startApp } from "../src/main/index.ts";
 import { type AppRig, appRig, rawRequest, writeSettings } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
+import { FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
 import { tempDir } from "./helpers.ts";
+
+/** `POST /v1/jobs` as the route table will describe it: a multipart upload, for any key. */
+const JOBS_CREATE = (
+  FIXTURE_ROUTES.find((f) => f.doc.id === "jobs.create") as (typeof FIXTURE_ROUTES)[number]
+).doc;
 
 const SERVER = { "server.enabled": true, "api.bind": "127.0.0.1" };
 
@@ -547,7 +553,7 @@ describe("SV-K1: GET /v1/server", () => {
       app: fakeApp(),
       port: 0,
       token: () => "t".repeat(64),
-      routes: (r) => r.add("POST", "/jobs", () => json(202, {}), { access: "jobs", upload: true }),
+      router: buildRouter("app").add("POST", "/jobs", JOBS_CREATE, () => json(202, {})),
     });
     try {
       const r = await fetch(`http://127.0.0.1:${s.port}/v1/server`);

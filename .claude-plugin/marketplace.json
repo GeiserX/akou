@@ -1,0 +1,14 @@
+{
+  "name": "akou",
+  "owner": { "name": "GeiserX" },
+  "metadata": {
+    "description": "akou's Claude Code plugin, served from its own repository."
+  },
+  "plugins": [
+    {
+      "name": "akou",
+      "source": "./",
+      "description": "Record your calls locally with akou and question them while they run: the akou skills and the akou_* MCP tools."
+    }
+  ]
+}

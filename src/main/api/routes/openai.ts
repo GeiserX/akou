@@ -304,5 +304,30 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
 }
 
 export function openaiRoutes(r: Router<ApiApp>): void {
-  r.add("POST", "/audio/transcriptions", transcriptions, { access: "jobs", upload: true });
+  r.add(
+    "POST",
+    "/audio/transcriptions",
+    {
+      id: "openai.transcribe",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or an engine (anything else is `auto`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
+      access: "jobs",
+      modes: ["server"],
+      door: "compat",
+      body: {
+        multipart: {
+          file: "file",
+          "model?": "string",
+          "language?": "string",
+          "prompt?": "string",
+          "keywords[]?": "string[]",
+          "response_format?": "string",
+          "timestamp_granularities[]?": "string[]",
+          "stream?": "boolean",
+          "temperature?": "number",
+        },
+      },
+      ok: 200,
+    },
+    transcriptions,
+  );
 }

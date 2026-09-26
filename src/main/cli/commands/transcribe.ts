@@ -18,10 +18,11 @@ export const transcribeCommand: Command = {
   summary: "Transcribe an audio file as a server job and print the transcript",
   usage: `akou transcribe FILE [--preset ${PRESETS.join("|")}] [--language L] [--diarize]   [--json]`,
   flags: {
-    preset: { type: "string" },
-    language: { type: "string" },
-    diarize: { type: "boolean" },
+    preset: { type: "string", value: "P", desc: `${PRESETS.join(", ")} (default auto)` },
+    language: { type: "string", value: "L", desc: "a BCP-47 tag such as en or es-ES, or auto" },
+    diarize: { type: "boolean", desc: "label the speakers" },
   },
+  examples: ["akou transcribe voice-note.ogg", "akou transcribe call.m4a --language es --diarize"],
   run: async (ctx, p) => {
     const [file, ...rest] = p.positional;
     if (!file || rest.length > 0) return usage(ctx, "transcribe needs one FILE");

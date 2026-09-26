@@ -113,7 +113,12 @@ export const SETTINGS = {
     type: "string",
     max: 60,
     default: "",
-    doc: "Global shortcut that starts and stops a call, in accelerator form (`Control+Alt+R`). Empty: `Option+Command+R` on macOS, `Control+Alt+R` elsewhere.",
+    doc: "Global shortcut that starts and stops a call, in accelerator form (`Control+Shift+F9`). Empty: `Option+Command+R` on macOS, `Control+Shift+F9` elsewhere (never `Control+Alt`, which is AltGr on many layouts).",
+  },
+  "app.floatingIndicator": {
+    type: "boolean",
+    default: true,
+    doc: "While a call records and the akou window is not in front, a small always-on-top bar with the time, the levels, Mute, Ask and Stop. It shows no transcript text, so it can stay up during a screen share.",
   },
   "app.openAtLogin": {
     type: "boolean",

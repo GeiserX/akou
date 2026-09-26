@@ -754,6 +754,9 @@ button.cite {
   display: grid;
   gap: 6px;
 }
+dialog.question {
+  max-width: 420px;
+}
 dialog {
   background: var(--bg);
   color: var(--fg);
@@ -799,4 +802,55 @@ dialog {
   width: 22rem;
   overflow-y: auto;
   font-size: 14px;
+}
+
+/* A live speaker label is a guess until it is named or the final pass is done (W4.2): dashed, and
+   it reads `c3?`, so it is never told by colour alone. */
+.row .who.provisional {
+  width: fit-content;
+  border: 1px dashed var(--c);
+  border-radius: 4px;
+  padding: 0 4px;
+  text-transform: none;
+}
+
+/* The line being played (W5.6). */
+.row.playing .body {
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+#player-bar {
+  flex-wrap: wrap;
+}
+#player-bar time {
+  font-variant-numeric: tabular-nums;
+}
+#scrub {
+  flex: 1 1 120px;
+  min-width: 80px;
+}
+
+/* The line menu (W4.4). */
+#line-menu {
+  position: fixed;
+  z-index: 20;
+  display: grid;
+  min-width: 220px;
+  background: var(--panel);
+  border: 1px solid var(--faint);
+  border-radius: 8px;
+  padding: 4px;
+  font-size: 13px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.4);
+}
+#line-menu [role="menuitem"] {
+  text-align: left;
+  border: none;
+  background: none;
+  padding: 6px 10px;
+  border-radius: 4px;
+}
+#line-menu [role="menuitem"]:focus,
+#line-menu [role="menuitem"]:hover {
+  background: color-mix(in srgb, var(--accent) 22%, transparent);
 }

@@ -38,7 +38,7 @@ import {
 } from "node:fs";
 import { join } from "node:path";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
-import { type FileVocabEntry, fold } from "../core/log/fold.ts";
+import { type CallView, type FileVocabEntry, fold } from "../core/log/fold.ts";
 import { eventsAfter, readLog } from "../core/log/reader.ts";
 import {
   acquireLock,
@@ -319,6 +319,15 @@ interface ModelsPull {
   error?: string;
 }
 
+/**
+ * Whether the final layer covers the whole call: the pass ran, and no part started after it (a
+ * restarted call is final again only once the pass has run over the new part).
+ */
+function finalCurrent(v: CallView): boolean {
+  const done = v.final.state === "done" ? (v.final.done?.seq ?? 0) : null;
+  return done !== null && v.parts().every((p) => p.startSeq < done);
+}
+
 /** The default final-pass audio: a WAV beside every part's Opus file, or nothing. */
 function wavBesideParts(call: { dir: string; parts: number[] }): FinalAudioSpec | null {
   if (call.parts.length === 0) return null;
@@ -400,7 +409,7 @@ export class AkouApp implements ApiApp {
   private lockPath: string;
   tokens: TokenSource;
   /** `server` when `server.enabled` is on (docs/ux/SERVER.md); fixed for the life of the process. */
-  readonly mode: "app" | "server";
+  private readonly runMode: "app" | "server";
   /** The API keys; server mode only (SV-K2). */
   private readonly keyStore: KeyStore | null;
   /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
@@ -417,8 +426,9 @@ export class AkouApp implements ApiApp {
     this.clock = o.clock ?? realClock;
     this.configDir = cfg.paths.configDir;
     this.headless = o.headless ?? cfg.settings["app.headless"];
-    this.mode = cfg.settings["server.enabled"] ? "server" : "app";
-    this.keyStore = this.mode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
+    this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
+    this.keyStore =
+      this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.tokenPath = token.path;
@@ -436,7 +446,7 @@ export class AkouApp implements ApiApp {
       });
     this.manager = new CallManager({
       root: s["recordings.root"],
-      writer: { serverMode: this.mode === "server" },
+      writer: { serverMode: this.runMode === "server" },
       engine,
       clock: this.clock,
       user: s["user.name"],
@@ -781,7 +791,7 @@ export class AkouApp implements ApiApp {
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
       // After the event is out, so the pass starts from a log that has it.
-      queueMicrotask(() => void this.runFinal(id, false));
+      queueMicrotask(() => this.finalAtEnd(id));
     }
     if ((HOOK_STAGES as readonly string[]).includes(e.type)) {
       const stage = e.type as HookStage;
@@ -1237,7 +1247,7 @@ export class AkouApp implements ApiApp {
       this.page = new PageServer({
         // Server mode serves the page on the API's own listener, behind the proxy (SV-U1).
         mounted:
-          this.mode === "server" && this.server
+          this.runMode === "server" && this.server
             ? {
                 origin: `http://127.0.0.1:${this.server.port}`,
                 hostAllowed: (host) =>
@@ -1488,6 +1498,8 @@ export class AkouApp implements ApiApp {
     return {
       app: {
         version: this.version,
+        // The host's OS: a page in another machine's browser must not read its own (DK-K4).
+        platform: process.platform,
         pid: process.pid,
         port: this.server?.port ?? null,
         headless: this.headless,
@@ -1547,14 +1559,31 @@ export class AkouApp implements ApiApp {
     }
     if (this.finals.has(id))
       return fail(409, "final_running", "the final pass is running", { call: id });
-    if (c.view.final.state === "done" && !opts.force) {
+    if (finalCurrent(c.view) && !opts.force) {
       return fail(409, "already_final", "the final pass already ran; use force to run it again", {
         call: id,
       });
     }
-    const why = this.runFinal(id, true);
-    if (why) return fail(501, "final_unavailable", why, { call: id });
+    const r = this.runFinal(id, true);
+    if (r) return fail(501, "final_unavailable", r.why, { call: id });
     return { ok: true, call: id, started: true };
+  }
+
+  /**
+   * The final pass at a call's end. A pass that cannot run there (no readable audio, no models) is
+   * recorded as `final.failed {step: unavailable}`, so `akou wait`, the window and the API say why
+   * instead of waiting for a pass that never comes.
+   */
+  private finalAtEnd(id: string): void {
+    const r = this.runFinal(id, false);
+    const c = this.manager.controller(id);
+    if (!r?.unavailable || !c) return;
+    const release = c.holdWriter();
+    try {
+      c.record({ type: "final.failed", step: "unavailable", error: r.why });
+    } finally {
+      release();
+    }
   }
 
   /** The recognizer models for the final pass, or null when there are none. */
@@ -1573,19 +1602,25 @@ export class AkouApp implements ApiApp {
     return this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
   }
 
-  /** Starts the final pass in the background. Returns why it cannot run, or null once started. */
-  private runFinal(id: string, force: boolean): string | null {
-    if (this.quitting) return "akou is quitting";
-    if (this.finals.has(id)) return "the final pass is already running";
+  /**
+   * Starts the final pass in the background. Returns null once started, or why it cannot run;
+   * `unavailable` when the call lacks what the pass needs (readable audio, the models).
+   */
+  private runFinal(id: string, force: boolean): { why: string; unavailable?: true } | null {
+    if (this.quitting) return { why: "akou is quitting" };
+    if (this.finals.has(id)) return { why: "the final pass is already running" };
     const c = this.manager.controller(id);
-    if (!c || c.live) return "the call is not ended";
-    if (!force && c.view.final.state === "done") return "the final pass already ran";
+    if (!c || c.live) return { why: "the call is not ended" };
+    if (!force && finalCurrent(c.view)) return { why: "the final pass already ran" };
     const parts = c.view.parts().map((p) => p.part);
     const audio = (this.o.finalAudio ?? wavBesideParts)({ id, dir: c.dir, parts });
     if (!audio)
-      return "the final pass cannot read this call's audio yet (Opus decoding is not built)";
+      return {
+        why: "the final pass cannot read this call's audio yet (Opus decoding is not built)",
+        unavailable: true,
+      };
     const models = this.finalModels();
-    if (!models) return "the speech models are not downloaded";
+    if (!models) return { why: "the speech models are not downloaded", unavailable: true };
     const ws = c.view.call?.workspace ?? "";
     const p = finalizeCall(c, {
       models,
@@ -1612,7 +1647,7 @@ export class AkouApp implements ApiApp {
       try {
         const { events } = await readLog(join(s.dir, EVENTS_FILE));
         const v = fold(events);
-        if (v.final.state === "done") continue;
+        if (finalCurrent(v)) continue;
         const parts = v.parts().map((p) => p.part);
         if (!(this.o.finalAudio ?? wavBesideParts)({ id: s.id, dir: s.dir, parts })) continue;
         const c = await this.manager.open(s.id);
@@ -1630,6 +1665,10 @@ export class AkouApp implements ApiApp {
     return this.keyStore;
   }
 
+  mode(): "app" | "server" {
+    return this.runMode;
+  }
+
   jobs(): JobService | null {
     return this.jobService;
   }
@@ -1641,7 +1680,7 @@ export class AkouApp implements ApiApp {
   /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
   private startJobs(): void {
     const keys = this.keyStore;
-    if (this.mode !== "server" || !keys) return;
+    if (this.runMode !== "server" || !keys) return;
     this.jobService = new JobService({
       dir: join(this.configDir, "jobs"),
       version: this.version,
@@ -1709,7 +1748,7 @@ export class AkouApp implements ApiApp {
 
   async listen(): Promise<void> {
     const s = this.cfg.settings;
-    if (this.mode === "app" && s["api.bind"] !== "" && !isLoopback(s["api.bind"])) {
+    if (this.runMode === "app" && s["api.bind"] !== "" && !isLoopback(s["api.bind"])) {
       this.log("warn", "api.bind applies in server mode only; the app listens on 127.0.0.1");
     }
     const keys = this.keyStore;
@@ -1723,7 +1762,7 @@ export class AkouApp implements ApiApp {
         .filter((c): c is Cidr => c !== null),
       token: () => this.tokens.current(),
       page:
-        this.mode === "server"
+        this.runMode === "server"
           ? async (req, srv) => (await this.pageServer()).fetch(req, srv)
           : undefined,
       guard:

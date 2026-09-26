@@ -20,7 +20,14 @@ import { JOB_STATES, type JobStatus, type NewJob } from "../../server/store.ts";
 import { CallbackRefused, checkCallbackUrl } from "../../server/webhooks.ts";
 import type { Identity } from "../access.ts";
 import { caller, requireCallbackAllowed } from "../caller.ts";
-import { HttpError, intParam, json, type RouteContext, type Router } from "../http.ts";
+import {
+  HttpError,
+  json,
+  type RouteContext,
+  type RouteDoc,
+  type RoutedContext,
+  type Router,
+} from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
 
@@ -223,40 +230,98 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
   return json(r.existing ? 200 : 202, jobView(r.job));
 }
 
-function waitParam(c: RouteContext<ApiApp>): number {
-  const wait = intParam(c.url, "wait", 0, 0, MAX_WAIT_SECONDS) as number;
+/** `wait`, as the job and event routes declare it. */
+const WAIT = {
+  type: "integer",
+  min: 0,
+  max: MAX_WAIT_SECONDS,
+  default: 0,
+  doc: "Seconds to hold the request until the job ends (or an event arrives), up to 60.",
+} as const;
+
+const JOB_ID = "The job id.";
+
+function waitParam(c: RoutedContext<ApiApp>): number {
+  const wait = c.query.int("wait") as number;
   if (wait > 0) c.timeout?.(wait + 15);
   return wait;
 }
 
+/** Every job route: any key, server mode only (the desktop app has no job queue). */
+const JOB_ROUTE = { access: "jobs", modes: ["server"] } as const satisfies Partial<RouteDoc>;
+
 export function jobRoutes(r: Router<ApiApp>): void {
-  r.add("POST", "/jobs", submit, { access: "jobs", upload: true });
+  r.add(
+    "POST",
+    "/jobs",
+    {
+      id: "jobs.create",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
+      ...JOB_ROUTE,
+      body: {
+        multipart: {
+          file: "file",
+          "preset?": "string",
+          "language?": "string",
+          "keywords[]?": "string[]",
+          "diarize?": "boolean",
+          "callback_url?": "string",
+          "metadata?": "string",
+        },
+      },
+      ok: 202,
+    },
+    submit,
+  );
 
   r.add(
     "GET",
     "/jobs",
+    {
+      id: "jobs.list",
+      doc: "The key's jobs, newest first (an admin key sees every key's). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+      ...JOB_ROUTE,
+      query: {
+        status: { type: "string", values: JOB_STATES, doc: "Only jobs in this state." },
+        cursor: {
+          type: "integer",
+          min: 1,
+          max: Number.MAX_SAFE_INTEGER,
+          doc: "The `cursor` of the page before: jobs older than it.",
+        },
+        limit: { type: "integer", min: 1, max: 200, default: 50, doc: "Jobs per page." },
+      },
+      ok: 200,
+    },
     (c) => {
       const jobs = jobsOf(c);
-      const status = c.url.searchParams.get("status") || undefined;
+      const status = c.query.raw("status") || undefined;
       if (status !== undefined && !(JOB_STATES as readonly string[]).includes(status)) {
         throw new HttpError(400, "bad_param", `status is one of ${JOB_STATES.join(", ")}`, {
           param: "status",
         });
       }
-      const before = intParam(c.url, "cursor", undefined, 1, Number.MAX_SAFE_INTEGER);
-      const limit = intParam(c.url, "limit", 50, 1, 200) as number;
+      const before = c.query.int("cursor");
+      const limit = c.query.int("limit") as number;
       const list = jobs.list(caller(c), { status: status as JobStatus | undefined, before, limit });
       return json(200, {
         jobs: list.map(jobView),
         cursor: list.length === limit ? (list.at(-1)?.seq ?? null) : null,
       });
     },
-    { access: "jobs" },
   );
 
   r.add(
     "GET",
     "/jobs/:id",
+    {
+      id: "jobs.get",
+      doc: "One job and its state. `wait` holds the request until the job ends, up to 60 s.",
+      ...JOB_ROUTE,
+      params: { id: JOB_ID },
+      query: { wait: WAIT },
+      ok: 200,
+    },
     async (c) => {
       const jobs = jobsOf(c);
       const wait = waitParam(c);
@@ -265,12 +330,18 @@ export function jobRoutes(r: Router<ApiApp>): void {
       // A job deleted while the request waited answers its final state, once.
       return json(200, "seq" in j ? jobView(j) : { id: j.id, status: j.status });
     },
-    { access: "jobs" },
   );
 
   r.add(
     "GET",
     "/jobs/:id/result",
+    {
+      id: "jobs.result",
+      doc: "The transcript of a done job: text, segments with speakers and times, and the engines that made it. 409 `not_done` before the job is done.",
+      ...JOB_ROUTE,
+      params: { id: JOB_ID },
+      ok: 200,
+    },
     (c) => {
       const j = jobsOf(c).get(caller(c), c.params.id as string);
       if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
@@ -282,31 +353,50 @@ export function jobRoutes(r: Router<ApiApp>): void {
       }
       return json(200, j.result);
     },
-    { access: "jobs" },
   );
 
   r.add(
     "DELETE",
     "/jobs/:id",
+    {
+      id: "jobs.delete",
+      doc: "Delete a job: a queued one is dropped, a running one stopped within two seconds, and its file and result removed.",
+      ...JOB_ROUTE,
+      params: { id: JOB_ID },
+      ok: 200,
+    },
     (c) => {
       const gone = jobsOf(c).remove(caller(c), c.params.id as string);
       if (!gone) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
       return json(200, { ...gone, deleted: true });
     },
-    { access: "jobs" },
   );
 
   r.add(
     "GET",
     "/events",
+    {
+      id: "events.list",
+      doc: "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+      ...JOB_ROUTE,
+      query: {
+        after: {
+          type: "integer",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+          default: 0,
+          doc: "The `cursor` of the answer before: only events after it.",
+        },
+        limit: { type: "integer", min: 1, max: 1000, default: 500, doc: "Events per answer." },
+        wait: WAIT,
+      },
+      ok: 200,
+    },
     async (c) => {
       const jobs = jobsOf(c);
       const who = caller(c);
-      const after = Math.max(
-        intParam(c.url, "after", 0, 0, Number.MAX_SAFE_INTEGER) as number,
-        lastEventId(c.req),
-      );
-      const limit = intParam(c.url, "limit", 500, 1, 1000) as number;
+      const after = Math.max(c.query.int("after") as number, lastEventId(c.req));
+      const limit = c.query.int("limit") as number;
       if ((c.req.headers.get("accept") ?? "").includes("text/event-stream")) {
         c.timeout?.(0);
         return sseEvents(jobs, who, after, c.req.signal);
@@ -339,7 +429,6 @@ export function jobRoutes(r: Router<ApiApp>): void {
         has_more: jobs.hasEventsAfter(who, cursor),
       });
     },
-    { access: "jobs" },
   );
 }
 

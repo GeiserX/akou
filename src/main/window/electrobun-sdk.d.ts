@@ -3,8 +3,8 @@
  * the Hutch devkit. ElectroBun 2 does not ship its SDK through npm: Hutch projects it into
  * `.hutch/devkit` when the app is built (`electrobun build`), and the npm `electrobun` package only
  * throws. These declarations follow the 2.0.1 API reference (BrowserWindow, BrowserView.defineRPC,
- * Electroview.defineRPC, Tray, ApplicationMenu, GlobalShortcut, Utils, the `before-quit` event,
- * ElectrobunConfig); the M0 build is what proves them against the real SDK.
+ * Electroview.defineRPC, Tray, ApplicationMenu, GlobalShortcut, Screen, Utils, the `before-quit`
+ * and `reopen` events, ElectrobunConfig); the M0 build is what proves them against the real SDK.
  */
 
 declare module "electrobun" {
@@ -84,13 +84,36 @@ declare module "electrobun/main" {
       rpc?: DefinedRpc<Schema>;
       hidden?: boolean;
       titleBarStyle?: "default" | "hidden" | "hiddenInset";
+      transparent?: boolean;
+      /** False: the window opens without taking the focus from the app in front. */
+      activate?: boolean;
     });
     readonly id: number;
     show(): void;
+    /** Shows the window without taking the focus. */
+    showInactive(): void;
+    hide(): void;
     focus(): void;
     close(): void;
-    on(event: "close" | "will-close" | "focus" | "blur", fn: (e: unknown) => void): void;
+    setAlwaysOnTop(on: boolean): void;
+    setVisibleOnAllWorkspaces(on: boolean): void;
+    getFrame(): { x: number; y: number; width: number; height: number };
+    on(
+      event: "close" | "will-close" | "focus" | "blur" | "move" | "resize",
+      fn: (e: unknown) => void,
+    ): void;
   }
+  export interface Display {
+    id: number;
+    bounds: { x: number; y: number; width: number; height: number };
+    workArea: { x: number; y: number; width: number; height: number };
+    scaleFactor: number;
+    isPrimary: boolean;
+  }
+  export const Screen: {
+    getPrimaryDisplay(): Display;
+    getAllDisplays(): Display[];
+  };
   export type TrayItem =
     | { type: "normal"; label: string; action?: string; enabled?: boolean; checked?: boolean }
     | { type: "separator" };
@@ -135,6 +158,15 @@ declare module "electrobun/main" {
     quit(exitCode?: number): void;
     openExternal(url: string): boolean;
     showNotification(o: { title: string; body?: string }): void;
+    showMessageBox(o: {
+      type?: "info" | "warning" | "error" | "question";
+      title?: string;
+      message?: string;
+      detail?: string;
+      buttons?: string[];
+      defaultId?: number;
+      cancelId?: number;
+    }): Promise<{ response: number }>;
   };
   const Electrobun: {
     events: {

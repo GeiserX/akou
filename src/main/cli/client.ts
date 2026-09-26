@@ -30,6 +30,8 @@ export const EXIT = {
   software: 70,
   alreadyRecording: 75,
   permission: 77,
+  /** `akou wait` ran out of time, as `timeout(1)` reports it. */
+  timeout: 124,
 } as const;
 
 /** The design's wait for a cold app: `201` within 3 s of `akou start`. */

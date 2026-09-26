@@ -1,0 +1,3704 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "akou",
+    "version": "0.1.0",
+    "description": "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
+    "license": {
+      "name": "GPL-3.0-only",
+      "identifier": "GPL-3.0-only"
+    }
+  },
+  "servers": [
+    {
+      "url": "http://127.0.0.1:8476"
+    }
+  ],
+  "security": [
+    {
+      "bearerAuth": []
+    }
+  ],
+  "tags": [
+    {
+      "name": "app"
+    },
+    {
+      "name": "config"
+    },
+    {
+      "name": "templates"
+    },
+    {
+      "name": "share"
+    },
+    {
+      "name": "window"
+    },
+    {
+      "name": "models"
+    },
+    {
+      "name": "calls"
+    },
+    {
+      "name": "speakers"
+    },
+    {
+      "name": "notes"
+    },
+    {
+      "name": "memory"
+    },
+    {
+      "name": "memo"
+    },
+    {
+      "name": "callVocab"
+    },
+    {
+      "name": "vocab"
+    },
+    {
+      "name": "enhanced"
+    },
+    {
+      "name": "audio"
+    },
+    {
+      "name": "import"
+    },
+    {
+      "name": "server"
+    },
+    {
+      "name": "keys"
+    },
+    {
+      "name": "jobs"
+    },
+    {
+      "name": "events"
+    },
+    {
+      "name": "openai"
+    },
+    {
+      "name": "openapi"
+    }
+  ],
+  "paths": {
+    "/v1/status": {
+      "get": {
+        "operationId": "app.status",
+        "tags": [
+          "app"
+        ],
+        "description": "What akou is doing now: the app, the live call if there is one with its state and health, and the last call.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/config": {
+      "get": {
+        "operationId": "config.get",
+        "tags": [
+          "config"
+        ],
+        "description": "Every setting: its value, the values set in the config file, problems found in the file, and the schema of each key. Secrets are redacted.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      },
+      "patch": {
+        "operationId": "config.update",
+        "tags": [
+          "config"
+        ],
+        "description": "Change settings: a JSON object of dotted keys to new values, `null` to unset one. Every value is checked against the settings registry; one bad key refuses the whole change.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": true
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/templates": {
+      "get": {
+        "operationId": "templates.list",
+        "tags": [
+          "templates"
+        ],
+        "description": "The note templates the enhanced notes can use: the shipped ones and the user's own, with the sections of each.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/share": {
+      "get": {
+        "operationId": "share.get",
+        "tags": [
+          "share"
+        ],
+        "description": "The read-only live links that are on, one per shared call.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "post": {
+        "operationId": "share.start",
+        "tags": [
+          "share"
+        ],
+        "description": "Start a read-only live link to a call (default `live`). `bind` is `tailnet`, `lan` or an IPv4 address; `notes` also shares the notepad; `expires` is a duration such as `2h`.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "call": {
+                    "type": "string"
+                  },
+                  "bind": {
+                    "type": "string"
+                  },
+                  "notes": {
+                    "type": "boolean"
+                  },
+                  "expires": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "delete": {
+        "operationId": "share.stop",
+        "tags": [
+          "share"
+        ],
+        "description": "Stop the live link of one call, or every link when no call is named.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "call": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/window": {
+      "post": {
+        "operationId": "window.open",
+        "tags": [
+          "window"
+        ],
+        "description": "Show the window, on a call if one is named. With no window (headless) the answer is the address of the window in a browser, with a one-time code.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "call": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/quit": {
+      "post": {
+        "operationId": "app.quit",
+        "tags": [
+          "app"
+        ],
+        "description": "Quit akou cleanly, after the answer is sent. A live call is stopped first.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "models.get",
+        "tags": [
+          "models"
+        ],
+        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/models/pull": {
+      "post": {
+        "operationId": "models.pull",
+        "tags": [
+          "models"
+        ],
+        "description": "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get.",
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls": {
+      "post": {
+        "operationId": "calls.start",
+        "tags": [
+          "calls"
+        ],
+        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded. One call at a time: a second start answers 409.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "workspace": {
+                    "type": "string"
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "template": {
+                    "type": "string"
+                  },
+                  "call": {
+                    "type": "string"
+                  },
+                  "mic": {
+                    "type": "string"
+                  },
+                  "vocab": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "withoutModels": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "get": {
+        "operationId": "calls.list",
+        "tags": [
+          "calls"
+        ],
+        "description": "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content.",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "At most this many calls.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 50
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "Only the calls of this workspace.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "failed",
+            "in": "query",
+            "required": false,
+            "description": "List only the calls whose start failed.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}": {
+      "get": {
+        "operationId": "calls.get",
+        "tags": [
+          "calls"
+        ],
+        "description": "One call: its title, workspace, state, parts, speakers, health, the final pass and the log cursor.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/stop": {
+      "post": {
+        "operationId": "calls.stop",
+        "tags": [
+          "calls"
+        ],
+        "description": "Stop recording the live call. The final pass runs after it on its own.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/pause": {
+      "post": {
+        "operationId": "calls.pause",
+        "tags": [
+          "calls"
+        ],
+        "description": "Pause the live call: nothing is recorded until resume.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/resume": {
+      "post": {
+        "operationId": "calls.resume",
+        "tags": [
+          "calls"
+        ],
+        "description": "Resume a paused call.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/mute": {
+      "post": {
+        "operationId": "calls.mute",
+        "tags": [
+          "calls"
+        ],
+        "description": "Mute the microphone channel of the live call; the call channel keeps recording.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/unmute": {
+      "post": {
+        "operationId": "calls.unmute",
+        "tags": [
+          "calls"
+        ],
+        "description": "Unmute the microphone channel.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/restart": {
+      "post": {
+        "operationId": "calls.restart",
+        "tags": [
+          "calls"
+        ],
+        "description": "Start a new part of a call: a live call rebuilds its capture, an ended call records a new part into the same folder and log. An ended call whose last audio is over an hour old needs `force`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "force": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/events": {
+      "get": {
+        "operationId": "calls.events",
+        "tags": [
+          "calls"
+        ],
+        "description": "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "The log cursor: only events after this `seq`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 0
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "description": "Seconds to hold the request while nothing is past the cursor, up to 30.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 30,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/stream": {
+      "get": {
+        "operationId": "calls.stream",
+        "tags": [
+          "calls"
+        ],
+        "description": "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "The log cursor: only events after this `seq`.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/transcript": {
+      "get": {
+        "operationId": "calls.transcript",
+        "tags": [
+          "calls"
+        ],
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "layer",
+            "in": "query",
+            "required": false,
+            "description": "Which transcript: the final pass for the parts it has finished and the live lines for the rest (`best`), or one of the two.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "best",
+                "live",
+                "final"
+              ],
+              "default": "best"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "description": "JSON lines, Markdown, plain text, or the transcript section of the export.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "md",
+                "txt",
+                "export"
+              ],
+              "default": "json"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Only lines written or revised after this log position.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 0
+            }
+          },
+          {
+            "name": "limitTokens",
+            "in": "query",
+            "required": false,
+            "description": "Keep the newest lines that fit in this many tokens; with `offset`, `afterLine` or `since`, the page's size.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Page from this line, oldest first; the answer's `nextOffset` is where the next page starts (null at the end).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "afterLine",
+            "in": "query",
+            "required": false,
+            "description": "Page from the line after this line id; 409 `cursor_stale` when the line is no longer in the layer.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "description": "Lines ending at or after this time: epoch ms or ISO 8601.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "description": "Lines starting at or before this time: epoch ms or ISO 8601.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "speaker",
+            "in": "query",
+            "required": false,
+            "description": "Only this speaker, by id (`c2`) or by name.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/context": {
+      "post": {
+        "operationId": "calls.context",
+        "tags": [
+          "calls"
+        ],
+        "description": "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. Changes nothing.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "question": {
+                    "type": "string"
+                  },
+                  "budget": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "question"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/search": {
+      "get": {
+        "operationId": "calls.search",
+        "tags": [
+          "calls"
+        ],
+        "description": "Search one call's transcript for words, best matches first, each hit with its citation and lines. Never searches across calls.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "description": "The words to look for.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "k",
+            "in": "query",
+            "required": false,
+            "description": "At most this many hits.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 50,
+              "default": 6
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/ask": {
+      "post": {
+        "operationId": "calls.ask",
+        "tags": [
+          "calls"
+        ],
+        "description": "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "question": {
+                    "type": "string"
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "question"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/speakers": {
+      "post": {
+        "operationId": "speakers.name",
+        "tags": [
+          "speakers"
+        ],
+        "description": "Name a speaker of the call: `spk` is the speaker id (`you`, `c2`), `name` the name to show.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spk": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spk",
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/speakers/merge": {
+      "post": {
+        "operationId": "speakers.merge",
+        "tags": [
+          "speakers"
+        ],
+        "description": "Merge speaker `from` into speaker `into`: one person the diarizer split in two.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "from": {
+                    "type": "string"
+                  },
+                  "into": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "from",
+                  "into"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/speakers/unmerge": {
+      "post": {
+        "operationId": "speakers.unmerge",
+        "tags": [
+          "speakers"
+        ],
+        "description": "Undo a merge: speaker `spk` is its own speaker again.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "spk": {
+                    "type": "string"
+                  },
+                  "into": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "spk"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/notes": {
+      "get": {
+        "operationId": "notes.list",
+        "tags": [
+          "notes"
+        ],
+        "description": "The call's notepad lines, each with its time and author.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "post": {
+        "operationId": "notes.add",
+        "tags": [
+          "notes"
+        ],
+        "description": "Add a line to the call's notepad, marked with its author. `w` is when the line was begun (epoch ms) and `afterSeq` the last transcript position seen then.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "w": {
+                    "type": "integer"
+                  },
+                  "afterSeq": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/notes/{nid}": {
+      "patch": {
+        "operationId": "notes.edit",
+        "tags": [
+          "notes"
+        ],
+        "description": "Replace the text of one notepad line. The old text stays in the log.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nid",
+            "in": "path",
+            "required": true,
+            "description": "The note id (`n0012`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "delete": {
+        "operationId": "notes.delete",
+        "tags": [
+          "notes"
+        ],
+        "description": "Delete one notepad line. The log keeps it, with the delete after it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "nid",
+            "in": "path",
+            "required": true,
+            "description": "The note id (`n0012`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/remember": {
+      "post": {
+        "operationId": "memory.remember",
+        "tags": [
+          "memory"
+        ],
+        "description": "Keep a line of agent memory on the call, marked as the agent's.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/remember/{rid}": {
+      "delete": {
+        "operationId": "memory.forget",
+        "tags": [
+          "memory"
+        ],
+        "description": "Forget one line of agent memory. The log keeps it, with the delete after it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rid",
+            "in": "path",
+            "required": true,
+            "description": "The memory id (`r0012`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/memo": {
+      "get": {
+        "operationId": "memo.get",
+        "tags": [
+          "memo"
+        ],
+        "description": "The call's running memo, the log position it covers, and the current cursor, so a reader can tell whether it is stale.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "put": {
+        "operationId": "memo.put",
+        "tags": [
+          "memo"
+        ],
+        "description": "Write the call's running memo, covering the log up to `coversSeq`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "coversSeq": {
+                    "type": "integer"
+                  }
+                },
+                "required": [
+                  "text",
+                  "coversSeq"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/vocab": {
+      "get": {
+        "operationId": "callVocab.list",
+        "tags": [
+          "callVocab"
+        ],
+        "description": "The vocabulary in force for a call: its own words, the files it used, the pass's proposals, and the words waiting for the user's review.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "post": {
+        "operationId": "callVocab.add",
+        "tags": [
+          "callVocab"
+        ],
+        "description": "Add a word to this call only: `term` as it should read, `heard` the ways the recognizer wrote it, `segs` the lines it corrects. It applies to reading at once and to decoding from now on; `decode: false` keeps it out of decoding.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "term": {
+                    "type": "string"
+                  },
+                  "heard": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "segs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "decode": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "term"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/vocab/{vid}": {
+      "delete": {
+        "operationId": "callVocab.delete",
+        "tags": [
+          "callVocab"
+        ],
+        "description": "Retract a word added to this call. The log keeps it, with the retraction after it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "vid",
+            "in": "path",
+            "required": true,
+            "description": "The entry id (`v0012`).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/vocab/pass": {
+      "post": {
+        "operationId": "callVocab.pass",
+        "tags": [
+          "callVocab"
+        ],
+        "description": "Run the vocabulary pass on an ended call: the configured provider corrects known words and proposes new ones. A proposal does nothing until the user approves it.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab": {
+      "get": {
+        "operationId": "vocab.list",
+        "tags": [
+          "vocab"
+        ],
+        "description": "The user's vocabulary: the files read and their entries, global and for a workspace.",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "The workspace whose file this is; default: the global file.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "unconfirmed",
+            "in": "query",
+            "required": false,
+            "description": "Only the entries waiting for the user's yes.",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "post": {
+        "operationId": "vocab.add",
+        "tags": [
+          "vocab"
+        ],
+        "description": "Add or update a word in the user's vocabulary file. A word the user stated goes in confirmed; send `confirmed: false` for an inferred one, which does nothing until the user approves it.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "term": {
+                    "type": "string"
+                  },
+                  "heard": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "workspace": {
+                    "type": "string"
+                  },
+                  "decode": {
+                    "type": "boolean"
+                  },
+                  "note": {
+                    "type": "string"
+                  },
+                  "confirmed": {
+                    "type": "boolean"
+                  }
+                },
+                "required": [
+                  "term"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab/{term}": {
+      "delete": {
+        "operationId": "vocab.delete",
+        "tags": [
+          "vocab"
+        ],
+        "description": "Remove a word from the user's vocabulary file.",
+        "parameters": [
+          {
+            "name": "term",
+            "in": "path",
+            "required": true,
+            "description": "The word, as written in the file.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "description": "The workspace whose file this is; default: the global file.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab/approve": {
+      "post": {
+        "operationId": "vocab.approve",
+        "tags": [
+          "vocab"
+        ],
+        "description": "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "terms": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "call": {
+                    "type": "string"
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "terms"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab/reject": {
+      "post": {
+        "operationId": "vocab.reject",
+        "tags": [
+          "vocab"
+        ],
+        "description": "Reject words: unconfirmed entries of the file, or a call's proposals when `call` is named. A rejected word is not proposed again.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "terms": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "call": {
+                    "type": "string"
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "terms"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab/import": {
+      "post": {
+        "operationId": "vocab.import",
+        "tags": [
+          "vocab"
+        ],
+        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "text"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab/suggest": {
+      "post": {
+        "operationId": "vocab.suggest",
+        "tags": [
+          "vocab"
+        ],
+        "description": "Ranked candidate words from a call or from a text, leaving out words already known or rejected. Suggests only; nothing is written.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "call": {
+                    "type": "string"
+                  },
+                  "k": {
+                    "type": "integer"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/vocab/check": {
+      "post": {
+        "operationId": "vocab.check",
+        "tags": [
+          "vocab"
+        ],
+        "description": "How the recognizer's tokenizer splits a word. Not built yet: answers 501.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "term": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "term"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/finalize": {
+      "post": {
+        "operationId": "calls.finalize",
+        "tags": [
+          "calls"
+        ],
+        "description": "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "force": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/enhance": {
+      "post": {
+        "operationId": "calls.enhance",
+        "tags": [
+          "calls"
+        ],
+        "description": "Write the call's enhanced notes with the configured provider, from the transcript and the user's notepad, in a template's sections, citing the transcript. With no provider, an agent writes them with enhanced.context and enhanced.put.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "template": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/enhance/context": {
+      "get": {
+        "operationId": "enhanced.context",
+        "tags": [
+          "enhanced"
+        ],
+        "description": "What an agent needs to write the enhanced notes itself: the instructions, the input built from the transcript and the notepad, and the log position it covers. Send the result with enhanced.put.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "template",
+            "in": "query",
+            "required": false,
+            "description": "The template to use; default: the call's own.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/enhanced": {
+      "put": {
+        "operationId": "enhanced.put",
+        "tags": [
+          "enhanced"
+        ],
+        "description": "Store enhanced notes an agent wrote, covering the log up to `coversSeq`. Citations are checked against the transcript and the user's notes are kept.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "markdown": {
+                    "type": "string"
+                  },
+                  "coversSeq": {
+                    "type": "integer"
+                  },
+                  "template": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "markdown",
+                  "coversSeq"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "get": {
+        "operationId": "enhanced.get",
+        "tags": [
+          "enhanced"
+        ],
+        "description": "The call's enhanced notes as Markdown, the latest revision or the one `rev` names, with the list of revisions.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "rev",
+            "in": "query",
+            "required": false,
+            "description": "One revision; default: the latest.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/audio/{part}": {
+      "get": {
+        "operationId": "audio.get",
+        "tags": [
+          "audio"
+        ],
+        "description": "The audio of one part of the call, as Ogg. Honours `Range`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "part",
+            "in": "path",
+            "required": true,
+            "description": "The part number, from 1.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "audio/ogg": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/export": {
+      "post": {
+        "operationId": "calls.export",
+        "tags": [
+          "calls"
+        ],
+        "description": "Export an ended call as Markdown with frontmatter into the export folder, or into the absolute folder `to` names. Answers the file written, and whether it went beside a copy the user edited.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "to": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/hooks": {
+      "post": {
+        "operationId": "calls.hooks",
+        "tags": [
+          "calls"
+        ],
+        "description": "Run the call's hand-off hooks again and wait for them: the hooks of `stage` (call.ended, final.done, enhanced), or of every stage the call has reached. The export and the webhook are not re-run.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "stage": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/import/hark-viewer": {
+      "post": {
+        "operationId": "import.harkViewer",
+        "tags": [
+          "import"
+        ],
+        "description": "Import call folders recorded by the predecessor tool, hark-viewer, as akou calls. `dirs` are absolute folders.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dirs": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "workspace": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "dirs"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/server": {
+      "get": {
+        "operationId": "server.get",
+        "tags": [
+          "server"
+        ],
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, and which capabilities (jobs, events, the OpenAI route) exist. Needs no key.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "open"
+      }
+    },
+    "/v1/keys/me": {
+      "get": {
+        "operationId": "keys.me",
+        "tags": [
+          "keys"
+        ],
+        "description": "The calling key: its id, name, scopes and creation time. The app's own token answers as `app` with the `admin` scope. Executor's health check calls it.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/jobs": {
+      "post": {
+        "operationId": "jobs.create",
+        "tags": [
+          "jobs"
+        ],
+        "description": "Submit an audio file for transcription; answers at once with the queued job. An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  },
+                  "preset": {
+                    "type": "string"
+                  },
+                  "language": {
+                    "type": "string"
+                  },
+                  "keywords[]": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "diarize": {
+                    "type": "boolean"
+                  },
+                  "callback_url": {
+                    "type": "string"
+                  },
+                  "metadata": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      },
+      "get": {
+        "operationId": "jobs.list",
+        "tags": [
+          "jobs"
+        ],
+        "description": "The key's jobs, newest first (an admin key sees every key's). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Only jobs in this state.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "queued",
+                "running",
+                "done",
+                "failed",
+                "cancelled"
+              ]
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the page before: jobs older than it.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Jobs per page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200,
+              "default": 50
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/jobs/{id}": {
+      "get": {
+        "operationId": "jobs.get",
+        "tags": [
+          "jobs"
+        ],
+        "description": "One job and its state. `wait` holds the request until the job ends, up to 60 s.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "description": "Seconds to hold the request until the job ends (or an event arrives), up to 60.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      },
+      "delete": {
+        "operationId": "jobs.delete",
+        "tags": [
+          "jobs"
+        ],
+        "description": "Delete a job: a queued one is dropped, a running one stopped within two seconds, and its file and result removed.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/jobs/{id}/result": {
+      "get": {
+        "operationId": "jobs.result",
+        "tags": [
+          "jobs"
+        ],
+        "description": "The transcript of a done job: text, segments with speakers and times, and the engines that made it. 409 `not_done` before the job is done.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/events": {
+      "get": {
+        "operationId": "events.list",
+        "tags": [
+          "events"
+        ],
+        "description": "The key's job outcomes after a cursor, oldest first, as `{events, cursor, has_more}`; `wait` holds the request until one arrives. With `Accept: text/event-stream`, a stream resumable with `Last-Event-ID`.",
+        "parameters": [
+          {
+            "name": "after",
+            "in": "query",
+            "required": false,
+            "description": "The `cursor` of the answer before: only events after it.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991,
+              "default": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Events per answer.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000,
+              "default": 500
+            }
+          },
+          {
+            "name": "wait",
+            "in": "query",
+            "required": false,
+            "description": "Seconds to hold the request until the job ends (or an event arrives), up to 60.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 60,
+              "default": 0
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      }
+    },
+    "/v1/audio/transcriptions": {
+      "post": {
+        "operationId": "openai.transcribe",
+        "tags": [
+          "openai"
+        ],
+        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or an engine (anything else is `auto`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  },
+                  "model": {
+                    "type": "string"
+                  },
+                  "language": {
+                    "type": "string"
+                  },
+                  "prompt": {
+                    "type": "string"
+                  },
+                  "keywords[]": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "response_format": {
+                    "type": "string"
+                  },
+                  "timestamp_granularities[]": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "stream": {
+                    "type": "boolean"
+                  },
+                  "temperature": {
+                    "type": "number"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs",
+        "x-akou-door": "compat"
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "openapi.get",
+        "tags": [
+          "openapi"
+        ],
+        "description": "This API's OpenAPI 3.1 description, for the running mode. Needs no key. `scope=jobs` lists only the operations a `jobs` key can call, with no compatibility route.",
+        "parameters": [
+          {
+            "name": "scope",
+            "in": "query",
+            "required": false,
+            "description": "`jobs`: only what a key with the `jobs` scope can call.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "jobs"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "open",
+        "x-akou-door": "spec"
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "An akou key (`ak_…`) or, on the desktop, the app's token. The key's scope decides which operations it may call."
+      }
+    },
+    "responses": {
+      "Error": {
+        "description": "An error, in the one error shape.",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "Error": {
+        "type": "object",
+        "required": [
+          "error",
+          "message"
+        ],
+        "properties": {
+          "error": {
+            "type": "string",
+            "description": "A stable code, such as `not_found`."
+          },
+          "message": {
+            "type": "string",
+            "description": "What went wrong, for a person."
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  }
+}

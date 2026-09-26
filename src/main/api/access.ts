@@ -1,16 +1,15 @@
 /**
  * Who is calling and what they may call (docs/ux/SERVER.md section 4): one identity per request,
- * set by the guard, and one access level per route, checked in one place (`startApiServer`) before
- * any handler runs.
+ * set by the guard, and one access level per route, set in the route's `RouteDoc` in the one route
+ * table and checked in one place (the guard, fed by `startApiServer`) before any handler runs.
  *
- * - `open`: no key at all (`/healthz`, `GET /v1/server`, the admin login).
+ * - `open`: no key at all (`/healthz`, `GET /v1/server`, `GET /v1/openapi.json`, the admin login).
  * - `jobs`: any key. A `jobs` key reads and writes its own jobs, events and results, and
  *   `GET /v1/keys/me` (SV-K3).
- * - `admin`: an `admin` key, the app's own token, or an admin session. Every route that exists
- *   today is `admin`: a `jobs` key has no business with calls, settings or quit.
+ * - `admin`: an `admin` key, the app's own token, or an admin session. Every call route is
+ *   `admin`: a `jobs` key has no business with calls, settings or quit.
  *
- * A route says its level when it is added (`Router.add(..., {access: "jobs"})`); a route that says
- * nothing is `admin`, so a new route is closed until someone opens it on purpose.
+ * Every route states its level in its `RouteDoc`; there is no default to forget.
  *
  * This module imports only `net.ts`, which imports nothing of akou's: the guard needs it, and the
  * guard is loaded before `http.ts`. The helpers that answer with an HTTP error are in `caller.ts`.
@@ -24,24 +23,29 @@ export type Scope = (typeof SCOPES)[number];
 /** Who may call a route: anyone, any key, or admin only. */
 export type Access = "open" | Scope;
 
+/**
+ * What the guard needs to know about a route. A route's `RouteDoc` extends it, so the route table
+ * is the one place a route's access is written.
+ */
 export interface RouteMeta {
   access: Access;
-  /**
-   * The route takes a multipart upload (SV-D3): exempt from the JSON-only rule and the 64 KB cap,
-   * capped at `server.max_upload_mb` instead.
-   */
-  upload?: boolean;
 }
 
-/** What a route that says nothing gets (`Router.add`). */
-export const ADMIN_ROUTE: RouteMeta = { access: "admin" };
+/**
+ * A route as the guard checks it. Whether it takes an upload (SV-D3) is not a second flag in the
+ * route table: its body spec says so (`isMultipart`), and `startApiServer` derives it. An upload is
+ * exempt from the JSON-only rule and the 64 KB cap, and capped at `server.max_upload_mb` instead.
+ */
+export interface GuardRoute extends RouteMeta {
+  upload?: boolean;
+}
 
 /**
  * What a path that is no route (or a method it does not take) is checked as: any key, so a
  * request with none is 401 before any 404, and a valid key then gets the 404 or 405 it earned,
  * not a 403 that says the typo needs admin.
  */
-export const UNKNOWN_ROUTE: RouteMeta = { access: "jobs" };
+export const UNKNOWN_ROUTE: GuardRoute = { access: "jobs", upload: false };
 
 export interface Identity {
   /** The key id, or `app` for the app's token, or `session` for an admin login. */

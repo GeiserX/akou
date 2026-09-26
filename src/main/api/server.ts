@@ -21,7 +21,7 @@ import type { Template } from "../notes/templates.ts";
 import type { SessionStore } from "../query/ask.ts";
 import type { CallQuery } from "../query/context.ts";
 import type { ShareHandle, ShareStatus } from "../share/transport.ts";
-import { type Identity, UNKNOWN_ROUTE } from "./access.ts";
+import { type GuardRoute, type Identity, UNKNOWN_ROUTE } from "./access.ts";
 import { guard as defaultGuard, type Guard, MAX_BODY_BYTES } from "./guard.ts";
 import {
   authorOf,
@@ -29,7 +29,9 @@ import {
   drainBody,
   errorResponse,
   HttpError,
+  isMultipart,
   json,
+  type Mode,
   Router,
 } from "./http.ts";
 import type { KeyStore } from "./keys.ts";
@@ -41,6 +43,7 @@ import { jobRoutes } from "./routes/jobs.ts";
 import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
 import { openaiRoutes } from "./routes/openai.ts";
+import { openapiRoutes } from "./routes/openapi.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
 import { queryRoutes } from "./routes/query.ts";
 import { rootRoutes, serverRoutes } from "./routes/server.ts";
@@ -62,10 +65,13 @@ export interface Levels {
 /** What the routes need of the app. `index.ts` implements it. */
 export interface ApiApp {
   readonly version: string;
-  /** `server` in server mode (`server.enabled`), else `app`. */
-  readonly mode?: "app" | "server";
   readonly manager: CallManager;
   readonly configDir: string;
+  /**
+   * Which akou this is: `server` in server mode (`server.enabled`), else `app`; the served OpenAPI
+   * file lists this mode's routes. Default `app`.
+   */
+  mode?(): Mode;
   now(): number;
   status(): Promise<Record<string, unknown>>;
   /** The provider the settings name (a fake in tests). */
@@ -153,8 +159,6 @@ export interface ServerOptions {
   maxUploadBytes?: number;
   /** `server.trusted_proxies`: the peers whose `X-Forwarded-For` names the source. */
   trustedProxies?: readonly Cidr[];
-  /** Test-only: extra routes (the SV-D3 upload stub); no setting, variable or argument reaches it. */
-  routes?: (r: Router<ApiApp>) => void;
   /**
    * Every request that is not the API (`/v1/…`, `/healthz`): the web UI in server mode (SV-U1).
    * Absent: 404.
@@ -167,6 +171,12 @@ export interface ServerOptions {
    * no setting, variable or argument reaches this.
    */
   guard?: Guard;
+  /**
+   * The route table. Only tests pass another one: `buildRouter()` with routes added, to show that
+   * a route added to the table reaches the served OpenAPI file and the guard (and the SV-D3 upload
+   * stub); no setting, variable or argument reaches this.
+   */
+  router?: Router<ApiApp>;
   onError?(err: unknown, req: Request): void;
 }
 
@@ -179,7 +189,12 @@ export interface ApiServer {
   stop(): Promise<void>;
 }
 
-export function buildRouter(): Router<ApiApp> {
+/**
+ * The route table. With a mode, the routes that akou serves: the job routes exist in server mode
+ * only, so the desktop app answers 404 for them (SV-J1). With none, every route, for the OpenAPI
+ * file (`scripts/openapi.ts`), which marks each with its modes.
+ */
+export function buildRouter(mode?: Mode): Router<ApiApp> {
   const r = new Router<ApiApp>();
   settingsRoutes(r);
   modelRoutes(r);
@@ -191,10 +206,15 @@ export function buildRouter(): Router<ApiApp> {
   postCallRoutes(r);
   handoffRoutes(r);
   serverRoutes(r);
+  if (mode !== "app") {
+    jobRoutes(r);
+    openaiRoutes(r);
+  }
+  openapiRoutes(r);
   return r;
 }
 
-/** The routes outside `/v1`: `/healthz` (SV-P4). */
+/** The routes outside `/v1`: `/healthz` (SV-P4). Not in the OpenAPI file, which describes `/v1`. */
 export function buildRootRouter(): Router<ApiApp> {
   const r = new Router<ApiApp>();
   rootRoutes(r);
@@ -262,14 +282,19 @@ function reachable(bind: string | undefined): string {
   return bind.includes(":") ? `[${bind}]` : bind;
 }
 
+/**
+ * What the guard checks a request against: the route it names, from the route table (its
+ * `RouteDoc` holds its access, and its body spec says whether it takes an upload), or
+ * `UNKNOWN_ROUTE` when none matches: any key, so a request with none is 401 before any 404.
+ */
+export function routeMeta(found: ReturnType<Router<ApiApp>["match"]>): GuardRoute {
+  if (!("doc" in found)) return UNKNOWN_ROUTE;
+  const body = found.doc.body;
+  return { access: found.doc.access, upload: body !== undefined && isMultipart(body) };
+}
+
 export function startApiServer(o: ServerOptions): ApiServer {
-  const router = buildRouter();
-  // The job routes exist in server mode only: the desktop app answers 404 for them (SV-J1).
-  if (o.app.mode === "server") {
-    jobRoutes(router);
-    openaiRoutes(router);
-  }
-  o.routes?.(router);
+  const router = o.router ?? buildRouter(o.app.mode?.() ?? "app");
   const root = buildRootRouter();
   const check = o.guard ?? defaultGuard;
   const maxUploadBytes = o.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
@@ -298,7 +323,7 @@ export function startApiServer(o: ServerOptions): ApiServer {
         ? router.match(req.method, url.pathname.slice(API_PREFIX.length))
         : root.match(req.method, url.pathname);
       // An unknown path needs a key: without one, 401 before any 404 (`UNKNOWN_ROUTE`).
-      const route = "meta" in found ? found.meta : UNKNOWN_ROUTE;
+      const route = routeMeta(found);
       const peer = srv.requestIP(req)?.address ?? "";
       const source = sourceAddress(peer, req.headers.get("x-forwarded-for"), trusted);
       const g = check(req, {
