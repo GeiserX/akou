@@ -216,7 +216,13 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ github.event_name == 'push' && secrets.DOCKERHUB_USERNAME || '' }}
           DOCKERHUB_TOKEN: ${{ github.event_name == 'push' && secrets.DOCKERHUB_TOKEN || '' }}
-        run: echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+        # Without the secrets `docker login` fails on an empty user name and says nothing of them.
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            exit 1
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
       - name: build ${{ matrix.platform }} (and push it by digest on a tag)
         run: |
           docker buildx create --use --name akou
@@ -252,7 +258,13 @@ jobs:
         env:
           DOCKERHUB_USERNAME: ${{ github.event_name == 'push' && secrets.DOCKERHUB_USERNAME || '' }}
           DOCKERHUB_TOKEN: ${{ github.event_name == 'push' && secrets.DOCKERHUB_TOKEN || '' }}
-        run: echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+        # Without the secrets `docker login` fails on an empty user name and says nothing of them.
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            exit 1
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
       - name: geiserx/akou:<version> for amd64 and arm64
         env:
           TAG: ${{ github.ref_name }}

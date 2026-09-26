@@ -5,7 +5,8 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 const ROOT = join(import.meta.dir, "..");
@@ -216,4 +217,62 @@ describe("[SV-T1] the server job in ci.yml", () => {
       "a step is gated on a file name",
     ]);
   });
+});
+
+/** Runs a workflow step's script with bash, a fake `docker` on PATH that records its arguments. */
+function runStep(
+  script: string,
+  env: Record<string, string>,
+): { code: number; out: string; docker: string } {
+  const dir = mkdtempSync(join(tmpdir(), "akou-step-"));
+  try {
+    const log = join(dir, "docker.log");
+    writeFileSync(join(dir, "docker"), `#!/bin/sh\necho "$@" >> "${log}"\ncat > /dev/null\n`);
+    chmodSync(join(dir, "docker"), 0o755);
+    const r = Bun.spawnSync(["bash", "-e", "-c", script], {
+      env: { PATH: `${dir}:${process.env.PATH ?? ""}`, ...env },
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    let docker = "";
+    try {
+      docker = readFileSync(log, "utf8");
+    } catch {}
+    return { code: r.exitCode, out: `${r.stdout}${r.stderr}`, docker };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+describe("[SV-P1] Docker Hub credentials on a tag", () => {
+  // The step is a bash script with a fake `docker`, which Windows runs neither of.
+  test.skipIf(process.platform === "win32")(
+    "each login step fails naming both secrets when either is missing, before docker runs (skipped on Windows: no bash)",
+    () => {
+      const wf = Bun.YAML.parse(read(".github", "workflows", "release.yml")) as {
+        jobs: Record<string, { steps?: { name?: string; run?: string }[] }>;
+      };
+      const logins = ["image", "image-manifest"].map(
+        (j) =>
+          wf.jobs[j]?.steps?.find((s) => s.name?.startsWith("log in to Docker Hub"))?.run ?? "",
+      );
+      expect(logins.every((r) => r.includes("docker login"))).toBe(true);
+      for (const run of logins) {
+        for (const env of [
+          { DOCKERHUB_USERNAME: "", DOCKERHUB_TOKEN: "" },
+          { DOCKERHUB_USERNAME: "u", DOCKERHUB_TOKEN: "" },
+          { DOCKERHUB_USERNAME: "", DOCKERHUB_TOKEN: "t" },
+        ]) {
+          const r = runStep(run, env);
+          expect(r.code).not.toBe(0);
+          expect(r.out).toContain("DOCKERHUB_USERNAME");
+          expect(r.out).toContain("DOCKERHUB_TOKEN");
+          expect(r.docker).toBe("");
+        }
+        // Positive control: with both set, the step logs in.
+        const ok = runStep(run, { DOCKERHUB_USERNAME: "u", DOCKERHUB_TOKEN: "t" });
+        expect([ok.code, ok.docker.trim()]).toEqual([0, "login --username u --password-stdin"]);
+      }
+    },
+  );
 });
