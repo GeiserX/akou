@@ -46,6 +46,15 @@ export interface Job {
   model: string | null;
   /** Who chose it: `request`, `server_default` or `hardware`. */
   model_source: string | null;
+  /**
+   * `remote` for a job only a remote akou can run (section 14): `model` and `preset` are then the
+   * names sent to it, which this server's catalog may not have. `local`: a job a remote sent here,
+   * or one a remote refused, which is never forwarded. Null: here, or a remote that lists it.
+   */
+  route: "remote" | "local" | null;
+  /** The remote the job was last sent to, and its id there; kept while that remote is down. */
+  remote: string | null;
+  remote_job: string | null;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -150,7 +159,10 @@ CREATE TABLE IF NOT EXISTS jobs (
   result TEXT,
   error TEXT,
   model TEXT,
-  model_source TEXT
+  model_source TEXT,
+  route TEXT,
+  remote TEXT,
+  remote_job TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -190,6 +202,9 @@ function jobOf(r: Row): Job {
     preset: r.preset as string,
     model: (r.model as string | null) ?? null,
     model_source: (r.model_source as string | null) ?? null,
+    route: r.route === "remote" || r.route === "local" ? r.route : null,
+    remote: (r.remote as string | null) ?? null,
+    remote_job: (r.remote_job as string | null) ?? null,
     language: r.language as string,
     keywords: JSON.parse(r.keywords as string),
     diarize: r.diarize === 1,
@@ -240,6 +255,8 @@ export interface NewJob {
   /** The recognizer the job runs (SV-S1); absent, the server's default at run time. */
   model?: string | null;
   model_source?: string | null;
+  /** `remote`: only a remote akou can run it; `local`: never forwarded (section 14). */
+  route?: "remote" | "local" | null;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -272,10 +289,11 @@ export class JobStore {
     this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run(SCHEMA);
     // A jobs.db from before SV-S1 gains the model columns; its jobs run the server's default.
+    // One from before remote dispatch gains the route columns; its jobs run here.
     const cols = new Set(
       (this.db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name),
     );
-    for (const c of ["model", "model_source"]) {
+    for (const c of ["model", "model_source", "route", "remote", "remote_job"]) {
       if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
     }
   }
@@ -303,9 +321,9 @@ export class JobStore {
       const id = `job_${ulid(now)}`;
       this.db
         .query(
-          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, language, keywords,
-            diarize, callback_url, metadata, idempotency_key, file_sha256, audio, created_at)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, route, language,
+            keywords, diarize, callback_url, metadata, idempotency_key, file_sha256, audio, created_at)
+           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -313,6 +331,7 @@ export class JobStore {
           j.preset,
           j.model ?? null,
           j.model_source ?? null,
+          j.route ?? null,
           j.language,
           JSON.stringify(j.keywords),
           j.diarize ? 1 : 0,
@@ -362,6 +381,43 @@ export class JobStore {
       )
       .run(this.now(), id);
     return this.job(id);
+  }
+
+  /**
+   * A queued job taken by a remote (section 14): running, with no start counted, since this
+   * process runs nothing for it. False when it was no longer queued.
+   */
+  claim(id: string): boolean {
+    return (
+      this.db
+        .query(
+          "UPDATE jobs SET status = 'running', running_at = ? WHERE id = ? AND status = 'queued'",
+        )
+        .run(this.now(), id).changes === 1
+    );
+  }
+
+  /** The remote a job was sent to and its id there, or null for neither. */
+  setRemote(id: string, remote: string | null, remoteJob: string | null): void {
+    this.db
+      .query("UPDATE jobs SET remote = ?, remote_job = ? WHERE id = ?")
+      .run(remote, remoteJob, id);
+  }
+
+  /** A job a remote refused runs here from now on, and is never forwarded again. */
+  setRoute(id: string, route: "remote" | "local" | null): void {
+    this.db.query("UPDATE jobs SET route = ? WHERE id = ?").run(route, id);
+  }
+
+  /** A running job back to the queue, in its place: its remote went away before it ended. */
+  requeue(id: string): boolean {
+    return (
+      this.db
+        .query(
+          "UPDATE jobs SET status = 'queued', running_at = NULL WHERE id = ? AND status = 'running'",
+        )
+        .run(id).changes === 1
+    );
   }
 
   /** Every upload a job row names. */

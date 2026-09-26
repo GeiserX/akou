@@ -19,6 +19,7 @@
 import { eventView, type JobService } from "../../server/jobs.ts";
 import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
+import { FORWARDED_HEADER } from "../../server/remotes.ts";
 import { JOB_STATES, type JobStatus, type NewJob } from "../../server/store.ts";
 import { CallbackRefused, checkCallbackUrl } from "../../server/webhooks.ts";
 import type { Identity } from "../access.ts";
@@ -227,10 +228,27 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       idempotency_key: idem,
     };
     // Checked after the fields and before the upload is kept: a job that could never run is refused.
-    const choice = chooseModel(jobs, { model: textField(form, "model"), preset: presetName });
-    job.preset = choice.preset;
-    job.model = choice.model;
-    job.model_source = choice.source;
+    // One this server cannot run goes to a remote that offers it (section 14), unless a remote sent
+    // it here: a forwarded job is never forwarded again.
+    const ask = { model: textField(form, "model"), preset: presetName };
+    const forwarded = c.req.headers.get(FORWARDED_HEADER) !== null;
+    try {
+      const choice = chooseModel(jobs, ask);
+      job.preset = choice.preset;
+      job.model = choice.model;
+      job.model_source = choice.source;
+      job.route = forwarded ? "local" : null;
+    } catch (err) {
+      const remote =
+        !forwarded && err instanceof HttpError && (err.status === 409 || err.status === 422)
+          ? jobs.remoteChoice(ask)
+          : null;
+      if (!remote) throw err;
+      job.preset = remote.preset;
+      job.model = remote.model;
+      job.model_source = remote.source;
+      job.route = "remote";
+    }
     const r = jobs.submit({ ...job, file_sha256: file.sha256, audio: file.path });
     // A repeated submit's file is deleted by `submit` itself.
     kept = file;

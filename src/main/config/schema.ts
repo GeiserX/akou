@@ -24,6 +24,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseCidr } from "../api/net.ts";
 import { defaultModelsDir } from "../asr/models.ts";
+import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
 
@@ -245,6 +246,15 @@ export const SETTINGS = {
     max: 3650,
     default: 30,
     doc: "Days a model may go unused before server mode deletes it. The default model and any model a job or a worker needs are never deleted. 0: never delete.",
+  },
+  "server.remotes": {
+    type: "string[]",
+    default: [],
+    // Where jobs and their audio are sent, and the key files read for it, change only in the file:
+    // a key must not become a way to send every upload to a chosen host.
+    apiWritable: false,
+    check: (v) => checkRemotes(v as readonly string[]),
+    doc: "Other akou servers this one sends jobs to, one entry each: `<url> <key file> [names]`, the key file holding a `jobs` key of that server. A job goes to a remote when this server cannot run it, or first when `names` (presets or model ids, comma-separated, `*` for all) lists it; the client still sees only this server.",
   },
   "server.admin_password_hash": {
     type: "string",

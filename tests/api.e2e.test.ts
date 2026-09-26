@@ -577,6 +577,7 @@ describe("settings over the API", () => {
         "server.behind_proxy",
         "server.enabled",
         "server.public_host",
+        "server.remotes",
         "server.trusted_proxies",
         "webhook.url",
       ].sort(),

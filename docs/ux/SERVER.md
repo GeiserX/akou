@@ -11,6 +11,7 @@ The first client is [Telegram-Archive](https://github.com/GeiserX/Telegram-Archi
 - **Pull is the truth, push is the hint.** Every job's outcome sits in a per-key event feed a client can read after any cursor. Webhooks are signed per the Standard Webhooks spec, retried for a day, and never the only way to learn a result. A client behind NAT with no reachable URL loses nothing.
 - **Presets first, a model name when asked.** `lite`, `fast`, `best`, `fusion` and `auto`. A client says how much it cares; the server maps that to engines the hardware can run, or to its own default. A client that needs one exact model names its engine id, and akou fetches it if it is missing (section 12).
 - **Three dialects for free.** The OpenAI transcription endpoint, the Wyoming protocol and Bazarr's `/asr`. Nextcloud, Home Assistant, Bazarr and whisper-subs work with no code on their side.
+- **One URL, any number of boxes.** An akou can send jobs to other akou servers on the network, for example a Mac mini with a GPU, and still answer the client under its own job id, feed and webhook (section 14).
 - **Self-hosted, still.** There is no akou cloud and no relay. Server mode is the user's own box reachable by the user's own programs.
 
 ```mermaid
@@ -318,6 +319,62 @@ docker compose -f docker-compose.yml -f compose.akou.yml up -d
 ```
 
 The key must list `telegram-viewer` by name: the callback is plain `http` to a private address on the compose network, and a key that allows only `*` is refused there (SV-K4, SV-E7). `akou models pull fast` before the first voice note is optional; without it the first job fetches the models (SV-M1). The two items the archive also waits for are the first published image tag (SV-P1) and `retain_days` on `GET /v1/server` (SV-K1b).
+
+## 14. Sending jobs to another akou
+
+A client talks to one akou: one URL, one key, one callback secret, one event feed. That akou, the primary, can hand a job to another akou server on the network, a remote, and still own it. The case it is built for: akou in a container next to Telegram-Archive on a box whose CPU is too slow for `best`, and a Mac mini on the same LAN or tailnet running `akou serve` natively, where Metal reaches the GPU (Docker on a Mac has none, SV-R3). The archive keeps pointing at the container; the container sends `best` to the Mac.
+
+The remote is reached through the same public job API any client uses, with a `jobs` key of the remote. Nothing new is needed on the remote's side: any akou server can be one.
+
+```mermaid
+sequenceDiagram
+  participant C as Client (Telegram-Archive)
+  participant P as akou (primary)
+  participant R as akou on the Mac (remote)
+  C->>P: POST /v1/jobs preset=best, metadata, callback_url
+  P-->>C: 202 job_P
+  P->>R: POST /v1/jobs preset=best, Idempotency-Key job_P
+  R-->>P: 202 job_R
+  P->>R: GET /v1/jobs/job_R?wait=30 (repeated)
+  R-->>P: done
+  P->>R: GET /v1/jobs/job_R/result
+  Note over P: result under job_P, with the client's metadata
+  P->>C: signed webhook, event feed, GET /v1/jobs/job_P
+```
+
+Which job goes where, for each queued job:
+
+1. A job this server cannot run (its preset is not built here, or its model is missing with `server.auto_download` off) is accepted at submit when a remote has offered that preset or model since start, and waits in the queue until a remote that offers it is up. With no remote ever seen offering it, the submit answers 409 `preset_unavailable` as before.
+2. A job whose preset or model a remote entry names (or `*`) goes to that remote first while it is up and offers it, and runs here while it is not.
+3. Every other job runs here.
+
+A remote "offers" the presets its own `GET /v1/server` lists as available and the engines it lists as installed. Each remote is probed at start and every 30 s: `GET /v1/server` with no key, then `GET /v1/keys/me` with the key. It is `up`, `down` (no answer, or not an akou server with jobs) or `refused` (the key is not accepted, or its file cannot be read). A remote holds at most two of this server's jobs at a time: the one it runs and the next one, uploaded while the first runs.
+
+| Id | Feature | P | From | Acceptance | Today |
+|---|---|---|---|---|---|
+| SV-X1 | `server.remotes`, a list in the config file only (never over `PATCH /v1/config`, since a key must not become a way to send every upload to a chosen host), one entry per remote: `<url> <key file> [names]`. The URL is the remote's base, as `AKOU_URL` takes it, with no user name, password, query or fragment. The key file holds a `jobs` key of the remote, read at each request. `names` are presets or model ids, comma-separated, or `*` | P0 | owner: offloading to another akou container on the network, available to every self-hosted user | A good entry parses; a URL with a password, a relative key file, a bad name or the same URL twice is refused with a message | has: `parseRemote` and `checkRemotes` in [server/remotes.ts](../../src/main/server/remotes.ts), the setting in [schema.ts](../../src/main/config/schema.ts). Test: [remote-dispatch.e2e.test.ts](../../tests/remote-dispatch.e2e.test.ts) |
+| SV-X2 | A job this server cannot run goes to a remote that offers it, and `GET /v1/server` lists `remotes: [{url, state, presets, version, checked_at}]`, with a preset available when this server or a remote offers it | P0 | the job must run where the model or the accelerator is | With two servers where only the second has the `fast` recognizer, `preset=fast` submitted to the first runs on the second; the first's `GET /v1/server` lists the second as `up` and `fast` as available | has: `routeOf` and `dispatch` in [server/jobs.ts](../../src/main/server/jobs.ts), `remoteChoice` at submit ([routes/jobs.ts](../../src/main/api/routes/jobs.ts)), the view in [routes/server.ts](../../src/main/api/routes/server.ts) |
+| SV-X3 | The client sees only the primary. The remote is sent the audio, the preset or model, the language, the keywords and `diarize`, with the primary's job id as `Idempotency-Key`, and never the client's `metadata` or `callback_url`. The remote's result becomes the primary's result under the primary's job id and metadata, and ends as any job does here: the primary's event feed, its signed webhook, its long-poll | P0 | Telegram-Archive never needs to know where a job ran; its contract (section 12) does not change | The result, the feed event and the webhook carry the primary's job id and the client's metadata; the webhook verifies with the primary key's secret and a tampered copy is refused; the remote's copy has no metadata | has: `runRemote` in [server/jobs.ts](../../src/main/server/jobs.ts) |
+| SV-X4 | The remote's key never reaches a client: no route answers it or its file's path except the admin's `GET /v1/config`, which shows the path only; no log line holds it; a redirect from the remote is not followed, so the key is sent to the configured host only | P0 | a key of one box must not leak through another | The key appears in none of the submit answer, the job, the result, the feed, the webhook, `GET /v1/server`, `GET /v1/config` or the log; positive control: the same check finds the key when it is added to what is checked | has: [server/remotes.ts](../../src/main/server/remotes.ts), `redirect: "manual"`. Test: [remote-dispatch.e2e.test.ts](../../tests/remote-dispatch.e2e.test.ts); a mutation that put the key in the view failed it |
+| SV-X5 | A remote that stops answering puts its jobs back in the queue here, `queued`, never `failed`. A job goes to the next remote that offers it, or waits; when the first remote returns, the job is followed there again, and its idempotency key means a job sent twice is transcribed once. A remote that refuses a job for good (a 4xx other than 409) fails a job only a remote can run with the remote's error, and runs any other job here from then on | P0 | owner: a worker that is down must not fail the archive's jobs | With the remote stopped mid-job, the primary's job goes back to `queued` and stays there; with the remote back on the same address, the job ends `done` and the remote holds one copy of it; with a first remote refusing connections, the job runs on the second | has: `runRemote` in [server/jobs.ts](../../src/main/server/jobs.ts). A mutation that failed the job when the remote went away failed the test |
+| SV-X6 | A job this server can run stays here unless a remote entry names its preset or model; then it goes there first, and runs here while that remote is down. A job a remote sent is marked with the `Akou-Forwarded` header, and a server never forwards it again, so two servers listing each other cannot pass a job back and forth | P0 | the local box keeps its own work; loops are impossible by construction | With no names the remote gets no job; with `fast` named the remote gets it; with the named remote down the job runs here; a forwarded `best` the server cannot run answers 409 instead of going on | has: [server/jobs.ts](../../src/main/server/jobs.ts), [routes/jobs.ts](../../src/main/api/routes/jobs.ts) |
+| SV-X7 | `best` on a remote. A remote whose `GET /v1/server` lists `best` as available takes `best` jobs from a server that has no Qwen engine, with `diarize` passed on, so its segments come back with speaker labels | P0 | akou-5an.93, akou-5an.94: the owner's box has no GPU that fits Qwen, a Mac mini does | Against a stand-in remote listing `best`, `preset=best, diarize=true` is accepted with 202, forwarded with `preset=best` and `diarize=true`, and the result names the remote's models and speakers under the primary's id. The real remote waits for the Qwen engine (ASR-5, akou-chp.5) and the native Mac server (SI-8) | partial: dispatch is built and tested against a stand-in; no akou builds `best` yet |
+
+Setting it up, on the primary, with the remote's key saved in a file only the server's user reads:
+
+```sh
+# on the remote
+akou keys create --name primary --scope jobs
+# save the printed ak_ key in /data/remotes/mini.key on the primary, mode 0600
+```
+
+```json
+{ "server.remotes": ["https://mini.example /data/remotes/mini.key best,fusion"] }
+```
+
+The `whsec_` secret the remote prints is not needed: the primary reads results by long-poll, never by webhook, so the remote needs no route back to the primary.
+
+What stays open: `GET /v1/jobs/{id}` does not say which server a job ran on (the log line `job.done ... on <url>` does); the OpenAI endpoint (SV-C1) runs here only; and a job moved to a second remote while the first was down may also finish on the first when it returns, which costs that remote the work but gives the client one result.
 
 ## 13. Open points
 

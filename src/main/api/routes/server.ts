@@ -68,13 +68,15 @@ export function serverRoutes(r: Router<ApiApp>): void {
       const { ready } = modelState(c.app);
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
+      // Section 14: a preset a remote offers is available here too, since a job for it runs there.
+      const remotes = c.app.jobs?.()?.remotes;
       return json(200, {
         name: "akou",
         version: c.app.version,
         mode: c.app.mode?.() ?? "app",
         presets: PRESETS.map((p) => ({
           name: p.name,
-          available: p.built && ready,
+          available: (p.built && ready) || (remotes?.offered([p.name]) ?? false),
           engines: p.engines,
           hardware: p.hardware,
           speed: p.speed,
@@ -82,6 +84,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
         engines: [{ id: RECOGNIZER, provider: "cpu", installed: ready }],
         // Hardware detection is SV-R2; until then nothing claims a GPU.
         gpu: null,
+        // The remote akou servers jobs are sent to, and what each offers: never a key.
+        remotes: remotes?.view() ?? [],
         // SV-K1b: how long a job's result and events stay, counted from its creation, so a client knows when they go.
         retain_days: c.app.config().settings["server.retain_days"],
         capabilities: {
