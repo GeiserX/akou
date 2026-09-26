@@ -59,12 +59,18 @@ With a Developer ID signature, which comes later, the grants will survive update
 
 The app is all you need to record. The `akou` command lets you and your coding agent drive it from a terminal.
 
+With the app installed, the quickest way is the akou menu: **Install Command-Line Tool…** links the app's own `akou` into `/usr/local/bin`. macOS asks for your password only when that folder needs it. Open a new terminal and run `akou --version`. The link follows the app, so an update updates the command too.
+
+Without the app, use the release archive for your system. On a Mac:
+
 ```sh
 tar -xzf akou-cli-<version>-darwin-arm64.tar.gz
 mkdir -p ~/.local/bin
 mv akou-cli-<version>-darwin-arm64/akou ~/.local/bin/
 akou --version
 ```
+
+On Linux it is the same with `linux-x64` in place of `darwin-arm64`. On Windows, unzip `akou-cli-<version>-windows-x64.zip` and move `akou.exe` into a folder on your `PATH`.
 
 `~/.local/bin` must be on your `PATH`. If you downloaded the file with a browser, macOS marks it as downloaded and refuses to run it. Clear the mark once:
 
@@ -95,7 +101,7 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 1. If you turned on "Open at login", turn it off in akou's menu bar item first, or delete `~/Library/LaunchAgents/io.github.geiserx.akou.login.plist`.
 2. Quit akou: `akou quit`, or "Quit akou" in the menu bar item.
-3. Delete `/Applications/akou.app` and, if you installed it, `~/.local/bin/akou`.
+3. Delete `/Applications/akou.app` and the `akou` command, if you installed it: `/usr/local/bin/akou` from the menu (`sudo rm /usr/local/bin/akou` if the folder is root's), or `~/.local/bin/akou` from the release archive.
 4. Delete what akou keeps for itself:
    - `~/.config/akou`: settings, vocabulary and the API token;
    - `~/Library/Application Support/akou`: the speech models;

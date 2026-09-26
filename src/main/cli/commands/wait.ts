@@ -24,7 +24,16 @@
 import type { Parsed } from "../args.ts";
 import { duration, str } from "../args.ts";
 import { EXIT } from "../client.ts";
-import { api, type Body, type Command, type Ctx, enc, finish } from "../context.ts";
+import {
+  api,
+  type Body,
+  type Command,
+  type Ctx,
+  callFlag,
+  enc,
+  finish,
+  objectCall,
+} from "../context.ts";
 import { usage } from "./calls.ts";
 
 export const WAIT_STAGES = ["final.done", "enhanced", "exported"] as const;
@@ -76,7 +85,7 @@ async function run(ctx: Ctx, p: Parsed): Promise<number> {
   }
   const timeoutS = duration(p, "timeout") ?? WAIT_TIMEOUT_S;
   const deadline = Date.now() + timeoutS * 1000;
-  const ref = p.positional[0] ?? "last";
+  const ref = objectCall(p, p.positional[0]) ?? "last";
   const head = await api(ctx, "GET", `/calls/${enc(ref)}`);
   if (head.status !== 200) return finish(ctx, head, () => "");
   const id = head.body.id as string;
@@ -127,7 +136,12 @@ export const waitCommand: Command = {
   name: "wait",
   summary:
     "Block until a call reaches final.done, enhanced or exported (69 unavailable, 70 failed, 124 timeout)",
-  usage: "akou wait [CALL] --for final.done|enhanced|exported [--timeout 30m] [--json]",
-  flags: { for: { type: "string" }, timeout: { type: "string" } },
+  usage: "akou wait [CALL | -c CALL] --for final.done|enhanced|exported [--timeout 30m] [--json]",
+  flags: {
+    call: callFlag("last"),
+    for: { type: "string", value: "STAGE", desc: "final.done, enhanced or exported" },
+    timeout: { type: "string", value: "30m", desc: "give up after 90s, 30m or 1h (exit 124)" },
+  },
+  examples: ["akou wait --for final.done", "akou wait -c last --for enhanced --timeout 1h"],
   run,
 };

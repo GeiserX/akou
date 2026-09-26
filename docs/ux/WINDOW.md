@@ -141,9 +141,9 @@ Live speaker labels are guesses until the final pass ([DESIGN 3.2](../DESIGN.md#
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W4.1 | Rows, chips, hues, provisional row, pinned scroll, font keys | done | DESIGN 7 | Existing tests | has |
-| W4.2 | Live speaker labels look provisional until named or final | P1 | Intent: live labels are provisional, the final pass is authoritative | A live cluster chip has the provisional style and `c3?`; after `final.done` the same speaker's chip is solid; a named speaker is solid at once | missing |
+| W4.2 | Live speaker labels look provisional until named or final | P1 | Intent: live labels are provisional, the final pass is authoritative | A live cluster chip has the provisional style and `c3?`; after `final.done` the same speaker's chip is solid; a named speaker is solid at once | has |
 | W4.3 | With `asr.liveLabels` off, live rows show You or Them by channel | P2 | Intent: every choice a setting | With the setting off, live rows show You or Them and no `c<N>` | missing |
-| W4.4 | Right-click (and `Shift+F10`) on a line: Play from here, Copy line, Copy with time and speaker, Edit, Change speaker, Fix a word, Mark | P1 | Descript, anarlog; audit: no context menu | Each item runs its registry action; keyboard users reach the same menu | missing |
+| W4.4 | Right-click (and `Shift+F10`) on a line: Play from here, Copy line, Copy with time and speaker, Edit, Change speaker, Fix a word, Mark | P1 | Descript, anarlog; audit: no context menu | Each item runs its registry action; keyboard users reach the same menu | partial: Play from here, Copy line, Copy with time and speaker, Name this speaker and Fix a word, by mouse, `Shift+F10` and the Menu key; Edit and Change speaker wait for PG-A5, Mark for W3.2 |
 | W4.6 | Per-segment confidence shading, once engines report it | P2 | Meetily; intent: multi-engine fusion gives agreement per word | Lines or words under a threshold get a dotted underline; hover shows the agreement; depends on `seg` carrying confidence | missing |
 
 ### 4.2 Editing
@@ -176,10 +176,10 @@ The player bar gets real controls. Line-level sync comes first, because it needs
 |---|---|---|---|---|---|
 | W5.1 | Play from any line, mic/call balance | done | DESIGN 7 | Existing tests | has |
 | W5.2 | Play and pause: a button and `Space` (outside text fields) | P0 | Audit: the player has no controls and nothing can pause it | Start a line, press Space: `player.paused` is true; press again: it resumes from the same position | has |
-| W5.3 | Position shown as wall time, a scrubber over the call | P1 | Buzz, MacWhisper, VoiceInk | Seeking to 50 % shows the wall time of that instant, never a bare offset (TRAPS time rule) | missing |
-| W5.4 | Speed 0.75x to 2x in 0.25 steps, `[` and `]`, remembered | P1 | Buzz, MacWhisper | `]` twice sets 1.5x; reload keeps it | missing |
-| W5.5 | Seek back or forward 5 s: `Shift+←` / `Shift+→` | P1 | Otter, MacWhisper | Position moves 5 s; clamps at the part bounds | missing |
-| W5.6 | Follow audio: the line being played is highlighted and kept in view; scrolling by hand pauses following until "Follow" is pressed | P1 | Buzz | With playback running, the highlighted row's `a0 ≤ t < a1`; a manual scroll stops auto-scroll | missing |
+| W5.3 | Position shown as wall time, a scrubber over the call | P1 | Buzz, MacWhisper, VoiceInk | Seeking to 50 % shows the wall time of that instant, never a bare offset (TRAPS time rule) | partial: the wall-time position and a scrubber over the part being played (the unit the audio route serves) are built; left: one scrubber across every part of the call, and scrubbing before a line has been played |
+| W5.4 | Speed 0.75x to 2x in 0.25 steps, `[` and `]`, remembered | P1 | Buzz, MacWhisper | `]` twice sets 1.5x; reload keeps it | has |
+| W5.5 | Seek back or forward 5 s: `Shift+←` / `Shift+→` | P1 | Otter, MacWhisper | Position moves 5 s; clamps at the part bounds | has |
+| W5.6 | Follow audio: the line being played is highlighted and kept in view; scrolling by hand pauses following until "Follow" is pressed | P1 | Buzz | With playback running, the highlighted row's `a0 ≤ t < a1`; a manual scroll stops auto-scroll | has |
 | W5.7 | Replay the current line: `R` | P2 | MacWhisper | Seeks to the line's `a0` | missing |
 | W5.8 | Word-level highlight and click a word to play it | P2 | Descript, Scriberr, whishper | With word timings in `seg`, clicking a word seeks to its start ±50 ms; depends on word timings in the log | missing |
 
@@ -372,6 +372,7 @@ hark-viewer's other page parameter, `?quiet=SECONDS`, is dropped on purpose. The
 | `1` to `9` | Give the focused line to speaker N | transcript |
 | `N` | Name the focused line's speaker | transcript |
 | `C` | Copy the focused line | transcript |
+| `Shift+F10`, the Menu key | The focused line's menu (W4.4) | transcript |
 | `L` or `End` | Back to live | transcript |
 | `+` `-` `Mod+0` | Text size up, down, reset | window |
 | `Esc` | Close the top dialog, popover, find bar | window |

@@ -6,16 +6,20 @@
 
 import { resolve } from "node:path";
 import { str } from "../args.ts";
-import { api, type Body, type Command, enc, finish } from "../context.ts";
+import { api, type Body, type Command, callFlag, enc, finish, objectCall } from "../context.ts";
 import { usage } from "./calls.ts";
 
 const exportCmd: Command = {
   name: "export",
   summary: "Hand a finished call off to the export folder (Markdown, event log, audio)",
-  usage: "akou export [CALL] [--to DIR] [--json]",
-  flags: { to: { type: "string" } },
+  usage: "akou export [CALL | -c CALL] [--to DIR] [--json]",
+  flags: {
+    call: callFlag("last"),
+    to: { type: "string", value: "DIR", desc: "export here instead of export.dir" },
+  },
+  examples: ["akou export last --to ~/notes/calls"],
   run: async (ctx, p) => {
-    const call = p.positional[0] ?? "last";
+    const call = objectCall(p, p.positional[0]) ?? "last";
     const to = str(p, "to");
     const r = await api(ctx, "POST", `/calls/${enc(call)}/export`, {
       body: { to: to === undefined ? undefined : resolve(to) },
@@ -37,10 +41,15 @@ const exportCmd: Command = {
 const hooks: Command = {
   name: "hooks",
   summary: "Re-run the hand-off hooks of a call",
-  usage: "akou hooks run CALL [--stage call.ended|final.done|enhanced] [--json]",
-  flags: { stage: { type: "string" } },
+  usage: "akou hooks run CALL | -c CALL [--stage call.ended|final.done|enhanced] [--json]",
+  flags: {
+    call: callFlag("none; name one"),
+    stage: { type: "string", value: "S", desc: "only this stage's hooks" },
+  },
+  examples: ["akou hooks run last --stage final.done"],
   run: async (ctx, p) => {
-    const [sub, call, ...rest] = p.positional;
+    const [sub, word, ...rest] = p.positional;
+    const call = objectCall(p, word);
     if (sub !== "run" || !call || rest.length > 0) return usage(ctx, "hooks run needs one call");
     const r = await api(ctx, "POST", `/calls/${enc(call)}/hooks`, {
       body: { stage: str(p, "stage") },
@@ -64,7 +73,10 @@ const importCmd: Command = {
   name: "import",
   summary: "Convert hark-viewer call folders (every part) into akou calls",
   usage: "akou import hark-viewer DIR… [-w WORKSPACE] [--json]",
-  flags: { workspace: { type: "string", short: "w" } },
+  flags: {
+    workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the calls go in" },
+  },
+  examples: ["akou import hark-viewer ~/Recordings/calls/work -w work"],
   run: async (ctx, p) => {
     const [kind, ...dirs] = p.positional;
     if (kind !== "hark-viewer" || dirs.length === 0) {

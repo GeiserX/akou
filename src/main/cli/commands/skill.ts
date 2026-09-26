@@ -397,7 +397,11 @@ export const skillCommand: Command = {
   summary:
     "Install the akou skills into Claude Code's or Codex's skills folder and register the akou tools with it, or uninstall both",
   usage: "akou skill install|uninstall [--harness claude|codex] [--dir DIR] [--json]",
-  flags: { harness: { type: "string" }, dir: { type: "string" } },
+  flags: {
+    harness: { type: "string", value: "H", desc: "claude or codex (default: every one installed)" },
+    dir: { type: "string", value: "DIR", desc: "install into this skills folder instead" },
+  },
+  examples: ["akou skill install --harness claude", "akou skill uninstall"],
   run: async (ctx: Ctx, p) => {
     const sub = p.positional[0];
     if ((sub !== "install" && sub !== "uninstall") || p.positional.length > 1) {

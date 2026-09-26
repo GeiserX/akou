@@ -73,7 +73,7 @@ What we deliberately did not take:
 | `akou` app | TypeScript on Bun, inside ElectroBun 2.0.1 with `build.mainProcess: "bun"` (Bun 1.4.0) | From login (optional) or first use until quit. Runs with or without a window. | Call state machine, the event log (single writer), speech recognition workers, speaker clustering, query engine, LLM providers, notes and enhancement, local HTTP API, share server, export, hooks, webhook, tray, hotkey, window | Open an audio device |
 | `akou-capture` helper | Rust, one binary per OS | One per recording part, child of the app | Mic and call streams, alignment, Opus file, health monitors, keep-awake | Write the event log, talk HTTP, load a model |
 | `akou-diarize` helper | Rust, one binary per OS, ONNX Runtime linked statically | One per live transcriber and one per final pass, child of the Worker that uses it | Nemotron 3 Diarization: who speaks when on the call channel (section 3.4) | Touch audio devices, write the event log, talk HTTP |
-| `akou` CLI and `akou mcp` | TypeScript on the bundled Bun (a shim), or a compiled binary in the Linux CLI tarball | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
+| `akou` CLI and `akou mcp` | One compiled binary (`bun build --compile`): the release ships it on its own, and the macOS app carries a copy (section 6.1) | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
 
 Inside the app, work is split across threads so the user interface and the API never wait on a model:
 
@@ -108,7 +108,7 @@ On Linux, a CLI-only tarball (M4) packages the same app code with `bun build --c
 
 The slow starts of the past (minutes, while people waited) came from the first agent request after a context compaction: the prompt cache was cold, so the harness reprocessed its whole context (instruction files, memory, the skill, re-injected skills) before it did anything. A skill that starts first still pays that cost on the first turn after a compaction. akou answers it three ways:
 
-- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Alt+R`, `Option+Cmd+R` on macOS), the Record button and `! akou start` typed into a harness all start a call directly.
+- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Shift+F9`, `Option+Cmd+R` on macOS; never `Ctrl+Alt`, which is AltGr on many layouts, DK-K4), the Record button and `! akou start` typed into a harness all start a call directly.
 - **Start first in the skill.** The skill makes `akou start` its first tool call, with no status check first, so the one unavoidable model turn is the start itself.
 - **A short turn.** `akou start --json` returns the `201` within 1 s, so that turn ends quickly.
 
@@ -532,7 +532,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 
 ### 6.1 CLI
 
-A shim runs the bundled Bun on `cli.js` (installed from the menu "Install command-line tool": `~/.local/bin/akou`, `akou.cmd`, or a symlink). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
+`akou` is one compiled binary: the release ships it on its own, and the macOS app carries a copy beside its main process that the akou menu's "Install Command-Line Tool…" links into `/usr/local/bin`, asking for a password only when that folder needs one ([DESKTOP.md](ux/DESKTOP.md) DK-M6). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
 
 | Command | Does |
 |---|---|
@@ -604,7 +604,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 hark's remote-control agent accepted a cross-origin `POST /stop` from any web page. akou's guard, enforced in one middleware before routing, with a test for each rule:
 
 1. Bind `127.0.0.1` only, IPv4, no reverse DNS on bind. The share server is a separate listener.
-2. `Authorization: Bearer <token>` on every request, GETs included, because transcripts are sensitive. The token is 32 random bytes in `~/.config/akou/token`, mode 0600 (on Windows an ACL for the current user only), created atomically, rotated by `akou token rotate`.
+2. `Authorization: Bearer <token>` on every request, GETs included, because transcripts are sensitive. The one exception is a route the route table marks `access: "open"`: `GET /v1/openapi.json`, the generated API description, which holds no secrets and which Executor fetches with no credentials ([service-interface.md](research/service-interface.md) SI-2). The token is 32 random bytes in `~/.config/akou/token`, mode 0600 (on Windows an ACL for the current user only), created atomically, rotated by `akou token rotate`.
 3. `Host` must be exactly `127.0.0.1:<port>` or `localhost:<port>`, or 403. This blocks DNS rebinding.
 4. Any request carrying `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Mode` is refused with 403. Our clients never send them; browsers always do cross-origin.
 5. No CORS headers, ever. Mutations require `Content-Type: application/json`. Bodies are capped at 64 KB. Unknown fields are refused with 400.
