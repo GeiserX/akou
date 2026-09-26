@@ -24,7 +24,8 @@
 
 import { accessSync, constants, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { type LlamaBuild, llamaAccelerators, llamaBuild, llamaServerName } from "./llama-builds.ts";
+import { LLAMA_RELEASE, llamaAccelerators, llamaServerName } from "./llama-builds.ts";
+import { llamaBuildId } from "./llama-catalog.ts";
 import { ACCELERATORS, type Accelerator, hostPlatform } from "./models.ts";
 
 export const ACCELERATOR_SETTINGS = ["auto", ...ACCELERATORS] as const;
@@ -176,7 +177,7 @@ export function chooseAccelerator(
     const image = seen.vendor === "nvidia" ? "-cuda" : "-vulkan";
     return {
       active: "cpu",
-      reason: `${at(seen)} is here, but this install has no build for it: run the geiserx/akou:<version>${image} image`,
+      reason: `${at(seen)} is here, but this install has no build for it: run the drumsergio/akou:<version>${image} image`,
     };
   }
   return { active: "cpu", reason: "no GPU found" };
@@ -256,19 +257,18 @@ export function confirmAccelerator(
   };
 }
 
-/** The folder a build is unpacked into under the models folder; a Mac's one build serves both backends. */
-export function llamaBuildDir(modelsDir: string, build: LlamaBuild): string {
-  const first = build.assets[0]?.name ?? "llama";
-  return join(modelsDir, "runtimes", first.replace(/\.(tar\.gz|zip)$/, ""));
-}
-
-/** llama-server for the active backend: the image's (`AKOU_LLAMA_SERVER`), else a downloaded build, else none. */
+/**
+ * llama-server for the active backend: the image's (`AKOU_LLAMA_SERVER`), else the build the best
+ * preset downloaded and unpacked (llama-server.ts: `<models>/<build id>/bin`, inside the release's
+ * top folder on Linux and macOS, at the top on Windows), else none yet.
+ */
 export function llamaServerBin(p: Probe, modelsDir: string, active: Accelerator): string | null {
   if (p.env.AKOU_LLAMA_SERVER) return p.env.AKOU_LLAMA_SERVER;
-  const build = llamaBuild(p.platform, active);
-  if (!build) return null;
-  const bin = join(llamaBuildDir(modelsDir, build), llamaServerName(p.platform));
-  return p.exists(bin) ? bin : null;
+  const bin = join(modelsDir, llamaBuildId(p.platform, active), "bin");
+  const name = llamaServerName(p.platform);
+  return (
+    [join(bin, `llama-${LLAMA_RELEASE}`, name), join(bin, name)].find((f) => p.exists(f)) ?? null
+  );
 }
 
 /** Runs `<cmd> --list-devices` for at most 15 s: its stdout, or why it failed. */

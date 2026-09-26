@@ -6,9 +6,10 @@
 
 import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import config, { MAIN_OUT, SHERPA_LIBS, sherpaCopies } from "../electrobun.config.ts";
+import { ICONSET, ICONSET_FILES } from "../scripts/app-icon.ts";
 import { MIN_MACOS } from "../scripts/build-app.ts";
 import { trayIconFiles } from "../scripts/tray-icons.ts";
 import type { LogEvent } from "../src/core/log/events.ts";
@@ -65,6 +66,23 @@ function trayImageFault(
   if (b[25] !== 6) return "no alpha channel";
   if ((platform === "darwin") !== (o.template === true)) return "the template flag is wrong";
   return null;
+}
+
+/** What `iconutil` would refuse in an iconset: a missing file, or one that is not a PNG of its size. */
+function iconsetFaults(dir: string): string[] {
+  const faults: string[] = [];
+  for (const [name, px] of Object.entries(ICONSET_FILES)) {
+    const file = join(dir, name);
+    if (!existsSync(file)) {
+      faults.push(`${name}: missing`);
+      continue;
+    }
+    const b = readFileSync(file);
+    if (!b.subarray(0, 8).equals(PNG_SIGNATURE)) faults.push(`${name}: not a PNG`);
+    else if (b.readUInt32BE(16) !== px || b.readUInt32BE(20) !== px)
+      faults.push(`${name}: ${b.readUInt32BE(16)} px, not ${px}`);
+  }
+  return faults;
 }
 
 const EDIT_ROLES = ["undo", "redo", "cut", "copy", "paste", "selectAll"];
@@ -507,6 +525,24 @@ describe("the ElectroBun build", () => {
     }
     expect(config.build?.mac?.bundleCEF).toBe(false);
     expect(config.build?.mac?.entitlements?.["com.apple.security.device.audio-input"]).toBe(true);
+  });
+
+  test("the app icon is an iconset with every size iconutil reads, drawn by scripts/app-icon.ts", () => {
+    expect(join(ROOT, config.build?.mac?.icons as string)).toBe(ICONSET);
+    expect(iconsetFaults(ICONSET)).toEqual([]);
+    // Positive control: an iconset missing a file, and one with a file at the wrong size.
+    const t = tempDir();
+    const bad = t.dir;
+    for (const name of Object.keys(ICONSET_FILES)) {
+      writeFileSync(join(bad, name), readFileSync(join(ICONSET, name)));
+    }
+    rmSync(join(bad, "icon_16x16.png"));
+    writeFileSync(join(bad, "icon_32x32.png"), readFileSync(join(ICONSET, "icon_128x128.png")));
+    expect(iconsetFaults(bad)).toEqual([
+      "icon_16x16.png: missing",
+      "icon_32x32.png: 128 px, not 32",
+    ]);
+    t.cleanup();
   });
 
   test("[spike] Native libraries missing from the bundle: sherpa-onnx-node, its .node file and both libraries are in build.copy beside the main process", () => {

@@ -538,10 +538,14 @@ describe("SV-K1: GET /v1/server", () => {
       const b = JSON.parse(r.body);
       expect(b).toMatchObject({ name: "akou", version: rig.app.version, mode, gpu: null });
       expect(b.presets.map((p: { name: string }) => p.name)).toEqual(names);
-      // Only `fast` is built, over the one engine; it is available when its model is there.
+      // `fast` (Parakeet) and `best` (Qwen on llama-server) are built; each is available once the
+      // default models are there, and best fetches Qwen on demand.
       const avail = b.presets.filter((p: { available: boolean }) => p.available);
-      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast"]);
-      expect(b.engines.map((e: { id: string }) => e.id)).toEqual(["parakeet-tdt-0.6b-v3-fp32"]);
+      expect(avail.map((p: { name: string }) => p.name)).toEqual(["fast", "best"]);
+      expect(b.engines.map((e: { id: string }) => e.id)).toEqual([
+        "parakeet-tdt-0.6b-v3-fp32",
+        "qwen3-asr-1.7b",
+      ]);
       expect(Object.keys(b.capabilities).sort()).toEqual(
         ["bazarr", "events", "jobs", "openai", "webhooks", "wyoming"].sort(),
       );
@@ -629,7 +633,7 @@ describe("SV-K1: GET /v1/server", () => {
 });
 
 describe("SV-P4: GET /healthz", () => {
-  test("curl with no header gets 200 with the four fields, in both modes", async () => {
+  test("curl with no header gets 200 with its fields, in both modes", async () => {
     for (const rig of [app, server]) {
       // The fake recognizer loads in a moment; until then the answer is 503 (the test below).
       await until(() => rig.app.recognizer() === "ready", 10_000, "recognizer ready");
@@ -640,6 +644,8 @@ describe("SV-P4: GET /healthz", () => {
         version: rig.app.version,
         models_ready: true,
         queue_depth: 0,
+        // The job queue's numbers (SV-Q4): the app has no queue.
+        queue: rig === app ? null : expect.objectContaining({ depth: 0, concurrency: 1 }),
       });
     }
   });

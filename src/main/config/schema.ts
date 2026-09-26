@@ -204,6 +204,27 @@ export const SETTINGS = {
     default: 7,
     doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends.",
   },
+  "server.concurrency": {
+    type: "integer",
+    min: 1,
+    max: 64,
+    default: 1,
+    doc: "File jobs run at once. Each running job has its own Worker with its models loaded and `asr.threads` threads, so keep this times `asr.threads` under the cores, and the memory for that many copies of the model.",
+  },
+  "server.queue_max": {
+    type: "integer",
+    min: 0,
+    max: 1000000,
+    default: 1000,
+    doc: "File jobs queued or running at most, across keys. A submit past it is refused with 429 `queue_full` and `Retry-After`. 0: no limit.",
+  },
+  "server.queue_max_per_key": {
+    type: "integer",
+    min: 0,
+    max: 1000000,
+    default: 500,
+    doc: "File jobs one key may have queued or running, so one client cannot fill the queue. A submit past it is refused with 429 `queue_full` and `Retry-After`. 0: no limit.",
+  },
   "server.default_language": {
     type: "string",
     min: 2,
@@ -347,13 +368,28 @@ export const SETTINGS = {
     values: ACCELERATOR_SETTINGS,
     default: "auto",
     env: "AKOU_ACCELERATOR",
-    doc: "The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Takes effect at the next start.",
+    doc: "The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Natively it picks which pinned llama-server build to download; an image runs the build it carries. `asr.llamaServer` runs an own build instead (SYCL or ROCm compiled on the host). Applies to the next job that starts llama-server.",
   },
   "asr.parakeet.decoding": {
     type: "string",
     values: ["greedy", "beam"],
     default: "greedy",
     doc: "How Parakeet decodes, live and in the final pass: `greedy` (the default) or `beam`. Beam search also steers decoding toward the call's vocabulary at boost 1.5, but on some meeting audio it returns whole spans empty. Vocabulary correction when reading and after the call applies with either. Takes effect at the next start.",
+  },
+  "asr.languages": {
+    type: "string[]",
+    default: [],
+    check: (v) =>
+      (v as readonly string[]).every((c) => /^[a-z]{2,3}$/.test(c))
+        ? null
+        : "is a list of ISO 639 codes, for example en and es",
+    doc: "The languages Qwen3-ASR may choose among when a job's language is `auto`, as ISO 639 codes (for example `en` and `es`). An answer in another language is replaced by the decode, forced into one of these, that the model scores higher; a no-speech answer stays empty. Empty: whatever language the model names.",
+  },
+  "asr.llamaServer": {
+    type: "string[]",
+    default: [],
+    apiWritable: false,
+    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a SYCL or ROCm build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
   },
   "asr.diarizeHelper": {
     type: "string[]",

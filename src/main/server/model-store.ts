@@ -187,6 +187,11 @@ export interface ModelStoreOptions {
   machine(): readonly ModelSpecEntry[] | null;
   /** Every model a request may name and the sweep may delete. */
   catalog(): readonly ModelSpecEntry[];
+  /**
+   * What a recognizer runs on besides its own files: the llama-server build for Qwen. Fetched,
+   * kept and swept with it.
+   */
+  requires?(recognizer: string): readonly string[];
   autoDownload(): boolean;
   maxGb(): number;
   unusedDays(): number;
@@ -314,12 +319,18 @@ export class ModelStore {
     return this.o.catalog().find((m) => m.id === id);
   }
 
-  /** The model ids a job on `recognizer` loads: it, with the helpers the machine needs. */
+  /**
+   * The model ids a job on `recognizer` loads: it, the runtime it runs on, and the helpers the
+   * machine needs.
+   */
   needs(recognizer: string): string[] {
     const machine = this.o.machine();
     if (machine === null) return [];
     const out = machine.filter((m) => m.id === recognizer || !isRecognizer(m)).map((m) => m.id);
     if (!out.includes(recognizer) && this.entry(recognizer)) out.unshift(recognizer);
+    for (const id of this.o.requires?.(recognizer) ?? []) {
+      if (!out.includes(id) && this.entry(id)) out.splice(1, 0, id);
+    }
     return out;
   }
 

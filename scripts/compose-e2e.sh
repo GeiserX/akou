@@ -12,12 +12,12 @@
 # own code; the script passes when the viewer has stored akou's transcript from the signed
 # callback, and a tampered copy of a signed delivery was refused while a genuine one was taken.
 #
-# The image geiserx/akou:$AKOU_VERSION must exist locally or on Docker Hub. MODELS, when set, is a
+# The image drumsergio/akou:$AKOU_VERSION must exist locally or on Docker Hub. MODELS, when set, is a
 # models folder to use instead of an empty one, so no job waits on a download.
 set -euo pipefail
 
 note=${1:?usage: AKOU_VERSION=... scripts/compose-e2e.sh note.ogg}
-: "${AKOU_VERSION:?AKOU_VERSION names the geiserx/akou tag to run}"
+: "${AKOU_VERSION:?AKOU_VERSION names the drumsergio/akou tag to run}"
 # Telegram-Archive's main with its transcription client (its PR #484); the first release that
 # carries it replaces both builds with its published images.
 TA_REF=${TA_REF:-10c928ad82f52ec83a7271b75a34e68423682364}

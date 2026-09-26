@@ -10,7 +10,10 @@
 import { copyFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { rotateToken } from "../../api/guard.ts";
+import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
+import { llamaRuntime } from "../../asr/llama-server.ts";
 import {
+  type CatalogEntry,
   DownloadRefused,
   downloadModels,
   hostPlatform,
@@ -205,9 +208,19 @@ function pullPlan(
   const all = ctx.models ?? MODELS;
   if (isPreset(name)) {
     const reg = registry(ctx);
+    // The build `akou serve` runs here (akou-5an.94): none in an image, else the GPU detection finds.
+    const settings = loadConfig(ctx.io.env).settings;
+    const detected = detectAccelerator(
+      settings["asr.accelerator"] as AcceleratorSetting,
+      hostProbe(ctx.io.env),
+    );
     const p = presetModels(
       name,
       reg.map((m) => m.id),
+      llamaRuntime(settings, hostPlatform(), all as readonly CatalogEntry[], {
+        image: ctx.io.env.AKOU_LLAMA_SERVER,
+        detected,
+      }),
     );
     if ("unavailable" in p) {
       return {
@@ -215,7 +228,13 @@ function pullPlan(
         message: `the ${name} preset has no engine in this version: ${p.unavailable}; \`akou models pull fast\` gets the one that exists`,
       };
     }
-    return { ids: [...p.models], registry: reg, preset: name, named: name };
+    // `best` names on-demand entries (Qwen, a llama-server build) that the machine's list leaves out.
+    return {
+      ids: [...p.models],
+      registry: name === "best" ? all : reg,
+      preset: name,
+      named: name,
+    };
   }
   if (all.some((m) => m.id === name)) return { ids: [name], registry: all, named: name };
   return {

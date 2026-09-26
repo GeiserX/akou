@@ -4,7 +4,7 @@
  */
 
 /** The one version, stamped from `package.json` at release (DESIGN section 9). */
-export const APP_VERSION = "0.2.0";
+export const APP_VERSION = "0.2.1";
 /** `runtime.json` in the config folder: pid, port and version of the running app, mode 0600. */
 export const RUNTIME_FILE = "runtime.json";
 /**

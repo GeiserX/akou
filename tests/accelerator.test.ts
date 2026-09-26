@@ -34,6 +34,7 @@ import {
   llamaBuildProblems,
   llamaUrl,
 } from "../src/main/asr/llama-builds.ts";
+import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { ACCELERATORS, PLATFORMS } from "../src/main/asr/models.ts";
 import { validateSetting } from "../src/main/config/schema.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
@@ -346,29 +347,37 @@ describe("detect, then verify with the real binary", () => {
     });
   });
 
-  test("the binary: AKOU_LLAMA_SERVER in an image, else the downloaded build, else none", () => {
+  test("the binary: AKOU_LLAMA_SERVER in an image, else the build the best preset unpacked, else none", () => {
     const models = join(t.dir, "models");
     const p = machine("linux-x64", { env: { AKOU_LLAMA_SERVER: "/opt/llama/llama-server" } });
     expect(llamaServerBin(p, models, "vulkan")).toBe("/opt/llama/llama-server");
     const native = machine("linux-x64", { files: {} });
     expect(llamaServerBin(native, models, "vulkan")).toBeNull();
+    // Where llama-server.ts unpacks a build: the release's top folder on Linux and macOS.
     const there = join(
       models,
-      "runtimes",
-      `llama-${LLAMA_RELEASE}-bin-ubuntu-vulkan-x64`,
+      `llama-server-${LLAMA_RELEASE}-linux-x64-vulkan`,
+      "bin",
+      `llama-${LLAMA_RELEASE}`,
       "llama-server",
     );
     const withFile = machine("linux-x64", { files: { [there]: "" } });
     expect(llamaServerBin(withFile, models, "vulkan")).toBe(there);
-    // A Mac's one build serves Metal and the CPU from one folder; Windows runs the .exe.
-    const mac = join(models, "runtimes", `llama-${LLAMA_RELEASE}-bin-macos-arm64`, "llama-server");
-    expect(llamaServerBin(machine("darwin-arm64", { files: { [mac]: "" } }), models, "cpu")).toBe(
+    const mac = join(
+      models,
+      `llama-server-${LLAMA_RELEASE}-darwin-arm64-metal`,
+      "bin",
+      `llama-${LLAMA_RELEASE}`,
+      "llama-server",
+    );
+    expect(llamaServerBin(machine("darwin-arm64", { files: { [mac]: "" } }), models, "metal")).toBe(
       mac,
     );
+    // Windows' zip has no top folder.
     const win = join(
       models,
-      "runtimes",
-      `llama-${LLAMA_RELEASE}-bin-win-cuda-12.4-x64`,
+      `llama-server-${LLAMA_RELEASE}-win32-x64-cuda`,
+      "bin",
       "llama-server.exe",
     );
     expect(llamaServerBin(machine("win32-x64", { files: { [win]: "" } }), models, "cuda")).toBe(
@@ -589,6 +598,9 @@ describe("GET /v1/server reports the accelerator", () => {
       available: ["vulkan", "cpu"],
       reason: "an Intel GPU at /dev/dri/renderD128",
     });
+    // The best preset's Qwen runs there too: on the image's llama-server, on the Vulkan GPU.
+    const engines = b.engines as { id: string; provider: string }[];
+    expect(engines.find((e) => e.id === QWEN_ASR)?.provider).toBe("vulkan");
   });
 
   test("the same box whose build opens nothing: the CPU, and why", async () => {
@@ -596,6 +608,21 @@ describe("GET /v1/server reports the accelerator", () => {
     expect(b.gpu).toBeNull();
     expect(b.accelerator.active).toBe("cpu");
     expect(b.accelerator.reason).toContain("llama-server lists no vulkan device");
+    const engines = b.engines as { id: string; provider: string }[];
+    expect(engines.find((e) => e.id === QWEN_ASR)?.provider).toBe("cpu");
+  });
+
+  test("a changed asr.accelerator applies to the next Qwen job, with no restart", async () => {
+    const r = await rig(LIST_UHD770);
+    await server(r);
+    const qwen = async () =>
+      ((await r.api("GET", "/server")).body.engines as { id: string; provider: string }[]).find(
+        (e) => e.id === QWEN_ASR,
+      )?.provider;
+    expect(await qwen()).toBe("vulkan");
+    expect((await r.api("PATCH", "/config", { "asr.accelerator": "cpu" })).status).toBe(200);
+    expect(await qwen()).toBe("cpu");
+    expect((await r.api("GET", "/server")).body.accelerator.setting).toBe("cpu");
   });
 
   test("asr.accelerator cpu keeps the GPU out of it", async () => {

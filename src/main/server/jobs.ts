@@ -3,8 +3,12 @@
  * job Worker, the long-polls, the per-key feed, the webhook outbox and retention.
  *
  * - **One pipeline.** A job's upload is decoded to 16 kHz mono and run through the finalize
- *   Worker's mono pass (SV-J7), one job at a time, in submit order. The result has one shape
- *   (SV-J4) whichever door asked for it: `POST /v1/jobs`, the OpenAI endpoint or `akou transcribe`.
+ *   Worker's mono pass (SV-J7). The result has one shape (SV-J4) whichever door asked for it:
+ *   `POST /v1/jobs`, the OpenAI endpoint or `akou transcribe`.
+ * - **A queue a backlog can lean on** (SV-Q1 to SV-Q4). Up to `server.concurrency` jobs run at
+ *   once, each in its own Worker with its models loaded; the next is the highest `priority`, then
+ *   the oldest. A submit past `server.queue_max` or `server.queue_max_per_key` is refused with a
+ *   retry time from the jobs that ended, and the same numbers give the queue's ETA.
  * - **Every state change is one transaction** in the store: the job's state, its feed event and its
  *   delivery. A job the last process left running is queued again at start, in its place.
  * - **Nothing is kept longer than needed** (SV-J6). The upload is deleted when the job ends; a
@@ -63,6 +67,55 @@ export { DAY_MS };
  */
 export const MAX_JOB_STARTS = 2;
 
+/** The window of `jobs_last_hour` and `audio_seconds_last_hour`. */
+export const THROUGHPUT_WINDOW_MS = 3_600_000;
+/** How many of the last jobs' running times the mean, the ETA and the retry time are taken from. */
+export const MEAN_OF_JOBS = 50;
+/** The retry time of a refusal before any job has ended, and its bounds. */
+export const RETRY_AFTER_DEFAULT_S = 30;
+export const RETRY_AFTER_MAX_S = 3600;
+
+/** The queue as `GET /v1/server` and `GET /healthz` report it (SV-Q4). */
+export interface QueueStats {
+  /** `server.concurrency`. */
+  concurrency: number;
+  /** `server.queue_max`, 0 for none. */
+  max: number;
+  /** `server.queue_max_per_key`, 0 for none. */
+  max_per_key: number;
+  /** Jobs queued or running: what the limits count. */
+  depth: number;
+  queued: number;
+  running: number;
+  /** Jobs that ended, done or failed, in the last hour. */
+  jobs_last_hour: number;
+  /** Seconds of audio in the jobs done in the last hour. */
+  audio_seconds_last_hour: number;
+  /** The mean running time of the last jobs, in seconds; null before one has ended. */
+  mean_job_seconds: number | null;
+  /** Seconds until the queue is empty at that pace; null before a job has ended. */
+  eta_seconds: number | null;
+}
+
+/** A submit refused because the queue is full (SV-Q3). */
+export interface QueueFull {
+  /** The setting that refused it. */
+  limit: "server.queue_max" | "server.queue_max_per_key";
+  max: number;
+  /** The jobs queued or running that the limit counts. */
+  depth: number;
+  /** When one more job is likely to fit, in seconds. */
+  retry_after_s: number;
+}
+
+/** One place a job runs: its Worker, the recognizer the Worker holds, and the job in it. */
+interface Slot {
+  worker: JobWorker | null;
+  spec: string;
+  model: string | null;
+  job: { id: string; abort: AbortController } | null;
+}
+
 export interface JobServiceOptions {
   /** The folder of `jobs.db` and the uploads. */
   dir: string;
@@ -81,6 +134,12 @@ export interface JobServiceOptions {
   retainDays(): number;
   /** `server.max_audio_minutes`: longer audio fails `too_long` before it is held in memory. */
   maxAudioMinutes(): number;
+  /** `server.concurrency`: jobs run at once. Default 1. */
+  concurrency?(): number;
+  /** `server.queue_max`: jobs queued or running across keys; 0 or absent, no limit. */
+  queueMax?(): number;
+  /** `server.queue_max_per_key`: the same for one key; 0 or absent, no limit. */
+  queueMaxPerKey?(): number;
   /** Test seams: the upload decoder and the delivery's network. */
   decode?: (path: string, signal: AbortSignal, maxSamples: number) => Promise<Float32Array>;
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
@@ -102,6 +161,7 @@ export function jobView(j: Job, waiting: Waiting | null = null): Record<string, 
     preset: j.preset,
     model: j.model,
     model_source: j.model_source,
+    priority: j.priority,
     language: j.language,
     diarize: j.diarize,
     metadata: j.metadata,
@@ -178,19 +238,22 @@ export class JobService {
   private readonly deliverer: Deliverer;
   private readonly audioDir: string;
   private readonly now: () => number;
-  private worker: JobWorker | null = null;
-  private workerSpec = "";
-  /** The recognizer the worker was built for. */
-  private workerModelId: string | null = null;
-  private running: { id: string; abort: AbortController } | null = null;
-  private pumping = false;
+  private readonly slots: Slot[] = [];
   private closed = false;
+  /** Jobs that ended in this process: when, and the seconds of audio of a done one (SV-Q4). */
+  private ended: { at: number; audio_s: number }[] = [];
+  /** The running times of the last `MEAN_OF_JOBS` jobs this process ran, in ms. */
+  private runTimes: number[] = [];
   private readonly waiters = new Map<string, Set<Waiter>>();
   private readonly feedWatchers = new Set<(e: FeedEvent) => void>();
   private retention: ReturnType<typeof setInterval> | null = null;
 
+  /** When this process started the service: a job running from before is not timed. */
+  private readonly startedAt: number;
+
   constructor(private readonly o: JobServiceOptions) {
     this.now = o.now ?? Date.now;
+    this.startedAt = this.now();
     mkdirSync(o.dir, { recursive: true, mode: 0o700 });
     this.audioDir = join(o.dir, "audio");
     mkdirSync(this.audioDir, { recursive: true, mode: 0o700 });
@@ -251,6 +314,72 @@ export class JobService {
     return this.store.depth();
   }
 
+  private concurrency(): number {
+    return Math.max(1, this.o.concurrency?.() ?? 1);
+  }
+
+  /** The mean running time of the last jobs, in ms, or null before one has ended. */
+  private meanRunMs(): number | null {
+    if (this.runTimes.length === 0) return null;
+    return this.runTimes.reduce((a, b) => a + b, 0) / this.runTimes.length;
+  }
+
+  /** Seconds until `jobs` more have run at the current pace: rounds of `concurrency` jobs each. */
+  private secondsFor(jobs: number): number | null {
+    const mean = this.meanRunMs();
+    if (mean === null) return null;
+    return Math.ceil((Math.ceil(jobs / this.concurrency()) * mean) / 1000);
+  }
+
+  /** The queue's settings, depth, throughput and ETA (SV-Q4). */
+  queueStats(): QueueStats {
+    const c = this.store.counts(null);
+    const depth = c.queued + c.running;
+    const since = this.now() - THROUGHPUT_WINDOW_MS;
+    this.ended = this.ended.filter((e) => e.at > since);
+    const mean = this.meanRunMs();
+    return {
+      concurrency: this.concurrency(),
+      max: this.o.queueMax?.() ?? 0,
+      max_per_key: this.o.queueMaxPerKey?.() ?? 0,
+      depth,
+      queued: c.queued,
+      running: c.running,
+      jobs_last_hour: this.ended.length,
+      audio_seconds_last_hour: Math.round(this.ended.reduce((a, e) => a + e.audio_s, 0)),
+      mean_job_seconds: mean === null ? null : Math.round(mean / 100) / 10,
+      eta_seconds: depth === 0 ? 0 : this.secondsFor(depth),
+    };
+  }
+
+  /**
+   * Whether one more job from `key` is refused (SV-Q3): the queue at `server.queue_max`, or the
+   * key at `server.queue_max_per_key`. A retry of a job the key already holds (its idempotency
+   * key) is never refused: it adds nothing, and its answer is that job.
+   */
+  queueFull(key: string, idem: string | null): QueueFull | null {
+    if (idem !== null && this.store.hasIdempotent(key, idem)) return null;
+    const check = (
+      limit: QueueFull["limit"],
+      max: number,
+      c: { queued: number; running: number },
+    ) => {
+      const depth = c.queued + c.running;
+      if (max <= 0 || depth < max) return null;
+      const wait = this.secondsFor(depth - max + 1) ?? RETRY_AFTER_DEFAULT_S;
+      return {
+        limit,
+        max,
+        depth,
+        retry_after_s: Math.min(RETRY_AFTER_MAX_S, Math.max(1, wait)),
+      };
+    };
+    return (
+      check("server.queue_max", this.o.queueMax?.() ?? 0, this.store.counts(null)) ??
+      check("server.queue_max_per_key", this.o.queueMaxPerKey?.() ?? 0, this.store.counts(key))
+    );
+  }
+
   // -------------------------------------------------------------------------
   // Which model (SV-S1)
 
@@ -294,9 +423,19 @@ export class JobService {
     return jobView(j, waiting);
   }
 
-  /** The recognizer a live worker holds, or null. */
+  /** Whether a job on `model` could run now: its files on disk, or allowed to be fetched. */
+  obtainable(model: string): boolean {
+    try {
+      this.admit(model);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /** The recognizer a live worker holds (the first, with several), or null. */
   workerModel(): string | null {
-    return this.worker ? this.workerModelId : null;
+    return this.slots.find((s) => s.worker && s.model)?.model ?? null;
   }
 
   /** Every queued job waiting on `model` fails: its download failed for good (SV-M3). */
@@ -325,11 +464,19 @@ export class JobService {
   }
 
   /**
-   * A new job, the key's existing one for the same idempotency key and file, or a conflict when
-   * the same key names another file (SV-J2).
+   * A new job, the key's existing one for the same idempotency key and file, a conflict when the
+   * same key names another file (SV-J2), or a refusal when the queue is full (SV-Q3). The limit's
+   * check and the insert are one transaction, so two submits racing for the last place make one job.
    */
-  submit(j: NewJob): { job: Job; existing: boolean } | { conflict: Job } {
-    const r = this.store.submit(j);
+  submit(j: NewJob): { job: Job; existing: boolean } | { conflict: Job } | { full: QueueFull } {
+    const r = this.store.db.transaction(() => {
+      const full = this.queueFull(j.key_id, j.idempotency_key);
+      return full ? { full } : this.store.submit(j);
+    })();
+    if ("full" in r) {
+      rmSync(j.audio, { force: true });
+      return r;
+    }
     if (r.existing) {
       rmSync(j.audio, { force: true });
       if (r.job.file_sha256 !== j.file_sha256) return { conflict: r.job };
@@ -413,13 +560,17 @@ export class JobService {
   private drop(id: string): { id: string; status: JobStatus } | null {
     const r = this.store.remove(id);
     if (!r) return null;
-    if (this.running?.id === id) {
-      this.running.abort.abort();
-      this.worker?.cancel("the job was deleted");
+    const slot = this.slots.find((s) => s.job?.id === id);
+    if (slot) {
+      slot.job?.abort.abort();
+      slot.worker?.cancel("the job was deleted");
+      // The slot is free now: an aborted run touches neither it nor its Worker again.
+      slot.job = null;
     }
     if (r.job.audio) rmSync(r.job.audio, { force: true });
     this.notify(id, r.final);
     if (r.final === "cancelled") this.announce(id);
+    if (slot) this.pump();
     return { id, status: r.final };
   }
 
@@ -441,8 +592,8 @@ export class JobService {
     for (const j of [...this.store.queued(), ...this.store.running()]) {
       for (const id of shelf.needs(this.modelOf(j))) inUse.add(id);
     }
-    if (this.worker && this.workerModelId) {
-      for (const id of shelf.needs(this.workerModelId)) inUse.add(id);
+    for (const s of this.slots) {
+      if (s.worker && s.model) for (const id of shelf.needs(s.model)) inUse.add(id);
     }
     return { defaults, inUse };
   }
@@ -565,34 +716,64 @@ export class JobService {
   // -------------------------------------------------------------------------
   // The runner
 
-  private workerFor(spec: ModelSpec, recognizer: string): JobWorker {
+  private workerFor(slot: Slot, spec: ModelSpec, recognizer: string): JobWorker {
     const key = JSON.stringify(spec);
-    if (!this.worker || this.workerSpec !== key) {
-      this.worker?.close();
-      this.worker = new JobWorker(spec, (level, msg) => this.o.log(level, `job: ${msg}`));
-      this.workerSpec = key;
+    if (!slot.worker || slot.spec !== key) {
+      slot.worker?.close();
+      slot.worker = new JobWorker(spec, (level, msg) => this.o.log(level, `job: ${msg}`));
+      slot.spec = key;
     }
-    this.workerModelId = recognizer;
-    return this.worker;
+    slot.model = recognizer;
+    return slot.worker;
   }
 
   /**
-   * A worker built for a model other than the default's is closed once no queued job needs it, so
-   * an idle worker never pins a model the sweep should free (SV-M4).
+   * An idle slot for a job on `model`: one whose Worker holds it already, so its models stay
+   * loaded, else an empty one, else any idle one, whose Worker is rebuilt.
    */
-  private releaseWorker(): void {
-    const held = this.workerModelId;
-    if (!this.worker || held === null || held === this.defaultRecognizer()) return;
-    if (this.store.queued().some((j) => this.modelOf(j) === held)) return;
-    this.worker.close();
-    this.worker = null;
-    this.workerSpec = "";
-    this.workerModelId = null;
+  private slotFor(model: string): Slot {
+    const idle = this.slots.filter((s) => !s.job);
+    const slot =
+      idle.find((s) => s.worker && s.model === model) ?? idle.find((s) => !s.worker) ?? idle[0];
+    if (slot) return slot;
+    const fresh: Slot = { worker: null, spec: "", model: null, job: null };
+    this.slots.push(fresh);
+    return fresh;
   }
 
   /**
-   * The oldest queued job whose models are on disk. A job whose models are missing starts their
-   * download and waits, holding no worker (SV-M1).
+   * Idle Workers are closed when they hold a model other than the default's that no queued job
+   * needs, so an idle worker never pins a model the sweep should free (SV-M4), and when there are
+   * more of them than `server.concurrency` allows.
+   */
+  private releaseWorkers(): void {
+    let kept = this.slots.filter((s) => s.job).length;
+    const room = this.concurrency();
+    const queued = this.store.queued();
+    const fallback = this.defaultRecognizer();
+    for (const s of this.slots) {
+      if (s.job || !s.worker) continue;
+      const wanted =
+        s.model !== null &&
+        (s.model === fallback || queued.some((j) => this.modelOf(j) === s.model));
+      if (wanted && kept < room) {
+        kept++;
+        continue;
+      }
+      s.worker.close();
+      s.worker = null;
+      s.spec = "";
+      s.model = null;
+    }
+    for (let i = this.slots.length - 1; i >= 0; i--) {
+      const s = this.slots[i] as Slot;
+      if (!s.job && !s.worker) this.slots.splice(i, 1);
+    }
+  }
+
+  /**
+   * The next queued job whose models are on disk, in the queue's order. A job whose models are
+   * missing starts their download and waits, holding no worker (SV-M1).
    */
   private nextRunnable(): Job | null {
     for (const j of this.store.queued()) {
@@ -603,34 +784,27 @@ export class JobService {
     return null;
   }
 
-  /** Runs queued jobs one at a time, oldest first, until none is left. */
+  /** Starts queued jobs while a slot is free, up to `server.concurrency` at once. */
   private pump(): void {
-    if (this.pumping || this.closed) return;
-    this.pumping = true;
-    void (async () => {
-      try {
-        for (;;) {
-          if (this.closed) return;
-          const next = this.nextRunnable();
-          if (!next) {
-            this.releaseWorker();
-            return;
-          }
-          const job = this.store.markRunning(next.id);
-          if (job?.status !== "running") continue;
-          this.notify(job.id, "running");
-          await this.run(job);
-          this.releaseWorker();
-        }
-      } finally {
-        this.pumping = false;
-      }
-    })();
+    if (this.closed) return;
+    while (this.slots.filter((s) => s.job).length < this.concurrency()) {
+      const next = this.nextRunnable();
+      if (!next) break;
+      const job = this.store.markRunning(next.id);
+      if (job?.status !== "running") continue;
+      const slot = this.slotFor(this.modelOf(job));
+      const abort = new AbortController();
+      slot.job = { id: job.id, abort };
+      this.notify(job.id, "running");
+      void this.run(job, slot, abort).finally(() => {
+        if (slot.job?.id === job.id) slot.job = null;
+        this.pump();
+      });
+    }
+    this.releaseWorkers();
   }
 
-  private async run(job: Job): Promise<void> {
-    const abort = new AbortController();
-    this.running = { id: job.id, abort };
+  private async run(job: Job, slot: Slot, abort: AbortController): Promise<void> {
     let end:
       | { status: "done"; result: Record<string, unknown> }
       | { status: "failed"; error: JobError };
@@ -657,8 +831,9 @@ export class JobService {
         });
       }
       if (abort.signal.aborted) return;
+      // A llama-server engine (Qwen) takes the keywords as its glossary instead of hotwords.
       const decode: DecodeList | null =
-        job.keywords.length === 0
+        job.keywords.length === 0 || spec.final
           ? null
           : {
               model: modelNameFor(spec),
@@ -672,10 +847,12 @@ export class JobService {
               warnings: [],
             };
       // A model that takes no hotwords gets none (the engine would refuse them).
-      const pass = await this.workerFor(spec, model).run({
+      const pass = await this.workerFor(slot, spec, model).run({
         samples,
         diarize: job.diarize,
         decode: decode && modelKind(decode.model) === "transducer" ? decode : null,
+        language: job.language,
+        glossary: job.keywords,
       });
       const recognizer = pass.model ?? modelNameFor(spec);
       end = {
@@ -690,7 +867,6 @@ export class JobService {
       const code = (err as { code?: string }).code ?? "transcription_failed";
       end = { status: "failed", error: { code, message: (err as Error).message } };
     } finally {
-      if (this.running?.id === job.id) this.running = null;
       this.o.shelf.touch(needs);
     }
     this.conclude(job, end);
@@ -717,6 +893,7 @@ export class JobService {
           });
     if (job.audio) rmSync(job.audio, { force: true });
     if (!e) return;
+    this.measure(job, end);
     this.o.log(
       end.status === "done" ? "info" : "warn",
       `job.${end.status} ${job.id} key ${job.key_id} model ${this.modelOf(job)}`,
@@ -726,13 +903,34 @@ export class JobService {
     if (job.callback_url) this.deliverer.kick();
   }
 
+  /**
+   * A job that ended counts in the hour's throughput; its running time counts in the mean when this
+   * process ran it from its start (not a job failed while it waited, or one a restart interrupted).
+   */
+  private measure(
+    job: Job,
+    end: { status: "done"; result: Record<string, unknown> } | { status: "failed" },
+  ): void {
+    const now = this.now();
+    const audio = end.status === "done" ? Number(end.result.duration_s) : 0;
+    this.ended.push({ at: now, audio_s: Number.isFinite(audio) ? audio : 0 });
+    this.ended = this.ended.filter((e) => e.at > now - THROUGHPUT_WINDOW_MS);
+    if (job.running_at !== null && job.running_at >= this.startedAt) {
+      this.runTimes.push(Math.max(0, now - job.running_at));
+      if (this.runTimes.length > MEAN_OF_JOBS) this.runTimes.shift();
+    }
+  }
+
   close(): void {
+    if (this.closed) return;
     this.closed = true;
     if (this.retention) clearInterval(this.retention);
     this.deliverer.close();
-    this.running?.abort.abort();
-    this.worker?.close();
-    this.worker = null;
+    for (const s of this.slots) {
+      s.job?.abort.abort();
+      s.worker?.close();
+      s.worker = null;
+    }
     this.o.shelf.close();
     this.store.close();
   }

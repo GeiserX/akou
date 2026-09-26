@@ -23,6 +23,8 @@ on:
     paths:
       - .github/workflows/release.yml
       - electrobun.config.ts
+      - assets/brand/akou.iconset/**
+      - scripts/app-icon.ts
       - package.json
       - bun.lock
       - scripts/build-app.ts
@@ -193,7 +195,7 @@ jobs:
   # The server image (docs/ux/SERVER.md SV-P1), built natively on each architecture's runner from
   # the tag's tree, in three variants (akou-5an.94): cpu, vulkan (Intel and AMD GPUs) and cuda
   # (NVIDIA). A tag pushes each build by digest, and `image-manifest` joins the two architectures of
-  # each under geiserx/akou:<version>, <version>-vulkan and <version>-cuda. There is never a
+  # each under drumsergio/akou:<version>, <version>-vulkan and <version>-cuda. There is never a
   # `latest` tag. A pull request or a dry run builds them all and pushes nothing. Pushing needs
   # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the repository.
   image:
@@ -236,7 +238,7 @@ jobs:
         # Without the secrets `docker login` fails on an empty user name and says nothing of them.
         run: |
           if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            echo "::error::a tag pushes drumsergio/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
             exit 1
           fi
           echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
@@ -244,7 +246,7 @@ jobs:
         run: |
           docker buildx create --use --name akou
           if [ "$PUSH" = true ]; then
-            output="type=image,name=docker.io/geiserx/akou,push-by-digest=true,name-canonical=true,push=true"
+            output="type=image,name=docker.io/drumsergio/akou,push-by-digest=true,name-canonical=true,push=true"
           else
             output="type=docker,name=akou:dry-run"
           fi
@@ -279,11 +281,11 @@ jobs:
         # Without the secrets `docker login` fails on an empty user name and says nothing of them.
         run: |
           if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            echo "::error::a tag pushes drumsergio/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
             exit 1
           fi
           echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
-      - name: geiserx/akou:<version>, <version>-vulkan and <version>-cuda, each for amd64 and arm64
+      - name: drumsergio/akou:<version>, <version>-vulkan and <version>-cuda, each for amd64 and arm64
         env:
           TAG: ${{ github.ref_name }}
         run: |
@@ -291,12 +293,12 @@ jobs:
           for variant in cpu vulkan cuda; do
             suffix=""
             [ "$variant" = cpu ] || suffix="-$variant"
-            refs=$(cat digests/"$variant"-linux-amd64 digests/"$variant"-linux-arm64 | sed 's|^|docker.io/geiserx/akou@|')
+            refs=$(cat digests/"$variant"-linux-amd64 digests/"$variant"-linux-arm64 | sed 's|^|docker.io/drumsergio/akou@|')
             # Both architectures, or nothing: the step's shell has no pipefail, so count them.
             test "$(printf '%s\n' "$refs" | grep -c .)" = 2
             # shellcheck disable=SC2086
-            docker buildx imagetools create --tag "docker.io/geiserx/akou:$version$suffix" $refs
-            docker buildx imagetools inspect "docker.io/geiserx/akou:$version$suffix"
+            docker buildx imagetools create --tag "docker.io/drumsergio/akou:$version$suffix" $refs
+            docker buildx imagetools inspect "docker.io/drumsergio/akou:$version$suffix"
           done
 
   # The image of the tag is part of the release: no GitHub release goes out while it failed.

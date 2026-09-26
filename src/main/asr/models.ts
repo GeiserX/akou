@@ -21,6 +21,7 @@ import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DiarizerKind } from "./engine.ts";
+import { LLAMA_CATALOG } from "./llama-catalog.ts";
 
 export interface ModelFileSpec {
   name: string;
@@ -42,16 +43,19 @@ export interface ModelSpecEntry {
 export const PLATFORMS = ["darwin-arm64", "linux-x64", "linux-arm64", "win32-x64"] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
-/** How an entry runs: in-process sherpa-onnx, or the `akou-diarize` helper. */
-export const RUNTIMES = ["sherpa-onnx", "akou-diarize"] as const;
+/**
+ * How an entry runs: in-process sherpa-onnx, the `akou-diarize` helper, or a `llama-server` child
+ * process (llama.cpp), which is itself a catalog entry per platform and accelerator.
+ */
+export const RUNTIMES = ["sherpa-onnx", "akou-diarize", "llama-server"] as const;
 export type Runtime = (typeof RUNTIMES)[number];
 
 /** The llama.cpp backends akou ships builds of (llama-builds.ts), in the order `asr.accelerator` lists them. */
 export const ACCELERATORS = ["cpu", "metal", "vulkan", "cuda", "sycl", "rocm"] as const;
 export type Accelerator = (typeof ACCELERATORS)[number];
 
-/** The interfaces of engine.ts an entry serves. */
-export const ROLES = ["final", "live", "vad", "diarizer", "embedder"] as const;
+/** The interfaces of engine.ts an entry serves; `runtime` is a program another entry runs on. */
+export const ROLES = ["final", "live", "vad", "diarizer", "embedder", "runtime"] as const;
 export type Role = (typeof ROLES)[number];
 
 /** A catalog entry: a model with what runs it, where, and for which languages. */
@@ -62,6 +66,12 @@ export interface CatalogEntry extends ModelSpecEntry {
   accelerators: readonly Accelerator[];
   /** ISO 639-1 codes the model recognizes, or `any` for a model that hears no words. */
   languages: "any" | readonly string[];
+  /**
+   * Fetched only when a preset, a job or `akou models pull` names it, never as part of a machine's
+   * default download (`modelsFor`): Qwen and the llama-server builds weigh gigabytes a `fast`
+   * machine never loads.
+   */
+  onDemand?: true;
 }
 
 /** Parakeet TDT v3's 25 European languages, from its model card. */
@@ -222,6 +232,7 @@ export const MODELS: readonly CatalogEntry[] = [
       },
     ],
   },
+  ...LLAMA_CATALOG,
 ];
 
 /** The models only one speaker-label engine needs. */
@@ -237,7 +248,8 @@ export function hostPlatform(): string {
 
 /**
  * The models a machine needs for its settings (`asr.diarizer`) on its platform: the recognizer, the
- * VAD and TitaNet always, then Nemotron or pyannote, each only where it runs. `akou models pull`
+ * VAD and TitaNet always, then Nemotron or pyannote, each only where it runs. An `onDemand` entry
+ * (Qwen, the llama-server builds) is never in it. `akou models pull`
  * fetches these and `akou doctor` checks them. Tests pass their own registry, which loses the other
  * engine's entries the same way; an entry with no `platforms` (a test's) runs everywhere.
  */
@@ -249,8 +261,13 @@ export function modelsFor<T extends ModelSpecEntry>(
   const diarizer = settings["asr.diarizer"] as DiarizerKind;
   const other = diarizer === "nemotron" ? ONLY.embeddings : ONLY.nemotron;
   return registry.filter((m) => {
-    const platforms = (m as Partial<CatalogEntry>).platforms as readonly string[] | undefined;
-    return !other.includes(m.id) && (platforms === undefined || platforms.includes(platform));
+    const c = m as Partial<CatalogEntry>;
+    const platforms = c.platforms as readonly string[] | undefined;
+    return (
+      !other.includes(m.id) &&
+      !c.onDemand &&
+      (platforms === undefined || platforms.includes(platform))
+    );
   });
 }
 
