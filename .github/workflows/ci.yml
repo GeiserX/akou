@@ -413,10 +413,11 @@ jobs:
       - name: the image refuses 0.0.0.0 without AKOU_BEHIND_PROXY (SV-P11) and a /models it cannot write (SV-P12)
         run: |
           set -uo pipefail
-          mkdir -p "$DATA"
-          sudo chown 1000:1000 "$DATA"
+          # A data folder of their own, so the server below still starts on an empty one.
+          scratch=$(mktemp -d)
+          sudo chown 1000:1000 "$scratch"
           code=0
-          docker run --rm -v "$DATA:/data" -v "$MODELS:/models" akou:ci > refused.log 2>&1 || code=$?
+          docker run --rm -v "$scratch:/data" -v "$MODELS:/models" akou:ci > refused.log 2>&1 || code=$?
           cat refused.log
           [ "$code" = 78 ] && grep -q 'server.behind_proxy' refused.log \
             || { echo "want: exited 78 naming server.behind_proxy; got $code"; exit 1; }
@@ -424,12 +425,14 @@ jobs:
           locked=$(mktemp -d)
           sudo chown root:root "$locked"
           code=0
-          docker run --rm -e AKOU_BEHIND_PROXY=true -v "$DATA:/data" -v "$locked:/models" akou:ci > locked.log 2>&1 || code=$?
+          docker run --rm -e AKOU_BEHIND_PROXY=true -v "$scratch:/data" -v "$locked:/models" akou:ci > locked.log 2>&1 || code=$?
           cat locked.log
           [ "$code" = 77 ] && grep -q '/models is not writable by uid 1000' locked.log \
             || { echo "want: exited 77 naming /models and uid 1000; got $code"; exit 1; }
       - name: start the server with only AKOU_BEHIND_PROXY and an empty data folder (SV-P5, SV-P11)
         run: |
+          mkdir -p "$DATA"
+          sudo chown 1000:1000 "$DATA"
           test -z "$(ls -A "$DATA")"
           docker run -d --name akou --add-host=host.docker.internal:host-gateway -e AKOU_BEHIND_PROXY=true \
             -p 127.0.0.1:8476:8476 -v "$DATA:/data" -v "$MODELS:/models" akou:ci
