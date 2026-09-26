@@ -25,6 +25,7 @@ import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { handoffCommands } from "./commands/handoff.ts";
 import { noteCommands } from "./commands/notes.ts";
+import { serverCommands } from "./commands/server.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
 import { vocab } from "./commands/vocab.ts";
@@ -57,6 +58,7 @@ export const COMMANDS: readonly Command[] = [
   vocab,
   doctorCommand,
   ...setupCommands,
+  ...serverCommands,
   skillCommand,
   mcp,
 ];
@@ -223,6 +225,7 @@ if (import.meta.main) {
     signal: ac.signal,
     tty: process.stdout.isTTY === true,
     readStdin: () => Bun.stdin.text(),
+    stdinIsTTY: process.stdin.isTTY === true,
     keys: process.stdin.isTTY ? stdinKeys() : undefined,
   });
   process.exit(code);

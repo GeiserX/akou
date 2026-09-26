@@ -4,7 +4,7 @@
  */
 
 import type { Outcome } from "../call/state.ts";
-import type { RouteMeta } from "./access.ts";
+import type { Identity, RouteMeta } from "./access.ts";
 import { MAX_BODY_BYTES } from "./guard.ts";
 
 export class HttpError extends Error {
@@ -115,8 +115,11 @@ export async function drainBody(
   }
 }
 
-/** Reads at most `MAX_BODY_BYTES`, whatever `Content-Length` claimed (or did not claim). */
-async function readCapped(req: Request): Promise<string> {
+/**
+ * Reads at most `MAX_BODY_BYTES`, whatever `Content-Length` claimed (or did not claim); past it,
+ * throws 413. The API's body parser and the web UI's page (`page-server.ts`) both read through it.
+ */
+export async function readCapped(req: Request): Promise<string> {
   if (!req.body) return "";
   const reader = req.body.getReader();
   const chunks: Uint8Array[] = [];
@@ -230,6 +233,16 @@ export interface RouteContext<A> {
   app: A;
   /** `agent:<client>` from `X-Akou-Client`, or `agent:api`. */
   by: string;
+  /**
+   * Who is calling, as the guard found it: null on an `open` route called with no key; absent in
+   * process (the window's bridge), which is the user, `admin`. Read it with `caller(c)`.
+   */
+  identity?: Identity | null;
+  /**
+   * The source address: the TCP peer, or the client a trusted proxy names (`server.trusted_proxies`,
+   * SV-P5). For rate limits and audit, never for access. Absent in process.
+   */
+  source?: string;
   /**
    * Sets this request's idle timeout, seconds; 0 turns it off. A route that waits on a model
    * (ask, enhance) turns it off, so a slow answer is not cut at the server's idle limit.
@@ -436,8 +449,13 @@ export class Router<A> {
     return { status: pathMatched ? 405 : 404 };
   }
 
-  list(): { method: string; path: string }[] {
-    return this.routes.map((r) => ({ method: r.method, path: `/${r.parts.join("/")}` }));
+  /** Every route with its access level, for the scope walks (SV-K3). */
+  list(): { method: string; path: string; meta: RouteMeta }[] {
+    return this.routes.map((r) => ({
+      method: r.method,
+      path: `/${r.parts.join("/")}`,
+      meta: { access: r.doc.access },
+    }));
   }
 
   /** Every route with its doc, in the order added. */

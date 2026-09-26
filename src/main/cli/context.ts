@@ -25,8 +25,13 @@ export interface Io {
   signal?: AbortSignal;
   /** stdout is a terminal: colour and redraws are allowed there only (CLI-20). */
   tty?: boolean;
-  /** Everything on stdin, for `config set KEY -` (CLI-06). Absent: stdin is empty. */
+  /**
+   * Everything on stdin, for `config set KEY -` (CLI-06) and a password (never an argument).
+   * Absent: stdin is empty.
+   */
   readStdin?(): Promise<string>;
+  /** Standard input is a terminal: a secret read from it would echo and wait with no prompt. */
+  stdinIsTTY?: boolean;
   /** Keys typed at a terminal, for `akou watch`. Absent: stdin is not a terminal (`config set KEY -` reads it silently). */
   keys?: Keys;
 }

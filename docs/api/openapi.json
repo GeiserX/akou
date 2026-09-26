@@ -69,6 +69,12 @@
       "name": "import"
     },
     {
+      "name": "server"
+    },
+    {
+      "name": "keys"
+    },
+    {
       "name": "openapi"
     }
   ],
@@ -3128,6 +3134,65 @@
           "app"
         ],
         "x-akou-access": "admin"
+      }
+    },
+    "/v1/server": {
+      "get": {
+        "operationId": "server.get",
+        "tags": [
+          "server"
+        ],
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, and which capabilities (jobs, events, the OpenAI route) exist. Needs no key.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "security": [],
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "open"
+      }
+    },
+    "/v1/keys/me": {
+      "get": {
+        "operationId": "keys.me",
+        "tags": [
+          "keys"
+        ],
+        "description": "The calling key: its id, name, scopes and creation time. The app's own token answers as `app` with the `admin` scope. Executor's health check calls it.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "jobs"
       }
     },
     "/v1/openapi.json": {

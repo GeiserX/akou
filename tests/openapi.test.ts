@@ -123,7 +123,13 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
   test("every route in server.routes() appears in the file, and nothing else does", async () => {
     const { server } = await serve();
     try {
-      const served = routeKeys(server.routes());
+      // `/healthz` is outside `/v1`, and so outside the file; the file's paths add `/v1` back.
+      const served = routeKeys(
+        server
+          .routes()
+          .filter((r) => r.path.startsWith("/v1/"))
+          .map((r) => ({ ...r, path: r.path.slice("/v1".length) })),
+      );
       expect(served.length).toBeGreaterThan(50);
       expect(opKeys(committed())).toEqual(served);
       // Positive control: a file with an operation the server lacks, or lacking one it has.
@@ -448,7 +454,7 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
       const ids = operations(doc)
         .map((o) => o.op.operationId)
         .sort();
-      expect(ids).toEqual(["events.list", "jobs.create", "jobs.get", "keys.me"]);
+      expect(ids).toEqual(["events.list", "jobs.create", "jobs.get", "keys.me", "server.get"]);
       for (const { op } of operations(doc)) expect(op["x-akou-access"]).not.toBe("admin");
       expect(openApiProblems(doc)).toEqual([]);
       // Positive control: without the scope the same server lists admin and compat operations.

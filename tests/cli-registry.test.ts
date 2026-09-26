@@ -98,6 +98,8 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   skill: "copies the skills and registers the MCP server",
   doctor: "checks akou's folders and asks the running app only for /status",
   mcp: "serves MCP on stdin and stdout until they close",
+  keys: "reads and writes the keys file, with the app stopped or running",
+  admin: "writes the admin password hash into the settings file",
 };
 
 const CALL_ROUTE = /^[A-Z]+ \/calls\/[^/?]+/;
