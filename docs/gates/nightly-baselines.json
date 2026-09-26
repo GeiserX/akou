@@ -1,7 +1,7 @@
 {
   "_about": "Baselines of the nightly model evaluation (scripts/eval/nightly.ts, docs/TESTING.md TS-19 and TS-20), per platform as process.platform-process.arch. A gated number worse than its baseline, or with none, fails the night. Lower a baseline when a change makes a number better; raising one needs the reason in the commit. Rounded to two decimals.",
   "_measured": {
-    "linux-x64": "2026-09-25, an Ubuntu 24.04 x64 container limited to 4 CPUs, twice with the same numbers (the AMI diarization error too, after the set moved from VoxConverse); the first night on the GitHub runner confirms them or replaces them in its own commit",
+    "linux-x64": "2026-09-25, an Ubuntu 24.04 x64 container limited to 4 CPUs, twice with the same numbers (the AMI diarization error too, after the set moved from VoxConverse); the first night on the GitHub runner confirms them or replaces them in its own commit. The two WER numbers were decoded with beam search (modified_beam_search), the default before #34; the night decodes with the app default, greedy since #34, so a first-night WER miss here is the decoder change to re-baseline, not a regression",
     "darwin-arm64": "not yet: the first night prints the numbers to commit",
     "win32-x64": "not yet: the first night prints the numbers to commit"
   },
