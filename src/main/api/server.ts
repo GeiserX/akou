@@ -40,6 +40,7 @@ import { callRoutes } from "./routes/calls.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
 import { jobRoutes } from "./routes/jobs.ts";
+import { keyRoutes } from "./routes/keys.ts";
 import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
 import { openaiRoutes } from "./routes/openai.ts";
@@ -208,6 +209,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   serverRoutes(r);
   if (mode !== "app") {
     jobRoutes(r);
+    keyRoutes(r);
     openaiRoutes(r);
   }
   openapiRoutes(r);

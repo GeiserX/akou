@@ -69,8 +69,17 @@ export interface CreatedKey {
   secret: string;
 }
 
+/** What a refused edit was refused for: a field of the new key, a taken name, or a held lock. */
+export type KeyErrorReason = "name" | "scope" | "callback_hosts" | "exists" | "busy";
+
 export class KeyError extends Error {
   override name = "KeyError";
+  constructor(
+    message: string,
+    readonly reason: KeyErrorReason,
+  ) {
+    super(message);
+  }
 }
 
 export function newApiKey(): string {
@@ -166,6 +175,7 @@ export class KeyStore {
       if (err instanceof LockError) {
         throw new KeyError(
           `another edit of the keys (pid ${err.holderPid}) is running; run this again when it ends`,
+          "busy",
         );
       }
       throw err;
@@ -199,19 +209,24 @@ export class KeyStore {
     if (!NAME.test(name)) {
       throw new KeyError(
         "a key's name is 1 to 64 letters, digits, spaces, dots, dashes or underscores",
+        "name",
       );
     }
     const scope = o.scope ?? "jobs";
     if (!(SCOPES as readonly string[]).includes(scope)) {
-      throw new KeyError(`the scope is one of ${SCOPES.join(", ")}`);
+      throw new KeyError(`the scope is one of ${SCOPES.join(", ")}`, "scope");
     }
     const hosts = [...new Set((o.callbackHosts ?? []).map((h) => h.trim().toLowerCase()))];
     const bad = hosts.find((h) => !HOST.test(h));
     if (bad !== undefined) {
-      throw new KeyError(`"${bad}" is not a host name or an address (no scheme, port or path)`);
+      throw new KeyError(
+        `"${bad}" is not a host name or an address (no scheme, port or path)`,
+        "callback_hosts",
+      );
     }
     return this.edit((keys) => {
-      if (keys.some((k) => k.name === name)) throw new KeyError(`a key named "${name}" exists`);
+      if (keys.some((k) => k.name === name))
+        throw new KeyError(`a key named "${name}" exists`, "exists");
       let id: string;
       do id = `key_${randomBytes(4).toString("hex")}`;
       while (keys.some((k) => k.id === id));

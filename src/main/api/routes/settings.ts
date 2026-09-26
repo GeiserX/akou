@@ -59,6 +59,7 @@ export function settingsRoutes(r: Router<ApiApp>): void {
                 type: s.type,
                 min: s.min,
                 max: s.max,
+                values: s.values,
                 env: s.env,
                 secret: s.secret,
                 // File only when false: it names a program akou runs or where transcripts are sent.

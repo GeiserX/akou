@@ -358,9 +358,11 @@ describe("SV-K3: a path that is not a route", () => {
     const typo = await get(server, "/v1/jbos", auth);
     expect(typo.status).toBe(404);
     expect(JSON.parse(typo.body).error).toBe("not_found");
+    // A path that exists with another method. (`DELETE /v1/keys/me` is no longer one: it names
+    // the admin route `DELETE /v1/keys/{id}` of SV-K7.)
     const method = await rawRequest(server.port, {
       method: "DELETE",
-      path: "/v1/keys/me",
+      path: "/v1/server",
       headers: { ...auth, "content-type": "application/json" },
     });
     expect(method.status).toBe(405);
