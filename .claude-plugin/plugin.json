@@ -1,6 +1,6 @@
 {
   "name": "akou",
-  "version": "0.2.1",
+  "version": "0.3.0",
   "description": "Record your calls locally with akou and question them while they run: the akou skills and the akou_* MCP tools.",
   "author": { "name": "GeiserX" },
   "homepage": "https://github.com/GeiserX/akou",

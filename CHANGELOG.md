@@ -2,6 +2,26 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.3.0 — the best preset, on the GPU the box has
+
+The server now runs the `best` preset, on Qwen3-ASR with speaker labels, and uses the GPU it finds: Intel or AMD through Vulkan, NVIDIA through CUDA, Apple silicon through Metal. A server that has no fitting GPU can hand its jobs to another akou, such as a Mac mini. A backlog of tens of thousands of files can drain without a client flooding the server.
+
+### Server mode
+- `best` runs Qwen3-ASR-1.7B, the most accurate open model akou knows for English and Spanish, through llama.cpp's `llama-server` (release b11200, every file pinned by SHA-256). A job asks for it with `preset=best`, or `server.default_model` makes it the default. `diarize=true` adds Nemotron speaker labels. The model and its llama-server download on demand, like any model. `asr.languages` keeps Qwen's automatic language choice inside the languages you list. See [docs/install.md](docs/install.md#the-best-preset).
+- GPU images: `drumsergio/akou:<version>-vulkan` for Intel (integrated or Arc) and AMD GPUs, with `--device /dev/dri` and the render node's group, and `drumsergio/akou:<version>-cuda` for NVIDIA, with `--gpus all`. The plain `drumsergio/akou:<version>` runs on the CPU. All three are built for amd64 and arm64. See [docs/install.md](docs/install.md#a-gpu).
+- `asr.accelerator` (`auto` by default, or `AKOU_ACCELERATOR`) picks the GPU: Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU. llama-server then confirms the device itself. `GET /v1/server` reports `gpu` and `accelerator`, with the device's name, or the reason it runs on the CPU.
+- Sending jobs to another akou: `server.remotes` names other akou servers, their key files and the presets to send them first. A job this server cannot run goes to a remote that offers it. The client still sees one server, with its own job ids, feed, webhooks and metadata. When a remote goes down, its jobs go back to the queue and never fail for that reason. See [docs/install.md](docs/install.md#sending-jobs-to-another-akou).
+- A Mac as the server: `akou serve` from a source checkout uses Metal, with steps for a LaunchDaemon that starts it at boot. CI runs it on a macOS arm64 runner. See [docs/install.md](docs/install.md#a-mac-as-the-server).
+- A large backlog: `server.concurrency` runs jobs in parallel, `server.queue_max` and `server.queue_max_per_key` cap the queue, and a submit past a limit gets `429 queue_full` with `Retry-After` before the upload is read. A job may carry `priority` from -10 to 10. `GET /v1/server` and `/healthz` report the queue's depth, throughput and ETA. See [docs/install.md](docs/install.md#a-large-backlog).
+
+The Telegram-Archive contract does not change: the event feed, `Idempotency-Key`, the job fields and the error shape are as in 0.2.1. `priority` is new and optional.
+
+### Known limitations
+- **GPU speed is measured on Apple silicon only.** A Mac mini M4 runs `best` with speaker labels at a real-time factor of 0.16, natively on Metal. The Vulkan image on an Intel UHD 770 and the CUDA image on a real NVIDIA card have passed CI with no GPU, but nobody has timed them yet.
+- **A Mac serves from a source checkout.** Docker on a Mac has no GPU, and the single-file CLI's `akou serve` still carries no speech engine.
+- **`best`'s nightly accuracy checks are not in CI yet.** CI covers it with a fake llama-server. Qwen's per-word confidences do not reach the result yet.
+- Every item under 0.2.0's Known limitations still applies, except the one that said only `fast` had an engine and the image used no GPU.
+
 ## 0.2.1 — the first published 0.2 release
 
 The `v0.2.0` tag exists, but 0.2.0 never published a Docker image or a GitHub release. Docker Hub refused the push to `geiserx/akou`, a namespace that does not exist, and the release waits for the image. 0.2.1 ships everything listed under 0.2.0, under the image name that works.
