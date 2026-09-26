@@ -8,7 +8,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readdirSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { z } from "zod";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
@@ -230,6 +230,91 @@ describe("SV-J1: POST /v1/jobs, multipart", () => {
     expect((await call(app, app.token, "GET", "/jobs")).status).toBe(404);
     // Positive control: the server has it.
     expect(routes(server)).toContain("POST /v1/jobs");
+  });
+});
+
+describe("SV-D3: an upload streams to disk as it arrives", () => {
+  const BOUNDARY = "akouD3boundaryx7";
+  const enc = (t: string) => new TextEncoder().encode(t);
+  const head = enc(
+    `--${BOUNDARY}\r\nContent-Disposition: form-data; name="file"; filename="note.wav"\r\nContent-Type: audio/wav\r\n\r\n`,
+  );
+  const tail = enc(
+    `\r\n--${BOUNDARY}\r\nContent-Disposition: form-data; name="metadata"\r\n\r\n{"d3": 1}\r\n--${BOUNDARY}--\r\n`,
+  );
+
+  /** A body that sends the part head and the whole file, then waits for `finish` or `fail`. */
+  function heldBody() {
+    let finish = () => {};
+    let fail = () => {};
+    const body = new ReadableStream<Uint8Array>({
+      start(ctl) {
+        ctl.enqueue(head);
+        ctl.enqueue(NOTE);
+        finish = () => {
+          ctl.enqueue(tail);
+          ctl.close();
+        };
+        fail = () => ctl.error(new Error("the client went away"));
+      },
+    });
+    return { body, finish: () => finish(), fail: () => fail() };
+  }
+
+  function post(key: string, body: ReadableStream<Uint8Array>): Promise<Response> {
+    return fetch(`http://127.0.0.1:${server.port}/v1/jobs`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${key}`,
+        "content-type": `multipart/form-data; boundary=${BOUNDARY}`,
+      },
+      body,
+      duplex: "half",
+    } as RequestInit);
+  }
+
+  /** Uploads that were not in the folder before. */
+  function fresh(before: string[]): { name: string; size: number }[] {
+    const dir = join(server.app.configDir, "jobs", "audio");
+    return audioFiles(server)
+      .filter((f) => !before.includes(f))
+      .map((name) => ({ name, size: statSync(join(dir, name)).size }));
+  }
+
+  test("the file is on disk before the body ends, and the job runs from it", async () => {
+    const k = await newKey(server, "d3-stream");
+    const before = audioFiles(server);
+    const held = heldBody();
+    const sent = post(k.key, held.body);
+    // Positive control of the test itself: nothing arrives whole, so a server that reads the body
+    // into memory first holds nothing on disk here, and this wait times out.
+    await until(
+      () => fresh(before).some((f) => f.size >= NOTE.length - 64),
+      10_000,
+      "the upload on disk while the body is still arriving",
+    );
+    held.finish();
+    const s = await answer(await sent);
+    expect(s.status).toBe(202);
+    const done = await call(server, k.key, "GET", `/jobs/${s.body.id}?wait=60`);
+    expect(done.body.status).toBe("done");
+    const r = await call(server, k.key, "GET", `/jobs/${s.body.id}/result`);
+    expect(r.body.text).toBe("hello world");
+    expect(r.body.metadata).toEqual({ d3: 1 });
+  });
+
+  test("an upload cut off mid-body, or refused after it arrived, leaves no file behind", async () => {
+    const k = await newKey(server, "d3-cleanup");
+    const before = audioFiles(server);
+    const held = heldBody();
+    const sent = post(k.key, held.body).catch(() => null);
+    await until(() => fresh(before).length > 0, 10_000, "the upload started");
+    held.fail();
+    await sent;
+    await until(() => fresh(before).length === 0, 10_000, "the cut upload deleted");
+    const refused = await submit(server, k.key, NOTE, { preset: "nope" });
+    expect(refused.status).toBe(422);
+    expect(fresh(before)).toEqual([]);
   });
 });
 

@@ -12,7 +12,6 @@
  *   older than `server.retain_days` goes the same way on a timer.
  */
 
-import { createHash } from "node:crypto";
 import { mkdirSync, readdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Identity } from "../api/access.ts";
@@ -219,20 +218,12 @@ export class JobService {
   // -------------------------------------------------------------------------
   // Submit, read, delete
 
-  /** Keeps an upload on disk and returns its path and SHA-256. */
-  async keepUpload(file: Blob): Promise<{ path: string; sha256: string }> {
-    const path = join(this.audioDir, `${crypto.randomUUID()}.upload`);
-    const hash = createHash("sha256");
-    const sink = Bun.file(path).writer();
-    try {
-      for await (const chunk of file.stream()) {
-        hash.update(chunk);
-        sink.write(chunk);
-      }
-    } finally {
-      await sink.end();
-    }
-    return { path, sha256: hash.digest("hex") };
+  /**
+   * The folder uploads are written into as they arrive (SV-D3), as `<uuid>.upload`; one that no
+   * job names is deleted at the next start.
+   */
+  get uploadDir(): string {
+    return this.audioDir;
   }
 
   /**
