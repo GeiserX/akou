@@ -450,7 +450,12 @@ export class Router<A> {
   }
 }
 
-/** `X-Akou-Client: claude-code` names the agent in `by`; anything odd is replaced. */
+/**
+ * `X-Akou-Client: claude-code` names the agent in `by`; anything odd is replaced. A header never
+ * makes a request the user's, `user` included: any token holder can send any header, and `by:
+ * "user"` would hide an agent's start and share from the notices and pass its notes off as the
+ * user's (PRINCIPLES 4 and 10). Only the window, in process, writes as the user.
+ */
 export function authorOf(req: Request): string {
   const raw = (req.headers.get("x-akou-client") ?? "").trim().toLowerCase();
   const client = /^[a-z0-9][a-z0-9._-]{0,39}$/.test(raw) ? raw : "api";

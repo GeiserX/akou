@@ -47,6 +47,7 @@ export function rigCli(rig: AppRig) {
 export async function cliChild(
   env: Record<string, string | undefined>,
   argv: string[],
+  o: { stdin?: string } = {},
 ): Promise<{ code: number; out: string; err: string; ms: number }> {
   const t0 = performance.now();
   const clean = Object.fromEntries(
@@ -54,6 +55,7 @@ export async function cliChild(
   );
   const proc = Bun.spawn([process.execPath, CLI, ...argv], {
     env: clean,
+    stdin: o.stdin === undefined ? "ignore" : new TextEncoder().encode(o.stdin),
     stdout: "pipe",
     stderr: "pipe",
   });

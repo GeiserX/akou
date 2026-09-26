@@ -100,8 +100,8 @@ describe("exit codes", () => {
 
   test("a flag never takes another flag as its value; --name=value still can", () => {
     const spec = {
-      title: { type: "string", short: "t" },
-      follow: { type: "boolean", short: "f" },
+      title: { type: "string", short: "t", desc: "a title" },
+      follow: { type: "boolean", short: "f", desc: "follow" },
     } as const;
     expect(() => parseArgs(["-t", "--json"], spec)).toThrow("--title needs a value");
     expect(() => parseArgs(["--title", "-f"], spec)).toThrow("--title needs a value");

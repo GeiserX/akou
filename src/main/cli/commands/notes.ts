@@ -4,19 +4,20 @@
  */
 
 import { bool, str } from "../args.ts";
-import { api, type Command, enc, finish, ref } from "../context.ts";
+import { api, type Command, callFlag, enc, finish, ref } from "../context.ts";
 import { usage } from "./calls.ts";
 
 const name: Command = {
   name: "name",
   summary: "Name a speaker, or merge and unmerge speakers",
   usage:
-    "akou name SPK NAME… | akou name --merge A B | akou name --unmerge SPK   [--call ID] [--json]",
+    "akou name SPK NAME… | akou name --merge A B | akou name --unmerge SPK   [-c CALL] [--json]",
   flags: {
-    merge: { type: "boolean" },
-    unmerge: { type: "boolean" },
-    call: { type: "string" },
+    merge: { type: "boolean", desc: "merge speaker A into speaker B" },
+    unmerge: { type: "boolean", desc: "undo a merge of this speaker" },
+    call: callFlag("live"),
   },
+  examples: ["akou name c2 Ben Carter", "akou name --merge c3 c2"],
   run: async (ctx, p) => {
     const [a, ...rest] = p.positional;
     if (bool(p, "merge")) {
@@ -42,9 +43,13 @@ const name: Command = {
 const note: Command = {
   name: "note",
   summary: "Add a line to the call's notepad, or edit or delete one",
-  usage:
-    'akou note "TEXT" | akou note --edit ID "TEXT" | akou note --del ID   [--call ID] [--json]',
-  flags: { call: { type: "string" }, edit: { type: "string" }, del: { type: "string" } },
+  usage: 'akou note "TEXT" | akou note --edit ID "TEXT" | akou note --del ID   [-c CALL] [--json]',
+  flags: {
+    call: callFlag("live"),
+    edit: { type: "string", value: "ID", desc: "replace the text of this note" },
+    del: { type: "string", value: "ID", desc: "delete this note" },
+  },
+  examples: ['akou note "ship on Friday"', 'akou note --edit n0001 "ship on Thursday"'],
   run: async (ctx, p) => {
     const text = p.positional.join(" ").trim();
     const del = str(p, "del");
@@ -67,8 +72,12 @@ const note: Command = {
 const remember: Command = {
   name: "remember",
   summary: "Keep a line for the agent's later turns, or retract one with --del",
-  usage: 'akou remember "TEXT" | akou remember --del ID   [--call ID] [--json]',
-  flags: { del: { type: "string" }, call: { type: "string" } },
+  usage: 'akou remember "TEXT" | akou remember --del ID   [-c CALL] [--json]',
+  flags: {
+    del: { type: "string", value: "ID", desc: "retract this line" },
+    call: callFlag("live"),
+  },
+  examples: ['akou remember "Ben owns the deploy"'],
   run: async (ctx, p) => {
     const del = str(p, "del");
     if (del !== undefined) {

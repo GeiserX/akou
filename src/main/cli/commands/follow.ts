@@ -6,17 +6,19 @@
 import { readSse } from "../../llm/provider.ts";
 import { bool, duration, int, str } from "../args.ts";
 import { EXIT } from "../client.ts";
-import { api, type Body, type Command, type Ctx, finish, ref } from "../context.ts";
+import { SpeakerColors } from "../color.ts";
+import { api, type Body, type Command, type Ctx, callFlag, finish, ref } from "../context.ts";
 import { usage } from "./calls.ts";
 
 type Format = "txt" | "md" | "json";
 
-function lineText(l: Body, format: Format): string {
+/** One committed line. `colors` is given only for text on a terminal (CLI-20). */
+export function lineText(l: Body, format: Format, colors?: SpeakerColors): string {
   if (format === "json") return JSON.stringify(l);
   const text = l.annotated ?? l.text;
-  return format === "md"
-    ? `**${l.time} ${l.speaker}:** ${text}`
-    : `${l.time} ${l.speaker}: ${text}`;
+  if (format === "md") return `**${l.time} ${l.speaker}:** ${text}`;
+  const who = colors ? colors.name(l.spk ?? l.speaker, l.speaker) : l.speaker;
+  return `${l.time} ${who}: ${text}`;
 }
 
 /** Waits for the next events after `cursor` (the API long-polls up to 25 s). */
@@ -33,18 +35,24 @@ async function nextEvents(ctx: Ctx, call: string, cursor: number): Promise<Body>
 const tail: Command = {
   name: "tail",
   summary: "Committed lines with wall times; -f follows the call until it ends",
-  usage:
-    "akou tail [--call ID] [--since SEQ] [--last 5m] [-f] [--format json|md|txt] (json prints one line per row)",
+  usage: "akou tail [-c CALL] [-f] [--since SEQ] [--last 5m] [--format txt|md|json] [--json]",
   flags: {
-    call: { type: "string" },
-    since: { type: "string" },
-    last: { type: "string" },
-    follow: { type: "boolean", short: "f" },
-    format: { type: "string" },
+    call: callFlag("live"),
+    follow: { type: "boolean", short: "f", desc: "keep printing until the call ends" },
+    since: { type: "string", value: "SEQ", desc: "lines after this cursor" },
+    last: { type: "string", value: "5m", desc: "lines from the last 90s, 5m or 1h" },
+    format: {
+      type: "string",
+      value: "F",
+      desc: "txt (default), md or json (one row per line)",
+    },
+    json: { type: "boolean", desc: "same as --format json" },
   },
+  examples: ["akou tail -f --last 2m"],
   run: async (ctx, p) => {
     const format = (ctx.json ? "json" : (str(p, "format") ?? "txt")) as Format;
     if (!["json", "md", "txt"].includes(format)) return usage(ctx, "--format is json, md or txt");
+    const colors = format === "txt" && ctx.color ? new SpeakerColors(true) : undefined;
     const last = duration(p, "last");
     const call = ref(p);
     const query = {
@@ -55,7 +63,7 @@ const tail: Command = {
     const first = await api(ctx, "GET", `/calls/${call}/transcript`, { query });
     if (first.status !== 200) return finish(ctx, first, () => "");
     const id = first.body.call as string;
-    for (const l of first.body.lines) ctx.io.out(lineText(l, format));
+    for (const l of first.body.lines) ctx.io.out(lineText(l, format, colors));
     if (!bool(p, "follow")) return EXIT.ok;
     // Follow by id, so `live` cannot move to another call under us. Two cursors: the transcript
     // read can already hold lines committed after the events answer, and must not print them twice.
@@ -76,7 +84,7 @@ const tail: Command = {
         query: { format: "json", since: lineCursor },
       });
       if (r.status !== 200) return finish(ctx, r, () => "");
-      for (const l of r.body.lines) ctx.io.out(lineText(l, format));
+      for (const l of r.body.lines) ctx.io.out(lineText(l, format, colors));
       lineCursor = r.body.cursor;
       eventCursor = ev.cursor;
       const ended = (ev.events as Body[]).some(
@@ -99,8 +107,12 @@ function question(words: string[]): string | null {
 const context: Command = {
   name: "context",
   summary: "Print the context pack an agent answers from (no model is called)",
-  usage: 'akou context "QUESTION" [--call ID] [--budget N] [--json]',
-  flags: { call: { type: "string" }, budget: { type: "string" } },
+  usage: 'akou context "QUESTION" [-c CALL] [--budget N] [--json]',
+  flags: {
+    call: callFlag("live"),
+    budget: { type: "string", value: "N", desc: "the most tokens the pack may use" },
+  },
+  examples: ['akou context "what did we decide about the release?" --budget 4000'],
   run: async (ctx, p) => {
     const q = question(p.positional);
     if (!q) return usage(ctx, "context needs a question");
@@ -136,8 +148,9 @@ function askDone(ctx: Ctx, q: string, b: Body, streamed: boolean): number {
 const ask: Command = {
   name: "ask",
   summary: "Answer a question with akou's configured provider (excerpts when it cannot)",
-  usage: 'akou ask "QUESTION" [--call ID] [--json]',
-  flags: { call: { type: "string" } },
+  usage: 'akou ask "QUESTION" [-c CALL] [--json]',
+  flags: { call: callFlag("live") },
+  examples: ['akou ask "what did we decide about the release?"'],
   run: async (ctx, p) => {
     const q = question(p.positional);
     if (!q) return usage(ctx, "ask needs a question");
@@ -191,8 +204,12 @@ const ask: Command = {
 const search: Command = {
   name: "search",
   summary: "Exact word hits in a call, with wall times",
-  usage: 'akou search "QUERY" [--call ID] [-k N] [--json]',
-  flags: { call: { type: "string" }, k: { type: "string", short: "k" } },
+  usage: 'akou search "QUERY" [-c CALL] [-k N] [--json]',
+  flags: {
+    call: callFlag("live"),
+    k: { type: "string", short: "k", value: "N", desc: "at most N hits (default 5)" },
+  },
+  examples: ["akou search migration -k 3"],
   run: async (ctx, p) => {
     const q = question(p.positional);
     if (!q) return usage(ctx, "search needs a query");
