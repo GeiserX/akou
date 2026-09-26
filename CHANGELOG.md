@@ -2,12 +2,26 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.2.1 — the first published 0.2 release
+
+The `v0.2.0` tag exists, but 0.2.0 never published a Docker image or a GitHub release. Docker Hub refused the push to `geiserx/akou`, a namespace that does not exist, and the release waits for the image. 0.2.1 ships everything listed under 0.2.0, under the image name that works.
+
+### Changed
+- The server image is now `drumsergio/akou:<version>`, starting with `drumsergio/akou:0.2.1` for linux/amd64 and linux/arm64. There is still no `latest` tag. The [Dockerfile](Dockerfile), [docs/install.md](docs/install.md#the-server), the [compose example](examples/compose/telegram-archive/compose.akou.yml) and the release workflow all use the new name.
+
+### Added
+- akou has a logo. The mark is a lowercase a that holds the red recording dot.
+- The mark is the menu bar and tray icon, the macOS app icon in the Dock and Finder, and the favicon of akou's web pages. The idle tray icon has no red dot, so it never looks like it is recording.
+
+### Known limitations
+Every item under 0.2.0's Known limitations, below, still applies to 0.2.1.
+
 ## 0.2.0 — server mode
 
 akou now also runs as a transcription server. The Docker image, for amd64 and arm64, takes audio files from other programs and returns their transcripts. It fetches the models it needs and has its own web page. The app, the CLI and the agent tools grew too: a player you can drive from the keyboard, a floating recording indicator, `akou watch`, and MCP answers that never outgrow an agent's context.
 
 ### Server mode
-- Image `geiserx/akou:0.2.0` for linux/amd64 and linux/arm64, built from the [Dockerfile](Dockerfile). It runs `akou serve`. There is no `latest` tag. `akou models pull fast` fetches the models into a volume before the first start, with no server running. See [docs/install.md](docs/install.md#the-server).
+- Image for linux/amd64 and linux/arm64, built from the [Dockerfile](Dockerfile). It was meant to be `geiserx/akou:0.2.0`, but that name was never published: see 0.2.1. It runs `akou serve`. There is no `latest` tag. `akou models pull fast` fetches the models into a volume before the first start, with no server running. See [docs/install.md](docs/install.md#the-server).
 - File jobs. `POST /v1/jobs` takes an audio file, such as an Ogg Opus voice note, M4A, MP3 or WebM. Wait on it with `?wait=`, read the result, or cancel and delete it. A retried submit with the same `Idempotency-Key` gets the first job back. Queued jobs survive a restart. A file longer than 240 minutes fails as `too_long` (`server.max_audio_minutes`).
 - A job can name its model. Without one, akou uses `server.default_model`, then `fast`. A model akou does not have is downloaded while the job waits in the queue, and every file is checked against its pinned SHA-256. `server.auto_download` set to `false` turns that off. `server.default_language` and `server.default_diarize` apply when a request does not say.
 - akou deletes on its own. A job, its result and its events go after `server.retain_days`, 7 by default. A model nobody has used for 30 days goes too (`server.models_unused_days`, 0 for never), but never the default model or one a job needs. A download that would take the models folder past 40 GB is refused (`server.models_max_gb`).

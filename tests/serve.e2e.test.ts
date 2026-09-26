@@ -75,7 +75,7 @@ describe("[SV-P8] akou serve", () => {
 
   test("the single-file CLI says it cannot transcribe; from source nothing is said", () => {
     expect(compiledServeWarning(true)).toContain("cannot transcribe");
-    expect(compiledServeWarning(true)).toContain("geiserx/akou");
+    expect(compiledServeWarning(true)).toContain("drumsergio/akou");
     expect(compiledServeWarning(false)).toBeNull();
   });
 
