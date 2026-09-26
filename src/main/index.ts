@@ -37,6 +37,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
 import { type CallView, type FileVocabEntry, fold } from "../core/log/fold.ts";
 import { eventsAfter, readLog } from "../core/log/reader.ts";
@@ -108,6 +109,7 @@ import {
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
+import { DictationService } from "./dictation/service.ts";
 import { type ExportResult, exportCall } from "./handoff/export.ts";
 import {
   buildPayload,
@@ -156,6 +158,7 @@ import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
 import { mergeVocab, readVocabFile, toFoldEntries, vocabPaths } from "./vocab/files.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
+import { dictationHotkeyDefault } from "./window/hotkey.ts";
 import { PageServer, type SettingsPane } from "./window/page-server.ts";
 
 export { APP_VERSION, RUNTIME_FILE };
@@ -449,6 +452,8 @@ export class AkouApp implements ApiApp {
   private jobService: JobService | null = null;
   /** The GPU llama-server runs on: detected at start, then confirmed by the build itself. */
   private accel: AcceleratorState | null = null;
+  /** Dictation (docs/ux/DICTATION.md); app mode only, since a server has no keyboard. */
+  private dictationSvc: DictationService | null = null;
   /** The machine that detection read: its env names the image's llama-server. */
   private accelProbe: Probe | null = null;
 
@@ -1373,6 +1378,11 @@ export class AkouApp implements ApiApp {
       before[k].join("\n") === after[k].join("\n");
     // Other files or other word lists: every open call reads its vocabulary again.
     if (!same("vocab.extraFiles") || !same("vocab.languages")) this.vocabChanged();
+    if (
+      before["dictation.enabled"] !== after["dictation.enabled"] ||
+      before["dictation.activation"] !== after["dictation.activation"]
+    )
+      this.applyDictation();
     return this.cfg;
   }
 
@@ -1851,6 +1861,51 @@ export class AkouApp implements ApiApp {
     ];
   }
 
+  dictation(): DictationService | null {
+    return this.dictationSvc;
+  }
+
+  /**
+   * Dictation's log and engine in app mode, and with `dictation.enabled` the helper's `dictate`
+   * process (DC-A1's master switch): off, nothing is started and no key is taken.
+   */
+  private startDictation(): void {
+    if (this.runMode !== "app") return;
+    this.dictationSvc ??= new DictationService({
+      configDir: this.configDir,
+      now: () => this.clock.now(),
+      engine: () => {
+        const asr = this.asr;
+        return asr ? { name: "fast", decode: (samples, o) => asr.decode(samples, o) } : null;
+      },
+      onLog: (level, msg) => this.log(level, msg),
+    });
+    this.applyDictation();
+  }
+
+  /** Starts or stops the helper to match `dictation.enabled`, and sends it the keys. */
+  private applyDictation(): void {
+    const d = this.dictationSvc;
+    if (!d || this.quitting) return;
+    const s = this.cfg.settings;
+    if (!s["dictation.enabled"]) {
+      void d.stop();
+      return;
+    }
+    if (d.session()) {
+      d.rebind();
+      return;
+    }
+    const platform = this.o.platform ?? process.platform;
+    d.start([...locateHelper(s["capture.helper"]).command, "dictate"], () => ({
+      hotkey: dictationHotkeyDefault(platform),
+      draft: "",
+      fixLast: "",
+      pasteLast: "",
+      activation: this.cfg.settings["dictation.activation"] as Activation,
+    }));
+  }
+
   /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
   private startJobs(): void {
     const keys = this.keyStore;
@@ -1999,6 +2054,7 @@ export class AkouApp implements ApiApp {
     this.writeRuntime();
     this.detectAccelerator();
     this.startJobs();
+    this.startDictation();
     // Recovery and the final-pass catch-up run behind the API, never before it.
     void this.manager
       .init()
@@ -2049,6 +2105,7 @@ export class AkouApp implements ApiApp {
         if (!r.ok)
           this.log("info", "a final pass is still running; it runs again at the next start");
       }
+      await this.dictationSvc?.close();
       await this.asr?.close();
       await this.page?.stop();
       await this.server?.stop();

@@ -22,6 +22,19 @@ export function hotkeyFor(setting: string, platform: string): string {
   return platform === "darwin" ? MAC_HOTKEY : DEFAULT_HOTKEY;
 }
 
+/**
+ * The dictation key's default (docs/ux/DICTATION.md DC-A2): Right Command on macOS, since Option
+ * is the symbol layer of every ISO layout and no layout puts characters on Command; Right Control
+ * on Windows, where DC-A1's interrupt rule keeps Right Ctrl+C a copy; a chord on Linux, because the
+ * GlobalShortcuts portal binds chords only. The Linux default is checked against the GNOME and KDE
+ * default bindings in the change that makes the key a setting (`dictation.hotkey`).
+ */
+export function dictationHotkeyDefault(platform: string): string {
+  if (platform === "darwin") return "RightCommand";
+  if (platform === "win32") return "RightControl";
+  return "Control+Shift+Space";
+}
+
 /** An accelerator as its modifiers (lower case, one name each) and its key. */
 export function parseAccelerator(accel: string): { mods: Set<string>; key: string } {
   const names: Record<string, string> = {

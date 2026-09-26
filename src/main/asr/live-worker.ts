@@ -54,7 +54,9 @@ import {
   type PreparedHotwords,
   type StreamDiarizer,
   type Vad,
+  type WordHyp,
 } from "./engine.ts";
+import { DEFAULT_FINAL, timelinePieces } from "./finalize-worker.ts";
 import { RECOGNIZER } from "./models.ts";
 import { prepareSpan } from "./pad.ts";
 import { siblingModule } from "./sibling.ts";
@@ -119,6 +121,30 @@ export type LiveOut =
     }
   | SpeakerEvent
   | { type: "log"; level: "info" | "warn" | "error"; msg: string };
+
+/**
+ * A dictation's buffer decoded whole on the loaded recognizer (docs/ux/DICTATION.md DC-E1). Word
+ * times are seconds into the buffer; `c` is the word's confidence, 0 to 1.
+ */
+export interface Decoded {
+  text: string;
+  words: { w: string; s: number; e: number; c: number }[];
+  language: string | null;
+  /** The recognizer's registry name. */
+  model: string;
+  /** Decode time over every span, milliseconds. */
+  ms: number;
+  /** How many spans of at most `DICTATION_SPAN_SECONDS` the buffer was cut into. */
+  spans: number;
+}
+
+/**
+ * The longest span a dictation decode sends to the recognizer: the final pass's `maxSpanSeconds`
+ * (a literal, since finalize-worker.ts imports this module; a test holds the two equal), so a
+ * 20-minute latched session never holds the Worker for one long decode, and a live call waits at
+ * most one span for its next segment.
+ */
+export const DICTATION_SPAN_SECONDS = 30;
 
 // ---------------------------------------------------------------------------
 // Audio kept per channel: from a start position to the newest sample
@@ -251,6 +277,7 @@ export class LivePipeline {
   /** The highest `c<N>` the call has: a new stream numbers its speakers after it. */
   private labelsUsed = 0;
   private streamStarts = 0;
+  private dictationVad: Vad | null = null;
 
   constructor(
     private readonly models: ModelSet,
@@ -281,6 +308,10 @@ export class LivePipeline {
 
   private sec(n: number): number {
     return Math.round(n * ASR_RATE);
+  }
+
+  get recognizerModel(): string {
+    return this.models.recognizerModel;
   }
 
   /**
@@ -329,6 +360,54 @@ export class LivePipeline {
 
   unmerge(from: string, into: string): void {
     this.speakers.unmerge(from, into);
+  }
+
+  /**
+   * A dictation buffer cut at pauses into spans of at most `DICTATION_SPAN_SECONDS`, with the final
+   * pass's rule (`timelinePieces`), judged by a VAD of its own so a call's channels keep theirs.
+   */
+  dictationSpans(samples: Float32Array): { from: number; to: number }[] {
+    this.dictationVad ??= this.models.vad();
+    const vad = this.dictationVad;
+    const w = vad.windowSize;
+    const speech: boolean[] = [];
+    const pad = new Float32Array(w);
+    for (let at = 0; at < samples.length; at += w) {
+      let win = samples.subarray(at, at + w);
+      if (win.length < w) {
+        pad.fill(0);
+        pad.set(win);
+        win = pad;
+      }
+      speech.push(vad.accept(win));
+    }
+    vad.reset();
+    return timelinePieces(samples, speech, w, {
+      ...DEFAULT_FINAL,
+      maxSpanSeconds: DICTATION_SPAN_SECONDS,
+    });
+  }
+
+  /**
+   * One span of a dictation on the loaded recognizer, with no hotwords: a call's decode list never
+   * biases a dictation, and passing none never reloads the model.
+   */
+  decodeDictationSpan(
+    samples: Float32Array,
+    span: { from: number; to: number },
+  ): { text: string; lang?: string; words: Decoded["words"]; model: string; ms: number } {
+    const rec = this.hot().recognizer;
+    const t = performance.now();
+    const r = rec.decode(prepareSpan(samples.subarray(span.from, span.to)));
+    const ms = performance.now() - t;
+    const off = span.from / ASR_RATE;
+    const words = (r.words ?? []).map((x: WordHyp) => ({
+      w: x.w,
+      s: round3(off + (x.t0 ?? 0)),
+      e: round3(off + (x.t1 ?? x.t0 ?? 0)),
+      c: round3(x.conf ?? 0),
+    }));
+    return { text: r.text.trim(), lang: r.lang, words, model: rec.model, ms };
   }
 
   private hot(): PreparedHotwords {
@@ -767,13 +846,20 @@ export type ToWorker =
   | { type: "end-part"; part: number }
   | { type: "unmerge"; from: string; into: string }
   /** Closes the named call's open segments if it is still the Worker's call; always answers. */
-  | { type: "flush"; token: number; call: string };
+  | { type: "flush"; token: number; call: string }
+  /**
+   * A dictation's buffer (DC-E1), decoded span by span on the loaded recognizer. `language` is
+   * accepted and not sent: Parakeet picks the language itself.
+   */
+  | { type: "decode"; token: number; samples: Float32Array; language?: string };
 
 export type FromWorker =
   | { type: "ready"; loads: Record<string, number> }
   | { type: "flushed"; token: number }
   | { type: "failed"; error: string }
   | { type: "loads"; loads: Record<string, number> }
+  | ({ type: "decoded"; token: number } & Decoded)
+  | { type: "decode.failed"; token: number; error: string }
   /** Tagged with the call it belongs to, so a late result never lands in the next call. */
   | (LiveOut & { call: string });
 
@@ -811,6 +897,9 @@ export class WorkerSide {
       const p = this.pipeline;
       if (!p) throw new Error(`${m.type} before init`);
       switch (m.type) {
+        case "decode":
+          this.decode(p, m);
+          break;
         case "call":
           // The previous call's closing lines are tagged with its own id.
           await p.beginCall(m);
@@ -838,7 +927,55 @@ export class WorkerSide {
       this.out({ type: "log", level: "error", msg: `live ASR: ${(err as Error).message}` });
       if (m.type === "init") this.reply({ type: "failed", error: (err as Error).message });
       if (m.type === "flush") this.reply({ type: "flushed", token: m.token });
+      if (m.type === "decode")
+        this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
     }
+  }
+
+  /**
+   * A dictation decode: one span per turn of the message queue, each queued behind whatever
+   * arrived while the last one ran, so a live call's audio is transcribed between two spans and its
+   * next segment waits at most one span.
+   */
+  private decode(p: LivePipeline, m: Extract<ToWorker, { type: "decode" }>): void {
+    const spans = p.dictationSpans(m.samples);
+    const texts: string[] = [];
+    const words: Decoded["words"] = [];
+    // Characters per detected language: the dictation's language is the one most of it is in.
+    const heard = new Map<string, number>();
+    let ms = 0;
+    let model = p.recognizerModel;
+    const step = (i: number) => (): void => {
+      try {
+        if (i < spans.length) {
+          const r = p.decodeDictationSpan(m.samples, spans[i] as { from: number; to: number });
+          ms += r.ms;
+          model = r.model;
+          if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
+          if (r.text !== "") texts.push(r.text);
+          words.push(...r.words);
+          this.queue = this.queue.then(step(i + 1));
+          return;
+        }
+        let language: string | null = null;
+        for (const [l, n] of heard)
+          if (language === null || n > (heard.get(language) ?? 0)) language = l;
+        this.reply({
+          type: "decoded",
+          token: m.token,
+          text: texts.join(" "),
+          words,
+          language,
+          model,
+          ms: Math.round(ms),
+          spans: spans.length,
+        });
+      } catch (err) {
+        this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
+      }
+    };
+    // The first span now; each later one behind whatever arrived meanwhile.
+    step(0)();
   }
 }
 
@@ -936,6 +1073,12 @@ export class LiveAsr {
   private current: HostCall | null = null;
   private readonly flushes = new Map<number, () => void>();
   private flushToken = 0;
+  /** Dictation decodes waiting for their answer, by token. */
+  private readonly decodes = new Map<
+    number,
+    { resolve: (d: Decoded) => void; reject: (e: Error) => void }
+  >();
+  private decodeToken = 0;
   private failed: string | null = null;
   private closed = false;
   private readonly respawns: number[] = [];
@@ -1005,6 +1148,7 @@ export class LiveAsr {
     if (t !== this.transport || this.closed || this.failed) return;
     for (const done of this.flushes.values()) done();
     this.flushes.clear();
+    this.dropDecodes(`the recognizer stopped (${error})`);
     const now = this.clock.now();
     while (this.respawns.length > 0 && now - (this.respawns[0] as number) > RESPAWN_WINDOW_MS)
       this.respawns.shift();
@@ -1039,6 +1183,36 @@ export class LiveAsr {
     this.rejectReady(new Error(error));
     for (const done of this.flushes.values()) done();
     this.flushes.clear();
+    this.dropDecodes(`the recognizer failed: ${error}`);
+  }
+
+  private dropDecodes(why: string): void {
+    for (const d of this.decodes.values()) d.reject(new Error(why));
+    this.decodes.clear();
+  }
+
+  /**
+   * Decodes a dictation's buffer on the Worker's already loaded recognizer (DC-E1): never a second
+   * copy of the model. Sent before the Worker is ready, it waits for the model to load and keeps
+   * the audio. Between two of its spans the Worker takes whatever call audio has arrived.
+   */
+  decode(samples: Float32Array, o: { language?: string } = {}): Promise<Decoded> {
+    if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
+    if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
+    const token = ++this.decodeToken;
+    const copy = samples.slice();
+    return new Promise<Decoded>((resolve, reject) => {
+      this.decodes.set(token, { resolve, reject });
+      this.transport.post(
+        {
+          type: "decode",
+          token,
+          samples: copy,
+          ...(o.language ? { language: o.language } : {}),
+        },
+        [copy.buffer],
+      );
+    });
   }
 
   // --- from the call ------------------------------------------------------------------------
@@ -1109,6 +1283,7 @@ export class LiveAsr {
     this.transport.close();
     for (const done of this.flushes.values()) done();
     this.flushes.clear();
+    this.dropDecodes("the recognizer is closed");
   }
 
   // --- internals ----------------------------------------------------------------------------
@@ -1233,6 +1408,19 @@ export class LiveAsr {
         const done = this.flushes.get(m.token);
         this.flushes.delete(m.token);
         done?.();
+        return;
+      }
+      case "decoded": {
+        const d = this.decodes.get(m.token);
+        this.decodes.delete(m.token);
+        const { type: _t, token: _k, ...result } = m;
+        d?.resolve(result);
+        return;
+      }
+      case "decode.failed": {
+        const d = this.decodes.get(m.token);
+        this.decodes.delete(m.token);
+        d?.reject(new Error(m.error));
         return;
       }
       case "log":

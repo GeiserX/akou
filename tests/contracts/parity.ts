@@ -407,6 +407,24 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
+    action: "Transcribe a clip through the dictation path",
+    cli: ["dictate"],
+    api: ["POST /dictations"],
+    mcp: {
+      none: "MCP reads dictation history only; no tool feeds audio in (DICTATION.md DC-G5)",
+    },
+    window: {
+      none: "the window dictates with the key into the app under the cursor, not from a file",
+    },
+  },
+  {
+    action: "Dictation history",
+    cli: { none: "`akou dictations list` and `show` come with the rest of DC-G3" },
+    api: ["GET /dictations", "GET /dictations/:id"],
+    mcp: { none: "akou_dictation_list and akou_dictation_get come with DC-G5 (P1)" },
+    window: { none: "the History page comes with DC-H1" },
+  },
+  {
     action: "The admin password (server mode)",
     cli: ["admin"],
     api: { none: "set on the box that runs akou, in its config file (SERVER.md SV-U1)" },
