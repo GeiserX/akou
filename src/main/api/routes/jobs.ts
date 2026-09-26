@@ -28,6 +28,7 @@ import {
   type RoutedContext,
   type Router,
 } from "../http.ts";
+import { readMultipart, type SpooledFile, type StreamedForm } from "../multipart.ts";
 import type { ApiApp } from "../server.ts";
 import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
 
@@ -37,8 +38,8 @@ export const MAX_METADATA_BYTES = 4096;
 const LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
 const IDEMPOTENCY = /^[\x21-\x7e]{1,255}$/;
 
-/** A parsed multipart body, as Bun's `Request.formData()` gives it. */
-export type Form = Awaited<ReturnType<Request["formData"]>>;
+/** A multipart body, its file parts already on disk (SV-D3). */
+export type Form = StreamedForm;
 
 /** The job service, or 404 where there is none (the desktop app). */
 export function jobsOf(c: RouteContext<ApiApp>): JobService {
@@ -77,15 +78,14 @@ export function resolvePreset(app: ApiApp, name: string): string {
   return preset;
 }
 
-/** The multipart body, or 400 when it is not one. */
-export async function formOf(c: RouteContext<ApiApp>): Promise<Form> {
+/**
+ * The multipart body, its files written into `dir` as they arrive (SV-D3), or 400 when it is not
+ * one. The caller deletes the files it does not keep with `form.discard`.
+ */
+export async function formOf(c: RouteContext<ApiApp>, dir: string): Promise<Form> {
   // An upload can take a while to arrive: no idle cut while it does.
   c.timeout?.(0);
-  try {
-    return await c.req.formData();
-  } catch {
-    throw new HttpError(400, "bad_multipart", "the body is not multipart/form-data");
-  }
+  return readMultipart(c.req.body, c.req.headers.get("content-type"), dir);
 }
 
 /** One text field, or undefined; a file where text is expected is refused. */
@@ -98,7 +98,7 @@ export function textField(form: Form, name: string): string | undefined {
   return x;
 }
 
-export function fileField(form: Form): File {
+export function fileField(form: Form): SpooledFile {
   const files = form.getAll("file");
   const f = files[0];
   if (files.length !== 1 || typeof f === "string" || !f) {
@@ -106,7 +106,7 @@ export function fileField(form: Form): File {
       field: "file",
     });
   }
-  return f as File;
+  return f;
 }
 
 export function keywordsOf(form: Form, extra: string[] = []): string[] {
@@ -193,30 +193,41 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
   if (idem !== null && !IDEMPOTENCY.test(idem)) {
     throw new HttpError(400, "bad_header", "Idempotency-Key is 1 to 255 printable characters");
   }
-  const form = await formOf(c);
-  for (const k of form.keys()) {
-    if (!JOB_FIELDS.has(k))
-      throw new HttpError(400, "unknown_field", `unknown field "${k}"`, { field: k });
+  const form = await formOf(c, jobs.uploadDir);
+  // The job owns its file once submitted; every other file, and this one on a refusal, is deleted.
+  let kept: SpooledFile | undefined;
+  try {
+    for (const k of form.keys()) {
+      if (!JOB_FIELDS.has(k))
+        throw new HttpError(400, "unknown_field", `unknown field "${k}"`, { field: k });
+    }
+    const file = fileField(form);
+    const presetName = textField(form, "preset")?.trim() || "auto";
+    if (!(PRESET_NAMES as readonly string[]).includes(presetName)) {
+      throw bad("preset", `preset is one of ${PRESET_NAMES.join(", ")}`);
+    }
+    const job: Omit<NewJob, "file_sha256" | "audio"> = {
+      key_id: who.id,
+      preset: presetName,
+      language: languageOf(form),
+      keywords: keywordsOf(form),
+      diarize: booleanOf(form, "diarize"),
+      callback_url: callbackOf(c.app, who, textField(form, "callback_url")),
+      metadata: metadataOf(form),
+      idempotency_key: idem,
+    };
+    // Checked after the fields and before the upload is kept: a job that could never run is refused.
+    job.preset = resolvePreset(c.app, presetName);
+    const r = jobs.submit({ ...job, file_sha256: file.sha256, audio: file.path });
+    // A repeated submit's file is deleted by `submit` itself.
+    kept = file;
+    return answerSubmit(r);
+  } finally {
+    await form.discard(kept);
   }
-  const file = fileField(form);
-  const presetName = textField(form, "preset")?.trim() || "auto";
-  if (!(PRESET_NAMES as readonly string[]).includes(presetName)) {
-    throw bad("preset", `preset is one of ${PRESET_NAMES.join(", ")}`);
-  }
-  const job: Omit<NewJob, "file_sha256" | "audio"> = {
-    key_id: who.id,
-    preset: presetName,
-    language: languageOf(form),
-    keywords: keywordsOf(form),
-    diarize: booleanOf(form, "diarize"),
-    callback_url: callbackOf(c.app, who, textField(form, "callback_url")),
-    metadata: metadataOf(form),
-    idempotency_key: idem,
-  };
-  // Checked after the fields and before the upload is kept: a job that could never run is refused.
-  job.preset = resolvePreset(c.app, presetName);
-  const kept = await jobs.keepUpload(file);
-  const r = jobs.submit({ ...job, file_sha256: kept.sha256, audio: kept.path });
+}
+
+function answerSubmit(r: ReturnType<JobService["submit"]>): Response {
   if ("conflict" in r) {
     throw new HttpError(
       422,

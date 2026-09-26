@@ -23,6 +23,7 @@ import { PRESET_NAMES, PRESETS } from "../../server/presets.ts";
 import type { Job } from "../../server/store.ts";
 import { caller } from "../caller.ts";
 import { HttpError, json, type RouteContext, type Router } from "../http.ts";
+import type { SpooledFile } from "../multipart.ts";
 import type { ApiApp } from "../server.ts";
 import {
   type Form,
@@ -226,80 +227,87 @@ function streamOpenAI(r: Rendered, diarized: boolean): Response {
 async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
   const jobs = jobsOf(c);
   const who = caller(c);
-  const form = await formOf(c);
-  for (const k of form.keys()) {
-    if (!FIELDS.has(k.replace(/\[\]$/, ""))) {
-      throw new HttpError(400, "unknown_field", `unknown field "${k}"`, { field: k });
-    }
-  }
-  const file = fileField(form);
-  const format = (textField(form, "response_format")?.trim() || "json") as ResponseFormat;
-  if (!RESPONSE_FORMATS.includes(format)) {
-    throw bad("response_format", `response_format is one of ${RESPONSE_FORMATS.join(", ")}`);
-  }
-  const granularities = list(form, "timestamp_granularities");
-  for (const g of granularities) {
-    if (g !== "word" && g !== "segment") {
-      throw bad("timestamp_granularities[]", "timestamp_granularities[] are word and segment");
-    }
-  }
-  const stream = textField(form, "stream")?.trim().toLowerCase();
-  if (stream !== undefined && !["", "true", "false"].includes(stream)) {
-    throw bad("stream", "stream is true or false");
-  }
-  const temperature = textField(form, "temperature");
-  if (temperature !== undefined && Number.isNaN(Number(temperature))) {
-    throw bad("temperature", "temperature is a number");
-  }
-  const language = languageOf(form);
-  const keywords = promptTerms(textField(form, "prompt"), keywordsOf(form));
-  list(form, "include");
-  list(form, "languages");
-  list(form, "known_speaker_names");
-  list(form, "known_speaker_references");
-  textField(form, "chunking_strategy");
-  const preset = resolvePreset(c.app, presetForModel(textField(form, "model")));
-  const kept = await jobs.keepUpload(file);
-  const submitted = jobs.submit({
-    key_id: who.id,
-    preset,
-    language,
-    keywords,
-    diarize: format === "diarized_json",
-    callback_url: null,
-    metadata: null,
-    idempotency_key: null,
-    file_sha256: kept.sha256,
-    audio: kept.path,
-  });
-  if ("conflict" in submitted) throw new Error("a job with no idempotency key cannot conflict");
-  const id = submitted.job.id;
-  // Synchronous: no idle cut while the queue and the pass run; a caller that hangs up cancels.
-  c.timeout?.(0);
-  const hangUp = () => jobs.remove(who, id);
-  c.req.signal.addEventListener("abort", hangUp);
+  const form = await formOf(c, jobs.uploadDir);
+  // Every file but the job's is deleted, and the job's too when the request is refused first.
+  let kept: SpooledFile | undefined;
   try {
-    let job = jobs.get(who, id);
-    while (job && (job.status === "queued" || job.status === "running")) {
-      await jobs.wait(who, id, 60_000, c.req.signal);
-      if (c.req.signal.aborted) throw new HttpError(499, "cancelled", "the caller went away");
-      job = jobs.get(who, id);
+    for (const k of form.keys()) {
+      if (!FIELDS.has(k.replace(/\[\]$/, ""))) {
+        throw new HttpError(400, "unknown_field", `unknown field "${k}"`, { field: k });
+      }
     }
-    if (!job) throw new HttpError(409, "cancelled", "the job was deleted before it finished");
-    if (job.status !== "done") {
-      const e = job.error ?? { code: "transcription_failed", message: `the job ${job.status}` };
-      // The caller's file is at fault for these two; anything else is the server's.
-      const theirs = e.code === "decode_failed" || e.code === "too_long";
-      throw new HttpError(theirs ? 422 : 500, e.code, e.message);
+    const file = fileField(form);
+    const format = (textField(form, "response_format")?.trim() || "json") as ResponseFormat;
+    if (!RESPONSE_FORMATS.includes(format)) {
+      throw bad("response_format", `response_format is one of ${RESPONSE_FORMATS.join(", ")}`);
     }
-    const r = rendered(job);
-    return stream === "true" && format !== "text" && format !== "srt" && format !== "vtt"
-      ? streamOpenAI(r, format === "diarized_json")
-      : renderOpenAI(r, format, granularities.length ? granularities : ["segment"]);
+    const granularities = list(form, "timestamp_granularities");
+    for (const g of granularities) {
+      if (g !== "word" && g !== "segment") {
+        throw bad("timestamp_granularities[]", "timestamp_granularities[] are word and segment");
+      }
+    }
+    const stream = textField(form, "stream")?.trim().toLowerCase();
+    if (stream !== undefined && !["", "true", "false"].includes(stream)) {
+      throw bad("stream", "stream is true or false");
+    }
+    const temperature = textField(form, "temperature");
+    if (temperature !== undefined && Number.isNaN(Number(temperature))) {
+      throw bad("temperature", "temperature is a number");
+    }
+    const language = languageOf(form);
+    const keywords = promptTerms(textField(form, "prompt"), keywordsOf(form));
+    list(form, "include");
+    list(form, "languages");
+    list(form, "known_speaker_names");
+    list(form, "known_speaker_references");
+    textField(form, "chunking_strategy");
+    const preset = resolvePreset(c.app, presetForModel(textField(form, "model")));
+    const submitted = jobs.submit({
+      key_id: who.id,
+      preset,
+      language,
+      keywords,
+      diarize: format === "diarized_json",
+      callback_url: null,
+      metadata: null,
+      idempotency_key: null,
+      file_sha256: file.sha256,
+      audio: file.path,
+    });
+    // The job owns its file from here, and deletes it when it is removed below.
+    kept = file;
+    if ("conflict" in submitted) throw new Error("a job with no idempotency key cannot conflict");
+    const id = submitted.job.id;
+    // Synchronous: no idle cut while the queue and the pass run; a caller that hangs up cancels.
+    c.timeout?.(0);
+    const hangUp = () => jobs.remove(who, id);
+    c.req.signal.addEventListener("abort", hangUp);
+    try {
+      let job = jobs.get(who, id);
+      while (job && (job.status === "queued" || job.status === "running")) {
+        await jobs.wait(who, id, 60_000, c.req.signal);
+        if (c.req.signal.aborted) throw new HttpError(499, "cancelled", "the caller went away");
+        job = jobs.get(who, id);
+      }
+      if (!job) throw new HttpError(409, "cancelled", "the job was deleted before it finished");
+      if (job.status !== "done") {
+        const e = job.error ?? { code: "transcription_failed", message: `the job ${job.status}` };
+        // The caller's file is at fault for these two; anything else is the server's.
+        const theirs = e.code === "decode_failed" || e.code === "too_long";
+        throw new HttpError(theirs ? 422 : 500, e.code, e.message);
+      }
+      const r = rendered(job);
+      return stream === "true" && format !== "text" && format !== "srt" && format !== "vtt"
+        ? streamOpenAI(r, format === "diarized_json")
+        : renderOpenAI(r, format, granularities.length ? granularities : ["segment"]);
+    } finally {
+      c.req.signal.removeEventListener("abort", hangUp);
+      // The caller has the only copy it asked for; akou keeps none (SV-J6).
+      jobs.remove(who, id);
+    }
   } finally {
-    c.req.signal.removeEventListener("abort", hangUp);
-    // The caller has the only copy it asked for; akou keeps none (SV-J6).
-    jobs.remove(who, id);
+    await form.discard(kept);
   }
 }
 
