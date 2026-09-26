@@ -14,10 +14,14 @@
 //!
 //! The switches of the second form are the fakes of DC-N10 and exist only with the `simulate`
 //! feature, which never ships: a shipping build refuses each of them as a usage error, and CI
-//! checks that on the release binary. No real key, clipboard or accessibility backend exists yet,
-//! so without `--from-wav` the process says so and exits 69.
+//! checks that on the release binary. The insert and its guards (`insert`) run against those fakes;
+//! no real key, clipboard or accessibility backend exists yet, so without `--from-wav` the process
+//! says so and exits 69.
 
 pub mod activation;
+#[cfg(any(test, feature = "simulate"))]
+pub mod fake;
+pub mod insert;
 pub mod keys;
 pub mod mic;
 pub mod protocol;
