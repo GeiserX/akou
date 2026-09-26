@@ -101,7 +101,7 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
 
-Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote:
+Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first with the `config.json` snippet below (`"asr.diarizer": "embeddings"` in place of `"server.behind_proxy": true`):
 
 ```sh
 docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version> models pull fast

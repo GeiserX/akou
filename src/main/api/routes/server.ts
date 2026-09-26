@@ -58,7 +58,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, which capabilities (jobs, events, the OpenAI route) exist, and `retain_days`, the days a finished job and its result are kept before akou deletes them (`server.retain_days`). Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, which capabilities (jobs, events, the OpenAI route) exist, and `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`). Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -81,7 +81,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
         engines: [{ id: RECOGNIZER, provider: "cpu", installed: ready }],
         // Hardware detection is SV-R2; until then nothing claims a GPU.
         gpu: null,
-        // SV-K1b: how long a finished job's result and events stay, so a client knows when they go.
+        // SV-K1b: how long a job's result and events stay, counted from its creation, so a client knows when they go.
         retain_days: c.app.config().settings["server.retain_days"],
         capabilities: {
           jobs: has("POST", "/jobs"),
