@@ -31,8 +31,21 @@ export function requireWritable(dir: string, uid = process.getuid?.()): void {
     if (!DENIED.has(code)) throw err;
     let at = dir;
     while (!existsSync(at) && dirname(at) !== at) at = dirname(at);
-    const who = uid === undefined ? "this user" : `uid ${uid}`;
-    const fix = uid === undefined ? "" : `; on the host, chown ${uid}:${uid} it`;
-    throw new NotWritable(`${at} is not writable by ${who} (${code})${fix}`);
+    throw new NotWritable(notWritableMessage(at, code, uid));
   }
+}
+
+/**
+ * The line naming the folder and its fix: a read-only mount (EROFS) is fixed by mounting it
+ * read-write, which no chown does; any other refusal by giving the folder to the server's user.
+ */
+export function notWritableMessage(at: string, code: string, uid: number | undefined): string {
+  const who = uid === undefined ? "this user" : `uid ${uid}`;
+  const fix =
+    code === "EROFS"
+      ? "; it is mounted read-only: mount it read-write, akou writes its downloads and usage there"
+      : uid === undefined
+        ? ""
+        : `; on the host, chown ${uid}:${uid} it`;
+  return `${at} is not writable by ${who} (${code})${fix}`;
 }
