@@ -9,7 +9,9 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
+import { MODELS } from "../src/main/asr/models.ts";
 import { JobService } from "../src/main/server/jobs.ts";
+import { ModelStore } from "../src/main/server/model-store.ts";
 import { JOBS_DB, JobStore } from "../src/main/server/store.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -55,6 +57,17 @@ function service(dir: string, o: { hold?: boolean } = {}): JobService {
     // `hold` keeps a running job on its decode instead, so its upload stays on disk.
     models: () => (o.hold ? ({} as ModelSpec) : null),
     ...(o.hold ? { decode: () => new Promise<Float32Array>(() => {}) } : {}),
+    // No catalog files: the recognizer is the given one, so no job waits on a download.
+    shelf: new ModelStore({
+      dir: () => join(dir, "models"),
+      machine: () => null,
+      catalog: () => MODELS,
+      autoDownload: () => false,
+      maxGb: () => 0,
+      unusedDays: () => 0,
+      log: () => {},
+    }),
+    defaultModel: () => "auto",
     diarizer: () => "embeddings",
     secrets: () => [],
     hostListed: () => false,

@@ -42,6 +42,10 @@ export interface Job {
   key_id: string;
   status: JobStatus;
   preset: string;
+  /** The recognizer id the job runs (SV-S1); null for a job from before the field existed. */
+  model: string | null;
+  /** Who chose it: `request`, `server_default` or `hardware`. */
+  model_source: string | null;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -144,7 +148,9 @@ CREATE TABLE IF NOT EXISTS jobs (
   failed_at INTEGER,
   cancelled_at INTEGER,
   result TEXT,
-  error TEXT
+  error TEXT,
+  model TEXT,
+  model_source TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -182,6 +188,8 @@ function jobOf(r: Row): Job {
     key_id: r.key_id as string,
     status: r.status as JobStatus,
     preset: r.preset as string,
+    model: (r.model as string | null) ?? null,
+    model_source: (r.model_source as string | null) ?? null,
     language: r.language as string,
     keywords: JSON.parse(r.keywords as string),
     diarize: r.diarize === 1,
@@ -229,6 +237,9 @@ function deliveryOf(r: Row): Delivery {
 export interface NewJob {
   key_id: string;
   preset: string;
+  /** The recognizer the job runs (SV-S1); absent, the server's default at run time. */
+  model?: string | null;
+  model_source?: string | null;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -260,6 +271,13 @@ export class JobStore {
     this.db.run("PRAGMA synchronous = FULL");
     this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run(SCHEMA);
+    // A jobs.db from before SV-S1 gains the model columns; its jobs run the server's default.
+    const cols = new Set(
+      (this.db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name),
+    );
+    for (const c of ["model", "model_source"]) {
+      if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
+    }
   }
 
   close(): void {
@@ -285,14 +303,16 @@ export class JobStore {
       const id = `job_${ulid(now)}`;
       this.db
         .query(
-          `INSERT INTO jobs (id, key_id, status, preset, language, keywords, diarize, callback_url,
-            metadata, idempotency_key, file_sha256, audio, created_at)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, language, keywords,
+            diarize, callback_url, metadata, idempotency_key, file_sha256, audio, created_at)
+           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
           j.key_id,
           j.preset,
+          j.model ?? null,
+          j.model_source ?? null,
           j.language,
           JSON.stringify(j.keywords),
           j.diarize ? 1 : 0,
@@ -318,6 +338,13 @@ export class JobStore {
       .query("SELECT * FROM jobs WHERE status = 'queued' ORDER BY seq LIMIT 1")
       .get() as Row | null;
     return r ? jobOf(r) : null;
+  }
+
+  /** Every queued job, oldest first. */
+  queued(): Job[] {
+    return (
+      this.db.query("SELECT * FROM jobs WHERE status = 'queued' ORDER BY seq").all() as Row[]
+    ).map(jobOf);
   }
 
   /** Jobs waiting or running. */
@@ -364,7 +391,8 @@ export class JobStore {
 
   /**
    * A running job's end, its feed event and its delivery, in one transaction. False when the job
-   * is no longer running (a delete got there first), and nothing is written.
+   * is no longer running (a delete got there first), and nothing is written. A queued job can only
+   * fail, when the model it waits for cannot be had (SV-M3).
    */
   finish(
     id: string,
@@ -384,7 +412,7 @@ export class JobStore {
               .run(now, JSON.stringify(end.result), id).changes
           : this.db
               .query(
-                "UPDATE jobs SET status = 'failed', failed_at = ?, error = ?, audio = NULL WHERE id = ? AND status = 'running'",
+                "UPDATE jobs SET status = 'failed', failed_at = ?, error = ?, audio = NULL WHERE id = ? AND status IN ('running', 'queued')",
               )
               .run(now, JSON.stringify(end.error), id).changes;
       if (changed === 0) return null;

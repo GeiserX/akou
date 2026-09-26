@@ -76,6 +76,7 @@ import {
   modelFile,
   modelsFor,
   pruneRetiredModels,
+  RECOGNIZER,
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import type { CallController, StartOk } from "./call/call.ts";
@@ -136,6 +137,7 @@ import {
 } from "./query/memo.ts";
 import { renderLine } from "./query/render.ts";
 import { JobService, type JobServiceOptions } from "./server/jobs.ts";
+import { ModelStore, type ModelStoreOptions } from "./server/model-store.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
@@ -227,8 +229,13 @@ export interface AppOptions {
   excludeResponsible?: string;
   /** Test-only: the security suite's positive control replaces the guard. */
   guard?: Guard;
-  /** Test-only: the file jobs' upload decoder and webhook network (server mode). */
-  jobs?: Pick<JobServiceOptions, "decode" | "delivery" | "now">;
+  /**
+   * Test-only: the file jobs' upload decoder, webhook network and clock (server mode), and the
+   * on-demand downloads' retry waits and free-space probe.
+   */
+  jobs?: Pick<JobServiceOptions, "decode" | "delivery" | "now"> & {
+    modelStore?: Pick<ModelStoreOptions, "retryMs" | "freeBytes" | "fetch">;
+  };
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
@@ -1679,14 +1686,59 @@ export class AkouApp implements ApiApp {
     return this.jobService?.depth() ?? 0;
   }
 
+  /**
+   * The engine a file job runs for one recognizer id (SV-S1). The job service has checked its
+   * files first. A recognizer given on purpose (tests) runs as given, or, with a test catalog, as
+   * the recognizer the job names.
+   */
+  private jobModels(recognizer: string): ModelSpec | null {
+    const given = this.o.models;
+    if (given !== undefined) {
+      return given?.kind === "module" && this.o.modelRegistry
+        ? { ...given, model: recognizer }
+        : given;
+    }
+    // The catalog's one real recognizer; a second needs the engine registry (ASR-2).
+    if (recognizer !== RECOGNIZER) {
+      throw Object.assign(new Error(`${recognizer} has no engine in this version`), {
+        code: "unknown_model",
+      });
+    }
+    return this.finalSherpaSpec();
+  }
+
   /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
   private startJobs(): void {
     const keys = this.keyStore;
     if (this.runMode !== "server" || !keys) return;
+    const { modelStore, ...jobSeams } = this.o.jobs ?? {};
+    const s = () => this.cfg.settings;
+    const shelf = new ModelStore({
+      dir: () => s()["asr.modelsDir"],
+      // What a job loads besides its recognizer: the running engine's helpers, as the final pass.
+      machine: () =>
+        this.o.models !== undefined && !this.o.modelRegistry
+          ? null
+          : modelsFor(
+              { "asr.diarizer": this.runningDiarizer() },
+              hostPlatform(),
+              this.o.modelRegistry ?? MODELS,
+            ),
+      catalog: () => this.o.modelRegistry ?? MODELS,
+      autoDownload: () => s()["server.auto_download"],
+      maxGb: () => s()["server.models_max_gb"],
+      unusedDays: () => s()["server.models_unused_days"],
+      now: jobSeams.now,
+      env: (this.o.env ?? process.env) as NodeJS.ProcessEnv,
+      ...modelStore,
+      log: (level, msg) => this.log(level, msg),
+    });
     this.jobService = new JobService({
       dir: join(this.configDir, "jobs"),
       version: this.version,
-      models: () => this.finalModels(),
+      models: (recognizer) => this.jobModels(recognizer),
+      shelf,
+      defaultModel: () => s()["server.default_model"],
       diarizer: () => this.runningDiarizer(),
       secrets: (id) => {
         const s = keys.secretOf(id);
@@ -1696,7 +1748,7 @@ export class AkouApp implements ApiApp {
         keys.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
       retainDays: () => this.cfg.settings["server.retain_days"],
       maxAudioMinutes: () => this.cfg.settings["server.max_audio_minutes"],
-      ...this.o.jobs,
+      ...jobSeams,
       log: (level, msg) => this.log(level, msg),
     });
     this.jobService.start();

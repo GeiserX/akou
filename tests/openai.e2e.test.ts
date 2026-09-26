@@ -9,14 +9,9 @@
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import {
-  presetForModel,
-  promptTerms,
-  RESPONSE_FORMATS,
-  srt,
-  vtt,
-} from "../src/main/api/routes/openai.ts";
-import { RECOGNIZER } from "../src/main/asr/models.ts";
+import { promptTerms, RESPONSE_FORMATS, srt, vtt } from "../src/main/api/routes/openai.ts";
+import { MODELS, RECOGNIZER } from "../src/main/asr/models.ts";
+import { resolveModel } from "../src/main/server/model-store.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
@@ -256,12 +251,17 @@ describe("SV-T3: conformance with the pinned OpenAI transcription operation", ()
 });
 
 describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
-  test("a model is a preset or an engine id, and any other name is auto", () => {
-    expect(presetForModel("fast")).toBe("fast");
-    expect(presetForModel(RECOGNIZER)).toBe("fast");
-    expect(presetForModel("qwen3-asr-1.7b")).toBe("best");
-    expect(presetForModel("whisper-1")).toBe("auto");
-    expect(presetForModel(undefined)).toBe("auto");
+  test("a model is a preset or a recognizer id, and any other name leaves it to the server", () => {
+    const o = { catalog: MODELS, defaultModel: "auto", unknownIsAuto: true };
+    expect(resolveModel({ model: "fast" }, o)).toMatchObject({ preset: "fast", source: "request" });
+    expect(resolveModel({ model: RECOGNIZER }, o)).toMatchObject({
+      model: RECOGNIZER,
+      preset: "fast",
+      source: "request",
+    });
+    expect(() => resolveModel({ model: "qwen3-asr-1.7b" }, o)).toThrow(/best preset/);
+    expect(resolveModel({ model: "whisper-1" }, o)).toMatchObject({ source: "hardware" });
+    expect(resolveModel({}, o)).toMatchObject({ model: RECOGNIZER, source: "hardware" });
   });
 
   test("a preset that is not built is refused with 409 preset_unavailable", async () => {

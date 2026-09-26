@@ -24,6 +24,7 @@ import {
 } from "../../asr/models.ts";
 import { isPreset, PRESET_NAMES, presetModels } from "../../asr/presets.ts";
 import { isSettingKey, loadConfig, SETTINGS, type SettingSpec } from "../../config/schema.ts";
+import { touchUsage } from "../../server/model-store.ts";
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
 import { api, type Body, type Command, type Ctx, callFlag, finish, notBuilt } from "../context.ts";
@@ -285,6 +286,8 @@ const models: Command = {
             );
           },
         });
+        // A pulled model counts as used, so a server's sweep does not delete it at once (SV-M4).
+        touchUsage(dir, plan.ids);
         // Retired folders go only once everything this machine needs is verified, not a subset.
         const retired = arg === undefined ? pruneRetiredModels(dir) : [];
         if (ctx.json) {

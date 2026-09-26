@@ -305,7 +305,7 @@ export const PARITY: readonly Row[] = [
   {
     action: "Speech models",
     cli: ["models"],
-    api: ["GET /models", "POST /models/pull"],
+    api: ["GET /models", "POST /models/pull", "DELETE /models/:id"],
     mcp: { none: "no tool yet; the models card and `akou models` own the download" },
     window: [ui("models-card.ts", '"POST", "/models/pull"')],
   },
