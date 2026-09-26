@@ -76,6 +76,11 @@ function checkPlist(app: string, label: string, version: string): void {
   }
   const min = plistValue(plist, "LSMinimumSystemVersion");
   check(min === MIN_MACOS, `${label} LSMinimumSystemVersion is ${MIN_MACOS}`, `found ${min}`);
+  // The app icon Hutch builds from `build.mac.icons` (scripts/app-icon.ts).
+  const icon = plistValue(plist, "CFBundleIconFile");
+  const icns =
+    icon && join(app, "Contents", "Resources", icon.endsWith(".icns") ? icon : `${icon}.icns`);
+  check(!!icns && existsSync(icns), `${label} carries its app icon`, `CFBundleIconFile ${icon}`);
 }
 
 function checkSignature(app: string, label: string): void {

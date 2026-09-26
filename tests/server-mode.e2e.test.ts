@@ -633,7 +633,7 @@ describe("SV-K1: GET /v1/server", () => {
 });
 
 describe("SV-P4: GET /healthz", () => {
-  test("curl with no header gets 200 with the four fields, in both modes", async () => {
+  test("curl with no header gets 200 with its fields, in both modes", async () => {
     for (const rig of [app, server]) {
       // The fake recognizer loads in a moment; until then the answer is 503 (the test below).
       await until(() => rig.app.recognizer() === "ready", 10_000, "recognizer ready");
@@ -644,6 +644,8 @@ describe("SV-P4: GET /healthz", () => {
         version: rig.app.version,
         models_ready: true,
         queue_depth: 0,
+        // The job queue's numbers (SV-Q4): the app has no queue.
+        queue: rig === app ? null : expect.objectContaining({ depth: 0, concurrency: 1 }),
       });
     }
   });

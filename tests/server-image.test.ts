@@ -108,12 +108,12 @@ describe("[SV-P1] the server image", () => {
       expect({ f, latest: latestTags(read(f)) }).toEqual({ f, latest: [] });
     }
     // Positive control: a latest tag is seen, and a runner label is not an image.
-    expect(latestTags("docker push geiserx/akou:latest\nruns-on: ubuntu-latest")).toEqual([
-      "geiserx/akou:latest",
+    expect(latestTags("docker push drumsergio/akou:latest\nruns-on: ubuntu-latest")).toEqual([
+      "drumsergio/akou:latest",
     ]);
   });
 
-  test("the release publishes geiserx/akou:<version> for amd64 and arm64, built on each architecture's runner", () => {
+  test("the release publishes drumsergio/akou:<version> for amd64 and arm64, built on each architecture's runner", () => {
     const wf = Bun.YAML.parse(read(".github", "workflows", "release.yml")) as {
       jobs: Record<
         string,
@@ -133,7 +133,7 @@ describe("[SV-P1] the server image", () => {
     const manifest = wf.jobs["image-manifest"];
     expect(manifest?.if).toContain("github.ref_type == 'tag'");
     const script = (manifest?.steps ?? []).map((s) => s.run ?? "").join("\n");
-    expect(script).toContain('--tag "docker.io/geiserx/akou:$version"');
+    expect(script).toContain('--tag "docker.io/drumsergio/akou:$version"');
     // The version is the tag without its v: a shell expansion, spelled out so it is not a template.
     expect(script).toContain(`version="$${"{"}TAG#v}"`);
     // A GitHub release never goes out while the image of the same tag failed.

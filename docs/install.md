@@ -99,19 +99,19 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 ## The server
 
-akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
 
 Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first:
 
 ```sh
-docker run --rm -v akou-data:/data --entrypoint sh geiserx/akou:<version> -c \
+docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:<version> -c \
   'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
 ```
 
 Then pull:
 
 ```sh
-docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version> models pull fast
+docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 ```
 
 `fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
@@ -122,7 +122,7 @@ Inside a container akou listens on every address, and it refuses to start that w
 
 ```sh
 docker run -d --name akou -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 \
-  -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
+  -v akou-data:/data -v akou-models:/models drumsergio/akou:<version>
 ```
 
 The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host): a folder the server cannot write stops it at start with exit 77 and the folder's name.
@@ -156,6 +156,33 @@ Where it runs is `asr.accelerator`:
 Docker on a Mac has no Metal, so on a Mac run akou natively rather than in a container. A server elsewhere on the network (a Telegram-Archive box, for example) then reaches it by URL and key like any client.
 
 `GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda` or `cpu`). A setting with no build for the platform (`metal` on Linux) runs on the CPU, and the server log says so. For a GPU llama.cpp publishes no build for, such as Intel's SYCL or AMD's ROCm, build `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
+
+### A large backlog
+
+A client with thousands of files to send, such as Telegram-Archive transcribing a whole archive, leans on three settings:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `server.concurrency` | 1 | Jobs run at once. Each running job loads its own copy of the model and uses `asr.threads` threads (default 2), so keep `server.concurrency` times `asr.threads` under the machine's cores: on a 20-thread box, 4 jobs of 4 threads leaves room for the rest |
+| `server.queue_max` | 1000 | Jobs queued or running at most, across every key. 0 means no limit |
+| `server.queue_max_per_key` | 500 | The same for one key, so one client cannot fill the queue. 0 means no limit |
+
+Set them on the web page's settings, with `PATCH /v1/config` and an admin key, or in `config.json` as above. A new `server.concurrency` applies from the next submit or job end.
+
+A submit past a limit is refused with `429 queue_full` and a `Retry-After` header in seconds, before akou reads the upload; wait that long and send it again. A job may carry `priority`, from -10 to 10 (default 0): a higher one runs first, then the oldest. The queue is kept in `jobs.db` in the data volume, so a restart resumes it in the same order.
+
+`GET /v1/server` and `GET /healthz` answer how the queue is doing, with no key:
+
+```sh
+curl -s http://127.0.0.1:8476/v1/server | jq .queue
+```
+
+```json
+{ "concurrency": 4, "max": 1000, "max_per_key": 500, "depth": 212, "queued": 208, "running": 4,
+  "jobs_last_hour": 610, "audio_seconds_last_hour": 21480, "mean_job_seconds": 23.5, "eta_seconds": 1246 }
+```
+
+`audio_seconds_last_hour` over 3600 is how many hours of audio the box transcribes per hour. `eta_seconds` is the time left at the pace of the last 50 jobs, and `null` until one has ended since the server started.
 
 ### The command line against a server
 
