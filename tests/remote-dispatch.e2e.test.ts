@@ -75,6 +75,8 @@ async function server(o: {
   settings?: Record<string, unknown>;
   decode?: (p: string, s: AbortSignal) => Promise<Float32Array>;
   keyName?: string;
+  /** The dictation lane's Workers (DC-R2), through the jobs seam. */
+  dictationSlots?: number;
 }): Promise<Server> {
   const t = o.home ? { dir: o.home } : tempDir("akou-remote-");
   const models = join(t.dir, "models");
@@ -95,6 +97,7 @@ async function server(o: {
       modelStore: { retryMs: [5, 5, 5], freeBytes: () => 1e12 },
       remoteProbeMs: PROBE_MS,
       ...(o.decode ? { decode: o.decode } : {}),
+      ...(o.dictationSlots ? { dictationSlots: () => o.dictationSlots as number } : {}),
     },
   });
   let key = "";
@@ -516,6 +519,7 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
       keyName: "archive",
       // Qwen is not on disk and may not be fetched, so this server cannot run best itself.
       absent: [reg.entry(QWEN_ASR, ["q.gguf"])],
+      dictationSlots: 1,
       settings: {
         "server.remotes": [`http://127.0.0.1:${fake.port} ${keyFile(pdir, FAKE_KEY)}`],
         "server.auto_download": false,
@@ -530,6 +534,10 @@ describe("[SV-X7] best, which this server cannot run, goes to a remote that offe
       // A job already forwarded once is never forwarded again: the primary runs it or refuses it.
       const again = await submit(primary, { preset: "best" }, { "akou-forwarded": "1" });
       expect(again.status).toBe(409);
+      expect(seen).toHaveLength(0);
+      // A dictation runs here or not at all (DC-R2): the lane never forwards.
+      const lane = await submit(primary, { preset: "best", interactive: "true" });
+      expect(lane.status).toBe(409);
       expect(seen).toHaveLength(0);
 
       const r = await submit(primary, {
