@@ -11,9 +11,10 @@ import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:
 import { join } from "node:path";
 import { type APP_IDENTITY, callbackAllowed } from "../src/main/api/access.ts";
 import { requireCallbackAllowed } from "../src/main/api/caller.ts";
-import { HttpError, json } from "../src/main/api/http.ts";
+import { HttpError, json, Router } from "../src/main/api/http.ts";
 import { KeyError, KeyStore } from "../src/main/api/keys.ts";
 import { inCidr, isLoopback, parseCidr, sourceAddress } from "../src/main/api/net.ts";
+import { serverRoutes } from "../src/main/api/routes/server.ts";
 import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server.ts";
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import { loadConfig } from "../src/main/config/schema.ts";
@@ -545,6 +546,30 @@ describe("SV-K1: GET /v1/server", () => {
       // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
       for (const c of ["jobs", "events", "webhooks"])
         expect(b.capabilities[c]).toBe(mode === "server");
+    }
+  });
+
+  test("[SV-C4] it links to the OpenAPI file, which answers with no key, in both modes", async () => {
+    for (const rig of [app, server]) {
+      const b = JSON.parse((await get(rig, "/v1/server")).body);
+      expect(b.links).toEqual({ openapi: "/v1/openapi.json" });
+      const spec = await get(rig, b.links.openapi);
+      expect(spec.status).toBe(200);
+      expect(JSON.parse(spec.body).openapi).toBe("3.1.0");
+    }
+  });
+
+  test("[SV-C4] positive control: with no OpenAPI route, nothing links to one", async () => {
+    const r = new Router<ApiApp>();
+    serverRoutes(r);
+    const s = startApiServer({ app: fakeApp(), port: 0, token: () => "t".repeat(64), router: r });
+    try {
+      const b = (await (await fetch(`http://127.0.0.1:${s.port}/v1/server`)).json()) as {
+        links: Record<string, string>;
+      };
+      expect(b.links).toEqual({});
+    } finally {
+      await s.stop();
     }
   });
 

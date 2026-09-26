@@ -5,9 +5,10 @@
  * - `GET /healthz`, no key: `{ok, version, models_ready, queue_depth}`, 200 when the API answers,
  *   503 while the models load: while the files download, and while the recognizer loads them.
  *   `models_ready` is true only once the recognizer is ready. Docker's `HEALTHCHECK` calls it.
- * - `GET /v1/server`, no key: what this akou is and can do, so a client tells akou from a plain
- *   OpenAI-compatible server and lists the presets before offering them. A capability is true only
- *   once its route exists, so the flags follow the code; a client ignores flags it does not know.
+ * - `GET /v1/server`, no key: what this akou is and can do, and a link to the OpenAPI file (SV-C4),
+ *   so a client tells akou from a plain OpenAI-compatible server and lists the presets before
+ *   offering them. A capability is true only once its route exists, so the flags follow the code;
+ *   a client ignores flags it does not know.
  * - `GET /v1/keys/me`, any key: the calling key's `{id, name, scopes, created_at}`; the app's token
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
@@ -89,6 +90,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
           wyoming: false,
           bazarr: false,
         },
+        // SV-C4: where this API's description is, once the route serving it exists.
+        links: has("GET", "/openapi.json") ? { openapi: "/v1/openapi.json" } : {},
       });
     },
   );
