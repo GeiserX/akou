@@ -76,8 +76,9 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename\|move\|delete\|restore CALL …` **new** (CLI-26) · `import hark-viewer DIR… [-w WS]` | has, except the subcommands |
 | Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
-| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull\|import\|select` · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
+| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull [PRESET\|MODEL]\|import\|select` (`pull` and `import` need no running app, SV-P3) · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
 | Agents | `skill install\|uninstall [--harness claude\|codex] [--dir DIR]` · `mcp` · `webhook test` **new** (PG-W2) · `api METHOD PATH` **new** (CLI-11) | has, except `webhook test`, `api` |
+| Server | `serve` (SV-P8: the server in the foreground, exit 78 when the settings refuse its bind) · `jobs list [--status STATE]` (SV-J8) · `transcribe FILE [--preset P]` · `keys create\|list\|revoke` · `admin set-password` | has |
 | App | `quit` · `self-update` (Linux tarball, M4) · `version` · `help [CMD]` | has, except `self-update` |
 
 ### Naming a call
@@ -410,6 +411,8 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Import | `import hark-viewer` | `POST /import/hark-viewer` | none, by design | none | none |
 | Window | `open` | `POST /window` | none | n/a | PG-M4 adds open window |
 | Quit | `quit` | `POST /quit` | none, by design | tray Quit | none |
+| Transcribe a file as a job (server mode) | `transcribe`, `jobs list` | `POST /jobs`, `GET /jobs` … | none, by design | none | window: no jobs until SV-U4 |
+| Run the server | `serve` | n/a | n/a | n/a | it starts the API, so no other door can |
 | Token, skill, models, doctor, completion | CLI only | n/a | n/a | models card | these touch only akou's folders or the terminal |
 
 Names differ where a terminal verb is shorter (`name` against `akou_name_speaker`, `tail` against `akou_read`); section 1 says why we keep them. The generated map is the reference for each pair.
