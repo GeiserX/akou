@@ -8,23 +8,22 @@
  * - `akou.ico`: Windows, 16 and 32 px PNG frames in one ICO.
  * - `akou.png`: the Linux AppIndicator, 32 px.
  *
- * The glyph is five rounded bars of a sound level, one shape for the idle state. Windows and Linux
- * get a mid blue that reads on a dark and a light panel; neither recolours a tray image. The
- * files are committed; a test checks they equal what this script draws, so the two never drift.
+ * The glyph is akou's mark (`assets/brand/akou-mark-mono.svg`): a lowercase a whose counter holds a
+ * dot, one shape for the idle state, drawn on the mark's 32-unit grid so every edge of the ring and
+ * the stem lands on a whole pixel at 16 px. The dot is the glyph's own colour, never red, so the
+ * idle icon never reads as recording. Windows and Linux get a mid blue that reads on a dark and a
+ * light panel; neither recolours a tray image. The files are committed; a test checks they equal
+ * what this script draws, so the two never drift.
  */
 
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 
-/** The bars on a 32-unit square: left edge, width and height, centred vertically. */
-const BARS = [
-  { x: 2, h: 12 },
-  { x: 8, h: 20 },
-  { x: 14, h: 28 },
-  { x: 20, h: 20 },
-  { x: 26, h: 12 },
-] as const;
-const BAR_W = 4;
+/** The mark on a 32-unit square: a ring and the stem of the a, both 4 units wide, and the dot. */
+const RING = { cx: 16, cy: 16, r: 8 } as const;
+const STEM = { x: 24, top: 8, bottom: 24 } as const;
+const STROKE = 4;
+const DOT_R = 2.5;
 const UNITS = 32;
 /** Samples per pixel side for the antialiased edge. */
 const SS = 4;
@@ -33,18 +32,14 @@ type Rgb = readonly [number, number, number];
 const BLACK: Rgb = [0, 0, 0];
 const BLUE: Rgb = [0x2f, 0x7c, 0xf6];
 
-/** Is a point (in units) inside a bar with round ends? */
+/** Is a point (in units) inside the mark? */
 function inside(px: number, py: number): boolean {
-  const r = BAR_W / 2;
-  for (const b of BARS) {
-    if (px < b.x || px > b.x + BAR_W) continue;
-    const top = (UNITS - b.h) / 2 + r;
-    const bottom = (UNITS + b.h) / 2 - r;
-    const cx = b.x + r;
-    const cy = Math.min(Math.max(py, top), bottom);
-    if ((px - cx) ** 2 + (py - cy) ** 2 <= r * r) return true;
-  }
-  return false;
+  const h = STROKE / 2;
+  const d = Math.hypot(px - RING.cx, py - RING.cy);
+  if (Math.abs(d - RING.r) <= h || d <= DOT_R) return true;
+  // The stem, with round ends.
+  const cy = Math.min(Math.max(py, STEM.top), STEM.bottom);
+  return (px - STEM.x) ** 2 + (py - cy) ** 2 <= h * h;
 }
 
 /** The glyph at `size` pixels, RGBA, straight alpha. */

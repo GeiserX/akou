@@ -23,6 +23,8 @@ on:
     paths:
       - .github/workflows/release.yml
       - electrobun.config.ts
+      - assets/brand/akou.iconset/**
+      - scripts/app-icon.ts
       - package.json
       - bun.lock
       - scripts/build-app.ts
