@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!.beads"]
+    "includes": ["**", "!.beads", "!docs/api/openapi.json"]
   },
   "formatter": {
     "enabled": true,

@@ -17,6 +17,7 @@ One line per document, in the order to read them.
 - [ux/DESKTOP.md](ux/DESKTOP.md): the tray, hotkeys, menus, floating indicator, notifications, first run, updates, the model manager and the settings registry.
 - [ux/CLI.md](ux/CLI.md): the command line: naming a call, output, exit codes, errors, help, `akou watch`, and parity with the other doors.
 - [ux/PROGRAMMABILITY.md](ux/PROGRAMMABILITY.md): the API, the event stream, MCP, skills, hooks, the webhook, `akou://` and the security model.
+- [api/openapi.json](api/openapi.json): the OpenAPI 3.1 file of the HTTP API, generated from the route table with `bun run openapi`; CI fails when it drifts.
 - [TESTING.md](TESTING.md): which suite proves what, the fakes, the model-gated and hardware tests, and the flake policy.
 - [CI-CD.md](CI-CD.md): the pipeline, branch protection, nightly jobs and releases.
 - [gates/M0-results.md](gates/M0-results.md): what each M0 gate measured on the reference Mac mini, with the raw outputs beside it.

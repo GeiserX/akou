@@ -19,9 +19,9 @@ import type { LogEvent } from "../../../core/log/events.ts";
 import type { Line, View } from "../../../core/log/fold.ts";
 import { renderTranscriptSection } from "../../handoff/export.ts";
 import { estimateTokens, renderLine } from "../../query/render.ts";
-import { enumParam, HttpError, intParam, json, type Router } from "../http.ts";
+import { HttpError, json, type Query, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { callId, callOf } from "./common.ts";
+import { CALL_ID, callId, callOf } from "./common.ts";
 
 /** Longest a long poll waits, seconds. */
 export const MAX_WAIT_SECONDS = 30;
@@ -65,8 +65,8 @@ function eventWaiter(
 }
 
 /** Parses a time bound: epoch ms, or an ISO 8601 date-time with its zone. */
-function timeParam(url: URL, name: string): number | undefined {
-  const raw = url.searchParams.get(name);
+function timeParam(query: Query, name: string): number | undefined {
+  const raw = query.raw(name);
   if (raw === null || raw === "") return undefined;
   const n = /^\d+$/.test(raw) ? Number(raw) : Date.parse(raw);
   if (!Number.isFinite(n)) {
@@ -303,135 +303,217 @@ export function sseFollow(app: ApiApp, id: string, after: number, signal: AbortS
   });
 }
 
+const AFTER = {
+  type: "integer",
+  min: 0,
+  max: Number.MAX_SAFE_INTEGER,
+  default: 0,
+  doc: "The log cursor: only events after this `seq`.",
+} as const;
+
+const WAIT = {
+  type: "integer",
+  min: 0,
+  max: MAX_WAIT_SECONDS,
+  default: 0,
+  doc: `Seconds to hold the request while nothing is past the cursor, up to ${MAX_WAIT_SECONDS}.`,
+} as const;
+
 export function followRoutes(r: Router<ApiApp>): void {
-  r.add("GET", "/calls/:id/events", async (c) => {
-    const id = callId(c);
-    const after = intParam(c.url, "after", 0, 0, Number.MAX_SAFE_INTEGER) as number;
-    const wait = intParam(c.url, "wait", 0, 0, MAX_WAIT_SECONDS) as number;
-    const waiter = wait > 0 ? eventWaiter(c.app, id, after, c.req.signal) : null;
-    let events: LogEvent[];
-    try {
-      events = await c.app.events(id, after);
-      if (events.length === 0 && waiter) {
-        await waiter.wait(wait * 1000);
+  r.add(
+    "GET",
+    "/calls/:id/events",
+    {
+      id: "calls.events",
+      doc: "The call's log events after a cursor, oldest first, each exactly once, with the next cursor. With `wait`, holds the request until an event arrives or the wait ends: a long poll.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      query: { after: AFTER, wait: WAIT },
+      ok: 200,
+    },
+    async (c) => {
+      const id = callId(c);
+      const after = c.query.int("after") as number;
+      const wait = c.query.int("wait") as number;
+      const waiter = wait > 0 ? eventWaiter(c.app, id, after, c.req.signal) : null;
+      let events: LogEvent[];
+      try {
         events = await c.app.events(id, after);
+        if (events.length === 0 && waiter) {
+          await waiter.wait(wait * 1000);
+          events = await c.app.events(id, after);
+        }
+      } finally {
+        waiter?.stop();
       }
-    } finally {
-      waiter?.stop();
-    }
-    return json(200, { call: id, events, cursor: events.at(-1)?.seq ?? after });
-  });
+      return json(200, { call: id, events, cursor: events.at(-1)?.seq ?? after });
+    },
+  );
 
-  r.add("GET", "/calls/:id/stream", async (c) => {
-    const id = callId(c);
-    // A reconnecting client repeats the URL and names the last event it got: resume after that.
-    const after = Math.max(
-      intParam(c.url, "after", 0, 0, Number.MAX_SAFE_INTEGER) as number,
-      lastEventId(c.req),
-    );
-    await c.app.call(id);
-    return sseFollow(c.app, id, after, c.req.signal);
-  });
+  r.add(
+    "GET",
+    "/calls/:id/stream",
+    {
+      id: "calls.stream",
+      doc: "The call's log events after a cursor as server-sent events, then every new one as it is written, plus the line being spoken and the levels. A reconnecting client sends `Last-Event-ID` and resumes after it.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      query: { after: AFTER },
+      ok: 200,
+      type: "sse",
+    },
+    async (c) => {
+      const id = callId(c);
+      // A reconnecting client repeats the URL and names the last event it got: resume after that.
+      const after = Math.max(c.query.int("after") as number, lastEventId(c.req));
+      await c.app.call(id);
+      return sseFollow(c.app, id, after, c.req.signal);
+    },
+  );
 
-  r.add("GET", "/calls/:id/transcript", async (c) => {
-    const call = await callOf(c);
-    const v = call.view;
-    const tz = v.call?.tz ?? "UTC";
-    const layer = enumParam<View>(c.url, "layer", ["best", "live", "final"], "best");
-    const format = enumParam(c.url, "format", ["json", "md", "txt", "export"] as const, "json");
-    const since = intParam(c.url, "since", 0, 0, Number.MAX_SAFE_INTEGER) as number;
-    const limitTokens = intParam(c.url, "limitTokens", undefined, 1, 1_000_000);
-    const from = timeParam(c.url, "from");
-    const to = timeParam(c.url, "to");
-    const speaker = c.url.searchParams.get("speaker")?.toLowerCase() ?? null;
-    let lines: Line[] = v.lines(layer).filter((l) => {
-      if (since > 0 && (v.segment(l.id)?.lastSeq ?? 0) <= since) return false;
-      if (from !== undefined && l.w1 < from) return false;
-      if (to !== undefined && l.w0 > to) return false;
-      if (
-        speaker !== null &&
-        l.spk.toLowerCase() !== speaker &&
-        l.speaker.toLowerCase() !== speaker
-      )
-        return false;
-      return true;
-    });
-    const rendered = (l: Line) =>
-      format === "txt"
-        ? `${formatWall(l.w0, tz)} ${l.speaker}: ${l.annotated}`
-        : format === "md"
-          ? `**${formatWall(l.w0, tz)} ${l.speaker}:** ${l.annotated}`
-          : renderLine(l, { tz });
-    if (limitTokens !== undefined) {
-      // The newest lines that fit.
-      let used = 0;
-      let start = lines.length;
-      while (start > 0) {
-        const t = estimateTokens(rendered(lines[start - 1] as Line)) + 1;
-        if (used + t > limitTokens) break;
-        used += t;
-        start--;
-      }
-      lines = lines.slice(start);
-    }
-    if (format === "export") {
-      return new Response(`${renderTranscriptSection(lines, tz)}\n`, {
-        headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" },
-      });
-    }
-    const zone = `Times are local, ${formatZone(tz, v.parts()[0]?.wallStart ?? c.app.now())}.`;
-    if (format !== "json") {
-      const title = v.call?.title ?? "";
-      const head = format === "md" ? [`# ${title}`, "", zone, ""] : [`${title}`, zone, ""];
-      const body = format === "md" ? lines.map((l) => `${rendered(l)}\n`) : lines.map(rendered);
-      return new Response(`${[...head, ...body].join("\n")}\n`, {
-        headers: {
-          "content-type": `${format === "md" ? "text/markdown" : "text/plain"}; charset=utf-8`,
-          "cache-control": "no-store",
+  r.add(
+    "GET",
+    "/calls/:id/transcript",
+    {
+      id: "calls.transcript",
+      doc: "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      query: {
+        layer: {
+          type: "string",
+          values: ["best", "live", "final"],
+          default: "best",
+          doc: "Which transcript: the final pass for the parts it has finished and the live lines for the rest (`best`), or one of the two.",
         },
+        format: {
+          type: "string",
+          values: ["json", "md", "txt", "export"],
+          default: "json",
+          doc: "JSON lines, Markdown, plain text, or the transcript section of the export.",
+        },
+        since: {
+          type: "integer",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+          default: 0,
+          doc: "Only lines written or revised after this log position.",
+        },
+        limitTokens: {
+          type: "integer",
+          min: 1,
+          max: 1_000_000,
+          doc: "Keep the newest lines that fit in this many tokens.",
+        },
+        from: { type: "string", doc: "Lines ending at or after this time: epoch ms or ISO 8601." },
+        to: { type: "string", doc: "Lines starting at or before this time: epoch ms or ISO 8601." },
+        speaker: { type: "string", doc: "Only this speaker, by id (`c2`) or by name." },
+      },
+      ok: 200,
+    },
+    async (c) => {
+      const call = await callOf(c);
+      const v = call.view;
+      const tz = v.call?.tz ?? "UTC";
+      const layer = c.query.oneOf<View>("layer");
+      const format = c.query.oneOf<"json" | "md" | "txt" | "export">("format");
+      const since = c.query.int("since") as number;
+      const limitTokens = c.query.int("limitTokens");
+      const from = timeParam(c.query, "from");
+      const to = timeParam(c.query, "to");
+      const speaker = c.query.raw("speaker")?.toLowerCase() ?? null;
+      let lines: Line[] = v.lines(layer).filter((l) => {
+        if (since > 0 && (v.segment(l.id)?.lastSeq ?? 0) <= since) return false;
+        if (from !== undefined && l.w1 < from) return false;
+        if (to !== undefined && l.w0 > to) return false;
+        if (
+          speaker !== null &&
+          l.spk.toLowerCase() !== speaker &&
+          l.speaker.toLowerCase() !== speaker
+        )
+          return false;
+        return true;
       });
-    }
-    // The line still being spoken, for a reader following the live call (DESIGN 5.5): never in the
-    // log, marked as a draft, and only while it is fresh.
-    const provisional = v.live
-      ? v.provisional.current(c.app.now()).map((p) => {
-          const spk = p.ch === "mic" ? "you" : p.spk;
-          return {
-            ch: p.ch,
-            part: p.part,
-            time: formatWall(p.w0, tz),
-            w0: p.w0,
-            speaker: spk ? v.speakerLabel(spk) : "Call",
-            text: p.text,
-            draft: true,
-          };
-        })
-      : [];
-    return json(200, {
-      call: call.id,
-      state: v.state,
-      live: v.live,
-      layer,
-      tz,
-      zone,
-      cursor: v.lastSeq,
-      provisional,
-      lines: lines.map((l) => ({
-        id: l.id,
-        seq: l.seq,
-        time: formatWall(l.w0, tz),
-        w0: l.w0,
-        w1: l.w1,
-        part: l.part,
-        ch: l.ch,
-        spk: l.spk,
-        speaker: l.speaker,
-        text: l.text,
-        // With a correction: the raw line, and the line as packs and exports show it,
-        // `Hetzner (heard: "hetzna")`.
-        ...(l.heard !== undefined ? { heard: l.heard, annotated: l.annotated } : {}),
-        layer: l.layer,
-      })),
-    });
-  });
+      const rendered = (l: Line) =>
+        format === "txt"
+          ? `${formatWall(l.w0, tz)} ${l.speaker}: ${l.annotated}`
+          : format === "md"
+            ? `**${formatWall(l.w0, tz)} ${l.speaker}:** ${l.annotated}`
+            : renderLine(l, { tz });
+      if (limitTokens !== undefined) {
+        // The newest lines that fit.
+        let used = 0;
+        let start = lines.length;
+        while (start > 0) {
+          const t = estimateTokens(rendered(lines[start - 1] as Line)) + 1;
+          if (used + t > limitTokens) break;
+          used += t;
+          start--;
+        }
+        lines = lines.slice(start);
+      }
+      if (format === "export") {
+        return new Response(`${renderTranscriptSection(lines, tz)}\n`, {
+          headers: { "content-type": "text/markdown; charset=utf-8", "cache-control": "no-store" },
+        });
+      }
+      const zone = `Times are local, ${formatZone(tz, v.parts()[0]?.wallStart ?? c.app.now())}.`;
+      if (format !== "json") {
+        const title = v.call?.title ?? "";
+        const head = format === "md" ? [`# ${title}`, "", zone, ""] : [`${title}`, zone, ""];
+        const body = format === "md" ? lines.map((l) => `${rendered(l)}\n`) : lines.map(rendered);
+        return new Response(`${[...head, ...body].join("\n")}\n`, {
+          headers: {
+            "content-type": `${format === "md" ? "text/markdown" : "text/plain"}; charset=utf-8`,
+            "cache-control": "no-store",
+          },
+        });
+      }
+      // The line still being spoken, for a reader following the live call (DESIGN 5.5): never in the
+      // log, marked as a draft, and only while it is fresh.
+      const provisional = v.live
+        ? v.provisional.current(c.app.now()).map((p) => {
+            const spk = p.ch === "mic" ? "you" : p.spk;
+            return {
+              ch: p.ch,
+              part: p.part,
+              time: formatWall(p.w0, tz),
+              w0: p.w0,
+              speaker: spk ? v.speakerLabel(spk) : "Call",
+              text: p.text,
+              draft: true,
+            };
+          })
+        : [];
+      return json(200, {
+        call: call.id,
+        state: v.state,
+        live: v.live,
+        layer,
+        tz,
+        zone,
+        cursor: v.lastSeq,
+        provisional,
+        lines: lines.map((l) => ({
+          id: l.id,
+          seq: l.seq,
+          time: formatWall(l.w0, tz),
+          w0: l.w0,
+          w1: l.w1,
+          part: l.part,
+          ch: l.ch,
+          spk: l.spk,
+          speaker: l.speaker,
+          text: l.text,
+          // With a correction: the raw line, and the line as packs and exports show it,
+          // `Hetzner (heard: "hetzna")`.
+          ...(l.heard !== undefined ? { heard: l.heard, annotated: l.annotated } : {}),
+          layer: l.layer,
+        })),
+      });
+    },
+  );
 }

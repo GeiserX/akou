@@ -10,9 +10,9 @@ import { formatWall } from "../../../core/log/clock.ts";
 import type { CallController } from "../../call/call.ts";
 import { LIVE_CONTROLS } from "../../call/manager.ts";
 import { validateTerm } from "../../vocab/files.ts";
-import { HttpError, intParam, json, outcome, type Router, readBody } from "../http.ts";
+import { HttpError, json, outcome, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { callOf, resolveRef } from "./common.ts";
+import { CALL_ID, callOf, resolveRef } from "./common.ts";
 
 /** Header, parts, roster, health and final state of one call. */
 export function callDetail(c: CallController, app: ApiApp, now: number) {
@@ -70,87 +70,164 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
   };
 }
 
+const CONTROL_DOCS: Record<(typeof LIVE_CONTROLS)[number], string> = {
+  stop: "Stop recording the live call. The final pass runs after it on its own.",
+  pause: "Pause the live call: nothing is recorded until resume.",
+  resume: "Resume a paused call.",
+  mute: "Mute the microphone channel of the live call; the call channel keeps recording.",
+  unmute: "Unmute the microphone channel.",
+};
+
 export function callRoutes(r: Router<ApiApp>): void {
-  r.add("POST", "/calls", async (c) => {
-    const b = await readBody<{
-      workspace?: string;
-      title?: string;
-      template?: string;
-      call?: string;
-      mic?: string;
-      vocab?: string[];
-      withoutModels?: boolean;
-    }>(c.req, {
-      "workspace?": "string",
-      "title?": "string",
-      "template?": "string",
-      "call?": "string",
-      "mic?": "string",
-      "vocab?": "string[]",
-      "withoutModels?": "boolean",
-    });
-    const vocab = [];
-    for (const term of b.vocab ?? []) {
-      const bad = validateTerm(term);
-      if (bad) throw new HttpError(400, "bad_term", `${JSON.stringify(term)}: ${bad}`, { term });
-      vocab.push({ term });
-    }
-    const res = await c.app.start({
-      workspace: b.workspace,
-      title: b.title,
-      template: b.template,
-      call: b.call,
-      mic: b.mic,
-      vocab,
-      by: c.by,
-      withoutModels: b.withoutModels,
-    });
-    if (!res.ok) return outcome(res);
-    return json(201, {
-      call: res.call,
-      folder: res.folder,
-      part: res.part,
-      firstAudioMs: res.startMs,
-      url: `akou://call/${res.call}`,
-    });
-  });
+  r.add(
+    "POST",
+    "/calls",
+    {
+      id: "calls.start",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded. One call at a time: a second start answers 409.",
+      access: "admin",
+      modes: ["app"],
+      body: {
+        "workspace?": "string",
+        "title?": "string",
+        "template?": "string",
+        "call?": "string",
+        "mic?": "string",
+        "vocab?": "string[]",
+        "withoutModels?": "boolean",
+      },
+      ok: 201,
+    },
+    async (c) => {
+      const b = await c.body<{
+        workspace?: string;
+        title?: string;
+        template?: string;
+        call?: string;
+        mic?: string;
+        vocab?: string[];
+        withoutModels?: boolean;
+      }>();
+      const vocab = [];
+      for (const term of b.vocab ?? []) {
+        const bad = validateTerm(term);
+        if (bad) throw new HttpError(400, "bad_term", `${JSON.stringify(term)}: ${bad}`, { term });
+        vocab.push({ term });
+      }
+      const res = await c.app.start({
+        workspace: b.workspace,
+        title: b.title,
+        template: b.template,
+        call: b.call,
+        mic: b.mic,
+        vocab,
+        by: c.by,
+        withoutModels: b.withoutModels,
+      });
+      if (!res.ok) return outcome(res);
+      return json(201, {
+        call: res.call,
+        folder: res.folder,
+        part: res.part,
+        firstAudioMs: res.startMs,
+        url: `akou://call/${res.call}`,
+      });
+    },
+  );
 
-  r.add("GET", "/calls", (c) => {
-    const limit = intParam(c.url, "limit", 50, 1, 1000) as number;
-    const workspace = c.url.searchParams.get("workspace");
-    const failed = c.url.searchParams.get("failed");
-    if (failed !== null && failed !== "" && failed !== "true" && failed !== "false") {
-      throw new HttpError(400, "bad_param", "failed must be true or false");
-    }
-    const all = c.app.manager.calls({ failed: failed === "true" || failed === "" });
-    const calls = all
-      .filter((s) => workspace === null || s.workspace === workspace)
-      .slice(0, limit)
-      .map(({ dir, ...s }) => ({ ...s, folder: dir }));
-    return json(200, { calls });
-  });
+  r.add(
+    "GET",
+    "/calls",
+    {
+      id: "calls.list",
+      doc: "The calls on disk, newest first, by metadata only: id, title, workspace, times and state. Never their content.",
+      access: "admin",
+      modes: ["app"],
+      query: {
+        limit: { type: "integer", min: 1, max: 1000, default: 50, doc: "At most this many calls." },
+        workspace: { type: "string", doc: "Only the calls of this workspace." },
+        failed: {
+          type: "boolean",
+          doc: "List only the calls whose start failed.",
+        },
+      },
+      ok: 200,
+    },
+    (c) => {
+      const limit = c.query.int("limit") as number;
+      const workspace = c.query.raw("workspace");
+      const failed = c.query.raw("failed");
+      if (failed !== null && failed !== "" && failed !== "true" && failed !== "false") {
+        throw new HttpError(400, "bad_param", "failed must be true or false");
+      }
+      const all = c.app.manager.calls({ failed: failed === "true" || failed === "" });
+      const calls = all
+        .filter((s) => workspace === null || s.workspace === workspace)
+        .slice(0, limit)
+        .map(({ dir, ...s }) => ({ ...s, folder: dir }));
+      return json(200, { calls });
+    },
+  );
 
-  r.add("GET", "/calls/:id", async (c) => {
-    const call = await callOf(c);
-    return json(200, callDetail(call, c.app, c.app.now()));
-  });
+  r.add(
+    "GET",
+    "/calls/:id",
+    {
+      id: "calls.get",
+      doc: "One call: its title, workspace, state, parts, speakers, health, the final pass and the log cursor.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      ok: 200,
+    },
+    async (c) => {
+      const call = await callOf(c);
+      return json(200, callDetail(call, c.app, c.app.now()));
+    },
+  );
 
   for (const name of LIVE_CONTROLS) {
-    r.add("POST", `/calls/:id/${name}`, async (c) => {
-      await readBody(c.req, {});
-      const id = resolveRef(c.app, c.params.id as string, { allowLast: false });
-      const res = await c.app.manager[name](id);
-      if (!res.ok) return outcome(res);
-      const call = c.app.manager.controller(id);
-      return json(200, { ok: true, call: id, state: call?.view.state ?? null });
-    });
+    r.add(
+      "POST",
+      `/calls/:id/${name}`,
+      {
+        id: `calls.${name}`,
+        doc: CONTROL_DOCS[name],
+        access: "admin",
+        modes: ["app"],
+        params: { id: CALL_ID },
+        body: {},
+        ok: 200,
+      },
+      async (c) => {
+        await c.body();
+        const id = resolveRef(c.app, c.params.id as string, { allowLast: false });
+        const res = await c.app.manager[name](id);
+        if (!res.ok) return outcome(res);
+        const call = c.app.manager.controller(id);
+        return json(200, { ok: true, call: id, state: call?.view.state ?? null });
+      },
+    );
   }
 
-  r.add("POST", "/calls/:id/restart", async (c) => {
-    const b = await readBody<{ force?: boolean }>(c.req, { "force?": "boolean" });
-    const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
-    const res = await c.app.manager.restart(id, { force: b.force });
-    if (!res.ok) return outcome(res);
-    return json(200, { ok: true, call: id, part: res.part });
-  });
+  r.add(
+    "POST",
+    "/calls/:id/restart",
+    {
+      id: "calls.restart",
+      doc: "Start a new part of a call: a live call rebuilds its capture, an ended call records a new part into the same folder and log. An ended call whose last audio is over an hour old needs `force`.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      body: { "force?": "boolean" },
+      ok: 200,
+    },
+    async (c) => {
+      const b = await c.body<{ force?: boolean }>();
+      const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
+      const res = await c.app.manager.restart(id, { force: b.force });
+      if (!res.ok) return outcome(res);
+      return json(200, { ok: true, call: id, part: res.part });
+    },
+  );
 }

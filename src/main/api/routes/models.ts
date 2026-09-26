@@ -15,9 +15,31 @@ import { json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 
 export function modelRoutes(r: Router<ApiApp>): void {
-  r.add("GET", "/models", (c) => json(200, c.app.models()));
-  r.add("POST", "/models/pull", (c) => {
-    const s = c.app.pullModels();
-    return json(s.state === "ready" ? 200 : 202, s);
-  });
+  r.add(
+    "GET",
+    "/models",
+    {
+      id: "models.get",
+      doc: "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`.",
+      access: "admin",
+      modes: ["app", "server"],
+      ok: 200,
+    },
+    (c) => json(200, c.app.models()),
+  );
+  r.add(
+    "POST",
+    "/models/pull",
+    {
+      id: "models.pull",
+      doc: "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get.",
+      access: "admin",
+      modes: ["app", "server"],
+      ok: 202,
+    },
+    (c) => {
+      const s = c.app.pullModels();
+      return json(s.state === "ready" ? 200 : 202, s);
+    },
+  );
 }
