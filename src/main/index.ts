@@ -136,6 +136,7 @@ import {
 } from "./query/memo.ts";
 import { renderLine } from "./query/render.ts";
 import { JobService, type JobServiceOptions } from "./server/jobs.ts";
+import { NotWritable, requireWritable } from "./server/writable.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
@@ -232,6 +233,8 @@ export interface AppOptions {
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
+
+export { NotWritable };
 
 /** The settings forbid a start; the entry point exits 78 (EX_CONFIG) with the message. */
 export class StartRefused extends Error {
@@ -1881,10 +1884,15 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
   const cfg = loadConfig(o.env ?? process.env, o.platform);
   // A bind the settings forbid stops the start before anything is taken or written.
   apiBind(cfg.settings);
+  const serverMode = cfg.settings["server.enabled"];
+  // SV-P12: a bind-mounted folder the server cannot write stops it here, with the folder named.
+  if (serverMode) {
+    requireWritable(cfg.paths.configDir);
+    requireWritable(cfg.settings["asr.modelsDir"]);
+  }
   // The folder holds the token and runtime.json: the owner's alone.
   makePrivateDir(cfg.paths.configDir);
   const lockPath = join(cfg.paths.configDir, APP_LOCK);
-  const serverMode = cfg.settings["server.enabled"];
   try {
     acquireLock(lockPath, process.pid, processAlive, { serverMode });
   } catch (err) {
@@ -1925,6 +1933,10 @@ if (import.meta.main) {
     if (err instanceof StartRefused) {
       console.error(`akou: cannot start: ${err.message}`);
       process.exit(78);
+    }
+    if (err instanceof NotWritable) {
+      console.error(`akou: cannot start: ${err.message}`);
+      process.exit(77);
     }
     if (err instanceof LockAgingError) {
       console.error(`akou: cannot start yet: ${err.message}`);
