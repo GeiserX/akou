@@ -185,6 +185,7 @@ export function mountDraft(t: DraftTransport): DraftSink {
 
   return {
     open: (next) => {
+      chip.dismiss();
       d = next;
       done = false;
       text = next.text;

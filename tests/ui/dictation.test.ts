@@ -76,6 +76,9 @@ describe("DC-O1: the pill", () => {
       expect(await meter()).toBe(-20);
       await v.send("level", { db: -45 });
       expect(await meter()).toBe(-45);
+      // A clipping mic reads full scale, never silence.
+      await v.send("level", { db: 0 });
+      expect(await meter()).toBe(0);
       await v.send("level", { db: 12 });
       expect(await meter()).toBe(0);
 
@@ -249,7 +252,14 @@ describe("DC-L4: the learn chip", () => {
       expect(await p.$$eval("#chip input[type=checkbox]", (b) => b.length)).toBe(2);
       await v.send("chip", one("d7"));
       expect(await text(p, "#chip .chip-text")).toContain("Learn these words?");
+      // With nothing ticked there is nothing to learn or reject.
+      await p.uncheck('#chip input[data-term="Kubernetes"]');
       await p.uncheck('#chip input[data-term="Vercel"]');
+      expect(await p.isDisabled("#chip-learn")).toBe(true);
+      expect(await p.isDisabled("#chip-reject")).toBe(true);
+      await p.check('#chip input[data-term="Kubernetes"]');
+      expect(await p.isDisabled("#chip-learn")).toBe(false);
+      expect(await p.isDisabled("#chip-reject")).toBe(false);
       await p.click("#chip-learn");
       expect(v.requests[0]?.params).toEqual({ id: "d6", action: "learn", terms: ["Kubernetes"] });
       await p.click("#chip-undo");
@@ -427,6 +437,46 @@ describe("DC-S1: the draft box", () => {
     UI_TIMEOUT,
   );
 
+  test(
+    "a new draft takes the last one's chip down and answers it ignore",
+    async () => {
+      const p = v.page;
+      await v.send("open", draft({ id: "d11" }));
+      await v.send("chip", {
+        id: "d11",
+        mode: "ask",
+        candidates: [{ term: "Kubernetes", heard: "cooper netties" }],
+      });
+      expect(await visible(p, "#chip")).toBe(true);
+      v.requests.length = 0;
+      await v.send("open", draft({ id: "d12" }));
+      expect(await visible(p, "#chip")).toBe(false);
+      expect(v.requests).toEqual([{ name: "chip", params: { id: "d11", action: "ignore" } }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a press on a control in the drag strip is a press, not a window move",
+    async () => {
+      // ElectroBun's preload starts a window move on a mousedown under the drag class unless an
+      // element on the way up carries the no-drag class.
+      const p = v.page;
+      expect((await p.$$(".electrobun-webkit-app-region-drag")).length).toBeGreaterThan(0);
+      const moves = await p.$$eval("button, input, select, textarea", (els) =>
+        els
+          .filter(
+            (e) =>
+              e.closest(".electrobun-webkit-app-region-drag") &&
+              !e.closest(".electrobun-webkit-app-region-no-drag"),
+          )
+          .map((e) => e.id),
+      );
+      expect(moves).toEqual([]);
+    },
+    UI_TIMEOUT,
+  );
+
   test("the marks follow an edit before them and vanish when their word is edited", () => {
     const t = "aa bb cc";
     const m = lowMarks(t, [
@@ -504,6 +554,20 @@ describe("DC-U1: the Dictation page in the window", () => {
         "dictation.maxMinutes: must be at most 60",
       );
       expect(f.patches.at(-1)).toEqual({ "dictation.maxMinutes": 90 });
+
+      // Once saved, the page keeps no copy of a secret.
+      const remoteKey = "#dictation [data-key='dictation.remote.key']:not(div)";
+      await page.fill(remoteKey, "k-123");
+      await page.press(remoteKey, "Tab");
+      await until(() => f.patches.length === 4, 5000, "the key saved");
+      expect(f.patches.at(-1)).toEqual({ "dictation.remote.key": "k-123" });
+      await page.waitForFunction(
+        (sel) => (document.querySelector(sel) as HTMLInputElement).value === "",
+        remoteKey,
+      );
+      expect(await page.getAttribute(remoteKey, "placeholder")).toBe(
+        "set (hidden); type to replace",
+      );
 
       // The remote's address is shown in a browser and cannot be changed from it.
       expect(await page.isDisabled("#dictation [data-key='dictation.remote.url']:not(div)")).toBe(

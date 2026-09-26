@@ -22,6 +22,8 @@ export interface ChipView {
   show(chip: Chip): void;
   /** Something is up (the question or the Undo line). */
   busy(): boolean;
+  /** Takes the chip down for the next dictation: an unanswered question answers `ignore`. */
+  dismiss(): void;
 }
 
 const quoted = (s: string) => `"${s}"`;
@@ -29,10 +31,12 @@ const quoted = (s: string) => `"${s}"`;
 export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): ChipView {
   let up: Chip | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let drop: (() => void) | null = null;
 
   const close = () => {
     clearTimeout(timer);
     up = null;
+    drop = null;
     root.hidden = true;
     replace(root);
   };
@@ -40,6 +44,7 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
   const learned = (chip: Chip, terms: string[]) => {
     clearTimeout(timer);
     up = chip;
+    drop = close;
     root.dataset.mode = "learned";
     replace(
       root,
@@ -66,12 +71,19 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
   const ask = (chip: Chip) => {
     up = chip;
     root.dataset.mode = "ask";
+    drop = () => done("ignore");
     const many = chip.candidates.length > 1;
     const boxes = chip.candidates.map((c) =>
       h(
         "label",
         { class: "chip-candidate" },
-        many ? h("input", { type: "checkbox", attrs: { checked: "", "data-term": c.term } }) : null,
+        many
+          ? h("input", {
+              type: "checkbox",
+              attrs: { checked: "", "data-term": c.term },
+              on: { change: () => untick() },
+            })
+          : null,
         `${quoted(c.term)} (heard ${quoted(c.heard)})`,
       ),
     );
@@ -81,6 +93,12 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
             .filter((b) => b.checked)
             .map((b) => b.dataset.term as string)
         : chip.candidates.map((c) => c.term);
+    // Learn and Not a word answer for the ticked terms, so with none ticked there is nothing to send.
+    const untick = () => {
+      const none = ticked().length === 0;
+      for (const id of ["chip-learn", "chip-reject"])
+        root.querySelector<HTMLButtonElement>(`#${id}`)?.toggleAttribute("disabled", none);
+    };
     const done = (action: ChipAnswer["action"], terms?: string[]) => {
       answer({ id: chip.id, action, ...(terms ? { terms } : {}) });
       if (action === "learn" && terms && terms.length > 0) learned(chip, terms);
@@ -127,5 +145,6 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
       else ask(chip);
     },
     busy: () => up !== null,
+    dismiss: () => drop?.(),
   };
 }

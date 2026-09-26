@@ -1,6 +1,6 @@
 /**
  * The dictation pill's RPC with the main process (docs/ux/DICTATION.md section 5.1, DC-O1, DC-D2,
- * DC-L4). Types only; the main side is `src/main/window/pill.ts`.
+ * DC-L4). Types only; the main side (the window and its RPC handlers) is lane B's, not yet written.
  *
  * The pill never receives dictated text: no state below has a field for it, and the main side
  * rebuilds every message field by field, as the indicator's does, so a stray `text` never reaches

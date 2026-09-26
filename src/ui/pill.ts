@@ -128,7 +128,11 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
     },
     level: ({ db }) => {
       if (s.state !== "listening") return;
-      el<HTMLMeterElement>("level").value = Math.max(-60, Math.min(0, Number(db) || -60));
+      const v = Number(db);
+      el<HTMLMeterElement>("level").value = Math.max(
+        -60,
+        Math.min(0, Number.isFinite(v) ? v : -60),
+      );
     },
     chip: (c) => chip.show(c),
   };

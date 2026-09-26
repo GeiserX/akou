@@ -267,6 +267,14 @@ export class DictationSettings {
     }
     for (const [k, v] of Object.entries(patch)) {
       this.shown[k] = Array.isArray(v) ? v.join("\n") : String(v ?? "");
+      if (!this.schema[k]?.secret) continue;
+      // akou has the secret now; the page keeps no copy of it, as Settings does by reloading.
+      const input = row.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(k)}"]`);
+      if (input) {
+        input.value = "";
+        input.placeholder = v ? "set (hidden); type to replace" : "not set";
+      }
+      this.shown[k] = "";
     }
     row.classList.remove("refused");
     row.querySelector(".issue")?.remove();
