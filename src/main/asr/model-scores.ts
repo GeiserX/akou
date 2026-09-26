@@ -74,7 +74,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "wer",
       value: (3.76 + 2.81) / 2,
-      what: "FLEURS, 150 English and 150 Spanish clips, the Q8_0 GGUF through llama.cpp: 3.76 % and 2.81 %. The Open ASR Leaderboard ranks it the first open model on English (mean WER 4.31, 2026-09-25)",
+      what: "FLEURS, 150 English and 150 Spanish clips, the Q8_0 GGUF through llama.cpp on a Linux arm64 CPU: 3.76 % and 2.81 % (bf16 on Metal reads 3.79 % and 2.89 %)",
       source: `${ARCH}#23-runtimes-akou-bundles-or-downloads-three-no-python`,
     },
     speed: {

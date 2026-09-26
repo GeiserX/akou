@@ -858,7 +858,6 @@ export class JobService {
       // A model that takes no hotwords gets none (the engine would refuse them).
       // Read before the run: the samples' buffer is handed to the Worker, which empties it here.
       const audioS = samples.length / ASR_RATE;
-      const began = performance.now();
       const pass = await this.workerFor(slot, spec, model).run({
         samples,
         diarize: job.diarize,
@@ -867,8 +866,9 @@ export class JobService {
         glossary: job.keywords,
       });
       const recognizer = pass.model ?? modelNameFor(spec);
-      // This machine's speed on the model, for the Models page (SV-U6): wall time over audio time.
-      this.o.shelf.recordRun(model, audioS, (performance.now() - began) / 1000);
+      // This machine's speed on the model, for the Models page (SV-U6): decode time over audio
+      // time, without the model loads or the speaker labels.
+      if (pass.decode_s !== undefined) this.o.shelf.recordRun(model, audioS, pass.decode_s);
       end = {
         status: "done",
         result: jobResult(job, pass, {

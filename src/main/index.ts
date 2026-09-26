@@ -1677,7 +1677,6 @@ export class AkouApp implements ApiApp {
     const models = this.finalModels();
     if (!models) return { why: "the speech models are not downloaded", unavailable: true };
     const ws = c.view.call?.workspace ?? "";
-    const began = performance.now();
     const p = finalizeCall(c, {
       models,
       audio,
@@ -1688,7 +1687,7 @@ export class AkouApp implements ApiApp {
     })
       .then((r) => {
         if (!r.ok) this.log("warn", `final pass of ${id} failed: ${r.error}`);
-        else this.ranModels(r.audio_s ?? 0, (performance.now() - began) / 1000);
+        else this.ranModels(r.audio_s ?? 0, r.decode_s ?? 0);
       })
       .catch((err) => this.log("error", `final pass of ${id}: ${(err as Error).message}`))
       .finally(() => this.finals.delete(id));
@@ -1698,13 +1697,14 @@ export class AkouApp implements ApiApp {
 
   /**
    * A final pass finished here: its models count as used (the sweep's ledger), and the
-   * recognizer's speed on this machine is one run more (the Models page, SV-U6).
+   * recognizer's speed on this machine is one run more (the Models page, SV-U6): the pass's decode
+   * time alone, without the Worker's start, the model loads or the speaker labels.
    */
-  private ranModels(audioS: number, wallS: number): void {
+  private ranModels(audioS: number, decodeS: number): void {
     const shelf = this.shelf;
     if (!shelf || this.givenRecognizer()) return;
     shelf.touch(this.runningSet().map((m) => m.id));
-    shelf.recordRun(RECOGNIZER, audioS, wallS);
+    shelf.recordRun(RECOGNIZER, audioS, decodeS);
   }
 
   /** Calls that ended while akou was not running and have no final layer yet. */

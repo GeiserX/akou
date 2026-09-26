@@ -26,6 +26,8 @@ const PYANNOTE = "pyannote-segmentation-3.0";
 /** A recognizer fetched on demand only, so it is never part of the app's own set. */
 const EXTRA = "test-recognizer-extra";
 const T = Date.UTC(2026, 8, 1, 12, 0, 0);
+/** Longer than the fake decode of the pass's audio takes, and longer than that audio. */
+const DIARIZE_MS = 2000;
 const iso = (t: number) => new Date(t).toISOString();
 
 let reg: ModelRegistry;
@@ -68,6 +70,13 @@ async function desktopRig(installed: string[]): Promise<Rig> {
   const heard = () => concat(silence(0.4), speak(["hello"]), silence(0.4));
   const rig = await appRig({
     modelRegistry: catalog,
+    // Slow speaker labels, which the recognizer's measured speed must leave out.
+    models: {
+      kind: "module",
+      path: FAKE_MODELS,
+      model: "fake-parakeet",
+      options: { diarizeMs: DIARIZE_MS },
+    },
     settings: { "asr.modelsDir": models, "asr.diarizer": "nemotron" },
     jobs: { now: () => clock.t, modelStore: { retryMs: [5, 5, 5], freeBytes: () => 1e12 } },
     finalAudio: ({ parts }) => ({
@@ -179,6 +188,8 @@ describe("[DK-E2, SV-M6] the desktop app lists, pulls and deletes one model at a
     const m = (await listed(rig))[RECOGNIZER].measured;
     expect(m.runs).toBe(1);
     expect(m.rtf).toBeGreaterThan(0);
+    // Decode time alone: the 2 s of speaker labels over under 2 s of audio would read above 1.
+    expect(m.rtf).toBeLessThan(1);
   });
 
   test("akou models delete asks the running app, and says why it refuses", async () => {

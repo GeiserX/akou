@@ -13,7 +13,7 @@ import { join } from "node:path";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { DAY_MS, USAGE_FILE } from "../src/main/server/model-store.ts";
-import { type AppRig, appRig } from "./api-helpers.ts";
+import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -32,6 +32,8 @@ function clip(words: string[], seconds: number): Uint8Array {
   return monoWav(concat(speech, silence(Math.max(0, seconds - speech.length / RATE))));
 }
 const NOTE = clip(["hello", "world"], 3);
+/** Slow speaker labels, longer than NOTE, which a model's measured speed must leave out. */
+const DIARIZE_MS = 4000;
 
 let reg: ModelRegistry;
 let catalog: ModelSpecEntry[];
@@ -65,6 +67,7 @@ async function serverRig(
   installed: string[],
   settings: Record<string, unknown> = {},
   jobs: { decode?: (p: string, s: AbortSignal) => Promise<Float32Array> } = {},
+  fake: Record<string, unknown> = {},
 ): Promise<Rig> {
   const t = tempDir("akou-models-e2e-");
   const models = join(t.dir, "models");
@@ -73,6 +76,7 @@ async function serverRig(
   const clock = { t: T };
   const rig = await appRig({
     modelRegistry: catalog,
+    models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: fake },
     settings: {
       "server.enabled": true,
       "api.bind": "127.0.0.1",
@@ -435,7 +439,14 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
   let rig: Rig;
   const iso = (t: number) => new Date(t).toISOString();
   beforeAll(async () => {
-    rig = await serverRig([RECOGNIZER, B, "silero-vad", NEMOTRON]);
+    rig = await serverRig(
+      [RECOGNIZER, B, "silero-vad", NEMOTRON],
+      {},
+      {},
+      {
+        diarizeMs: DIARIZE_MS,
+      },
+    );
   });
   afterAll(async () => rig.done());
 
@@ -498,11 +509,13 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
   test("a finished job is this machine's measured speed for its model", async () => {
     // Before any job, nothing is measured: the check below can fail.
     expect((await listed())[RECOGNIZER].measured).toBeNull();
-    const j = await submit(rig, { preset: "auto" });
+    const j = await submit(rig, { preset: "auto", diarize: "true" });
     expect((await ended(rig, j.body.id)).status).toBe("done");
     const m = (await listed())[RECOGNIZER].measured;
     expect(m.runs).toBe(1);
     expect(m.rtf).toBeGreaterThan(0);
+    // Decode time alone: 4 s of speaker labels over a 3 s file would read above 1.
+    expect(m.rtf).toBeLessThan(1);
   });
 
   test("POST /models/pull with a model fetches that model only", async () => {
