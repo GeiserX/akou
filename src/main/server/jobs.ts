@@ -86,7 +86,7 @@ export const MAX_DICTATION_SLOTS = 8;
 export interface DictationStats {
   /** Workers reserved for interactive jobs; 0 when `interactive` is ignored. */
   slots: number;
-  /** `server.dictation_engine`. */
+  /** The engine the lane runs when a dictation names none: `server.dictation_engine` resolved. */
   engine: string;
   /** Interactive jobs that ended in the last hour. */
   served_last_hour: number;
@@ -405,13 +405,28 @@ export class JobService {
     return this.o.dictationEngine?.()?.trim() || "auto";
   }
 
+  /**
+   * The engine a dictation that names none runs (DC-R4): `server.dictation_engine` resolved, so
+   * `auto` reports the preset it picks, and a recognizer id outside the presets reports itself. A
+   * setting that cannot run reports as written; the dictation itself gets the refusal.
+   */
+  private laneEngine(): string {
+    const setting = this.dictationEngine();
+    try {
+      const c = this.choose({ preset: setting });
+      return c.preset === "custom" ? c.model : c.preset;
+    } catch {
+      return setting;
+    }
+  }
+
   /** The dictation lane as `GET /v1/server` reports it (DC-R2). */
   dictationStats(): DictationStats {
     const since = this.now() - THROUGHPUT_WINDOW_MS;
     this.served = this.served.filter((t) => t > since);
     return {
       slots: this.laneSize(),
-      engine: this.dictationEngine(),
+      engine: this.laneEngine(),
       served_last_hour: this.served.length,
     };
   }

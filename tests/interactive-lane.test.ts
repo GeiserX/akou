@@ -9,6 +9,7 @@
  * through the jobs seam until the setting is wired.
  */
 
+import { Database } from "bun:sqlite";
 import {
   afterAll,
   afterEach,
@@ -18,7 +19,7 @@ import {
   setDefaultTimeout,
   test,
 } from "bun:test";
-import { writeFileSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { laneAsk } from "../src/main/api/routes/jobs.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
@@ -27,7 +28,7 @@ import type { AppOptions } from "../src/main/index.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { JobService } from "../src/main/server/jobs.ts";
 import { ModelStore } from "../src/main/server/model-store.ts";
-import type { Job } from "../src/main/server/store.ts";
+import { JOBS_DB, type Job, JobStore } from "../src/main/server/store.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -51,7 +52,13 @@ interface Rig {
   clock: { t: number };
 }
 
-function rig(o: { slots: number; queueMax?: number; queueMaxPerKey?: number }): Rig {
+function rig(o: {
+  slots: number;
+  queueMax?: number;
+  queueMaxPerKey?: number;
+  engine?: string;
+  catalog?: typeof MODELS;
+}): Rig {
   const t = tempDir("akou-lane-");
   cleanups.push(t.cleanup);
   const started: string[] = [];
@@ -70,7 +77,7 @@ function rig(o: { slots: number; queueMax?: number; queueMaxPerKey?: number }): 
     shelf: new ModelStore({
       dir: () => join(t.dir, "models"),
       machine: () => null,
-      catalog: () => MODELS,
+      catalog: () => o.catalog ?? MODELS,
       autoDownload: () => false,
       maxGb: () => 0,
       unusedDays: () => 0,
@@ -86,7 +93,7 @@ function rig(o: { slots: number; queueMax?: number; queueMaxPerKey?: number }): 
     queueMax: () => o.queueMax ?? 0,
     queueMaxPerKey: () => o.queueMaxPerKey ?? 0,
     dictationSlots: () => o.slots,
-    dictationEngine: () => "fast",
+    dictationEngine: () => o.engine ?? "fast",
     now: () => clock.t,
     log: () => {},
   });
@@ -209,6 +216,49 @@ describe("DC-R2: the dictation lane in the job service", () => {
     expect(laneAsk(r.svc, { preset: "best" })).toEqual({ preset: "best" });
   });
 
+  test("dictation.engine is the engine the lane will run, not the raw setting", () => {
+    expect(rig({ slots: 1, engine: "auto" }).svc.dictationStats().engine).toBe("fast");
+    expect(rig({ slots: 1, engine: "fast" }).svc.dictationStats().engine).toBe("fast");
+    expect(rig({ slots: 1, engine: "best" }).svc.dictationStats().engine).toBe("best");
+    // A recognizer no preset leads with reports its own id, not `custom`.
+    const other = { ...(MODELS[0] as (typeof MODELS)[number]), id: "other-asr", serves: ["final"] };
+    const catalog = [...MODELS, other] as typeof MODELS;
+    expect(rig({ slots: 1, engine: "other-asr", catalog }).svc.dictationStats().engine).toBe(
+      "other-asr",
+    );
+    expect(rig({ slots: 1, engine: "nonsense" }).svc.dictationStats().engine).toBe("nonsense");
+  });
+
+  test("a jobs.db from before DC-R2 gains the interactive column, and its jobs count as ordinary ones", () => {
+    const t = tempDir("akou-lane-old-");
+    cleanups.push(t.cleanup);
+    mkdirSync(join(t.dir, "audio"));
+    const path = join(t.dir, JOBS_DB);
+    const s = new JobStore(path);
+    const { job: old } = s.submit({
+      key_id: "key_a",
+      preset: "fast",
+      language: "auto",
+      keywords: [],
+      diarize: false,
+      callback_url: null,
+      metadata: null,
+      idempotency_key: null,
+      file_sha256: "0".repeat(64),
+      audio: join(t.dir, "audio", "x.upload"),
+    });
+    s.close();
+    const raw = new Database(path);
+    raw.run("ALTER TABLE jobs DROP COLUMN interactive");
+    raw.close();
+    const again = new JobStore(path);
+    cleanups.push(() => again.close());
+    const cols = again.db.query("PRAGMA table_info(jobs)").all() as { name: string }[];
+    expect(cols.map((c) => c.name)).toContain("interactive");
+    expect(again.counts(null)).toEqual({ queued: 1, running: 0 });
+    expect(again.job(old.id)?.interactive).toBe(false);
+  });
+
   test("served_last_hour counts the lane's dictations for an hour, and the queue's throughput does not", async () => {
     const r = rig({ slots: 1 });
     const d = job(put(r, { interactive: true }));
@@ -310,7 +360,7 @@ for (const slots of [1, 0]) {
         // biome-ignore lint/suspicious/noExplicitAny: bodies are inspected field by field.
         const body: any = await res.json();
         expect(body.capabilities.interactive).toBe(true);
-        expect(body.dictation).toMatchObject({ slots: 1, engine: "auto" });
+        expect(body.dictation).toMatchObject({ slots: 1, engine: "fast" });
         expect(body.dictation.served_last_hour).toBeGreaterThanOrEqual(1);
       });
     } else {
@@ -324,7 +374,7 @@ for (const slots of [1, 0]) {
         // biome-ignore lint/suspicious/noExplicitAny: bodies are inspected field by field.
         const body: any = await res.json();
         expect(body.capabilities.interactive).toBe(false);
-        expect(body.dictation).toEqual({ slots: 0, engine: "auto", served_last_hour: 0 });
+        expect(body.dictation).toEqual({ slots: 0, engine: "fast", served_last_hour: 0 });
       });
     }
   });

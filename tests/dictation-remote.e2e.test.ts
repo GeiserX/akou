@@ -369,13 +369,13 @@ describe("DC-R1 and DC-R4 against a server rig", () => {
     expect(t).toMatchObject({
       ok: true,
       mode: "server",
-      engine: "auto",
+      engine: "fast",
       accelerator: "cpu",
       biasing: "no biasing",
       interactive: true,
       warning: null,
     });
-    expect(t.summary).toMatch(/^ok, auto on cpu, no biasing, \d+ ms$/);
+    expect(t.summary).toMatch(/^ok, fast on cpu, no biasing, \d+ ms$/);
     expect((await testRemote({ url, key, glossary: ["a", "b"] })).biasing).toBe("2 terms");
   });
 
