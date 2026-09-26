@@ -171,16 +171,15 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
   });
 
   test("fast pulls exactly what the server waits for before it starts the recognizer, for either diarizer", async () => {
-    const { MODELS, modelsFor } = await import("../src/main/asr/models.ts");
+    const { MODELS, modelsFor, hostPlatform } = await import("../src/main/asr/models.ts");
+    const need = (d: string) => modelsFor({ "asr.diarizer": d }, hostPlatform());
     for (const d of ["nemotron", "embeddings"] as const) {
-      const machine = modelsFor(d).map((m) => m.id);
+      const machine = need(d).map((m) => m.id);
       const m = presetModels("fast", machine);
       expect("models" in m && m.models).toEqual(machine);
       for (const id of machine) expect(MODELS.map((x) => x.id)).toContain(id);
     }
     // Positive control: the two diarizers need different files, so the list is not a constant.
-    expect(modelsFor("nemotron").map((m) => m.id)).not.toEqual(
-      modelsFor("embeddings").map((m) => m.id),
-    );
+    expect(need("nemotron").map((m) => m.id)).not.toEqual(need("embeddings").map((m) => m.id));
   });
 });

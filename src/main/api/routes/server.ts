@@ -9,6 +9,7 @@
  *   so a client tells akou from a plain OpenAI-compatible server and lists the presets before
  *   offering them. A capability is true only once its route exists, so the flags follow the code;
  *   a client ignores flags it does not know.
+ *   `retain_days` is `server.retain_days` (SV-K1b), so a client knows when a job's result is gone.
  * - `GET /v1/keys/me`, any key: the calling key's `{id, name, scopes, created_at}`; the app's token
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
@@ -58,7 +59,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, and which capabilities (jobs, events, the OpenAI route) exist. Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, which capabilities (jobs, events, the OpenAI route) exist, and `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`). Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -81,6 +82,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
         engines: [{ id: RECOGNIZER, provider: "cpu", installed: ready }],
         // Hardware detection is SV-R2; until then nothing claims a GPU.
         gpu: null,
+        // SV-K1b: how long a job's result and events stay, counted from its creation, so a client knows when they go.
+        retain_days: c.app.config().settings["server.retain_days"],
         capabilities: {
           jobs: has("POST", "/jobs"),
           // Signed deliveries per key (SV-E2) come with the job route's `callback_url`.

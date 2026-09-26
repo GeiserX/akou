@@ -44,6 +44,7 @@ import {
   type StreamDiarizer,
   type StreamListener,
   type Vad,
+  type WordHyp,
 } from "./engine.ts";
 import { modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
 import { DIARIZE_HELPER_NAME, NemotronDiarizer, NemotronStream } from "./nemotron.ts";
@@ -89,10 +90,56 @@ export class SherpaRecognizer implements Recognizer {
     const s = hotwords === undefined ? this.rec.createStream() : this.rec.createStream(hotwords);
     s.acceptWaveform({ samples, sampleRate: ASR_RATE });
     this.rec.decode(s);
-    const r = this.rec.getResult(s) as { text?: string; lang?: string };
+    const r = this.rec.getResult(s) as SherpaResult & { text?: string; lang?: string };
     const lang = r.lang?.replace(/[<|>]/g, "") || undefined;
-    return lang ? { text: (r.text ?? "").trim(), lang } : { text: (r.text ?? "").trim() };
+    const out: Recognized = { text: (r.text ?? "").trim(), words: sherpaWords(r) };
+    if (lang) out.lang = lang;
+    return out;
   }
+}
+
+/** The per-token fields of a sherpa-onnx offline result (`OfflineRecognitionResult`). */
+export interface SherpaResult {
+  tokens?: readonly string[];
+  /** Seconds into the decoded span, one per token. */
+  timestamps?: readonly number[];
+  /** Seconds each token lasts; transducers with durations (Parakeet TDT) report them. */
+  durations?: readonly number[];
+  /** Natural log-probability of each token. */
+  ys_log_probs?: readonly number[];
+}
+
+/**
+ * Words from sherpa-onnx tokens, the way the ASR benchmark derived them: a token with a leading
+ * space starts a word, and a word's confidence is exp of the lowest log-probability of its tokens,
+ * clipped at 0 (a hotword boost can lift a log-probability above it). A word starts at its first
+ * token and ends where its last token's duration ends, else where the next word begins.
+ */
+export function sherpaWords(r: SherpaResult): WordHyp[] {
+  const tokens = r.tokens ?? [];
+  const words: { w: string; from: number; to: number }[] = [];
+  tokens.forEach((t, i) => {
+    const last = words.at(-1);
+    if (last && !t.startsWith(" ")) {
+      last.w += t;
+      last.to = i;
+    } else words.push({ w: t.trim(), from: i, to: i });
+  });
+  const ts = r.timestamps;
+  const lps = r.ys_log_probs;
+  return words.map(({ w, from, to }, k) => {
+    const out: WordHyp = { w };
+    if (lps && lps.length === tokens.length) {
+      out.conf = Math.exp(Math.min(0, ...lps.slice(from, to + 1)));
+    }
+    if (ts && ts.length === tokens.length) {
+      out.t0 = ts[from] as number;
+      const d = r.durations?.length === tokens.length ? r.durations[to] : undefined;
+      const next = words[k + 1];
+      out.t1 = d !== undefined ? (ts[to] as number) + d : next ? (ts[next.from] as number) : ts[to];
+    }
+    return out;
+  });
 }
 
 class SherpaVad implements Vad {
