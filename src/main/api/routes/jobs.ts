@@ -159,12 +159,39 @@ export function languageOf(form: Form, fallback = "auto"): string {
 }
 
 /** A true or false field, or null when absent (or empty), so an explicit `false` stays false. */
-function booleanOf(form: Form, name: string): boolean | null {
+export function booleanOf(form: Form, name: string): boolean | null {
   const v = textField(form, name)?.trim().toLowerCase();
   if (v === undefined || v === "") return null;
   if (v === "false" || v === "0") return false;
   if (v === "true" || v === "1") return true;
   throw bad(name, `"${name}" is true or false`);
+}
+
+/**
+ * Refuses a submit before its upload is read when the queue has no room (SV-Q3), on a server with
+ * no dictation lane. With one, an `interactive` field in the body may take the lane (DC-R2), so the
+ * refusal waits for the body: `JobService.submit` makes the same check in its transaction.
+ */
+export function requireRoomUnlessLane(jobs: JobService, key: string, idem: string | null): void {
+  if (!jobs.interactive(true)) requireQueueRoom(jobs, key, idem);
+}
+
+/** Whether the form asks for the dictation lane and gets it: false with no dictation slots. */
+export function interactiveOf(jobs: JobService, form: Form): boolean {
+  return jobs.interactive(booleanOf(form, "interactive") === true);
+}
+
+/**
+ * The model an interactive job asks for (DC-R2): the request's, else `server.dictation_engine`
+ * where the request named no preset either.
+ */
+export function laneAsk(
+  jobs: JobService,
+  ask: { model?: string; preset?: string },
+): { model?: string; preset?: string } {
+  const named = (v: string | undefined) => (v ?? "").trim() !== "" && v?.trim() !== "auto";
+  if (named(ask.model) || named(ask.preset)) return ask;
+  return { ...ask, preset: jobs.dictationEngine() };
 }
 
 /** `priority`, an integer from -10 to 10; absent or empty, 0. */
@@ -189,6 +216,7 @@ const JOB_FIELDS = new Set([
   "diarize",
   "callback_url",
   "metadata",
+  "interactive",
 ]);
 
 /** A callback the caller may name (SV-K4), at an address the rules allow (SV-E7), and can sign. */
@@ -238,7 +266,8 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     throw new HttpError(400, "bad_header", "Idempotency-Key is 1 to 255 printable characters");
   }
   // A full queue answers before the upload is read: a client pacing itself sends no bytes twice.
-  requireQueueRoom(jobs, who.id, idem);
+  // With a dictation lane, only after it, since the body says whether the lane takes it (DC-R2).
+  requireRoomUnlessLane(jobs, who.id, idem);
   const form = await formOf(c, jobs.uploadDir);
   // The job owns its file once submitted; every other file, and this one on a refusal, is deleted.
   let kept: SpooledFile | undefined;
@@ -254,6 +283,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     }
     const settings = c.app.config().settings;
     const model = textField(form, "model");
+    const interactive = interactiveOf(jobs, form);
     const diarize = booleanOf(form, "diarize");
     const keywords = keywordsOf(form);
     // The options as sent, before a server default fills a gap: what a repeated Idempotency-Key is
@@ -279,11 +309,14 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       metadata: metadataOf(form),
       idempotency_key: idem,
       request,
+      interactive,
     };
     // Checked after the fields and before the upload is kept: a job that could never run is refused.
     // One this server cannot run goes to a remote that offers it (section 14), unless a remote sent
     // it here: a forwarded job is never forwarded again.
-    const ask = { model, preset: presetName };
+    const ask = interactive
+      ? laneAsk(jobs, { model, preset: presetName })
+      : { model, preset: presetName };
     const forwarded = c.req.headers.get(FORWARDED_HEADER) !== null;
     try {
       const choice = chooseModel(jobs, ask);
@@ -292,8 +325,12 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       job.model_source = choice.source;
       job.route = forwarded ? "local" : null;
     } catch (err) {
+      // A dictation runs here or not at all: the lane never forwards (DC-R2).
       const remote =
-        !forwarded && err instanceof HttpError && (err.status === 409 || err.status === 422)
+        !forwarded &&
+        !interactive &&
+        err instanceof HttpError &&
+        (err.status === 409 || err.status === 422)
           ? jobs.remoteChoice(ask)
           : null;
       if (!remote) throw err;
@@ -350,7 +387,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds.",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
       ...JOB_ROUTE,
       body: {
         multipart: {
@@ -363,6 +400,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "callback_url?": "string",
           "metadata?": "string",
           "priority?": "integer",
+          "interactive?": "boolean",
         },
       },
       ok: 202,
