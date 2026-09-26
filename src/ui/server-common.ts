@@ -15,7 +15,7 @@ export interface ServerScreen {
   hide(): void;
 }
 
-export const PAGES = ["jobs", "models", "keys", "settings"] as const;
+export const PAGES = ["jobs", "models", "keys", "dictation", "settings"] as const;
 export type PageName = (typeof PAGES)[number];
 
 /**

@@ -9,11 +9,15 @@
  * transcripts or keys are sent to) are shown, never editable here; the schema says which. A secret
  * is never shown back; typing a new one replaces it.
  *
+ * Dictation's keys are on the Dictation page (docs/ux/DICTATION.md DC-U1) and left out here, with a
+ * link to it, so a setting is never shown twice.
+ *
  * Below the settings, the vocabulary panel: the entries in force for the workspace, where each
  * came from, and the files they live in.
  */
 
 import { hotkeyWarning } from "../main/window/hotkey.ts";
+import { onDictationPage } from "./dictation-page.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
@@ -52,6 +56,8 @@ export class SettingsPane {
   constructor(
     private readonly t: Transport,
     private readonly workspace: () => string,
+    /** Opens the Dictation page, where the `dictation.*` keys are. */
+    private readonly openDictation: () => void = () => {},
   ) {
     byId("settings-open").addEventListener("click", () => void this.open());
     byId("settings-close").addEventListener("click", () => this.dialog.close());
@@ -84,12 +90,32 @@ export class SettingsPane {
     this.schema = r.body.schema;
     this.shown = {};
     const issues = new Map(r.body.issues.map((i) => [i.key, i.message]));
+    const keys = Object.entries(this.schema);
+    const here = keys.filter(([key]) => !onDictationPage(key));
     replace(
       this.fields,
       h("p", { class: "hint" }, `Saved in ${r.body.file}`),
-      ...Object.entries(this.schema).map(([key, spec]) =>
-        this.field(key, spec, r.body.settings[key], issues.get(key)),
-      ),
+      here.length < keys.length
+        ? h(
+            "p",
+            { id: "settings-dictation", class: "hint" },
+            "Dictation's settings are on its own page. ",
+            h(
+              "button",
+              {
+                type: "button",
+                on: {
+                  click: () => {
+                    this.dialog.close();
+                    this.openDictation();
+                  },
+                },
+              },
+              "Open Dictation",
+            ),
+          )
+        : null,
+      ...here.map(([key, spec]) => this.field(key, spec, r.body.settings[key], issues.get(key))),
     );
     void this.loadVocab();
   }

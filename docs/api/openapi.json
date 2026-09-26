@@ -423,7 +423,7 @@
         "tags": [
           "models"
         ],
-        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. In server mode, `models` lists every catalog model with its state, size, last use, the date the sweep will delete it, and whether it is the default's or in use.",
+        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default.",
         "responses": {
           "200": {
             "description": "OK",
@@ -452,7 +452,7 @@
         "tags": [
           "models"
         ],
-        "description": "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get. In server mode `model` fetches that one catalog model, under `server.models_max_gb` and the free-space check.",
+        "description": "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get. `model` fetches that one catalog model, under `server.models_max_gb` and the free-space check.",
         "requestBody": {
           "required": false,
           "content": {
@@ -497,7 +497,7 @@
         "tags": [
           "models"
         ],
-        "description": "Delete one model from disk, under the sweep's rules: 409 `model_in_use` for the default model's set, a model a queued or running job needs, or one downloading. A job that later names it downloads it again.",
+        "description": "Delete one model from disk, under the sweep's rules: 409 `model_in_use` for the default model's set, a model in use (a queued or running job, a worker, the recognizer), or one downloading. A job or a pull that later names it downloads it again.",
         "parameters": [
           {
             "name": "id",
@@ -525,6 +525,7 @@
           }
         },
         "x-akou-modes": [
+          "app",
           "server"
         ],
         "x-akou-access": "admin"

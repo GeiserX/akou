@@ -306,8 +306,14 @@ export const PARITY: readonly Row[] = [
     action: "Speech models",
     cli: ["models"],
     api: ["GET /models", "POST /models/pull", "DELETE /models/:id"],
-    mcp: { none: "no tool yet; the models card and `akou models` own the download" },
-    window: [ui("models-card.ts", '"POST", "/models/pull"')],
+    mcp: {
+      none: "no tool: the Models page and `akou models` own downloads and deletes; akou_status reports the models in use",
+    },
+    window: [
+      ui("models-card.ts", '"POST", "/models/pull"'),
+      ui("models-page.ts", '"DELETE",'),
+      ui("models-page.ts", '"GET", "/models"'),
+    ],
   },
   {
     action: "Open the window",

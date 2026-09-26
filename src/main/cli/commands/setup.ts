@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
 import { llamaRuntime } from "../../asr/llama-server.ts";
+import { score as scoreOf, scoresOf } from "../../asr/model-scores.ts";
 import {
   type CatalogEntry,
   DownloadRefused,
@@ -243,17 +244,25 @@ function pullPlan(
   };
 }
 
+/** A model's 0 to 100 score for one side, or null when nobody measured it (model-scores.ts). */
+function scoreFor(m: ModelSpecEntry, side: "accuracy" | "speed"): number | null {
+  const s = scoresOf(m)?.[side];
+  return s && !("notMeasured" in s) ? scoreOf(s) : null;
+}
+
 const models: Command = {
   name: "models",
-  summary: "The speech models: list, pull (download, checksummed) or import from a folder",
+  summary: "The speech models: list, pull (download, checksummed), delete, or import from a folder",
   usage:
-    "akou models list | akou models pull [PRESET|MODEL] | akou models import DIR   [--json]\n" +
+    "akou models list | akou models pull [PRESET|MODEL] | akou models delete MODEL | akou models import DIR   [--json]\n" +
     "  PRESET is lite, fast, best, fusion or auto; MODEL is an id from `akou models list`.\n" +
-    "  No app needs to run: an image build or an entrypoint pulls before the server starts.",
+    "  list, pull and import need no app running: an image build or an entrypoint pulls before the\n" +
+    "  server starts. delete asks the running akou, which refuses the default model and one in use.",
   examples: [
     "akou models list",
     "akou models pull fast",
     "akou models pull",
+    "akou models delete qwen3-asr-1.7b",
     "akou models import /Volumes/usb/akou-models",
   ],
   run: async (ctx, p) => {
@@ -266,13 +275,16 @@ const models: Command = {
         licence: m.licence,
         bytes: m.files.reduce((n, f) => n + f.size, 0),
         state: quickState(dir, m),
+        accuracy: scoreFor(m, "accuracy"),
+        speed: scoreFor(m, "speed"),
       }));
       if (ctx.json) ctx.io.out(JSON.stringify({ dir, models: rows }));
       else {
         ctx.io.out(`# ${dir}`);
+        const shown = (n: number | null) => (n === null ? "-" : String(n));
         for (const r of rows) {
           ctx.io.out(
-            `${r.id}  ${r.state}  ${(r.bytes / 1e6).toFixed(0)} MB  ${r.licence}  (${r.job})`,
+            `${r.id}  ${r.state}  ${(r.bytes / 1e6).toFixed(0)} MB  accuracy ${shown(r.accuracy)}  speed ${shown(r.speed)}  ${r.licence}  (${r.job})`,
           );
         }
       }
@@ -333,6 +345,15 @@ const models: Command = {
         return err instanceof DownloadRefused ? EXIT.unavailable : EXIT.software;
       }
     }
+    if (sub === "delete") {
+      if (!arg) return usage(ctx, "models delete needs a model id from `akou models list`");
+      const r = await api(ctx, "DELETE", `/models/${encodeURIComponent(arg)}`);
+      return finish(ctx, r, (b) => {
+        const n = Number(b.bytes);
+        const size = n >= 1e6 ? `${(n / 1e6).toFixed(0)} MB` : `${Math.ceil(n / 1e3)} KB`;
+        return `Deleted ${b.id}: ${size} freed`;
+      });
+    }
     if (sub === "import") {
       if (!arg) return usage(ctx, "models import needs a folder");
       const r = await importModels(ctx, arg);
@@ -355,7 +376,7 @@ const models: Command = {
       }
       return r.missing.length > 0 ? EXIT.unavailable : EXIT.ok;
     }
-    return usage(ctx, "models needs list, pull or import");
+    return usage(ctx, "models needs list, pull, delete or import");
   },
 };
 

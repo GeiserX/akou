@@ -173,11 +173,16 @@ describe("[SV-T5] one table of who may call each route", () => {
     const r = await walk((req, ctx) => guard(req, { ...ctx, route: { access: "open" } }));
     expect(r.wrong).toContain("GET /v1/status with none: 418, table says 401");
     expect(r.wrong).toContain("POST /v1/quit with unknown: 418, table says 401");
-    // Every closed route is wrong twice (no key, unknown key), except `GET /v1/keys/me`: it needs a
-    // caller, so with every route anonymous it answers 401 itself, right for those two and wrong
-    // once, for the admin token.
+    // Every closed route is wrong twice (no key, unknown key), except the routes that need a
+    // caller (`GET /v1/keys/me`, and `DELETE /v1/models/{id}`, which logs who deleted): with every
+    // route anonymous they answer 401 themselves, right for those two and wrong once, for the
+    // admin token.
+    const needsCaller = ["GET /v1/keys/me", "DELETE /v1/models/{id}"];
     const open = Object.values(TABLE).filter((a) => a === "open").length;
-    expect(r.wrong.length).toBe((Object.keys(TABLE).length - open - 1) * 2 + 1);
-    expect(r.wrong).toContain("GET /v1/keys/me with admin: 401, table says allowed");
+    expect(r.wrong.length).toBe(
+      (Object.keys(TABLE).length - open - needsCaller.length) * 2 + needsCaller.length,
+    );
+    for (const k of needsCaller)
+      expect(r.wrong).toContain(`${k} with admin: 401, table says allowed`);
   });
 });

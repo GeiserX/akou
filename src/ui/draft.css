@@ -1,0 +1,136 @@
+/* The draft box (DC-S1) and its learn chip (DC-L4), in dark and light. */
+:root {
+  color-scheme: light dark;
+  --bg: #fdfdfd;
+  --fg: #1a1a1a;
+  --muted: #5c5c5c;
+  --line: #c9c9c9;
+  --warn: #8a4b00;
+  --mark: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1f1f;
+    --fg: #f2f2f2;
+    --muted: #b0b0b0;
+    --line: #555;
+    --warn: #ffb35c;
+    --mark: #ff8a80;
+  }
+}
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: the attribute must beat every display rule, whatever its specificity */
+  display: none !important;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px / 1.3 -apple-system,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+}
+button,
+select {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+button:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 1px;
+}
+.hint {
+  color: var(--muted);
+}
+#chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+}
+#chip {
+  margin: 0;
+  min-width: 0;
+}
+.chip-candidate {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+#draft {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px;
+}
+#draft-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+#draft-to {
+  margin-left: auto;
+  color: var(--muted);
+}
+#draft-field {
+  position: relative;
+}
+/* The marks sit behind the field with the same box and font, so an underline lands on its word. */
+#draft-marks,
+#draft-text {
+  box-sizing: border-box;
+  width: 100%;
+  min-height: 6em;
+  margin: 0;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  font: inherit;
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+#draft-marks {
+  position: absolute;
+  inset: 0;
+  color: transparent;
+  overflow: hidden;
+  pointer-events: none;
+}
+#draft-marks mark {
+  color: transparent;
+  background: transparent;
+  text-decoration: underline wavy var(--mark);
+  text-underline-offset: 3px;
+}
+#draft-text {
+  position: relative;
+  background: transparent;
+  color: var(--fg);
+  resize: vertical;
+}
+#draft-alts {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+#draft-foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+#draft-keys {
+  flex-basis: 100%;
+  margin: 0;
+}
