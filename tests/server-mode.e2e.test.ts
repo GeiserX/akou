@@ -542,8 +542,9 @@ describe("SV-K1: GET /v1/server", () => {
       expect(Object.keys(b.capabilities).sort()).toEqual(
         ["bazarr", "events", "jobs", "openai", "webhooks", "wyoming"].sort(),
       );
-      // No job route exists yet, in either mode.
-      expect(b.capabilities.jobs).toBe(false);
+      // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
+      for (const c of ["jobs", "events", "webhooks"])
+        expect(b.capabilities[c]).toBe(mode === "server");
     }
   });
 
@@ -552,7 +553,7 @@ describe("SV-K1: GET /v1/server", () => {
       app: fakeApp(),
       port: 0,
       token: () => "t".repeat(64),
-      router: buildRouter().add("POST", "/jobs", JOBS_CREATE, () => json(202, {})),
+      router: buildRouter("app").add("POST", "/jobs", JOBS_CREATE, () => json(202, {})),
     });
     try {
       const r = await fetch(`http://127.0.0.1:${s.port}/v1/server`);

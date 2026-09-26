@@ -219,7 +219,7 @@ Each row is one bead labelled `docs-lag`, closed by the PR that fixes the doc.
 Each needs a yes or no before any bead is built on it. Until then the matrix marks it `decision`. The numbers are stable because other docs cite them.
 
 1. A "Record this call?" prompt from OS signals, off by default, versus starting only from the skill, CLI and UI.
-2. The predecessor features REQUIREMENTS drops: transcribing arbitrary audio files, SRT and VTT output, dictation to the clipboard, and the engine comparison lane (which the multi-engine work may bring back in another form).
+2. Closed by [SERVER.md SV-D1](SERVER.md#2-decisions-this-reverses): transcribing a file is a product feature, as a job, and SRT and VTT come back as formats of a job (SV-J5). The other predecessor features this item named, dictation to the clipboard and the engine comparison lane, are not brought back by it.
 3. Redaction of a span, and how it coexists with an append-only log.
 4. Screen or slide capture, which brings back the Screen Recording grant we removed.
 5. A sharing hub beyond the local link.

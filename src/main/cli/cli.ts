@@ -28,6 +28,7 @@ import { noteCommands } from "./commands/notes.ts";
 import { serverCommands } from "./commands/server.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
+import { transcribeCommand } from "./commands/transcribe.ts";
 import { vocab } from "./commands/vocab.ts";
 import { waitCommand } from "./commands/wait.ts";
 import { watch } from "./commands/watch.ts";
@@ -59,6 +60,7 @@ export const COMMANDS: readonly Command[] = [
   doctorCommand,
   ...setupCommands,
   ...serverCommands,
+  transcribeCommand,
   skillCommand,
   mcp,
 ];

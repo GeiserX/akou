@@ -39,8 +39,10 @@ import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
+import { jobRoutes } from "./routes/jobs.ts";
 import { modelRoutes } from "./routes/models.ts";
 import { notesRoutes } from "./routes/notes.ts";
+import { openaiRoutes } from "./routes/openai.ts";
 import { openapiRoutes } from "./routes/openapi.ts";
 import { postCallRoutes } from "./routes/post-call.ts";
 import { queryRoutes } from "./routes/query.ts";
@@ -141,8 +143,10 @@ export interface ApiApp {
    * while it is still loading them, or after it failed to. Absent: ready once the files are.
    */
   recognizer?(): "loading" | "ready" | "unavailable";
-  /** Jobs waiting or running, for `/healthz`; 0 until the job queue exists. */
+  /** Jobs waiting or running, for `/healthz`. */
   queueDepth?(): number;
+  /** The file jobs of server mode (docs/ux/SERVER.md section 5); none in app mode. */
+  jobs?(): import("../server/jobs.ts").JobService | null;
 }
 
 export interface ServerOptions {
@@ -185,7 +189,12 @@ export interface ApiServer {
   stop(): Promise<void>;
 }
 
-export function buildRouter(): Router<ApiApp> {
+/**
+ * The route table. With a mode, the routes that akou serves: the job routes exist in server mode
+ * only, so the desktop app answers 404 for them (SV-J1). With none, every route, for the OpenAPI
+ * file (`scripts/openapi.ts`), which marks each with its modes.
+ */
+export function buildRouter(mode?: Mode): Router<ApiApp> {
   const r = new Router<ApiApp>();
   settingsRoutes(r);
   modelRoutes(r);
@@ -197,6 +206,10 @@ export function buildRouter(): Router<ApiApp> {
   postCallRoutes(r);
   handoffRoutes(r);
   serverRoutes(r);
+  if (mode !== "app") {
+    jobRoutes(r);
+    openaiRoutes(r);
+  }
   openapiRoutes(r);
   return r;
 }
@@ -281,7 +294,7 @@ export function routeMeta(found: ReturnType<Router<ApiApp>["match"]>): GuardRout
 }
 
 export function startApiServer(o: ServerOptions): ApiServer {
-  const router = o.router ?? buildRouter();
+  const router = o.router ?? buildRouter(o.app.mode?.() ?? "app");
   const root = buildRootRouter();
   const check = o.guard ?? defaultGuard;
   const maxUploadBytes = o.maxUploadBytes ?? DEFAULT_MAX_UPLOAD_BYTES;
