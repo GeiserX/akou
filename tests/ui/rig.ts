@@ -10,15 +10,26 @@
  * Run with `bun run test:ui`; `bun run check` leaves these out (bunfig.toml).
  */
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type Browser, chromium, type Page, type Request, webkit } from "playwright-core";
+import {
+  type APIResponse,
+  type Browser,
+  type BrowserContext,
+  chromium,
+  type Page,
+  type Request,
+  type Route,
+  webkit,
+} from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
+import type { ConfigReply, SchemaEntry } from "../../src/ui/settings.ts";
 import { type AppRig, appRig, type RigOptions } from "../api-helpers.ts";
 import { until } from "../capture-helpers.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import { LogBuilder, T0, TZ } from "../helpers.ts";
+import { buildEntry } from "./desktop-rig.ts";
 
 export { until };
 
@@ -299,4 +310,277 @@ export function seg(
     text,
     model: "fake",
   } as EventDraft;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Dictation fixtures (docs/ux/DICTATION.md sections 5 and 6). Until the dictation settings and
+// routes land in the app, the page's requests for them are answered here, and the rest of each
+// request goes to the real app.
+
+type Schema = Record<string, SchemaEntry>;
+const bool = (doc: string): SchemaEntry => ({ type: "boolean", apiWritable: true, doc });
+const pick = (values: string[], doc: string): SchemaEntry => ({
+  type: "string",
+  values,
+  apiWritable: true,
+  doc,
+});
+const int = (min: number, max: number, doc: string): SchemaEntry => ({
+  type: "integer",
+  min,
+  max,
+  apiWritable: true,
+  doc,
+});
+const str = (doc: string, o: Partial<SchemaEntry> = {}): SchemaEntry => ({
+  type: "string",
+  apiWritable: true,
+  doc,
+  ...o,
+});
+
+/** The app-mode dictation keys of section 6, with their defaults, as `GET /config` will carry them. */
+export const DICTATION_SCHEMA: Schema = {
+  "dictation.enabled": bool("Dictation on or off."),
+  "dictation.hotkey": str("The dictation key."),
+  "dictation.activation": pick(["hold", "toggle", "hold-or-toggle"], "How the key starts."),
+  "dictation.hotkeyDraft": str("Opens the draft box instead."),
+  "dictation.hotkeyFixLast": str("Opens the last dictation to fix it."),
+  "dictation.hotkeyPasteLast": str("Inserts the last dictation again."),
+  "dictation.silenceStopSeconds": int(0, 600, "Ends a latched session after this much silence."),
+  "dictation.maxMinutes": int(1, 60, "The longest session."),
+  "dictation.mic": str("The microphone; empty follows the system."),
+  "dictation.preferBuiltInOverBluetooth": bool("The built-in mic over a Bluetooth headset."),
+  "dictation.warmMic": pick(["off", "auto", "always"], "Keeps the mic open between dictations."),
+  "dictation.engine": pick(["auto", "fast", "best", "remote"], "The engine."),
+  "dictation.localTimeoutSeconds": int(2, 120, "How long a local best may take."),
+  "dictation.remote.url": str("The remote akou.", { apiWritable: false }),
+  "dictation.remote.key": str("The remote's jobs key.", { secret: true }),
+  "dictation.remote.fallback": pick(["local", "error"], "When the remote is down."),
+  "dictation.remote.timeoutSeconds": int(1, 60, "The remote's budget before any audio."),
+  "asr.qwenIdleMinutes": int(0, 1440, "Stops llama-server after this idle time."),
+  "dictation.language": str("auto or a language tag."),
+  "dictation.languages": { type: "string[]", apiWritable: true, doc: "Languages to choose among." },
+  "dictation.glossary": pick(["off", "on"], "Sends learned words to the recognizer."),
+  "dictation.glossaryMax": int(1, 24, "How many learned words at most."),
+  "dictation.insert": pick(["paste", "type", "clipboard"], "How text is inserted."),
+  "dictation.sendKey": pick(["Enter", "Ctrl+Enter", "Cmd+Enter", "Shift+Enter", "none"], "Send."),
+  "dictation.sendAlways": bool("Sends after every dictation."),
+  "dictation.restoreClipboard": bool("Puts the old clipboard back."),
+  "dictation.smartSpacing": bool("Spacing and case from the text around the cursor."),
+  "dictation.trailingSpace": bool("A space after the text."),
+  "dictation.spokenPunctuation": bool("Spoken punctuation."),
+  "dictation.fillers": bool("Removes filler words."),
+  "dictation.spokenSend": bool("A spoken send."),
+  "dictation.format": pick(["off", "provider"], "Cleans up with your provider."),
+  "dictation.formatPrompt": str("The formatting prompt."),
+  "dictation.formatTimeoutSeconds": int(1, 60, "How long formatting may take."),
+  "dictation.muteMedia": bool("Pauses other media while listening."),
+  "dictation.learn": pick(["off", "ask", "auto"], "Suggests words to learn."),
+  "dictation.readField": bool("Reads the field you dictated into."),
+  "dictation.learn.audioCheck": bool("Confirms a word against the audio."),
+  "dictation.pill": pick(["bottom", "top", "left", "right", "off"], "Where the pill shows."),
+  "dictation.pillPreview": bool("Shows the words as you speak."),
+  "dictation.sounds": pick(["auto", "off", "soft", "click"], "Start and stop sounds."),
+  "dictation.retainDays": int(0, 3650, "How long history is kept."),
+  "dictation.keepAudio": bool("Keeps the audio for retry and learning."),
+};
+
+/** Server mode's dictation keys. */
+export const DICTATION_SERVER_SCHEMA: Schema = {
+  "server.dictation_slots": int(0, 8, "Workers reserved for dictation requests."),
+  "server.dictation_engine": str("The engine a dictation request runs."),
+};
+
+/** A value for every fixture key: its section 6 default. */
+function defaults(schema: Schema): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, s] of Object.entries(schema)) {
+    out[k] =
+      s.type === "boolean"
+        ? false
+        : s.type === "integer"
+          ? (s.min ?? 0)
+          : s.type === "string[]"
+            ? []
+            : (s.values?.[0] ?? "");
+  }
+  return out;
+}
+
+/**
+ * The real answer to a routed request: from the app itself, or, for a page on another origin, from
+ * the app at `proxy.to` with the request's `Origin` rewritten, as a reverse proxy in front of it
+ * would.
+ */
+function upstream(route: Route, proxy?: { from: string; to: string }): Promise<APIResponse> {
+  if (!proxy) return route.fetch();
+  const req = route.request();
+  const headers = { ...req.headers() };
+  if (headers.origin) headers.origin = proxy.to;
+  return route.fetch({ url: req.url().replace(proxy.from, proxy.to), headers });
+}
+
+/** Carries every request of a page on `from` to the app at `to` (see `upstream`). */
+export async function proxyRoute(context: BrowserContext, from: string, to: string): Promise<void> {
+  await context.route(`${from}/**`, async (route) =>
+    route.fulfill({ response: await upstream(route, { from, to }) }),
+  );
+}
+
+export interface DictationFixture {
+  /** Every `PATCH /config` body the page sent that named a fixture key. */
+  patches: Record<string, unknown>[];
+  settings: Record<string, unknown>;
+  /** Refuses the next patch of this key with this message, as the registry would. */
+  refuse: Map<string, string>;
+  /** What `GET /server` adds under `dictation`. */
+  server: { slots: number; engine: string; served_last_hour: number } | null;
+  /** The `DELETE /dictations` the page sent. */
+  deletes: number;
+}
+
+/**
+ * Answers the page's dictation requests from fixtures: `GET /config` gains `schema`'s keys (the
+ * real reply is fetched and extended), a `PATCH /config` of fixture keys is recorded and answered
+ * here, `GET /server` gains the `dictation` block, and `DELETE /dictations` is counted.
+ * `prefix`: the API's path on this page (`/api/v1`). `proxy`: the page is on another origin
+ * (`proxyRoute`), whose requests reach the app at `to`.
+ */
+export async function dictationFixture(
+  page: Page,
+  o: {
+    schema?: Schema;
+    prefix?: string;
+    server?: DictationFixture["server"];
+    proxy?: { from: string; to: string };
+  } = {},
+): Promise<DictationFixture> {
+  const schema = o.schema ?? DICTATION_SCHEMA;
+  const prefix = o.prefix ?? "/api/v1";
+  const fx: DictationFixture = {
+    patches: [],
+    settings: defaults(schema),
+    refuse: new Map(),
+    server: o.server ?? null,
+    deletes: 0,
+  };
+  await page.route(
+    (u) => u.pathname === `${prefix}/config`,
+    async (route) => {
+      const req = route.request();
+      if (req.method() === "PATCH") {
+        const body = req.postDataJSON() as Record<string, unknown>;
+        const mine = Object.keys(body).filter((k) => k in schema);
+        if (mine.length === 0) return route.continue();
+        fx.patches.push(body);
+        const errors = mine.flatMap((k) => (fx.refuse.has(k) ? [`${k}: ${fx.refuse.get(k)}`] : []));
+        for (const k of mine) fx.refuse.delete(k);
+        if (errors.length > 0) {
+          return route.fulfill({
+            status: 400,
+            json: { error: "bad_setting", message: errors.join("; "), errors },
+          });
+        }
+        Object.assign(fx.settings, body);
+        return route.fulfill({ status: 200, json: { ok: true } });
+      }
+      const res = await upstream(route, o.proxy);
+      const real = (await res.json()) as ConfigReply;
+      return route.fulfill({
+        response: res,
+        json: {
+          ...real,
+          settings: { ...real.settings, ...fx.settings },
+          schema: { ...real.schema, ...schema },
+        },
+      });
+    },
+  );
+  await page.route(
+    (u) => u.pathname === `${prefix}/server`,
+    async (route) => {
+      const res = await upstream(route, o.proxy);
+      const real = (await res.json()) as Record<string, unknown>;
+      return route.fulfill({
+        response: res,
+        json: fx.server ? { ...real, dictation: fx.server } : real,
+      });
+    },
+  );
+  await page.route(
+    (u) => u.pathname === `${prefix}/dictations`,
+    (route) => {
+      fx.deletes++;
+      return route.fulfill({ status: 200, json: { deleted: 0 } });
+    },
+  );
+  return fx;
+}
+
+/** A small ElectroBun view (the pill, the draft box) on its own page, with a fake main side. */
+export interface ViewPage {
+  page: Page;
+  /** Every request the page made, in order. */
+  requests: { name: string; params: unknown }[];
+  /** Pushes a message to the page, as the main process does. */
+  send(name: string, payload: unknown): Promise<void>;
+  close(): Promise<void>;
+}
+
+const VIEW_FILES: Record<"pill" | "draft", { html: string; css: string; entry: string }> = {
+  pill: { html: "pill.html", css: "pill.css", entry: "dictation-pill-window.ts" },
+  draft: { html: "draft.html", css: "draft.css", entry: "dictation-draft-window.ts" },
+};
+
+/**
+ * Opens a dictation view's real page, built from its ElectroBun entry over the shim, on its own
+ * origin; the requests it makes are recorded and answered `true`. With `clock`, the page runs on
+ * Playwright's clock from its first script.
+ */
+export async function viewPage(
+  view: "pill" | "draft",
+  o: { clock?: Date } = {},
+): Promise<ViewPage> {
+  const f = VIEW_FILES[view];
+  const ui = join(import.meta.dir, "..", "..", "src", "ui");
+  const files: Record<string, { body: string; type: string }> = {
+    "index.html": { body: readFileSync(join(ui, f.html), "utf8"), type: "text/html" },
+    [f.css]: { body: readFileSync(join(ui, f.css), "utf8"), type: "text/css" },
+    "index.js": { body: await buildEntry(f.entry), type: "text/javascript" },
+  };
+  const b = await launch();
+  const context = await b.newContext();
+  const page = await context.newPage();
+  page.on("pageerror", (err) => {
+    pageErrors.push(err.message);
+    console.error(`${view} page error: ${err.message}`);
+  });
+  await page.addInitScript(watchHidden);
+  // The page's timers are Playwright's from the start, so a test moves them.
+  if (o.clock) await page.clock.install({ time: o.clock });
+  const requests: ViewPage["requests"] = [];
+  await page.route("http://akou.test/**", (route) => {
+    const file = files[new URL(route.request().url()).pathname.slice(1) || "index.html"];
+    if (!file) return route.fulfill({ status: 404, body: "" });
+    return route.fulfill({ status: 200, contentType: file.type, body: file.body });
+  });
+  await page.exposeFunction("__akouRequest", (name: string, params: unknown) => {
+    requests.push({ name, params });
+    return true;
+  });
+  await page.goto("http://akou.test/index.html");
+  return {
+    page,
+    requests,
+    send: (name, payload) =>
+      page.evaluate(([n, m]) => window.__akouMessage(n as string, m), [name, payload] as const),
+    close: async () => {
+      const hidden = await watchedOffenders(page).catch(() => []);
+      await context.close();
+      const errors = pageErrors.splice(0);
+      if (errors.length > 0) throw new Error(`the page threw: ${errors.join("; ")}`);
+      if (hidden.length > 0) throw new Error(`[TS-15] hidden but shown: ${hidden.join("; ")}`);
+    },
+  };
 }

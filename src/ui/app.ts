@@ -13,6 +13,7 @@
 import { formatWall, formatZone } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
+import { mountDictationDialog } from "./dictation-page.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
@@ -166,9 +167,11 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
+    const dictation = mountDictationDialog(t);
     const settings = new SettingsPane(
       t,
       () => this.view()?.call?.workspace ?? this.workspaceInput().value,
+      () => void dictation.open(),
     );
     this.modelsCard = new ModelsCard(t);
     wireModelsDialog(t);

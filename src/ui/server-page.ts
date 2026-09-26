@@ -1,13 +1,14 @@
 /**
  * The page of server mode (docs/ux/SERVER.md section 12.4, SV-U7): after the admin login it shows
- * the server's own screens, not the call window. It opens on Jobs, with Models, Keys and Settings
- * beside it, each over routes a script can call too. The call window's markup is taken off the
- * page, so no recording control is there to press.
+ * the server's own screens, not the call window. It opens on Jobs, with Models, Keys, Dictation
+ * and Settings beside it, each over routes a script can call too. The call window's markup is
+ * taken off the page, so no recording control is there to press.
  *
  * Same bundle, same transport and same session as the window: `web.ts` boots this instead of the
  * window when `GET /v1/server` says `mode: "server"`.
  */
 
+import { DictationPage } from "./dictation-page.ts";
 import { h, replace } from "./dom.ts";
 import { ModelsPage } from "./models-page.ts";
 import type { Transport } from "./protocol.ts";
@@ -29,6 +30,7 @@ export function bootServer(t: Transport, logout: () => void): void {
     new JobsPage(t),
     new ModelsPage(t, true),
     new KeysPage(t),
+    new DictationPage(t),
     new SettingsPage(t),
   ];
   const nav = h("nav", { id: "server-nav", attrs: { "aria-label": "Server pages" } });
