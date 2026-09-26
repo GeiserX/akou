@@ -13,9 +13,10 @@
  * 3. **Call channel:** speaker diarization over the call channel of **all parts concatenated**, so
  *    one person has one label (`s<N>`) for the whole call: Nemotron 3 Diarization at its 30.4 s
  *    latency through `akou-diarize` (`asr.diarizer` nemotron), or pyannote segmentation plus
- *    embeddings (`embeddings`). The call pieces are cut at the turn boundaries; where two turns
- *    overlap, a piece is labelled with the speaker active longest inside it (one channel carries
- *    one transcript, so overlapping voices share a line). Mic lines are `you`.
+ *    embeddings (`embeddings`). The call pieces are cut where the turns change, each turn edge
+ *    moved to the nearest pause (`timelinePieces`); where two turns overlap, a piece is labelled
+ *    with the speaker active longest inside it (one channel carries one transcript, so
+ *    overlapping voices share a line). Mic lines are `you`.
  * 4. Every span is gained and padded by `prepareSpan` (the one rule) and decoded with the call's
  *    decode list as it stands when the pass starts, recorded as `vocab.used`. A span the engine
  *    refuses is halved down to 20 s, and only the smallest failing piece is skipped and listed.
@@ -62,6 +63,8 @@ export interface FinalOptions {
   minGapSeconds: number;
   /** A piece with no diarization span within this many seconds is `s?`. */
   attachSeconds: number;
+  /** A diarizer's turn edge cuts at the nearest pause within this many seconds of it. */
+  snapSeconds: number;
 }
 
 export const DEFAULT_FINAL: FinalOptions = {
@@ -71,6 +74,7 @@ export const DEFAULT_FINAL: FinalOptions = {
   silenceDbfs: -50,
   minGapSeconds: 0.3,
   attachSeconds: 1,
+  snapSeconds: 0.5,
 };
 
 /** One part's stereo audio at 16 kHz, read by channel index. */
@@ -217,6 +221,16 @@ interface Piece {
  * Pieces that cover the whole timeline, cut inside non-speech runs at their quietest window, split
  * further so none is longer than `maxSpan`, then trimmed to where they rise above the floor. Pieces
  * that never do are silence and dropped.
+ *
+ * `cutsAt` (samples) are a diarizer's turn edges. They are not cut points as they stand: the
+ * model places an edge a frame or two off the pause it belongs to, and a cut there leaves the
+ * tail of a word, or a sliver of the pause, as a piece of its own, which an engine decodes into a
+ * filler ("Yeah.") or a fragment. Each edge moves to the quietest window of the nearest pause
+ * within `snapSeconds`, the window a non-speech run's own cut takes, so the edges and the run's
+ * cut are one cut. With no pause in reach (the speakers change with no pause between them) the
+ * edge cuts at the quietest window within reach. A pause is a window the VAD `heard` no speech
+ * in; `speech` may count more as speech (a job keeps a pad beside the speech), and a pause of
+ * `heard` inside that never takes a cut of its own.
  */
 export function timelinePieces(
   samples: Float32Array,
@@ -224,6 +238,7 @@ export function timelinePieces(
   window: number,
   o: FinalOptions,
   cutsAt: readonly number[] = [],
+  heard: readonly boolean[] = speech,
 ): Piece[] {
   const floor = 10 ** (o.silenceDbfs / 20);
   const nWin = Math.ceil(samples.length / window);
@@ -240,7 +255,22 @@ export function timelinePieces(
     for (let w = a; w < b; w++) if ((rms[w] as number) < (rms[best] as number)) best = w;
     return best;
   };
-  const cuts = new Set<number>(cutsAt.map((c) => Math.round(c / window)));
+  const reach = Math.round((o.snapSeconds * ASR_RATE) / window);
+  const snapEdge = (at: number): number => {
+    const c = Math.min(nWin - 1, Math.max(0, at));
+    for (let d = 0; d <= reach; d++) {
+      for (const w of [c - d, c + d]) {
+        if (w < 0 || w >= nWin || heard[w]) continue;
+        let a = w;
+        while (a > 0 && !heard[a - 1]) a--;
+        let e = w + 1;
+        while (e < nWin && !heard[e]) e++;
+        return quietest(a, e);
+      }
+    }
+    return quietest(Math.max(0, c - reach), Math.min(nWin, c + reach + 1));
+  };
+  const cuts = new Set<number>(cutsAt.map((c) => snapEdge(Math.round(c / window))));
   const gapWins = Math.ceil((o.minGapSeconds * ASR_RATE) / window);
   for (let w = 0; w < nWin; ) {
     if (speech[w]) {
@@ -851,13 +881,16 @@ export async function runJobPass(
   const heard = new Map<string, number>();
   // The pad counts as speech, so it stays with the speech beside it and never becomes a piece of
   // noise on its own.
-  const kept = flags.slice(w0, w1).map((f, i) => f || i < first - w0 || i > last - w0);
-  for (const piece of timelinePieces(samples, kept, window, o, cuts)) {
-    // An engine that writes text on noise (Qwen answers a filler) never gets a piece in which the
-    // VAD found no speech: turn boundaries can leave one between two turns.
+  const heardSpeech = flags.slice(w0, w1);
+  const kept = heardSpeech.map((f, i) => f || i < first - w0 || i > last - w0);
+  for (const piece of timelinePieces(samples, kept, window, o, cuts, heardSpeech)) {
+    // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
+    // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a
+    // word there that the plain run does not have.
     if (
-      engine &&
-      !kept.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true)
+      !heardSpeech
+        .slice(Math.floor(piece.from / window), Math.ceil(piece.to / window))
+        .includes(true)
     ) {
       continue;
     }

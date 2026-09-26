@@ -151,6 +151,55 @@ describe("SV-J7: a mono path through the finalize worker", () => {
   });
 });
 
+describe("[akou-5an.100] speakers on or off, the same words", () => {
+  // Three turns of two voices over room noise, which keeps every sliver above the silence floor,
+  // and an engine that hears a filler in a piece with no word, as Qwen does. Word gaps of 0.05 s
+  // keep the fake VAD on through a phrase, so the only pauses are the ones between turns.
+  const A = ["hello", "world", "we"];
+  const B = ["ok", "great", "today"];
+  const talk = concat(
+    silence(0.6),
+    speak(A, { voice: 1, gapSeconds: 0.05 }),
+    silence(0.6),
+    speak(B, { voice: 4, gapSeconds: 0.05 }),
+    silence(0.6),
+    speak(["thanks"], { voice: 1, gapSeconds: 0.05 }),
+    silence(0.6),
+  );
+  const x = mix(roomNoise(talk.length / RATE, 3, 0.006), talk);
+  // The phrases sit at 0.6 to 1.5, 2.1 to 3.0 and 3.6 to 3.9 s. The turns as Nemotron places
+  // them: each edge a frame or two into the pause, and one 50 ms inside the last word of a turn.
+  const turns = [
+    { speaker: 0, start: 0.45, end: 1.62 },
+    { speaker: 1, start: 1.98, end: 2.9 },
+    { speaker: 0, start: 3.5, end: 4.05 },
+  ];
+  const FILLER = "Yeah.";
+  const withSpeakers = (options: { snapSeconds?: number } = {}) => {
+    const models = new FakeModels({ hallucinate: FILLER });
+    models.diarizer = () => ({ process: () => turns });
+    return runJobPass({ samples: x, diarize: true, decode: null, options }, models);
+  };
+
+  test("a diarized job carries the plain job's words, labelled, and nothing else", async () => {
+    const plain = await job(x, { hallucinate: FILLER });
+    expect(plain.text).toBe("hello world we ok great today thanks");
+    const r = await withSpeakers();
+    expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([
+      ["s0", "hello world we"],
+      ["s1", "ok great today"],
+      ["s0", "thanks"],
+    ]);
+    expect(r.text).toBe(plain.text);
+  });
+
+  test("positive control: cut at the edges as they stand, the diarized job gains words", async () => {
+    const r = await withSpeakers({ snapSeconds: 0 });
+    expect(r.text).not.toBe("hello world we ok great today thanks");
+    expect(r.text.split(" ").length).toBeGreaterThan(7);
+  });
+});
+
 describe("SV-R5: silence and hallucination guards on every job", () => {
   const INVENTED = "thank you for watching";
 
