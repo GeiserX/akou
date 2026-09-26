@@ -507,7 +507,8 @@ jobs:
   # checkout with no Docker, since Docker on a Mac has no Metal. A Mac mini serving this way is the
   # box another akou sends its GPU jobs to (docs/ux/SERVER.md section 14). The same round trip as
   # the image's: `/healthz`, then one clip by long-poll, event feed and signed webhook, then
-  # `akou transcribe`. The clip is a 16 kHz WAV, which needs no ffmpeg.
+  # `akou transcribe`, with an Ogg Opus voice note as Telegram-Archive sends, decoded by the
+  # Homebrew ffmpeg a Mac server needs too (install.md).
   server-macos:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -523,6 +524,13 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      - name: ffmpeg, as install.md tells a Mac server to install it
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v ffmpeg || brew install ffmpeg
+          ffmpeg -version | head -n 1
       - name: the models and home folders
         run: |
           echo "AKOU_MODELS_DIR=$RUNNER_TEMP/akou-models" >> "$GITHUB_ENV"
@@ -563,12 +571,13 @@ jobs:
           work=$(mktemp -d)
           curl -fsSL --retry 3 -o "$work/en.wav" https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/1a468a35cbba69418f126de829e75261dea4a4e4/test_wavs/en.wav
           echo "148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6  $work/en.wav" | shasum -a 256 -c -
+          ffmpeg -nostdin -loglevel error -i "$work/en.wav" -c:a libopus "$work/note.ogg"
           bun src/main/cli/cli.ts keys create --name ci --scope jobs --callback-host 127.0.0.1 --json > "$work/key.json"
           AKOU_API_KEY=$(jq -r .key "$work/key.json")
           AKOU_WEBHOOK_SECRET=$(jq -r .secret "$work/key.json")
           export AKOU_API_KEY AKOU_WEBHOOK_SECRET
-          AKOU_URL=http://127.0.0.1:8476 CALLBACK_HOST=127.0.0.1 bun scripts/server-roundtrip.ts "$work/en.wav"
-          AKOU_URL=http://127.0.0.1:8476 bun src/main/cli/cli.ts transcribe "$work/en.wav" | tee "$work/transcribe.txt"
+          AKOU_URL=http://127.0.0.1:8476 CALLBACK_HOST=127.0.0.1 bun scripts/server-roundtrip.ts "$work/note.ogg"
+          AKOU_URL=http://127.0.0.1:8476 bun src/main/cli/cli.ts transcribe "$work/note.ogg" | tee "$work/transcribe.txt"
           tr 'A-Z' 'a-z' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
       - name: the server's log
         if: always()
