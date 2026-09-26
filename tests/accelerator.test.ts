@@ -28,14 +28,19 @@ import {
 import {
   fetchForHost,
   fetchLlamaBuild,
-  LLAMA_BUILDS,
-  LLAMA_RELEASE,
+  llamaAccelerators,
   llamaBuild,
   llamaBuildProblems,
-  llamaUrl,
 } from "../src/main/asr/llama-builds.ts";
-import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
-import { ACCELERATORS, PLATFORMS } from "../src/main/asr/models.ts";
+import {
+  LLAMA_BUILDS,
+  LLAMA_RELEASE,
+  llamaBuildId,
+  llamaUrl,
+  QWEN_ASR,
+} from "../src/main/asr/llama-catalog.ts";
+import { llamaPlan } from "../src/main/asr/llama-server.ts";
+import { ACCELERATORS, MODELS, PLATFORMS } from "../src/main/asr/models.ts";
 import { validateSetting } from "../src/main/config/schema.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -459,6 +464,48 @@ describe("the pinned llama.cpp builds", () => {
   });
 });
 
+describe("one table: what detection offers is what the best preset downloads", () => {
+  const runtimes = MODELS.filter((m) => m.serves.includes("runtime"));
+
+  test("every build is a catalog entry with the same files, and every catalog build is in the table", () => {
+    for (const b of LLAMA_BUILDS) {
+      const entry = runtimes.find((m) => m.id === llamaBuildId(b.platform, b.accelerator));
+      expect(entry?.platforms).toEqual([b.platform]);
+      expect(entry?.accelerators).toEqual([b.accelerator]);
+      expect(entry?.files).toEqual(
+        b.assets.map((a) => ({ name: a.name, url: llamaUrl(a), sha256: a.sha256, size: a.size })),
+      );
+    }
+    for (const m of runtimes) {
+      const [platform, accelerator] = [m.platforms[0] ?? "", m.accelerators[0] ?? ""];
+      expect(llamaBuild(platform, accelerator)).not.toBeNull();
+    }
+    expect(runtimes).toHaveLength(LLAMA_BUILDS.length);
+  });
+
+  test("natively, every backend detection can choose plans that backend's build, with no fallback", () => {
+    for (const platform of PLATFORMS) {
+      const offered = availableBuilds(machine(platform));
+      expect(offered).toEqual(llamaAccelerators(platform));
+      for (const a of offered) {
+        const plan = llamaPlan({
+          setting: a,
+          own: [],
+          platform,
+          detected: detectAccelerator(a, machine(platform)),
+        });
+        expect({ platform, a, plan: plan.accelerator, note: plan.note }).toEqual({
+          platform,
+          a,
+          plan: a,
+          note: undefined,
+        });
+        expect(plan.build?.id).toBe(llamaBuildId(platform, a));
+      }
+    }
+  });
+});
+
 describe("fetching a build", () => {
   let server: ReturnType<typeof Bun.serve> | null = null;
   afterEach(() => {
@@ -629,6 +676,49 @@ describe("GET /v1/server reports the accelerator", () => {
     const b = await server(await rig(LIST_UHD770, { settings: { "asr.accelerator": "cpu" } }));
     expect(b.gpu).toBeNull();
     expect(b.accelerator).toMatchObject({ setting: "cpu", active: "cpu", device: null });
+  });
+
+  test("natively, the build is asked once the best preset has unpacked it, and a GPU it cannot open is the CPU", async () => {
+    const models = join(t.dir, "native-models");
+    const intel = renderNode("0x8086");
+    const r = await appRig({
+      settings: { "asr.modelsDir": models },
+      accelerator: {
+        // The fake machine, plus the real disk for the build the best preset unpacks.
+        probe: { ...intel, exists: (p) => intel.exists(p) || existsSync(p) },
+        run: (b) => listDevices([process.execPath, b]),
+      },
+    });
+    rigs.push(r);
+    const before = (await r.api("GET", "/server")).body;
+    expect(before.accelerator).toMatchObject({ active: "vulkan", verified: false });
+    // Where extractBuild leaves the Linux build, printing what a box with no Vulkan device prints.
+    const bin = join(
+      models,
+      llamaBuildId("linux-x64", "vulkan"),
+      "bin",
+      `llama-${LLAMA_RELEASE}`,
+      "llama-server",
+    );
+    mkdirSync(join(bin, ".."), { recursive: true });
+    writeFileSync(bin, `process.stdout.write(${JSON.stringify(LIST_NONE)});\n`);
+    const b = await server(r);
+    expect(b.gpu).toBeNull();
+    expect(b.accelerator.active).toBe("cpu");
+    expect(b.accelerator.reason).toContain("llama-server lists no vulkan device");
+    const engines = b.engines as { id: string; provider: string }[];
+    expect(engines.find((e) => e.id === QWEN_ASR)?.provider).toBe("cpu");
+  });
+
+  test("a platform with no llama-server build reports why Qwen runs on the CPU", async () => {
+    const r = await appRig({ accelerator: { probe: machine("freebsd-x64") } });
+    rigs.push(r);
+    const b = (await r.api("GET", "/server")).body;
+    expect(b.gpu).toBeNull();
+    expect(b.accelerator.active).toBe("cpu");
+    expect(b.accelerator.reason).toBe(
+      "no GPU found; there is no cpu build of llama-server for freebsd-x64, so Qwen runs on the CPU",
+    );
   });
 
   test("the default rig reports no GPU, whatever machine runs the tests", async () => {

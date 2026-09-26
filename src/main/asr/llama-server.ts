@@ -2,14 +2,17 @@
  * The llama-server runtime (docs/research/asr-architecture.md section 2.3, ASR-5): llama.cpp's HTTP
  * server as a child process that runs Qwen3-ASR.
  *
- * - **Which build** (`llamaPlan`). `asr.accelerator` picks one of the pinned builds of
- *   `llama-catalog.ts` for this platform. On `auto`, the GPU accelerator.ts found wins (Vulkan for
- *   an Intel or AMD GPU, CUDA for NVIDIA); with none, `auto` is Metal on Apple silicon and the CPU
- *   elsewhere. An accelerator with no build for the platform falls back to the CPU, and the caller
- *   logs why. An image runs the build it carries (`AKOU_LLAMA_SERVER`) and downloads none;
- *   `asr.llamaServer` names an own llama-server instead (a SYCL or ROCm build compiled on the host).
+ * - **Which build** (`llamaPlan`). accelerator.ts's choice picks one of the pinned builds of
+ *   `llama-catalog.ts` for this platform: the GPU it found on `auto` (Metal on Apple silicon, CUDA
+ *   for NVIDIA, Vulkan for Intel or AMD), the backend `asr.accelerator` names, or the CPU once the
+ *   build itself listed no such device. It chooses among the same table, so the build exists; only
+ *   a platform with no build at all falls back, with a note the app folds into what it reports. An
+ *   image runs the build it carries (`AKOU_LLAMA_SERVER`) and downloads none; `asr.llamaServer`
+ *   names an own llama-server instead (one compiled on the host).
  * - **The download is an archive**, verified like every model file, then unpacked once beside
- *   itself into `bin/` (`extractBuild`); a marker file records which archives it came from.
+ *   itself into `bin/` (`extractBuild`); a marker file records which archives it came from. A
+ *   CUDA build's second archive, the CUDA runtime, lands beside llama-server, as in the `-cuda`
+ *   image, so the host needs only the NVIDIA driver.
  * - **The supervisor** (`LlamaServer`) starts it on a free loopback port with `--cache-ram 0` (its
  *   default prompt cache grows with every request until the machine runs out of memory), waits for
  *   `GET /health`, and starts it again when it has exited. The engine asks for a restart when a
@@ -33,7 +36,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { basename, join, relative } from "node:path";
+import { basename, dirname, join, relative, sep } from "node:path";
 import type { LlamaEngineSpec } from "./engine.ts";
 import { llamaBuildId } from "./llama-catalog.ts";
 import { type Accelerator, type CatalogEntry, MODELS } from "./models.ts";
@@ -48,7 +51,7 @@ export function llamaBuild(
   return catalog.find((m) => m.id === llamaBuildId(platform, accelerator));
 }
 
-/** `asr.accelerator` on this platform: the build that runs, and why it is not the one asked for. */
+/** A backend on this platform: the build that runs, and why it is not the one asked for. */
 export function resolveAccelerator(
   setting: string,
   platform: string,
@@ -60,7 +63,7 @@ export function resolveAccelerator(
   if (llamaBuild(platform, setting, catalog)) return { accelerator: setting as Accelerator };
   return {
     accelerator: "cpu",
-    note: `asr.accelerator is ${setting}, but there is no ${setting} build of llama-server for ${platform}; Qwen runs on the CPU`,
+    note: `there is no ${setting} build of llama-server for ${platform}, so Qwen runs on the CPU`,
   };
 }
 
@@ -81,13 +84,13 @@ export interface LlamaPlan {
   gpuLayers?: number;
   /** The pinned build to download and unpack. */
   build?: CatalogEntry;
-  /** Why the build is not the one asked for. */
+  /** Why the build is not the one detection chose: the platform has none. */
   note?: string;
 }
 
 /**
  * Qwen's llama-server on this machine (akou-5an.94): `asr.llamaServer` first, then the build an
- * image carries, then a pinned build to download, for the GPU detection found or the setting.
+ * image carries, then a pinned build to download, for what detection chose (the setting without it).
  */
 export function llamaPlan(
   o: {
@@ -96,13 +99,13 @@ export function llamaPlan(
     own: readonly string[];
     /** `AKOU_LLAMA_SERVER`: the build an image carries. */
     image?: string;
-    /** accelerator.ts's choice, verified or not; a GPU it found outranks `auto`'s guess. */
+    /** accelerator.ts's choice, verified or not: a GPU it found, or the CPU its check fell back to. */
     detected?: DetectedAccelerator | null;
     platform: string;
   },
   catalog: readonly CatalogEntry[] = MODELS,
 ): LlamaPlan {
-  const want = o.detected?.gpu ? o.detected.active : o.setting;
+  const want = o.detected ? o.detected.active : o.setting;
   if (o.own.length > 0) {
     // An own llama-server is whatever it was built for: the setting says, `custom` when it is auto.
     const auto = o.setting === "auto";
@@ -209,10 +212,20 @@ export function extractBuild(dir: string, archives: readonly string[], platform:
         throw new Error(`cannot unpack ${basename(a)}: ${(r.stderr || r.error?.message) ?? ""}`);
       }
     }
-    if (!findFile(tmp, name)) {
+    const server = findFile(tmp, name);
+    if (!server) {
       throw new Error(
         `no ${name.replace(/\.exe$/, "")} in ${archives.map((a) => basename(a)).join(", ")}`,
       );
+    }
+    // A CUDA runtime archive unpacks into a folder of its own; llama-server finds its libraries
+    // beside itself (RUNPATH $ORIGIN), so they move there. Windows' zips have no top folder.
+    const home = dirname(server);
+    for (const e of home === tmp ? [] : readdirSync(tmp, { withFileTypes: true })) {
+      const from = join(tmp, e.name);
+      if (!e.isDirectory() || home === from || home.startsWith(from + sep)) continue;
+      for (const f of readdirSync(from)) renameSync(join(from, f), join(home, f));
+      rmSync(from, { recursive: true, force: true });
     }
     writeFileSync(join(tmp, MARKER), stamp);
     rmSync(bin, { recursive: true, force: true });
@@ -273,6 +286,9 @@ export function llamaArgs(
     // Every layer on the GPU when the build has one; a CPU build must not look for one.
     "-ngl",
     String(o.gpuLayers ?? (o.accelerator === "cpu" ? 0 : 999)),
+    // On the CPU, no device at all: the Mac's one build has Metal, and the audio projector's offload
+    // follows --device, not -ngl.
+    ...(o.gpuLayers === undefined && o.accelerator === "cpu" ? ["--device", "none"] : []),
     ...(o.threads ? ["-t", String(o.threads)] : []),
   ];
 }
