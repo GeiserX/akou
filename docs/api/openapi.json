@@ -3278,7 +3278,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The key's jobs, newest first (an admin key sees every key's). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+        "description": "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
         "parameters": [
           {
             "name": "status",
@@ -3294,6 +3294,15 @@
                 "failed",
                 "cancelled"
               ]
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "description": "Only the jobs of this key id. A key that is not admin sees its own jobs only.",
+            "schema": {
+              "type": "string"
             }
           },
           {

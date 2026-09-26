@@ -70,6 +70,7 @@ export function jobView(j: Job): Record<string, unknown> {
   return {
     id: j.id,
     status: j.status,
+    key_id: j.key_id,
     created_at: iso(j.created_at),
     started_at: iso(j.running_at),
     finished_at: iso(finished),
@@ -251,9 +252,17 @@ export class JobService {
     return who.scopes.includes("admin") || who.id === key;
   }
 
-  /** The key's jobs (every key's for an admin), newest first. */
-  list(who: Identity, o: { status?: JobStatus; before?: number; limit: number }): Job[] {
-    return this.store.list({ key: who.scopes.includes("admin") ? null : who.id, ...o });
+  /**
+   * The key's jobs (every key's for an admin, or the one `key` names), newest first. A key that is
+   * not admin sees its own only, whatever `key` names.
+   */
+  list(
+    who: Identity,
+    o: { key?: string; status?: JobStatus; before?: number; limit: number },
+  ): Job[] {
+    const admin = who.scopes.includes("admin");
+    if (!admin && o.key !== undefined && o.key !== who.id) return [];
+    return this.store.list({ ...o, key: admin ? (o.key ?? null) : who.id });
   }
 
   /**

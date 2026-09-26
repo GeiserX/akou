@@ -298,10 +298,14 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.list",
-      doc: "The key's jobs, newest first (an admin key sees every key's). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+      doc: "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
       ...JOB_ROUTE,
       query: {
         status: { type: "string", values: JOB_STATES, doc: "Only jobs in this state." },
+        key: {
+          type: "string",
+          doc: "Only the jobs of this key id. A key that is not admin sees its own jobs only.",
+        },
         cursor: {
           type: "integer",
           min: 1,
@@ -322,7 +326,13 @@ export function jobRoutes(r: Router<ApiApp>): void {
       }
       const before = c.query.int("cursor");
       const limit = c.query.int("limit") as number;
-      const list = jobs.list(caller(c), { status: status as JobStatus | undefined, before, limit });
+      const key = c.query.raw("key") || undefined;
+      const list = jobs.list(caller(c), {
+        key,
+        status: status as JobStatus | undefined,
+        before,
+        limit,
+      });
       return json(200, {
         jobs: list.map(jobView),
         cursor: list.length === limit ? (list.at(-1)?.seq ?? null) : null,
