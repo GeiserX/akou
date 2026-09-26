@@ -153,8 +153,8 @@ describe("SV-J7: a mono path through the finalize worker", () => {
 
 describe("[akou-5an.100] speakers on or off, the same words", () => {
   // Three turns of two voices over room noise, which keeps every sliver above the silence floor,
-  // and an engine that hears a filler in a piece with no word, as Qwen does. Word gaps of 0.05 s
-  // keep the fake VAD on through a phrase, so the only pauses are the ones between turns.
+  // and an engine that hears a filler in a piece with no word, as Parakeet and Qwen do. Word gaps
+  // of 0.05 s keep the fake VAD on through a phrase, so the only pauses are the ones between turns.
   const A = ["hello", "world", "we"];
   const B = ["ok", "great", "today"];
   const talk = concat(
@@ -197,6 +197,44 @@ describe("[akou-5an.100] speakers on or off, the same words", () => {
     const r = await withSpeakers({ snapSeconds: 0 });
     expect(r.text).not.toBe("hello world we ok great today thanks");
     expect(r.text.split(" ").length).toBeGreaterThan(7);
+  });
+
+  test("a short reply with no pause before it keeps its own line and label", async () => {
+    // B answers "ok" 50 ms after A's last word, too soon for the VAD to hear a pause, then a
+    // pause, then A again. B's turn starts 60 ms late, inside "ok", so its start edge has no
+    // pause in reach and cuts at the quietest window near it, the 50 ms gap. A's end edge snaps
+    // forward into the pause after "ok"; B's own edges reach under half its turn, so they never
+    // follow it there and swallow the reply into A's line.
+    const quick = mix(
+      roomNoise(3.1, 5, 0.006),
+      concat(
+        silence(0.3),
+        speak(["hello", "world", "we"], { voice: 1, gapSeconds: 0.05 }),
+        speak(["ok"], { voice: 4, gapSeconds: 0.05 }),
+        silence(0.7),
+        speak(["thanks"], { voice: 1, gapSeconds: 0.05 }),
+        silence(0.6),
+      ),
+    );
+    // The phrases sit at 0.3 to 1.15 (A), 1.2 to 1.45 (B) and 2.2 to 2.45 s (A); the job trims
+    // nothing, so these are the diarizer's times too.
+    const models = new FakeModels({ hallucinate: FILLER });
+    models.diarizer = () => ({
+      process: () => [
+        { speaker: 0, start: 0.2, end: 1.17 },
+        { speaker: 1, start: 1.26, end: 1.48 },
+        { speaker: 0, start: 2.15, end: 2.6 },
+      ],
+    });
+    const plain = await job(quick, { hallucinate: FILLER });
+    expect(plain.text).toBe("hello world we ok thanks");
+    const r = await runJobPass({ samples: quick, diarize: true, decode: null }, models);
+    expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([
+      ["s0", "hello world we"],
+      ["s1", "ok"],
+      ["s0", "thanks"],
+    ]);
+    expect(r.text).toBe(plain.text);
   });
 });
 

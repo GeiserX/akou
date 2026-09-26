@@ -222,22 +222,24 @@ interface Piece {
  * further so none is longer than `maxSpan`, then trimmed to where they rise above the floor. Pieces
  * that never do are silence and dropped.
  *
- * `cutsAt` (samples) are a diarizer's turn edges. They are not cut points as they stand: the
- * model places an edge a frame or two off the pause it belongs to, and a cut there leaves the
- * tail of a word, or a sliver of the pause, as a piece of its own, which an engine decodes into a
- * filler ("Yeah.") or a fragment. Each edge moves to the quietest window of the nearest pause
- * within `snapSeconds`, the window a non-speech run's own cut takes, so the edges and the run's
- * cut are one cut. With no pause in reach (the speakers change with no pause between them) the
- * edge cuts at the quietest window within reach. A pause is a window the VAD `heard` no speech
- * in; `speech` may count more as speech (a job keeps a pad beside the speech), and a pause of
- * `heard` inside that never takes a cut of its own.
+ * `turns` (seconds) are a diarizer's turns, and their edges are cut points, but not as they
+ * stand: the model places an edge a frame or two off the pause it belongs to, and a cut there
+ * leaves the tail of a word, or a sliver of the pause, as a piece of its own, which an engine
+ * decodes into a filler ("Yeah.") or a fragment. Each edge moves to the quietest window of the
+ * nearest pause within `snapSeconds`, the window a non-speech run's own cut takes, so the edges
+ * and the run's cut are one cut. With no pause in reach (the speakers change with no pause
+ * between them) the edge cuts at the quietest window within reach. An edge reaches at most
+ * under half its turn, so a short turn's two edges never meet on one cut and a quick "ok" keeps
+ * its own piece and label. A pause is a window the VAD `heard` no speech in; `speech` may count
+ * more as speech (a job keeps a pad beside the speech), and a pause of `heard` inside that never
+ * takes a cut of its own.
  */
 export function timelinePieces(
   samples: Float32Array,
   speech: readonly boolean[],
   window: number,
   o: FinalOptions,
-  cutsAt: readonly number[] = [],
+  turns: readonly { start: number; end: number }[] = [],
   heard: readonly boolean[] = speech,
 ): Piece[] {
   const floor = 10 ** (o.silenceDbfs / 20);
@@ -255,8 +257,7 @@ export function timelinePieces(
     for (let w = a; w < b; w++) if ((rms[w] as number) < (rms[best] as number)) best = w;
     return best;
   };
-  const reach = Math.round((o.snapSeconds * ASR_RATE) / window);
-  const snapEdge = (at: number): number => {
+  const snapEdge = (at: number, reach: number): number => {
     const c = Math.min(nWin - 1, Math.max(0, at));
     for (let d = 0; d <= reach; d++) {
       for (const w of [c - d, c + d]) {
@@ -270,7 +271,15 @@ export function timelinePieces(
     }
     return quietest(Math.max(0, c - reach), Math.min(nWin, c + reach + 1));
   };
-  const cuts = new Set<number>(cutsAt.map((c) => snapEdge(Math.round(c / window))));
+  const snapWins = Math.round((o.snapSeconds * ASR_RATE) / window);
+  const cuts = new Set<number>();
+  for (const t of turns) {
+    const a = Math.round((t.start * ASR_RATE) / window);
+    const b = Math.round((t.end * ASR_RATE) / window);
+    const reach = Math.min(snapWins, Math.max(0, Math.floor((b - a - 1) / 2)));
+    cuts.add(snapEdge(a, reach));
+    cuts.add(snapEdge(b, reach));
+  }
   const gapWins = Math.ceil((o.minGapSeconds * ASR_RATE) / window);
   for (let w = 0; w < nWin; ) {
     if (speech[w]) {
@@ -475,9 +484,8 @@ export async function runFinalPass(
         const samples = readAll(audio, p, ch, chunk);
         const { flags, window } = speechFlags(samples, models);
         const spans = spansByPart.get(p) ?? [];
-        const cuts =
-          ch === "call" ? spans.flatMap((s) => [s.start * ASR_RATE, s.end * ASR_RATE]) : [];
-        for (const piece of timelinePieces(samples, flags, window, o, cuts)) {
+        const turns = ch === "call" ? spans : [];
+        for (const piece of timelinePieces(samples, flags, window, o, turns)) {
           const r = decodeHalving(samples, piece.from, piece.to, hw, o, (from, to, error) =>
             skipped.push({ part: p, ch, a0: from / ASR_RATE, a1: to / ASR_RATE, error }),
           );
@@ -873,7 +881,6 @@ export async function runJobPass(
       );
     }
   }
-  const cuts = spans.flatMap((s) => [s.start * ASR_RATE, s.end * ASR_RATE]);
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
   // Characters of text per detected language: the job's language is the one most of it is in, so
@@ -883,7 +890,7 @@ export async function runJobPass(
   // noise on its own.
   const heardSpeech = flags.slice(w0, w1);
   const kept = heardSpeech.map((f, i) => f || i < first - w0 || i > last - w0);
-  for (const piece of timelinePieces(samples, kept, window, o, cuts, heardSpeech)) {
+  for (const piece of timelinePieces(samples, kept, window, o, spans, heardSpeech)) {
     // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
     // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a
     // word there that the plain run does not have.
