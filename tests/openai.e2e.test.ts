@@ -7,7 +7,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   presetForModel,
@@ -18,6 +18,7 @@ import {
 } from "../src/main/api/routes/openai.ts";
 import { RECOGNIZER } from "../src/main/asr/models.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
+import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
@@ -298,6 +299,18 @@ describe("SV-C1: the OpenAI endpoint is a thin door onto a job", () => {
       headers: { authorization: `Bearer ${key}` },
     });
     expect(((await jobs.json()) as { jobs: unknown[] }).jobs).toEqual([]);
+  });
+
+  test("[SV-D3] a refused request leaves no upload on disk, and neither does an answered one", async () => {
+    const dir = join(rig.app.configDir, "jobs", "audio");
+    const uploads = () => readdirSync(dir).filter((f) => f.endsWith(".upload"));
+    const before = uploads();
+    expect((await post([["model", "best"]])).status).toBe(409);
+    expect((await post([["response_format", "nope"]])).status).toBe(422);
+    expect(uploads()).toEqual(before);
+    expect((await post([["response_format", "json"]])).status).toBe(200);
+    await until(() => uploads().length === before.length, 5_000, "the answered job's upload gone");
+    expect(uploads()).toEqual(before);
   });
 
   test("no file is 422 with the one error shape", async () => {

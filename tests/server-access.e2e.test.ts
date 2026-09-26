@@ -1,17 +1,20 @@
 /**
  * SV-K3, scopes over every route, and SV-D3, the upload exception to the 64 KB JSON rule.
  *
- * The scope test walks every route the server has (the table the OpenAPI file is generated from)
- * with a `jobs` key, an `admin` key, a revoked key and no key, and asserts each answer against the
- * table below. A route with no row fails the test, so a new route cannot ship without saying who
- * may call it. A request that passes the guard must not change anything, so every route but a GET
+ * The scope test (SV-T5) walks every route the server has, which is every operation of the
+ * OpenAPI file it serves plus `/healthz`, with a `jobs` key, an `admin` key, a revoked key and no
+ * key, and asserts each answer against the one table of `fixtures/route-access.ts`. A route with
+ * no row fails the test, so a new route cannot ship without saying who may call it. A request that passes the guard must not change anything, so every route but a GET
  * is sent with a wrong Content-Type: getting past the scope check then shows as 415, before any
  * handler runs.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { OPENAPI_FILE } from "../scripts/openapi.ts";
 import type { Access } from "../src/main/api/access.ts";
 import { json } from "../src/main/api/http.ts";
+import { type OpenApiDoc, operations } from "../src/main/api/openapi.ts";
 import {
   type ApiApp,
   type ApiServer,
@@ -21,78 +24,17 @@ import {
 import { type AppRig, appRig, declare, rawRequest } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 import { FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
+import { ACCESS } from "./fixtures/route-access.ts";
 
-/** Who may call each route. Adding a route means adding its row here. */
+/**
+ * Who may call each route: the one table of `fixtures/route-access.ts`, in the route table's
+ * `:param` form, and `/healthz`, which is outside `/v1` and the OpenAPI file.
+ */
 const TABLE: Record<string, Access> = {
   "GET /healthz": "open",
-  "GET /v1/server": "open",
-  "GET /v1/openapi.json": "open",
-  "GET /v1/keys/me": "jobs",
-  "POST /v1/jobs": "jobs",
-  "GET /v1/jobs": "jobs",
-  "GET /v1/jobs/:id": "jobs",
-  "GET /v1/jobs/:id/result": "jobs",
-  "DELETE /v1/jobs/:id": "jobs",
-  "GET /v1/events": "jobs",
-  "POST /v1/audio/transcriptions": "jobs",
-  "GET /v1/status": "admin",
-  "GET /v1/config": "admin",
-  "PATCH /v1/config": "admin",
-  "GET /v1/templates": "admin",
-  "GET /v1/share": "admin",
-  "POST /v1/share": "admin",
-  "DELETE /v1/share": "admin",
-  "POST /v1/window": "admin",
-  "POST /v1/quit": "admin",
-  "GET /v1/models": "admin",
-  "POST /v1/models/pull": "admin",
-  "POST /v1/calls": "admin",
-  "GET /v1/calls": "admin",
-  "GET /v1/calls/:id": "admin",
-  "POST /v1/calls/:id/stop": "admin",
-  "POST /v1/calls/:id/pause": "admin",
-  "POST /v1/calls/:id/resume": "admin",
-  "POST /v1/calls/:id/mute": "admin",
-  "POST /v1/calls/:id/unmute": "admin",
-  "POST /v1/calls/:id/restart": "admin",
-  "GET /v1/calls/:id/events": "admin",
-  "GET /v1/calls/:id/stream": "admin",
-  "GET /v1/calls/:id/transcript": "admin",
-  "POST /v1/calls/:id/context": "admin",
-  "GET /v1/calls/:id/search": "admin",
-  "POST /v1/calls/:id/ask": "admin",
-  "POST /v1/calls/:id/speakers": "admin",
-  "POST /v1/calls/:id/speakers/merge": "admin",
-  "POST /v1/calls/:id/speakers/unmerge": "admin",
-  "GET /v1/calls/:id/notes": "admin",
-  "POST /v1/calls/:id/notes": "admin",
-  "PATCH /v1/calls/:id/notes/:nid": "admin",
-  "DELETE /v1/calls/:id/notes/:nid": "admin",
-  "POST /v1/calls/:id/remember": "admin",
-  "DELETE /v1/calls/:id/remember/:rid": "admin",
-  "GET /v1/calls/:id/memo": "admin",
-  "PUT /v1/calls/:id/memo": "admin",
-  "GET /v1/calls/:id/vocab": "admin",
-  "POST /v1/calls/:id/vocab": "admin",
-  "DELETE /v1/calls/:id/vocab/:vid": "admin",
-  "POST /v1/calls/:id/vocab/pass": "admin",
-  "GET /v1/vocab": "admin",
-  "POST /v1/vocab": "admin",
-  "DELETE /v1/vocab/:term": "admin",
-  "POST /v1/vocab/approve": "admin",
-  "POST /v1/vocab/reject": "admin",
-  "POST /v1/vocab/import": "admin",
-  "POST /v1/vocab/suggest": "admin",
-  "POST /v1/vocab/check": "admin",
-  "POST /v1/calls/:id/finalize": "admin",
-  "POST /v1/calls/:id/enhance": "admin",
-  "GET /v1/calls/:id/enhance/context": "admin",
-  "PUT /v1/calls/:id/enhanced": "admin",
-  "GET /v1/calls/:id/enhanced": "admin",
-  "GET /v1/calls/:id/audio/:part": "admin",
-  "POST /v1/calls/:id/export": "admin",
-  "POST /v1/calls/:id/hooks": "admin",
-  "POST /v1/import/hark-viewer": "admin",
+  ...Object.fromEntries(
+    Object.entries(ACCESS).map(([route, access]) => [route.replace(/\{([^}]+)\}/g, ":$1"), access]),
+  ),
 };
 
 type Caller = "jobs" | "admin" | "revoked" | "none";
@@ -155,6 +97,18 @@ describe("SV-K3: scopes over every route", () => {
     // Positive control: a route added without a row is caught.
     expect(drift([...routes, "POST /v1/nothing"]).missing).toEqual(["POST /v1/nothing"]);
     expect(drift(routes.filter((r) => r !== "POST /v1/jobs")).stale).toEqual(["POST /v1/jobs"]);
+  });
+
+  test("[SV-T5] the walk covers every operation of the OpenAPI file, both modes", () => {
+    const file = JSON.parse(readFileSync(OPENAPI_FILE, "utf8")) as OpenApiDoc;
+    const ops = operations(file).map(
+      (o) => `${o.method.toUpperCase()} ${o.path.replace(/\{([^}]+)\}/g, ":$1")}`,
+    );
+    expect(ops.length).toBeGreaterThan(60);
+    // The file holds every route the server has, and only `/healthz` is outside it.
+    expect(drift(ops)).toEqual({ missing: [], stale: ["GET /healthz"] });
+    // Positive control: an operation added to the file without a row is caught.
+    expect(drift([...ops, "GET /v1/nothing"]).missing).toEqual(["GET /v1/nothing"]);
   });
 
   test("the routes declare the access the table says", () => {
