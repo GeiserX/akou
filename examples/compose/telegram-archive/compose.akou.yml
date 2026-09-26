@@ -2,7 +2,7 @@
 #   docker compose -f docker-compose.yml -f compose.akou.yml up -d
 services:
   akou:
-    image: geiserx/akou:${AKOU_VERSION}
+    image: drumsergio/akou:${AKOU_VERSION}
     restart: unless-stopped
     environment:
       AKOU_BEHIND_PROXY: "true"   # the web page is reached through your TLS proxy

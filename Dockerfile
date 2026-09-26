@@ -1,13 +1,13 @@
 # akou in server mode (docs/ux/SERVER.md section 3): the same Bun core the desktop app runs, under
 # plain Bun with AKOU_SERVER=1, started by `akou serve`. No ElectroBun, no tray, no capture helper.
 #
-#   docker build -t geiserx/akou:<version> .
-#   docker run -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
+#   docker build -t drumsergio/akou:<version> .
+#   docker run -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 -v akou-data:/data -v akou-models:/models drumsergio/akou:<version>
 #
 # The container binds 0.0.0.0, which server mode refuses until `server.behind_proxy` is true
 # (SV-P5): the operator states it with AKOU_BEHIND_PROXY=true (SV-P11), the image never does
 # (docs/install.md, "The server"). A /data or /models uid 1000 cannot write stops it with exit 77.
-#   docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version> models pull fast
+#   docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 #
 # Built for linux/amd64 and linux/arm64, each on its own runner (release.yml), and tagged with the
 # release's version only: there is never a `latest` tag. Both base images are pinned by digest.

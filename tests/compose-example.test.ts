@@ -47,7 +47,7 @@ describe("[SV-T6] the compose example beside Telegram-Archive", () => {
 
   test("akou is pinned by a version, starts behind the proxy by the environment, and publishes on loopback only", () => {
     expect(compose).not.toMatch(/:latest\b/);
-    expect(compose).toContain(`image: geiserx/akou:${"$"}{AKOU_VERSION}`);
+    expect(compose).toContain(`image: drumsergio/akou:${"$"}{AKOU_VERSION}`);
     expect(compose).toContain('AKOU_BEHIND_PROXY: "true"');
     expect(compose).toContain('"127.0.0.1:8476:8476"');
     // The archive keeps a note queued while akou is down, so nothing waits on akou's health.

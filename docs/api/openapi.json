@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "akou",
-    "version": "0.2.0",
+    "version": "0.2.1",
     "description": "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
     "license": {
       "name": "GPL-3.0-only",
