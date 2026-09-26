@@ -85,6 +85,10 @@ export interface ApiApp {
   templates(): Template[];
   /** The speech models on disk, or the download in progress (`GET /models`). */
   models(): ModelsStatus;
+  /** Whether a job on a preset can run now; undefined leaves it to the models' state. */
+  presetAvailable?(name: string): boolean | undefined;
+  /** The recognizers `GET /v1/server` lists: where each runs and whether its files are there. */
+  engines?(): { id: string; provider: string; installed: boolean }[];
   /** Starts the one download of the missing models and answers at once (`POST /models/pull`). */
   pullModels(): ModelsStatus;
   /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */

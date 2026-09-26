@@ -94,6 +94,15 @@ describe("[SV-P1] the server image", () => {
     expect(apt[0]?.args).toMatch(/--no-install-recommends ffmpeg\b/);
   });
 
+  test("[akou-5an.93] the runtime stage has libgomp1: llama-server's Linux builds load it at start", () => {
+    // Without it the pinned build exits with "libgomp.so.1: cannot open shared object file" in
+    // the image (checked on oven/bun:1.4.2-slim), and every best job fails.
+    const apt = finalStage(dockerfile).filter(
+      (x) => x.op === "RUN" && x.args.includes("apt-get install"),
+    );
+    expect(apt[0]?.args).toMatch(/\blibgomp1\b/);
+  });
+
   test("no image is ever tagged latest, in the Dockerfile or any workflow", () => {
     for (const f of ["Dockerfile", ".github/workflows/release.yml", ".github/workflows/ci.yml"]) {
       expect({ f, latest: latestTags(read(f)) }).toEqual({ f, latest: [] });

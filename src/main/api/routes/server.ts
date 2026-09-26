@@ -83,12 +83,14 @@ export function serverRoutes(r: Router<ApiApp>): void {
         mode: c.app.mode?.() ?? "app",
         presets: PRESETS.map((p) => ({
           name: p.name,
-          available: p.built && ready,
+          available: p.built && (c.app.presetAvailable?.(p.name) ?? ready),
           engines: p.engines,
           hardware: p.hardware,
           speed: p.speed,
         })),
-        engines: [{ id: RECOGNIZER, provider: "cpu", installed: ready }],
+        // Where each recognizer runs: `provider` is `cpu`, or the GPU API llama-server uses for
+        // Qwen (`metal`, `vulkan`, `cuda`), or `custom` for an own llama-server (`asr.llamaServer`).
+        engines: c.app.engines?.() ?? [{ id: RECOGNIZER, provider: "cpu", installed: ready }],
         // Hardware detection is SV-R2; until then nothing claims a GPU.
         gpu: null,
         // SV-K1b: how long a job's result and events stay, counted from its creation, so a client knows when they go.

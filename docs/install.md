@@ -114,7 +114,9 @@ Then pull:
 docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 ```
 
-`fast` is the only preset with an engine today. It fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
+`fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
+
+`best` is the other preset with an engine: Qwen3-ASR-1.7B, run by llama.cpp's `llama-server`, with the same speaker models when a job asks for speakers. `models pull best` fetches Qwen (2.5 GB), the llama-server build for this machine and the speaker models, and leaves Parakeet out. Without the pull, the first `best` job fetches them. See [The best preset](#the-best-preset) for where it runs fast.
 
 Inside a container akou listens on every address, and it refuses to start that way (exit 78) until you say a reverse proxy with TLS is in front of it, because akou has no TLS of its own. Say it with `AKOU_BEHIND_PROXY=true`, which sets `server.behind_proxy`, and publish the port on this machine's loopback only, for the proxy to reach:
 
@@ -130,6 +132,30 @@ To run it beside [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive)
 Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That is `akou serve`, the same server in the foreground. The single-file `akou` CLI runs `akou serve` too, on Linux x64 and arm64 and on macOS. It carries no speech engine, so it answers the API but cannot transcribe, and it says so when it starts.
 
 `akou serve` binds every address by default too, so on a plain machine it refuses to start (exit 78) until you choose. Put `{ "api.bind": "127.0.0.1" }` in `~/.config/akou/config.json` to serve this machine only, or set `server.behind_proxy` to `true` once a reverse proxy with TLS is in front of it.
+
+### The best preset
+
+`best` runs Qwen3-ASR-1.7B, the most accurate open model akou knows for English and Spanish, as a child process of akou (`llama-server`, pinned to llama.cpp release b11200 and downloaded like a model). A job asks for it with `preset=best`; a server makes it the default for every job that names nothing with `server.default_model`:
+
+```sh
+akou config set server.default_model best
+akou config set asr.languages '["en","es"]'
+```
+
+`asr.languages` lists the languages the people you transcribe speak. Qwen picks the language of each stretch of audio itself, and sometimes names one nobody spoke (a filler heard as Chinese); with the list set, such a stretch is decoded again in the listed language the model scores higher. A job that sends `language` gets that language instead.
+
+Where it runs is `asr.accelerator`:
+
+| Machine | Setting | What runs |
+|---|---|---|
+| A Mac with Apple silicon, akou run natively (`akou serve`) | `auto` (the default) | Metal. On a Mac mini M4 a 10-minute meeting with speaker labels took 94 s, a real-time factor of 0.16 |
+| The Docker image, any Linux box | `auto` | The CPU. It works everywhere and is several times slower than a GPU |
+| Linux or Windows with an NVIDIA card | `cuda` | llama.cpp's CUDA build. The host needs the CUDA 12 runtime (NVIDIA's runtime images carry it) |
+| Linux or Windows with an Intel or AMD GPU | `vulkan` | llama.cpp's Vulkan build, through Mesa. A container needs `/dev/dri` and the Vulkan loader, which the image does not carry yet |
+
+Docker on a Mac has no Metal, so on a Mac run akou natively rather than in a container. A server elsewhere on the network (a Telegram-Archive box, for example) then reaches it by URL and key like any client.
+
+`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda` or `cpu`). A setting with no build for the platform (`metal` on Linux) runs on the CPU, and the server log says so. For a GPU llama.cpp publishes no build for, such as Intel's SYCL or AMD's ROCm, build `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
 
 ### A large backlog
 

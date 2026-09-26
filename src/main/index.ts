@@ -63,9 +63,11 @@ import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
-import type { DiarizerKind, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
+import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
+import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
+import { llamaBuild, llamaRuntime, resolveAccelerator } from "./asr/llama-server.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -1696,18 +1698,100 @@ export class AkouApp implements ApiApp {
    */
   private jobModels(recognizer: string): ModelSpec | null {
     const given = this.o.models;
+    const llama = this.runsOnLlama(recognizer);
     if (given !== undefined) {
-      return given?.kind === "module" && this.o.modelRegistry
-        ? { ...given, model: recognizer }
-        : given;
+      const spec =
+        given?.kind === "module" && this.o.modelRegistry && !llama
+          ? { ...given, model: recognizer }
+          : given;
+      return spec && llama ? { ...spec, final: this.llamaSpec(recognizer) } : spec;
     }
-    // The catalog's one real recognizer; a second needs the engine registry (ASR-2).
+    // Parakeet on sherpa-onnx, or a llama-server engine (Qwen) over the same VAD and speaker models.
+    if (llama) return { ...this.finalSherpaSpec(), final: this.llamaSpec(recognizer) };
     if (recognizer !== RECOGNIZER) {
       throw Object.assign(new Error(`${recognizer} has no engine in this version`), {
         code: "unknown_model",
       });
     }
     return this.finalSherpaSpec();
+  }
+
+  /** A recognizer that runs on llama-server (Qwen3-ASR), as the real catalog says. */
+  private runsOnLlama(recognizer: string): boolean {
+    return MODELS.some((m) => m.id === recognizer && m.runtime === "llama-server");
+  }
+
+  /** `asr.accelerator` resolved on this machine, logged once when it is not the one asked for. */
+  private accelerator(): { accelerator: LlamaEngineSpec["accelerator"]; provider: string } {
+    const s = this.cfg.settings;
+    const setting = s["asr.accelerator"];
+    const r = resolveAccelerator(setting, hostPlatform());
+    if (r.note && this.acceleratorNote !== r.note) {
+      this.acceleratorNote = r.note;
+      this.log("warn", r.note);
+    }
+    // An own llama-server is whatever it was built for: the setting says, `custom` when it is auto.
+    const own = s["asr.llamaServer"].length > 0;
+    return {
+      accelerator: r.accelerator,
+      provider: own ? (setting === "auto" ? "custom" : setting) : r.accelerator,
+    };
+  }
+
+  private acceleratorNote = "";
+
+  /** The llama-server engine a job on `engine` runs: the pinned build, or `asr.llamaServer`. */
+  private llamaSpec(engine: string): LlamaEngineSpec {
+    const s = this.cfg.settings;
+    const dir = s["asr.modelsDir"];
+    const platform = hostPlatform();
+    const own = s["asr.llamaServer"];
+    const { accelerator, provider } = this.accelerator();
+    const build = llamaBuild(platform, accelerator);
+    return {
+      kind: "llama-server",
+      engine,
+      model: modelFile(dir, engine, QWEN_MODEL_FILE),
+      mmproj: modelFile(dir, engine, QWEN_MMPROJ_FILE),
+      accelerator,
+      languages: s["asr.languages"],
+      ...(own.length > 0
+        ? { command: own, ...(provider === "cpu" ? {} : { gpuLayers: 999 }) }
+        : build
+          ? {
+              build: {
+                dir: join(dir, build.id),
+                archives: build.files.map((f) => modelFile(dir, build.id, f.name)),
+                platform,
+              },
+            }
+          : {}),
+    };
+  }
+
+  /**
+   * Whether a job on a preset can run now, for `GET /v1/server`: `best` when Qwen, its runtime and
+   * the helpers are on disk or may be fetched (`server.auto_download`). Undefined for the others,
+   * and outside server mode, where the route's own rule stands.
+   */
+  presetAvailable(name: string): boolean | undefined {
+    const jobs = this.jobService;
+    if (name !== "best" || !jobs) return undefined;
+    return jobs.obtainable(QWEN_ASR);
+  }
+
+  /** Each engine `GET /v1/server` lists: where it runs and whether its files are on disk. */
+  engines(): { id: string; provider: string; installed: boolean }[] {
+    const dir = this.cfg.settings["asr.modelsDir"];
+    const onDisk = (m: ModelSpecEntry | undefined) =>
+      !!m && m.files.every((f) => existsSync(modelFile(dir, m.id, f.name)));
+    const qwen = MODELS.find((m) => m.runtime === "llama-server" && m.serves.includes("final"));
+    return [
+      { id: RECOGNIZER, provider: "cpu", installed: this.models().state === "ready" },
+      ...(qwen
+        ? [{ id: qwen.id, provider: this.accelerator().provider, installed: onDisk(qwen) }]
+        : []),
+    ];
   }
 
   /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
@@ -1727,7 +1811,15 @@ export class AkouApp implements ApiApp {
               hostPlatform(),
               this.o.modelRegistry ?? MODELS,
             ),
-      catalog: () => this.o.modelRegistry ?? MODELS,
+      // This platform's entries only: a Linux server lists no macOS llama-server build.
+      catalog: () =>
+        this.o.modelRegistry ??
+        MODELS.filter((m) => (m.platforms as readonly string[]).includes(hostPlatform())),
+      requires: (id) => {
+        if (!this.runsOnLlama(id)) return [];
+        const build = llamaRuntime(s(), hostPlatform());
+        return build ? [build] : [];
+      },
       autoDownload: () => s()["server.auto_download"],
       maxGb: () => s()["server.models_max_gb"],
       unusedDays: () => s()["server.models_unused_days"],

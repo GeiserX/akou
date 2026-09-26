@@ -9,7 +9,9 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
+import { llamaRuntime } from "../src/main/asr/llama-server.ts";
+import { hostPlatform, type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { PRESET_NAMES, presetModels } from "../src/main/asr/presets.ts";
 import { EXIT } from "../src/main/cli/client.ts";
 import { USAGE_FILE } from "../src/main/server/model-store.ts";
@@ -21,6 +23,8 @@ const bodies: Record<string, Uint8Array> = {
   "tokens.txt": new TextEncoder().encode("a stand-in token list\n"),
   "silero_vad.onnx": new TextEncoder().encode("a stand-in VAD\n"),
   "nemotron3_diar_v3.onnx": new TextEncoder().encode("a stand-in diarizer\n"),
+  "qwen.gguf": new TextEncoder().encode("a stand-in Qwen\n"),
+  "llama.tar.gz": new TextEncoder().encode("a stand-in llama-server build\n"),
 };
 const hits = new Map<string, number>();
 let server: ReturnType<typeof Bun.serve>;
@@ -160,8 +164,31 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
     v.t.cleanup();
   });
 
+  test("best pulls Qwen, this machine's llama-server build and the helpers, never Parakeet", async () => {
+    // The build this machine runs by default, as the real catalog names it (Metal on Apple silicon).
+    const build = llamaRuntime(
+      { "asr.accelerator": "auto", "asr.llamaServer": [] },
+      hostPlatform(),
+    ) as string;
+    expect(build).toStartWith("llama-server-");
+    const withQwen = [...registry, entry(QWEN_ASR, ["qwen.gguf"]), entry(build, ["llama.tar.gz"])];
+    const v = volume();
+    const r = await cli(v.env, ["models", "pull", "best", "--json"], { models: withQwen });
+    expect(r.code).toBe(0);
+    expect(r.json.models).toEqual([QWEN_ASR, build, "silero-vad", NEMOTRON]);
+    expect(existsSync(join(v.models, QWEN_ASR, "qwen.gguf"))).toBe(true);
+    expect(existsSync(join(v.models, build, "llama.tar.gz"))).toBe(true);
+    expect(existsSync(join(v.models, RECOGNIZER))).toBe(false);
+    // An own llama-server needs no build.
+    expect(presetModels("best", [RECOGNIZER, "silero-vad"], null)).toEqual({
+      preset: "best",
+      models: [QWEN_ASR, "silero-vad"],
+    });
+    v.t.cleanup();
+  });
+
   test("a preset with no engine yet exits 69, says so, and downloads nothing", async () => {
-    for (const p of ["lite", "best", "fusion"]) {
+    for (const p of ["lite", "fusion"]) {
       const v = volume();
       const before = count();
       const r = await cli(v.env, ["models", "pull", p], { models: registry });
