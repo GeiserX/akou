@@ -248,7 +248,7 @@ Section 0 used to say "presets, not model names"; it now says presets first. Pre
 
 A job whose model is not on disk waits while akou fetches it, instead of being refused. Every file is still checked against its pinned SHA-256, as `akou models pull` does. Only models in the catalog can be fetched; a client cannot name a URL.
 
-Where the files come from: each model's own publisher, at one pinned revision. Parakeet, pyannote and Qwen3-ASR come from Hugging Face (`huggingface.co/csukuangfj/…`, `nvidia/parakeet-tdt-0.6b-v3` for its tokenizer, `ggml-org/Qwen3-ASR-1.7B-GGUF`), Nemotron 3 Diarization from `huggingface.co/altunenes/parakeet-rs`, Silero VAD and TitaNet from the sherpa-onnx releases on GitHub, and the llama-server builds from llama.cpp's own GitHub release. The URLs, sizes and SHA-256 digests are in [asr/models.ts](../../src/main/asr/models.ts) and [asr/llama-catalog.ts](../../src/main/asr/llama-catalog.ts), and the Models page shows each model's source on its row.
+The files come from each model's own publisher, at one pinned revision. Parakeet, pyannote and Qwen3-ASR come from Hugging Face (`huggingface.co/csukuangfj/…`, `nvidia/parakeet-tdt-0.6b-v3` for its tokenizer, `ggml-org/Qwen3-ASR-1.7B-GGUF`), Nemotron 3 Diarization from `huggingface.co/altunenes/parakeet-rs`, Silero VAD and TitaNet from the sherpa-onnx releases on GitHub, and the llama-server builds from llama.cpp's own GitHub release. The URLs, sizes and SHA-256 digests are in [asr/models.ts](../../src/main/asr/models.ts) and [asr/llama-catalog.ts](../../src/main/asr/llama-catalog.ts), and the Models page shows each model's source on its row.
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
@@ -278,9 +278,9 @@ After the admin login (SV-U1) the server-mode page shows the server's own screen
 
 How the Models page scores the two bars, each 0 to 100 and clamped ([asr/model-scores.ts](../../src/main/asr/model-scores.ts)):
 
-- **Accuracy of a recognizer:** `100 - 5 x WER`, WER being the mean of our FLEURS English and Spanish (150 clips each), so every recognizer is scored on the same clips. A 20 % WER scores 0. Parakeet v3 fp32 (6.03 and 3.07) scores 77, Qwen3-ASR 1.7B Q8_0 (3.76 and 2.81) scores 84. The Open ASR Leaderboard's figure is shown in the detail, not scored.
-- **Accuracy of a diarizer:** `100 - DER`. Nemotron 3 Diarization (8.7 to 11.1 % on eight real calls) scores 90, the pyannote and TitaNet pass (54 to 64 % on the same calls) 41.
-- **Speed:** `50 x log10(RTFx)`, RTFx being seconds of audio per second of compute on the reference Mac mini M4 (16 GB): real time scores 0, 10x 50, 100x 100. Parakeet (1.3 min per audio hour) scores 83, Qwen on Metal (8.0 min) 44.
+- **Accuracy of a recognizer.** `100 - 5 x WER`, WER being the mean of our FLEURS English and Spanish (150 clips each), so every recognizer is scored on the same clips. A 20 % WER scores 0. Parakeet v3 fp32 (6.03 and 3.07) scores 77, Qwen3-ASR 1.7B Q8_0 (3.76 and 2.81) scores 84. The Open ASR Leaderboard's figure is shown in the detail, not scored.
+- **Accuracy of a diarizer.** `100 - DER`. Nemotron 3 Diarization (8.7 to 11.1 % on eight real calls) scores 90, the pyannote and TitaNet pass (54 to 64 % on the same calls) 41.
+- **Speed.** `50 x log10(RTFx)`, RTFx being seconds of audio per second of compute on the reference Mac mini M4 (16 GB): real time scores 0, 10x 50, 100x 100. Parakeet (1.3 min per audio hour) scores 83, Qwen on Metal (8.0 min) 44.
 - A number nobody measured is "not measured" with the reason: the diarizers' and the VAD's speed, the VAD's accuracy, TitaNet alone. A model added to the catalog without a row fails [model-scores.test.ts](../../tests/model-scores.test.ts).
 - Beside the published figure, a row shows this machine's own speed once it has run the model: the median real-time factor of its last 20 finished jobs (server) or final passes (app).
 
