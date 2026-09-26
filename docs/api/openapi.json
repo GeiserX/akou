@@ -423,7 +423,7 @@
         "tags": [
           "models"
         ],
-        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`.",
+        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. In server mode, `models` lists every catalog model with its state, size, last use, the date the sweep will delete it, and whether it is the default's or in use.",
         "responses": {
           "200": {
             "description": "OK",
@@ -452,7 +452,23 @@
         "tags": [
           "models"
         ],
-        "description": "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get.",
+        "description": "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get. In server mode `model` fetches that one catalog model, under `server.models_max_gb` and the free-space check.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
         "responses": {
           "202": {
             "description": "Accepted",
@@ -470,6 +486,45 @@
         },
         "x-akou-modes": [
           "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/models/{id}": {
+      "delete": {
+        "operationId": "models.delete",
+        "tags": [
+          "models"
+        ],
+        "description": "Delete one model from disk, under the sweep's rules: 409 `model_in_use` for the default model's set, a model a queued or running job needs, or one downloading. A job that later names it downloads it again.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The model id, from models.get.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
           "server"
         ],
         "x-akou-access": "admin"
@@ -3210,7 +3265,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "Submit an audio file for transcription; answers at once with the queued job. An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
+        "description": "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3224,6 +3279,9 @@
                     "contentMediaType": "application/octet-stream"
                   },
                   "preset": {
+                    "type": "string"
+                  },
+                  "model": {
                     "type": "string"
                   },
                   "language": {
@@ -3673,7 +3731,7 @@
         "tags": [
           "openai"
         ],
-        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or an engine (anything else is `auto`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
+        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
         "requestBody": {
           "required": true,
           "content": {

@@ -23,6 +23,15 @@ import { MODELS, NEMOTRON } from "../asr/models.ts";
 import { DEFAULT_BOOST, type DecodeList, modelKind } from "../vocab/decode-list.ts";
 import { readUploadAudio } from "./audio.ts";
 import {
+  DAY_MS,
+  hardwareChoice,
+  type ModelChoice,
+  ModelRefused,
+  type ModelStore,
+  resolveModel,
+  type Waiting,
+} from "./model-store.ts";
+import {
   type FeedEvent,
   JOBS_DB,
   type Job,
@@ -33,9 +42,21 @@ import {
 } from "./store.ts";
 import { completedData, Deliverer, type DelivererOptions } from "./webhooks.ts";
 
+/** One catalog model as `GET /models` lists it (SV-M6). */
+export interface ModelView {
+  id: string;
+  state: "ready" | "downloading" | "missing";
+  bytes: number;
+  size: number;
+  last_used_at: string | null;
+  evicts_at: string | null;
+  default: boolean;
+  in_use: boolean;
+}
+
 /** How often retention runs, besides at start. */
 export const RETENTION_SWEEP_MS = 3_600_000;
-export const DAY_MS = 86_400_000;
+export { DAY_MS };
 /**
  * Starts a job gets. One left running when the server stopped is queued again once; running at a
  * second stop, it fails `interrupted`, since the job itself may be what stops the server.
@@ -46,8 +67,12 @@ export interface JobServiceOptions {
   /** The folder of `jobs.db` and the uploads. */
   dir: string;
   version: string;
-  /** The recognizer's models, or null while they are missing. */
-  models(): ModelSpec | null;
+  /** The engine for one recognizer id, or null when there is none. */
+  models(recognizer: string): ModelSpec | null;
+  /** The models on disk, their downloads, ledger and sweep (SERVER.md section 12). */
+  shelf: ModelStore;
+  /** `server.default_model`, as the settings hold it now. */
+  defaultModel(): string;
   diarizer(): DiarizerKind;
   /** A key's webhook secrets (SV-E2); none for the app's token or an admin session. */
   secrets(keyId: string): string[];
@@ -63,8 +88,8 @@ export interface JobServiceOptions {
   log(level: "info" | "warn" | "error", msg: string): void;
 }
 
-/** A job as a client sees it (SV-J3). */
-export function jobView(j: Job): Record<string, unknown> {
+/** A job as a client sees it (SV-J3), with the download it waits on while queued (SV-M1). */
+export function jobView(j: Job, waiting: Waiting | null = null): Record<string, unknown> {
   const iso = (t: number | null) => (t === null ? null : new Date(t).toISOString());
   const finished = j.done_at ?? j.failed_at ?? j.cancelled_at;
   return {
@@ -75,9 +100,12 @@ export function jobView(j: Job): Record<string, unknown> {
     started_at: iso(j.running_at),
     finished_at: iso(finished),
     preset: j.preset,
+    model: j.model,
+    model_source: j.model_source,
     language: j.language,
     diarize: j.diarize,
     metadata: j.metadata,
+    ...(waiting ? { waiting_for: waiting } : {}),
     ...(j.error ? { error: j.error } : {}),
     links: {
       self: `/v1/jobs/${j.id}`,
@@ -152,6 +180,8 @@ export class JobService {
   private readonly now: () => number;
   private worker: JobWorker | null = null;
   private workerSpec = "";
+  /** The recognizer the worker was built for. */
+  private workerModelId: string | null = null;
   private running: { id: string; abort: AbortController } | null = null;
   private pumping = false;
   private closed = false;
@@ -176,6 +206,11 @@ export class JobService {
           what === "webhook.done" ? "info" : "warn",
           `${what} ${d.event_id} key ${d.key_id}: ${detail}`,
         ),
+    });
+    // A download's end: its jobs run, or, once it has failed for good, fail (SV-M3).
+    o.shelf.onEnd((e) => {
+      if (!e.ok) this.failWaiting(e.model, e.error);
+      this.pump();
     });
   }
 
@@ -214,6 +249,68 @@ export class JobService {
 
   depth(): number {
     return this.store.depth();
+  }
+
+  // -------------------------------------------------------------------------
+  // Which model (SV-S1)
+
+  /**
+   * The model a request runs: its `model`, its `preset`, `server.default_model`, then the
+   * hardware's choice. Throws `ModelRefused`; `unknownIsAuto` is the OpenAI door's leniency.
+   */
+  choose(ask: { model?: string; preset?: string }, unknownIsAuto = false): ModelChoice {
+    return resolveModel(ask, {
+      catalog: this.o.shelf.catalog(),
+      defaultModel: this.o.defaultModel(),
+      unknownIsAuto,
+    });
+  }
+
+  /** The recognizer a request with no opinion runs; the hardware's when the setting is unusable. */
+  defaultRecognizer(): string {
+    try {
+      return this.choose({}).model;
+    } catch {
+      return hardwareChoice().model;
+    }
+  }
+
+  /**
+   * Whether a job on `model` can be had: its files on disk, downloading, or allowed to start (SV-M1,
+   * SV-M2). Throws `ModelRefused`; the route answers it before the upload is kept.
+   */
+  admit(model: string): void {
+    this.o.shelf.admit(this.o.shelf.needs(model));
+  }
+
+  private modelOf(j: Job): string {
+    return j.model ?? this.defaultRecognizer();
+  }
+
+  /** The job as a client sees it, with its download's progress while it waits. */
+  view(j: Job): Record<string, unknown> {
+    const waiting =
+      j.status === "queued" ? this.o.shelf.waiting(this.o.shelf.needs(this.modelOf(j))) : null;
+    return jobView(j, waiting);
+  }
+
+  /** The recognizer a live worker holds, or null. */
+  workerModel(): string | null {
+    return this.worker ? this.workerModelId : null;
+  }
+
+  /** Every queued job waiting on `model` fails: its download failed for good (SV-M3). */
+  private failWaiting(model: string, cause: string): void {
+    for (const j of this.store.queued()) {
+      if (!this.o.shelf.needs(this.modelOf(j)).includes(model)) continue;
+      this.conclude(j, {
+        status: "failed",
+        error: {
+          code: "model_download_failed",
+          message: `the ${model} model could not be downloaded: ${cause}`,
+        },
+      });
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -326,8 +423,107 @@ export class JobService {
     return { id, status: r.final };
   }
 
-  /** Every job older than `server.retain_days` is deleted as a client's delete would. */
+  /**
+   * The hourly sweep: jobs past `server.retain_days`, then models unused for
+   * `server.models_unused_days` (SV-M5). Returns the number of jobs removed.
+   */
   sweep(): number {
+    const n = this.sweepJobs();
+    this.sweepModels();
+    return n;
+  }
+
+  /** The default's set, and what a queued or running job or the live worker needs. */
+  private held(): { defaults: Set<string>; inUse: Set<string> } {
+    const shelf = this.o.shelf;
+    const defaults = new Set(shelf.needs(this.defaultRecognizer()));
+    const inUse = new Set<string>();
+    for (const j of [...this.store.queued(), ...this.store.running()]) {
+      for (const id of shelf.needs(this.modelOf(j))) inUse.add(id);
+    }
+    if (this.worker && this.workerModelId) {
+      for (const id of shelf.needs(this.workerModelId)) inUse.add(id);
+    }
+    return { defaults, inUse };
+  }
+
+  /**
+   * Deletes the models nobody used for `server.models_unused_days`, never the default's set, one a
+   * queued or running job needs, one the worker holds, or one downloading (the store's own rule).
+   */
+  sweepModels(): void {
+    const { defaults, inUse } = this.held();
+    this.o.shelf.sweep(new Set([...defaults, ...inUse]));
+  }
+
+  /** Every catalog model as the Models page and `GET /models` show it (SV-M6). */
+  modelList(): ModelView[] {
+    const shelf = this.o.shelf;
+    const { defaults, inUse } = this.held();
+    const ledger = shelf.ledger();
+    const days = this.o.shelf.unusedDays();
+    const iso = (t: number | undefined) => (t === undefined ? null : new Date(t).toISOString());
+    return shelf.catalog().map((m) => {
+      const state = shelf.state(m.id);
+      const last = state === "ready" ? ledger[m.id] : undefined;
+      const kept = defaults.has(m.id) || inUse.has(m.id);
+      return {
+        id: m.id,
+        state,
+        ...shelf.size(m.id),
+        last_used_at: iso(last),
+        evicts_at: last === undefined || kept || days === 0 ? null : iso(last + days * DAY_MS),
+        default: defaults.has(m.id),
+        in_use: inUse.has(m.id),
+      };
+    });
+  }
+
+  private modelView(id: string): ModelView {
+    return this.modelList().find((m) => m.id === id) as ModelView;
+  }
+
+  /** Fetches one catalog model under the limits of an on-demand download (SV-M6, SV-M2). */
+  pullModel(id: string): ModelView {
+    const shelf = this.o.shelf;
+    if (!shelf.catalog().some((m) => m.id === id)) {
+      throw new ModelRefused(422, "unknown_model", `no model ${id} in the catalog`, {
+        field: "model",
+        model: id,
+      });
+    }
+    shelf.admit([id]);
+    shelf.fetch([id]);
+    return this.modelView(id);
+  }
+
+  /**
+   * Deletes one model under the sweep's rules (SV-M6): never the default's set, one in use, or one
+   * downloading. Logged as `model.deleted` with the key that asked.
+   */
+  deleteModel(id: string, by: string): { id: string; deleted: true; bytes: number } {
+    const shelf = this.o.shelf;
+    if (!shelf.catalog().some((m) => m.id === id) || shelf.state(id) === "missing") {
+      throw new ModelRefused(404, "not_found", `no model ${id} on disk`, { model: id });
+    }
+    const { defaults, inUse } = this.held();
+    if (defaults.has(id) || inUse.has(id)) {
+      throw new ModelRefused(
+        409,
+        "model_in_use",
+        defaults.has(id)
+          ? `${id} is part of the default model's set (server.default_model)`
+          : `${id} is needed by a queued or running job`,
+        { model: id, default: defaults.has(id) },
+      );
+    }
+    const bytes = shelf.remove(id);
+    this.o.log("info", `model.deleted ${id} key ${by} bytes_freed ${bytes}`);
+    return { id, deleted: true, bytes };
+  }
+
+  /** Every job older than `server.retain_days` is deleted as a client's delete would. */
+  private sweepJobs(): number {
     const before = this.now() - this.o.retainDays() * DAY_MS;
     let n = 0;
     for (const j of this.store.createdBefore(before)) if (this.drop(j.id)) n++;
@@ -369,14 +565,42 @@ export class JobService {
   // -------------------------------------------------------------------------
   // The runner
 
-  private workerFor(spec: ModelSpec): JobWorker {
+  private workerFor(spec: ModelSpec, recognizer: string): JobWorker {
     const key = JSON.stringify(spec);
     if (!this.worker || this.workerSpec !== key) {
       this.worker?.close();
       this.worker = new JobWorker(spec, (level, msg) => this.o.log(level, `job: ${msg}`));
       this.workerSpec = key;
     }
+    this.workerModelId = recognizer;
     return this.worker;
+  }
+
+  /**
+   * A worker built for a model other than the default's is closed once no queued job needs it, so
+   * an idle worker never pins a model the sweep should free (SV-M4).
+   */
+  private releaseWorker(): void {
+    const held = this.workerModelId;
+    if (!this.worker || held === null || held === this.defaultRecognizer()) return;
+    if (this.store.queued().some((j) => this.modelOf(j) === held)) return;
+    this.worker.close();
+    this.worker = null;
+    this.workerSpec = "";
+    this.workerModelId = null;
+  }
+
+  /**
+   * The oldest queued job whose models are on disk. A job whose models are missing starts their
+   * download and waits, holding no worker (SV-M1).
+   */
+  private nextRunnable(): Job | null {
+    for (const j of this.store.queued()) {
+      const needs = this.o.shelf.needs(this.modelOf(j));
+      if (this.o.shelf.missing(needs).length === 0) return j;
+      this.o.shelf.fetch(needs);
+    }
+    return null;
   }
 
   /** Runs queued jobs one at a time, oldest first, until none is left. */
@@ -387,12 +611,16 @@ export class JobService {
       try {
         for (;;) {
           if (this.closed) return;
-          const next = this.store.nextQueued();
-          if (!next) return;
+          const next = this.nextRunnable();
+          if (!next) {
+            this.releaseWorker();
+            return;
+          }
           const job = this.store.markRunning(next.id);
           if (job?.status !== "running") continue;
           this.notify(job.id, "running");
           await this.run(job);
+          this.releaseWorker();
         }
       } finally {
         this.pumping = false;
@@ -406,8 +634,12 @@ export class JobService {
     let end:
       | { status: "done"; result: Record<string, unknown> }
       | { status: "failed"; error: JobError };
+    const model = this.modelOf(job);
+    const needs = this.o.shelf.needs(model);
+    // A model is used when a job on it starts and when it ends (SV-M4).
+    this.o.shelf.touch(needs);
     try {
-      const spec = this.o.models();
+      const spec = this.o.models(model);
       if (!spec)
         throw Object.assign(
           new Error("the speech models are not downloaded; run `akou models pull`"),
@@ -440,7 +672,7 @@ export class JobService {
               warnings: [],
             };
       // A model that takes no hotwords gets none (the engine would refuse them).
-      const pass = await this.workerFor(spec).run({
+      const pass = await this.workerFor(spec, model).run({
         samples,
         diarize: job.diarize,
         decode: decode && modelKind(decode.model) === "transducer" ? decode : null,
@@ -459,6 +691,7 @@ export class JobService {
       end = { status: "failed", error: { code, message: (err as Error).message } };
     } finally {
       if (this.running?.id === job.id) this.running = null;
+      this.o.shelf.touch(needs);
     }
     this.conclude(job, end);
   }
@@ -486,7 +719,7 @@ export class JobService {
     if (!e) return;
     this.o.log(
       end.status === "done" ? "info" : "warn",
-      `job.${end.status} ${job.id} key ${job.key_id}`,
+      `job.${end.status} ${job.id} key ${job.key_id} model ${this.modelOf(job)}`,
     );
     this.notify(job.id, end.status);
     for (const fn of [...this.feedWatchers]) fn(e);
@@ -500,6 +733,7 @@ export class JobService {
     this.running?.abort.abort();
     this.worker?.close();
     this.worker = null;
+    this.o.shelf.close();
     this.store.close();
   }
 }
