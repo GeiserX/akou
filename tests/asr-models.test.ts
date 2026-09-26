@@ -34,7 +34,7 @@ import {
   RETIRED_MODELS,
   verifyModels,
 } from "../src/main/asr/models.ts";
-import { SherpaRecognizer, writeBpeVocab } from "../src/main/asr/sherpa.ts";
+import { recognizerConfig, SherpaRecognizer, writeBpeVocab } from "../src/main/asr/sherpa.ts";
 import { tempDir } from "./helpers.ts";
 
 const cleanups: (() => void)[] = [];
@@ -287,10 +287,10 @@ describe("[spike] Hotwords to a non-transducer model kill the process: the sherp
 
   test("an empty hotword string and any hotwords to a non-transducer throw before createStream", () => {
     const a = stub();
-    const parakeet = new SherpaRecognizer(RECOGNIZER, a.rec);
+    const parakeet = new SherpaRecognizer(RECOGNIZER, a.rec, "beam");
     expect(() => parakeet.decode(audio, "")).toThrow(/refusing hotwords/);
     const b = stub();
-    const moonshine = new SherpaRecognizer("moonshine-base", b.rec);
+    const moonshine = new SherpaRecognizer("moonshine-base", b.rec, "beam");
     expect(moonshine.kind).not.toBe("transducer");
     expect(() => moonshine.decode(audio, "Hetzner")).toThrow(/refusing hotwords/);
     expect([...a.calls, ...b.calls]).toEqual([]);
@@ -298,13 +298,55 @@ describe("[spike] Hotwords to a non-transducer model kill the process: the sherp
 
   test("positive control: a transducer with hotwords, and any model without, reach createStream", () => {
     const a = stub();
-    const parakeet = new SherpaRecognizer(RECOGNIZER, a.rec);
+    const parakeet = new SherpaRecognizer(RECOGNIZER, a.rec, "beam");
     expect(parakeet.decode(audio, "Hetzner").text).toBe("ok");
     expect(parakeet.decode(audio).text).toBe("ok");
     const b = stub();
-    new SherpaRecognizer("moonshine-base", b.rec).decode(audio);
+    new SherpaRecognizer("moonshine-base", b.rec, "beam").decode(audio);
     expect(a.calls).toEqual([["Hetzner"], []]);
     expect(b.calls).toEqual([[]]);
+  });
+});
+
+describe("Parakeet decodes greedy; hotwords only with beam, at 1.5 (asr.parakeet.decoding)", () => {
+  const file = (name: string) => `/m/${name}`;
+
+  test("greedy: greedy_search, no hotword score, no bpe.vocab", () => {
+    const c = recognizerConfig(file, 2, { decoding: "greedy" });
+    expect(c.decodingMethod).toBe("greedy_search");
+    expect(c).not.toHaveProperty("hotwordsScore");
+    expect(c).not.toHaveProperty("maxActivePaths");
+    expect(c.modelConfig).not.toHaveProperty("bpeVocab");
+    expect(c.modelConfig).not.toHaveProperty("modelingUnit");
+    expect(c.modelConfig).toMatchObject({ tokens: "/m/tokens.txt", numThreads: 2 });
+  });
+
+  test("beam: modified_beam_search with the bpe.vocab and hotwords at 1.5", () => {
+    const c = recognizerConfig(file, 4, { decoding: "beam", bpeVocab: "/c/bpe-x.vocab" });
+    expect(c.decodingMethod).toBe("modified_beam_search");
+    expect(c.hotwordsScore).toBe(1.5);
+    expect(c.maxActivePaths).toBe(4);
+    expect(c.modelConfig).toMatchObject({
+      modelingUnit: "bpe",
+      bpeVocab: "/c/bpe-x.vocab",
+      numThreads: 4,
+    });
+  });
+
+  test("a greedy recognizer refuses hotwords before createStream, and decodes without them", () => {
+    const calls: unknown[][] = [];
+    const rec = {
+      createStream: (...args: unknown[]) => {
+        calls.push(args);
+        return { acceptWaveform: () => {} };
+      },
+      decode: () => {},
+      getResult: () => ({ text: " ok " }),
+    };
+    const greedy = new SherpaRecognizer(RECOGNIZER, rec, "greedy");
+    expect(() => greedy.decode(new Float32Array(16000), "Hetzner")).toThrow(/greedy/);
+    expect(greedy.decode(new Float32Array(16000)).text).toBe("ok");
+    expect(calls).toEqual([[]]);
   });
 });
 

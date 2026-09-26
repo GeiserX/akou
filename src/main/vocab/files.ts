@@ -23,7 +23,8 @@
  *     source: "user"
  *     confirmed: true
  *     added_at: "2026-09-23"
- *     decode: 5            # optional: true, false (read-time only) or a boost 1 to 5
+ *     decode: 5            # optional: true, false (read-time only) or a boost 1 to 5; biases
+ *                          # decoding only with `asr.parakeet.decoding` beam
  *     note: "optional free text"
  * rejected: ["words the skill must not propose again"]
  * ```
