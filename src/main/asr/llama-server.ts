@@ -2,11 +2,12 @@
  * The llama-server runtime (docs/research/asr-architecture.md section 2.3, ASR-5): llama.cpp's HTTP
  * server as a child process that runs Qwen3-ASR.
  *
- * - **Which build.** `asr.accelerator` picks one of the pinned builds of `llama-catalog.ts` for this
- *   platform: `auto` is Metal on Apple silicon and the CPU elsewhere (hardware detection is SV-R2);
- *   `vulkan` runs on Intel and AMD GPUs through Mesa, `cuda` on NVIDIA. An accelerator with no
- *   build for the platform falls back to the CPU, and the caller logs why. `asr.llamaServer` names
- *   an own llama-server instead (a SYCL or ROCm build compiled on the host).
+ * - **Which build** (`llamaPlan`). `asr.accelerator` picks one of the pinned builds of
+ *   `llama-catalog.ts` for this platform. On `auto`, the GPU accelerator.ts found wins (Vulkan for
+ *   an Intel or AMD GPU, CUDA for NVIDIA); with none, `auto` is Metal on Apple silicon and the CPU
+ *   elsewhere. An accelerator with no build for the platform falls back to the CPU, and the caller
+ *   logs why. An image runs the build it carries (`AKOU_LLAMA_SERVER`) and downloads none;
+ *   `asr.llamaServer` names an own llama-server instead (a SYCL or ROCm build compiled on the host).
  * - **The download is an archive**, verified like every model file, then unpacked once beside
  *   itself into `bin/` (`extractBuild`); a marker file records which archives it came from.
  * - **The supervisor** (`LlamaServer`) starts it on a free loopback port with `--cache-ram 0` (its
@@ -63,18 +64,88 @@ export function resolveAccelerator(
   };
 }
 
+/** What `llamaPlan` reads of accelerator.ts's choice: the backend, and the GPU when it is one. */
+export interface DetectedAccelerator {
+  active: string;
+  gpu: string | null;
+}
+
+/** Where Qwen's llama-server comes from and what it runs on. */
+export interface LlamaPlan {
+  /** The backend llama-server runs: the one-Metal-server rule and the default `-ngl` follow it. */
+  accelerator: Accelerator;
+  /** What `GET /v1/server` lists as Qwen's provider; `custom` for an own build left on `auto`. */
+  provider: string;
+  /** An own llama-server or the image's, program first; then no build is downloaded. */
+  command?: readonly string[];
+  gpuLayers?: number;
+  /** The pinned build to download and unpack. */
+  build?: CatalogEntry;
+  /** Why the build is not the one asked for. */
+  note?: string;
+}
+
 /**
- * The llama-server build this machine's settings run Qwen on, or null when `asr.llamaServer` names
- * an own one (or the catalog has no build here).
+ * Qwen's llama-server on this machine (akou-5an.94): `asr.llamaServer` first, then the build an
+ * image carries, then a pinned build to download, for the GPU detection found or the setting.
+ */
+export function llamaPlan(
+  o: {
+    setting: string;
+    /** `asr.llamaServer`. */
+    own: readonly string[];
+    /** `AKOU_LLAMA_SERVER`: the build an image carries. */
+    image?: string;
+    /** accelerator.ts's choice, verified or not; a GPU it found outranks `auto`'s guess. */
+    detected?: DetectedAccelerator | null;
+    platform: string;
+  },
+  catalog: readonly CatalogEntry[] = MODELS,
+): LlamaPlan {
+  const want = o.detected?.gpu ? o.detected.active : o.setting;
+  if (o.own.length > 0) {
+    // An own llama-server is whatever it was built for: the setting says, `custom` when it is auto.
+    const auto = o.setting === "auto";
+    const provider = auto ? "custom" : o.setting;
+    return {
+      accelerator: auto
+        ? resolveAccelerator(want, o.platform, catalog).accelerator
+        : (o.setting as Accelerator),
+      provider,
+      command: o.own,
+      ...(provider === "cpu" ? {} : { gpuLayers: 999 }),
+    };
+  }
+  if (o.image) {
+    // The image's build runs what detection chose among the builds it carries, the CPU included.
+    const accelerator = (o.detected?.active ?? "cpu") as Accelerator;
+    return { accelerator, provider: accelerator, command: [o.image] };
+  }
+  const r = resolveAccelerator(want, o.platform, catalog);
+  const build = llamaBuild(o.platform, r.accelerator, catalog);
+  return {
+    accelerator: r.accelerator,
+    provider: r.accelerator,
+    ...(build ? { build } : {}),
+    ...(r.note ? { note: r.note } : {}),
+  };
+}
+
+/**
+ * The llama-server build to download for Qwen on this machine, or null when an own one
+ * (`asr.llamaServer`) or the image's runs instead, or the catalog has no build here.
  */
 export function llamaRuntime(
   settings: { readonly "asr.accelerator": string; readonly "asr.llamaServer": readonly string[] },
   platform: string,
   catalog: readonly CatalogEntry[] = MODELS,
+  o: { image?: string; detected?: DetectedAccelerator | null } = {},
 ): string | null {
-  if (settings["asr.llamaServer"].length > 0) return null;
-  const { accelerator } = resolveAccelerator(settings["asr.accelerator"], platform, catalog);
-  return llamaBuild(platform, accelerator, catalog)?.id ?? null;
+  const plan = llamaPlan(
+    { setting: settings["asr.accelerator"], own: settings["asr.llamaServer"], platform, ...o },
+    catalog,
+  );
+  return plan.build?.id ?? null;
 }
 
 const MARKER = ".unpacked";

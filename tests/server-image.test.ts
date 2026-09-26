@@ -5,7 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -120,20 +120,27 @@ describe("[SV-P1] the server image", () => {
         {
           "runs-on"?: string;
           if?: string;
-          strategy?: { matrix?: { include?: { runner: string; platform: string }[] } };
+          strategy?: {
+            matrix?: { include?: { runner: string; platform: string; variant: string }[] };
+          };
           steps?: { run?: string }[];
         }
       >;
     };
     const include = wf.jobs.image?.strategy?.matrix?.include ?? [];
-    expect(include).toEqual([
-      { runner: "ubuntu-24.04", platform: "linux/amd64" },
-      { runner: "ubuntu-24.04-arm", platform: "linux/arm64" },
-    ]);
+    // Each variant (akou-5an.94) on each architecture's own runner.
+    const legs = [];
+    for (const variant of ["cpu", "vulkan", "cuda"]) {
+      legs.push({ runner: "ubuntu-24.04", platform: "linux/amd64", variant });
+      legs.push({ runner: "ubuntu-24.04-arm", platform: "linux/arm64", variant });
+    }
+    expect(include).toEqual(legs);
+    const build = (wf.jobs.image?.steps ?? []).map((s) => s.run ?? "").join("\n");
+    expect(build).toContain('--build-arg ACCELERATOR="$VARIANT"');
     const manifest = wf.jobs["image-manifest"];
     expect(manifest?.if).toContain("github.ref_type == 'tag'");
     const script = (manifest?.steps ?? []).map((s) => s.run ?? "").join("\n");
-    expect(script).toContain('--tag "docker.io/drumsergio/akou:$version"');
+    expect(script).toContain('--tag "docker.io/drumsergio/akou:$version$suffix"');
     // The version is the tag without its v: a shell expansion, spelled out so it is not a template.
     expect(script).toContain(`version="$${"{"}TAG#v}"`);
     // A GitHub release never goes out while the image of the same tag failed.
@@ -289,4 +296,132 @@ describe("[SV-P1] Docker Hub credentials on a tag", () => {
       }
     },
   );
+});
+
+describe("[akou-5an.94] the GPU image variants", () => {
+  const dockerfile = read("Dockerfile");
+  const last = finalStage(dockerfile);
+
+  test("the llama stage copies every file the fetch imports, so a new import cannot break the image", () => {
+    const copy = instructions(dockerfile).find(
+      (x) => x.op === "COPY" && x.args.startsWith("src/main/asr/llama-builds.ts"),
+    );
+    const copied = (copy?.args ?? "").split(/\s+/).slice(0, -1);
+    // Every file llama-builds.ts reaches through value imports; type imports vanish at run time.
+    const reached = new Set<string>();
+    const todo = ["src/main/asr/llama-builds.ts"];
+    while (todo.length > 0) {
+      const file = todo.pop() as string;
+      if (reached.has(file)) continue;
+      reached.add(file);
+      for (const m of read(file).matchAll(/^import\s+(?!type\b)[^;]*?from\s+"(\.[^"]+)";/gm)) {
+        todo.push(join(file, "..", m[1] as string));
+      }
+    }
+    expect(reached.size).toBeGreaterThan(1);
+    expect(copied.sort()).toEqual([...reached].sort());
+  });
+
+  test("one Dockerfile builds every variant from ACCELERATOR, default cpu, with akou's pinned llama-server", () => {
+    const all = instructions(dockerfile);
+    expect(
+      all.filter((x) => x.op === "ARG" && x.args.startsWith("ACCELERATOR=")).map((x) => x.args),
+    ).toContain("ACCELERATOR=cpu");
+    // The build is fetched by the same pinned table akou reads (llama-builds.ts), never by a URL here.
+    const fetch = all.find(
+      (x) => x.op === "RUN" && x.args.includes("src/main/asr/llama-builds.ts"),
+    );
+    expect(fetch?.args).toContain('fetchForHost(process.env.ACCELERATOR, "/opt/llama")');
+    expect(dockerfile).not.toMatch(/releases\/download/);
+    expect(last.some((x) => x.op === "COPY" && x.args.includes("/opt/llama /opt/llama"))).toBe(
+      true,
+    );
+    const env = last
+      .filter((x) => x.op === "ENV")
+      .map((x) => x.args)
+      .join(" ");
+    // A Dockerfile expansion, spelled out so it is not a template.
+    expect(env).toContain(`AKOU_ACCELERATORS=$${"{"}ACCELERATOR},cpu`);
+    expect(env).toContain("AKOU_LLAMA_SERVER=/opt/llama/llama-server");
+    // --gpus all hands the driver's compute libraries to the CUDA image.
+    expect(env).toContain("NVIDIA_DRIVER_CAPABILITIES=compute,utility");
+  });
+
+  test("the Vulkan variant brings Mesa's drivers (Intel and AMD) and every variant brings OpenMP, in the one apt line", () => {
+    const apt = last.find((x) => x.op === "RUN" && x.args.includes("apt-get install"))?.args ?? "";
+    expect(apt).toMatch(/vulkan\) gpu="mesa-vulkan-drivers libvulkan1"/);
+    expect(apt).toMatch(/--no-install-recommends ffmpeg libgomp1 \$gpu\b/);
+    // The image checks its llama-server loads before it ships.
+    expect(
+      last.some((x) => x.op === "RUN" && x.args.includes("/opt/llama/llama-server --version")),
+    ).toBe(true);
+  });
+
+  // The step is a bash script with a fake `docker`, which Windows runs neither of.
+  test.skipIf(process.platform === "win32")(
+    "a tag publishes <version>, <version>-vulkan and <version>-cuda, each over both architectures (skipped on Windows: no bash)",
+    () => {
+      const wf = Bun.YAML.parse(read(".github", "workflows", "release.yml")) as {
+        jobs: Record<string, { steps?: { name?: string; run?: string }[] }>;
+      };
+      const step = wf.jobs["image-manifest"]?.steps?.find((s) =>
+        s.run?.includes("imagetools create"),
+      );
+      const dir = mkdtempSync(join(tmpdir(), "akou-digests-"));
+      try {
+        mkdirSync(join(dir, "digests"));
+        for (const v of ["cpu", "vulkan", "cuda"])
+          for (const a of ["amd64", "arm64"])
+            writeFileSync(join(dir, "digests", `${v}-linux-${a}`), `sha256:${v}${a}\n`);
+        const r = runStep(`cd ${dir}\n${step?.run ?? "exit 9"}`, { TAG: "v0.3.0" });
+        expect({ code: r.code, out: r.out }).toMatchObject({ code: 0 });
+        const creates = r.docker.split("\n").filter((l) => l.includes("imagetools create"));
+        expect(creates).toEqual([
+          "buildx imagetools create --tag docker.io/drumsergio/akou:0.3.0 docker.io/drumsergio/akou@sha256:cpuamd64 docker.io/drumsergio/akou@sha256:cpuarm64",
+          "buildx imagetools create --tag docker.io/drumsergio/akou:0.3.0-vulkan docker.io/drumsergio/akou@sha256:vulkanamd64 docker.io/drumsergio/akou@sha256:vulkanarm64",
+          "buildx imagetools create --tag docker.io/drumsergio/akou:0.3.0-cuda docker.io/drumsergio/akou@sha256:cudaamd64 docker.io/drumsergio/akou@sha256:cudaarm64",
+        ]);
+        // Positive control: a variant missing one architecture stops the release.
+        rmSync(join(dir, "digests", "cuda-linux-arm64"));
+        expect(runStep(`cd ${dir}\n${step?.run ?? ""}`, { TAG: "v0.3.0" }).code).not.toBe(0);
+      } finally {
+        rmSync(dir, { recursive: true, force: true });
+      }
+    },
+
+    // Two runs of a shell script with seven fake docker calls each: slow on a loaded runner.
+    20_000,
+  );
+
+  test("ci.yml builds the GPU variants on both architectures and asks each what it runs on, under ci-ok", () => {
+    const wf = Bun.YAML.parse(read(".github", "workflows", "ci.yml")) as {
+      jobs: Record<
+        string,
+        {
+          needs?: string[];
+          if?: string;
+          strategy?: { matrix?: { os?: string[]; variant?: string[] } };
+          steps?: { run?: string }[];
+        }
+      >;
+    };
+    const job = wf.jobs["gpu-image"];
+    expect(job?.strategy?.matrix?.os).toEqual(["ubuntu-24.04", "ubuntu-24.04-arm"]);
+    expect(job?.strategy?.matrix?.variant).toEqual(["vulkan", "cuda"]);
+    expect(job?.if).toBe("needs.changes.outputs.gpu == 'true'");
+    expect(wf.jobs["ci-ok"]?.needs).toContain("gpu-image");
+    const runs = (job?.steps ?? []).map((s) => s.run ?? "").join("\n");
+    for (const want of [
+      '--build-arg ACCELERATOR="$VARIANT"',
+      "/opt/llama/llama-server --version",
+      // The Vulkan loader and Mesa's driver really load: llvmpipe shows once it is made visible.
+      "GGML_VK_VISIBLE_DEVICES=0",
+      "Vulkan0: llvmpipe",
+      // Every CUDA library resolves in the image but the driver's own.
+      "ldd /opt/llama/libggml-cuda.so",
+      "scripts/accelerator-report.ts",
+    ]) {
+      expect({ want, found: runs.includes(want) }).toEqual({ want, found: true });
+    }
+  });
 });

@@ -261,7 +261,7 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | `asr.fusion.llm` | `none`, `pick`, `free` | `none` | Section 5 |
 | `asr.fusion.provider` | `workspace` (the workspace's `provider.kind`) or an explicit provider | `workspace` | Providers measured: harness (Opus), openai-compatible (gemma-4-12B) |
 | `asr.parakeet.decoding` | `greedy`, `beam` | `greedy` | The beam bug. The hotword boost becomes the constant 1.5 when beam is on |
-| `asr.accelerator` | `auto`, `cpu`, `metal`, `vulkan`, `cuda` | `auto` | Picks the llama-server and transcribe-cpp build to download |
+| `asr.accelerator` | `auto`, `cpu`, `metal`, `vulkan`, `cuda`, `sycl`, `rocm` | `auto` | Picks the llama-server and transcribe-cpp build to download. `auto` never picks `sycl` or `rocm`; built in `src/main/asr/accelerator.ts` |
 | `asr.memoryBudgetMb` | Integer | 60 % of physical RAM | The test machine's panic. The pass drops engines from the end of the list until the loaded set fits, and says so in `final.done` |
 | `asr.threads` (exists, `src/main/config/schema.ts:205-211`) | 1 to 32 | 2 today; **4** measured for the live engine (RTF 0.067 at 4, 0.091 at 2) | Latency table |
 

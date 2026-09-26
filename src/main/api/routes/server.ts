@@ -11,6 +11,8 @@
  *   offering them. A capability is true only once its route exists, so the flags follow the code;
  *   a client ignores flags it does not know.
  *   `retain_days` is `server.retain_days` (SV-K1b), so a client knows when a job's result is gone.
+ *   `gpu` and `accelerator` are `asr.accelerator` as detected at start and confirmed by the
+ *   llama-server build (akou-5an.94), so a client or an operator sees which GPU runs, or why none.
  *   `queue` is the same object `/healthz` carries, so a client paces a backlog by it (SV-Q4).
  * - `GET /v1/keys/me`, any key: the calling key's `{id, name, scopes, created_at}`; the app's token
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
@@ -68,13 +70,14 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), and `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog. Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), and `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog. Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
     },
     (c) => {
       const { ready } = modelState(c.app);
+      const accel = c.app.accelerator?.() ?? null;
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
       // Section 14: a preset a remote offers is available here too, since a job for it runs there.
@@ -95,8 +98,19 @@ export function serverRoutes(r: Router<ApiApp>): void {
         // Where each recognizer runs: `provider` is `cpu`, or the GPU API llama-server uses for
         // Qwen (`metal`, `vulkan`, `cuda`), or `custom` for an own llama-server (`asr.llamaServer`).
         engines: c.app.engines?.() ?? [{ id: RECOGNIZER, provider: "cpu", installed: ready }],
-        // Hardware detection is SV-R2; until then nothing claims a GPU.
-        gpu: null,
+        // The GPU llama-server runs on, null on the CPU; `accelerator` says which build, what it
+        // runs on, whether the build itself confirmed it, and why.
+        gpu: accel?.gpu ?? null,
+        accelerator: accel
+          ? {
+              setting: accel.setting,
+              active: accel.active,
+              device: accel.device,
+              verified: accel.verified,
+              available: accel.available,
+              reason: accel.reason,
+            }
+          : null,
         // The remote akou servers jobs are sent to, and what each offers: never a key.
         remotes: remotes?.view() ?? [],
         // SV-K1b: how long a job's result and events stay, counted from its creation, so a client knows when they go.

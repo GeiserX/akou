@@ -99,7 +99,7 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 ## The server
 
-akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](#a-gpu)). There is no `latest` tag: name the version you want.
 
 Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first:
 
@@ -193,6 +193,43 @@ On the sending server, save the printed `ak_` key in a file only the server's us
 
 Restart the server. `GET /v1/server` then lists the remote under `remotes` with its state (`up`, `down` or `refused`) and the presets it offers, and a preset a remote offers shows as available. A job for a preset this server cannot run goes to a remote that offers it; one for a preset the entry names goes there first and runs here while the remote is down; everything else runs here. A remote that goes down leaves its jobs queued, never failed, until it or another remote that offers them is back.
 
+### A GPU
+
+The large speech model, Qwen3-ASR, runs on llama-server, and a GPU makes it many times faster than the CPU. Every image carries a llama-server build, uses the GPU it can open, and falls back to the CPU. Pick the image for your GPU:
+
+| GPU | Image | Add to `docker run` |
+|---|---|---|
+| None | `drumsergio/akou:<version>` | Nothing |
+| Intel (integrated or Arc) or AMD | `drumsergio/akou:<version>-vulkan` | `--device /dev/dri --group-add $(stat -c %g /dev/dri/renderD128)` |
+| NVIDIA | `drumsergio/akou:<version>-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
+| Apple silicon | None: Docker on macOS has no GPU | Run akou on the Mac itself ([A Mac as the server](#a-mac-as-the-server)); it uses Metal |
+
+`--group-add` gives the container's user the group that owns the render node on the host (`render` on most distributions). Without it the GPU is there but akou cannot open it, and it says so. In compose, the Vulkan image takes:
+
+```yaml
+    devices: ["/dev/dri:/dev/dri"]
+    group_add: ["993"] # the number `stat -c %g /dev/dri/renderD128` prints on the host
+```
+
+and the CUDA image:
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+```
+
+To see what it chose:
+
+```sh
+curl -s http://127.0.0.1:8476/v1/server | jq '.gpu, .accelerator'
+```
+
+`gpu` is `vulkan`, `cuda`, `metal` or null for the CPU. `accelerator.device` is the GPU's name as llama-server lists it, `verified` is true once llama-server itself confirmed the device, and `reason` says why when it runs on the CPU. The setting `asr.accelerator` overrides the choice: `auto` (the default), `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or `rocm`, also as the environment variable `AKOU_ACCELERATOR`. `auto` never picks SYCL or ROCm, which need Intel's oneAPI or AMD's ROCm runtime on the host; Vulkan runs the same cards. OpenVINO is not offered: its llama.cpp backend does not run speech models yet.
+
+The GPU runs the `best` preset's Qwen3-ASR ([The best preset](#the-best-preset)); Parakeet (`fast`) stays on the CPU, where it already runs far faster than real time.
+
 ### The best preset
 
 `best` runs Qwen3-ASR-1.7B, the most accurate open model akou knows for English and Spanish, as a child process of akou (`llama-server`, pinned to llama.cpp release b11200 and downloaded like a model). A job asks for it with `preset=best`; a server makes it the default for every job that names nothing with `server.default_model`:
@@ -209,13 +246,13 @@ Where it runs is `asr.accelerator`:
 | Machine | Setting | What runs |
 |---|---|---|
 | A Mac with Apple silicon, akou run natively (`akou serve`) | `auto` (the default) | Metal. On a Mac mini M4 a 10-minute meeting with speaker labels took 94 s, a real-time factor of 0.16 |
-| The Docker image, any Linux box | `auto` | The CPU. It works everywhere and is several times slower than a GPU |
-| Linux or Windows with an NVIDIA card | `cuda` | llama.cpp's CUDA build. The host needs the CUDA 12 runtime (NVIDIA's runtime images carry it) |
-| Linux or Windows with an Intel or AMD GPU | `vulkan` | llama.cpp's Vulkan build, through Mesa. A container needs `/dev/dri` and the Vulkan loader, which the image does not carry yet |
+| The Docker image, any Linux box | `auto` | The GPU the image can open, else the CPU: the `-vulkan` image on an Intel or AMD GPU, the `-cuda` image on NVIDIA ([A GPU](#a-gpu)). The plain image runs the CPU, several times slower |
+| Linux or Windows, akou run natively, with an NVIDIA card | `auto` or `cuda` | llama.cpp's CUDA build, downloaded with Qwen. On Linux the host needs the CUDA 12 runtime; on Windows akou downloads it with the build |
+| Linux or Windows, akou run natively, with an Intel or AMD GPU | `auto` or `vulkan` | llama.cpp's Vulkan build, through the GPU's Vulkan driver (Mesa on Linux) |
 
 Docker on a Mac has no Metal, so on a Mac run akou natively rather than in a container. A server elsewhere on the network (a Telegram-Archive box, for example) then reaches it by URL and key like any client.
 
-`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda` or `cpu`). A setting with no build for the platform (`metal` on Linux) runs on the CPU, and the server log says so. For a GPU llama.cpp publishes no build for, such as Intel's SYCL or AMD's ROCm, build `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
+`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda` or `cpu`), and `gpu` and `accelerator` say which GPU was found and why. A setting with no build for the platform (`metal` on Linux) runs on what `auto` finds, the CPU when there is no GPU, and the server log says so. For a GPU llama.cpp publishes no build for, such as Intel's SYCL or AMD's ROCm, build `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
 
 ### A large backlog
 
