@@ -97,6 +97,37 @@ describe("SV-J7: a mono path through the finalize worker", () => {
     ]);
   });
 
+  test("[akou-5an.99] a line outside every turn takes the nearest turn's speaker, never `s?`", async () => {
+    const x = concat(
+      silence(0.3),
+      speak(["hello", "world"], { voice: 1 }),
+      silence(3),
+      speak(["ok"], { voice: 4 }),
+      silence(0.3),
+    );
+    const models = new FakeModels();
+    // The one turn ends well over a second before "ok": on a call that line would be `s?`.
+    models.diarizer = () => ({ process: async () => [{ speaker: 1, start: 0, end: 1 }] });
+    const r = await runJobPass({ samples: x, diarize: true, decode: null }, models);
+    expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([
+      ["s1", "hello world"],
+      ["s1", "ok"],
+    ]);
+  });
+
+  test("[akou-5an.99] a speaker model that finds no turns, or fails, leaves every speaker null", async () => {
+    const x = concat(silence(0.3), speak(["hello", "world"]), silence(0.5));
+    for (const process of [
+      async () => [],
+      () => Promise.reject(new Error("akou-diarize gave no answer")),
+    ]) {
+      const models = new FakeModels();
+      models.diarizer = () => ({ process });
+      const r = await runJobPass({ samples: x, diarize: true, decode: null }, models);
+      expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([[null, "hello world"]]);
+    }
+  });
+
   test("without diarize no diarizer runs", async () => {
     const { models } = await job(concat(speak(["hello"]), silence(0.5)));
     expect(models.diarizers.length).toBe(0);

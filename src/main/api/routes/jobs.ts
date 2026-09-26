@@ -4,9 +4,9 @@
  *
  * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `preset`, `model`, `language`,
  *   `keywords[]`, `diarize`, `callback_url`, `metadata`, `priority`, and the `Idempotency-Key`
- *   header. 202 with the new job, 200 with the existing one for a repeated key and file, 422 for the
- *   same key and another file, 429 `queue_full` with `Retry-After` past a queue limit (SV-Q3),
- *   answered before the upload is read. The model is the request's, else `server.default_model`, else the hardware's
+ *   header. 202 with the new job, 200 with the existing one for a repeated key, file and options,
+ *   422 `idempotency_conflict` for the same key with another file or options, 429 `queue_full`
+ *   with `Retry-After` past a queue limit (SV-Q3), answered before the upload is read. The model is the request's, else `server.default_model`, else the hardware's
  *   (SV-S1); a missing one is downloaded while the job waits (SV-M1).
  * - `GET /v1/jobs/{id}?wait=0..60` (SV-J3): the job, after holding the request until it ends.
  * - `GET /v1/jobs?status=&cursor=&limit=`: the key's jobs, newest first.
@@ -21,7 +21,7 @@ import { eventView, type JobService, type QueueFull } from "../../server/jobs.ts
 import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
 import { FORWARDED_HEADER } from "../../server/remotes.ts";
-import { JOB_STATES, type JobStatus, type NewJob } from "../../server/store.ts";
+import { JOB_STATES, type JobRequest, type JobStatus, type NewJob } from "../../server/store.ts";
 import { CallbackRefused, checkCallbackUrl } from "../../server/webhooks.ts";
 import type { Identity } from "../access.ts";
 import { caller, requireCallbackAllowed } from "../caller.ts";
@@ -158,10 +158,10 @@ export function languageOf(form: Form, fallback = "auto"): string {
   return l === "auto" ? fallback : l;
 }
 
-/** A true or false field; absent (or empty) it is `fallback`, so an explicit `false` stays false. */
-function booleanOf(form: Form, name: string, fallback = false): boolean {
+/** A true or false field, or null when absent (or empty), so an explicit `false` stays false. */
+function booleanOf(form: Form, name: string): boolean | null {
   const v = textField(form, name)?.trim().toLowerCase();
-  if (v === undefined || v === "") return fallback;
+  if (v === undefined || v === "") return null;
   if (v === "false" || v === "0") return false;
   if (v === "true" || v === "1") return true;
   throw bad(name, `"${name}" is true or false`);
@@ -253,6 +253,18 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       throw bad("preset", `preset is one of ${PRESET_NAMES.join(", ")}`);
     }
     const settings = c.app.config().settings;
+    const model = textField(form, "model");
+    const diarize = booleanOf(form, "diarize");
+    const keywords = keywordsOf(form);
+    // The options as sent, before a server default fills a gap: what a repeated Idempotency-Key is
+    // compared against (SV-J2), so a retry still matches after a default changes.
+    const request: JobRequest = {
+      preset: presetName,
+      model: model?.trim() || null,
+      language: textField(form, "language")?.trim() || "auto",
+      keywords,
+      diarize,
+    };
     const job: Omit<NewJob, "file_sha256" | "audio"> = {
       key_id: who.id,
       preset: presetName,
@@ -261,16 +273,17 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       priority: priorityOf(form),
       // A request with no opinion gets the server's defaults (SV-S2).
       language: languageOf(form, settings["server.default_language"]),
-      keywords: keywordsOf(form),
-      diarize: booleanOf(form, "diarize", settings["server.default_diarize"]),
+      keywords,
+      diarize: diarize ?? settings["server.default_diarize"],
       callback_url: callbackOf(c.app, who, textField(form, "callback_url")),
       metadata: metadataOf(form),
       idempotency_key: idem,
+      request,
     };
     // Checked after the fields and before the upload is kept: a job that could never run is refused.
     // One this server cannot run goes to a remote that offers it (section 14), unless a remote sent
     // it here: a forwarded job is never forwarded again.
-    const ask = { model: textField(form, "model"), preset: presetName };
+    const ask = { model, preset: presetName };
     const forwarded = c.req.headers.get(FORWARDED_HEADER) !== null;
     try {
       const choice = chooseModel(jobs, ask);
@@ -304,10 +317,8 @@ function answerSubmit(jobs: JobService, r: ReturnType<JobService["submit"]>): Re
     throw new HttpError(
       422,
       "idempotency_conflict",
-      "this Idempotency-Key was used for another file",
-      {
-        id: r.conflict.id,
-      },
+      `this Idempotency-Key was used for a request with another ${r.fields.join(", ")}; send it again unchanged, or use a new key`,
+      { id: r.conflict.id, fields: r.fields },
     );
   }
   return json(r.existing ? 200 : 202, jobs.view(r.job));
@@ -339,7 +350,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds.",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds.",
       ...JOB_ROUTE,
       body: {
         multipart: {
@@ -432,7 +443,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs/:id/result",
     {
       id: "jobs.result",
-      doc: "The transcript of a done job: text, segments with speakers and times, and the engines that made it. 409 `not_done` before the job is done.",
+      doc: "The transcript of a done job: text, segments with speakers and times, and the engines that made it. A segment's `speaker` is `s0`, `s1`, … when the job asked for `diarize`, one per speaker found in this file (the numbers name speakers within one job only), the nearest turn's speaker for a segment outside every turn, never `s?`; null without `diarize`, or when the speaker model found no turns or failed. 409 `not_done` before the job is done.",
       ...JOB_ROUTE,
       params: { id: JOB_ID },
       ok: 200,

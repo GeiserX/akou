@@ -60,7 +60,7 @@ export interface FinalOptions {
   silenceDbfs: number;
   /** A non-speech run this long proposes a cut point, seconds. */
   minGapSeconds: number;
-  /** A piece with no diarization span within this many seconds is `s?`. */
+  /** A call piece with no diarization span within this many seconds is `s?` (a job's never is). */
   attachSeconds: number;
 }
 
@@ -760,7 +760,10 @@ export const JOB_TRIM_PAD_SECONDS = 0.5;
 export interface JobPassInput {
   /** 16 kHz mono. */
   samples: Float32Array;
-  /** Label the lines with speakers (`s<N>`); otherwise every speaker is null. */
+  /**
+   * Label the lines with speakers (`s<N>`, the nearest turn's for a line outside every turn);
+   * otherwise, or when the speaker model finds no turns, every speaker is null.
+   */
   diarize: boolean;
   /** The job's hotwords, or null. */
   decode: DecodeList | null;
@@ -872,7 +875,9 @@ export async function runJobPass(
       s: round3((from + piece.from) / ASR_RATE),
       e: round3((from + piece.to) / ASR_RATE),
       text: r.text,
-      speaker: input.diarize ? labelPiece(piece, spans, o.attachSeconds) : null,
+      // A job's piece outside every turn takes the nearest turn's speaker, never `s?`, a label a
+      // client would read as one more speaker (SV-J4); no turns at all is no labels.
+      speaker: spans.length > 0 ? labelPiece(piece, spans, Number.POSITIVE_INFINITY) : null,
     });
   }
   let language: string | null = null;
