@@ -47,6 +47,7 @@ import {
   JOBS_DB,
   type Job,
   type JobError,
+  type JobRequest,
   type JobStatus,
   JobStore,
   type NewJob,
@@ -528,11 +529,14 @@ export class JobService {
   }
 
   /**
-   * A new job, the key's existing one for the same idempotency key and file, a conflict when the
-   * same key names another file (SV-J2), or a refusal when the queue is full (SV-Q3). The limit's
-   * check and the insert are one transaction, so two submits racing for the last place make one job.
+   * A new job, the key's existing one for the same idempotency key, file and options, a conflict
+   * naming what differs when the same key comes with another file or options (SV-J2), or a refusal
+   * when the queue is full (SV-Q3). The limit's check and the insert are one transaction, so two
+   * submits racing for the last place make one job.
    */
-  submit(j: NewJob): { job: Job; existing: boolean } | { conflict: Job } | { full: QueueFull } {
+  submit(
+    j: NewJob,
+  ): { job: Job; existing: boolean } | { conflict: Job; fields: string[] } | { full: QueueFull } {
     const r = this.store.db.transaction(() => {
       const full = this.queueFull(j.key_id, j.idempotency_key);
       return full ? { full } : this.store.submit(j);
@@ -543,7 +547,8 @@ export class JobService {
     }
     if (r.existing) {
       rmSync(j.audio, { force: true });
-      if (r.job.file_sha256 !== j.file_sha256) return { conflict: r.job };
+      const fields = requestDiffers(r.job, j);
+      if (fields.length > 0) return { conflict: r.job, fields };
       return r;
     }
     this.dispatch();
@@ -1086,4 +1091,41 @@ export class JobService {
     this.o.shelf.close();
     this.store.close();
   }
+}
+
+const REQUEST_FIELDS = [
+  "preset",
+  "model",
+  "language",
+  "keywords",
+  "diarize",
+] as const satisfies readonly (keyof JobRequest)[];
+
+/**
+ * The options as compared, not as stored: keywords in any order and a language tag in any case
+ * (BCP-47 tags are case-insensitive) make the same transcript, so they are the same request. The
+ * row keeps the options as sent, so a job stored before this compares the same way.
+ */
+function comparable(r: JobRequest): JobRequest {
+  return {
+    ...r,
+    language: r.language.toLowerCase(),
+    keywords: [...new Set(r.keywords)].sort(),
+  };
+}
+
+/**
+ * What a repeated `Idempotency-Key` changed against the job it names (SV-J2): `file` when the
+ * upload differs, then each option of `JobRequest` sent otherwise. Empty for a plain retry. A job
+ * stored before the options were kept is compared by its file only.
+ */
+export function requestDiffers(held: Job, j: NewJob): string[] {
+  const fields: string[] = held.file_sha256 === j.file_sha256 ? [] : ["file"];
+  if (!held.request || !j.request) return fields;
+  const a = comparable(held.request);
+  const b = comparable(j.request);
+  for (const k of REQUEST_FIELDS) {
+    if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) fields.push(k);
+  }
+  return fields;
 }

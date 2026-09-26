@@ -1759,18 +1759,34 @@ export class AkouApp implements ApiApp {
     const first = detectAccelerator(s["asr.accelerator"] as AcceleratorSetting, probe);
     this.accel = first;
     this.accelProbe = probe;
-    const bin = llamaServerBin(probe, s["asr.modelsDir"], first.active);
-    void verifyAccelerator(first, bin, this.o.accelerator?.run).then((st) => {
+    this.accelAsked = null;
+    this.verifyAccelerator(first);
+    return first;
+  }
+
+  /**
+   * Asks the build for the current choice which devices it can open, once per build: a native
+   * install has none until the best preset first unpacks it, so every plan checks again.
+   */
+  private verifyAccelerator(state: AcceleratorState): void {
+    const probe = this.accelProbe;
+    if (!probe || state.verified) return;
+    const bin = llamaServerBin(probe, this.cfg.settings["asr.modelsDir"], state.active);
+    if (bin === null || bin === this.accelAsked) return;
+    this.accelAsked = bin;
+    void verifyAccelerator(state, bin, this.o.accelerator?.run).then((st) => {
       // A newer detection (the setting changed) owns the state now.
-      if (this.quitting || this.accel !== first) return;
+      if (this.quitting || this.accel !== state) return;
       this.accel = st;
       this.log(
         "info",
         `accelerator ${st.active}${st.device ? ` (${st.device})` : ""}${st.verified ? "" : " unverified"}: ${st.reason}`,
       );
     });
-    return first;
   }
+
+  /** The llama-server binary the last check asked, so each build is asked once. */
+  private accelAsked: string | null = null;
 
   /**
    * The engine a file job runs for one recognizer id (SV-S1). The job service has checked its
@@ -1803,9 +1819,10 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * Qwen's llama-server here (akou-5an.94): an own one, the image's, or the pinned build for the
-   * GPU detection found, logged once when it is not the one asked for. A changed
-   * `asr.accelerator` is detected again, so it applies to the next job that starts llama-server.
+   * Qwen's llama-server here (akou-5an.94): an own one, the image's, or the pinned build for what
+   * detection chose. A changed `asr.accelerator` is detected again, so it applies to the next job
+   * that starts llama-server. A plan that has to fall back (a platform with no build) says so in
+   * the accelerator's state, so `GET /v1/server` reports what really runs.
    */
   private llamaPlan(): LlamaPlan {
     const s = this.cfg.settings;
@@ -1813,28 +1830,38 @@ export class AkouApp implements ApiApp {
       this.accel && this.accel.setting === s["asr.accelerator"]
         ? this.accel
         : this.detectAccelerator();
+    this.verifyAccelerator(accel);
     const plan = llamaPlan({
       setting: s["asr.accelerator"],
       own: s["asr.llamaServer"],
       image: this.accelProbe?.env.AKOU_LLAMA_SERVER,
       detected: accel,
-      platform: hostPlatform(),
+      platform: this.llamaPlatform(),
     });
-    if (plan.note && this.acceleratorNote !== plan.note) {
-      this.acceleratorNote = plan.note;
+    if (plan.note && this.accel === accel && !accel.reason.includes(plan.note)) {
+      this.accel = {
+        ...accel,
+        active: plan.accelerator,
+        gpu: plan.accelerator === "cpu" ? null : plan.accelerator,
+        device: null,
+        reason: `${accel.reason}; ${plan.note}`,
+      };
       this.log("warn", plan.note);
     }
     return plan;
   }
 
-  private acceleratorNote = "";
+  /** The platform detection read, which is the machine's own outside tests. */
+  private llamaPlatform(): string {
+    return this.accelProbe?.platform ?? hostPlatform();
+  }
 
   /** The llama-server engine a job on `engine` runs: `asr.llamaServer`, the image's, or the pinned build. */
   private llamaSpec(engine: string): LlamaEngineSpec {
     const s = this.cfg.settings;
     const dir = s["asr.modelsDir"];
-    const platform = hostPlatform();
     const { accelerator, command, gpuLayers, build } = this.llamaPlan();
+    const platform = this.llamaPlatform();
     return {
       kind: "llama-server",
       engine,

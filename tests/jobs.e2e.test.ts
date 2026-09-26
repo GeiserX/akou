@@ -333,12 +333,12 @@ describe("SV-J2: Idempotency-Key", () => {
         5000,
         "the first job to run",
       );
-      // Metadata and options are not part of the comparison, only the file.
+      // Metadata and priority are not part of the comparison: they never change the transcript.
       const second = await submit(
         rig,
         k.key,
         NOTE,
-        { metadata: '{"row": 2}', preset: "fast" },
+        { metadata: '{"row": 2}', priority: "5" },
         idem,
       );
       expect(second.status).toBe(200);
@@ -369,8 +369,163 @@ describe("SV-J2: Idempotency-Key", () => {
     expect(first.status).toBe(202);
     const other = await submit(server, k.key, OTHER_NOTE, {}, idem);
     expect(other.status).toBe(422);
-    expect(other.body).toMatchObject({ error: "idempotency_conflict", id: first.body.id });
+    expect(other.body).toMatchObject({
+      error: "idempotency_conflict",
+      id: first.body.id,
+      fields: ["file"],
+    });
     await call(server, k.key, "GET", `/jobs/${first.body.id}?wait=60`);
+  });
+
+  test("[akou-5an.98] the same key with other options answers 422 naming them, queued, running or done", async () => {
+    const g = gate();
+    const rig = await appRig({ settings: SERVER, jobs: { decode: g.decode } });
+    try {
+      const k = await newKey(rig, "archive");
+      const idem = { "idempotency-key": "b".repeat(64) };
+      const asked = { preset: "auto", language: "auto", diarize: "false" };
+      const first = await submit(rig, k.key, NOTE, asked, idem);
+      expect(first.status).toBe(202);
+      // The second job waits behind the first, so each state is asked while it holds.
+      const queued = await submit(rig, k.key, OTHER_NOTE, asked, { "idempotency-key": "q" });
+      await until(
+        async () =>
+          (await call(rig, k.key, "GET", `/jobs/${first.body.id}`)).body.status === "running",
+        5000,
+        "the first job to run",
+      );
+      const differs = async (id: string, file: Uint8Array, key: string, state: string) => {
+        const h = { "idempotency-key": key };
+        const cases: [Record<string, string | string[]>, string[]][] = [
+          [{ ...asked, diarize: "true" }, ["diarize"]],
+          [{ ...asked, preset: "fast" }, ["preset"]],
+          [{ ...asked, model: "fast" }, ["model"]],
+          [{ ...asked, language: "es" }, ["language"]],
+          [{ ...asked, "keywords[]": ["akou"] }, ["keywords"]],
+          [{ preset: "auto", language: "es", diarize: "true" }, ["language", "diarize"]],
+        ];
+        for (const [fields, named] of cases) {
+          const r = await submit(rig, k.key, file, fields, h);
+          expect([state, r.status, r.body.error, r.body.id, r.body.fields]).toEqual([
+            state,
+            422,
+            "idempotency_conflict",
+            id,
+            named,
+          ]);
+          expect(r.body.message).toContain(named.join(", "));
+        }
+        // A plain retry of the same request answers the job, whatever its state.
+        const same = await submit(rig, k.key, file, { ...asked, metadata: '{"retry": 1}' }, h);
+        expect(`${same.status} ${same.body.id} ${same.body.status}`).toBe(`200 ${id} ${state}`);
+      };
+      await differs(queued.body.id, OTHER_NOTE, "q", "queued");
+      await differs(first.body.id, NOTE, "b".repeat(64), "running");
+      g.open();
+      for (const j of [first, queued]) await call(rig, k.key, "GET", `/jobs/${j.body.id}?wait=60`);
+      await differs(first.body.id, NOTE, "b".repeat(64), "done");
+      const list = await call(rig, k.key, "GET", "/jobs");
+      expect(list.body.jobs.length).toBe(2);
+      const result = await call(rig, k.key, "GET", `/jobs/${first.body.id}/result`);
+      expect(result.body.segments.map((x: { speaker: unknown }) => x.speaker)).toEqual([null]);
+      expect(audioFiles(rig)).toEqual([]);
+    } finally {
+      g.open();
+      await rig.close();
+    }
+  });
+
+  test("[akou-5an.98] the options are compared as sent: a changed server default keeps a retry matching", async () => {
+    const rig = await appRig({ settings: SERVER });
+    try {
+      const k = await newKey(rig, "defaults");
+      const idem = { "idempotency-key": "defaults-1" };
+      const first = await submit(rig, k.key, NOTE, {}, idem);
+      expect(first.status).toBe(202);
+      await call(rig, k.key, "GET", `/jobs/${first.body.id}?wait=60`);
+      await rig.api("PATCH", "/config", {
+        "server.default_diarize": true,
+        "server.default_language": "es",
+      });
+      const again = await submit(rig, k.key, NOTE, {}, idem);
+      expect(`${again.status} ${again.body.id}`).toBe(`200 ${first.body.id}`);
+      // Stating what the default was is a different request: the job was asked with no opinion.
+      const stated = await submit(rig, k.key, NOTE, { diarize: "false" }, idem);
+      expect([stated.status, stated.body.fields]).toEqual([422, ["diarize"]]);
+    } finally {
+      await rig.close();
+    }
+  });
+
+  test("keywords in another order and a language in another case are the same request", async () => {
+    const rig = await appRig({ settings: SERVER });
+    try {
+      const k = await newKey(rig, "normalised");
+      const idem = { "idempotency-key": "normalised-1" };
+      // The row keeps the options as sent, the way every job before this change stored them.
+      const first = await submit(
+        rig,
+        k.key,
+        NOTE,
+        { language: "ES", "keywords[]": ["b", "a"] },
+        idem,
+      );
+      expect(first.status).toBe(202);
+      const retries = [
+        { language: "ES", "keywords[]": ["b", "a"] },
+        { language: "es", "keywords[]": ["a", "b"] },
+        { language: "Es", "keywords[]": ["a", "b", "a"] },
+      ];
+      for (const fields of retries) {
+        const r = await submit(rig, k.key, NOTE, fields, idem);
+        expect(`${r.status} ${r.body.id}`).toBe(`200 ${first.body.id}`);
+      }
+      // A real change still conflicts.
+      const other = await submit(
+        rig,
+        k.key,
+        NOTE,
+        { language: "en", "keywords[]": ["a", "c"] },
+        idem,
+      );
+      expect([other.status, other.body.fields]).toEqual([422, ["language", "keywords"]]);
+      await call(rig, k.key, "GET", `/jobs/${first.body.id}?wait=60`);
+    } finally {
+      await rig.close();
+    }
+  });
+
+  test("[akou-5an.98] the options survive a restart; a job stored before them is compared by file only", async () => {
+    const home = tempDir("akou-jobs-idem-");
+    const first = await appRig({ settings: SERVER, home: home.dir });
+    let second: AppRig | null = null;
+    try {
+      const k = await newKey(first, "restart-idem");
+      const asked = { diarize: "false", language: "auto" };
+      const kept = await submit(first, k.key, NOTE, asked, { "idempotency-key": "kept" });
+      const old = await submit(first, k.key, NOTE, asked, { "idempotency-key": "old" });
+      for (const j of [kept, old]) await call(first, k.key, "GET", `/jobs/${j.body.id}?wait=60`);
+      await first.app.quit();
+      // A jobs.db from before the options were kept has no request on its rows.
+      const { Database } = await import("bun:sqlite");
+      const db = new Database(join(first.app.configDir, "jobs", JOBS_DB));
+      db.query("UPDATE jobs SET request = NULL WHERE id = ?").run(old.body.id);
+      db.close();
+      second = await appRig({ settings: SERVER, home: home.dir });
+      const s = second;
+      const diarized = { ...asked, diarize: "true" };
+      const a = await submit(s, k.key, NOTE, diarized, { "idempotency-key": "kept" });
+      expect([a.status, a.body.id, a.body.fields]).toEqual([422, kept.body.id, ["diarize"]]);
+      const b = await submit(s, k.key, NOTE, asked, { "idempotency-key": "kept" });
+      expect(`${b.status} ${b.body.id}`).toBe(`200 ${kept.body.id}`);
+      const c = await submit(s, k.key, NOTE, diarized, { "idempotency-key": "old" });
+      expect(`${c.status} ${c.body.id}`).toBe(`200 ${old.body.id}`);
+      const d = await submit(s, k.key, OTHER_NOTE, asked, { "idempotency-key": "old" });
+      expect([d.status, d.body.fields]).toEqual([422, ["file"]]);
+    } finally {
+      await second?.close();
+      home.cleanup();
+    }
   });
 
   test("the key is scoped to the API key: another key with the same header gets its own job", async () => {

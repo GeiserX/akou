@@ -97,6 +97,37 @@ describe("SV-J7: a mono path through the finalize worker", () => {
     ]);
   });
 
+  test("[akou-5an.99] a line outside every turn takes the nearest turn's speaker, never `s?`", async () => {
+    const x = concat(
+      silence(0.3),
+      speak(["hello", "world"], { voice: 1 }),
+      silence(3),
+      speak(["ok"], { voice: 4 }),
+      silence(0.3),
+    );
+    const models = new FakeModels();
+    // The one turn ends well over a second before "ok": on a call that line would be `s?`.
+    models.diarizer = () => ({ process: async () => [{ speaker: 1, start: 0, end: 1 }] });
+    const r = await runJobPass({ samples: x, diarize: true, decode: null }, models);
+    expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([
+      ["s1", "hello world"],
+      ["s1", "ok"],
+    ]);
+  });
+
+  test("[akou-5an.99] a speaker model that finds no turns, or fails, leaves every speaker null", async () => {
+    const x = concat(silence(0.3), speak(["hello", "world"]), silence(0.5));
+    for (const process of [
+      async () => [],
+      () => Promise.reject(new Error("akou-diarize gave no answer")),
+    ]) {
+      const models = new FakeModels();
+      models.diarizer = () => ({ process });
+      const r = await runJobPass({ samples: x, diarize: true, decode: null }, models);
+      expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([[null, "hello world"]]);
+    }
+  });
+
   test("without diarize no diarizer runs", async () => {
     const { models } = await job(concat(speak(["hello"]), silence(0.5)));
     expect(models.diarizers.length).toBe(0);
@@ -148,6 +179,93 @@ describe("SV-J7: a mono path through the finalize worker", () => {
     expect(r.segments.map((s) => s.text)).toEqual(["ok"]);
     // Transferred, not cloned: the caller's buffer is detached.
     expect(samples.length).toBe(0);
+  });
+});
+
+describe("[akou-5an.100] speakers on or off, the same words", () => {
+  // Three turns of two voices over room noise, which keeps every sliver above the silence floor,
+  // and an engine that hears a filler in a piece with no word, as Parakeet and Qwen do. Word gaps
+  // of 0.05 s keep the fake VAD on through a phrase, so the only pauses are the ones between turns.
+  const A = ["hello", "world", "we"];
+  const B = ["ok", "great", "today"];
+  const talk = concat(
+    silence(0.6),
+    speak(A, { voice: 1, gapSeconds: 0.05 }),
+    silence(0.6),
+    speak(B, { voice: 4, gapSeconds: 0.05 }),
+    silence(0.6),
+    speak(["thanks"], { voice: 1, gapSeconds: 0.05 }),
+    silence(0.6),
+  );
+  const x = mix(roomNoise(talk.length / RATE, 3, 0.006), talk);
+  // The phrases sit at 0.6 to 1.5, 2.1 to 3.0 and 3.6 to 3.9 s. The turns as Nemotron places
+  // them: each edge a frame or two into the pause, and one 50 ms inside the last word of a turn.
+  const turns = [
+    { speaker: 0, start: 0.45, end: 1.62 },
+    { speaker: 1, start: 1.98, end: 2.9 },
+    { speaker: 0, start: 3.5, end: 4.05 },
+  ];
+  const FILLER = "Yeah.";
+  const withSpeakers = (options: { snapSeconds?: number } = {}) => {
+    const models = new FakeModels({ hallucinate: FILLER });
+    models.diarizer = () => ({ process: () => turns });
+    return runJobPass({ samples: x, diarize: true, decode: null, options }, models);
+  };
+
+  test("a diarized job carries the plain job's words, labelled, and nothing else", async () => {
+    const plain = await job(x, { hallucinate: FILLER });
+    expect(plain.text).toBe("hello world we ok great today thanks");
+    const r = await withSpeakers();
+    expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([
+      ["s0", "hello world we"],
+      ["s1", "ok great today"],
+      ["s0", "thanks"],
+    ]);
+    expect(r.text).toBe(plain.text);
+  });
+
+  test("positive control: cut at the edges as they stand, the diarized job gains words", async () => {
+    const r = await withSpeakers({ snapSeconds: 0 });
+    expect(r.text).not.toBe("hello world we ok great today thanks");
+    expect(r.text.split(" ").length).toBeGreaterThan(7);
+  });
+
+  test("a short reply with no pause before it keeps its own line and label", async () => {
+    // B answers "ok" 50 ms after A's last word, too soon for the VAD to hear a pause, then a
+    // pause, then A again. B's turn starts 60 ms late, inside "ok", so its start edge has no
+    // pause in reach and cuts at the quietest window near it, the 50 ms gap. A's end edge snaps
+    // forward into the pause after "ok"; B's own edges reach under half its turn, so they never
+    // follow it there and swallow the reply into A's line.
+    const quick = mix(
+      roomNoise(3.1, 5, 0.006),
+      concat(
+        silence(0.3),
+        speak(["hello", "world", "we"], { voice: 1, gapSeconds: 0.05 }),
+        speak(["ok"], { voice: 4, gapSeconds: 0.05 }),
+        silence(0.7),
+        speak(["thanks"], { voice: 1, gapSeconds: 0.05 }),
+        silence(0.6),
+      ),
+    );
+    // The phrases sit at 0.3 to 1.15 (A), 1.2 to 1.45 (B) and 2.2 to 2.45 s (A); the job trims
+    // nothing, so these are the diarizer's times too.
+    const models = new FakeModels({ hallucinate: FILLER });
+    models.diarizer = () => ({
+      process: () => [
+        { speaker: 0, start: 0.2, end: 1.17 },
+        { speaker: 1, start: 1.26, end: 1.48 },
+        { speaker: 0, start: 2.15, end: 2.6 },
+      ],
+    });
+    const plain = await job(quick, { hallucinate: FILLER });
+    expect(plain.text).toBe("hello world we ok thanks");
+    const r = await runJobPass({ samples: quick, diarize: true, decode: null }, models);
+    expect(r.segments.map((s) => [s.speaker, s.text])).toEqual([
+      ["s0", "hello world we"],
+      ["s1", "ok"],
+      ["s0", "thanks"],
+    ]);
+    expect(r.text).toBe(plain.text);
   });
 });
 

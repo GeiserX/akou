@@ -64,6 +64,11 @@ export interface Job {
   /** The client's JSON, echoed back untouched. */
   metadata: unknown;
   idempotency_key: string | null;
+  /**
+   * The options the submit asked for, as sent: with `file_sha256`, what a repeated
+   * `Idempotency-Key` is compared against (SV-J2). Null for a job from before the field existed.
+   */
+  request: JobRequest | null;
   file_sha256: string;
   /** The uploaded file on disk, until the job ends. */
   audio: string | null;
@@ -76,6 +81,22 @@ export interface Job {
   cancelled_at: number | null;
   result: Record<string, unknown> | null;
   error: JobError | null;
+}
+
+/**
+ * The options of a submit that change its transcript, as the client sent them, before any server
+ * default fills a gap (SV-J2). `metadata`, `callback_url` and `priority` are not among them: they
+ * change what is done with the result, never the result.
+ */
+export interface JobRequest {
+  preset: string;
+  /** The `model` field, or null when the request named none. */
+  model: string | null;
+  /** The `language` field, `auto` when the request sent none. */
+  language: string;
+  keywords: string[];
+  /** The `diarize` field, or null when the request sent none. */
+  diarize: boolean | null;
 }
 
 export interface FeedEvent {
@@ -165,7 +186,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   route TEXT,
   remote TEXT,
   remote_job TEXT,
-  priority INTEGER NOT NULL DEFAULT 0
+  priority INTEGER NOT NULL DEFAULT 0,
+  request TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -215,6 +237,7 @@ function jobOf(r: Row): Job {
     callback_url: (r.callback_url as string | null) ?? null,
     metadata: JSON.parse(r.metadata as string),
     idempotency_key: (r.idempotency_key as string | null) ?? null,
+    request: typeof r.request === "string" ? JSON.parse(r.request) : null,
     file_sha256: r.file_sha256 as string,
     audio: (r.audio as string | null) ?? null,
     created_at: r.created_at as number,
@@ -269,6 +292,8 @@ export interface NewJob {
   callback_url: string | null;
   metadata: unknown;
   idempotency_key: string | null;
+  /** The options as sent, kept to compare a repeated `Idempotency-Key` against (SV-J2). */
+  request?: JobRequest | null;
   file_sha256: string;
   audio: string;
 }
@@ -295,11 +320,12 @@ export class JobStore {
     this.db.run("PRAGMA busy_timeout = 5000");
     this.db.run(SCHEMA);
     // A jobs.db from before SV-S1 gains the model columns; its jobs run the server's default.
-    // One from before remote dispatch gains the route columns; its jobs run here.
+    // One from before remote dispatch gains the route columns; its jobs run here. One from before
+    // the request column keeps comparing a repeated idempotency key by file only (SV-J2).
     const cols = new Set(
       (this.db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name),
     );
-    for (const c of ["model", "model_source", "route", "remote", "remote_job"]) {
+    for (const c of ["model", "model_source", "route", "remote", "remote_job", "request"]) {
       if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
     }
     // A jobs.db from before SV-Q2 gains the priority column; its jobs are priority 0.
@@ -334,8 +360,8 @@ export class JobStore {
       this.db
         .query(
           `INSERT INTO jobs (id, key_id, status, preset, model, model_source, route, priority, language,
-            keywords, diarize, callback_url, metadata, idempotency_key, file_sha256, audio, created_at)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            keywords, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
+           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -351,6 +377,7 @@ export class JobStore {
           j.callback_url,
           JSON.stringify(j.metadata ?? null),
           j.idempotency_key,
+          j.request ? JSON.stringify(j.request) : null,
           j.file_sha256,
           j.audio,
           now,

@@ -316,7 +316,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json; `stream=true` sends Server-Sent Events.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events.",
       access: "jobs",
       modes: ["server"],
       door: "compat",

@@ -13,9 +13,10 @@
  * 3. **Call channel:** speaker diarization over the call channel of **all parts concatenated**, so
  *    one person has one label (`s<N>`) for the whole call: Nemotron 3 Diarization at its 30.4 s
  *    latency through `akou-diarize` (`asr.diarizer` nemotron), or pyannote segmentation plus
- *    embeddings (`embeddings`). The call pieces are cut at the turn boundaries; where two turns
- *    overlap, a piece is labelled with the speaker active longest inside it (one channel carries
- *    one transcript, so overlapping voices share a line). Mic lines are `you`.
+ *    embeddings (`embeddings`). The call pieces are cut where the turns change, each turn edge
+ *    moved to the nearest pause (`timelinePieces`); where two turns overlap, a piece is labelled
+ *    with the speaker active longest inside it (one channel carries one transcript, so
+ *    overlapping voices share a line). Mic lines are `you`.
  * 4. Every span is gained and padded by `prepareSpan` (the one rule) and decoded with the call's
  *    decode list as it stands when the pass starts, recorded as `vocab.used`. A span the engine
  *    refuses is halved down to 20 s, and only the smallest failing piece is skipped and listed.
@@ -60,8 +61,10 @@ export interface FinalOptions {
   silenceDbfs: number;
   /** A non-speech run this long proposes a cut point, seconds. */
   minGapSeconds: number;
-  /** A piece with no diarization span within this many seconds is `s?`. */
+  /** A call piece with no diarization span within this many seconds is `s?` (a job's never is). */
   attachSeconds: number;
+  /** A diarizer's turn edge cuts at the nearest pause within this many seconds of it. */
+  snapSeconds: number;
 }
 
 export const DEFAULT_FINAL: FinalOptions = {
@@ -71,6 +74,7 @@ export const DEFAULT_FINAL: FinalOptions = {
   silenceDbfs: -50,
   minGapSeconds: 0.3,
   attachSeconds: 1,
+  snapSeconds: 0.5,
 };
 
 /** One part's stereo audio at 16 kHz, read by channel index. */
@@ -219,13 +223,26 @@ interface Piece {
  * Pieces that cover the whole timeline, cut inside non-speech runs at their quietest window, split
  * further so none is longer than `maxSpan`, then trimmed to where they rise above the floor. Pieces
  * that never do are silence and dropped.
+ *
+ * `turns` (seconds) are a diarizer's turns, and their edges are cut points, but not as they
+ * stand: the model places an edge a frame or two off the pause it belongs to, and a cut there
+ * leaves the tail of a word, or a sliver of the pause, as a piece of its own, which an engine
+ * decodes into a filler ("Yeah.") or a fragment. Each edge moves to the quietest window of the
+ * nearest pause within `snapSeconds`, the window a non-speech run's own cut takes, so the edges
+ * and the run's cut are one cut. With no pause in reach (the speakers change with no pause
+ * between them) the edge cuts at the quietest window within reach. An edge reaches at most
+ * under half its turn, so a short turn's two edges never meet on one cut and a quick "ok" keeps
+ * its own piece and label. A pause is a window the VAD `heard` no speech in; `speech` may count
+ * more as speech (a job keeps a pad beside the speech), and a pause of `heard` inside that never
+ * takes a cut of its own.
  */
 export function timelinePieces(
   samples: Float32Array,
   speech: readonly boolean[],
   window: number,
   o: FinalOptions,
-  cutsAt: readonly number[] = [],
+  turns: readonly { start: number; end: number }[] = [],
+  heard: readonly boolean[] = speech,
 ): Piece[] {
   const floor = 10 ** (o.silenceDbfs / 20);
   const nWin = Math.ceil(samples.length / window);
@@ -242,7 +259,29 @@ export function timelinePieces(
     for (let w = a; w < b; w++) if ((rms[w] as number) < (rms[best] as number)) best = w;
     return best;
   };
-  const cuts = new Set<number>(cutsAt.map((c) => Math.round(c / window)));
+  const snapEdge = (at: number, reach: number): number => {
+    const c = Math.min(nWin - 1, Math.max(0, at));
+    for (let d = 0; d <= reach; d++) {
+      for (const w of [c - d, c + d]) {
+        if (w < 0 || w >= nWin || heard[w]) continue;
+        let a = w;
+        while (a > 0 && !heard[a - 1]) a--;
+        let e = w + 1;
+        while (e < nWin && !heard[e]) e++;
+        return quietest(a, e);
+      }
+    }
+    return quietest(Math.max(0, c - reach), Math.min(nWin, c + reach + 1));
+  };
+  const snapWins = Math.round((o.snapSeconds * ASR_RATE) / window);
+  const cuts = new Set<number>();
+  for (const t of turns) {
+    const a = Math.round((t.start * ASR_RATE) / window);
+    const b = Math.round((t.end * ASR_RATE) / window);
+    const reach = Math.min(snapWins, Math.max(0, Math.floor((b - a - 1) / 2)));
+    cuts.add(snapEdge(a, reach));
+    cuts.add(snapEdge(b, reach));
+  }
   const gapWins = Math.ceil((o.minGapSeconds * ASR_RATE) / window);
   for (let w = 0; w < nWin; ) {
     if (speech[w]) {
@@ -447,9 +486,8 @@ export async function runFinalPass(
         const samples = readAll(audio, p, ch, chunk);
         const { flags, window } = speechFlags(samples, models);
         const spans = spansByPart.get(p) ?? [];
-        const cuts =
-          ch === "call" ? spans.flatMap((s) => [s.start * ASR_RATE, s.end * ASR_RATE]) : [];
-        for (const piece of timelinePieces(samples, flags, window, o, cuts)) {
+        const turns = ch === "call" ? spans : [];
+        for (const piece of timelinePieces(samples, flags, window, o, turns)) {
           const r = decodeHalving(samples, piece.from, piece.to, hw, o, (from, to, error) =>
             skipped.push({ part: p, ch, a0: from / ASR_RATE, a1: to / ASR_RATE, error }),
           );
@@ -763,7 +801,10 @@ export const JOB_TRIM_PAD_SECONDS = 0.5;
 export interface JobPassInput {
   /** 16 kHz mono. */
   samples: Float32Array;
-  /** Label the lines with speakers (`s<N>`); otherwise every speaker is null. */
+  /**
+   * Label the lines with speakers (`s<N>`, the nearest turn's for a line outside every turn);
+   * otherwise, or when the speaker model finds no turns, every speaker is null.
+   */
   diarize: boolean;
   /** The job's hotwords, or null. */
   decode: DecodeList | null;
@@ -846,7 +887,6 @@ export async function runJobPass(
       );
     }
   }
-  const cuts = spans.flatMap((s) => [s.start * ASR_RATE, s.end * ASR_RATE]);
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
   // Characters of text per detected language: the job's language is the one most of it is in, so
@@ -854,13 +894,16 @@ export async function runJobPass(
   const heard = new Map<string, number>();
   // The pad counts as speech, so it stays with the speech beside it and never becomes a piece of
   // noise on its own.
-  const kept = flags.slice(w0, w1).map((f, i) => f || i < first - w0 || i > last - w0);
-  for (const piece of timelinePieces(samples, kept, window, o, cuts)) {
-    // An engine that writes text on noise (Qwen answers a filler) never gets a piece in which the
-    // VAD found no speech: turn boundaries can leave one between two turns.
+  const heardSpeech = flags.slice(w0, w1);
+  const kept = heardSpeech.map((f, i) => f || i < first - w0 || i > last - w0);
+  for (const piece of timelinePieces(samples, kept, window, o, spans, heardSpeech)) {
+    // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
+    // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a
+    // word there that the plain run does not have.
     if (
-      engine &&
-      !kept.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true)
+      !heardSpeech
+        .slice(Math.floor(piece.from / window), Math.ceil(piece.to / window))
+        .includes(true)
     ) {
       continue;
     }
@@ -875,7 +918,9 @@ export async function runJobPass(
       s: round3((from + piece.from) / ASR_RATE),
       e: round3((from + piece.to) / ASR_RATE),
       text: r.text,
-      speaker: input.diarize ? labelPiece(piece, spans, o.attachSeconds) : null,
+      // A job's piece outside every turn takes the nearest turn's speaker, never `s?`, a label a
+      // client would read as one more speaker (SV-J4); no turns at all is no labels.
+      speaker: spans.length > 0 ? labelPiece(piece, spans, Number.POSITIVE_INFINITY) : null,
     });
   }
   let language: string | null = null;
