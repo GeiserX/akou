@@ -115,6 +115,8 @@ export interface FinalResult {
   skipped: SkippedSpan[];
   warning?: string;
   error?: string;
+  /** Seconds of call audio the pass decoded, for this machine's measured speed (SV-U6). */
+  audio_s?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -512,7 +514,8 @@ export async function runFinalPass(
       ...(languages.size > 0 ? { languages: [...languages].sort() } : {}),
       ...(warning ? { warning } : {}),
     });
-    return { ok: true, parts, skipped, ...(warning ? { warning } : {}) };
+    const audio_s = parts.reduce((n, p) => n + audio.length(p), 0) / ASR_RATE;
+    return { ok: true, parts, skipped, audio_s, ...(warning ? { warning } : {}) };
   } catch (err) {
     const error = (err as Error).message;
     emit({ type: "final.failed", step, error });

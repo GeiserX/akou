@@ -32,9 +32,9 @@ import { DEFAULT_BOOST, type DecodeList, modelKind } from "../vocab/decode-list.
 import { readUploadAudio } from "./audio.ts";
 import {
   DAY_MS,
+  type Held,
   hardwareChoice,
   type ModelChoice,
-  ModelRefused,
   type ModelSource,
   type ModelStore,
   resolveModel,
@@ -52,18 +52,6 @@ import {
   type NewJob,
 } from "./store.ts";
 import { completedData, Deliverer, type DelivererOptions } from "./webhooks.ts";
-
-/** One catalog model as `GET /models` lists it (SV-M6). */
-export interface ModelView {
-  id: string;
-  state: "ready" | "downloading" | "missing";
-  bytes: number;
-  size: number;
-  last_used_at: string | null;
-  evicts_at: string | null;
-  default: boolean;
-  in_use: boolean;
-}
 
 /** How often retention runs, besides at start. */
 export const RETENTION_SWEEP_MS = 3_600_000;
@@ -666,7 +654,7 @@ export class JobService {
   }
 
   /** The default's set, and what a queued or running job or the live worker needs. */
-  private held(): { defaults: Set<string>; inUse: Set<string> } {
+  held(): Held & { defaults: Set<string>; inUse: Set<string> } {
     const shelf = this.o.shelf;
     const defaults = new Set(shelf.needs(this.defaultRecognizer()));
     const inUse = new Set<string>();
@@ -686,72 +674,6 @@ export class JobService {
   sweepModels(): void {
     const { defaults, inUse } = this.held();
     this.o.shelf.sweep(new Set([...defaults, ...inUse]));
-  }
-
-  /** Every catalog model as the Models page and `GET /models` show it (SV-M6). */
-  modelList(): ModelView[] {
-    const shelf = this.o.shelf;
-    const { defaults, inUse } = this.held();
-    const ledger = shelf.ledger();
-    const days = this.o.shelf.unusedDays();
-    const iso = (t: number | undefined) => (t === undefined ? null : new Date(t).toISOString());
-    return shelf.catalog().map((m) => {
-      const state = shelf.state(m.id);
-      const last = state === "ready" ? ledger[m.id] : undefined;
-      const kept = defaults.has(m.id) || inUse.has(m.id);
-      return {
-        id: m.id,
-        state,
-        ...shelf.size(m.id),
-        last_used_at: iso(last),
-        evicts_at: last === undefined || kept || days === 0 ? null : iso(last + days * DAY_MS),
-        default: defaults.has(m.id),
-        in_use: inUse.has(m.id),
-      };
-    });
-  }
-
-  private modelView(id: string): ModelView {
-    return this.modelList().find((m) => m.id === id) as ModelView;
-  }
-
-  /** Fetches one catalog model under the limits of an on-demand download (SV-M6, SV-M2). */
-  pullModel(id: string): ModelView {
-    const shelf = this.o.shelf;
-    if (!shelf.catalog().some((m) => m.id === id)) {
-      throw new ModelRefused(422, "unknown_model", `no model ${id} in the catalog`, {
-        field: "model",
-        model: id,
-      });
-    }
-    shelf.admit([id]);
-    shelf.fetch([id]);
-    return this.modelView(id);
-  }
-
-  /**
-   * Deletes one model under the sweep's rules (SV-M6): never the default's set, one in use, or one
-   * downloading. Logged as `model.deleted` with the key that asked.
-   */
-  deleteModel(id: string, by: string): { id: string; deleted: true; bytes: number } {
-    const shelf = this.o.shelf;
-    if (!shelf.catalog().some((m) => m.id === id) || shelf.state(id) === "missing") {
-      throw new ModelRefused(404, "not_found", `no model ${id} on disk`, { model: id });
-    }
-    const { defaults, inUse } = this.held();
-    if (defaults.has(id) || inUse.has(id)) {
-      throw new ModelRefused(
-        409,
-        "model_in_use",
-        defaults.has(id)
-          ? `${id} is part of the default model's set (server.default_model)`
-          : `${id} is needed by a queued or running job`,
-        { model: id, default: defaults.has(id) },
-      );
-    }
-    const bytes = shelf.remove(id);
-    this.o.log("info", `model.deleted ${id} key ${by} bytes_freed ${bytes}`);
-    return { id, deleted: true, bytes };
   }
 
   /** Every job older than `server.retain_days` is deleted as a client's delete would. */
@@ -929,6 +851,9 @@ export class JobService {
               warnings: [],
             };
       // A model that takes no hotwords gets none (the engine would refuse them).
+      // Read before the run: the samples' buffer is handed to the Worker, which empties it here.
+      const audioS = samples.length / ASR_RATE;
+      const began = performance.now();
       const pass = await this.workerFor(slot, spec, model).run({
         samples,
         diarize: job.diarize,
@@ -937,6 +862,8 @@ export class JobService {
         glossary: job.keywords,
       });
       const recognizer = pass.model ?? modelNameFor(spec);
+      // This machine's speed on the model, for the Models page (SV-U6): wall time over audio time.
+      this.o.shelf.recordRun(model, audioS, (performance.now() - began) / 1000);
       end = {
         status: "done",
         result: jobResult(job, pass, {

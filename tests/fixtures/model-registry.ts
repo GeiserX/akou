@@ -56,7 +56,8 @@ export function modelRegistry(size = 4096): ModelRegistry {
       if (!body) return new Response("no", { status: 404 });
       if (corrupted.has(name)) body = body.map((b) => b ^ 0xff);
       const h = held.get(name);
-      if (!h) return new Response(body);
+      // Typed for the DOM's BodyInit too: the browser tests' config reads this file.
+      if (!h) return new Response(body as Uint8Array<ArrayBuffer>);
       const b = body;
       return new Response(
         new ReadableStream({

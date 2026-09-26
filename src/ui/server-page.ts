@@ -9,11 +9,12 @@
  */
 
 import { h, replace } from "./dom.ts";
+import { ModelsPage } from "./models-page.ts";
 import type { Transport } from "./protocol.ts";
 import { PAGES, type PageName, type ServerScreen } from "./server-common.ts";
 import { JobsPage } from "./server-jobs.ts";
 import { KeysPage } from "./server-keys.ts";
-import { ModelsPage, SettingsPage } from "./server-settings.ts";
+import { SettingsPage } from "./server-settings.ts";
 
 /** What stays of the window's page: the fatal notice, the login form and the toast. */
 const KEEP = new Set(["fatal", "login", "toast"]);
@@ -26,7 +27,7 @@ export function bootServer(t: Transport, logout: () => void): void {
   const main = h("main", { id: "server-main" });
   const screens: ServerScreen[] = [
     new JobsPage(t),
-    new ModelsPage(t),
+    new ModelsPage(t, true),
     new KeysPage(t),
     new SettingsPage(t),
   ];

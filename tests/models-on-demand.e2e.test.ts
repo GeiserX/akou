@@ -451,8 +451,14 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
     expect(r.body).toMatchObject({ dir: rig.models });
     const m = await listed();
     expect(Object.keys(m).sort()).toEqual(catalog.map((x) => x.id).sort());
+    const notMeasured = { score: null, not_measured: "no measurement recorded for this model" };
     expect(m[B]).toEqual({
       id: B,
+      kind: "speech",
+      job: "test",
+      languages: null,
+      streaming: false,
+      from: [`127.0.0.1:${reg.port}/b.onnx`],
       state: "ready",
       bytes: 4096,
       size: 4096,
@@ -460,10 +466,24 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
       evicts_at: iso(T + 30 * DAY_MS),
       default: false,
       in_use: false,
+      accuracy: notMeasured,
+      speed: notMeasured,
+      measured: null,
+      set_default: { key: "server.default_model", value: B },
     });
-    expect(m[RECOGNIZER]).toMatchObject({ state: "ready", default: true, evicts_at: null });
-    expect(m["silero-vad"]).toMatchObject({ default: true, evicts_at: null });
-    expect(m[C]).toEqual({
+    expect(m[RECOGNIZER]).toMatchObject({
+      state: "ready",
+      default: true,
+      evicts_at: null,
+      accuracy: { score: 77, metric: "wer", value: 4.55 },
+      speed: { score: 83, metric: "rtfx" },
+    });
+    expect(m["silero-vad"]).toMatchObject({ default: true, evicts_at: null, kind: "helper" });
+    expect(m[NEMOTRON]).toMatchObject({
+      kind: "speakers",
+      set_default: { key: "asr.diarizer", value: "nemotron" },
+    });
+    expect(m[C]).toMatchObject({
       id: C,
       state: "missing",
       bytes: 0,
@@ -473,6 +493,16 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
       default: false,
       in_use: false,
     });
+  });
+
+  test("a finished job is this machine's measured speed for its model", async () => {
+    // Before any job, nothing is measured: the check below can fail.
+    expect((await listed())[RECOGNIZER].measured).toBeNull();
+    const j = await submit(rig, { preset: "auto" });
+    expect((await ended(rig, j.body.id)).status).toBe("done");
+    const m = (await listed())[RECOGNIZER].measured;
+    expect(m.runs).toBe(1);
+    expect(m.rtf).toBeGreaterThan(0);
   });
 
   test("POST /models/pull with a model fetches that model only", async () => {

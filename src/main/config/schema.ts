@@ -256,21 +256,21 @@ export const SETTINGS = {
   "server.auto_download": {
     type: "boolean",
     default: true,
-    doc: "A job naming a model that is not on disk waits while akou downloads it, each file checked against its pinned SHA-256. Off: such a job is refused with 409 `preset_unavailable` and the `akou models pull` line.",
+    doc: "What a job naming a model that is not on disk gets. On (the default): it waits while akou downloads the model, each file checked against its pinned SHA-256, then runs. Off: it is refused with 409 `preset_unavailable` and the `akou models pull` line. Download on the Models page and `akou models pull` fetch either way.",
   },
   "server.models_max_gb": {
     type: "number",
     min: 0,
     max: 100000,
     default: 40,
-    doc: "Largest the models folder may grow through on-demand downloads, in GB (10^9 bytes). 0: no cap. A download that would pass it is refused with 409 `preset_unavailable`, `reason: models_max_gb`.",
+    doc: "Largest the models folder may grow through downloads of one model (a job's, or Download on the Models page), in GB (10^9 bytes). 0: no cap. A download that would pass it is refused with 409 `preset_unavailable`, `reason: models_max_gb`.",
   },
   "server.models_unused_days": {
     type: "integer",
     min: 0,
     max: 3650,
     default: 30,
-    doc: "Days a model may go unused before server mode deletes it. The default model and any model a job or a worker needs are never deleted. 0: never delete.",
+    doc: "Days a model may go unused before akou deletes it, in the desktop app and in server mode. The default model, any model in use (a job, a worker, the recognizer) and one downloading are never deleted. 0: never delete.",
   },
   "server.remotes": {
     type: "string[]",
