@@ -461,6 +461,11 @@ jobs:
           docker run --rm --network host -e AKOU_URL=http://127.0.0.1:8476 -e AKOU_API_KEY -e AKOU_WEBHOOK_SECRET \
             -e CALLBACK_HOST=host.docker.internal -v "$work:/work" -v "$PWD/scripts:/app/scripts:ro" \
             --entrypoint bun akou:ci scripts/server-roundtrip.ts /work/note.ogg
+          # SV-D1: the same note through `akou transcribe`, the CLI's file job, against `akou serve`
+          # on a Linux box with no sound server. It prints the transcript, or the step fails.
+          docker run --rm --network host -e AKOU_URL=http://127.0.0.1:8476 -e AKOU_API_KEY \
+            -v "$work:/work" akou:ci transcribe /work/note.ogg | tee "$work/transcribe.txt"
+          tr 'A-Z' 'a-z' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
       - name: the server's log
         if: always()
         run: docker logs akou 2>&1 | tail -n 200 || true
