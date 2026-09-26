@@ -1,12 +1,11 @@
 /**
- * Test support for server mode over HTTP: keys made with the CLI, a job submitted the way a client
- * does it (multipart, a bearer key), and a request as a key. `tests/jobs.e2e.test.ts` keeps its
- * own copies; the web UI's and the server defaults' tests share these.
+ * Test support for server mode over HTTP: keys in the rig's key file, a job submitted the way a
+ * client does it (multipart, a bearer key), and a request as a key. `tests/jobs.e2e.test.ts`
+ * keeps its own copies; the web UI's and the server defaults' tests share these.
  */
 
-import { expect } from "bun:test";
+import { KeyStore } from "../src/main/api/keys.ts";
 import type { AppRig } from "./api-helpers.ts";
-import { cli } from "./cli-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav, RATE } from "./fixtures/audio.ts";
 
@@ -32,25 +31,18 @@ export interface Answer {
   headers: Headers;
 }
 
-/** A key made with `akou keys create`, as an operator does it. */
+/**
+ * A key written into the rig's `keys.json` through the `KeyStore` that `akou keys create` uses.
+ * Not through the CLI itself: the UI tests import this, and their type check (the DOM library)
+ * must not reach the CLI's modules.
+ */
 export async function newKey(
   rig: AppRig,
   name: string,
   scope: "jobs" | "admin" = "jobs",
   hosts: string[] = [],
 ): Promise<Key> {
-  const r = await cli({ ...process.env, ...rig.env }, [
-    "keys",
-    "create",
-    "--name",
-    name,
-    "--scope",
-    scope,
-    ...hosts.flatMap((h) => ["--callback-host", h]),
-    "--json",
-  ]);
-  expect(r.code).toBe(0);
-  return r.json;
+  return new KeyStore(rig.app.configDir).create({ name, scope, callbackHosts: hosts });
 }
 
 async function answer(res: Response): Promise<Answer> {

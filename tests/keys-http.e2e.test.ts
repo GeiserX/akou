@@ -20,7 +20,16 @@ beforeAll(async () => {
   server = await appRig({ settings: SERVER });
   app = await appRig();
   admin = await newKey(server, "ops", "admin");
-  jobs = await newKey(server, "archive");
+  // Made with the CLI itself, so the list below proves the routes read the CLI's keys.
+  const made = await cli({ ...process.env, ...server.env }, [
+    "keys",
+    "create",
+    "--name",
+    "archive",
+    "--json",
+  ]);
+  expect(made.code).toBe(0);
+  jobs = made.json;
 });
 
 afterAll(async () => {
