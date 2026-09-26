@@ -32,7 +32,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:net";
-import { basename, join } from "node:path";
+import { basename, join, relative } from "node:path";
 import type { LlamaEngineSpec } from "./engine.ts";
 import { llamaBuildId } from "./llama-catalog.ts";
 import { type Accelerator, type CatalogEntry, MODELS } from "./models.ts";
@@ -79,6 +79,13 @@ export function llamaRuntime(
 
 const MARKER = ".unpacked";
 
+/** Windows' own bsdtar reads the builds' `.zip` archives; a GNU tar earlier on PATH does not. */
+function tarProgram(platform: string): string {
+  if (!platform.startsWith("win32")) return "tar";
+  const own = join(process.env.SystemRoot ?? "C:\\Windows", "System32", "tar.exe");
+  return existsSync(own) ? own : "tar";
+}
+
 function binaryName(platform: string): string {
   return platform.startsWith("win32") ? "llama-server.exe" : "llama-server";
 }
@@ -118,7 +125,15 @@ export function extractBuild(dir: string, archives: readonly string[], platform:
   mkdirSync(tmp, { recursive: true });
   try {
     for (const a of archives) {
-      const r = spawnSync("tar", ["-xf", a, "-C", tmp], { encoding: "utf8" });
+      // Relative paths from the build's folder: GNU tar reads "C:" as a remote host.
+      const r = spawnSync(
+        tarProgram(platform),
+        ["-xf", relative(dir, a), "-C", relative(dir, tmp)],
+        {
+          cwd: dir,
+          encoding: "utf8",
+        },
+      );
       if (r.status !== 0) {
         throw new Error(`cannot unpack ${basename(a)}: ${(r.stderr || r.error?.message) ?? ""}`);
       }

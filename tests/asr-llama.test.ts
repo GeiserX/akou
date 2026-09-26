@@ -190,7 +190,10 @@ describe("the pinned build is unpacked once", () => {
     writeFileSync(join(src, "llama-server"), "#!/bin/sh\necho fake\n");
     writeFileSync(join(src, "libggml.so"), "lib");
     const archive = join(dir, "build.tar.gz");
-    const tar = Bun.spawnSync(["tar", "-czf", archive, "-C", join(dir, "src"), "llama-b1"]);
+    // Relative paths: GNU tar reads "C:" in an absolute Windows path as a remote host.
+    const tar = Bun.spawnSync(["tar", "-czf", "build.tar.gz", "-C", "src", "llama-b1"], {
+      cwd: dir,
+    });
     expect(tar.exitCode).toBe(0);
     const target = join(dir, "build");
     mkdirSync(target);
@@ -210,7 +213,7 @@ describe("the pinned build is unpacked once", () => {
     mkdirSync(join(dir, "src"));
     writeFileSync(join(dir, "src", "README"), "x");
     const archive = join(dir, "empty.tar.gz");
-    Bun.spawnSync(["tar", "-czf", archive, "-C", join(dir, "src"), "README"]);
+    Bun.spawnSync(["tar", "-czf", "empty.tar.gz", "-C", "src", "README"], { cwd: dir });
     mkdirSync(join(dir, "build"));
     expect(() => extractBuild(join(dir, "build"), [archive], "linux-x64")).toThrow(
       "no llama-server in empty.tar.gz",
@@ -281,27 +284,43 @@ describe("the supervisor", () => {
     expect(err.fatal).toBe(true);
   });
 
-  test.skipIf(process.platform === "win32")(
-    "one Metal engine at a time: a second Metal server stops the first (skipped on Windows: no Metal)",
-    async () => {
-      const lockDir = scratch();
-      const a = fakeServer([], { accelerator: "metal", lockDir });
-      const b = fakeServer([], { accelerator: "metal", lockDir });
-      await a.server.url();
-      const pidA = a.server.pid() as number;
-      await b.server.url();
-      await Bun.sleep(200);
-      expect(alive(pidA)).toBe(false);
-      expect(alive(b.server.pid() as number)).toBe(true);
-      // Positive control: two CPU servers sharing the lock folder both keep running.
-      const c = fakeServer([], { accelerator: "cpu", lockDir });
-      const d = fakeServer([], { accelerator: "cpu", lockDir });
-      await c.server.url();
-      await d.server.url();
-      expect(alive(c.server.pid() as number)).toBe(true);
-      expect(alive(d.server.pid() as number)).toBe(true);
-    },
-  );
+  test("one Metal engine at a time: a second Metal server stops the first", async () => {
+    const lockDir = scratch();
+    const a = fakeServer([], { accelerator: "metal", lockDir });
+    const b = fakeServer([], { accelerator: "metal", lockDir });
+    await a.server.url();
+    const pidA = a.server.pid() as number;
+    await b.server.url();
+    await Bun.sleep(200);
+    expect(alive(pidA)).toBe(false);
+    expect(alive(b.server.pid() as number)).toBe(true);
+    // Positive control: two CPU servers sharing the lock folder both keep running.
+    const c = fakeServer([], { accelerator: "cpu", lockDir });
+    const d = fakeServer([], { accelerator: "cpu", lockDir });
+    await c.server.url();
+    await d.server.url();
+    expect(alive(c.server.pid() as number)).toBe(true);
+    expect(alive(d.server.pid() as number)).toBe(true);
+    // One this thread never started (another Worker's, or a crashed akou's) goes too, through the
+    // pid file. Only where `ps` can confirm the pid is that llama-server: not on Windows, which
+    // has no Metal anyway.
+    if (process.platform !== "win32") {
+      const orphan = Bun.spawn([process.execPath, FAKE, "--host", "127.0.0.1", "--port", "0"]);
+      cleanups.push(() => orphan.kill());
+      await Bun.sleep(300);
+      writeFileSync(
+        join(lockDir, "llama-metal.json"),
+        JSON.stringify({ pid: orphan.pid, port: 0 }),
+      );
+      const e = fakeServer([], { accelerator: "metal", lockDir });
+      await e.server.url();
+      const ended = await Promise.race([
+        orphan.exited.then(() => true),
+        Bun.sleep(3000).then(() => false),
+      ]);
+      expect(ended).toBe(true);
+    }
+  });
 
   test("stop ends the process and reports it through onChild", async () => {
     const seen: [number, boolean][] = [];
