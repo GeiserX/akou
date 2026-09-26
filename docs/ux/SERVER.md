@@ -320,6 +320,14 @@ docker compose -f docker-compose.yml -f compose.akou.yml up -d
 
 The key must list `telegram-viewer` by name: the callback is plain `http` to a private address on the compose network, and a key that allows only `*` is refused there (SV-K4, SV-E7). `akou models pull fast` before the first voice note is optional; without it the first job fetches the models (SV-M1). The two items the archive also waits for are the first published image tag (SV-P1) and `retain_days` on `GET /v1/server` (SV-K1b).
 
+## 13. Open points
+
+- **Fusion by the provider unattended.** Open decision 8 in [PRINCIPLES.md](PRINCIPLES.md) line 228 says the harness never runs unattended. In server mode there is no one at the keyboard, so the `fusion` preset's tie-break must use the OpenAI-compatible or Anthropic provider, or a deterministic vote, and never the harness. This document assumes that and the decision should be closed the same way.
+- **The 64 KB cap in app mode.** SV-D3 lifts it for upload routes only. `akou transcribe` in app mode goes through the same route, so the app's guard learns the upload exception too.
+- **Same-box clients over Docker.** A client in another container on the same Docker network reaches akou by service name. The contract assumes nothing about that; it is a convenience in each client's compose example.
+- **arm64 speed.** The repo holds no arm64 measurement. A Raspberry Pi 5 and an Apple silicon box under Linux need a real run before the `lite` preset claims a time.
+- **Telegram's own transcripts.** A client that also holds a Telegram Premium account can fetch Telegram's transcript for a message and submit it as a second opinion. Whether fusion accepts an external text as one voter is an engine-design question, not a server one.
+
 ## 14. Sending jobs to another akou
 
 A client talks to one akou: one URL, one key, one callback secret, one event feed. That akou, the primary, can hand a job to another akou server on the network, a remote, and still own it. The case it is built for: akou in a container next to Telegram-Archive on a box whose CPU is too slow for `best`, and a Mac mini on the same LAN or tailnet running `akou serve` natively, where Metal reaches the GPU (Docker on a Mac has none, SV-R3). The archive keeps pointing at the container; the container sends `best` to the Mac.
@@ -375,11 +383,3 @@ akou keys create --name primary --scope jobs
 The `whsec_` secret the remote prints is not needed: the primary reads results by long-poll, never by webhook, so the remote needs no route back to the primary.
 
 What stays open: `GET /v1/jobs/{id}` does not say which server a job ran on (the log line `job.done ... on <url>` does); the OpenAI endpoint (SV-C1) runs here only; and a job moved to a second remote while the first was down may also finish on the first when it returns, which costs that remote the work but gives the client one result.
-
-## 13. Open points
-
-- **Fusion by the provider unattended.** Open decision 8 in [PRINCIPLES.md](PRINCIPLES.md) line 228 says the harness never runs unattended. In server mode there is no one at the keyboard, so the `fusion` preset's tie-break must use the OpenAI-compatible or Anthropic provider, or a deterministic vote, and never the harness. This document assumes that and the decision should be closed the same way.
-- **The 64 KB cap in app mode.** SV-D3 lifts it for upload routes only. `akou transcribe` in app mode goes through the same route, so the app's guard learns the upload exception too.
-- **Same-box clients over Docker.** A client in another container on the same Docker network reaches akou by service name. The contract assumes nothing about that; it is a convenience in each client's compose example.
-- **arm64 speed.** The repo holds no arm64 measurement. A Raspberry Pi 5 and an Apple silicon box under Linux need a real run before the `lite` preset claims a time.
-- **Telegram's own transcripts.** A client that also holds a Telegram Premium account can fetch Telegram's transcript for a message and submit it as a second opinion. Whether fusion accepts an external text as one voter is an engine-design question, not a server one.

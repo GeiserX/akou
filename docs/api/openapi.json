@@ -3206,7 +3206,7 @@
         "tags": [
           "server"
         ],
-        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, which capabilities (jobs, events, the OpenAI route) exist, and `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`). Needs no key.",
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), and `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`). Needs no key.",
         "responses": {
           "200": {
             "description": "OK",
