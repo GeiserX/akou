@@ -337,7 +337,7 @@ sequenceDiagram
 
 The contract holds on these points, and SERVER.md at `a8e8d49` and the archive's design at `3c9acd2` say the same thing:
 
-- **Idempotency compares the file, not the request.** The `Idempotency-Key` is the audio's SHA-256. akou compares the key and the SHA-256 of the uploaded `file` only, never the raw multipart body, `metadata` or the options (SV-J2). A retry carries a new multipart boundary and still matches. The same audio under two media rows gets the first job back with `200`, never a conflict. A client that wants the same audio in another preset sends another key.
+- **Idempotency compares the file, not the request.** The `Idempotency-Key` is the audio's SHA-256. akou compares the key and the SHA-256 of the uploaded `file` only, never the raw multipart body, `metadata` or the options (SV-J2). A retry carries a new multipart boundary and still matches. The same audio under two media rows gets the first job back with `200`, never a conflict. A client that wants the same audio in another preset sends another key. Since then SV-J2 also compares the options that change the transcript (`preset`, `model`, `language`, `keywords[]`, `diarize`): the same key with other options answers 422 `idempotency_conflict` naming them, instead of the first job made with other options.
 - **`metadata` carries the hash and nothing else.** A replay echoes the first job's metadata, which is the same hash. The viewer's callback route fills every open row whose `idempotency_key` equals `data.metadata.content_hash`, so twin rows both get the text.
 - **The event feed is the truth, and the callback is the fast path.** An archive with no URL akou can reach loses nothing.
 
