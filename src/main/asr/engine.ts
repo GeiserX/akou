@@ -17,6 +17,7 @@
 import type { Provider } from "../llm/provider.ts";
 import type { TermCheck } from "../vocab/bpe-vocab.ts";
 import type { DecodeList, ModelKind } from "../vocab/decode-list.ts";
+import type { Accelerator } from "./models.ts";
 
 export const ASR_RATE = 16000;
 
@@ -230,7 +231,7 @@ export interface LlamaEngineSpec {
   engine: string;
   model: string;
   mmproj: string;
-  accelerator: "cpu" | "metal" | "cuda" | "vulkan";
+  accelerator: Accelerator;
   command?: readonly string[];
   build?: { dir: string; archives: readonly string[]; platform: string };
   threads?: number;

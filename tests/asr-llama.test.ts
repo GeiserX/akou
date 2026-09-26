@@ -24,6 +24,8 @@ import {
   LlamaServer,
   llamaArgs,
   llamaBuild,
+  llamaPlan,
+  llamaRuntime,
   resolveAccelerator,
 } from "../src/main/asr/llama-server.ts";
 import {
@@ -179,6 +181,49 @@ describe("which accelerator runs llama-server", () => {
     const r = resolveAccelerator("metal", "linux-x64");
     expect(r.accelerator).toBe("cpu");
     expect(r.note).toContain("no metal build of llama-server for linux-x64");
+  });
+});
+
+describe("where Qwen's llama-server comes from (akou-5an.94)", () => {
+  const vulkan = { active: "vulkan", gpu: "vulkan" } as const;
+  const none = { active: "cpu", gpu: null } as const;
+  const base = { setting: "auto", own: [] as string[], platform: "linux-x64" };
+
+  test("natively, the GPU detection found picks the pinned build to download", () => {
+    const p = llamaPlan({ ...base, detected: vulkan });
+    expect(p.build?.id).toBe(llamaBuildId("linux-x64", "vulkan"));
+    expect(p).toMatchObject({ accelerator: "vulkan", provider: "vulkan" });
+    expect(p.command).toBeUndefined();
+    // Positive control: no GPU found keeps auto's own answer, Metal on a Mac and the CPU elsewhere.
+    expect(llamaPlan({ ...base, detected: none }).build?.id).toBe(llamaBuildId("linux-x64", "cpu"));
+    expect(llamaPlan({ ...base, platform: "darwin-arm64", detected: none }).build?.id).toBe(
+      llamaBuildId("darwin-arm64", "metal"),
+    );
+  });
+
+  test("an image runs the build it carries, on what detection chose, and downloads none", () => {
+    const image = "/opt/llama/llama-server";
+    const p = llamaPlan({ ...base, image, detected: vulkan });
+    expect(p).toMatchObject({ command: [image], accelerator: "vulkan", provider: "vulkan" });
+    expect(p.build).toBeUndefined();
+    // Every layer on the GPU, none on the CPU: llamaArgs' default for the accelerator.
+    expect(llamaArgs({ ...p, command: [image], model: "m", mmproj: "p" }, 1)).toContain("999");
+    // `akou models pull best` in an image downloads no build either.
+    const settings = { "asr.accelerator": "auto", "asr.llamaServer": [] };
+    expect(llamaRuntime(settings, "linux-x64", MODELS, { image, detected: vulkan })).toBeNull();
+    expect(llamaRuntime(settings, "linux-x64", MODELS, { detected: vulkan })).toBe(
+      llamaBuildId("linux-x64", "vulkan"),
+    );
+    const cpu = llamaPlan({ ...base, image, detected: none });
+    expect(cpu).toMatchObject({ command: [image], accelerator: "cpu", provider: "cpu" });
+  });
+
+  test("an own llama-server wins over the image's, and runs the GPU its setting names", () => {
+    const own = ["/opt/sycl/llama-server"];
+    const p = llamaPlan({ ...base, setting: "sycl", own, image: "/opt/llama/llama-server" });
+    expect(p).toMatchObject({ command: own, provider: "sycl", gpuLayers: 999 });
+    expect(p.note).toBeUndefined();
+    expect(llamaPlan({ ...base, own }).provider).toBe("custom");
   });
 });
 
