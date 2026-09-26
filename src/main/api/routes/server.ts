@@ -14,6 +14,9 @@
  *   `gpu` and `accelerator` are `asr.accelerator` as detected at start and confirmed by the
  *   llama-server build (akou-5an.94), so a client or an operator sees which GPU runs, or why none.
  *   `queue` is the same object `/healthz` carries, so a client paces a backlog by it (SV-Q4).
+ *   `dictation` is the reserved lane for dictation (DICTATION.md DC-R2): `slots`, `engine` and
+ *   `served_last_hour`, null in the desktop app; `capabilities.interactive` is true while it has a
+ *   slot, so a dictating client knows its requests will not wait behind the queue.
  * - `GET /v1/keys/me`, any key: the calling key's `{id, name, scopes, created_at}`; the app's token
  *   answers as `{id: "app", name: "app", scopes: ["admin"]}`. Executor's health check calls it.
  */
@@ -70,7 +73,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), and `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog. Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog, and `dictation`: the lane `interactive=true` requests run in, with its `slots` (`server.dictation_slots`), `engine` (`server.dictation_engine`) and `served_last_hour` (`capabilities.interactive` is true while it has a slot). Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -81,7 +84,9 @@ export function serverRoutes(r: Router<ApiApp>): void {
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
       // Section 14: a preset a remote offers is available here too, since a job for it runs there.
-      const remotes = c.app.jobs?.()?.remotes;
+      const jobs = c.app.jobs?.();
+      const remotes = jobs?.remotes;
+      const dictation = jobs?.dictationStats() ?? null;
       return json(200, {
         name: "akou",
         version: c.app.version,
@@ -117,12 +122,16 @@ export function serverRoutes(r: Router<ApiApp>): void {
         retain_days: c.app.config().settings["server.retain_days"],
         // SV-Q4: the queue's settings, depth, throughput and ETA; null in the desktop app.
         queue: queueOf(c.app),
+        // DC-R2: the lane dictations run in; null in the desktop app.
+        dictation,
         capabilities: {
           jobs: has("POST", "/jobs"),
           // Signed deliveries per key (SV-E2) come with the job route's `callback_url`.
           webhooks: has("POST", "/jobs"),
           events: has("GET", "/events"),
           openai: has("POST", "/audio/transcriptions"),
+          // DC-R2: `interactive=true` takes the dictation lane only while it has a slot.
+          interactive: has("POST", "/audio/transcriptions") && (dictation?.slots ?? 0) > 0,
           wyoming: false,
           bazarr: false,
         },

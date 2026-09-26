@@ -15,6 +15,10 @@
  *   names, is sent to another akou over its job API and followed there; its end is concluded here
  *   as any job's, so the client reads it under this server's id, feed and webhook. A remote that
  *   goes away puts the job back in the queue, never fails it.
+ * - **A lane for dictation** (DICTATION.md DC-R2). A job submitted `interactive` runs in one of
+ *   `server.dictation_slots` Workers of its own, which never take a queued job, in the order the
+ *   dictations arrived. It is never refused by the queue's limits, never counted in them, and never
+ *   sent to a remote. With no slots, `interactive` is ignored and the job queues like any other.
  * - **Nothing is kept longer than needed** (SV-J6). The upload is deleted when the job ends; a
  *   delete removes the job and its result and leaves the feed the id and the final state; a job
  *   older than `server.retain_days` goes the same way on a timer.
@@ -74,6 +78,19 @@ export { DAY_MS };
  * second stop, it fails `interrupted`, since the job itself may be what stops the server.
  */
 export const MAX_JOB_STARTS = 2;
+
+/** The most Workers `server.dictation_slots` reserves. */
+export const MAX_DICTATION_SLOTS = 8;
+
+/** What `GET /v1/server` says of the dictation lane (DC-R2). */
+export interface DictationStats {
+  /** Workers reserved for interactive jobs; 0 when `interactive` is ignored. */
+  slots: number;
+  /** `server.dictation_engine`. */
+  engine: string;
+  /** Interactive jobs that ended in the last hour. */
+  served_last_hour: number;
+}
 
 /** The window of `jobs_last_hour` and `audio_seconds_last_hour`. */
 export const THROUGHPUT_WINDOW_MS = 3_600_000;
@@ -155,6 +172,10 @@ export interface JobServiceOptions {
   queueMax?(): number;
   /** `server.queue_max_per_key`: the same for one key; 0 or absent, no limit. */
   queueMaxPerKey?(): number;
+  /** `server.dictation_slots`: Workers reserved for interactive jobs (DC-R2); 0 or absent, none. */
+  dictationSlots?(): number;
+  /** `server.dictation_engine`: what an interactive job runs when it names no model; `auto` or absent, the server's default. */
+  dictationEngine?(): string;
   /** Test seams: the upload decoder and the delivery's network. */
   decode?: (path: string, signal: AbortSignal, maxSamples: number) => Promise<Float32Array>;
   delivery?: Partial<Omit<DelivererOptions, "store" | "secrets" | "hostListed" | "audit">>;
@@ -177,6 +198,7 @@ export function jobView(j: Job, waiting: Waiting | null = null): Record<string, 
     model: j.model,
     model_source: j.model_source,
     priority: j.priority,
+    interactive: j.interactive,
     language: j.language,
     diarize: j.diarize,
     metadata: j.metadata,
@@ -264,6 +286,10 @@ export class JobService {
   private readonly audioDir: string;
   private readonly now: () => number;
   private readonly slots: Slot[] = [];
+  /** The dictation lane's Workers (DC-R2): they run interactive jobs only. */
+  private readonly laneSlots: Slot[] = [];
+  /** When each interactive job ended, for `served_last_hour`. */
+  private served: number[] = [];
   private closed = false;
   /** Jobs that ended in this process: when, and the seconds of audio of a done one (SV-Q4). */
   private ended: { at: number; audio_s: number }[] = [];
@@ -361,6 +387,33 @@ export class JobService {
 
   private concurrency(): number {
     return Math.max(1, this.o.concurrency?.() ?? 1);
+  }
+
+  /** `server.dictation_slots`, bounded: the Workers of the dictation lane (DC-R2). */
+  private laneSize(): number {
+    const n = Math.floor(this.o.dictationSlots?.() ?? 0);
+    return Number.isFinite(n) ? Math.min(MAX_DICTATION_SLOTS, Math.max(0, n)) : 0;
+  }
+
+  /** Whether a request that asks for `interactive` gets the dictation lane: only while it has slots. */
+  interactive(asked: boolean): boolean {
+    return asked && this.laneSize() > 0;
+  }
+
+  /** `server.dictation_engine`, `auto` when unset. */
+  dictationEngine(): string {
+    return this.o.dictationEngine?.()?.trim() || "auto";
+  }
+
+  /** The dictation lane as `GET /v1/server` reports it (DC-R2). */
+  dictationStats(): DictationStats {
+    const since = this.now() - THROUGHPUT_WINDOW_MS;
+    this.served = this.served.filter((t) => t > since);
+    return {
+      slots: this.laneSize(),
+      engine: this.dictationEngine(),
+      served_last_hour: this.served.length,
+    };
   }
 
   /** The mean running time of the last jobs, in ms, or null before one has ended. */
@@ -549,9 +602,14 @@ export class JobService {
   submit(
     j: NewJob,
   ): { job: Job; existing: boolean } | { conflict: Job; fields: string[] } | { full: QueueFull } {
+    // A dictation takes the lane when there is one: no queue limit, never a remote (DC-R2).
+    const lane = this.interactive(j.interactive === true);
+    const row: NewJob = lane
+      ? { ...j, interactive: true, route: "local" }
+      : { ...j, interactive: false };
     const r = this.store.db.transaction(() => {
-      const full = this.queueFull(j.key_id, j.idempotency_key);
-      return full ? { full } : this.store.submit(j);
+      const full = lane ? null : this.queueFull(j.key_id, j.idempotency_key);
+      return full ? { full } : this.store.submit(row);
     })();
     if ("full" in r) {
       rmSync(j.audio, { force: true });
@@ -642,7 +700,7 @@ export class JobService {
   private drop(id: string): { id: string; status: JobStatus } | null {
     const r = this.store.remove(id);
     if (!r) return null;
-    const slot = this.slots.find((s) => s.job?.id === id);
+    const slot = [...this.slots, ...this.laneSlots].find((s) => s.job?.id === id);
     if (slot) {
       slot.job?.abort.abort();
       slot.worker?.cancel("the job was deleted");
@@ -678,7 +736,7 @@ export class JobService {
     for (const j of [...this.store.queued(), ...this.store.running()]) {
       for (const id of this.localNeeds(j)) inUse.add(id);
     }
-    for (const s of this.slots) {
+    for (const s of [...this.slots, ...this.laneSlots]) {
       if (s.worker && s.model) for (const id of shelf.needs(s.model)) inUse.add(id);
     }
     return { defaults, inUse };
@@ -817,13 +875,13 @@ export class JobService {
    * An idle slot for a job on `model`: one whose Worker holds it already, so its models stay
    * loaded, else an empty one, else any idle one, whose Worker is rebuilt.
    */
-  private slotFor(model: string): Slot {
-    const idle = this.slots.filter((s) => !s.job);
+  private slotFor(model: string, slots: Slot[] = this.slots): Slot {
+    const idle = slots.filter((s) => !s.job);
     const slot =
       idle.find((s) => s.worker && s.model === model) ?? idle.find((s) => !s.worker) ?? idle[0];
     if (slot) return slot;
     const fresh: Slot = { worker: null, spec: "", model: null, job: null };
-    this.slots.push(fresh);
+    slots.push(fresh);
     return fresh;
   }
 
@@ -862,7 +920,10 @@ export class JobService {
    * missing starts their download and waits, holding no worker (SV-M1).
    */
   private nextRunnable(): Job | null {
+    const lane = this.laneSize() > 0;
     for (const j of this.store.queued()) {
+      // The lane's jobs are the lane's while it has slots; with none, they queue as any other.
+      if (lane && j.interactive) continue;
       if (this.routeOf(j).where !== "local") continue;
       const needs = this.localNeeds(j);
       if (this.o.shelf.missing(needs).length === 0) return j;
@@ -871,22 +932,60 @@ export class JobService {
     return null;
   }
 
+  /**
+   * The next interactive job whose models are on disk, oldest first: a dictation is answered in the
+   * order it arrived, whatever its `priority` (DC-R2).
+   */
+  private nextInteractive(): Job | null {
+    const queued = this.store.queued().filter((j) => j.interactive);
+    queued.sort((a, b) => a.seq - b.seq);
+    for (const j of queued) {
+      const needs = this.localNeeds(j);
+      if (this.o.shelf.missing(needs).length === 0) return j;
+      this.o.shelf.fetch(needs);
+    }
+    return null;
+  }
+
+  /** Starts interactive jobs while a lane Worker is free; idle lane Workers keep their model. */
+  private pumpLane(): void {
+    const size = this.laneSize();
+    while (this.laneSlots.filter((s) => s.job).length < size) {
+      const next = this.nextInteractive();
+      if (!next) break;
+      this.start1(next, this.laneSlots);
+    }
+    // Past a lower `server.dictation_slots`, idle lane Workers go.
+    for (let i = this.laneSlots.length - 1; i >= 0 && this.laneSlots.length > size; i--) {
+      const s = this.laneSlots[i] as Slot;
+      if (s.job) continue;
+      s.worker?.close();
+      this.laneSlots.splice(i, 1);
+    }
+  }
+
+  /** Marks one queued job running in a slot of `slots`, and runs it. */
+  private start1(next: Job, slots: Slot[]): void {
+    const job = this.store.markRunning(next.id);
+    if (job?.status !== "running") return;
+    const slot = this.slotFor(this.modelOf(job), slots);
+    const abort = new AbortController();
+    slot.job = { id: job.id, abort };
+    this.notify(job.id, "running");
+    void this.run(job, slot, abort).finally(() => {
+      if (slot.job?.id === job.id) slot.job = null;
+      this.pump();
+    });
+  }
+
   /** Starts queued jobs while a slot is free, up to `server.concurrency` at once. */
   private pump(): void {
     if (this.closed) return;
+    this.pumpLane();
     while (this.slots.filter((s) => s.job).length < this.concurrency()) {
       const next = this.nextRunnable();
       if (!next) break;
-      const job = this.store.markRunning(next.id);
-      if (job?.status !== "running") continue;
-      const slot = this.slotFor(this.modelOf(job));
-      const abort = new AbortController();
-      slot.job = { id: job.id, abort };
-      this.notify(job.id, "running");
-      void this.run(job, slot, abort).finally(() => {
-        if (slot.job?.id === job.id) slot.job = null;
-        this.pump();
-      });
+      this.start1(next, this.slots);
     }
     this.releaseWorkers();
   }
@@ -1140,6 +1239,12 @@ export class JobService {
     end: { status: "done"; result: Record<string, unknown> } | { status: "failed" },
   ): void {
     const now = this.now();
+    // A dictation is the lane's, not the queue's: it counts in `served_last_hour` only.
+    if (job.interactive) {
+      this.served.push(now);
+      this.served = this.served.filter((t) => t > now - THROUGHPUT_WINDOW_MS);
+      return;
+    }
     const audio = end.status === "done" ? Number(end.result.duration_s) : 0;
     this.ended.push({ at: now, audio_s: Number.isFinite(audio) ? audio : 0 });
     this.ended = this.ended.filter((e) => e.at > now - THROUGHPUT_WINDOW_MS);
@@ -1156,7 +1261,7 @@ export class JobService {
     for (const s of this.sent.values()) s.abort.abort();
     if (this.retention) clearInterval(this.retention);
     this.deliverer.close();
-    for (const s of this.slots) {
+    for (const s of [...this.slots, ...this.laneSlots]) {
       s.job?.abort.abort();
       s.worker?.close();
       s.worker = null;
