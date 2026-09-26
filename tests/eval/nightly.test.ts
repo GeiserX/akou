@@ -5,7 +5,11 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { readWav } from "../../scripts/eval/nightly.ts";
+import { createHash } from "node:crypto";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { pinned, readWav } from "../../scripts/eval/nightly.ts";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 
 describe("a WAV at the recognizer's rate", () => {
@@ -69,5 +73,43 @@ describe("a WAV at the recognizer's rate", () => {
     const x = readWav(f);
     expect(x.length).toBe(400);
     expect(x[399]).toBeCloseTo(0.25, 6);
+  });
+});
+
+describe("a pinned download", () => {
+  test("a fetch that fails its hash leaves nothing at the path, and a good one lands there", async () => {
+    const good = new TextEncoder().encode("the pinned bytes");
+    let body = good.subarray(0, 5); // a truncated fetch
+    const server = Bun.serve({ port: 0, fetch: () => new Response(body) });
+    const dir = mkdtempSync(join(tmpdir(), "akou-pinned-"));
+    try {
+      const url = `http://127.0.0.1:${server.port}/f`;
+      const path = join(dir, "f");
+      const sha = createHash("sha256").update(good).digest("hex");
+      await expect(pinned(url, path, sha)).rejects.toThrow("pinned");
+      // Nothing half-written stays behind for the next run to trip on.
+      expect(readdirSync(dir)).toEqual([]);
+      body = good;
+      expect(await pinned(url, path, sha)).toEqual(good);
+      expect(readdirSync(dir)).toEqual(["f"]);
+    } finally {
+      server.stop(true);
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("the committed baselines", () => {
+  test("every platform with numbers names the decoder they were measured with", () => {
+    const b = JSON.parse(
+      readFileSync(
+        join(import.meta.dir, "..", "..", "docs", "gates", "nightly-baselines.json"),
+        "utf8",
+      ),
+    ) as { _measured: Record<string, string>; platforms: Record<string, Record<string, number>> };
+    const named = Object.keys(b.platforms).filter((p) =>
+      /\b(greedy|beam)\b/.test(b._measured[p] ?? ""),
+    );
+    expect(named).toEqual(Object.keys(b.platforms));
   });
 });

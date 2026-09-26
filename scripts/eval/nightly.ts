@@ -26,7 +26,7 @@
  */
 
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 import { downloadModels, RECOGNIZER } from "../../src/main/asr/models.ts";
@@ -104,12 +104,19 @@ async function get(url: string, headers: Record<string, string> = {}): Promise<U
   return new Uint8Array(await r.arrayBuffer());
 }
 
-/** A file fetched once into `path` and checked by SHA-256 every time it is used. */
-async function pinned(url: string, path: string, sha: string): Promise<Uint8Array> {
-  if (!existsSync(path)) writeFileSync(path, await get(url));
-  const b = new Uint8Array(readFileSync(path));
+/**
+ * A file fetched once into `path` and checked by SHA-256 every time it is used. A fresh download
+ * reaches `path` only after its hash matches, so a truncated fetch never sits in the cache.
+ */
+export async function pinned(url: string, path: string, sha: string): Promise<Uint8Array> {
+  const fresh = !existsSync(path);
+  const b = fresh ? await get(url) : new Uint8Array(readFileSync(path));
   const got = sha256(b);
   if (got !== sha) throw new Error(`${url}: SHA-256 ${got}, pinned ${sha}`);
+  if (fresh) {
+    writeFileSync(`${path}.part`, b);
+    renameSync(`${path}.part`, path);
+  }
   return b;
 }
 
