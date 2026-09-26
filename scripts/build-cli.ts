@@ -61,22 +61,17 @@ function run(cmd: string[], cwd = ROOT): string {
   return r.stdout.trim();
 }
 
-function main(): void {
+/**
+ * `src/main/cli/cli.ts` as one binary at `exe`, ad-hoc signed on macOS, then run: it must say
+ * `version`. Returns what it said. The app build uses it too, for the copy the app carries
+ * (`build-app.ts`, DK-M6).
+ */
+export function compileCli(exe: string, target: string, version: string): string {
   if (!atLeast(Bun.version, MIN_BUN)) {
     fail(
       `Bun ${Bun.version} cannot build the CLI: ${MIN_BUN} or newer is required (1.4.0 and 1.4.1 write a Mach-O signature macOS kills at exec)`,
     );
   }
-  const target = hostTarget();
-  if (!target) fail(`no CLI is released for ${process.platform}-${process.arch}`);
-  const version = sourceVersion(ROOT);
-  const name = `akou-cli-${version}-${target}`;
-  const out = join(ROOT, "dist", "cli");
-  const dir = join(out, name);
-  const exe = join(dir, process.platform === "win32" ? "akou.exe" : "akou");
-  rmSync(dir, { recursive: true, force: true });
-  mkdirSync(dir, { recursive: true });
-
   run([
     process.execPath,
     "build",
@@ -96,6 +91,21 @@ function main(): void {
   const said = run([exe, "--version"]);
   if (said !== version) fail(`the binary says ${JSON.stringify(said)}, package.json ${version}`);
   run([exe, "help"]);
+  return said;
+}
+
+function main(): void {
+  const target = hostTarget();
+  if (!target) fail(`no CLI is released for ${process.platform}-${process.arch}`);
+  const version = sourceVersion(ROOT);
+  const name = `akou-cli-${version}-${target}`;
+  const out = join(ROOT, "dist", "cli");
+  const dir = join(out, name);
+  const exe = join(dir, process.platform === "win32" ? "akou.exe" : "akou");
+  rmSync(dir, { recursive: true, force: true });
+  mkdirSync(dir, { recursive: true });
+
+  const said = compileCli(exe, target, version);
 
   copyFileSync(join(ROOT, "LICENSE"), join(dir, "LICENSE"));
   copyFileSync(join(ROOT, "NOTICE"), join(dir, "NOTICE"));

@@ -73,7 +73,7 @@ What we deliberately did not take:
 | `akou` app | TypeScript on Bun, inside ElectroBun 2.0.1 with `build.mainProcess: "bun"` (Bun 1.4.0) | From login (optional) or first use until quit. Runs with or without a window. | Call state machine, the event log (single writer), speech recognition workers, speaker clustering, query engine, LLM providers, notes and enhancement, local HTTP API, share server, export, hooks, webhook, tray, hotkey, window | Open an audio device |
 | `akou-capture` helper | Rust, one binary per OS | One per recording part, child of the app | Mic and call streams, alignment, Opus file, health monitors, keep-awake | Write the event log, talk HTTP, load a model |
 | `akou-diarize` helper | Rust, one binary per OS, ONNX Runtime linked statically | One per live transcriber and one per final pass, child of the Worker that uses it | Nemotron 3 Diarization: who speaks when on the call channel (section 3.4) | Touch audio devices, write the event log, talk HTTP |
-| `akou` CLI and `akou mcp` | TypeScript on the bundled Bun (a shim), or a compiled binary in the Linux CLI tarball | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
+| `akou` CLI and `akou mcp` | One compiled binary (`bun build --compile`): the release ships it on its own, and the macOS app carries a copy (section 6.1) | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
 
 Inside the app, work is split across threads so the user interface and the API never wait on a model:
 
@@ -108,7 +108,7 @@ On Linux, a CLI-only tarball (M4) packages the same app code with `bun build --c
 
 The slow starts of the past (minutes, while people waited) came from the first agent request after a context compaction: the prompt cache was cold, so the harness reprocessed its whole context (instruction files, memory, the skill, re-injected skills) before it did anything. A skill that starts first still pays that cost on the first turn after a compaction. akou answers it three ways:
 
-- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Alt+R`, `Option+Cmd+R` on macOS), the Record button and `! akou start` typed into a harness all start a call directly.
+- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Shift+F9`, `Option+Cmd+R` on macOS; never `Ctrl+Alt`, which is AltGr on many layouts, DK-K4), the Record button and `! akou start` typed into a harness all start a call directly.
 - **Start first in the skill.** The skill makes `akou start` its first tool call, with no status check first, so the one unavoidable model turn is the start itself.
 - **A short turn.** `akou start --json` returns the `201` within 1 s, so that turn ends quickly.
 
@@ -532,7 +532,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 
 ### 6.1 CLI
 
-A shim runs the bundled Bun on `cli.js` (installed from the menu "Install command-line tool": `~/.local/bin/akou`, `akou.cmd`, or a symlink). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
+`akou` is one compiled binary: the release ships it on its own, and the macOS app carries a copy beside its main process that the akou menu's "Install Command-Line Tool…" links into `/usr/local/bin`, asking for a password only when that folder needs one ([DESKTOP.md](ux/DESKTOP.md) DK-M6). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
 
 | Command | Does |
 |---|---|

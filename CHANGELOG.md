@@ -2,6 +2,10 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## Unreleased
+
+- Windows and Linux: the default global hotkey is now `Control+Shift+F9`, no longer `Control+Alt+R`, which is AltGr on many European layouts and could swallow a typed character. If you relied on the old default, set `app.hotkey` to `Control+Alt+R` in Settings.
+
 ## 0.1.0 — first prerelease
 
 akou records a call from the window, the CLI, the local API or an agent (Claude Code or Codex, through MCP and the akou skill). It transcribes the call live and lets you or an agent ask questions about it while it is still going. After the call it hands the call to your own notes and tools. akou has no knowledge base of its own.

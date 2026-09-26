@@ -104,6 +104,7 @@ describe("the window's RPC handlers (main side)", () => {
         status: () => {},
         showCall: () => {},
         showSettings: () => {},
+        askQuit: () => {},
       };
       const rpc = windowRpc(
         new Bridge(rig.app),
@@ -193,7 +194,7 @@ describe("the desktop shell over a fake NativeUi", () => {
 
   test("the hotkey is the platform default unless set", () => {
     expect(hotkeyFor("", "darwin")).toBe("Alt+Command+R");
-    expect(hotkeyFor("", "linux")).toBe("Control+Alt+R");
+    expect(hotkeyFor("", "linux")).toBe("Control+Shift+F9");
     expect(hotkeyFor(" Control+Shift+K ", "win32")).toBe("Control+Shift+K");
   });
 

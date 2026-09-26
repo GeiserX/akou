@@ -1,0 +1,1111 @@
+/**
+ * The desktop shell's P1 lines (docs/ux/DESKTOP.md sections 5 to 7): the default hotkey off macOS
+ * (DK-K4), the Dock's `reopen` (DK-M2), the quit that asks during a recording (DK-M3), the window's
+ * remembered frame (DK-M4), the command-line install from the menu (DK-M6) and the floating
+ * indicator (DK-F1). Each runs the real shell over the fake `NativeUi`; nothing opens a window.
+ */
+
+import { describe, expect, test } from "bun:test";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  symlinkSync,
+  unlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { basename, dirname, join } from "node:path";
+import { BUILT, builtCopies, MAIN_OUT } from "../electrobun.config.ts";
+import type { EventDraft, LogEvent } from "../src/core/log/events.ts";
+import { Bridge } from "../src/main/window/bridge.ts";
+import { DEFAULT_HOTKEY, hotkeyWarning } from "../src/main/window/hotkey.ts";
+import { indicatorEvent, indicatorRpc, indicatorStatus } from "../src/main/window/indicator.ts";
+import {
+  adminLinked,
+  adminScript,
+  BUNDLED_CLI,
+  CLI_DIR,
+  type InstallOps,
+  type InstallOutcome,
+  installCli,
+  installMessage,
+  nodeOps,
+} from "../src/main/window/install-cli.ts";
+import { windowRpc } from "../src/main/window/rpc.ts";
+import {
+  hotkeyFor,
+  INDICATOR_SIZE,
+  placeFrame,
+  QUIT_QUESTION,
+  type Rect,
+  Shell,
+  type ShellApp,
+  type ShellState,
+  TRAY_DIR,
+  WINDOW_URL,
+} from "../src/main/window/shell.ts";
+import { fileState, SHELL_STATE_FILE } from "../src/main/window/state.ts";
+import { recordedMs } from "../src/ui/indicator-clock.ts";
+import { appRig } from "./api-helpers.ts";
+import { until } from "./capture-helpers.ts";
+import { tempDir } from "./helpers.ts";
+import { fakeUi, shellOn } from "./shell-helpers.ts";
+
+const LONG = 30_000;
+
+/** An app that records what the shell asks of it; `live` says whether a call records. */
+function fakeApp(o: { live?: boolean; settings?: Record<string, unknown> } = {}) {
+  const state = { live: o.live ?? false, quits: 0, windows: 0, stops: 0 };
+  let shell: Shell | null = null;
+  const app: ShellApp = {
+    status: async () => ({
+      live: state.live ? { call: "c1", state: "recording" } : null,
+      share: { active: false },
+    }),
+    start: async () => {
+      state.live = true;
+      return { ok: true, call: "c1" };
+    },
+    stopLive: async () => {
+      state.stops++;
+      state.live = false;
+    },
+    config: () => ({
+      settings: { "app.hotkey": "", "app.openAtLogin": false, ...o.settings },
+    }),
+    saveSetting: async () => {},
+    quit: async () => {
+      state.quits++;
+    },
+    openSettingsPane: async () => false,
+    openWindow: async (call) => {
+      state.windows++;
+      shell?.show(call);
+    },
+    onAnnounce: () => () => {},
+  };
+  return { app, state, bind: (s: Shell) => (shell = s) };
+}
+
+const bridgeStub = {
+  watchLifecycle: () => () => {},
+  app: { status: async () => ({}), watch: () => () => {} },
+} as unknown as Bridge;
+
+/** A store for the shell's remembered state, in memory. */
+function memoryState(initial: ShellState = {}) {
+  let saved: ShellState = structuredClone(initial);
+  const writes: ShellState[] = [];
+  return {
+    writes,
+    load: () => structuredClone(saved),
+    save: (s: ShellState) => {
+      saved = structuredClone(s);
+      writes.push(saved);
+    },
+  };
+}
+
+/**
+ * Global shortcuts a default must never take, per platform (`*` is any key). A global grab steals
+ * the keys from every app, the meeting app and its browser included.
+ */
+const KNOWN_COLLISIONS: { accel: string; what: string }[] = [
+  { accel: "Control+Alt+*", what: "AltGr on Spanish, German, French and Polish layouts" },
+  { accel: "Control+R", what: "browser reload" },
+  { accel: "Control+Shift+R", what: "browser hard reload" },
+  { accel: "F5", what: "browser reload" },
+  { accel: "Control+F5", what: "browser hard reload" },
+  { accel: "Super+G", what: "Game Bar" },
+  { accel: "Super+Alt+R", what: "Game Bar: record that" },
+  { accel: "Super+Alt+G", what: "Game Bar: record the last 30 s" },
+  { accel: "Super+Alt+M", what: "Game Bar: microphone" },
+  { accel: "Super+Shift+R", what: "Snipping Tool: screen recording" },
+  { accel: "Alt+Shift+R", what: "Zoom: remote control" },
+  { accel: "Alt+A", what: "Zoom: mute" },
+  { accel: "Alt+R", what: "Zoom: local recording" },
+  { accel: "Control+Shift+M", what: "Teams: mute" },
+  { accel: "Control+Shift+O", what: "Teams: camera" },
+  { accel: "Control+Shift+E", what: "Teams: share" },
+  { accel: "Control+Shift+Space", what: "Slack huddle: mute" },
+  { accel: "Control+D", what: "Google Meet: microphone" },
+];
+
+const norm = (a: string) => {
+  const parts = a.split("+").map((p) => p.trim().toLowerCase());
+  const key = parts.pop() ?? "";
+  return { mods: new Set(parts), key };
+};
+
+/** The known collision `accel` hits, or null. */
+function collision(accel: string): string | null {
+  const a = norm(accel);
+  for (const c of KNOWN_COLLISIONS) {
+    const k = norm(c.accel);
+    const sameMods =
+      k.key === "*"
+        ? [...k.mods].every((m) => a.mods.has(m))
+        : k.mods.size === a.mods.size && [...k.mods].every((m) => a.mods.has(m));
+    if (sameMods && (k.key === "*" || k.key === a.key)) return c.what;
+  }
+  return null;
+}
+
+describe("[DK-K4] the default hotkey never eats AltGr on Windows and Linux", () => {
+  test("no default off macOS holds Control+Alt or a known collision", () => {
+    for (const platform of ["win32", "linux"]) {
+      const d = hotkeyFor("", platform);
+      expect(norm(d).mods.has("control") && norm(d).mods.has("alt")).toBe(false);
+      expect(collision(d)).toBeNull();
+    }
+    expect(hotkeyFor("", "darwin")).toBe("Alt+Command+R");
+    // A set hotkey is kept as typed, whatever it collides with: the warning is Settings' job.
+    expect(hotkeyFor(" Control+Alt+K ", "linux")).toBe("Control+Alt+K");
+    // Positive controls: the old default and each named family are caught by the same check.
+    expect(collision("Control+Alt+R")).toContain("AltGr");
+    expect(collision("Control+Shift+R")).toBe("browser hard reload");
+    expect(collision("Super+Alt+R")).toContain("Game Bar");
+  });
+
+  test("Settings warns for a typed Control+Alt hotkey off macOS, and only there", () => {
+    for (const platform of ["win32", "linux"]) {
+      expect(hotkeyWarning("Control+Alt+X", platform)).toContain("AltGr");
+      expect(hotkeyWarning("Alt+Ctrl+X", platform)).toContain("AltGr");
+      expect(hotkeyWarning("CommandOrControl+Alt+X", platform)).toContain("AltGr");
+      expect(hotkeyWarning(DEFAULT_HOTKEY, platform)).toBeNull();
+      expect(hotkeyWarning("Control+Shift+K", platform)).toBeNull();
+      expect(hotkeyWarning("", platform)).toBeNull();
+    }
+    // On a Mac, Control+Option is not AltGr.
+    expect(hotkeyWarning("Control+Alt+X", "darwin")).toBeNull();
+  });
+});
+
+describe("[DK-M2] clicking the Dock icon reopens a closed window", () => {
+  test("reopen with no window opens one; with a window, brings it forward", async () => {
+    const f = fakeUi();
+    const a = fakeApp();
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    a.bind(shell);
+    await shell.start();
+    expect(f.log.filter((l) => l.startsWith("window"))).toEqual([]);
+    f.reopen();
+    await until(() => f.log.includes("show"), 1000, "the window");
+    expect(a.state.windows).toBe(1);
+    expect(f.log.filter((l) => l.startsWith("window"))).toEqual([`window ${WINDOW_URL}`]);
+    // With the window there, the Dock click brings the same window forward.
+    f.reopen();
+    await until(() => f.log.filter((l) => l === "show").length === 2, 1000, "forward");
+    expect(f.log.filter((l) => l.startsWith("window"))).toHaveLength(1);
+    // Closed by the user, the next click opens a new one.
+    f.closeWindow();
+    f.reopen();
+    await until(() => f.log.filter((l) => l.startsWith("window")).length === 2, 1000, "reopened");
+    await shell.close();
+  });
+
+  test("a Dock click while akou quits leaves no unhandled rejection", async () => {
+    // The app's openWindow answers 503 "quitting" for the seconds a quit takes.
+    const f = fakeUi();
+    const a = fakeApp();
+    a.app.openWindow = async () => {
+      throw new Error("akou is quitting");
+    };
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    await shell.start();
+    // bun test fails the test that leaves a rejection unhandled, so the click alone is the check:
+    // without the shell's catch this test fails with "akou is quitting".
+    f.reopen();
+    await new Promise((r) => setTimeout(r, 0));
+    expect(f.log.filter((l) => l.startsWith("window"))).toEqual([]);
+    await shell.close();
+  });
+});
+
+describe("[DK-M3] quitting during a recording asks first", () => {
+  test(
+    "Cancel keeps the call recording; Stop and quit writes part.ended before the exit",
+    async () => {
+      const rig = await appRig();
+      const { shell, f } = await shellOn(rig);
+      const id = await rig.startCall();
+      const events = () =>
+        readFileSync(join(rig.app.manager.summary(id)?.dir as string, "events.jsonl"), "utf8")
+          .trim()
+          .split("\n")
+          .map((l) => JSON.parse(l) as LogEvent);
+      await until(() => events().some((e) => e.type === "part.started"), 10_000, "recording");
+
+      // Cmd+Q (the menu's quit role): the window opens and asks once its page has booted.
+      expect(f.quitRequested()).toBe(true);
+      await until(() => f.log.includes(`window ${WINDOW_URL}`), 2000, "the window");
+      expect(f.questions).toEqual([]);
+      await f.boot();
+      await until(() => f.questions.length === 1, 2000, "the question");
+      expect(f.questions[0]).toEqual({ id: 1, ...QUIT_QUESTION });
+      expect(QUIT_QUESTION.message).toBe("A call is recording. Stop it and quit?");
+      // The fake page answered Cancel.
+      await Bun.sleep(200);
+      expect(f.log).not.toContain("quit");
+      expect((await rig.api("GET", "/calls/live")).body.state).toBe("recording");
+      expect(events().some((e) => e.type === "part.ended")).toBe(false);
+
+      // The tray's Quit asks the same, and Stop and quit ends the part before the process exits.
+      let atExit: LogEvent[] = [];
+      f.onQuit = () => {
+        atExit = events();
+      };
+      f.answer = () => true;
+      f.tray("quit");
+      await until(() => f.log.includes("quit"), 15_000, "the quit");
+      expect(f.questions).toHaveLength(2);
+      const ended = atExit.filter((e) => e.type === "part.ended");
+      expect(ended.map((e) => (e as Extract<LogEvent, { type: "part.ended" }>).reason)).toEqual([
+        "stop",
+      ]);
+      await shell.close();
+      await rig.close();
+    },
+    LONG,
+  );
+
+  test("with no call recording, quit asks nothing", async () => {
+    const f = fakeUi();
+    const a = fakeApp();
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    a.bind(shell);
+    await shell.start();
+    expect(f.quitRequested()).toBe(true);
+    await until(() => f.log.includes("quit"), 1000, "the quit");
+    expect(f.questions).toEqual([]);
+    expect(a.state).toMatchObject({ quits: 1, windows: 0 });
+    await shell.close();
+  });
+
+  /** A shell over a fake app with a call recording, its page booted, the question left up. */
+  async function asking() {
+    const f = fakeUi();
+    const a = fakeApp({ live: true });
+    f.answer = () => undefined;
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    a.bind(shell);
+    await shell.start();
+    shell.show();
+    await f.boot();
+    return { f, a, shell };
+  }
+
+  test("two quits while the question is up ask once, and bring the window forward", async () => {
+    const { f, a, shell } = await asking();
+    f.quitRequested();
+    await until(() => f.questions.length === 1, 1000, "the question");
+    const windows = a.state.windows;
+    f.tray("quit");
+    await Bun.sleep(50);
+    expect(f.questions).toHaveLength(1);
+    expect(a.state.windows).toBe(windows + 1);
+    await f.answerQuit(false);
+    await Bun.sleep(50);
+    expect(a.state).toMatchObject({ live: true, quits: 0 });
+    // Asked again after Cancel: a new question, and a stale answer to the old one does nothing.
+    f.quitRequested();
+    await until(() => f.questions.length === 2, 1000, "asked again");
+    expect(f.questions[1]?.id).not.toBe(f.questions[0]?.id);
+    await f.answerQuit(true, f.questions[0]?.id);
+    await Bun.sleep(50);
+    expect(a.state.quits).toBe(0);
+    await f.answerQuit(true);
+    await until(() => f.log.includes("quit"), 1000, "the quit");
+    expect(a.state.quits).toBe(1);
+    await shell.close();
+  });
+
+  test("closing the window with the question up is Cancel", async () => {
+    const { f, a, shell } = await asking();
+    f.quitRequested();
+    await until(() => f.questions.length === 1, 1000, "the question");
+    f.closeWindow();
+    await Bun.sleep(50);
+    expect(a.state).toMatchObject({ live: true, quits: 0 });
+    expect(f.log).not.toContain("quit");
+    // Positive control: the next quit asks again, and answering it quits.
+    f.quitRequested();
+    await until(() => f.log.filter((l) => l.startsWith("window ")).length === 2, 1000, "reopened");
+    await f.boot();
+    await until(() => f.questions.length === 2, 1000, "asked again");
+    await f.answerQuit(true);
+    await until(() => f.log.includes("quit"), 1000, "the quit");
+    await shell.close();
+  });
+
+  test("a status that cannot be read asks instead of doing nothing", async () => {
+    const f = fakeUi();
+    const a = fakeApp({ live: true });
+    const status = a.app.status;
+    let broken = true;
+    a.app.status = async () => {
+      if (broken) throw new Error("the status is gone");
+      return status();
+    };
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    a.bind(shell);
+    broken = false;
+    await shell.start();
+    shell.show();
+    await f.boot();
+    broken = true;
+    f.answer = () => true;
+    f.quitRequested();
+    await until(() => f.log.includes("quit"), 1000, "the quit");
+    expect(f.questions).toHaveLength(1);
+    expect(a.state.quits).toBe(1);
+    await shell.close();
+  });
+
+  test("[TRAPS: a synchronous SDK dialog] the main process never calls a blocking SDK dialog", () => {
+    // ElectroBun 2.0.1's Utils.showMessageBox and openFileDialog are synchronous FFI calls behind
+    // an async name: the Bun thread, and the capture it pumps, waits until someone clicks.
+    const BLOCKING = /\b(showMessageBox|openFileDialog)\s*\(/;
+    const root = join(import.meta.dir, "..", "src");
+    const hits: string[] = [];
+    for (const rel of new Bun.Glob("**/*.ts").scanSync(root)) {
+      if (rel.endsWith(".d.ts")) continue;
+      readFileSync(join(root, rel), "utf8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (BLOCKING.test(line)) hits.push(`${rel}:${i + 1}`);
+        });
+    }
+    expect(hits).toEqual([]);
+    // Positive control: the line this change removed is caught.
+    expect(
+      BLOCKING.test("showMessageBox: async (o) => (await Utils.showMessageBox(o)).response,"),
+    ).toBe(true);
+  });
+});
+
+describe("[DK-M4] the window reopens where it was left", () => {
+  const primary: Rect = { x: 0, y: 25, width: 1440, height: 850 };
+  const second: Rect = { x: 1440, y: 0, width: 1920, height: 1080 };
+
+  test("close at a frame, reopen, same frame; and again after a restart", async () => {
+    const store = memoryState();
+    const f = fakeUi();
+    f.areas = [primary, second];
+    const a = fakeApp();
+    const shell = new Shell(a.app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+      state: store,
+    });
+    a.bind(shell);
+    await shell.start();
+    shell.show();
+    const moved = { x: 1600, y: 100, width: 1000, height: 700 };
+    f.moveWindow(moved);
+    f.closeWindow();
+    expect(store.load().window).toEqual(moved);
+    shell.show();
+    expect(f.frames.at(-1)).toEqual(moved);
+    await shell.close();
+
+    // A new app over the same store opens there too.
+    const f2 = fakeUi();
+    f2.areas = [primary, second];
+    const shell2 = new Shell(fakeApp().app, bridgeStub, f2.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+      state: store,
+    });
+    await shell2.start();
+    shell2.show();
+    expect(f2.frames).toEqual([moved]);
+    await shell2.close();
+  });
+
+  test("a frame is kept at quit too, without a close first", async () => {
+    const store = memoryState();
+    const f = fakeUi();
+    const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+      state: store,
+    });
+    await shell.start();
+    shell.show();
+    f.moveWindow({ x: 40, y: 60, width: 900, height: 600 });
+    await shell.close();
+    expect(store.load().window).toEqual({ x: 40, y: 60, width: 900, height: 600 });
+  });
+
+  test("a zero frame from a closing window never replaces the last real one", async () => {
+    // The SDK answers {0,0,0,0} once the window is gone; a late move or resize carries it.
+    const store = memoryState();
+    const f = fakeUi();
+    const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+      state: store,
+    });
+    await shell.start();
+    shell.show();
+    const good = { x: 40, y: 60, width: 900, height: 600 };
+    f.moveWindow(good);
+    f.moveWindow({ x: 0, y: 0, width: 0, height: 0 });
+    f.moveWindow({ x: 10, y: 10, width: 900, height: -1 });
+    f.closeWindow();
+    expect(store.load().window).toEqual(good);
+    // Positive control: a real frame after it is kept.
+    shell.show();
+    const next = { x: 50, y: 70, width: 800, height: 500 };
+    f.moveWindow(next);
+    await shell.close();
+    expect(store.load().window).toEqual(next);
+  });
+
+  test("placeFrame: kept on its display, clamped into the primary work area when off every display", () => {
+    // On the second display: unchanged.
+    const onSecond = { x: 1600, y: 100, width: 1000, height: 700 };
+    expect(placeFrame(onSecond, [primary, second])).toEqual(onSecond);
+    // That display is gone: into the primary work area, size kept where it fits.
+    expect(placeFrame(onSecond, [primary])).toEqual({ x: 440, y: 100, width: 1000, height: 700 });
+    // Far off every display: inside the primary, never outside it.
+    const lost = { x: -5000, y: 9000, width: 1280, height: 820 };
+    const p = placeFrame(lost, [primary, second]);
+    expect(inside(p, primary)).toBe(true);
+    expect(p).toEqual({ x: 0, y: 55, width: 1280, height: 820 });
+    // Bigger than the work area: shrunk to it.
+    expect(placeFrame({ x: 0, y: 0, width: 3000, height: 2000 }, [primary])).toEqual(primary);
+    // Half off the edge of its display: pulled in whole.
+    expect(placeFrame({ x: 1000, y: 500, width: 800, height: 600 }, [primary])).toEqual({
+      x: 640,
+      y: 275,
+      width: 800,
+      height: 600,
+    });
+    // Nothing saved: the default size, centred on the primary.
+    expect(placeFrame(undefined, [primary, second])).toEqual({
+      x: 80,
+      y: 40,
+      width: 1280,
+      height: 820,
+    });
+    // No display reported (the SDK answers zeros when it cannot tell): the saved frame as it was.
+    expect(placeFrame(onSecond, [{ x: 0, y: 0, width: 0, height: 0 }])).toEqual(onSecond);
+    // Positive control: the check used above fails for a frame off the primary.
+    expect(inside(lost, primary)).toBe(false);
+  });
+});
+
+describe("[DK-M4] the remembered frame on disk", () => {
+  test("shell.json round-trips, and a torn or hand-edited file means the default place", () => {
+    const t = tempDir();
+    const st = fileState(join(t.dir, "cfg"));
+    expect(st.load()).toEqual({});
+    const s = {
+      window: { x: 10, y: 20, width: 900, height: 600 },
+      indicator: { x: 5, y: 6, width: 300, height: 44 },
+    };
+    st.save(s);
+    expect(st.load()).toEqual(s);
+    const path = join(t.dir, "cfg", SHELL_STATE_FILE);
+    writeFileSync(path, '{"window": {"x": 1, "y": 2, "width": ');
+    expect(st.load()).toEqual({});
+    writeFileSync(
+      path,
+      JSON.stringify({
+        window: { x: "1", y: 2, width: 3, height: 4 },
+        indicator: { x: 1, y: 2, width: 0, height: 9 },
+      }),
+    );
+    expect(st.load()).toEqual({});
+    // Positive control: the same file with numbers is read.
+    writeFileSync(path, JSON.stringify({ window: { x: 1, y: 2, width: 3, height: 4 } }));
+    expect(st.load()).toEqual({ window: { x: 1, y: 2, width: 3, height: 4 } });
+    t.cleanup();
+  });
+});
+
+/** A filesystem in memory: files, links, and folders that need a password. */
+function memoryOps(o: { locked?: string[]; cancel?: boolean } = {}) {
+  const files = new Set<string>();
+  const links = new Map<string, string>();
+  const admin: string[] = [];
+  const replaced: (string | null)[] = [];
+  const ops: InstallOps = {
+    exists: (p) => files.has(p) || links.has(p),
+    readlink: (p) => links.get(p) ?? null,
+    writable: (dir) => !(o.locked ?? []).includes(dir),
+    link: (src, dst) => {
+      if (files.has(dst)) throw new Error("EEXIST");
+      links.set(dst, src);
+    },
+    linkAsAdmin: async (src, dst, replacing) => {
+      admin.push(dst);
+      replaced.push(replacing);
+      if (o.cancel) return false;
+      links.set(dst, src);
+      return true;
+    },
+  };
+  return { ops, files, links, admin, replaced };
+}
+
+describe("[DK-M6] Install Command-Line Tool… from the akou menu", () => {
+  const SRC = "/Applications/akou.app/Contents/Resources/app/bun/akou";
+
+  test("links the bundled akou into /usr/local/bin, and a second run says it is already there", async () => {
+    const m = memoryOps();
+    m.files.add(SRC);
+    expect(await installCli(SRC, m.ops)).toEqual({ state: "installed", path: `${CLI_DIR}/akou` });
+    expect(m.links.get(`${CLI_DIR}/akou`)).toBe(SRC);
+    expect(await installCli(SRC, m.ops)).toEqual({ state: "already", path: `${CLI_DIR}/akou` });
+    expect(installMessage({ state: "already", path: `${CLI_DIR}/akou` }).title).toBe(
+      "The akou command is already installed.",
+    );
+    // No password was asked for a folder that needed none.
+    expect(m.admin).toEqual([]);
+  });
+
+  test("asks for the password only when the folder needs one; a cancel installs nothing", async () => {
+    const m = memoryOps({ locked: [CLI_DIR] });
+    m.files.add(SRC);
+    expect((await installCli(SRC, m.ops)).state).toBe("installed");
+    expect(m.admin).toEqual([`${CLI_DIR}/akou`]);
+    // Nothing was there, so root is told to replace nothing.
+    expect(m.replaced).toEqual([null]);
+    const o = memoryOps({ locked: [CLI_DIR] });
+    const older = "/Users/x/Downloads/akou.app/Contents/Resources/app/bun/akou";
+    o.files.add(SRC);
+    o.links.set(`${CLI_DIR}/akou`, older);
+    expect((await installCli(SRC, o.ops)).state).toBe("installed");
+    // An older copy's link: root replaces exactly that link.
+    expect(o.replaced).toEqual([older]);
+    const c = memoryOps({ locked: [CLI_DIR], cancel: true });
+    c.files.add(SRC);
+    expect(await installCli(SRC, c.ops)).toEqual({ state: "refused" });
+    expect(c.links.size).toBe(0);
+  });
+
+  test("a link into an older copy is repointed; a file that is not ours is left alone", async () => {
+    const m = memoryOps();
+    m.files.add(SRC);
+    m.links.set(`${CLI_DIR}/akou`, "/Users/x/Downloads/akou.app/Contents/Resources/app/bun/akou");
+    expect((await installCli(SRC, m.ops)).state).toBe("installed");
+    expect(m.links.get(`${CLI_DIR}/akou`)).toBe(SRC);
+    const f = memoryOps();
+    f.files.add(SRC);
+    f.files.add(`${CLI_DIR}/akou`);
+    expect(await installCli(SRC, f.ops)).toEqual({ state: "in-the-way", path: `${CLI_DIR}/akou` });
+    expect(f.links.size).toBe(0);
+    // A build without the binary (a checkout) says so and touches nothing.
+    const none = memoryOps();
+    expect(await installCli(SRC, none.ops)).toEqual({ state: "missing" });
+  });
+
+  test("a live link to another tool's akou is left alone; a live link into an older app is repointed", async () => {
+    // Homebrew links its own formulae into /usr/local/bin on Intel Macs.
+    const brew = "/usr/local/Cellar/akou/1.0/bin/akou";
+    const f = memoryOps();
+    f.files.add(SRC);
+    f.files.add(brew);
+    f.links.set(`${CLI_DIR}/akou`, brew);
+    expect(await installCli(SRC, f.ops)).toEqual({ state: "in-the-way", path: `${CLI_DIR}/akou` });
+    expect(f.links.get(`${CLI_DIR}/akou`)).toBe(brew);
+    expect(f.admin).toEqual([]);
+    // Positive controls: a live link into another copy of the app, and a dangling link to
+    // anything, are ours to replace.
+    const older = "/Users/x/Downloads/akou.app/Contents/Resources/app/bun/akou";
+    const o = memoryOps();
+    o.files.add(SRC);
+    o.files.add(older);
+    o.links.set(`${CLI_DIR}/akou`, older);
+    expect((await installCli(SRC, o.ops)).state).toBe("installed");
+    expect(o.links.get(`${CLI_DIR}/akou`)).toBe(SRC);
+    const d = memoryOps();
+    d.files.add(SRC);
+    d.links.set(`${CLI_DIR}/akou`, brew);
+    expect((await installCli(SRC, d.ops)).state).toBe("installed");
+  });
+
+  test("an app run from a mounted disk image or a translocated copy installs nothing", async () => {
+    // Both paths vanish at eject, quit or reboot, and the link would dangle.
+    for (const src of [
+      "/Volumes/akou/akou.app/Contents/Resources/app/bun/akou",
+      "/private/var/folders/x1/abc/T/AppTranslocation/0F1E2D3C/d/akou.app/Contents/Resources/app/bun/akou",
+    ]) {
+      const m = memoryOps();
+      m.files.add(src);
+      expect(await installCli(src, m.ops)).toEqual({ state: "not-in-place" });
+      expect(m.links.size).toBe(0);
+      expect(m.admin).toEqual([]);
+    }
+    expect(installMessage({ state: "not-in-place" }).detail).toBe(
+      "Move akou to Applications, open it from there, then choose Install Command-Line Tool… again.",
+    );
+    // Positive control: the same app in /Applications installs.
+    const m = memoryOps();
+    m.files.add(SRC);
+    expect((await installCli(SRC, m.ops)).state).toBe("installed");
+  });
+
+  test(
+    "the admin script quotes paths, and as root replaces only the link the check saw",
+    () => {
+      if (process.platform === "win32") return;
+      // The command root runs, run here as the user in a scratch folder: paths with spaces and quotes.
+      const t = tempDir();
+      const src = join(t.dir, `a k"o'u.app`, "akou");
+      const bin = join(t.dir, `b i"n'`, "bin");
+      const dst = join(bin, "akou");
+      mkdirSync(dirname(src));
+      writeFileSync(src, "#!/bin/sh\n");
+      const older = "/Applications/old/akou.app/Contents/Resources/app/bun/akou";
+      const brew = "/usr/local/Cellar/akou/1.0/bin/akou";
+      const run = (replacing: string | null) => {
+        const s = adminScript(src, dst, replacing);
+        const head = 'do shell script "';
+        const tail = '" with administrator privileges';
+        expect(s.startsWith(head) && s.endsWith(tail)).toBe(true);
+        // Unescaped once as AppleScript reads its string, it is the command sh gets.
+        const cmd = s.slice(head.length, -tail.length).replace(/\\(.)/g, "$1");
+        return Bun.spawnSync(["/bin/sh", "-c", cmd]);
+      };
+      try {
+        // A missing folder is made and the link goes in.
+        expect(run(null).exitCode).toBe(0);
+        expect(readlinkSync(dst)).toBe(src);
+        // The link the check saw (an older copy of the app) is replaced.
+        unlinkSync(dst);
+        symlinkSync(older, dst);
+        expect(run(older).exitCode).toBe(0);
+        expect(readlinkSync(dst)).toBe(src);
+        // What appeared during the password prompt is left alone: another tool's link where the
+        // older one was, or a file where nothing was.
+        unlinkSync(dst);
+        symlinkSync(brew, dst);
+        const moved = run(older);
+        expect(moved.exitCode).not.toBe(0);
+        expect(moved.stderr.toString()).toContain("changed while macOS asked for the password");
+        expect(readlinkSync(dst)).toBe(brew);
+        unlinkSync(dst);
+        writeFileSync(dst, "someone else's\n");
+        for (const replacing of [null, older]) {
+          const r = run(replacing);
+          expect(r.exitCode).not.toBe(0);
+          expect(readFileSync(dst, "utf8")).toBe("someone else's\n");
+        }
+      } finally {
+        t.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test("the real file operations make and read the link (POSIX)", async () => {
+    // The menu exists on macOS only; this checks nodeOps where links need no privilege.
+    if (process.platform === "win32") return;
+    const t = tempDir();
+    const src = join(t.dir, "app", "akou");
+    mkdirSync(join(t.dir, "app"));
+    mkdirSync(join(t.dir, "bin"));
+    writeFileSync(src, "#!/bin/sh\n");
+    const bin = join(t.dir, "bin");
+    expect(await installCli(src, nodeOps, bin)).toEqual({
+      state: "installed",
+      path: join(bin, "akou"),
+    });
+    expect(readlinkSync(join(bin, "akou"))).toBe(src);
+    expect((await installCli(src, nodeOps, bin)).state).toBe("already");
+    expect(nodeOps.writable(join(t.dir, "none"))).toBe(false);
+    expect(existsSync(join(bin, "akou"))).toBe(true);
+    t.cleanup();
+  });
+
+  test("a destination it cannot look at counts as something in the way (POSIX)", () => {
+    // Only ENOENT means absent. Any other error, here EACCES on a folder with no search bit,
+    // is something in the way, not a reason to ask for a password.
+    if (process.platform === "win32") return;
+    const t = tempDir();
+    const bin = join(t.dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "akou"), "someone else's\n");
+    // Positive control: readable, the file is there and absence is absence.
+    expect(nodeOps.exists(join(bin, "akou"))).toBe(true);
+    expect(nodeOps.exists(join(bin, "nothing"))).toBe(false);
+    chmodSync(bin, 0o000);
+    try {
+      expect(nodeOps.exists(join(bin, "akou"))).toBe(true);
+    } finally {
+      chmodSync(bin, 0o755);
+      t.cleanup();
+    }
+  });
+
+  test("a cancelled password prompt is a refusal; a failed privileged link is a failure", async () => {
+    // osascript's exit and stderr, as macOS gives them.
+    expect(adminLinked(0, "")).toBe(true);
+    expect(adminLinked(1, "0:163: execution error: User cancelled. (-128)\n")).toBe(false);
+    const failed = "0:163: execution error: ln: /usr/local/bin/akou: Read-only file system (1)\n";
+    expect(() => adminLinked(1, failed)).toThrow("Read-only file system");
+    expect(() => adminLinked(1, "")).toThrow("osascript exited 1");
+    // Through the install: the failure reaches the menu with its reason, not as "not given".
+    const m = memoryOps({ locked: [CLI_DIR] });
+    m.files.add(SRC);
+    m.ops.linkAsAdmin = async () => adminLinked(1, failed);
+    const o = await installCli(SRC, m.ops);
+    expect(o.state).toBe("failed");
+    expect(installMessage(o).detail).toContain("Read-only file system");
+  });
+
+  test("the app carries the binary where the menu looks: beside the main process", () => {
+    // The build copies it to `bun/akou`, beside `bun/tray`; the menu reads it beside the tray.
+    expect(builtCopies((p) => p === BUILT.cli)).toEqual({ [BUILT.cli]: `${MAIN_OUT}/akou` });
+    expect(builtCopies(() => false)).toEqual({});
+    expect(dirname(BUNDLED_CLI)).toBe(dirname(TRAY_DIR));
+    expect(basename(BUNDLED_CLI)).toBe("akou");
+  });
+
+  test("the menu item runs the install and says what happened in a notification", async () => {
+    const f = fakeUi();
+    const runs: string[] = [];
+    let next: InstallOutcome = { state: "installed", path: `${CLI_DIR}/akou` };
+    const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+      installCli: async () => {
+        runs.push("install");
+        return next;
+      },
+    });
+    await shell.start();
+    const menu = f.appMenu() ?? [];
+    const akou = menu[0] as { submenu: { label?: string; action?: string }[] };
+    expect(akou.submenu.find((i) => i.action === "install-cli")?.label).toBe(
+      "Install Command-Line Tool…",
+    );
+    f.menu("install-cli");
+    await until(() => f.notices.length === 1, 1000, "the result");
+    expect(f.notices[0]).toEqual({
+      title: "The akou command is installed.",
+      body: installMessage({ state: "installed", path: `${CLI_DIR}/akou` }).detail,
+    });
+    next = { state: "already", path: `${CLI_DIR}/akou` };
+    f.menu("install-cli");
+    await until(() => f.notices.length === 2, 1000, "the second result");
+    expect(f.notices[1]?.title).toBe("The akou command is already installed.");
+    expect(runs).toHaveLength(2);
+    await shell.close();
+  });
+});
+
+/** A shell whose bridge hands the test the app's event feed, to play a call's lifecycle. */
+async function eventShell(
+  f: ReturnType<typeof fakeUi>,
+  o: {
+    settings?: Record<string, unknown>;
+    state?: ReturnType<typeof memoryState>;
+    live?: boolean;
+  } = {},
+) {
+  let watcher: (call: string, e: LogEvent) => void = () => {};
+  const bridge = {
+    watchLifecycle: () => () => {},
+    app: {
+      status: async () => ({}),
+      watch: (fn: typeof watcher) => {
+        watcher = fn;
+        return () => {};
+      },
+      onStatusChange: () => () => {},
+    },
+  } as unknown as Bridge;
+  const a = fakeApp({ live: o.live ?? true, settings: o.settings });
+  const shell = new Shell(a.app, bridge, f.ui, {
+    platform: "darwin",
+    setLoginItem: async () => {},
+    state: o.state,
+  });
+  a.bind(shell);
+  await shell.start();
+  const feed = (type: string, extra: Record<string, unknown> = {}) =>
+    watcher("c1", { type, ...extra } as unknown as LogEvent);
+  return { shell, a, feed };
+}
+
+describe("[DK-F1] the floating indicator, in the shell", () => {
+  test("created on call.created, hidden while the main window has the focus, closed on part.ended", async () => {
+    const f = fakeUi();
+    const store = memoryState();
+    const { shell, feed } = await eventShell(f, { state: store });
+    expect(f.indicator()).toBeNull();
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    const ind = f.indicator();
+    expect(ind).toMatchObject({ visible: true, closed: false, opened: 1 });
+    // At the top right of the primary work area the first time.
+    expect(ind?.frame).toEqual({ x: 1440 - INDICATOR_SIZE.width - 16, y: 16, ...INDICATOR_SIZE });
+    // The main window comes forward with the focus: the indicator steps aside.
+    shell.show();
+    expect(f.indicator()?.visible).toBe(false);
+    f.focus(false);
+    expect(f.indicator()?.visible).toBe(true);
+    f.focus(true);
+    f.closeWindow();
+    expect(f.indicator()?.visible).toBe(true);
+    // part.started of the same call does not open a second one.
+    feed("part.started", { part: 1 });
+    await Bun.sleep(20);
+    expect(f.indicator()?.opened).toBe(1);
+    // Dragged, then the call ends: closed, and its place kept.
+    const moved = { x: 200, y: 300, ...INDICATOR_SIZE };
+    f.moveIndicator(moved);
+    // A late event from the closing window reports no frame at all.
+    f.moveIndicator({ x: 0, y: 0, width: 0, height: 0 });
+    feed("part.ended", { part: 1, reason: "stop" });
+    expect(f.indicator()).toMatchObject({ closed: true, visible: false });
+    expect(store.load().indicator).toEqual(moved);
+    // The next call's indicator opens where the last one was left.
+    feed("call.created");
+    await until(() => f.indicator()?.opened === 2, 1000, "the second indicator");
+    expect(f.indicator()).toMatchObject({ opened: 2, frame: moved, visible: true });
+    await shell.close();
+    expect(f.indicator()?.closed).toBe(true);
+  });
+
+  test("a call.created that records nothing (an import) opens no indicator", async () => {
+    const f = fakeUi();
+    const { shell, a, feed } = await eventShell(f, { live: false });
+    feed("call.created");
+    await Bun.sleep(20);
+    expect(f.indicator()).toBeNull();
+    // Positive control: the same event while a call records opens it.
+    a.state.live = true;
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    await shell.close();
+  });
+
+  test("an end while the status is still being read cancels the open", async () => {
+    const f = fakeUi();
+    const { shell, feed } = await eventShell(f);
+    feed("call.created");
+    feed("part.ended", { part: 1, reason: "cancelled" });
+    await Bun.sleep(30);
+    expect(f.indicator()).toBeNull();
+    await shell.close();
+  });
+
+  test("app.floatingIndicator off: no indicator", async () => {
+    const f = fakeUi();
+    const { shell, feed } = await eventShell(f, { settings: { "app.floatingIndicator": false } });
+    feed("call.created");
+    feed("part.started", { part: 1 });
+    await Bun.sleep(20);
+    expect(f.indicator()).toBeNull();
+    // Positive control: the same feed with the setting on opens it.
+    const g = fakeUi();
+    const on = await eventShell(g, { settings: { "app.floatingIndicator": true } });
+    on.feed("call.created");
+    await until(() => g.indicator() !== null, 1000, "the indicator");
+    await shell.close();
+    await on.shell.close();
+  });
+
+  test("a click on it opens the main window; it offers no Ask (PRINCIPLES: asking is the palette)", async () => {
+    const f = fakeUi();
+    const { shell, a, feed } = await eventShell(f);
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    const handlers = f.indicator()?.rpc.handlers as Record<string, unknown>;
+    expect(await (handlers.openMain as () => Promise<boolean>)()).toBe(true);
+    expect(a.state.windows).toBe(1);
+    expect(Object.keys(handlers).sort()).toEqual([
+      "control",
+      "follow",
+      "openMain",
+      "status",
+      "unfollow",
+    ]);
+    await shell.close();
+  });
+});
+
+/** Markers carried by everything a call holds that the indicator must never receive. */
+const MARKS = {
+  title: "TITLEMARK-q7x",
+  workspace: "wsmark-k2p",
+  line: "SEGMARK-z9k",
+  name: "NAMEMARK-w3v",
+} as const;
+
+describe("[DK-F1] the indicator's RPC carries no call content", () => {
+  test(
+    "every push and answer to the indicator page is free of the call's title, words and names",
+    async () => {
+      const rig = await appRig();
+      const bridge = new Bridge(rig.app);
+      const id = await rig.startCall({
+        title: `Weekly ${MARKS.title}`,
+        workspace: MARKS.workspace,
+      });
+      const pushes: unknown[] = [];
+      const answers: unknown[] = [];
+      let opened = 0;
+      const ind = indicatorRpc(
+        bridge,
+        () => ({ followed: (m) => pushes.push(m), status: (m) => pushes.push(m) }),
+        { openMain: async () => void opened++ },
+      );
+      // The same call through the main window's RPC: the positive control.
+      const winPushes: unknown[] = [];
+      const win = windowRpc(
+        bridge,
+        () => ({
+          followed: (m) => winPushes.push(m),
+          status: (m) => winPushes.push(m),
+          asked: () => {},
+          showCall: () => {},
+          showSettings: () => {},
+          askQuit: () => {},
+        }),
+        async () => false,
+      );
+      answers.push(await ind.handlers.status({}));
+      answers.push(await ind.handlers.follow({ stream: "i1", call: id, after: 0 }));
+      winPushes.push(await win.handlers.status({}));
+      await win.handlers.follow({ stream: "w1", call: id, after: 0 });
+      const wall = Date.now();
+      await rig.app.write(id, {
+        type: "seg",
+        id: "l000001",
+        rev: 1,
+        layer: "live",
+        part: 1,
+        ch: "call",
+        spk: "c1",
+        a0: 1,
+        a1: 2,
+        w0: wall,
+        w1: wall + 900,
+        text: `we ship ${MARKS.line} on friday`,
+        model: "fake",
+      } as EventDraft);
+      await rig.app.write(id, {
+        type: "speaker.name",
+        spk: "c1",
+        name: MARKS.name,
+        by: "user",
+      } as EventDraft);
+      answers.push(await ind.handlers.control({ action: "mute" }));
+      answers.push(await ind.handlers.status({}));
+      await until(
+        () => JSON.stringify(winPushes).includes(MARKS.name),
+        5000,
+        "the window saw the name",
+      );
+      await Bun.sleep(200);
+      const all = JSON.stringify([pushes, answers]);
+      const leaks = (text: string) => Object.values(MARKS).filter((m) => text.includes(m));
+      expect(leaks(all)).toEqual([]);
+      // It did get what it needs: the part, the mute, the state.
+      expect(all).toContain('"part.started"');
+      expect(answers.at(-1)).toEqual({ live: { call: id, state: "recording", muted: true } });
+      // Positive control: the main window's RPC over the same call carries the markers.
+      expect(leaks(JSON.stringify(winPushes))).toEqual([
+        MARKS.title,
+        MARKS.workspace,
+        MARKS.line,
+        MARKS.name,
+      ]);
+      expect(await ind.handlers.control({ action: "stop" })).toBe(true);
+      await until(
+        async () => (await rig.api("GET", `/calls/${id}`)).body?.state !== "recording",
+        10_000,
+        "stopped",
+      );
+      // Nothing to control once the call ended.
+      expect(await ind.handlers.control({ action: "mute" })).toBe(false);
+      expect(opened).toBe(0);
+      ind.close();
+      win.close();
+      await rig.close();
+    },
+    LONG,
+  );
+
+  test("the relayed events are rebuilt from a list of fields, never passed through", () => {
+    const e = {
+      seq: 3,
+      t: 1000,
+      type: "part.started",
+      part: 1,
+      file: `/calls/${MARKS.title}/part-1.opus`,
+      wallStart: 900,
+      monoStart: 1,
+      mic: `${MARKS.name}'s AirPods`,
+      call: { mode: "system" },
+      capture: "fake",
+    } as unknown as LogEvent;
+    expect(indicatorEvent(e)).toEqual({ type: "part.started", part: 1, wallStart: 900 });
+    expect(
+      indicatorEvent({ seq: 4, t: 5, type: "seg", text: MARKS.line } as unknown as LogEvent),
+    ).toBeNull();
+    expect(
+      indicatorStatus({
+        live: { call: "c1", title: MARKS.title, workspace: "w", state: "paused", muted: false },
+      }),
+    ).toEqual({ live: { call: "c1", state: "paused", muted: false } });
+    expect(indicatorStatus({ live: null })).toEqual({ live: null });
+  });
+});
+
+describe("[DK-F1] the indicator's elapsed time is the call's recorded time", () => {
+  const started = (part: number, wallStart: number) =>
+    ({ type: "part.started", part, wallStart }) as const;
+  test("counts from the call's first part, across a new part, and stands still while paused", () => {
+    const ev = [started(1, 0)];
+    expect(recordedMs(ev, 60_000)).toEqual({ ms: 60_000, since: 0 });
+    // Paused at 60 s: the time stands still until the resume.
+    const paused = [...ev, { type: "pause", wall: 60_000 } as const];
+    expect(recordedMs(paused, 90_000).ms).toBe(60_000);
+    const resumed = [...paused, { type: "resume", wall: 100_000 } as const];
+    expect(recordedMs(resumed, 110_000).ms).toBe(70_000);
+    // A capture rebuild ends part 1 and starts part 2: the time carries on, never back to 0:00.
+    const rebuilt = [
+      ...resumed,
+      { type: "part.ended", part: 1, at: 120_000 } as const,
+      started(2, 121_000),
+    ];
+    expect(recordedMs(rebuilt, 131_000)).toEqual({ ms: 90_000, since: 0 });
+    // Ended: nothing runs.
+    expect(
+      recordedMs([...rebuilt, { type: "part.ended", part: 2, at: 131_000 } as const], 500_000).ms,
+    ).toBe(90_000);
+    // Positive control: the same clock reads 0 with no part started.
+    expect(recordedMs([], 5000)).toEqual({ ms: 0, since: null });
+  });
+});
+
+function inside(r: Rect, a: Rect): boolean {
+  return (
+    r.x >= a.x && r.y >= a.y && r.x + r.width <= a.x + a.width && r.y + r.height <= a.y + a.height
+  );
+}
