@@ -44,6 +44,8 @@ set_env AKOU_VERSION "$AKOU_VERSION"
   echo "TA_REF=$TA_REF"
   echo "VIEWER_USERNAME=e2e"
   echo "VIEWER_PASSWORD=$(openssl rand -hex 16)"
+  # The backup never logs in to Telegram here; empty, so compose does not warn on every call.
+  printf 'TELEGRAM_API_ID=\nTELEGRAM_API_HASH=\nTELEGRAM_PHONE=\n'
 } >> .env
 
 dc() { docker compose -f docker-compose.yml -f compose.akou.yml -f compose.e2e.yml "$@"; }
