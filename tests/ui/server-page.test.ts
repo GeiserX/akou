@@ -222,6 +222,12 @@ describe("SV-U7: the server-mode page", () => {
   test(
     "SV-U2: the settings page holds the server's defaults and no device picker; a save applies",
     async () => {
+      // A slow read of the settings: the page drawn on the first visit must not take the typing
+      // while it waits, or the read, when it lands, wipes what was typed (seen on a loaded CI box).
+      await page.route("**/api/v1/config", async (route) => {
+        if (route.request().method() === "GET") await Bun.sleep(500);
+        await route.continue();
+      });
       await page.click('#server-nav [data-page="settings"]');
       await page.waitForSelector("#page-settings [data-key='server.default_language']");
       for (const key of [
@@ -260,6 +266,7 @@ describe("SV-U7: the server-mode page", () => {
         "the saved language",
       );
       expect((await rig.api("GET", "/config")).body.settings["server.default_diarize"]).toBe(true);
+      await page.unroute("**/api/v1/config");
     },
     UI_TIMEOUT,
   );

@@ -90,12 +90,19 @@ export class SettingsPage implements ServerScreen {
   }
 
   show(): void {
+    // What the last visit drew is taken away until the new read lands: typing into it would be
+    // lost when the read replaces it.
+    replace(this.fields, h("p", { class: "hint" }, "Reading the settings…"));
     void this.load();
   }
 
   hide(): void {}
 
+  /** Bumped by every read, so an older read that lands late never draws over a newer one. */
+  private reads = 0;
+
   private async load(): Promise<void> {
+    const read = ++this.reads;
     const [cfg, server] = await Promise.all([
       readConfig(this.t),
       this.t.request<{ presets?: { name: string }[]; engines?: { id: string }[] }>(
@@ -103,7 +110,7 @@ export class SettingsPage implements ServerScreen {
         "/server",
       ),
     ]);
-    if (!cfg) return;
+    if (!cfg || read !== this.reads) return;
     this.schema = cfg.schema;
     this.shown = {};
     const issues = new Map(cfg.issues.map((i) => [i.key, i.message]));
