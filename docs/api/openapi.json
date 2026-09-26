@@ -3534,6 +3534,130 @@
         "x-akou-access": "jobs"
       }
     },
+    "/v1/keys": {
+      "get": {
+        "operationId": "keys.list",
+        "tags": [
+          "keys"
+        ],
+        "description": "Every API key: id, name, scopes, callback hosts, when it was created and last used. Never a key or a webhook secret.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "admin"
+      },
+      "post": {
+        "operationId": "keys.create",
+        "tags": [
+          "keys"
+        ],
+        "description": "Create a key for a program. `scopes` is `jobs` (the default) or `admin`; `callback_hosts` are the hosts its callback URLs may name. The answer holds the `ak_` key and the `whsec_` webhook secret, shown this once only.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  },
+                  "scopes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "callback_hosts": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/keys/{id}": {
+      "delete": {
+        "operationId": "keys.revoke",
+        "tags": [
+          "keys"
+        ],
+        "description": "Revoke a key by its id. It gets 401 on its next request; a web UI session it opened ends.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The key id, `key_…`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/audio/transcriptions": {
       "post": {
         "operationId": "openai.transcribe",
