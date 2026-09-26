@@ -46,7 +46,7 @@ export const serveCommand: Command = {
     process.env.AKOU_SERVER = "1";
     process.env.AKOU_HEADLESS = "1";
     // Loaded only here, so the other commands never load the core.
-    const { AlreadyRunningError, startApp } = await import("../../index.ts");
+    const { AlreadyRunningError, StartRefused, startApp } = await import("../../index.ts");
     let app: Awaited<ReturnType<typeof startApp>>;
     try {
       app = await startApp({ env, headless: true, version: ctx.version });
@@ -54,6 +54,11 @@ export const serveCommand: Command = {
       if (err instanceof AlreadyRunningError) {
         ctx.io.err(`akou serve: ${err.message}`);
         return EXIT.unavailable;
+      }
+      // A bind the settings refuse (SV-P5): 78, as the app's own entry point exits.
+      if (err instanceof StartRefused) {
+        ctx.io.err(`akou serve: cannot start: ${err.message}`);
+        return EXIT.config;
       }
       ctx.io.err(`akou serve: cannot start: ${(err as Error).message}`);
       return EXIT.software;

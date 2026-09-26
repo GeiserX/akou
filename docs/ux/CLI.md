@@ -148,6 +148,7 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 | 70 | akou failed | A bug; a stage that failed, reported by `akou wait` |
 | 75 | Already recording | `akou start` while a call is live |
 | 77 | Permission | The token is refused; an OS grant is missing |
+| 78 | The settings refuse it | `akou serve` with `api.bind` not loopback and `server.behind_proxy` false (sysexits `EX_CONFIG`) |
 | 124 | Timed out | `akou wait --timeout` ran out (the GNU `timeout` convention, PG-S5) |
 | 130 | Interrupted | Ctrl-C during a one-shot command (`ask`, `wait`, `models pull`) |
 

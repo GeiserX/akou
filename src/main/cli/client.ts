@@ -36,6 +36,8 @@ export const EXIT = {
   software: 70,
   alreadyRecording: 75,
   permission: 77,
+  /** EX_CONFIG: the settings forbid what was asked, as `akou serve` with a bind they refuse. */
+  config: 78,
   /** `akou wait` ran out of time, as `timeout(1)` reports it. */
   timeout: 124,
 } as const;

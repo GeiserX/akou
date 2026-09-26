@@ -139,4 +139,16 @@ describe("[SV-P8] akou serve", () => {
     expect(await proc.exited).toBe(64);
     expect(runtime(h.configDir)).toBeNull();
   });
+
+  test("[SV-P5] the default bind with no proxy is a settings refusal: exit 78 naming both keys, nothing served", async () => {
+    const h = home();
+    writeFileSync(join(h.configDir, "config.json"), JSON.stringify({ "api.port": 0 }));
+    const proc = serve(h.env);
+    const code = await proc.exited;
+    const err = await new Response(proc.stderr).text();
+    expect(err).toContain("api.bind");
+    expect(err).toContain("server.behind_proxy");
+    expect(code).toBe(78);
+    expect(runtime(h.configDir)).toBeNull();
+  }, 30_000);
 });

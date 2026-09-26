@@ -7,7 +7,7 @@
  *
  *   0 ok · 3 nothing live · 64 usage · 65 a vocabulary term fails validation · 69 unavailable
  *   (app, model, provider, or not built yet) · 70 software · 75 already recording · 77 permission
- *   · 124 `akou wait` timed out
+ *   · 78 the settings refuse it (`akou serve`) · 124 `akou wait` timed out
  *
  * If the app is not running, a command that needs it launches it headless and waits up to 3 s.
  *
@@ -80,7 +80,7 @@ function help(): string {
     "",
     "`akou help COMMAND` shows a command's options. Exit codes: 0 ok, 3 nothing live, 64 usage,",
     "65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission,",
-    "124 timed out (`akou wait`).",
+    "78 settings refuse it (`akou serve`), 124 timed out (`akou wait`).",
   ].join("\n");
 }
 
