@@ -182,7 +182,7 @@ function hostileApi(pack: string): ApiClient {
   const body = (method: string, path: string, o: RequestOptions = {}): unknown => {
     if (path === "/status") return { provider: { state: "available", id: "anthropic" } };
     if (path.endsWith("/context")) {
-      return { pack, call: "c1", state: "live", cursor: 9, memoStale: false };
+      return { pack, call: "c1", state: "LIVE", cursor: 9, memoStale: false };
     }
     if (path.endsWith("/transcript") && o.query?.format === "md") return null;
     if (path.endsWith("/transcript")) {
@@ -198,7 +198,7 @@ function hostileApi(pack: string): ApiClient {
       return { hits: [{ citation: "[15:36 Speaker 2]", lines: [`#l000002 ${INJECT}`] }] };
     }
     if (path.endsWith("/notes")) return { notes: [{ id: "n0001", text: INJECT, by: "user" }] };
-    if (path.endsWith("/memo")) return { memo: { body: INJECT, coversSeq: 4 } };
+    if (path.endsWith("/memo")) return { memo: { body: INJECT, coversSeq: 4 }, cursor: 12 };
     if (path.endsWith("/enhance/context")) return { template: "general", pack, notes: [INJECT] };
     if (path.endsWith("/enhance") && method === "POST") {
       return {

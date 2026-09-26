@@ -9,6 +9,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { codexEnv, run } from "../scripts/gates/pg-k1-codex-skills.ts";
 import { APP_VERSION } from "../src/main/app-info.ts";
 import { COMMANDS } from "../src/main/cli/cli.ts";
 import type { ApiClient, ApiResponse } from "../src/main/cli/client.ts";
@@ -237,6 +238,22 @@ describe("[PG-K1] Codex finds the skill where akou writes it", () => {
     expect(harnessSkillsDir("codex", { HOME: "/h" })).toBe(join("/h", ".codex", "skills"));
     // Positive control: the folder Codex's docs name (`~/.agents/skills`) is not the checked one.
     expect(skillsDirSpec({ env: "HOME", home: ".agents" })).not.toBe(checked);
+  });
+
+  test("the gate script fails a case whose command fails, never reading its silence as an empty list", () => {
+    // Bun itself as the child, so the test runs the same on Windows, which has no /bin/sh.
+    const env = { ...process.env } as Record<string, string>;
+    expect(run([process.execPath, "-e", "console.log('listed')"], env).trim()).toBe("listed");
+    const broken = "console.error('broken'); process.exit(3)";
+    expect(() => run([process.execPath, "-e", broken], env)).toThrow(/exit 3[\s\S]*broken/);
+  });
+
+  test("the gate script asks Codex with CODEX_HOME unset for case A, even when the shell has one", () => {
+    const inherited = { ...process.env, CODEX_HOME: "/elsewhere" };
+    expect("CODEX_HOME" in codexEnv("/h", undefined, inherited)).toBe(false);
+    expect(codexEnv("/h", undefined, inherited).HOME).toBe("/h");
+    // Positive control: a case that names its own CODEX_HOME keeps it.
+    expect(codexEnv("/h", "/h/ch", inherited).CODEX_HOME).toBe("/h/ch");
   });
 });
 

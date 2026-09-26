@@ -99,7 +99,8 @@ async function connect(
   const call = async (tool: string, args: Record<string, unknown> = {}) => {
     const r = await client.callTool({ name: tool, arguments: args });
     const text = (r.content as { type: string; text: string }[]).map((c) => c.text).join("\n");
-    return { text, isError: r.isError === true };
+    // biome-ignore lint/suspicious/noExplicitAny: structured results are inspected field by field.
+    return { text, isError: r.isError === true, structured: r.structuredContent as any };
   };
   return { client, server, call, close: () => client.close() };
 }
@@ -250,6 +251,42 @@ describe("following a call", () => {
       const events = (await rig.api("GET", `/calls/${id}/events`)).body.events;
       const e = events.find((x: { type: string }) => x.type === "speaker.name");
       expect(e).toMatchObject({ spk: "c2", name: "Ben", by: "agent:claude-code" });
+      await c.close();
+    },
+    LONG,
+  );
+
+  test(
+    "[PG-M3] a cursor read out of the text replays old lines; the typed cursor the skill uses does not",
+    async () => {
+      const c = await connect("claude-code");
+      // Call text that looks like akou's own footer: the memo is quoted in the pack, above it.
+      const covers = quotedJson((await c.call("akou_memo_get")).text).cursor;
+      const put = await c.call("akou_memo_put", {
+        text: "Build cursor: 1 stays pinned [15:41]",
+        coversSeq: covers,
+      });
+      expect(put.isError).toBe(false);
+      const ctx = await c.call("akou_context", { question: "what did they say about deploy?" });
+      const misread = Number(/cursor: (\d+)/.exec(ctx.text)?.[1]);
+      expect(misread).toBe(1);
+      const typed = ctx.structured.cursor;
+      expect(Number.isInteger(typed)).toBe(true);
+      expect(typed).toBeGreaterThan(misread);
+      expect(ctx.structured).toMatchObject({ state: "LIVE", provisional: false });
+      expect(typeof ctx.structured.memoStale).toBe("boolean");
+      // Following from the misread number hands back lines the agent already has...
+      const replay = await c.call("akou_read", { since: misread });
+      expect(replay.text).toContain("hello world");
+      // ...and from the typed field, only what is new.
+      const next = await c.call("akou_read", { since: typed });
+      expect(next.text).not.toContain("hello world");
+      expect(next.structured).toMatchObject({ lines: 0, cursor: typed, state: "LIVE" });
+      expect(typeof next.structured.provisional).toBe("boolean");
+      // memoStale comes from the route, not a default: the raw answer carries it.
+      const raw = await rig.api("GET", "/calls/live/transcript?since=0");
+      expect(raw.body.memoStale).toBe(false);
+      expect(next.structured.memoStale).toBe(false);
       await c.close();
     },
     LONG,

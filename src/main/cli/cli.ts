@@ -7,6 +7,7 @@
  *
  *   0 ok · 3 nothing live · 64 usage · 65 a vocabulary term fails validation · 69 unavailable
  *   (app, model, provider, or not built yet) · 70 software · 75 already recording · 77 permission
+ *   · 124 `akou wait` timed out
  *
  * If the app is not running, a command that needs it launches it headless and waits up to 3 s.
  *
@@ -27,6 +28,7 @@ import { noteCommands } from "./commands/notes.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
 import { vocab } from "./commands/vocab.ts";
+import { waitCommand } from "./commands/wait.ts";
 import { watch } from "./commands/watch.ts";
 import type { Command, Ctx, GrantChecker, Io, Keys } from "./context.ts";
 import { commandHelp } from "./help.ts";
@@ -48,6 +50,7 @@ const mcp: Command = {
 export const COMMANDS: readonly Command[] = [
   ...callCommands,
   ...followCommands,
+  waitCommand,
   watch,
   ...noteCommands,
   ...handoffCommands,
@@ -68,7 +71,8 @@ function help(): string {
     ...COMMANDS.map((c) => `  ${c.name.padEnd(w)}  ${c.summary}`),
     "",
     "`akou help COMMAND` shows a command's options. Exit codes: 0 ok, 3 nothing live, 64 usage,",
-    "65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission.",
+    "65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission,",
+    "124 timed out (`akou wait`).",
   ].join("\n");
 }
 

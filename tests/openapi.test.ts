@@ -148,6 +148,8 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
       "query:format",
       "query:since",
       "query:limitTokens",
+      "query:offset",
+      "query:afterLine",
       "query:from",
       "query:to",
       "query:speaker",

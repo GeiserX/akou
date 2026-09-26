@@ -12,6 +12,13 @@
  *   wall-clock times only. The JSON form also carries the call's state and, while it is live, the
  *   provisional line (marked `draft`), which is what `akou_read` follows a call with.
  *   `format=export` is the export file's `## Transcript` section, what the window copies.
+ *   `limitTokens` alone keeps the newest lines that fit (`omitted` counts the rest); with `offset`
+ *   it pages from that line, oldest first, and `nextOffset` is where the next page starts;
+ *   `afterLine=ID` pages from the line after that one instead, so a line retracted or added before
+ *   it moves nothing, and answers 409 `cursor_stale` when the line is gone (the final layer replaced
+ *   it). That is how `akou_get_call` reads a long call (PG-M5). With `since` it takes the lines changed
+ *   earliest after the cursor that fit, and `cursor` then covers exactly those, so a follower that
+ *   reads again from it gets the rest (`more` counts them) and never skips a line: `akou_read`.
  */
 
 import { formatWall, formatZone } from "../../../core/log/clock.ts";
@@ -378,7 +385,7 @@ export function followRoutes(r: Router<ApiApp>): void {
     "/calls/:id/transcript",
     {
       id: "calls.transcript",
-      doc: "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit.",
+      doc: "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -406,7 +413,17 @@ export function followRoutes(r: Router<ApiApp>): void {
           type: "integer",
           min: 1,
           max: 1_000_000,
-          doc: "Keep the newest lines that fit in this many tokens.",
+          doc: "Keep the newest lines that fit in this many tokens; with `offset`, `afterLine` or `since`, the page's size.",
+        },
+        offset: {
+          type: "integer",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+          doc: "Page from this line, oldest first; the answer's `nextOffset` is where the next page starts (null at the end).",
+        },
+        afterLine: {
+          type: "string",
+          doc: "Page from the line after this line id; 409 `cursor_stale` when the line is no longer in the layer.",
         },
         from: { type: "string", doc: "Lines ending at or after this time: epoch ms or ISO 8601." },
         to: { type: "string", doc: "Lines starting at or before this time: epoch ms or ISO 8601." },
@@ -422,6 +439,8 @@ export function followRoutes(r: Router<ApiApp>): void {
       const format = c.query.oneOf<"json" | "md" | "txt" | "export">("format");
       const since = c.query.int("since") as number;
       const limitTokens = c.query.int("limitTokens");
+      let offset = c.query.int("offset");
+      const afterLine = c.query.raw("afterLine");
       const from = timeParam(c.query, "from");
       const to = timeParam(c.query, "to");
       const speaker = c.query.raw("speaker")?.toLowerCase() ?? null;
@@ -443,7 +462,57 @@ export function followRoutes(r: Router<ApiApp>): void {
           : format === "md"
             ? `**${formatWall(l.w0, tz)} ${l.speaker}:** ${l.annotated}`
             : renderLine(l, { tz });
-      if (limitTokens !== undefined) {
+      const total = lines.length;
+      let omitted = 0;
+      let more = 0;
+      let cursor = v.lastSeq;
+      let nextOffset: number | null = null;
+      const lastSeqOf = (l: Line) => v.segment(l.id)?.lastSeq ?? 0;
+      if (afterLine) {
+        const at = lines.findIndex((l) => l.id === afterLine);
+        if (at < 0) {
+          throw new HttpError(
+            409,
+            "cursor_stale",
+            `line ${afterLine} is no longer in the ${layer} layer (the call changed since that page); read it again from the first page`,
+            { line: afterLine, layer },
+          );
+        }
+        offset = at + 1;
+      }
+      if (offset !== undefined) {
+        // A page, oldest first: the lines from `offset` that fit, at least one, and where the next
+        // page starts (null at the end).
+        let used = 0;
+        let end = offset;
+        while (end < lines.length) {
+          const t = estimateTokens(rendered(lines[end] as Line)) + 1;
+          if (limitTokens !== undefined && used + t > limitTokens && end > offset) break;
+          used += t;
+          end++;
+        }
+        nextOffset = end < lines.length ? end : null;
+        lines = lines.slice(offset, end);
+      } else if (limitTokens !== undefined && since > 0) {
+        // Following from a cursor: the lines changed earliest that fit, at least one, and a cursor
+        // at the last change they cover. Lines sharing that change come too, so none is split.
+        const bySeq = [...lines].sort((a, b) => lastSeqOf(a) - lastSeqOf(b));
+        let used = 0;
+        let n = 0;
+        while (n < bySeq.length) {
+          const t = estimateTokens(rendered(bySeq[n] as Line)) + 1;
+          if (used + t > limitTokens && n > 0) break;
+          used += t;
+          n++;
+        }
+        if (n < bySeq.length) {
+          const upTo = lastSeqOf(bySeq[n - 1] as Line);
+          const kept = lines.filter((l) => lastSeqOf(l) <= upTo);
+          more = lines.length - kept.length;
+          lines = kept;
+          cursor = upTo;
+        }
+      } else if (limitTokens !== undefined) {
         // The newest lines that fit.
         let used = 0;
         let start = lines.length;
@@ -454,6 +523,7 @@ export function followRoutes(r: Router<ApiApp>): void {
           start--;
         }
         lines = lines.slice(start);
+        omitted = start;
       }
       if (format === "export") {
         return new Response(`${renderTranscriptSection(lines, tz)}\n`, {
@@ -495,8 +565,17 @@ export function followRoutes(r: Router<ApiApp>): void {
         layer,
         tz,
         zone,
-        cursor: v.lastSeq,
+        cursor,
+        // The memo slot as a pack reports it, so a follower learns it is due without a pack.
+        memoStale: (await c.app.query(call.id)).memoStale(c.app.now()),
         provisional,
+        // Lines that matched before paging or trimming, those `limitTokens` left out (the oldest),
+        // and where the page after this one starts.
+        total,
+        omitted,
+        more,
+        offset: offset ?? 0,
+        nextOffset,
         lines: lines.map((l) => ({
           id: l.id,
           seq: l.seq,

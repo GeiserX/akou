@@ -1052,7 +1052,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit.",
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
         "parameters": [
           {
             "name": "id",
@@ -1110,11 +1110,31 @@
             "name": "limitTokens",
             "in": "query",
             "required": false,
-            "description": "Keep the newest lines that fit in this many tokens.",
+            "description": "Keep the newest lines that fit in this many tokens; with `offset`, `afterLine` or `since`, the page's size.",
             "schema": {
               "type": "integer",
               "minimum": 1,
               "maximum": 1000000
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "description": "Page from this line, oldest first; the answer's `nextOffset` is where the next page starts (null at the end).",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
+            }
+          },
+          {
+            "name": "afterLine",
+            "in": "query",
+            "required": false,
+            "description": "Page from the line after this line id; 409 `cursor_stale` when the line is no longer in the layer.",
+            "schema": {
+              "type": "string"
             }
           },
           {
