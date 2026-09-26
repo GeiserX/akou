@@ -403,7 +403,7 @@ No bead until the trigger happens.
 - **SV-C4** is P1 there. SI-2 needs it at P0, and PG-A2's check ("every route in `server.routes()` appears in the file and nothing else does", [PROGRAMMABILITY.md](../ux/PROGRAMMABILITY.md) line 82) should compare against the union of both modes' route tables, since the committed file holds both.
 - **SV-T5** gains the anonymous `GET /v1/openapi.json` row, next to `/healthz` and `GET /v1/server`.
 - **SV-E7** allows plain `http` callbacks to any host that passes the address rules. With akou hosted anywhere, a voice-message transcript can then cross the internet in cleartext. We want `https` required unless the resolved address is loopback, RFC 1918 or unique-local. The archive's `TRANSCRIPTION_CALLBACK_URL` accepts `http` today and would follow the same rule.
-- **SV-K4** names the refusal `callback_not_allowed`; the archive's design expects `callback_host_not_allowed`. One of them changes before either ships.
+- **SV-K4** names the refusal `callback_not_allowed`. Settled: the archive's client handles that name, so neither side changes it.
 - **SV-J2** cites the IETF idempotency-key draft as a standard. The draft expired at revision 07 ([datatracker](https://datatracker.ietf.org/doc/draft-ietf-httpapi-idempotency-key-header/)); cite it as a convention.
 - **SV-J8** says "the server it is pointed at" without saying how. SI-1 is how.
 
