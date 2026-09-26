@@ -1,0 +1,127 @@
+/* The dictation pill (DC-O1) and its learn chip (DC-L4): one small floating window, readable over
+   any desktop, in dark and light. */
+:root {
+  color-scheme: light dark;
+  --bg: #fdfdfd;
+  --fg: #1a1a1a;
+  --muted: #5c5c5c;
+  --line: #c9c9c9;
+  --warn: #8a4b00;
+  --mark: #b3261e;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #1f1f1f;
+    --fg: #f2f2f2;
+    --muted: #b0b0b0;
+    --line: #555;
+    --warn: #ffb35c;
+    --mark: #ff8a80;
+  }
+}
+[hidden] {
+  /* biome-ignore lint/complexity/noImportantStyles: the attribute must beat every display rule, whatever its specificity */
+  display: none !important;
+}
+html,
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font:
+    13px / 1.3 -apple-system,
+    "Segoe UI",
+    system-ui,
+    sans-serif;
+}
+.pill-page {
+  overflow: hidden;
+  user-select: none;
+}
+button,
+select {
+  font: inherit;
+  color: inherit;
+  background: transparent;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+}
+button:focus-visible {
+  outline: 2px solid Highlight;
+  outline-offset: 1px;
+}
+.hint {
+  color: var(--muted);
+}
+#pill,
+#chip {
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 6px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+#pill-row,
+#hints,
+#buttons,
+#chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+#buttons {
+  justify-content: flex-end;
+}
+#grip {
+  cursor: grab;
+  opacity: 0.6;
+}
+#pill[data-state="listening"] #mark {
+  color: var(--mark);
+}
+#pill[data-state="transcribing"] #mark {
+  display: inline-block;
+  animation: spin 1s linear infinite;
+}
+#pill[data-state="error"] #mark,
+#pill[data-state="error"] #word {
+  color: var(--warn);
+}
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #pill[data-state="transcribing"] #mark {
+    animation: none;
+  }
+}
+#level {
+  width: 80px;
+  height: 6px;
+}
+#elapsed {
+  font-variant-numeric: tabular-nums;
+  margin-left: auto;
+}
+#note {
+  color: var(--muted);
+}
+#chip {
+  flex-direction: row;
+  margin-top: 4px;
+}
+#chip {
+  margin: 0;
+  min-width: 0;
+}
+.chip-candidate {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}

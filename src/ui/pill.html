@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="referrer" content="no-referrer">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self' views:; style-src 'self' views:; connect-src 'self' views: ws://127.0.0.1:*; img-src 'self' views: data:; base-uri 'none'; form-action 'none'">
+<title>akou dictation</title>
+<link rel="stylesheet" href="pill.css">
+<script type="module" src="index.js"></script>
+</head>
+<body class="pill-page">
+<div id="pill" data-state="hidden" hidden>
+  <div id="pill-row">
+    <span id="grip" class="electrobun-webkit-app-region-drag" title="Drag to move" aria-hidden="true">⋮⋮</span>
+    <span id="mark" aria-hidden="true"></span>
+    <meter id="level" min="-60" max="0" value="-60" aria-hidden="true" hidden></meter>
+    <span id="word" role="status" aria-live="polite"></span>
+    <span id="elapsed"></span>
+  </div>
+  <div id="hints" hidden></div>
+  <div id="note" hidden></div>
+  <div id="buttons" hidden></div>
+</div>
+<fieldset id="chip" aria-label="Learn a word" hidden></fieldset>
+</body>
+</html>

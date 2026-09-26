@@ -13,12 +13,14 @@
 import { formatWall, formatZone } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
+import { mountDictationDialog } from "./dictation-page.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
 import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from "./model.ts";
 import { ModelsCard } from "./models-card.ts";
+import { ModelsPage } from "./models-page.ts";
 import { message, NotepadPane } from "./notepad.ts";
 import { Player } from "./player.ts";
 import type { AppStatus, Levels, QuitQuestion, Transport } from "./protocol.ts";
@@ -85,6 +87,22 @@ export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
   });
 }
 
+/**
+ * The Models dialog (DESKTOP.md DK-E2): the Models page of server mode, the same code, over the
+ * app's own `/models`. Read when opened, and it stops following when closed.
+ */
+function wireModelsDialog(t: Transport): void {
+  const dialog = byId<HTMLDialogElement>("models");
+  const page = new ModelsPage(t, false);
+  byId("models-body").append(page.root);
+  byId("models-open").addEventListener("click", () => {
+    if (!dialog.open) dialog.showModal();
+    page.show();
+  });
+  byId("models-close").addEventListener("click", () => dialog.close());
+  dialog.addEventListener("close", () => page.hide());
+}
+
 /** The application menu's Settings… opens the settings pane, as its button does. */
 export function showSettings(): void {
   document.getElementById("settings-open")?.click();
@@ -149,11 +167,14 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
+    const dictation = mountDictationDialog(t);
     const settings = new SettingsPane(
       t,
       () => this.view()?.call?.workspace ?? this.workspaceInput().value,
+      () => void dictation.open(),
     );
     this.modelsCard = new ModelsCard(t);
+    wireModelsDialog(t);
     this.enhanced = new EnhancedPane({
       t,
       call,
