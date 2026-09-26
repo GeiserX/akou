@@ -1,6 +1,6 @@
 /**
  * SV-U1 in a real browser: server mode's page asks for the admin password, a wrong one is refused
- * after its delay, a right one shows the app, and the session dies with the tab, because it lives
+ * after its delay, a right one shows the server's pages, and the session dies with the tab, as it lives
  * in `sessionStorage` and never in a cookie.
  */
 
@@ -30,7 +30,7 @@ afterAll(async () => {
 
 describe("SV-U1: the admin login in a browser", () => {
   test(
-    "a wrong password is refused, a right one shows the app, and a new tab asks again",
+    "a wrong password is refused, a right one shows the server's pages, and a new tab asks again",
     async () => {
       const browser = await launch();
       const ctx = await browser.newContext();
@@ -54,11 +54,8 @@ describe("SV-U1: the admin login in a browser", () => {
         await page.fill("#login-secret", PASSWORD);
         await page.click("#login-go");
         await page.waitForSelector("#login", { state: "hidden" });
-        await until(
-          async () => !["…", ""].includes((await page.textContent("#state")) ?? ""),
-          8000,
-          "the app's status",
-        );
+        // Server mode shows the server's pages (SV-U7, tests/ui/server-page.test.ts).
+        await page.waitForSelector("#server", { state: "visible", timeout: 8000 });
         expect(await page.isVisible("#fatal")).toBe(false);
         // The session is the tab's: sessionStorage, and no cookie at all.
         expect(await page.evaluate(() => sessionStorage.getItem("akou.session"))).toMatch(
@@ -68,11 +65,7 @@ describe("SV-U1: the admin login in a browser", () => {
 
         // A reload keeps the tab's session.
         await page.reload();
-        await until(
-          async () => !["…", ""].includes((await page.textContent("#state")) ?? ""),
-          8000,
-          "the app after a reload",
-        );
+        await page.waitForSelector("#server", { state: "visible", timeout: 8000 });
         expect(await page.isVisible("#login")).toBe(false);
 
         // A new tab of the same browser starts with nothing: the session died with its tab.

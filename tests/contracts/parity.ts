@@ -305,7 +305,7 @@ export const PARITY: readonly Row[] = [
   {
     action: "Speech models",
     cli: ["models"],
-    api: ["GET /models", "POST /models/pull"],
+    api: ["GET /models", "POST /models/pull", "DELETE /models/:id"],
     mcp: { none: "no tool yet; the models card and `akou models` own the download" },
     window: [ui("models-card.ts", '"POST", "/models/pull"')],
   },
@@ -375,9 +375,11 @@ export const PARITY: readonly Row[] = [
     mcp: {
       none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
     },
-    window: {
-      none: "the web UI of server mode lists no jobs until its dashboard (SERVER.md SV-U4)",
-    },
+    // The Jobs page of server mode's web UI (SERVER.md SV-U4).
+    window: [
+      ui("server-jobs.ts", '"GET", `/jobs?#{q}`'),
+      ui("server-jobs.ts", '"DELETE", `/jobs/#{encodeURIComponent(id)}`'),
+    ],
   },
   {
     action: "Run the server in the foreground (server mode)",
@@ -394,13 +396,22 @@ export const PARITY: readonly Row[] = [
     window: { none: "the window is the user's own, in process" },
   },
   {
-    action: "API keys and the admin password (server mode)",
-    cli: ["keys", "admin"],
-    api: {
-      none: "made on the box that runs akou, from its files (SERVER.md SV-K2, SV-U1)",
-    },
-    mcp: { none: "made on the box that runs akou, from its files, not by an agent (SV-K2)" },
-    window: { none: "made on the box that runs akou, from its files (SERVER.md SV-K2)" },
+    action: "API keys (server mode)",
+    cli: ["keys"],
+    api: ["GET /keys", "POST /keys", "DELETE /keys/:id"],
+    mcp: { none: "made by the operator, on the box or on the Keys page, not by an agent (SV-K2)" },
+    // The Keys page of server mode's web UI (SERVER.md SV-U3, over SV-K7).
+    window: [
+      ui("server-keys.ts", '"POST", "/keys"'),
+      ui("server-keys.ts", '"DELETE", `/keys/#{encodeURIComponent(id)}`'),
+    ],
+  },
+  {
+    action: "The admin password (server mode)",
+    cli: ["admin"],
+    api: { none: "set on the box that runs akou, in its config file (SERVER.md SV-U1)" },
+    mcp: { none: "set on the box that runs akou, not by an agent (SV-U1)" },
+    window: { none: "set on the box that runs akou, in its config file (SERVER.md SV-U1)" },
   },
   {
     action: "Token, skill, doctor and the MCP server",

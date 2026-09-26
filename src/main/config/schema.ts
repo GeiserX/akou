@@ -203,6 +203,52 @@ export const SETTINGS = {
     default: 7,
     doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends.",
   },
+  "server.default_language": {
+    type: "string",
+    min: 2,
+    max: 35,
+    default: "auto",
+    check: (v) =>
+      /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/.test(v as string)
+        ? null
+        : `${JSON.stringify(v)} is not a BCP-47 tag such as es or en-US, or auto`,
+    doc: "The language a file job is transcribed in when its request sends `language: auto` or none, as Telegram-Archive does. A BCP-47 tag such as `es`, or `auto` to detect it.",
+  },
+  "server.default_diarize": {
+    type: "boolean",
+    default: false,
+    doc: "Label speakers in a file job whose request has no `diarize` field. A request that sends `diarize: false` gets no labels.",
+  },
+  "server.default_model": {
+    type: "string",
+    min: 1,
+    max: 100,
+    default: "auto",
+    check: (v) =>
+      /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(v as string)
+        ? null
+        : "is a preset name (auto, fast, ...) or an engine id from the model catalog",
+    doc: "The model a file job runs when its request names none (`preset: auto` and no `model`): a preset name or an engine id from the model catalog. `auto`: the hardware's choice, `fast` today.",
+  },
+  "server.auto_download": {
+    type: "boolean",
+    default: true,
+    doc: "A job naming a model that is not on disk waits while akou downloads it, each file checked against its pinned SHA-256. Off: such a job is refused with 409 `preset_unavailable` and the `akou models pull` line.",
+  },
+  "server.models_max_gb": {
+    type: "number",
+    min: 0,
+    max: 100000,
+    default: 40,
+    doc: "Largest the models folder may grow through on-demand downloads, in GB (10^9 bytes). 0: no cap. A download that would pass it is refused with 409 `preset_unavailable`, `reason: models_max_gb`.",
+  },
+  "server.models_unused_days": {
+    type: "integer",
+    min: 0,
+    max: 3650,
+    default: 30,
+    doc: "Days a model may go unused before server mode deletes it. The default model and any model a job or a worker needs are never deleted. 0: never delete.",
+  },
   "server.admin_password_hash": {
     type: "string",
     max: 512,

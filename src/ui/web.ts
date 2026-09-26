@@ -23,6 +23,7 @@ import type {
   Reply,
   Transport,
 } from "./protocol.ts";
+import { bootServer } from "./server-page.ts";
 
 const SESSION_KEY = "akou.session";
 
@@ -252,5 +253,20 @@ void (async () => {
     showFatal("This link was used already or has expired. Run `akou open` for a new one.");
     return;
   }
-  boot(new HttpTransport(session));
+  const t = new HttpTransport(session);
+  // Server mode shows the server's own pages, not the call window (SV-U7).
+  let mode = "app";
+  try {
+    const r = await t.request<{ mode?: string }>("GET", "/server");
+    if (r.status === 200 && r.body.mode === "server") mode = "server";
+  } catch {}
+  if (mode === "server") {
+    bootServer(t, () => {
+      sessionStorage.removeItem(SESSION_KEY);
+      sessionStorage.removeItem(LOGIN_KEY);
+      location.replace(location.pathname);
+    });
+    return;
+  }
+  boot(t);
 })();
