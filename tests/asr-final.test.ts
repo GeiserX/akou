@@ -471,10 +471,14 @@ describe("after Stop, through the call's writer", () => {
     writeFileSync(wav, stereoWav(mic, call));
     const c = r.mgr.controller(res.call);
     if (!c) throw new Error("no controller");
-    const out = await finalizeCall(c, {
+    const pass = finalizeCall(c, {
       models: spec(),
       audio: { kind: "wav", files: { 1: wav } },
     });
+    // The pass is in the log before finalizeCall returns, so `akou finalize --force && akou wait`
+    // never reads the earlier final.done as this pass's.
+    expect(c.view.final.state).toBe("running");
+    const out = await pass;
     expect(out.ok).toBe(true);
     expect(out.loads["fake-parakeet"]).toBe(1);
     const view = c.view;
@@ -488,6 +492,7 @@ describe("after Stop, through the call's writer", () => {
     const e = await logOf(res.folder);
     const ended = ofType(e, "call.ended")[0]?.seq as number;
     expect((ofType(e, "final.done")[0]?.seq as number) > ended).toBe(true);
+    expect(ofType(e, "final.started")).toHaveLength(1);
   }, 20_000);
 
   test("a pass stuck in a native call is stopped at its budget: final.failed, the writer released", async () => {
