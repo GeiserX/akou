@@ -160,7 +160,10 @@ async function serveCheck(): Promise<void> {
     }
     check(port > 0, "akou serve writes runtime.json with the port it listens on", stderr.trim());
     if (port === 0) return;
-    const health = await fetch(`http://127.0.0.1:${port}/healthz`).catch((e: Error) => e);
+    // A server that accepts and never answers must not hold the smoke past its budget.
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
+      signal: AbortSignal.timeout(5000),
+    }).catch((e: Error) => e);
     check(
       !(health instanceof Error) && health.status === 200,
       "akou serve answers GET /healthz with no token",

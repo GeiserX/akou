@@ -48,8 +48,10 @@ function serve(env: Record<string, string>) {
     stdout: "pipe",
     stderr: "pipe",
   });
-  cleanups.push(() => {
+  // Wait for the exit, so the home is never removed under a handle the server still holds.
+  cleanups.push(async () => {
     proc.kill("SIGKILL");
+    await proc.exited;
   });
   return proc;
 }

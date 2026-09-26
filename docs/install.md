@@ -7,7 +7,7 @@ akou 0.x runs on Macs with Apple silicon and macOS 14.4 or later. Every release 
 | `akou-<version>-macos-arm64.dmg` | The app, to drag into Applications |
 | `akou-<version>-macos-arm64.zip` | The same app, zipped |
 | `akou-cli-<version>-darwin-arm64.tar.gz` | The `akou` command line for macOS |
-| `akou-cli-<version>-linux-x64.tar.gz`, `akou-cli-<version>-windows-x64.zip` | The command line alone, for Linux and Windows. The app for those systems is not released yet, so these can manage models, the skill and the settings, but cannot record |
+| `akou-cli-<version>-linux-x64.tar.gz`, `akou-cli-<version>-linux-arm64.tar.gz`, `akou-cli-<version>-windows-x64.zip` | The command line alone, for Linux and Windows. The app for those systems is not released yet, so these can manage models, the skill and the settings, but cannot record |
 | `SHA256SUMS` | A checksum for every file above |
 
 To check a download, put it next to `SHA256SUMS` and run:
@@ -97,9 +97,14 @@ docker run --rm -v akou-models:/models geiserx/akou:<version> models pull fast
 Inside a container akou listens on every address, and it refuses to start that way until you say a reverse proxy with TLS is in front of it (`server.behind_proxy`), because akou has no TLS of its own. Say it once, in the data volume:
 
 ```sh
-docker run --rm -v akou-data:/data --entrypoint sh geiserx/akou:<version> -c \
-  'mkdir -p /data/.config/akou && echo "{ \"server.behind_proxy\": true }" > /data/.config/akou/config.json'
+docker run --rm -v akou-data:/data --entrypoint bun geiserx/akou:<version> -e '
+  const fs = require("node:fs"), dir = "/data/.config/akou", file = dir + "/config.json";
+  fs.mkdirSync(dir, { recursive: true });
+  const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+  fs.writeFileSync(file, JSON.stringify({ ...cfg, "server.behind_proxy": true }, null, 2));'
 ```
+
+It adds the one setting and keeps any others already in `config.json`.
 
 Then start it, with the port published on this machine's loopback only, for the proxy to reach:
 
