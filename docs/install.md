@@ -99,19 +99,19 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 ## The server
 
-akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
 
 Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first:
 
 ```sh
-docker run --rm -v akou-data:/data --entrypoint sh geiserx/akou:<version> -c \
+docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:<version> -c \
   'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
 ```
 
 Then pull:
 
 ```sh
-docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version> models pull fast
+docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 ```
 
 `fast` is the only preset with an engine today. It fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
@@ -120,7 +120,7 @@ Inside a container akou listens on every address, and it refuses to start that w
 
 ```sh
 docker run -d --name akou -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 \
-  -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
+  -v akou-data:/data -v akou-models:/models drumsergio/akou:<version>
 ```
 
 The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host): a folder the server cannot write stops it at start with exit 77 and the folder's name.

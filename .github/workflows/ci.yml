@@ -500,7 +500,7 @@ jobs:
         if: steps.caps.outputs.roundtrip == 'true'
         run: |
           docker rm -f akou
-          docker tag akou:ci geiserx/akou:ci
+          docker tag akou:ci drumsergio/akou:ci
           AKOU_VERSION=ci MODELS="$MODELS" scripts/compose-e2e.sh "$RUNNER_TEMP/note.ogg"
 
   # The diarization helper (native/akou-diarize) on every OS: format, lint, unit tests and the NOTICE

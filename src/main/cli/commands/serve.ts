@@ -25,7 +25,7 @@ export function serverEnv(
  */
 export function compiledServeWarning(compiled: boolean): string | null {
   return compiled
-    ? "akou serve: this single-file CLI carries no speech engine, so it answers the API but cannot transcribe; for transcription run the geiserx/akou image, or `bun src/main/cli/cli.ts serve` from a checkout"
+    ? "akou serve: this single-file CLI carries no speech engine, so it answers the API but cannot transcribe; for transcription run the drumsergio/akou image, or `bun src/main/cli/cli.ts serve` from a checkout"
     : null;
 }
 
