@@ -220,10 +220,33 @@ export interface ModelSet {
 }
 
 /**
- * How a Worker gets its models: sherpa-onnx with files from the models folder, or a module that
- * exports `createModels(options)` (the test fakes, which CI uses).
+ * A final engine that runs as a llama-server child process (Qwen3-ASR, `qwen.ts`). The Worker that
+ * decodes starts and supervises the process; `command` is an own llama-server (`asr.llamaServer`)
+ * or a test's fake, else `build` is the pinned download, unpacked on first use.
  */
-export type ModelSpec =
+export interface LlamaEngineSpec {
+  kind: "llama-server";
+  /** The catalog id (`qwen3-asr-1.7b`). */
+  engine: string;
+  model: string;
+  mmproj: string;
+  accelerator: "cpu" | "metal" | "cuda" | "vulkan";
+  command?: readonly string[];
+  build?: { dir: string; archives: readonly string[]; platform: string };
+  threads?: number;
+  /** Layers on the GPU; default every one on a GPU build and none on a CPU build. */
+  gpuLayers?: number;
+  /** ISO codes the engine may choose among on `auto`; empty for any. */
+  languages?: readonly string[];
+}
+
+/**
+ * How a Worker gets its models: sherpa-onnx with files from the models folder, or a module that
+ * exports `createModels(options)` (the test fakes, which CI uses). `final`, when set, is the engine
+ * that decodes a file job's units in place of the model set's recognizer, which then never loads;
+ * the model set still gives the VAD and the speaker labels.
+ */
+export type ModelSpec = (
   | {
       kind: "sherpa";
       dir: string;
@@ -236,7 +259,8 @@ export type ModelSpec =
       /** The `akou-diarize` command, program first (`locateHelper`). */
       diarizeHelper?: readonly string[];
     }
-  | { kind: "module"; path: string; model: string; options?: unknown };
+  | { kind: "module"; path: string; model: string; options?: unknown }
+) & { final?: LlamaEngineSpec };
 
 export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
   if (spec.kind === "module") {

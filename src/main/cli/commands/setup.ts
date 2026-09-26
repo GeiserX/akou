@@ -10,7 +10,9 @@
 import { copyFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { rotateToken } from "../../api/guard.ts";
+import { llamaRuntime } from "../../asr/llama-server.ts";
 import {
+  type CatalogEntry,
   DownloadRefused,
   downloadModels,
   hostPlatform,
@@ -208,6 +210,7 @@ function pullPlan(
     const p = presetModels(
       name,
       reg.map((m) => m.id),
+      llamaRuntime(loadConfig(ctx.io.env).settings, hostPlatform(), all as readonly CatalogEntry[]),
     );
     if ("unavailable" in p) {
       return {
@@ -215,7 +218,13 @@ function pullPlan(
         message: `the ${name} preset has no engine in this version: ${p.unavailable}; \`akou models pull fast\` gets the one that exists`,
       };
     }
-    return { ids: [...p.models], registry: reg, preset: name, named: name };
+    // `best` names on-demand entries (Qwen, a llama-server build) that the machine's list leaves out.
+    return {
+      ids: [...p.models],
+      registry: name === "best" ? all : reg,
+      preset: name,
+      named: name,
+    };
   }
   if (all.some((m) => m.id === name)) return { ids: [name], registry: all, named: name };
   return {

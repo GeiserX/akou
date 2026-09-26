@@ -77,13 +77,15 @@ function serve(body: Uint8Array, o: { cutAt?: number; ignoreRange?: boolean } = 
 
 describe("the registry", () => {
   test("every file has an https URL pinned to a revision, a SHA-256, a size and a licence", () => {
-    expect(MODELS.map((m) => m.id)).toEqual([
+    // The five sherpa and helper models, then Qwen and its llama-server builds (asr-llama.test.ts).
+    expect(MODELS.filter((m) => !m.onDemand).map((m) => m.id)).toEqual([
       RECOGNIZER,
       "silero-vad",
       NEMOTRON,
       "pyannote-segmentation-3.0",
       "titanet-small",
     ]);
+    expect(MODELS.filter((m) => m.onDemand)[0]?.id).toBe("qwen3-asr-1.7b");
     for (const m of MODELS) {
       expect(m.licence).toMatch(/^(MIT|CC-BY-4\.0|Apache-2\.0|OpenMDW-1\.1)$/);
       expect(m.source).toMatch(/^https:\/\//);
@@ -142,9 +144,11 @@ describe("the registry", () => {
       "pyannote-segmentation-3.0",
       "titanet-small",
     ]);
-    // Every model is needed by one choice or the other: none is fetched for nothing.
+    // Every model is needed by one choice or the other: none is fetched for nothing. The on-demand
+    // entries (Qwen and its runtime) come only when a job or a pull names them.
     const used = new Set([...ids("nemotron"), ...ids("embeddings")]);
-    expect(MODELS.every((m) => used.has(m.id))).toBe(true);
+    expect(MODELS.filter((m) => !m.onDemand).every((m) => used.has(m.id))).toBe(true);
+    expect(MODELS.filter((m) => m.onDemand).some((m) => used.has(m.id))).toBe(false);
   });
 
   test("a retired model is never a current one, and pruning removes only the retired folders", () => {

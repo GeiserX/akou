@@ -26,9 +26,10 @@ COPY native/akou-diarize/ ./
 RUN cargo build --locked --release && ./target/release/akou-diarize --version
 
 FROM ${BUN_IMAGE}
-# ffmpeg decodes every container a job may send (SV-P6): one apt line.
+# ffmpeg decodes every container a job may send (SV-P6); libgomp1 is the OpenMP runtime the pinned
+# llama-server builds load, which runs Qwen3-ASR for the best preset: one apt line.
 RUN apt-get update \
-  && apt-get install -y --no-install-recommends ffmpeg \
+  && apt-get install -y --no-install-recommends ffmpeg libgomp1 \
   && rm -rf /var/lib/apt/lists/*
 WORKDIR /app
 COPY package.json bun.lock bunfig.toml ./
