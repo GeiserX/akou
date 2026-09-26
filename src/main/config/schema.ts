@@ -378,7 +378,7 @@ export const SETTINGS = {
     values: ACCELERATOR_SETTINGS,
     default: "auto",
     env: "AKOU_ACCELERATOR",
-    doc: "The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Natively it picks which pinned llama-server build to download; an image runs the build it carries. `asr.llamaServer` runs an own build instead (SYCL or ROCm compiled on the host). Applies to the next job that starts llama-server.",
+    doc: "The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Natively it picks which pinned llama-server build to download; an image runs the build it carries. Natively `sycl` and `rocm` download llama.cpp's SYCL or ROCm build, which needs Intel's oneAPI or AMD's ROCm runtime on the host. `asr.llamaServer` runs an own build instead. Applies to the next job that starts llama-server.",
   },
   "asr.parakeet.decoding": {
     type: "string",
@@ -399,7 +399,7 @@ export const SETTINGS = {
     type: "string[]",
     default: [],
     apiWritable: false,
-    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a SYCL or ROCm build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
+    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
   },
   "asr.diarizeHelper": {
     type: "string[]",

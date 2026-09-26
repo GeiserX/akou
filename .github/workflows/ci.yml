@@ -72,7 +72,7 @@ jobs:
           else
             echo "diarize=false" >> "$GITHUB_OUTPUT"
           fi
-          if grep -qE '^(Dockerfile$|\.dockerignore$|src/main/asr/(accelerator|llama-builds|models)\.ts$|scripts/accelerator-report\.ts$|\.github/workflows/(ci|release)\.yml$)' changed.txt; then
+          if grep -qE '^(Dockerfile$|\.dockerignore$|src/main/asr/(accelerator|llama-builds|llama-catalog|models)\.ts$|scripts/accelerator-report\.ts$|\.github/workflows/(ci|release)\.yml$)' changed.txt; then
             echo "gpu=true" >> "$GITHUB_OUTPUT"
           else
             echo "gpu=false" >> "$GITHUB_OUTPUT"
