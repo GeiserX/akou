@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
+import { notWritableMessage } from "../src/main/server/writable.ts";
 import { until } from "./capture-helpers.ts";
 import { CLI } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
@@ -205,4 +206,16 @@ describe("[SV-P12] a folder the server cannot write", () => {
       30_000,
     );
   }
+
+  test("[akou-5an.102] a read-only mount is told to mount read-write, never to chown", () => {
+    const ro = notWritableMessage("/models", "EROFS", 1000);
+    expect(ro).toBe(
+      "/models is not writable by uid 1000 (EROFS); it is mounted read-only: mount it read-write, akou writes its downloads and usage there",
+    );
+    expect(ro).not.toContain("chown");
+    // Positive control: a folder owned by someone else is still told to chown.
+    expect(notWritableMessage("/models", "EACCES", 1000)).toBe(
+      "/models is not writable by uid 1000 (EACCES); on the host, chown 1000:1000 it",
+    );
+  });
 });

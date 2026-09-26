@@ -101,17 +101,19 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](#a-gpu)). There is no `latest` tag: name the version you want.
 
-Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first:
+The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`. Both must be writable by uid 1000, `/models` too even when every model is already in it: the pull and the server write downloads and the models' `usage.json` there. Named volumes, as below, already are. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host), and a read-only mount (`:ro`) does not work: the pull stops with exit 70 and the server with exit 77, both naming the folder and `EROFS`.
+
+Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too, since the pull reads `asr.diarizer` from the settings there:
+
+```sh
+docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
+```
+
+The speaker model is Nemotron by default, and that needs no step. Only to use pyannote (`asr.diarizer` `embeddings`) instead, set it on the data volume before the pull; without it the pull fetches Nemotron. Skip this on a volume whose models are already pulled for Nemotron: with it the pull fetches pyannote too.
 
 ```sh
 docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:<version> -c \
   'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
-```
-
-Then pull:
-
-```sh
-docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 ```
 
 `fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
@@ -125,7 +127,15 @@ docker run -d --name akou -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 \
   -v akou-data:/data -v akou-models:/models drumsergio/akou:<version>
 ```
 
-The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host): a folder the server cannot write stops it at start with exit 77 and the folder's name.
+`curl -s http://127.0.0.1:8476/healthz` answers `{"ok":true,…,"models_ready":true}` once the pulled models are found. The server decodes any audio file with the ffmpeg inside the image, and `docker stop` ends it cleanly.
+
+Every program that sends jobs needs its own key. Create one in the running container, with a `jobs` scope and every host its `callback_url` may name:
+
+```sh
+docker exec akou akou keys create --name archive --scope jobs --callback-host telegram-viewer
+```
+
+It prints the `ak_` API key and the `whsec_` webhook secret once, and never again: give the key to the program as its bearer token, and the secret to whatever checks the signed callbacks. The key works at once, with no restart. Repeat `--callback-host` for each host; `*` allows any public host, but a callback to a private address, such as another container by its name, needs that host named. A key with no callback host submits jobs and reads the event feed, and a submit that names a `callback_url` is refused with 422 `callback_not_allowed`. `akou keys list` and `akou keys revoke ID` manage them the same way.
 
 To run it beside [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive), use the compose file in [examples/compose/telegram-archive](../examples/compose/telegram-archive/) and the one-time setup in [ux/SERVER.md section 12.5](ux/SERVER.md#125-one-compose-file-for-both).
 
