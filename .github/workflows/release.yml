@@ -36,6 +36,8 @@ on:
       - scripts/post-build.ts
       - scripts/post-wrap.ts
       - scripts/patch-plist.sh
+      - Dockerfile
+      - .dockerignore
   workflow_dispatch:
     inputs:
       allow_missing_helper:
@@ -158,12 +160,14 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  # The CLI on each machine it is released for, built on that machine (linux-arm64 is the
+  # Raspberry Pi and arm64 server build, SV-P8).
   cli:
     needs: version
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     defaults:
@@ -181,13 +185,100 @@ jobs:
         run: bun scripts/smoke-cli.ts
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: release-cli-${{ runner.os }}
+          name: release-cli-${{ runner.os }}-${{ runner.arch }}
           path: dist/release/*
           if-no-files-found: error
           retention-days: 14
 
+  # The server image (docs/ux/SERVER.md SV-P1), built natively on each architecture's runner from
+  # the tag's tree. A tag pushes each build by digest, and `image-manifest` joins the two under
+  # geiserx/akou:<version>. There is never a `latest` tag. A pull request or a dry run builds both
+  # and pushes nothing. Pushing needs DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the repository.
+  image:
+    needs: version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    env:
+      PUSH: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
+      PLATFORM: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: log in to Docker Hub (a pushed tag only)
+        if: env.PUSH == 'true'
+        env:
+          DOCKERHUB_USERNAME: ${{ github.event_name == 'push' && secrets.DOCKERHUB_USERNAME || '' }}
+          DOCKERHUB_TOKEN: ${{ github.event_name == 'push' && secrets.DOCKERHUB_TOKEN || '' }}
+        # Without the secrets `docker login` fails on an empty user name and says nothing of them.
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            exit 1
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+      - name: build ${{ matrix.platform }} (and push it by digest on a tag)
+        run: |
+          docker buildx create --use --name akou
+          if [ "$PUSH" = true ]; then
+            output="type=image,name=docker.io/geiserx/akou,push-by-digest=true,name-canonical=true,push=true"
+          else
+            output="type=docker,name=akou:dry-run"
+          fi
+          docker buildx build --platform "$PLATFORM" --output "$output" --metadata-file meta.json .
+          digest=$(jq -r '."containerimage.digest"' meta.json)
+          echo "$PLATFORM $digest"
+          mkdir -p digests
+          echo "$digest" > "digests/${PLATFORM//\//-}"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: image-digest-${{ runner.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  image-manifest:
+    needs: [image]
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: image-digest-*
+          path: digests
+          merge-multiple: true
+      - name: log in to Docker Hub
+        env:
+          DOCKERHUB_USERNAME: ${{ github.event_name == 'push' && secrets.DOCKERHUB_USERNAME || '' }}
+          DOCKERHUB_TOKEN: ${{ github.event_name == 'push' && secrets.DOCKERHUB_TOKEN || '' }}
+        # Without the secrets `docker login` fails on an empty user name and says nothing of them.
+        run: |
+          if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
+            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            exit 1
+          fi
+          echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
+      - name: geiserx/akou:<version> for amd64 and arm64
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version="${TAG#v}"
+          refs=$(sed 's|^|docker.io/geiserx/akou@|' digests/*)
+          test "$(echo "$refs" | wc -l)" = 2
+          # shellcheck disable=SC2086
+          docker buildx imagetools create --tag "docker.io/geiserx/akou:$version" $refs
+          docker buildx imagetools inspect "docker.io/geiserx/akou:$version"
+
+  # The image of the tag is part of the release: no GitHub release goes out while it failed.
   release:
-    needs: [app, cli]
+    needs: [app, cli, image-manifest]
     if: github.ref_type == 'tag'
     runs-on: ubuntu-latest
     timeout-minutes: 10

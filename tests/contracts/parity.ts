@@ -362,7 +362,7 @@ export const PARITY: readonly Row[] = [
   },
   {
     action: "Transcribe a file as a job (server mode)",
-    cli: ["transcribe"],
+    cli: ["transcribe", "jobs"],
     api: [
       "POST /jobs",
       "GET /jobs",
@@ -378,6 +378,13 @@ export const PARITY: readonly Row[] = [
     window: {
       none: "the web UI of server mode lists no jobs until its dashboard (SERVER.md SV-U4)",
     },
+  },
+  {
+    action: "Run the server in the foreground (server mode)",
+    cli: ["serve"],
+    api: { none: "it starts the API, so the API cannot start it" },
+    mcp: { none: "an agent does not start a server; the image or a service manager runs it" },
+    window: { none: "server mode has no window" },
   },
   {
     action: "Which key is calling",

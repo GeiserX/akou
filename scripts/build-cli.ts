@@ -2,7 +2,7 @@
  * The `akou` command line as one standalone binary (docs/DESIGN.md sections 6.1 and 9), built with
  * `bun build --compile` for the machine it runs on, then packed for the release:
  *
- *   bun scripts/build-cli.ts            # darwin-arm64 on a Mac, linux-x64 on Linux, windows-x64 on Windows
+ *   bun scripts/build-cli.ts            # darwin-arm64 on a Mac, linux-x64 or linux-arm64 on Linux, windows-x64 on Windows
  *
  * - Bun must be 1.4.2 or newer: 1.4.0 and 1.4.1 write an invalid Mach-O signature and macOS kills
  *   the binary at exec (TRAPS "Compiled Bun binary killed on launch", oven-sh/bun#39764).
@@ -31,6 +31,7 @@ export function hostTarget(
   const targets: Record<string, string> = {
     "darwin-arm64": "darwin-arm64",
     "linux-x64": "linux-x64",
+    "linux-arm64": "linux-arm64",
     "win32-x64": "windows-x64",
   };
   return targets[`${platform}-${arch}`] ?? null;

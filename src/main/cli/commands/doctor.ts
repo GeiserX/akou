@@ -7,7 +7,8 @@
  * - token: present, mode 0600 or on Windows an ACL for the user alone (created if missing, replaced
  *   if loose);
  * - api: the app answers, and refuses a request that looks like a browser (403) and one without the
- *   token (401), which is the security self-test;
+ *   token (401), which is the security self-test; with `AKOU_URL` set, the server there answers
+ *   `GET /v1/server` instead, since that is what the CLI talks to;
  * - models: every file `asr.diarizer` needs present, the right size, and its pinned SHA-256;
  * - helper: the capture helper program can be found. The running app's answer (`GET /status`) wins,
  *   because it spawns the helper and resolves it from inside its bundle; the standalone CLI has no
@@ -35,7 +36,7 @@ import { findHelper, type HelperFound } from "../../capture/helper.ts";
 import { loadConfig } from "../../config/schema.ts";
 import { findProgram } from "../../llm/harness.ts";
 import { bool, UsageError } from "../args.ts";
-import { EXIT } from "../client.ts";
+import { EXIT, type RemoteTarget, remoteTarget, Unreachable } from "../client.ts";
 import type { Command, Ctx, Grant } from "../context.ts";
 import { systemGrants } from "../grants.ts";
 
@@ -48,9 +49,38 @@ export interface Check {
 
 export { findProgram };
 
+/**
+ * With `AKOU_URL` set the CLI talks to that server, so the api line is about it: `GET /v1/server`
+ * needs no key and names the version. The local app's security self-test does not apply to it.
+ */
+async function remoteCheck(ctx: Ctx, remote: RemoteTarget): Promise<Check> {
+  const where = `${remote.base} (AKOU_URL)`;
+  try {
+    const r = await ctx.client.request("GET", "/server", { timeoutMs: 5000 });
+    if (r.status === 200 && r.body?.name === "akou") {
+      return {
+        name: "api",
+        state: "ok",
+        detail: `akou ${r.body.version} answers at ${where} in ${r.body.mode ?? "app"} mode`,
+      };
+    }
+    return {
+      name: "api",
+      state: "fail",
+      detail: `${where} answered GET /v1/server with HTTP ${r.status}, not as akou`,
+    };
+  } catch (err) {
+    if (!(err instanceof Unreachable)) throw err;
+    return { name: "api", state: "fail", detail: err.message };
+  }
+}
+
 async function apiChecks(
   ctx: Ctx,
 ): Promise<{ checks: Check[]; helper: HelperFound | null; diarizeHelper: HelperFound | null }> {
+  const remote = remoteTarget(ctx.io.env);
+  if (remote)
+    return { checks: [await remoteCheck(ctx, remote)], helper: null, diarizeHelper: null };
   const rt = await ctx.client.running();
   if (!rt) {
     return {

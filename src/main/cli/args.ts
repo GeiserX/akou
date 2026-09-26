@@ -33,18 +33,61 @@ export class UsageError extends Error {
   override name = "UsageError";
 }
 
+/** A secret flag, refused; `rest` is the arguments without it and its value. */
+export class SecretFlagError extends UsageError {
+  constructor(
+    message: string,
+    readonly rest: readonly string[],
+  ) {
+    super(message);
+  }
+}
+
 /** The flags every command accepts. A command whose `--json` does something else declares its own. */
 export const COMMON: FlagSpecs = {
   json: { type: "boolean", desc: "print the answer as JSON, errors included" },
   help: { type: "boolean", short: "h", desc: "show this help" },
 };
 
+/**
+ * Flags that would carry a secret. They are refused by name on every command, so a key never lands
+ * in the process list or the shell history (CLI-06); the message names the environment form.
+ */
+const SECRET_FLAGS = new Set(["key", "api-key", "token", "secret", "password"]);
+
 /** A word the parser reads as a flag or as `--`, never as a value. */
 function isFlag(a: string): boolean {
   return a.startsWith("--") || /^-[a-zA-Z]$/.test(a);
 }
 
+/**
+ * The same words without any secret flag and its value, for the `try:` line runCli adds: every
+ * `--key`, `--token=...` and the like, not only the one that tripped. Words after `--` stay.
+ */
+function withoutSecrets(argv: readonly string[]): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i] as string;
+    if (a === "--") {
+      out.push(...argv.slice(i));
+      break;
+    }
+    const m = /^--([^=]+)(=.*)?$/.exec(a);
+    if (m && SECRET_FLAGS.has(m[1] as string)) {
+      if (m[2] === undefined && i + 1 < argv.length && !isFlag(argv[i + 1] as string)) i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
+}
+
 export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
+  for (const n of Object.keys(spec)) {
+    // A declared secret flag would take the value this parser exists to refuse.
+    if (SECRET_FLAGS.has(n))
+      throw new Error(`--${n} is reserved: a secret never comes from a flag`);
+  }
   const all: Record<string, FlagSpec> = { ...COMMON, ...spec };
   const byShort = new Map<string, string>();
   for (const [name, s] of Object.entries(all)) if (s.short) byShort.set(s.short, name);
@@ -70,6 +113,13 @@ export function parseArgs(argv: readonly string[], spec: FlagSpecs): Parsed {
       continue;
     }
     const s = all[name];
+    if (!s && SECRET_FLAGS.has(name)) {
+      throw new SecretFlagError(
+        `--${name} would put a secret on the command line, where the process list and the shell history keep it; ` +
+          "set AKOU_API_KEY, or AKOU_API_KEY_FILE to a file that holds it",
+        withoutSecrets(argv),
+      );
+    }
     if (!s) throw new UsageError(`unknown option --${name}`);
     if (s.type === "boolean") {
       if (inline !== undefined) throw new UsageError(`--${name} takes no value`);

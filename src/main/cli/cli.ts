@@ -7,7 +7,7 @@
  *
  *   0 ok · 3 nothing live · 64 usage · 65 a vocabulary term fails validation · 69 unavailable
  *   (app, model, provider, or not built yet) · 70 software · 75 already recording · 77 permission
- *   · 124 `akou wait` timed out
+ *   · 78 the settings refuse it (`akou serve`) · 124 `akou wait` timed out
  *
  * If the app is not running, a command that needs it launches it headless and waits up to 3 s.
  *
@@ -18,13 +18,15 @@
 
 import { APP_VERSION } from "../app-info.ts";
 import type { ModelSpecEntry } from "../asr/models.ts";
-import { parseArgs, UsageError } from "./args.ts";
-import { ApiClient, EXIT, Unreachable } from "./client.ts";
+import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
+import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { handoffCommands } from "./commands/handoff.ts";
+import { jobsCommand } from "./commands/jobs.ts";
 import { noteCommands } from "./commands/notes.ts";
+import { serveCommand } from "./commands/serve.ts";
 import { serverCommands } from "./commands/server.ts";
 import { setupCommands } from "./commands/setup.ts";
 import { skillCommand } from "./commands/skill.ts";
@@ -56,6 +58,7 @@ export const COMMANDS: readonly Command[] = [
   watch,
   ...noteCommands,
   ...handoffCommands,
+  jobsCommand,
   vocab,
   doctorCommand,
   ...setupCommands,
@@ -63,6 +66,7 @@ export const COMMANDS: readonly Command[] = [
   transcribeCommand,
   skillCommand,
   mcp,
+  serveCommand,
 ];
 
 function help(): string {
@@ -76,7 +80,7 @@ function help(): string {
     "",
     "`akou help COMMAND` shows a command's options. Exit codes: 0 ok, 3 nothing live, 64 usage,",
     "65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission,",
-    "124 timed out (`akou wait`).",
+    "78 settings refuse it (`akou serve`), 124 timed out (`akou wait`).",
   ].join("\n");
 }
 
@@ -127,6 +131,11 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     parsed = parseArgs(rest, cmd.flags ?? {});
   } catch (err) {
     if (!(err instanceof UsageError)) throw err;
+    if (err instanceof SecretFlagError) {
+      const again = ["akou", name, ...err.rest].join(" ");
+      io.err(`akou ${name}: ${err.message}\ntry: AKOU_API_KEY_FILE=/path/to/key ${again}`);
+      return EXIT.usage;
+    }
     io.err(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`);
     return EXIT.usage;
   }
@@ -158,6 +167,11 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
     if (err instanceof UsageError) {
       io.err(`akou ${name}: ${err.message}\nusage: ${cmd.usage}`);
       return EXIT.usage;
+    }
+    if (err instanceof TargetError) {
+      if (json) io.out(JSON.stringify({ error: "target", message: err.message }));
+      else io.err(`akou: ${err.message}`);
+      return err.exit;
     }
     if (err instanceof Unreachable) {
       if (json) io.out(JSON.stringify({ error: "unavailable", message: err.message }));

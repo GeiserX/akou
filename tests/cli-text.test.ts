@@ -190,3 +190,24 @@ describe("[CLI-17] Honest text", () => {
     expect(startAsLaunch("Record with `akou start -w work`")).toBe(false);
   });
 });
+
+/** The registry commands that CLI.md's command tree (section 4) does not name in backticks. */
+function untabled(doc: string, names: readonly string[]): string[] {
+  const start = doc.indexOf("## 4. The command tree");
+  const tree = doc.slice(start, doc.indexOf("\n## ", start + 1));
+  return names.filter((n) => !new RegExp(`\`${n}[\\s\`\\\\]`).test(tree));
+}
+
+describe("[CLI-17] The design names every command", () => {
+  test("every command in the registry has a place in CLI.md's command tree", () => {
+    const doc = readFileSync(join(ROOT, "docs", "ux", "CLI.md"), "utf8");
+    expect(
+      untabled(
+        doc,
+        COMMANDS.map((c) => c.name),
+      ),
+    ).toEqual([]);
+    // Positive control: a command the tree does not name is reported.
+    expect(untabled(doc, ["no-such-command"])).toEqual(["no-such-command"]);
+  });
+});

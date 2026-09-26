@@ -1,0 +1,21 @@
+# The image needs package.json, bun.lock, bunfig.toml, src/, skills/, the licence files and
+# native/akou-diarize; everything else stays out of the build context.
+.git
+.github
+.beads
+.omc
+.agents
+.claude
+.codex
+node_modules
+dist
+build
+artifacts
+docs
+examples
+tests
+scripts
+native/akou-capture
+**/target
+*.log
+.junit-*.xml
