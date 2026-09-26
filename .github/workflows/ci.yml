@@ -372,11 +372,14 @@ jobs:
         os: [ubuntu-24.04, ubuntu-24.04-arm]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
-    env:
-      MODELS: ${{ github.workspace }}/../akou-models
-      DATA: ${{ github.workspace }}/../akou-data
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # Under the runner's temp directory: actions/cache refuses a path with `..`, so a models
+      # folder beside the workspace never saved. The runner context is not readable in a job's env.
+      - name: the models and data folders
+        run: |
+          echo "MODELS=$RUNNER_TEMP/akou-models" >> "$GITHUB_ENV"
+          echo "DATA=$RUNNER_TEMP/akou-data" >> "$GITHUB_ENV"
       - name: build the image
         run: docker build -t akou:ci .
       - name: the fast preset's models, by their pins
