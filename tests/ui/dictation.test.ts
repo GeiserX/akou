@@ -11,13 +11,17 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
+import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
 import type { PillState } from "../../src/ui/pill-protocol.ts";
 import { tempDir } from "../helpers.ts";
 import {
+  CLIPBOARD_PERMISSIONS,
   DICTATION_SCHEMA,
+  type DictationFixture,
   dictationFixture,
+  dictationRow,
   UI_TIMEOUT,
   type UiRig,
   uiRig,
@@ -621,6 +625,153 @@ describe("DC-U1: the Dictation page in the window", () => {
       await page.click("#settings-open");
       await page.waitForSelector("#settings-fields .setting");
       expect(await page.$("#settings-dictation")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-H1: the History page", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-hist-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const openHistory = async (history: DictationRow[]) => {
+    let fx: DictationFixture | null = null;
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        await p.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
+        fx = await dictationFixture(p, { history });
+      },
+    });
+    await page.click("#dictation-open");
+    await page.click("#dictation-history-open");
+    await page.waitForSelector("#dictation-history[open] #dictation-history-list li");
+    return { page, fx: fx as unknown as DictationFixture };
+  };
+  const row = (id: string) => `#dictation-history-list li[data-id='${id}']`;
+
+  test(
+    "lists every dictation with its app, engine, time and state; each action calls its route",
+    async () => {
+      const { page, fx } = await openHistory([
+        dictationRow(1),
+        dictationRow(2, { state: "cancelled", app: null, engine: "best", ms: 640 }),
+        dictationRow(3, { state: "failed", text: null, error: "remote akou not reachable" }),
+      ]);
+      expect(
+        await page.$$eval("#dictation-history-list li", (l) => l.map((x) => x.dataset.id)),
+      ).toEqual(["d001", "d002", "d003"]);
+      expect(await text(page, `${row("d001")} .text`)).toBe("dictation number 1");
+      const meta = await text(page, `${row("d002")} .meta`);
+      expect(meta).toContain("no app · best 0.6 s");
+      expect(await text(page, `${row("d002")} .state`)).toBe("cancelled");
+      expect(await text(page, `${row("d003")} .issue`)).toBe("remote akou not reachable");
+      // Nothing to insert, copy or fix in a dictation with no text; Retry still decodes its audio.
+      expect(await page.isDisabled(`${row("d003")} button.insert`)).toBe(true);
+      expect(await page.isDisabled(`${row("d003")} button.fix`)).toBe(true);
+      expect(await page.isDisabled(`${row("d003")} button.retry`)).toBe(false);
+
+      fx.calls.length = 0;
+      await page.click(`${row("d001")} button.insert`);
+      await page.click(`${row("d001")} button.fix`);
+      await until(() => fx.calls.length === 2, 5000, "insert and fix");
+      expect(fx.calls).toEqual([
+        { method: "POST", path: "/dictations/d001/insert", body: { text: "dictation number 1" } },
+        {
+          method: "POST",
+          path: "/dictations/d001/insert",
+          body: { text: "dictation number 1", fix: true },
+        },
+      ]);
+
+      await page.click(`${row("d001")} button.copy`);
+      await page.waitForFunction(async () => (await navigator.clipboard.readText()) !== "");
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("dictation number 1");
+
+      // Delete asks once more, then removes the dictation from the page and the store.
+      fx.calls.length = 0;
+      await page.click(`${row("d002")} button.delete`);
+      expect(fx.calls).toEqual([]);
+      await page.click(`${row("d002")} button.delete`);
+      await page.waitForSelector(row("d002"), { state: "detached" });
+      expect(fx.calls).toEqual([{ method: "DELETE", path: "/dictations/d002" }]);
+      expect(fx.history.map((d) => d.id)).toEqual(["d001", "d003"]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Retry with best shows the second result beside the first, and either can be inserted",
+    async () => {
+      const { page, fx } = await openHistory([dictationRow(1)]);
+      // The picker starts on another engine than the one that ran.
+      expect(await page.inputValue(`${row("d001")} select.retry-engine`)).toBe("best");
+      fx.calls.length = 0;
+      await page.click(`${row("d001")} button.retry`);
+      await page.waitForSelector(`${row("d001")} .result.retry`);
+      expect(fx.calls).toEqual([
+        { method: "POST", path: "/dictations/d001/retry", body: { engine: "best" } },
+      ]);
+      const readings = await page.$$eval(`${row("d001")} .result`, (r) =>
+        r.map((x) => [x.getAttribute("data-engine"), x.querySelector(".text")?.textContent]),
+      );
+      expect(readings).toEqual([
+        ["fast", "dictation number 1"],
+        ["best", "dictation number 1 (best)"],
+      ]);
+      expect(await text(page, `${row("d001")} .result.retry small`)).toBe("best 0.6 s");
+
+      fx.calls.length = 0;
+      await page.click(`${row("d001")} .result.retry button.insert`);
+      await page.click(`${row("d001")} .result.first button.insert`);
+      await until(() => fx.calls.length === 2, 5000, "both inserts");
+      expect(fx.calls.map((c) => c.body)).toEqual([
+        { text: "dictation number 1 (best)" },
+        { text: "dictation number 1" },
+      ]);
+
+      // A refused retry says why and leaves the readings as they were.
+      fx.refuse.set("retry:remote", "no remote akou is set");
+      await page.selectOption(`${row("d001")} select.retry-engine`, "remote");
+      await page.click(`${row("d001")} button.retry`);
+      await page.waitForFunction(() => document.getElementById("toast")?.textContent !== "");
+      expect(await text(page, "#toast")).toBe("no remote akou is set");
+      expect(await page.$$(`${row("d001")} .result`)).toHaveLength(2);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "search asks the route for the typed text, and Older pages on from the last shown",
+    async () => {
+      const many = Array.from({ length: HISTORY_PAGE + 5 }, (_, i) => dictationRow(i + 1));
+      many[3] = dictationRow(4, { text: "ping the Kubernetes team" });
+      const { page, fx } = await openHistory(many);
+      expect(await page.$$(`#dictation-history-list li`)).toHaveLength(HISTORY_PAGE);
+      await page.click("#dictation-history-more");
+      await page.waitForFunction(
+        (n) => document.querySelectorAll("#dictation-history-list li").length === n,
+        HISTORY_PAGE + 5,
+      );
+      expect(await page.isHidden("#dictation-history-more")).toBe(true);
+
+      fx.calls.length = 0;
+      await page.fill("#dictation-history-q", "kubernetes");
+      await page.waitForFunction(
+        () => document.querySelectorAll("#dictation-history-list li").length === 1,
+      );
+      expect(fx.calls.map((c) => c.path)).toEqual(["/dictations?limit=50&q=kubernetes"]);
+      expect(await text(page, "#dictation-history-list li .text")).toBe("ping the Kubernetes team");
+      await page.fill("#dictation-history-q", "nothing like this");
+      await page.waitForSelector("#dictation-history-list li[data-empty]");
+      expect(await text(page, "#dictation-history-list li")).toBe("No dictation holds that.");
     },
     UI_TIMEOUT,
   );

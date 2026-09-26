@@ -18,6 +18,7 @@
  * microphone at all (no `getUserMedia` outside a secure context), and says so rather than failing.
  */
 
+import { mountHistoryDialog } from "./dictation-history.ts";
 import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
@@ -282,7 +283,10 @@ export class DictationSettings {
   }
 }
 
-/** The window's `#dictation` dialog, opened by its button, by `#dictation` in the address, or by Settings. */
+/**
+ * The window's `#dictation` dialog, opened by its button, by `#dictation` in the address, or by
+ * Settings; its History button opens the history (DC-H1) over it.
+ */
 export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
   const dialog = document.getElementById("dictation") as HTMLDialogElement;
   const body = document.getElementById("dictation-fields") as HTMLElement;
@@ -294,6 +298,10 @@ export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
   };
   document.getElementById("dictation-open")?.addEventListener("click", () => void open());
   document.getElementById("dictation-close")?.addEventListener("click", () => dialog.close());
+  const history = mountHistoryDialog(t);
+  document
+    .getElementById("dictation-history-open")
+    ?.addEventListener("click", () => void history.open());
   const fromHash = () => {
     if (location.hash === "#dictation") void open();
   };

@@ -24,6 +24,7 @@ import {
 } from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
+import type { DictationRow } from "../../src/ui/dictation-history.ts";
 import type { ConfigReply, SchemaEntry } from "../../src/ui/settings.ts";
 import { type AppRig, appRig, type RigOptions } from "../api-helpers.ts";
 import { until } from "../capture-helpers.ts";
@@ -438,12 +439,19 @@ export interface DictationFixture {
   server: { slots: number; engine: string; served_last_hour: number } | null;
   /** The `DELETE /dictations` the page sent. */
   deletes: number;
+  /** What `GET /dictations` lists, newest first. */
+  history: DictationRow[];
+  /** Every request under `/dictations`, in order: its path with the query, and its body. */
+  calls: { method: string; path: string; body?: unknown }[];
+  /** The answer to `POST /dictations/{id}/retry`; refuse it with `refuse.set("retry:ENGINE")`. */
+  retry: (d: DictationRow, engine: string) => DictationRow;
 }
 
 /**
  * Answers the page's dictation requests from fixtures: `GET /config` gains `schema`'s keys (the
  * real reply is fetched and extended), a `PATCH /config` of fixture keys is recorded and answered
- * here, `GET /server` gains the `dictation` block, and `DELETE /dictations` is counted.
+ * here, `GET /server` gains the `dictation` block, and the dictation routes (DC-G1) answer from
+ * `history`, each request recorded in `calls`.
  * `prefix`: the API's path on this page (`/api/v1`). `proxy`: the page is on another origin
  * (`proxyRoute`), whose requests reach the app at `to`.
  */
@@ -454,6 +462,7 @@ export async function dictationFixture(
     prefix?: string;
     server?: DictationFixture["server"];
     proxy?: { from: string; to: string };
+    history?: DictationRow[];
   } = {},
 ): Promise<DictationFixture> {
   const schema = o.schema ?? DICTATION_SCHEMA;
@@ -464,6 +473,9 @@ export async function dictationFixture(
     refuse: new Map(),
     server: o.server ?? null,
     deletes: 0,
+    history: o.history ?? [],
+    calls: [],
+    retry: (d, engine) => ({ ...d, engine, text: `${d.text} (${engine})`, ms: 640 }),
   };
   await page.route(
     (u) => u.pathname === `${prefix}/config`,
@@ -509,13 +521,75 @@ export async function dictationFixture(
     },
   );
   await page.route(
-    (u) => u.pathname === `${prefix}/dictations`,
+    (u) => u.pathname === `${prefix}/dictations` || u.pathname.startsWith(`${prefix}/dictations/`),
     (route) => {
-      fx.deletes++;
-      return route.fulfill({ status: 200, json: { deleted: 0 } });
+      const req = route.request();
+      const url = new URL(req.url());
+      const path = url.pathname.slice(prefix.length);
+      // The browser transport sends `{}` with a bodiless request; that is no body.
+      const sent = req.postData() ? (req.postDataJSON() as Record<string, unknown>) : {};
+      const body = Object.keys(sent).length > 0 ? sent : undefined;
+      fx.calls.push({
+        method: req.method(),
+        path: path + url.search,
+        ...(body === undefined ? {} : { body }),
+      });
+      if (path === "/dictations" && req.method() === "DELETE") {
+        fx.deletes++;
+        fx.history = [];
+        return route.fulfill({ status: 200, json: { deleted: 0 } });
+      }
+      if (path === "/dictations" && req.method() === "GET") {
+        const q = url.searchParams.get("q")?.toLowerCase() ?? "";
+        const limit = Number(url.searchParams.get("limit") ?? 100);
+        const cursor = url.searchParams.get("cursor");
+        let items = fx.history;
+        if (cursor) items = items.slice(items.findIndex((d) => d.id === cursor) + 1);
+        if (q) items = items.filter((d) => (d.text ?? "").toLowerCase().includes(q));
+        const page = items.slice(0, limit);
+        return route.fulfill({
+          status: 200,
+          json: {
+            items: page,
+            next_cursor: items.length > limit ? (page.at(-1)?.id ?? null) : null,
+          },
+        });
+      }
+      const m = /^\/dictations\/([^/]+)(?:\/(insert|retry))?$/.exec(path);
+      const id = decodeURIComponent(m?.[1] ?? "");
+      const d = fx.history.find((x) => x.id === id);
+      if (!m || !d) return route.fulfill({ status: 404, json: { error: "not_found" } });
+      if (m[2] === "retry") {
+        const engine = (body as { engine: string }).engine;
+        const err = fx.refuse.get(`retry:${engine}`);
+        if (err)
+          return route.fulfill({ status: 409, json: { error: "unavailable", message: err } });
+        return route.fulfill({ status: 200, json: fx.retry(d, engine) });
+      }
+      if (m[2] === "insert") return route.fulfill({ status: 200, json: { opened: true } });
+      if (req.method() === "DELETE") {
+        fx.history = fx.history.filter((x) => x !== d);
+        return route.fulfill({ status: 200, json: { deleted: 1 } });
+      }
+      return route.fulfill({ status: 200, json: d });
     },
   );
   return fx;
+}
+
+/** A dictation for the history fixture: `n` sets the id, the text and the time, newest first. */
+export function dictationRow(n: number, o: Partial<DictationRow> = {}): DictationRow {
+  return {
+    id: `d${String(n).padStart(3, "0")}`,
+    at: Date.parse("2026-09-26T10:00:00Z") - n * 60_000,
+    state: "inserted",
+    app: "com.example.chat",
+    text: `dictation number ${n}`,
+    engine: "fast",
+    model: "parakeet",
+    ms: 120,
+    ...o,
+  };
 }
 
 /** A small ElectroBun view (the pill, the draft box) on its own page, with a fake main side. */
