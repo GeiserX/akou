@@ -1,4 +1,11 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/akou-banner-dark.svg">
+  <img alt="akou. Every word of your calls, on your own machine." src="assets/brand/akou-banner.svg" width="100%">
+</picture>
+
 # akou
+
+An open-source alternative to [Granola](https://www.granola.ai). akou transcribes your calls on your own machine and works with your own AI agent in the terminal: Claude Code, Codex or any other agent that [speaks MCP or can run the `akou` command](docs/ux/PROGRAMMABILITY.md). Its own ask box answers with the Claude Code or Codex subscription you already pay for, or with [any OpenAI-compatible or Anthropic endpoint](docs/providers.md). The notes go into the tools you use today. It runs on macOS, Windows and Linux, and as a [transcription server](docs/ux/SERVER.md) you host yourself.
 
 akou (Greek: "listen!") is a desktop app that records your calls on your own computer. It shows a live transcript, keeps a timestamped notepad while the call runs, and answers questions about the call while it is still going. It captures the microphone and the call audio on separate channels, with no bot in the meeting, and transcribes on the machine. Its default brain is the coding-agent subscription you already have, Claude Code or Codex, run locally. A finished call becomes Markdown, an event log and the audio, and lands in whatever system you already keep your notes in. It runs on macOS, Windows and Linux.
 
