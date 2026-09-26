@@ -129,7 +129,8 @@ describe("the catalog pins Qwen3-ASR and one llama-server build per platform and
   });
 
   test("every released platform has a CPU build; Apple silicon has Metal; Linux x64 has Vulkan and CUDA", () => {
-    for (const p of PLATFORMS) expect(llamaBuild(p, "cpu") ?? llamaBuild(p, "metal")).toBeDefined();
+    // The Mac's too: asr.accelerator cpu there must have a build to download.
+    for (const p of PLATFORMS) expect(llamaBuild(p, "cpu")).toBeDefined();
     expect(llamaBuild("darwin-arm64", "metal")?.id).toBe(llamaBuildId("darwin-arm64", "metal"));
     for (const a of ["cpu", "vulkan", "cuda"] as const) {
       expect(llamaBuild("linux-x64", a)).toBeDefined();
@@ -194,11 +195,42 @@ describe("where Qwen's llama-server comes from (akou-5an.94)", () => {
     expect(p.build?.id).toBe(llamaBuildId("linux-x64", "vulkan"));
     expect(p).toMatchObject({ accelerator: "vulkan", provider: "vulkan" });
     expect(p.command).toBeUndefined();
-    // Positive control: no GPU found keeps auto's own answer, Metal on a Mac and the CPU elsewhere.
+    // Positive control: no GPU found downloads the CPU build.
     expect(llamaPlan({ ...base, detected: none }).build?.id).toBe(llamaBuildId("linux-x64", "cpu"));
-    expect(llamaPlan({ ...base, platform: "darwin-arm64", detected: none }).build?.id).toBe(
-      llamaBuildId("darwin-arm64", "metal"),
+  });
+
+  test("a Mac on asr.accelerator cpu gets a build: the Metal archive, run with no device", () => {
+    const p = llamaPlan({ ...base, setting: "cpu", platform: "darwin-arm64", detected: none });
+    expect(p).toMatchObject({ accelerator: "cpu", provider: "cpu" });
+    expect(p.build?.id).toBe(llamaBuildId("darwin-arm64", "cpu"));
+    expect(p.build?.files).toEqual(llamaBuild("darwin-arm64", "metal")?.files);
+    expect(p.note).toBeUndefined();
+    const args = llamaArgs(
+      { accelerator: p.accelerator, command: ["x"], model: "m", mmproj: "p" },
+      1,
     );
+    expect(args.slice(args.indexOf("--device"), args.indexOf("--device") + 2)).toEqual([
+      "--device",
+      "none",
+    ]);
+  });
+
+  test("a GPU the build listed no device for runs the CPU build, not the GPU one with -ngl 999", () => {
+    const p = llamaPlan({ ...base, setting: "vulkan", detected: none });
+    expect(p).toMatchObject({ accelerator: "cpu", provider: "cpu" });
+    expect(p.build?.id).toBe(llamaBuildId("linux-x64", "cpu"));
+    expect(llamaArgs({ ...p, command: ["x"], model: "m", mmproj: "p" }, 1)).not.toContain("999");
+  });
+
+  test("a platform with no build says so in the plan's note, and plans no download", () => {
+    const p = llamaPlan({ ...base, platform: "freebsd-x64", detected: none });
+    expect(p.build).toBeUndefined();
+    expect(p.accelerator).toBe("cpu");
+    expect(p.note).toBe(
+      "there is no cpu build of llama-server for freebsd-x64, so Qwen runs on the CPU",
+    );
+    // Positive control: a platform with a build has no note.
+    expect(llamaPlan({ ...base, detected: none }).note).toBeUndefined();
   });
 
   test("an image runs the build it carries, on what detection chose, and downloads none", () => {
@@ -253,6 +285,38 @@ describe("the pinned build is unpacked once", () => {
     expect(readFileSync(bin, "utf8")).toContain("mine");
   });
 
+  test("a CUDA build's runtime archive lands beside llama-server, which finds it through $ORIGIN", () => {
+    const dir = scratch();
+    const files: Record<string, string> = {
+      "llama-b1/llama-server": "#!/bin/sh\n",
+      "llama-b1/libggml-cuda.so": "lib",
+      "cudart-llama-b1/libcudart.so.12": "cudart",
+      "cudart-llama-b1/libcublas.so.12": "cublas",
+    };
+    for (const [name, text] of Object.entries(files)) {
+      mkdirSync(join(dir, "src", name, ".."), { recursive: true });
+      writeFileSync(join(dir, "src", name), text);
+    }
+    for (const [archive, top] of [
+      ["llama.tar.gz", "llama-b1"],
+      ["cudart.tar.gz", "cudart-llama-b1"],
+    ] as const) {
+      const tar = Bun.spawnSync(["tar", "-czf", archive, "-C", "src", top], { cwd: dir });
+      expect(tar.exitCode).toBe(0);
+    }
+    const target = join(dir, "build");
+    mkdirSync(target);
+    const bin = extractBuild(
+      target,
+      [join(dir, "llama.tar.gz"), join(dir, "cudart.tar.gz")],
+      "linux-x64",
+    );
+    expect(bin).toBe(join(target, "bin", "llama-b1", "llama-server"));
+    expect(readFileSync(join(target, "bin", "llama-b1", "libcudart.so.12"), "utf8")).toBe("cudart");
+    expect(existsSync(join(target, "bin", "llama-b1", "libcublas.so.12"))).toBe(true);
+    expect(existsSync(join(target, "bin", "cudart-llama-b1"))).toBe(false);
+  });
+
   test("an archive with no llama-server in it is an error naming the archive", () => {
     const dir = scratch();
     mkdirSync(join(dir, "src"));
@@ -296,8 +360,15 @@ describe("the supervisor", () => {
     const base = { command: ["x"], model: "m", mmproj: "p" };
     const cpu = llamaArgs({ ...base, accelerator: "cpu" }, 1);
     expect(cpu.slice(cpu.indexOf("-ngl"), cpu.indexOf("-ngl") + 2)).toEqual(["-ngl", "0"]);
+    expect(cpu.slice(cpu.indexOf("--device"), cpu.indexOf("--device") + 2)).toEqual([
+      "--device",
+      "none",
+    ]);
     const gpu = llamaArgs({ ...base, accelerator: "vulkan" }, 1);
     expect(gpu.slice(gpu.indexOf("-ngl"), gpu.indexOf("-ngl") + 2)).toEqual(["-ngl", "999"]);
+    expect(gpu).not.toContain("--device");
+    // An own build given its own layer count picks its own devices.
+    expect(llamaArgs({ ...base, accelerator: "cpu", gpuLayers: 999 }, 1)).not.toContain("--device");
   });
 
   test("a server that dies is started again on the next request", async () => {

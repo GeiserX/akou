@@ -103,17 +103,19 @@ akou also runs as a transcription server that other programs send audio to. [ux/
 
 The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`. Both must be writable by uid 1000, `/models` too even when every model is already in it: the pull and the server write downloads and the models' `usage.json` there. Named volumes, as below, already are. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host), and a read-only mount (`:ro`) does not work: the pull stops with exit 70 and the server with exit 77, both naming the folder and `EROFS`.
 
-Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too, since the pull reads `asr.diarizer` from the settings there:
-
-```sh
-docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
-```
+Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this.
 
 The speaker model is Nemotron by default, and that needs no step. Only to use pyannote (`asr.diarizer` `embeddings`) instead, set it on the data volume before the pull; without it the pull fetches Nemotron. Skip this on a volume whose models are already pulled for Nemotron: with it the pull fetches pyannote too.
 
 ```sh
 docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:<version> -c \
   'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
+```
+
+Then pull. Mount the data volume too, since the pull reads `asr.diarizer` from the settings there:
+
+```sh
+docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 ```
 
 `fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
@@ -236,7 +238,7 @@ To see what it chose:
 curl -s http://127.0.0.1:8476/v1/server | jq '.gpu, .accelerator'
 ```
 
-`gpu` is `vulkan`, `cuda`, `metal` or null for the CPU. `accelerator.device` is the GPU's name as llama-server lists it, `verified` is true once llama-server itself confirmed the device, and `reason` says why when it runs on the CPU. The setting `asr.accelerator` overrides the choice: `auto` (the default), `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or `rocm`, also as the environment variable `AKOU_ACCELERATOR`. `auto` never picks SYCL or ROCm, which need Intel's oneAPI or AMD's ROCm runtime on the host; Vulkan runs the same cards. OpenVINO is not offered: its llama.cpp backend does not run speech models yet.
+`gpu` is the GPU backend (`metal`, `vulkan`, `cuda`, `sycl` or `rocm`) or null for the CPU. `accelerator.device` is the GPU's name as llama-server lists it, `verified` is true once llama-server itself confirmed the device, and `reason` says why when it runs on the CPU. The setting `asr.accelerator` overrides the choice: `auto` (the default), `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or `rocm`, also as the environment variable `AKOU_ACCELERATOR`. `auto` never picks SYCL or ROCm, which need Intel's oneAPI or AMD's ROCm runtime on the host; Vulkan runs the same cards. OpenVINO is not offered: its llama.cpp backend does not run speech models yet.
 
 The GPU runs the `best` preset's Qwen3-ASR ([The best preset](#the-best-preset)); Parakeet (`fast`) stays on the CPU, where it already runs far faster than real time.
 
@@ -257,12 +259,14 @@ Where it runs is `asr.accelerator`:
 |---|---|---|
 | A Mac with Apple silicon, akou run natively (`akou serve`) | `auto` (the default) | Metal. On a Mac mini M4 a 10-minute meeting with speaker labels took 94 s, a real-time factor of 0.16 |
 | The Docker image, any Linux box | `auto` | The GPU the image can open, else the CPU: the `-vulkan` image on an Intel or AMD GPU, the `-cuda` image on NVIDIA ([A GPU](#a-gpu)). The plain image runs the CPU, several times slower |
-| Linux or Windows, akou run natively, with an NVIDIA card | `auto` or `cuda` | llama.cpp's CUDA build, downloaded with Qwen. On Linux the host needs the CUDA 12 runtime; on Windows akou downloads it with the build |
+| Linux or Windows, akou run natively, with an NVIDIA card | `auto` or `cuda` | llama.cpp's CUDA build and NVIDIA's CUDA runtime, both downloaded with Qwen, so the host needs only the driver |
 | Linux or Windows, akou run natively, with an Intel or AMD GPU | `auto` or `vulkan` | llama.cpp's Vulkan build, through the GPU's Vulkan driver (Mesa on Linux) |
+| Linux or Windows x64, akou run natively, with Intel's oneAPI or AMD's ROCm installed | `sycl` or `rocm` | llama.cpp's SYCL or ROCm build, downloaded with Qwen. `auto` never picks these |
+| Any machine, akou run natively | `cpu` | llama.cpp's CPU build (on a Mac, the Metal build with no GPU device) |
 
 Docker on a Mac has no Metal, so on a Mac run akou natively rather than in a container. A server elsewhere on the network (a Telegram-Archive box, for example) then reaches it by URL and key like any client.
 
-`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda` or `cpu`), and `gpu` and `accelerator` say which GPU was found and why. A setting with no build for the platform (`metal` on Linux) runs on what `auto` finds, the CPU when there is no GPU, and the server log says so. For a GPU llama.cpp publishes no build for, such as Intel's SYCL or AMD's ROCm, build `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
+`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda`, `sycl`, `rocm` or `cpu`), and `gpu` and `accelerator` say which GPU was found and why. A setting with no build here (`metal` on Linux, or `sycl` in an image) runs on what `auto` finds, the CPU when there is no GPU, and `accelerator.reason` says so. Natively, akou asks the build which devices it can open once `best` has downloaded it; a GPU it cannot open runs on the CPU build. For a build akou does not pin, compile `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
 
 ### A large backlog
 

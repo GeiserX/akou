@@ -166,29 +166,43 @@ describe("a job on Qwen", () => {
   });
 
   test("a piece with no speech in it is never sent to Qwen, which would invent a filler there", async () => {
-    // Two turns with room noise between them: the turn boundaries make the noise its own piece.
-    const x = concat(
+    // Two turns over room noise (above the silence floor), and a diarizer whose turns start 0.2 s
+    // early: the first edge lands in the leading pad, where the VAD heard nothing.
+    const talk = concat(
       silence(0.3),
       speak(["hello", "world"], { voice: 1 }),
-      roomNoise(3, 7, 0.02),
+      silence(3),
       speak(["ok", "great"], { voice: 4 }),
       silence(0.3),
     );
+    const noise = roomNoise(talk.length / 16000, 7, 0.006);
+    const x = talk.map((v, i) => v + (noise[i] as number));
+    const early = (models: FakeModels) => {
+      const diarizer = models.diarizer.bind(models);
+      models.diarizer = () => {
+        const d = diarizer();
+        return {
+          process: async (samples: Float32Array) =>
+            (await d.process(samples)).map((t) => ({ ...t, start: Math.max(0, t.start - 0.2) })),
+        };
+      };
+      return models;
+    };
     const s = spec();
     const engine = createLlamaEngine(s.spec);
     cleanups.push(() => engine.unload());
     const r = await runJobPass(
       { samples: x, diarize: true, decode: null },
-      new FakeModels(),
+      early(new FakeModels()),
       undefined,
       engine,
     );
     expect(r.segments.map((g) => g.text)).toEqual(["hello world", "ok great"]);
     expect(s.requests()).toHaveLength(2);
-    // Positive control: on the model set's recognizer the noise piece is decoded (and heard as nothing).
-    const m = new FakeModels();
+    // The model set's recognizer gets the same two pieces: the pad is never decoded on its own.
+    const m = early(new FakeModels());
     await runJobPass({ samples: x, diarize: true, decode: null }, m);
-    expect(m.calls).toHaveLength(3);
+    expect(m.calls).toHaveLength(2);
   });
 
   test("[SV-R5] ten seconds of room noise on best: empty text, and Qwen is never asked", async () => {
