@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { PRESET_NAMES, presetModels } from "../src/main/asr/presets.ts";
 import { EXIT } from "../src/main/cli/client.ts";
+import { USAGE_FILE } from "../src/main/server/model-store.ts";
 import { cli } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -134,6 +135,17 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
       "nemotron3_diar_v3.onnx": (before["nemotron3_diar_v3.onnx"] ?? 0) + 1,
     });
     expect(existsSync(join(v.models, RECOGNIZER))).toBe(false);
+    v.t.cleanup();
+  });
+
+  test("[SV-M4] a pull marks each model it finished as used in the ledger, and only those", async () => {
+    const v = volume();
+    const before = Date.now();
+    const r = await cli(v.env, ["models", "pull", NEMOTRON, "--json"], { models: registry });
+    expect(r.code).toBe(0);
+    const ledger = JSON.parse(readFileSync(join(v.models, USAGE_FILE), "utf8"));
+    expect(Object.keys(ledger)).toEqual([NEMOTRON]);
+    expect(Date.parse(ledger[NEMOTRON])).toBeGreaterThanOrEqual(before - 1000);
     v.t.cleanup();
   });
 

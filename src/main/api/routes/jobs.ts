@@ -2,9 +2,11 @@
  * The job routes of server mode (docs/ux/SERVER.md sections 5 and 6). Any key reaches them and
  * sees its own jobs and events only; an admin sees every key's.
  *
- * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `preset`, `language`, `keywords[]`,
- *   `diarize`, `callback_url`, `metadata`, and the `Idempotency-Key` header. 202 with the new job,
- *   200 with the existing one for a repeated key and file, 422 for the same key and another file.
+ * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `preset`, `model`, `language`,
+ *   `keywords[]`, `diarize`, `callback_url`, `metadata`, and the `Idempotency-Key` header. 202 with
+ *   the new job, 200 with the existing one for a repeated key and file, 422 for the same key and
+ *   another file. The model is the request's, else `server.default_model`, else the hardware's
+ *   (SV-S1); a missing one is downloaded while the job waits (SV-M1).
  * - `GET /v1/jobs/{id}?wait=0..60` (SV-J3): the job, after holding the request until it ends.
  * - `GET /v1/jobs?status=&cursor=&limit=`: the key's jobs, newest first.
  * - `GET /v1/jobs/{id}/result` (SV-J4): the result of a done job.
@@ -14,7 +16,8 @@
  *   `Last-Event-ID`.
  */
 
-import { eventView, type JobService, jobView } from "../../server/jobs.ts";
+import { eventView, type JobService } from "../../server/jobs.ts";
+import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
 import { JOB_STATES, type JobStatus, type NewJob } from "../../server/store.ts";
 import { CallbackRefused, checkCallbackUrl } from "../../server/webhooks.ts";
@@ -53,29 +56,25 @@ function bad(field: string, message: string): HttpError {
 }
 
 /**
- * The preset a job runs, after `auto` (SV-R1, SV-R2 not built: `auto` is `fast`). A preset whose
- * engines are not built, or whose models are missing, is refused with the command that fixes it.
+ * The model a job runs (SV-S1), and whether it can be had: on disk, downloading, or allowed to
+ * start (SV-M1, SV-M2). An unknown name is 422 `unknown_model`; an unbuilt preset, a download over
+ * a limit, or a missing model with `server.auto_download` off is 409 `preset_unavailable`.
  */
-export function resolvePreset(app: ApiApp, name: string): string {
-  const ready = app.models().state === "ready";
-  const preset = name === "auto" ? "fast" : name;
-  if (preset !== "fast") {
-    throw new HttpError(
-      409,
-      "preset_unavailable",
-      `the ${name} preset's engines are not built in this version; use fast or auto`,
-      {
-        preset: name,
-      },
-    );
+export function chooseModel(
+  jobs: JobService,
+  ask: { model?: string; preset?: string },
+  unknownIsAuto = false,
+): ModelChoice {
+  try {
+    const choice = jobs.choose(ask, unknownIsAuto);
+    jobs.admit(choice.model);
+    return choice;
+  } catch (err) {
+    if (err instanceof ModelRefused) {
+      throw new HttpError(err.status, err.code, err.message, err.details);
+    }
+    throw err;
   }
-  if (!ready) {
-    throw new HttpError(409, "preset_unavailable", "the speech models are not downloaded", {
-      preset: name,
-      run: "akou models pull",
-    });
-  }
-  return preset;
 }
 
 /**
@@ -139,6 +138,7 @@ function booleanOf(form: Form, name: string): boolean {
 const JOB_FIELDS = new Set([
   "file",
   "preset",
+  "model",
   "language",
   "keywords[]",
   "keywords",
@@ -209,6 +209,8 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     const job: Omit<NewJob, "file_sha256" | "audio"> = {
       key_id: who.id,
       preset: presetName,
+      model: null,
+      model_source: null,
       language: languageOf(form),
       keywords: keywordsOf(form),
       diarize: booleanOf(form, "diarize"),
@@ -217,17 +219,20 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       idempotency_key: idem,
     };
     // Checked after the fields and before the upload is kept: a job that could never run is refused.
-    job.preset = resolvePreset(c.app, presetName);
+    const choice = chooseModel(jobs, { model: textField(form, "model"), preset: presetName });
+    job.preset = choice.preset;
+    job.model = choice.model;
+    job.model_source = choice.source;
     const r = jobs.submit({ ...job, file_sha256: file.sha256, audio: file.path });
     // A repeated submit's file is deleted by `submit` itself.
     kept = file;
-    return answerSubmit(r);
+    return answerSubmit(jobs, r);
   } finally {
     await form.discard(kept);
   }
 }
 
-function answerSubmit(r: ReturnType<JobService["submit"]>): Response {
+function answerSubmit(jobs: JobService, r: ReturnType<JobService["submit"]>): Response {
   if ("conflict" in r) {
     throw new HttpError(
       422,
@@ -238,7 +243,7 @@ function answerSubmit(r: ReturnType<JobService["submit"]>): Response {
       },
     );
   }
-  return json(r.existing ? 200 : 202, jobView(r.job));
+  return json(r.existing ? 200 : 202, jobs.view(r.job));
 }
 
 /** `wait`, as the job and event routes declare it. */
@@ -267,12 +272,13 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
       ...JOB_ROUTE,
       body: {
         multipart: {
           file: "file",
           "preset?": "string",
+          "model?": "string",
           "language?": "string",
           "keywords[]?": "string[]",
           "diarize?": "boolean",
@@ -316,7 +322,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       const limit = c.query.int("limit") as number;
       const list = jobs.list(caller(c), { status: status as JobStatus | undefined, before, limit });
       return json(200, {
-        jobs: list.map(jobView),
+        jobs: list.map((j) => jobs.view(j)),
         cursor: list.length === limit ? (list.at(-1)?.seq ?? null) : null,
       });
     },
@@ -339,7 +345,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       const j = await jobs.wait(caller(c), c.params.id as string, wait * 1000, c.req.signal);
       if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
       // A job deleted while the request waited answers its final state, once.
-      return json(200, "seq" in j ? jobView(j) : { id: j.id, status: j.status });
+      return json(200, "seq" in j ? jobs.view(j) : { id: j.id, status: j.status });
     },
   );
 
