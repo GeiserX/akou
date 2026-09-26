@@ -77,6 +77,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
     },
     (c) => {
       const { ready } = modelState(c.app);
+      // The engines first: planning Qwen's llama-server can correct the accelerator it reports.
+      const engines = c.app.engines?.() ?? [{ id: RECOGNIZER, provider: "cpu", installed: ready }];
       const accel = c.app.accelerator?.() ?? null;
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
@@ -96,8 +98,9 @@ export function serverRoutes(r: Router<ApiApp>): void {
           speed: p.speed,
         })),
         // Where each recognizer runs: `provider` is `cpu`, or the GPU API llama-server uses for
-        // Qwen (`metal`, `vulkan`, `cuda`), or `custom` for an own llama-server (`asr.llamaServer`).
-        engines: c.app.engines?.() ?? [{ id: RECOGNIZER, provider: "cpu", installed: ready }],
+        // Qwen (`metal`, `vulkan`, `cuda`, `sycl`, `rocm`), or `custom` for an own llama-server
+        // (`asr.llamaServer`).
+        engines,
         // The GPU llama-server runs on, null on the CPU; `accelerator` says which build, what it
         // runs on, whether the build itself confirmed it, and why.
         gpu: accel?.gpu ?? null,
