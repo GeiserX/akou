@@ -439,7 +439,8 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           // A merged chip offers the way back.
           await page.click('#lines .row[data-id="l000002"] .who');
           await page.click("#popover >> text=Split off Speaker 2 (c2)");
-          await until(async () => (await who("l000003")) === "Speaker 2", 5000, "unmerged");
+          // Split off, Speaker 2 has no name and no final pass behind it: a guess again (W4.2).
+          await until(async () => (await who("l000003")) === "c2?", 5000, "unmerged");
           // No transcript was read again for any of it.
           expect(log.paths().filter((p) => /transcript|events$/.test(p))).toEqual([]);
         },

@@ -14,12 +14,20 @@ import {
   HUES,
   HueBook,
   languages,
+  playingLine,
+  positionText,
   presets,
   QUIET_AFTER_MS,
+  RATES,
   REOPEN_AFTER_MS,
+  rateLabel,
   resolveTimeCitation,
+  restoreRate,
+  seekBy,
+  speakerChip,
   splitCitations,
   stateLabel,
+  stepRate,
   suggestReopen,
   YOU_HUE,
 } from "../src/ui/model.ts";
@@ -392,5 +400,155 @@ describe("the first-run download card", () => {
     // A file that fails its checksum is deleted and fetched again: the card must not say it is kept.
     expect(failed?.text).not.toContain("What arrived is kept");
     expect(failed?.text).toContain("the one that failed is fetched again");
+  });
+});
+
+describe("[W4.2] live speaker labels look provisional until named or final", () => {
+  const line = (o: Partial<{ layer: "live" | "final"; ch: "mic" | "call"; spk: string }> = {}) => ({
+    layer: "live" as const,
+    ch: "call" as const,
+    spk: "c3",
+    speaker: "Speaker 3",
+    ...o,
+  });
+  const open = { named: false };
+
+  test("an unnamed live cluster reads c3? and is provisional", () => {
+    expect(speakerChip(line(), open)).toEqual({ label: "c3?", provisional: true });
+    // The unknown cluster already carries its question mark.
+    expect(speakerChip(line({ spk: "c?" }), open)).toEqual({ label: "c?", provisional: true });
+  });
+
+  test("a named speaker is solid at once, with its name", () => {
+    expect(speakerChip({ ...line(), speaker: "Ben" }, { ...open, named: true })).toEqual({
+      label: "Ben",
+      provisional: false,
+    });
+  });
+
+  test("after final.done the same speaker is solid, on either layer", () => {
+    // The line was written (seq 10) before the pass finished (seq 20).
+    const done = { named: false, finalDoneSeq: 20 };
+    expect(speakerChip({ ...line(), seq: 10 }, done)).toEqual({
+      label: "Speaker 3",
+      provisional: false,
+    });
+    expect(speakerChip(line({ layer: "final" }), done)).toEqual({
+      label: "Speaker 3",
+      provisional: false,
+    });
+    // A final-layer line is the final pass's own label even before the whole pass is done.
+    expect(speakerChip(line({ layer: "final" }), open).provisional).toBe(false);
+  });
+
+  test("a call reopened after final.done: its new live lines are guesses again, the old ones stay solid, and a re-run does not flip them back", () => {
+    const b = new LogBuilder();
+    b.created();
+    b.partStarted(1, T0);
+    b.seg({ id: "l000001", spk: "c1", w0: T0 + 1000, text: "before the pass" });
+    b.partEnded(1, "stop", 10);
+    b.add({ type: "call.ended", reason: "stop" });
+    b.add({ type: "final.started", pid: 1 });
+    b.add({ type: "final.done", parts: [], skipped: [1] });
+    // Call.restart() reopens the ended call as part 2; nothing about the final pass changes.
+    b.partStarted(2, T0 + 60_000);
+    b.seg({ id: "l000002", part: 2, spk: "c3", w0: T0 + 61_000, text: "after the reopen" });
+    const chip = (v: ReturnType<typeof fold>, id: string) => {
+      const l = v.resolve(id);
+      if (!l) throw new Error(`no line ${id}`);
+      return speakerChip(l, { named: false, finalDoneSeq: v.final.done?.seq });
+    };
+    const reopened = fold(b.events);
+    expect(reopened.final.state).toBe("done");
+    expect(chip(reopened, "l000001")).toEqual({ label: "Speaker 1", provisional: false });
+    expect(chip(reopened, "l000002")).toEqual({ label: "c3?", provisional: true });
+    // A second pass starts: the lines the first one finished stay solid.
+    b.add({ type: "final.started", pid: 2 });
+    const rerun = fold(b.events);
+    expect(rerun.final.state).toBe("running");
+    expect(chip(rerun, "l000001").provisional).toBe(false);
+    expect(chip(rerun, "l000002").provisional).toBe(true);
+    // A line with no seq (the grey line still being spoken) is newer than any finished pass.
+    expect(
+      speakerChip(line(), { named: false, finalDoneSeq: reopened.final.done?.seq }).provisional,
+    ).toBe(true);
+  });
+
+  test("you, on the mic, is never a guess", () => {
+    expect(speakerChip({ ...line({ ch: "mic", spk: "you" }), speaker: "Ana" }, open)).toEqual({
+      label: "Ana",
+      provisional: false,
+    });
+  });
+});
+
+describe("[W5.4] playback speed", () => {
+  test("0.75x to 2x in 0.25 steps; ] twice from 1x is 1.5x; held at both ends", () => {
+    expect(RATES).toEqual([0.75, 1, 1.25, 1.5, 1.75, 2]);
+    expect(stepRate(stepRate(1, 1), 1)).toBe(1.5);
+    expect(stepRate(2, 1)).toBe(2);
+    expect(stepRate(0.75, -1)).toBe(0.75);
+    expect(stepRate(1, -1)).toBe(0.75);
+  });
+
+  test("a stored speed comes back only when it is one of the steps", () => {
+    expect(restoreRate("1.5")).toBe(1.5);
+    expect(restoreRate("0.75")).toBe(0.75);
+    for (const bad of [null, "", "abc", "3", "0", "1.1", "-1"]) expect(restoreRate(bad)).toBe(1);
+  });
+
+  test("the label always shows the multiplier with its x", () => {
+    expect(RATES.map(rateLabel)).toEqual(["0.75x", "1.0x", "1.25x", "1.5x", "1.75x", "2.0x"]);
+  });
+});
+
+describe("[W5.5] seek 5 s back or forward", () => {
+  test("moves 5 s and clamps at the part bounds", () => {
+    expect(seekBy(3, 5, 12)).toBe(8);
+    expect(seekBy(8, -5, 12)).toBe(3);
+    expect(seekBy(10, 5, 12)).toBe(12);
+    expect(seekBy(2, -5, 12)).toBe(0);
+    // Before the length is known, only the start bounds it.
+    expect(seekBy(2, 5, Number.NaN)).toBe(7);
+    expect(seekBy(2, -5, Number.NaN)).toBe(0);
+  });
+});
+
+describe("[W5.6] the line being played", () => {
+  const lines = [
+    { id: "a", part: 1, a0: 0, a1: 2 },
+    { id: "b", part: 1, a0: 2, a1: 4 },
+    { id: "c", part: 1, a0: 5, a1: 6 },
+    { id: "d", part: 1, a0: 5.5, a1: 7 },
+    { id: "z", part: 2, a0: 0, a1: 10 },
+  ];
+
+  test("the row whose a0 <= t < a1, in the part being played", () => {
+    expect(playingLine(lines, 1, 0)).toBe("a");
+    expect(playingLine(lines, 1, 1.99)).toBe("a");
+    // a1 is exclusive: the instant a line ends, the next one is being played.
+    expect(playingLine(lines, 1, 2)).toBe("b");
+    // Nothing is said between 4 s and 5 s, from the instant b ends.
+    expect(playingLine(lines, 1, 4)).toBeNull();
+    expect(playingLine(lines, 1, 4.5)).toBeNull();
+    // Two lines at once (mic and call): the one that started last.
+    expect(playingLine(lines, 1, 5.7)).toBe("d");
+    expect(playingLine(lines, 2, 1)).toBe("z");
+    expect(playingLine(lines, 3, 1)).toBeNull();
+  });
+});
+
+describe("[W5.3] the player's position is a wall time", () => {
+  test("[T3.9] a position after a 5-minute pause shows the wall time of that instant, never an offset", () => {
+    const v = live((b) => {
+      b.add({ type: "pause", part: 1, a: 10, wall: T0 + 10_000, mono: 1_010_000 + 10_000 });
+      b.add({ type: "resume", part: 1, a: 10, wall: T0 + 310_000, mono: 1_010_000 + 310_000 });
+    });
+    expect(positionText(v, 1, 5)).toBe(formatWall(T0 + 5_000, TZ));
+    expect(positionText(v, 1, 20)).toBe(formatWall(T0 + 320_000, TZ));
+    expect(positionText(v, 1, 20)).toMatch(/^\d{1,2}:\d{2}:\d{2}/);
+    expect(positionText(v, 1, 20)).not.toMatch(/^\d{1,2}:\d{2}$/);
+    // A part the view does not have yet shows nothing rather than a guess.
+    expect(positionText(v, 9, 1)).toBe("");
   });
 });

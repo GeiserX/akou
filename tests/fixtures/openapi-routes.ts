@@ -1,0 +1,124 @@
+/**
+ * A route table shaped like the server-mode routes of docs/ux/SERVER.md (jobs, events, keys and
+ * the OpenAI endpoint), for the tests of the OpenAPI generation and the Executor round trip while
+ * those routes are not built. Each route answers 501; only its `RouteDoc` matters here.
+ */
+
+import { json, type RouteDoc, type RouteEntry, type Router } from "../../src/main/api/http.ts";
+import { type ApiApp, buildRouter } from "../../src/main/api/server.ts";
+
+export const FIXTURE_ROUTES: { method: string; path: string; doc: RouteDoc }[] = [
+  {
+    method: "POST",
+    path: "/jobs",
+    doc: {
+      id: "jobs.create",
+      doc: "Submit an audio file for transcription. Answers at once with a job id.",
+      access: "jobs",
+      modes: ["app", "server"],
+      body: { multipart: { file: "file", "preset?": "string", "keywords[]?": "string[]" } },
+      ok: 202,
+    },
+  },
+  {
+    method: "GET",
+    path: "/jobs/:id",
+    doc: {
+      id: "jobs.get",
+      doc: "One job and its state. `wait` holds the request until the job ends, up to 60 s.",
+      access: "jobs",
+      modes: ["app", "server"],
+      params: { id: "The job id." },
+      query: { wait: { type: "integer", min: 0, max: 60, default: 0, doc: "Seconds to wait." } },
+      ok: 200,
+    },
+  },
+  {
+    method: "GET",
+    path: "/events",
+    doc: {
+      id: "events.list",
+      doc: "The key's job outcomes after a cursor, oldest first.",
+      access: "jobs",
+      modes: ["server"],
+      ok: 200,
+    },
+  },
+  {
+    method: "GET",
+    path: "/keys/me",
+    doc: {
+      id: "keys.me",
+      doc: "The calling key: its id, name and scopes.",
+      access: "jobs",
+      modes: ["app", "server"],
+      ok: 200,
+    },
+  },
+  {
+    method: "POST",
+    path: "/keys",
+    doc: {
+      id: "keys.create",
+      doc: "Create a key for a program.",
+      access: "admin",
+      modes: ["server"],
+      body: { name: "string" },
+      ok: 201,
+    },
+  },
+  {
+    method: "POST",
+    path: "/audio/transcriptions",
+    doc: {
+      id: "openai.transcribe",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out.",
+      access: "jobs",
+      modes: ["server"],
+      door: "compat",
+      body: { multipart: { file: "file", "model?": "string" } },
+      ok: 200,
+    },
+  },
+];
+
+/**
+ * Adds to a table the fixture routes it does not have yet, by method and path, each answering
+ * 501, and returns the ids it added. A real route always wins: when the jobs routes land before
+ * `keys.me`, the file describes the real upload, and only `keys.me` comes from here.
+ */
+export function addFixtureRoutes(r: Router<ApiApp>): string[] {
+  const have = new Set(r.entries().map((e) => `${e.method} ${e.path}`));
+  const added: string[] = [];
+  for (const f of FIXTURE_ROUTES) {
+    if (have.has(`${f.method} ${f.path}`)) continue;
+    r.add(f.method, f.path, f.doc, () =>
+      json(501, { error: "not_built", message: `${f.doc.id} is a test fixture` }),
+    );
+    added.push(f.doc.id);
+  }
+  return added;
+}
+
+/** The real route table plus the fixture routes it lacks: the table the server-mode file describes. */
+export function withFixtureRoutes(): RouteEntry[] {
+  const r = buildRouter();
+  addFixtureRoutes(r);
+  return r.entries();
+}
+
+/**
+ * A route no real table has, for the positive controls that add one route more. A fixture route
+ * would not do: once its real route lands, adding it again is a duplicate, not one more.
+ */
+export const CONTROL_ROUTE: RouteEntry = {
+  method: "GET",
+  path: "/positive-control",
+  doc: {
+    id: "keys.control",
+    doc: "Not a route: a test adds it to prove a check fails.",
+    access: "jobs",
+    modes: ["app", "server"],
+    ok: 200,
+  },
+};
