@@ -18,13 +18,16 @@ afterEach(async () => {
   for (const c of cleanups.splice(0).reverse()) await c();
 });
 
-/** A fresh home whose config picks a free port, so the test never collides with a real app. */
+/**
+ * A fresh home whose config picks a free port, so the test never collides with a real app, and
+ * binds loopback: server mode's default bind, 0.0.0.0, starts only behind a proxy (SV-P5).
+ */
 function home(): { dir: string; configDir: string; env: Record<string, string> } {
   const t = tempDir();
   cleanups.push(t.cleanup);
   const configDir = join(t.dir, ".config", "akou");
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ "api.port": 0 }));
+  writeFileSync(join(configDir, "config.json"), JSON.stringify({ "api.port": 0, "api.bind": "127.0.0.1" }));
   const env: Record<string, string> = {};
   for (const [k, v] of Object.entries(process.env)) if (v !== undefined) env[k] = v;
   delete env.AKOU_URL;

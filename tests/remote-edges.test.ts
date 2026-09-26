@@ -138,6 +138,15 @@ describe("[SI-1] a remote that does not answer", () => {
     );
     expect(far).toBeInstanceOf(Unreachable);
     expect(far.message).toContain("HTTP_PROXY");
+    // A proxy URL can carry credentials, and this message reaches stderr and `--json`: name only.
+    const secret = await rejection(
+      client(
+        env({ AKOU_URL: `http://${FAR}:8476`, HTTP_PROXY: "http://user:s3cret@127.0.0.1:9" }),
+      ).request("GET", "/jobs", { timeoutMs: 300 }),
+    );
+    expect(secret.message).toContain("HTTP_PROXY");
+    expect(secret.message).not.toContain("s3cret");
+    expect(secret.message).not.toContain("user:");
     const near = await rejection(
       client(
         env({ AKOU_URL: `http://127.0.0.1:${portOf(silent)}`, HTTP_PROXY: "http://127.0.0.1:9" }),

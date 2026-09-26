@@ -423,8 +423,9 @@ function proxyNote(base: string, env: Record<string, string | undefined>): strin
   const names =
     url.protocol === "https:" ? ["HTTPS_PROXY", "https_proxy"] : ["HTTP_PROXY", "http_proxy"];
   const name = names.find((n) => env[n]);
+  // The variable's name only: a proxy URL can carry credentials, and this reaches `--json`.
   return name
-    ? `; ${name} is set, so the request went through ${env[name]} unless NO_PROXY names the host`
+    ? `; ${name} is set, so the request went through that proxy unless NO_PROXY names the host`
     : "";
 }
 

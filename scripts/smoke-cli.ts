@@ -135,8 +135,12 @@ async function serveCheck(): Promise<void> {
   const serveHome = join(home, "serve");
   const configDir = join(serveHome, ".config", "akou");
   mkdirSync(configDir, { recursive: true });
-  // A free port, so a release runner's other services never collide with it.
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ "api.port": 0 }));
+  // A free port, so a release runner's other services never collide with it, on loopback: server
+  // mode's default bind, 0.0.0.0, starts only behind a proxy (SV-P5).
+  writeFileSync(
+    join(configDir, "config.json"),
+    JSON.stringify({ "api.port": 0, "api.bind": "127.0.0.1" }),
+  );
   const serveEnv = { ...env, AKOU_HOME: serveHome, AKOU_MODELS_DIR: join(serveHome, "models") };
   const child = spawn(exe, ["serve"], { env: serveEnv, stdio: ["ignore", "ignore", "pipe"] });
   let stderr = "";
