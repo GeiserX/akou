@@ -134,6 +134,27 @@ describe("the environment", () => {
     h.cleanup();
   });
 
+  test("[SV-P11] AKOU_BEHIND_PROXY sets server.behind_proxy, so a container needs no seeded config.json", () => {
+    const h = home({});
+    expect(loadConfig(h.env).settings["server.behind_proxy"]).toBe(false);
+    expect(
+      loadConfig({ ...h.env, AKOU_BEHIND_PROXY: "true" }).settings["server.behind_proxy"],
+    ).toBe(true);
+    expect(loadConfig({ ...h.env, AKOU_BEHIND_PROXY: "1" }).settings["server.behind_proxy"]).toBe(
+      true,
+    );
+    // The environment wins over the file, as for every setting with a variable.
+    const off = home({ "server.behind_proxy": true });
+    expect(
+      loadConfig({ ...off.env, AKOU_BEHIND_PROXY: "false" }).settings["server.behind_proxy"],
+    ).toBe(false);
+    const bad = loadConfig({ ...h.env, AKOU_BEHIND_PROXY: "maybe" });
+    expect(bad.settings["server.behind_proxy"]).toBe(false);
+    expect(bad.issues[0]?.message).toContain("AKOU_BEHIND_PROXY");
+    h.cleanup();
+    off.cleanup();
+  });
+
   test("the default models folder follows LOCALAPPDATA on Windows and XDG_DATA_HOME on Linux", () => {
     const t = tempDir();
     const env: Record<string, string | undefined> = {
