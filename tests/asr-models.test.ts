@@ -22,6 +22,7 @@ import {
   defaultModelsDir,
   downloadFile,
   downloadModels,
+  hostPlatform,
   MODELS,
   type ModelSpecEntry,
   modelFile,
@@ -131,7 +132,8 @@ describe("the registry", () => {
   });
 
   test("a machine downloads only what its asr.diarizer needs", () => {
-    const ids = (k: "nemotron" | "embeddings") => modelsFor(k).map((m) => m.id);
+    const ids = (k: "nemotron" | "embeddings") =>
+      modelsFor({ "asr.diarizer": k }, hostPlatform()).map((m) => m.id);
     // TitaNet stays with Nemotron: it carries names across a stream that starts over.
     expect(ids("nemotron")).toEqual([RECOGNIZER, "silero-vad", NEMOTRON, "titanet-small"]);
     expect(ids("embeddings")).toEqual([

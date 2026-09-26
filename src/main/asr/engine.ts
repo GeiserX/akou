@@ -6,17 +6,104 @@
  * Every engine works on 16 kHz mono float audio. A `ModelSet` loads each model once per app run
  * and counts the loads (TRAPS "Models loaded twice"); the Silero VAD keeps per-stream state, so
  * there is one VAD per channel, never one per part.
+ *
+ * `FinalEngine`, `LiveEngine` and `Fuser` are the engine interfaces of
+ * docs/research/asr-architecture.md section 2.1: any number of engines decode the same units into
+ * `Hypothesis` values that carry per-word confidences and times, and a fuser combines them.
+ * Parakeet on sherpa-onnx is the first `FinalEngine` (`RecognizerEngine` over the model set's
+ * recognizer); the pipelines still call `Recognizer.decode` until the N-engine final pass (ASR-6).
  */
 
+import type { Provider } from "../llm/provider.ts";
 import type { TermCheck } from "../vocab/bpe-vocab.ts";
 import type { DecodeList, ModelKind } from "../vocab/decode-list.ts";
 
 export const ASR_RATE = 16000;
 
+/** One word of a hypothesis. Times are seconds into the decoded unit. */
+export interface WordHyp {
+  w: string;
+  /** 0 to 1, when the engine reports token probabilities. */
+  conf?: number;
+  t0?: number;
+  t1?: number;
+}
+
+/** What one engine heard in one unit. */
+export interface Hypothesis {
+  /** The engine's registry id, written into `seg.model`. */
+  engine: string;
+  text: string;
+  words: WordHyp[];
+  lang?: string;
+  /** Decode time, milliseconds. */
+  ms: number;
+}
+
+/** One unit of the final pass: gained, padded audio and what the call knows about it. */
+export interface FinalUnit {
+  samples: Float32Array;
+  lang: "auto" | string;
+  glossary: readonly string[];
+}
+
+/** An engine of the final pass (`asr.final.engines`). */
+export interface FinalEngine {
+  /** Registry id, written into `seg.model`. */
+  readonly id: string;
+  readonly features: {
+    confidence: boolean;
+    timestamps: boolean;
+    glossary: boolean;
+    languageId: boolean;
+  };
+  load(): Promise<void>;
+  unload(): Promise<void>;
+  decode(unit: FinalUnit): Promise<Hypothesis>;
+}
+
+/** A live token. Append-only: a token is never taken back. */
+export interface LiveToken {
+  text: string;
+  /** Seconds into the stream. */
+  t: number;
+  conf: number;
+}
+
+/** One live stream, kept for the whole call. */
+export interface LiveStream {
+  push(samples: Float32Array): LiveToken[];
+  flush(): LiveToken[];
+  close(): void;
+}
+
+/** A streaming engine of the live pass (`asr.live.engine`). */
+export interface LiveEngine {
+  readonly id: string;
+  /** The engine's latency tier (560 or 1120 for Nemotron). */
+  readonly tierMs: number;
+  readonly languages: readonly string[];
+  /** One stream per channel. */
+  open(lang: "auto" | string): LiveStream;
+}
+
+export type FuserId = "first" | "rover-freq" | "rover-conf" | "llm-pick" | "llm-free";
+
+/** Combines the hypotheses of any number of engines over one unit into one (`asr.fusion`). */
+export interface Fuser {
+  readonly id: FuserId;
+  fuse(
+    hyps: readonly Hypothesis[],
+    ctx: { lang: string; glossary: readonly string[]; provider?: Provider },
+  ): Promise<Hypothesis>;
+}
+
 export interface Recognized {
   text: string;
   /** Only models that detect the language report it (Whisper); Parakeet leaves it empty. */
   lang?: string;
+  /** Per-word confidences and times, from engines that report them (sherpa-onnx). */
+  words?: WordHyp[];
 }
 
 export interface Recognizer {
@@ -160,4 +247,39 @@ export async function loadModelSet(spec: ModelSpec): Promise<ModelSet> {
   }
   const { SherpaModels } = await import("./sherpa.ts");
   return new SherpaModels(spec);
+}
+
+/**
+ * A model set's recognizer as a `FinalEngine`: Parakeet on sherpa-onnx in the app, the fake
+ * recognizer in CI. It decodes through `prepare`, so the recognizer still loads once per app run
+ * whichever path asks for it. It takes no glossary: Parakeet decodes greedy, which takes no
+ * hotwords, and the vocabulary applies when reading and after the call.
+ */
+export class RecognizerEngine implements FinalEngine {
+  readonly id: string;
+  readonly features = { confidence: true, timestamps: true, glossary: false, languageId: false };
+  private rec: Recognizer | null = null;
+
+  constructor(private readonly models: Pick<ModelSet, "recognizerModel" | "prepare">) {
+    this.id = models.recognizerModel;
+  }
+
+  async load(): Promise<void> {
+    this.rec ??= this.models.prepare(null).recognizer;
+  }
+
+  async unload(): Promise<void> {
+    this.rec = null;
+  }
+
+  async decode(unit: FinalUnit): Promise<Hypothesis> {
+    await this.load();
+    const rec = this.rec as Recognizer;
+    const t = performance.now();
+    const r = rec.decode(unit.samples);
+    const ms = performance.now() - t;
+    const h: Hypothesis = { engine: this.id, text: r.text, words: r.words ?? [], ms };
+    if (r.lang) h.lang = r.lang;
+    return h;
+  }
 }

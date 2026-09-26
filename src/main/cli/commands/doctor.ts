@@ -30,7 +30,7 @@
 import { statSync } from "node:fs";
 import { ensureToken, tokenFileAccess } from "../../api/guard.ts";
 import type { DiarizerKind } from "../../asr/engine.ts";
-import { modelsFor, verifyModels } from "../../asr/models.ts";
+import { hostPlatform, modelsFor, verifyModels } from "../../asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "../../asr/nemotron.ts";
 import { findHelper, type HelperFound } from "../../capture/helper.ts";
 import { loadConfig } from "../../config/schema.ts";
@@ -301,7 +301,7 @@ export async function doctor(
   checks.push(...api.checks);
 
   const diarizer = cfg.settings["asr.diarizer"] as DiarizerKind;
-  const registry = ctx.models ?? modelsFor(diarizer);
+  const registry = ctx.models ?? modelsFor(cfg.settings, hostPlatform());
   const dir = cfg.settings["asr.modelsDir"];
   const states = await verifyModels(
     dir,

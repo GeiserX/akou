@@ -69,6 +69,7 @@ import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts
 import {
   DownloadRefused,
   downloadModels,
+  hostPlatform,
   MODELS,
   type ModelSpecEntry,
   type ModelsStatus,
@@ -585,10 +586,7 @@ export class AkouApp implements ApiApp {
 
   /** The models the next start needs (`asr.diarizer`): what the download card offers. */
   private registry(): readonly ModelSpecEntry[] {
-    return modelsFor(
-      this.cfg.settings["asr.diarizer"] as DiarizerKind,
-      this.o.modelRegistry ?? MODELS,
-    );
+    return modelsFor(this.cfg.settings, hostPlatform(), this.o.modelRegistry ?? MODELS);
   }
 
   /** The speaker-label engine running now: the one the recognizer started with, else the setting. */
@@ -606,7 +604,11 @@ export class AkouApp implements ApiApp {
    * change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
    */
   private runningModelsPresent(): boolean {
-    const registry = modelsFor(this.runningDiarizer(), this.o.modelRegistry ?? MODELS);
+    const registry = modelsFor(
+      { "asr.diarizer": this.runningDiarizer() },
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+    );
     return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
