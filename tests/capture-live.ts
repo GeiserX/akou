@@ -118,3 +118,48 @@ export function measure(left: Float32Array, right: Float32Array): Verdict {
     maxSkewMs: n ? Math.max(...skewsMs.map(Math.abs)) : Number.POSITIVE_INFINITY,
   };
 }
+
+/** Block length of `toneRuns`, seconds: 20 ms resolves 440 Hz from 1000 Hz with room to spare. */
+export const TONE_BLOCK = 0.02;
+
+/**
+ * The runs of `want` in `x`, each as its length in seconds, read from tone content alone: a 20 ms
+ * Hann-windowed block belongs to `want` when its power there is at least a tenth of the loudest
+ * block's power at either tone and at least `db` above its power at `other`. It never looks at
+ * when a burst starts, so two players that start a few milliseconds apart (PulseAudio's two
+ * `paplay`s) measure exactly as one player does, and it pairs nothing across channels.
+ */
+export function toneRuns(
+  x: Float32Array,
+  want: number,
+  other: number,
+  db = 20,
+  rate = CAPTURE_RATE,
+): number[] {
+  const n = Math.round(TONE_BLOCK * rate);
+  const hann = Float32Array.from(
+    { length: n },
+    (_, i) => 0.5 - 0.5 * Math.cos((2 * Math.PI * i) / (n - 1)),
+  );
+  const blocks: { w: number; o: number }[] = [];
+  const buf = new Float32Array(n);
+  for (let i = 0; i + n <= x.length; i += n) {
+    for (let j = 0; j < n; j++) buf[j] = (x[i + j] as number) * (hann[j] as number);
+    blocks.push({ w: power(buf, want, rate), o: power(buf, other, rate) });
+  }
+  const loud = blocks.reduce((m, b) => Math.max(m, b.w, b.o), 0);
+  if (loud === 0) return [];
+  const ratio = 10 ** (db / 10);
+  const runs: number[] = [];
+  let run = 0;
+  for (const b of blocks) {
+    if (b.w >= loud / 10 && b.w >= b.o * ratio) {
+      run++;
+    } else if (run > 0) {
+      runs.push(run * TONE_BLOCK);
+      run = 0;
+    }
+  }
+  if (run > 0) runs.push(run * TONE_BLOCK);
+  return runs;
+}

@@ -6,7 +6,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { countsOf, judge, scaled, skippedOf } from "../scripts/ci/test-floor.ts";
 import { tempDir } from "./helpers.ts";
@@ -128,8 +128,10 @@ describe("[T4.20] a job that runs too few tests fails", () => {
     }
   });
 
-  test("every job ci.yml hands to the floor script has a floor", () => {
-    const yaml = readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+  test("every job ci.yml and nightly.yml hand to the floor script has a floor", () => {
+    const yaml = ["ci.yml", "nightly.yml"]
+      .map((f) => readFileSync(join(ROOT, ".github", "workflows", f), "utf8"))
+      .join("\n");
     const floors = Object.keys(
       JSON.parse(readFileSync(join(ROOT, "tests", "floors.json"), "utf8")),
     );
@@ -252,5 +254,133 @@ jobs:
       - run: echo "$HOME"
 `;
     expect(posixStepsOutsideBash(yaml)).toEqual(['check: bun test --rerun-each "$TEST_REPEAT"']);
+  });
+});
+
+describe("[CI-2] one workflow, one required check", () => {
+  type Wf = {
+    jobs: Record<
+      string,
+      { needs?: string | string[]; if?: string; steps?: { id?: string; run?: string }[] }
+    >;
+  };
+  const ciYaml = () => readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8");
+
+  /** The pattern the `changes` job greps: a changed file it matches is documentation. */
+  function docsPattern(yaml: string): RegExp {
+    const wf = Bun.YAML.parse(yaml) as Wf;
+    const run = wf.jobs.changes?.steps?.find((s) => s.id === "diff")?.run ?? "";
+    const m = /grep -qvE '([^']+)'/.exec(run);
+    if (!m) throw new Error("the changes job has no `grep -qvE '<pattern>'`");
+    return new RegExp(m[1] as string);
+  }
+  /** What the `changes` job answers for a pull request that changed these files. */
+  const needsCode = (re: RegExp, files: string[]) => files.some((f) => !re.test(f));
+
+  test("docs, top-level Markdown and the tracker's .beads/ export are documentation; anything else is code", () => {
+    const re = docsPattern(ciYaml());
+    // PR #27 changed only these and ran every heavy leg.
+    expect(needsCode(re, [".beads/issues.jsonl", ".beads/interactions.jsonl"])).toBe(false);
+    expect(
+      needsCode(re, ["docs/TESTING.md", "README.md", "CHANGELOG.md", ".beads/config.yaml"]),
+    ).toBe(false);
+    for (const code of [
+      "src/main/index.ts",
+      "tests/floors.json",
+      ".github/workflows/ci.yml",
+      "package.json",
+      "native/akou-capture/README.md",
+      "scripts/.beads/x.ts",
+    ])
+      expect({ code, needsCode: needsCode(re, ["docs/INDEX.md", code]) }).toEqual({
+        code,
+        needsCode: true,
+      });
+  });
+
+  test("positive control: the filter before the fix counted a tracker-only change as code", () => {
+    const before = ciYaml().replace("^(docs/|\\.beads/|[^/]+\\.md$)", "^(docs/|[^/]+\\.md$)");
+    expect(before).not.toBe(ciYaml());
+    expect(needsCode(docsPattern(before), [".beads/issues.jsonl"])).toBe(true);
+  });
+
+  /** Jobs that are neither the aggregate nor in its `needs`: a leg that could fail unseen. */
+  function outsideAggregate(yaml: string): string[] {
+    const wf = Bun.YAML.parse(yaml) as Wf;
+    const agg = wf.jobs["ci-ok"];
+    if (!agg) return ["ci-ok is missing"];
+    const needs = new Set([agg.needs ?? []].flat());
+    const out = Object.keys(wf.jobs).filter((j) => j !== "ci-ok" && !needs.has(j));
+    if (agg.if !== "always()") out.push("ci-ok must run with if: always()");
+    return out;
+  }
+
+  test("ci-ok needs every other job and always runs, so a failed leg turns it red", () => {
+    expect(outsideAggregate(ciYaml())).toEqual([]);
+  });
+
+  test("positive control: a leg left out of ci-ok's needs is caught", () => {
+    const extra = ciYaml().replace(
+      /\n {2}ci-ok:\n/,
+      "\n  stray:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: exit 1\n\n  ci-ok:\n",
+    );
+    expect(outsideAggregate(extra)).toEqual(["stray"]);
+  });
+});
+
+describe("[TS-20] the two-voice diarization smoke guards main from ci.yml", () => {
+  type Job = {
+    needs?: string | string[];
+    if?: string;
+    strategy?: unknown;
+    steps?: { id?: string; run?: string }[];
+  };
+  const wf = () =>
+    Bun.YAML.parse(readFileSync(join(ROOT, ".github", "workflows", "ci.yml"), "utf8")) as {
+      jobs: Record<string, Job>;
+    };
+
+  /** The pattern the `changes` job greps for the diarization leg. */
+  function diarizePattern(): RegExp {
+    const run = wf().jobs.changes?.steps?.find((s) => s.id === "diff")?.run ?? "";
+    const m = /grep -qE '([^']+)' changed\.txt; then\s+echo "diarize=true"/.exec(run);
+    if (!m) throw new Error("the changes job has no diarize filter");
+    return new RegExp(m[1] as string);
+  }
+
+  test("the diarize leg runs on three OSes under ci-ok, when its own paths change", () => {
+    const jobs = wf().jobs;
+    const leg = jobs.diarize;
+    expect(leg?.if).toBe("needs.changes.outputs.diarize == 'true'");
+    expect(JSON.stringify(leg?.strategy)).toContain("windows");
+    expect(JSON.stringify(leg?.strategy)).toContain("macos");
+    expect(JSON.stringify(leg?.strategy)).toContain("ubuntu");
+    expect([jobs["ci-ok"]?.needs].flat()).toContain("diarize");
+    expect(leg?.steps?.some((s) => s.run?.includes("scripts/diarize-smoke.ts"))).toBe(true);
+    // One workflow: the separate diarize.yml is gone.
+    expect(existsSync(join(ROOT, ".github", "workflows", "diarize.yml"))).toBe(false);
+  });
+
+  test("the diarize filter picks the helper, its client, the smoke and its fixtures, and nothing else", () => {
+    const re = diarizePattern();
+    for (const f of [
+      "native/akou-diarize/src/main.rs",
+      "native/akou-diarize/Cargo.lock",
+      "src/main/asr/nemotron.ts",
+      "src/main/asr/models.ts",
+      "scripts/diarize-smoke.ts",
+      "tests/fixtures/two-voices.wav",
+      "NOTICE",
+      ".github/workflows/ci.yml",
+    ])
+      expect({ f, hit: re.test(f) }).toEqual({ f, hit: true });
+    for (const f of [
+      "native/akou-capture/src/main.rs",
+      "src/main/asr/sherpa.ts",
+      "docs/TESTING.md",
+      "tests/ui/window.test.ts",
+      "NOTICE.md",
+    ])
+      expect({ f, hit: re.test(f) }).toEqual({ f, hit: false });
   });
 });

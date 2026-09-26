@@ -118,12 +118,13 @@ describe("the registry", () => {
       url: /^\s*MODEL_URL:\s*(\S+)\s*$/m.exec(yml)?.[1],
       sha256: /^\s*MODEL_SHA256:\s*(\S+)\s*$/m.exec(yml)?.[1],
     });
-    const yml = readFileSync(
-      join(import.meta.dir, "..", ".github", "workflows", "diarize.yml"),
-      "utf8",
-    );
     const f = MODELS.find((x) => x.id === NEMOTRON)?.files[0];
-    expect(pin(yml)).toEqual({ url: f?.url, sha256: f?.sha256 });
+    // The PR smoke (ci.yml) and the nightly evaluation (nightly.yml) both fetch it.
+    for (const wf of ["ci.yml", "nightly.yml"]) {
+      const text = readFileSync(join(import.meta.dir, "..", ".github", "workflows", wf), "utf8");
+      expect({ wf, ...pin(text) }).toEqual({ wf, url: f?.url, sha256: f?.sha256 });
+    }
+    const yml = readFileSync(join(import.meta.dir, "..", ".github", "workflows", "ci.yml"), "utf8");
     // Positive control: a pin bumped on one side only is caught.
     const bumped = yml.replace(f?.sha256 as string, "0".repeat(64));
     expect(pin(bumped)).not.toEqual({ url: f?.url, sha256: f?.sha256 });

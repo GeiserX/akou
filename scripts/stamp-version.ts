@@ -24,6 +24,12 @@
  *
  * The release workflow runs `--check --tag "$GITHUB_REF_NAME"` first and `--plist` on the built
  * bundle; `tests/release.test.ts` fails when any place drifts.
+ *
+ * A stable version (1.0.0 or later, no prerelease part) also needs its evidence on record
+ * (docs/CI-CD.md CI-28), and `--check` fails without it: the newest row of the terms table in
+ * docs/providers.md is dated after the previous stable tag, and every M0 gate G1 to G8 has a Pass
+ * verdict in the summary table of docs/gates/M0-results.md. Prereleases never wait on a gate.
+ * `tests/release-evidence.test.ts` holds the positive control.
  */
 
 import { spawnSync } from "node:child_process";
@@ -161,6 +167,139 @@ export function plistVersion(plist: string): string | null {
   return r.status === 0 ? r.stdout.toString().trim() : null;
 }
 
+/** 1.0.0 or later with no prerelease part: a release that must carry its evidence (CI-28). */
+export function isStable(version: string): boolean {
+  const m = SEMVER.exec(version);
+  return m !== null && Number(m[1]) >= 1 && !/^[^+]*-/.test(version);
+}
+
+/** -1, 0 or 1 by major, minor and patch; build metadata and prerelease parts are ignored. */
+function compareCore(a: string, b: string): number {
+  const pa = a.split(/[-+]/)[0]?.split(".").map(Number) ?? [];
+  const pb = b.split(/[-+]/)[0]?.split(".").map(Number) ?? [];
+  for (let i = 0; i < 3; i++) {
+    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+    if (d !== 0) return Math.sign(d);
+  }
+  return 0;
+}
+
+/** The rows of the first Markdown table after `head` in `md`, as trimmed cells; null if none. */
+function tableAfter(md: string, head: RegExp): string[][] | null {
+  const lines = md.split("\n");
+  const at = lines.findIndex((l) => head.test(l));
+  if (at === -1) return null;
+  const rows: string[][] = [];
+  for (const l of lines.slice(at + 1)) {
+    if (!l.trim().startsWith("|")) break;
+    const cells = l
+      .trim()
+      .replace(/^\||\|$/g, "")
+      .split("|")
+      .map((c) => c.trim());
+    if (cells.every((c) => /^:?-+:?$/.test(c))) continue;
+    rows.push(cells);
+  }
+  return rows;
+}
+
+/**
+ * What is missing from the terms check in docs/providers.md: the newest dated row of its table
+ * must be later than `previousStableDate` (YYYY-MM-DD), or exist at all for a first stable release.
+ */
+export function termsProblems(providersMd: string, previousStableDate: string | null): string[] {
+  const where = "docs/providers.md";
+  const rows = tableAfter(providersMd, /^\|\s*Date checked\s*\|/);
+  if (rows === null) return [`${where}: no terms table (| Date checked | ...)`];
+  const dates = rows
+    .map((r) => r[0] ?? "")
+    .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d))
+    .sort();
+  const newest = dates.at(-1);
+  if (!newest)
+    return [
+      `${where}: the terms table has no dated row; read the current terms and add one (YYYY-MM-DD)`,
+    ];
+  if (previousStableDate !== null && newest <= previousStableDate)
+    return [
+      `${where}: the newest terms check is dated ${newest}, not after the previous stable release (${previousStableDate}); read the current terms and add a dated row`,
+    ];
+  return [];
+}
+
+/** Every M0 gate from G1 to G8 without a Pass verdict in the summary table of M0-results.md. */
+export function gateProblems(m0Md: string): string[] {
+  const where = "docs/gates/M0-results.md";
+  const summary = m0Md.split(/^## Summary\s*$/m)[1]?.split(/^## /m)[0];
+  const rows = summary === undefined ? null : tableAfter(summary, /^\|\s*Gate\s*\|\s*Verdict\s*\|/);
+  if (rows === null)
+    return [`${where}: no summary table (## Summary, then | Gate | Verdict | ...)`];
+  const verdicts = new Map<string, string>();
+  for (const r of rows) {
+    const id = /^(G\d+)\b/.exec(r[0] ?? "")?.[1];
+    if (id) verdicts.set(id, r[1] ?? "");
+  }
+  const out: string[] = [];
+  for (let g = 1; g <= 8; g++) {
+    const id = `G${g}`;
+    const v = verdicts.get(id);
+    if (v === undefined) out.push(`${where}: ${id} has no row in the summary table`);
+    else if (v.split(/\s/)[0] !== "Pass") out.push(`${where}: ${id} is ${v}, not Pass`);
+  }
+  return out;
+}
+
+/**
+ * The newest stable tag below `version` in the git repository at `root`, with its date. Throws
+ * when `root` is not the top of a git checkout or is a shallow clone, so a missing history never
+ * reads as "no release".
+ */
+export function previousStable(
+  root: string,
+  version: string,
+): { tag: string; date: string } | null {
+  const git = (args: string[]) => spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+  // Asked of git, not by comparing paths: on Windows git prints C:/Users/runneradmin/... where
+  // the caller may hold C:\Users\RUNNER~1\..., the same folder under its short name.
+  const top = git(["rev-parse", "--show-cdup"]);
+  if (top.status !== 0 || top.stdout.trim() !== "")
+    throw new Error(`cannot list the tags: ${root} is not the top of a git checkout`);
+  // A shallow clone holds none of the older tags, so "no stable tag" would be a guess.
+  if (git(["rev-parse", "--is-shallow-repository"]).stdout.trim() !== "false")
+    throw new Error(
+      `cannot list the tags: ${root} is a shallow clone (git fetch --unshallow --tags)`,
+    );
+  const r = git(["tag", "--list", "v*", "--format=%(refname:short) %(creatordate:short)"]);
+  if (r.status !== 0) throw new Error(`cannot list the tags: ${r.stderr.trim()}`);
+  let best: { tag: string; date: string; v: string } | null = null;
+  for (const line of r.stdout.split("\n")) {
+    const [tag, date] = line.trim().split(" ");
+    if (!tag || !date) continue;
+    const v = tag.replace(/^v/, "");
+    if (!SEMVER.test(v) || !isStable(v) || compareCore(v, version) >= 0) continue;
+    if (!best || compareCore(v, best.v) > 0) best = { tag, date, v };
+  }
+  return best && { tag: best.tag, date: best.date };
+}
+
+/** What a stable `version` still lacks before it may be released (CI-28); empty for a prerelease. */
+export function evidenceProblems(root: string, version: string): string[] {
+  if (!isStable(version)) return [];
+  const read = (f: string) =>
+    existsSync(join(root, f)) ? readFileSync(join(root, f), "utf8") : "";
+  const out: string[] = [];
+  let prev: { tag: string; date: string } | null = null;
+  try {
+    prev = previousStable(root, version);
+  } catch (err) {
+    // Reported, and the rest is still checked, so one run lists everything that is missing.
+    out.push(`${(err as Error).message}; a stable release needs the tag history`);
+  }
+  out.push(...termsProblems(read("docs/providers.md"), prev?.date ?? null));
+  out.push(...gateProblems(read("docs/gates/M0-results.md")));
+  return out;
+}
+
 export function main(argv: string[]): number {
   const flag = (name: string) => {
     const i = argv.indexOf(name);
@@ -204,6 +343,10 @@ export function main(argv: string[]): number {
       console.error(
         `stamp-version: ${d.file} says ${d.version ?? "(none)"}, package.json ${version}`,
       );
+      bad++;
+    }
+    for (const p of evidenceProblems(root, version)) {
+      console.error(`stamp-version: ${version} is a stable release: ${p}`);
       bad++;
     }
     if (bad === 0) {
