@@ -100,6 +100,9 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   mcp: "serves MCP on stdin and stdout until they close",
   keys: "reads and writes the keys file, with the app stopped or running",
   admin: "writes the admin password hash into the settings file",
+  // Not local, but it reads FILE before it sends anything, and its routes (`/server`, `/jobs`)
+  // never name a call.
+  transcribe: "reads FILE first; its routes name no call",
 };
 
 const CALL_ROUTE = /^[A-Z]+ \/calls\/[^/?]+/;

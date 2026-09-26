@@ -454,7 +454,16 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
       const ids = operations(doc)
         .map((o) => o.op.operationId)
         .sort();
-      expect(ids).toEqual(["events.list", "jobs.create", "jobs.get", "keys.me", "server.get"]);
+      expect(ids).toEqual([
+        "events.list",
+        "jobs.create",
+        "jobs.delete",
+        "jobs.get",
+        "jobs.list",
+        "jobs.result",
+        "keys.me",
+        "server.get",
+      ]);
       for (const { op } of operations(doc)) expect(op["x-akou-access"]).not.toBe("admin");
       expect(openApiProblems(doc)).toEqual([]);
       // Positive control: without the scope the same server lists admin and compat operations.

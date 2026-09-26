@@ -96,6 +96,14 @@ const TABLE: Record<string, Access> = {
   "GET /v1/server": "open",
   // Any key, and the app's token (SI-3).
   "GET /v1/keys/me": "jobs",
+  // Server mode's jobs, events and the OpenAI door: any key, each seeing its own (SV-K3).
+  "POST /v1/jobs": "jobs",
+  "GET /v1/jobs": "jobs",
+  "GET /v1/jobs/{id}": "jobs",
+  "GET /v1/jobs/{id}/result": "jobs",
+  "DELETE /v1/jobs/{id}": "jobs",
+  "GET /v1/events": "jobs",
+  "POST /v1/audio/transcriptions": "jobs",
 };
 
 type Credential = "none" | "unknown" | "admin";
