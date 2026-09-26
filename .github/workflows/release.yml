@@ -193,9 +193,11 @@ jobs:
           retention-days: 14
 
   # The server image (docs/ux/SERVER.md SV-P1), built natively on each architecture's runner from
-  # the tag's tree. A tag pushes each build by digest, and `image-manifest` joins the two under
-  # drumsergio/akou:<version>. There is never a `latest` tag. A pull request or a dry run builds both
-  # and pushes nothing. Pushing needs DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the repository.
+  # the tag's tree, in three variants (akou-5an.94): cpu, vulkan (Intel and AMD GPUs) and cuda
+  # (NVIDIA). A tag pushes each build by digest, and `image-manifest` joins the two architectures of
+  # each under drumsergio/akou:<version>, <version>-vulkan and <version>-cuda. There is never a
+  # `latest` tag. A pull request or a dry run builds them all and pushes nothing. Pushing needs
+  # DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the repository.
   image:
     needs: version
     strategy:
@@ -204,13 +206,28 @@ jobs:
         include:
           - runner: ubuntu-24.04
             platform: linux/amd64
+            variant: cpu
           - runner: ubuntu-24.04-arm
             platform: linux/arm64
+            variant: cpu
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            variant: vulkan
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            variant: vulkan
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+            variant: cuda
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+            variant: cuda
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
       PUSH: ${{ github.event_name == 'push' && github.ref_type == 'tag' }}
       PLATFORM: ${{ matrix.platform }}
+      VARIANT: ${{ matrix.variant }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: log in to Docker Hub (a pushed tag only)
@@ -225,7 +242,7 @@ jobs:
             exit 1
           fi
           echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
-      - name: build ${{ matrix.platform }} (and push it by digest on a tag)
+      - name: build ${{ matrix.variant }} for ${{ matrix.platform }} (and push it by digest on a tag)
         run: |
           docker buildx create --use --name akou
           if [ "$PUSH" = true ]; then
@@ -233,14 +250,15 @@ jobs:
           else
             output="type=docker,name=akou:dry-run"
           fi
-          docker buildx build --platform "$PLATFORM" --output "$output" --metadata-file meta.json .
+          docker buildx build --platform "$PLATFORM" --build-arg ACCELERATOR="$VARIANT" \
+            --output "$output" --metadata-file meta.json .
           digest=$(jq -r '."containerimage.digest"' meta.json)
-          echo "$PLATFORM $digest"
+          echo "$VARIANT $PLATFORM $digest"
           mkdir -p digests
-          echo "$digest" > "digests/${PLATFORM//\//-}"
+          echo "$digest" > "digests/$VARIANT-${PLATFORM//\//-}"
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: image-digest-${{ runner.arch }}
+          name: image-digest-${{ matrix.variant }}-${{ runner.arch }}
           path: digests/*
           if-no-files-found: error
           retention-days: 1
@@ -267,16 +285,21 @@ jobs:
             exit 1
           fi
           echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
-      - name: drumsergio/akou:<version> for amd64 and arm64
+      - name: drumsergio/akou:<version>, <version>-vulkan and <version>-cuda, each for amd64 and arm64
         env:
           TAG: ${{ github.ref_name }}
         run: |
           version="${TAG#v}"
-          refs=$(sed 's|^|docker.io/drumsergio/akou@|' digests/*)
-          test "$(echo "$refs" | wc -l)" = 2
-          # shellcheck disable=SC2086
-          docker buildx imagetools create --tag "docker.io/drumsergio/akou:$version" $refs
-          docker buildx imagetools inspect "docker.io/drumsergio/akou:$version"
+          for variant in cpu vulkan cuda; do
+            suffix=""
+            [ "$variant" = cpu ] || suffix="-$variant"
+            refs=$(cat digests/"$variant"-linux-amd64 digests/"$variant"-linux-arm64 | sed 's|^|docker.io/drumsergio/akou@|')
+            # Both architectures, or nothing: the step's shell has no pipefail, so count them.
+            test "$(printf '%s\n' "$refs" | grep -c .)" = 2
+            # shellcheck disable=SC2086
+            docker buildx imagetools create --tag "docker.io/drumsergio/akou:$version$suffix" $refs
+            docker buildx imagetools inspect "docker.io/drumsergio/akou:$version$suffix"
+          done
 
   # The image of the tag is part of the release: no GitHub release goes out while it failed.
   release:

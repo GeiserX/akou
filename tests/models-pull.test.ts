@@ -9,9 +9,16 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { detectAccelerator, hostProbe } from "../src/main/asr/accelerator.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { llamaRuntime } from "../src/main/asr/llama-server.ts";
-import { hostPlatform, type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import {
+  hostPlatform,
+  MODELS,
+  type ModelSpecEntry,
+  NEMOTRON,
+  RECOGNIZER,
+} from "../src/main/asr/models.ts";
 import { PRESET_NAMES, presetModels } from "../src/main/asr/presets.ts";
 import { EXIT } from "../src/main/cli/client.ts";
 import { USAGE_FILE } from "../src/main/server/model-store.ts";
@@ -165,10 +172,13 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
   });
 
   test("best pulls Qwen, this machine's llama-server build and the helpers, never Parakeet", async () => {
-    // The build this machine runs by default, as the real catalog names it (Metal on Apple silicon).
+    // The build this machine runs by default, as the real catalog names it (Metal on Apple silicon,
+    // the GPU detection finds elsewhere), as the CLI resolves it.
     const build = llamaRuntime(
       { "asr.accelerator": "auto", "asr.llamaServer": [] },
       hostPlatform(),
+      MODELS,
+      { detected: detectAccelerator("auto", hostProbe()) },
     ) as string;
     expect(build).toStartWith("llama-server-");
     const withQwen = [...registry, entry(QWEN_ASR, ["qwen.gguf"]), entry(build, ["llama.tar.gz"])];

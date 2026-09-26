@@ -8,6 +8,7 @@
  */
 
 import type { EventDraft, LogEvent } from "../../core/log/events.ts";
+import type { AcceleratorState } from "../asr/accelerator.ts";
 import type { ModelsStatus } from "../asr/models.ts";
 import type { CallController, StartOk } from "../call/call.ts";
 import type { CallManager, StartRequest } from "../call/manager.ts";
@@ -85,6 +86,8 @@ export interface ApiApp {
   templates(): Template[];
   /** The speech models on disk, or the download in progress (`GET /models`). */
   models(): ModelsStatus;
+  /** The GPU llama-server runs on (`asr.accelerator`), or null before the start detected it. */
+  accelerator?(): AcceleratorState | null;
   /** Whether a job on a preset can run now; undefined leaves it to the models' state. */
   presetAvailable?(name: string): boolean | undefined;
   /** The recognizers `GET /v1/server` lists: where each runs and whether its files are there. */

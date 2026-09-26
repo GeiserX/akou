@@ -63,11 +63,20 @@ import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
+import {
+  type AcceleratorSetting,
+  type AcceleratorState,
+  detectAccelerator,
+  hostProbe,
+  llamaServerBin,
+  type Probe,
+  verifyAccelerator,
+} from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
-import { llamaBuild, llamaRuntime, resolveAccelerator } from "./asr/llama-server.ts";
+import { type LlamaPlan, llamaPlan } from "./asr/llama-server.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -238,6 +247,14 @@ export interface AppOptions {
    */
   jobs?: Pick<JobServiceOptions, "decode" | "delivery" | "now"> & {
     modelStore?: Pick<ModelStoreOptions, "retryMs" | "freeBytes" | "fetch">;
+  };
+  /**
+   * What `asr.accelerator` reads of the machine, and how llama-server is asked for its devices
+   * (akou-5an.94). Tests pass a fake machine; by default the real one and the real binary.
+   */
+  accelerator?: {
+    probe?: Probe;
+    run?: (bin: string) => Promise<{ output?: string; error?: string }>;
   };
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
@@ -427,6 +444,10 @@ export class AkouApp implements ApiApp {
   private readonly keyStore: KeyStore | null;
   /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
   private jobService: JobService | null = null;
+  /** The GPU llama-server runs on: detected at start, then confirmed by the build itself. */
+  private accel: AcceleratorState | null = null;
+  /** The machine that detection read: its env names the image's llama-server. */
+  private accelProbe: Probe | null = null;
 
   constructor(
     private readonly o: AppOptions,
@@ -1691,6 +1712,33 @@ export class AkouApp implements ApiApp {
     return this.jobService?.depth() ?? 0;
   }
 
+  accelerator(): AcceleratorState | null {
+    return this.accel;
+  }
+
+  /**
+   * Reads the machine once for `asr.accelerator`, then asks the llama-server build which devices
+   * it can open, behind the API: until it answers, the choice is reported unverified.
+   */
+  private detectAccelerator(): AcceleratorState {
+    const s = this.cfg.settings;
+    const probe = this.o.accelerator?.probe ?? hostProbe(this.o.env ?? process.env);
+    const first = detectAccelerator(s["asr.accelerator"] as AcceleratorSetting, probe);
+    this.accel = first;
+    this.accelProbe = probe;
+    const bin = llamaServerBin(probe, s["asr.modelsDir"], first.active);
+    void verifyAccelerator(first, bin, this.o.accelerator?.run).then((st) => {
+      // A newer detection (the setting changed) owns the state now.
+      if (this.quitting || this.accel !== first) return;
+      this.accel = st;
+      this.log(
+        "info",
+        `accelerator ${st.active}${st.device ? ` (${st.device})` : ""}${st.verified ? "" : " unverified"}: ${st.reason}`,
+      );
+    });
+    return first;
+  }
+
   /**
    * The engine a file job runs for one recognizer id (SV-S1). The job service has checked its
    * files first. A recognizer given on purpose (tests) runs as given, or, with a test catalog, as
@@ -1721,33 +1769,39 @@ export class AkouApp implements ApiApp {
     return MODELS.some((m) => m.id === recognizer && m.runtime === "llama-server");
   }
 
-  /** `asr.accelerator` resolved on this machine, logged once when it is not the one asked for. */
-  private accelerator(): { accelerator: LlamaEngineSpec["accelerator"]; provider: string } {
+  /**
+   * Qwen's llama-server here (akou-5an.94): an own one, the image's, or the pinned build for the
+   * GPU detection found, logged once when it is not the one asked for. A changed
+   * `asr.accelerator` is detected again, so it applies to the next job that starts llama-server.
+   */
+  private llamaPlan(): LlamaPlan {
     const s = this.cfg.settings;
-    const setting = s["asr.accelerator"];
-    const r = resolveAccelerator(setting, hostPlatform());
-    if (r.note && this.acceleratorNote !== r.note) {
-      this.acceleratorNote = r.note;
-      this.log("warn", r.note);
+    const accel =
+      this.accel && this.accel.setting === s["asr.accelerator"]
+        ? this.accel
+        : this.detectAccelerator();
+    const plan = llamaPlan({
+      setting: s["asr.accelerator"],
+      own: s["asr.llamaServer"],
+      image: this.accelProbe?.env.AKOU_LLAMA_SERVER,
+      detected: accel,
+      platform: hostPlatform(),
+    });
+    if (plan.note && this.acceleratorNote !== plan.note) {
+      this.acceleratorNote = plan.note;
+      this.log("warn", plan.note);
     }
-    // An own llama-server is whatever it was built for: the setting says, `custom` when it is auto.
-    const own = s["asr.llamaServer"].length > 0;
-    return {
-      accelerator: r.accelerator,
-      provider: own ? (setting === "auto" ? "custom" : setting) : r.accelerator,
-    };
+    return plan;
   }
 
   private acceleratorNote = "";
 
-  /** The llama-server engine a job on `engine` runs: the pinned build, or `asr.llamaServer`. */
+  /** The llama-server engine a job on `engine` runs: `asr.llamaServer`, the image's, or the pinned build. */
   private llamaSpec(engine: string): LlamaEngineSpec {
     const s = this.cfg.settings;
     const dir = s["asr.modelsDir"];
     const platform = hostPlatform();
-    const own = s["asr.llamaServer"];
-    const { accelerator, provider } = this.accelerator();
-    const build = llamaBuild(platform, accelerator);
+    const { accelerator, command, gpuLayers, build } = this.llamaPlan();
     return {
       kind: "llama-server",
       engine,
@@ -1755,8 +1809,8 @@ export class AkouApp implements ApiApp {
       mmproj: modelFile(dir, engine, QWEN_MMPROJ_FILE),
       accelerator,
       languages: s["asr.languages"],
-      ...(own.length > 0
-        ? { command: own, ...(provider === "cpu" ? {} : { gpuLayers: 999 }) }
+      ...(command
+        ? { command, ...(gpuLayers === undefined ? {} : { gpuLayers }) }
         : build
           ? {
               build: {
@@ -1789,7 +1843,7 @@ export class AkouApp implements ApiApp {
     return [
       { id: RECOGNIZER, provider: "cpu", installed: this.models().state === "ready" },
       ...(qwen
-        ? [{ id: qwen.id, provider: this.accelerator().provider, installed: onDisk(qwen) }]
+        ? [{ id: qwen.id, provider: this.llamaPlan().provider, installed: onDisk(qwen) }]
         : []),
     ];
   }
@@ -1817,8 +1871,8 @@ export class AkouApp implements ApiApp {
         MODELS.filter((m) => (m.platforms as readonly string[]).includes(hostPlatform())),
       requires: (id) => {
         if (!this.runsOnLlama(id)) return [];
-        const build = llamaRuntime(s(), hostPlatform());
-        return build ? [build] : [];
+        const build = this.llamaPlan().build;
+        return build ? [build.id] : [];
       },
       autoDownload: () => s()["server.auto_download"],
       maxGb: () => s()["server.models_max_gb"],
@@ -1938,6 +1992,7 @@ export class AkouApp implements ApiApp {
         ),
     });
     this.writeRuntime();
+    this.detectAccelerator();
     this.startJobs();
     // Recovery and the final-pass catch-up run behind the API, never before it.
     void this.manager

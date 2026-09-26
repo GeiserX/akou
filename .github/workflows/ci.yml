@@ -35,13 +35,16 @@ jobs:
   # (under docs/, the issue tracker's export under .beads/, or a Markdown file at the top); then
   # only the Linux `check` leg runs, because some tests read the docs. `diarize` is true when the
   # diarization helper, its client, its smoke or their fixtures changed; that leg downloads a model
-  # on three OSes, so it runs only then. A push to main and a dispatch run everything.
+  # on three OSes, so it runs only then. `gpu` is true when the image, the llama-server builds or the
+  # accelerator choice changed; that leg downloads the CUDA runtime (about 750 MB) twice, so it too
+  # runs only then. A push to main and a dispatch run everything.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
       diarize: ${{ steps.diff.outputs.diarize }}
+      gpu: ${{ steps.diff.outputs.gpu }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -54,6 +57,7 @@ jobs:
           if [ "$EVENT" != pull_request ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
             echo "diarize=true" >> "$GITHUB_OUTPUT"
+            echo "gpu=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git diff --name-only HEAD^1 HEAD > changed.txt
@@ -67,6 +71,11 @@ jobs:
             echo "diarize=true" >> "$GITHUB_OUTPUT"
           else
             echo "diarize=false" >> "$GITHUB_OUTPUT"
+          fi
+          if grep -qE '^(Dockerfile$|\.dockerignore$|src/main/asr/(accelerator|llama-builds|models)\.ts$|scripts/accelerator-report\.ts$|\.github/workflows/(ci|release)\.yml$)' changed.txt; then
+            echo "gpu=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "gpu=false" >> "$GITHUB_OUTPUT"
           fi
 
   check:
@@ -575,6 +584,62 @@ jobs:
           bun scripts/diarize-smoke.ts "native/akou-diarize/target/release/akou-diarize$EXE" models/nemotron3_diar_v3.onnx | tee smoke.log
           { echo; sed 's/^/    /' smoke.log; } >> "$GITHUB_STEP_SUMMARY"
 
+  # The GPU images (akou-5an.94), -vulkan and -cuda, on both architectures. No runner has a GPU, so
+  # this proves what can be proved without one: the image's llama-server runs; in -vulkan, the
+  # Vulkan loader and Mesa's drivers load (llvmpipe, Mesa's CPU renderer, shows once it is made
+  # visible, and never counts as a GPU); in -cuda, every CUDA library resolves in the image but the
+  # driver's own, which --gpus all brings; and akou, asked inside each, reports the CPU, verified by
+  # the real build, with the reason. The real GPU runs are the operator's (docs/install.md).
+  gpu-image:
+    needs: changes
+    if: needs.changes.outputs.gpu == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+        variant: [vulkan, cuda]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      VARIANT: ${{ matrix.variant }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: build the ${{ matrix.variant }} image
+        run: docker build --build-arg ACCELERATOR="$VARIANT" -t "akou:$VARIANT" .
+      - name: its llama-server runs
+        run: docker run --rm --entrypoint sh "akou:$VARIANT" -c '/opt/llama/llama-server --version'
+      - name: the Vulkan loader and Mesa's drivers load (vulkan)
+        if: matrix.variant == 'vulkan'
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint /opt/llama/llama-server akou:vulkan --list-devices | tee plain.txt
+          # No GPU here, and llama.cpp skips a CPU renderer unless it is named: nothing listed.
+          if grep -q 'Vulkan0' plain.txt; then echo "a Vulkan device on a runner with no GPU"; exit 1; fi
+          docker run --rm -e GGML_VK_VISIBLE_DEVICES=0 --entrypoint /opt/llama/llama-server akou:vulkan --list-devices | tee named.txt
+          grep -q 'Vulkan0: llvmpipe' named.txt
+      - name: every CUDA library resolves but the driver's (cuda)
+        if: matrix.variant == 'cuda'
+        run: |
+          set -euo pipefail
+          docker run --rm --entrypoint sh akou:cuda -c 'ldd /opt/llama/libggml-cuda.so' | tee ldd.txt
+          missing=$(grep 'not found' ldd.txt | awk '{print $1}' | sort -u | tr '\n' ' ')
+          echo "missing: $missing"
+          test "$missing" = "libcuda.so.1 "
+      - name: akou inside reports the CPU, verified by the build, and why
+        run: |
+          set -euo pipefail
+          report() { docker run --rm "$@" -v "$PWD/scripts:/app/scripts:ro" --entrypoint bun "akou:$VARIANT" scripts/accelerator-report.ts; }
+          report | tee auto.json
+          jq -e --arg v "$VARIANT" '.available == [$v, "cpu"] and .active == "cpu" and .gpu == null and .verified and .reason == "no GPU found"' auto.json
+          # Asked for its GPU on purpose, it runs the build and says what the build listed.
+          if [ "$VARIANT" = vulkan ]; then
+            report -e AKOU_ACCELERATOR=vulkan -e GGML_VK_VISIBLE_DEVICES=0 | tee forced.json
+            jq -e '.active == "cpu" and .verified and (.reason | contains("llvmpipe"))' forced.json
+          else
+            report -e AKOU_ACCELERATOR=cuda | tee forced.json
+            jq -e '.active == "cpu" and .verified and (.reason | contains("lists no cuda device"))' forced.json
+          fi
+
   # docs/research/service-interface.md SI-2: a real Executor (executor@1.6.8, pinned by the
   # lockfile in scripts/ci/executor/, in a throwaway home) adds akou from the served
   # `GET /v1/openapi.json?scope=jobs` and must see the tools jobs.create, jobs.get and keys.me, no
@@ -600,7 +665,7 @@ jobs:
   # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.
   ci-ok:
     if: always()
-    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, diarize, executor]
+    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, diarize, gpu-image, executor]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
