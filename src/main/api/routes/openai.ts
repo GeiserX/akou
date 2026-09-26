@@ -255,7 +255,7 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     if (temperature !== undefined && Number.isNaN(Number(temperature))) {
       throw bad("temperature", "temperature is a number");
     }
-    const language = languageOf(form);
+    const language = languageOf(form, c.app.config().settings["server.default_language"]);
     const keywords = promptTerms(textField(form, "prompt"), keywordsOf(form));
     list(form, "include");
     list(form, "languages");

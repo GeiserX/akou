@@ -200,6 +200,22 @@ export const SETTINGS = {
     default: 7,
     doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends.",
   },
+  "server.default_language": {
+    type: "string",
+    min: 2,
+    max: 35,
+    default: "auto",
+    check: (v) =>
+      /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/.test(v as string)
+        ? null
+        : `${JSON.stringify(v)} is not a BCP-47 tag such as es or en-US, or auto`,
+    doc: "The language a file job is transcribed in when its request sends `language: auto` or none, as Telegram-Archive does. A BCP-47 tag such as `es`, or `auto` to detect it.",
+  },
+  "server.default_diarize": {
+    type: "boolean",
+    default: false,
+    doc: "Label speakers in a file job whose request has no `diarize` field. A request that sends `diarize: false` gets no labels.",
+  },
   "server.admin_password_hash": {
     type: "string",
     max: 512,

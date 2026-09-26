@@ -123,15 +123,21 @@ export function keywordsOf(form: Form, extra: string[] = []): string[] {
   return out;
 }
 
-export function languageOf(form: Form): string {
+/**
+ * The request's language; `auto` or none means no opinion, and `fallback` decides
+ * (`server.default_language`, SV-S2).
+ */
+export function languageOf(form: Form, fallback = "auto"): string {
   const l = textField(form, "language")?.trim() || "auto";
   if (!LANGUAGE.test(l)) throw bad("language", "language is a BCP-47 tag, or auto");
-  return l;
+  return l === "auto" ? fallback : l;
 }
 
-function booleanOf(form: Form, name: string): boolean {
+/** A true or false field; absent (or empty) it is `fallback`, so an explicit `false` stays false. */
+function booleanOf(form: Form, name: string, fallback = false): boolean {
   const v = textField(form, name)?.trim().toLowerCase();
-  if (v === undefined || v === "" || v === "false" || v === "0") return false;
+  if (v === undefined || v === "") return fallback;
+  if (v === "false" || v === "0") return false;
   if (v === "true" || v === "1") return true;
   throw bad(name, `"${name}" is true or false`);
 }
@@ -206,12 +212,14 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     if (!(PRESET_NAMES as readonly string[]).includes(presetName)) {
       throw bad("preset", `preset is one of ${PRESET_NAMES.join(", ")}`);
     }
+    const settings = c.app.config().settings;
     const job: Omit<NewJob, "file_sha256" | "audio"> = {
       key_id: who.id,
       preset: presetName,
-      language: languageOf(form),
+      // A request with no opinion gets the server's defaults (SV-S2).
+      language: languageOf(form, settings["server.default_language"]),
       keywords: keywordsOf(form),
-      diarize: booleanOf(form, "diarize"),
+      diarize: booleanOf(form, "diarize", settings["server.default_diarize"]),
       callback_url: callbackOf(c.app, who, textField(form, "callback_url")),
       metadata: metadataOf(form),
       idempotency_key: idem,
