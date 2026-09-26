@@ -28,7 +28,7 @@ const UI = join(import.meta.dir, "..", "..", "src", "ui");
 const ORIGIN = "http://akou.test";
 
 /** An ElectroBun entry built for the browser, with the shim in place of `electrobun/view`. */
-async function buildEntry(entry: string): Promise<string> {
+export async function buildEntry(entry: string): Promise<string> {
   const shim = join(import.meta.dir, "electroview-shim.ts");
   const r = await Bun.build({
     entrypoints: [join(UI, entry)],
