@@ -257,21 +257,21 @@ export const SETTINGS = {
   "server.auto_download": {
     type: "boolean",
     default: true,
-    doc: "A job naming a model that is not on disk waits while akou downloads it, each file checked against its pinned SHA-256. Off: such a job is refused with 409 `preset_unavailable` and the `akou models pull` line.",
+    doc: "What a job naming a model that is not on disk gets. On (the default): it waits while akou downloads the model, each file checked against its pinned SHA-256, then runs. Off: it is refused with 409 `preset_unavailable` and the `akou models pull` line. Download on the Models page and `akou models pull` fetch either way.",
   },
   "server.models_max_gb": {
     type: "number",
     min: 0,
     max: 100000,
     default: 40,
-    doc: "Largest the models folder may grow through on-demand downloads, in GB (10^9 bytes). 0: no cap. A download that would pass it is refused with 409 `preset_unavailable`, `reason: models_max_gb`.",
+    doc: "Largest the models folder may grow through downloads of one model (a job's, or Download on the Models page), in GB (10^9 bytes). 0: no cap. A download that would pass it is refused with 409 `preset_unavailable`, `reason: models_max_gb`.",
   },
   "server.models_unused_days": {
     type: "integer",
     min: 0,
     max: 3650,
     default: 30,
-    doc: "Days a model may go unused before server mode deletes it. The default model and any model a job or a worker needs are never deleted. 0: never delete.",
+    doc: "Days a model may go unused before akou deletes it, in the desktop app and in server mode. The default model, any model in use (a job, a worker, the recognizer) and one downloading are never deleted. 0: never delete.",
   },
   "server.remotes": {
     type: "string[]",
@@ -379,7 +379,7 @@ export const SETTINGS = {
     values: ACCELERATOR_SETTINGS,
     default: "auto",
     env: "AKOU_ACCELERATOR",
-    doc: "The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Natively it picks which pinned llama-server build to download; an image runs the build it carries. `asr.llamaServer` runs an own build instead (SYCL or ROCm compiled on the host). Applies to the next job that starts llama-server.",
+    doc: "The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Natively it picks which pinned llama-server build to download; an image runs the build it carries. Natively `sycl` and `rocm` download llama.cpp's SYCL or ROCm build, which needs Intel's oneAPI or AMD's ROCm runtime on the host. `asr.llamaServer` runs an own build instead. Applies to the next job that starts llama-server.",
   },
   "asr.parakeet.decoding": {
     type: "string",
@@ -400,7 +400,7 @@ export const SETTINGS = {
     type: "string[]",
     default: [],
     apiWritable: false,
-    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a SYCL or ROCm build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
+    doc: "Command that starts an own llama-server for Qwen3-ASR, before the arguments akou adds (for example a build compiled on this machine). Empty: the pinned llama-server release for this platform and `asr.accelerator`, downloaded like a model.",
   },
   "asr.diarizeHelper": {
     type: "string[]",

@@ -6,6 +6,7 @@
 //! akou-capture run --out <part.opus> --mic default --call system \
 //!   --from-wav <stereo.wav> [--speed X | --realtime] [--loop]
 //! akou-capture devices
+//! akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]
 //! akou-capture --version
 //! ```
 //!
@@ -26,7 +27,7 @@ use akou_capture::simulate::Faults;
 use akou_capture::source::{CallMode, DeviceConfig, Frontend};
 
 const USAGE: &str = "usage: akou-capture run --out FILE --mic default|<id>|none --call system|none|app:<id>[,<id>] \
-[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]\n       akou-capture devices";
+[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]\n       akou-capture devices\n       akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]";
 
 /// The slowest `--speed` other than 0: a hundred times slower than real time. Below it the pacing
 /// wait of a long file no longer fits a `Duration`.
@@ -143,6 +144,9 @@ fn main() {
     ) {
         println!("{USAGE}");
         return;
+    }
+    if matches!(argv.first().map(String::as_str), Some("dictate")) {
+        std::process::exit(akou_capture::dictate::main(&argv[1..]));
     }
     if matches!(argv.first().map(String::as_str), Some("devices")) {
         if argv.len() > 1 {

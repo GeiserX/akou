@@ -72,7 +72,7 @@ jobs:
           else
             echo "diarize=false" >> "$GITHUB_OUTPUT"
           fi
-          if grep -qE '^(Dockerfile$|\.dockerignore$|src/main/asr/(accelerator|llama-builds|models)\.ts$|scripts/accelerator-report\.ts$|\.github/workflows/(ci|release)\.yml$)' changed.txt; then
+          if grep -qE '^(Dockerfile$|\.dockerignore$|src/main/asr/(accelerator|llama-builds|llama-catalog|models)\.ts$|scripts/accelerator-report\.ts$|\.github/workflows/(ci|release)\.yml$)' changed.txt; then
             echo "gpu=true" >> "$GITHUB_OUTPUT"
           else
             echo "gpu=false" >> "$GITHUB_OUTPUT"
@@ -165,8 +165,9 @@ jobs:
       - name: cargo test (shipping and test builds)
         working-directory: native/akou-capture
         run: |
-          cargo test --locked
-          cargo test --locked --features simulate
+          set -o pipefail
+          cargo test --locked 2>&1 | tee ../../.cargo-test.log
+          cargo test --locked --features simulate 2>&1 | tee -a ../../.cargo-test.log
       - name: cargo build --release
         working-directory: native/akou-capture
         run: |
@@ -182,10 +183,52 @@ jobs:
             echo "| shipping | $(wc -c < "target/shipping/akou-capture$EXE") |"
             echo "| test (simulate) | $(wc -c < "target/release/akou-capture$EXE") |"
           } >> "$GITHUB_STEP_SUMMARY"
+      # DC-N10: `dictate`'s fakes (a scripted key source, a fake inserter, clipboard and
+      # accessibility tree) exist only in the simulate build. The shipping binary must refuse each
+      # one as a usage error that names the missing feature; the simulate binary, the positive
+      # control, must not.
+      - name: the shipping helper refuses every dictate fake
+        working-directory: native/akou-capture
+        run: |
+          for s in --from-wav --keys --inserter --clipboard --ax --speed --mic-open-delay --mic-bluetooth; do
+            set +e
+            "target/shipping/akou-capture$EXE" dictate "$s" fake x 2> refused.err
+            code=$?
+            set -e
+            if [ "$code" != 64 ] || ! grep -q 'no simulate switches' refused.err; then
+              echo "the shipping helper took dictate $s (exit $code):"
+              cat refused.err
+              exit 1
+            fi
+          done
+          set +e
+          "target/release/akou-capture$EXE" dictate --inserter fake 2> control.err
+          set -e
+          if grep -q 'no simulate switches' control.err; then
+            echo "the simulate build refused --inserter fake; the check above proves nothing"
+            cat control.err
+            exit 1
+          fi
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
+      # cargo test writes no JUnit on stable Rust, so its own result lines become one: each
+      # `test <name> ... ok|FAILED|ignored` line of both builds is a test case, and the `helper`
+      # floor counts them (DC-T2), so a Rust test that stops running fails the job.
+      - name: cargo test floor
+        run: |
+          awk '
+            function esc(v) { gsub(/&/, "\\&amp;", v); gsub(/</, "\\&lt;", v); gsub(/>/, "\\&gt;", v); gsub(/"/, "\\&quot;", v); return v }
+            /^test .* \.\.\. (ok|FAILED|ignored)/ {
+              n++; name = $0; sub(/^test /, "", name); sub(/ \.\.\. .*$/, "", name); name = esc(name)
+              if ($0 ~ /\.\.\. ok/) cases = cases "<testcase name=\"" name "\"/>\n"
+              else if ($0 ~ /\.\.\. FAILED/) { f++; cases = cases "<testcase name=\"" name "\"><failure/></testcase>\n" }
+              else { s++; cases = cases "<testcase name=\"" name "\">\n<skipped />\n</testcase>\n" }
+            }
+            END { printf "<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n<testsuite name=\"cargo test\">\n%s</testsuite>\n</testsuites>\n", n, f, s, cases }
+          ' .cargo-test.log > .junit-helper.xml
+          bun scripts/ci/test-floor.ts helper .junit-helper.xml
       - name: capture traps against the built helper
         env:
           AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}

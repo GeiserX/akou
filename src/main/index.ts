@@ -87,6 +87,7 @@ import {
   type ModelsStatus,
   modelFile,
   modelsFor,
+  NEMOTRON,
   pruneRetiredModels,
   RECOGNIZER,
 } from "./asr/models.ts";
@@ -149,8 +150,15 @@ import {
   refreshMemo,
 } from "./query/memo.ts";
 import { renderLine } from "./query/render.ts";
-import { JobService, type JobServiceOptions } from "./server/jobs.ts";
-import { ModelStore, type ModelStoreOptions } from "./server/model-store.ts";
+import { JobService, type JobServiceOptions, RETENTION_SWEEP_MS } from "./server/jobs.ts";
+import {
+  type Held,
+  kindOf,
+  ModelRefused,
+  ModelStore,
+  type ModelStoreOptions,
+  type ModelView,
+} from "./server/model-store.ts";
 import { NotWritable, requireWritable } from "./server/writable.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
@@ -246,7 +254,7 @@ export interface AppOptions {
   guard?: Guard;
   /**
    * Test-only: the file jobs' upload decoder, webhook network and clock (server mode), and the
-   * on-demand downloads' retry waits and free-space probe.
+   * model store's clock, retry waits and free-space probe (both modes).
    */
   jobs?: Pick<
     JobServiceOptions,
@@ -450,6 +458,13 @@ export class AkouApp implements ApiApp {
   private readonly keyStore: KeyStore | null;
   /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
   private jobService: JobService | null = null;
+  /**
+   * The models on disk, their per-model downloads, last use, measured speed and the unused-days
+   * sweep, in both modes (SERVER.md section 12.3, DESKTOP.md DK-E2). Made at start.
+   */
+  private shelf: ModelStore | null = null;
+  /** The app's hourly model sweep; server mode's runs in the job service. */
+  private modelSweep: ReturnType<typeof setInterval> | null = null;
   /** The GPU llama-server runs on: detected at start, then confirmed by the build itself. */
   private accel: AcceleratorState | null = null;
   /** Dictation (docs/ux/DICTATION.md); app mode only, since a server has no keyboard. */
@@ -803,6 +818,8 @@ export class AkouApp implements ApiApp {
     asr.ready.then(
       () => {
         this.asrState = { state: "ready" };
+        // The recognizer loaded its models: they count as used (SV-M4, in the app too).
+        if (!this.givenRecognizer()) this.shelf?.touch(this.runningSet().map((m) => m.id));
       },
       (err: Error) => {
         this.asrState = { state: "unavailable", reason: err.message };
@@ -1680,11 +1697,24 @@ export class AkouApp implements ApiApp {
     })
       .then((r) => {
         if (!r.ok) this.log("warn", `final pass of ${id} failed: ${r.error}`);
+        else this.ranModels(r.audio_s ?? 0, r.decode_s ?? 0);
       })
       .catch((err) => this.log("error", `final pass of ${id}: ${(err as Error).message}`))
       .finally(() => this.finals.delete(id));
     this.finals.set(id, p);
     return null;
+  }
+
+  /**
+   * A final pass finished here: its models count as used (the sweep's ledger), and the
+   * recognizer's speed on this machine is one run more (the Models page, SV-U6): the pass's decode
+   * time alone, without the Worker's start, the model loads or the speaker labels.
+   */
+  private ranModels(audioS: number, decodeS: number): void {
+    const shelf = this.shelf;
+    if (!shelf || this.givenRecognizer()) return;
+    shelf.touch(this.runningSet().map((m) => m.id));
+    shelf.recordRun(RECOGNIZER, audioS, decodeS);
   }
 
   /** Calls that ended while akou was not running and have no final layer yet. */
@@ -1739,18 +1769,34 @@ export class AkouApp implements ApiApp {
     const first = detectAccelerator(s["asr.accelerator"] as AcceleratorSetting, probe);
     this.accel = first;
     this.accelProbe = probe;
-    const bin = llamaServerBin(probe, s["asr.modelsDir"], first.active);
-    void verifyAccelerator(first, bin, this.o.accelerator?.run).then((st) => {
+    this.accelAsked = null;
+    this.verifyAccelerator(first);
+    return first;
+  }
+
+  /**
+   * Asks the build for the current choice which devices it can open, once per build: a native
+   * install has none until the best preset first unpacks it, so every plan checks again.
+   */
+  private verifyAccelerator(state: AcceleratorState): void {
+    const probe = this.accelProbe;
+    if (!probe || state.verified) return;
+    const bin = llamaServerBin(probe, this.cfg.settings["asr.modelsDir"], state.active);
+    if (bin === null || bin === this.accelAsked) return;
+    this.accelAsked = bin;
+    void verifyAccelerator(state, bin, this.o.accelerator?.run).then((st) => {
       // A newer detection (the setting changed) owns the state now.
-      if (this.quitting || this.accel !== first) return;
+      if (this.quitting || this.accel !== state) return;
       this.accel = st;
       this.log(
         "info",
         `accelerator ${st.active}${st.device ? ` (${st.device})` : ""}${st.verified ? "" : " unverified"}: ${st.reason}`,
       );
     });
-    return first;
   }
+
+  /** The llama-server binary the last check asked, so each build is asked once. */
+  private accelAsked: string | null = null;
 
   /**
    * The engine a file job runs for one recognizer id (SV-S1). The job service has checked its
@@ -1783,9 +1829,10 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * Qwen's llama-server here (akou-5an.94): an own one, the image's, or the pinned build for the
-   * GPU detection found, logged once when it is not the one asked for. A changed
-   * `asr.accelerator` is detected again, so it applies to the next job that starts llama-server.
+   * Qwen's llama-server here (akou-5an.94): an own one, the image's, or the pinned build for what
+   * detection chose. A changed `asr.accelerator` is detected again, so it applies to the next job
+   * that starts llama-server. A plan that has to fall back (a platform with no build) says so in
+   * the accelerator's state, so `GET /v1/server` reports what really runs.
    */
   private llamaPlan(): LlamaPlan {
     const s = this.cfg.settings;
@@ -1793,28 +1840,38 @@ export class AkouApp implements ApiApp {
       this.accel && this.accel.setting === s["asr.accelerator"]
         ? this.accel
         : this.detectAccelerator();
+    this.verifyAccelerator(accel);
     const plan = llamaPlan({
       setting: s["asr.accelerator"],
       own: s["asr.llamaServer"],
       image: this.accelProbe?.env.AKOU_LLAMA_SERVER,
       detected: accel,
-      platform: hostPlatform(),
+      platform: this.llamaPlatform(),
     });
-    if (plan.note && this.acceleratorNote !== plan.note) {
-      this.acceleratorNote = plan.note;
+    if (plan.note && this.accel === accel && !accel.reason.includes(plan.note)) {
+      this.accel = {
+        ...accel,
+        active: plan.accelerator,
+        gpu: plan.accelerator === "cpu" ? null : plan.accelerator,
+        device: null,
+        reason: `${accel.reason}; ${plan.note}`,
+      };
       this.log("warn", plan.note);
     }
     return plan;
   }
 
-  private acceleratorNote = "";
+  /** The platform detection read, which is the machine's own outside tests. */
+  private llamaPlatform(): string {
+    return this.accelProbe?.platform ?? hostPlatform();
+  }
 
   /** The llama-server engine a job on `engine` runs: `asr.llamaServer`, the image's, or the pinned build. */
   private llamaSpec(engine: string): LlamaEngineSpec {
     const s = this.cfg.settings;
     const dir = s["asr.modelsDir"];
-    const platform = hostPlatform();
     const { accelerator, command, gpuLayers, build } = this.llamaPlan();
+    const platform = this.llamaPlatform();
     return {
       kind: "llama-server",
       engine,
@@ -1906,23 +1963,14 @@ export class AkouApp implements ApiApp {
     }));
   }
 
-  /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
-  private startJobs(): void {
-    const keys = this.keyStore;
-    if (this.runMode !== "server" || !keys) return;
-    const { modelStore, ...jobSeams } = this.o.jobs ?? {};
+  /** The models' store, both modes: what the Models page, `/models` and the sweep work on. */
+  private startShelf(): ModelStore {
+    const { modelStore, now } = this.o.jobs ?? {};
     const s = () => this.cfg.settings;
     const shelf = new ModelStore({
       dir: () => s()["asr.modelsDir"],
       // What a job loads besides its recognizer: the running engine's helpers, as the final pass.
-      machine: () =>
-        this.o.models !== undefined && !this.o.modelRegistry
-          ? null
-          : modelsFor(
-              { "asr.diarizer": this.runningDiarizer() },
-              hostPlatform(),
-              this.o.modelRegistry ?? MODELS,
-            ),
+      machine: () => (this.givenRecognizer() ? null : this.runningSet()),
       // This platform's entries only: a Linux server lists no macOS llama-server build.
       catalog: () =>
         this.o.modelRegistry ??
@@ -1935,11 +1983,108 @@ export class AkouApp implements ApiApp {
       autoDownload: () => s()["server.auto_download"],
       maxGb: () => s()["server.models_max_gb"],
       unusedDays: () => s()["server.models_unused_days"],
-      now: jobSeams.now,
+      now,
       env: (this.o.env ?? process.env) as NodeJS.ProcessEnv,
       ...modelStore,
       log: (level, msg) => this.log(level, msg),
     });
+    this.shelf = shelf;
+    return shelf;
+  }
+
+  /** A recognizer given on purpose (tests) with no test catalog: no model file is needed. */
+  private givenRecognizer(): boolean {
+    return this.o.models !== undefined && !this.o.modelRegistry;
+  }
+
+  /** The models the running recognizer and its final pass load: its speaker-label engine's set. */
+  private runningSet(): readonly ModelSpecEntry[] {
+    return modelsFor(
+      { "asr.diarizer": this.runningDiarizer() },
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+    );
+  }
+
+  /**
+   * What neither the sweep nor a delete may touch. Server mode: the job service's (the default
+   * model's set, every queued or running job's, the worker's). The app: the set its settings name
+   * and the set the running recognizer holds.
+   */
+  private modelsHeld(): Held {
+    const jobs = this.jobService;
+    if (jobs) return jobs.held();
+    if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
+    return {
+      defaults: new Set(this.registry().map((m) => m.id)),
+      inUse:
+        this.asr !== null || this.finals.size > 0 || this.modelsPull.running
+          ? new Set(this.runningSet().map((m) => m.id))
+          : new Set(),
+    };
+  }
+
+  /** The setting that makes a model the default here, or null when none chooses it. */
+  private defaultSettingOf(m: ModelSpecEntry): { key: string; value: string } | null {
+    if (m.id === NEMOTRON) return { key: "asr.diarizer", value: "nemotron" };
+    if (m.id === "pyannote-segmentation-3.0") return { key: "asr.diarizer", value: "embeddings" };
+    // The app's recognizer is fixed; server mode's jobs run `server.default_model`.
+    if (this.runMode === "server" && kindOf(m) === "speech") {
+      return { key: "server.default_model", value: m.id };
+    }
+    return null;
+  }
+
+  /** Every catalog model as the Models page shows it (SV-M6, SV-U6), in both modes. */
+  modelRows(): ModelView[] {
+    const shelf = this.shelf;
+    if (!shelf) return [];
+    return shelf.list(this.modelsHeld(), (m) => this.defaultSettingOf(m));
+  }
+
+  /** Fetches one catalog model on purpose, under the size cap and the free-space check. */
+  pullModel(id: string): ModelView {
+    const shelf = this.shelf;
+    if (!shelf) throw new ModelRefused(409, "not_ready", "akou is still starting");
+    shelf.pull(id);
+    return this.modelRows().find((m) => m.id === id) as ModelView;
+  }
+
+  /** Deletes one model under the sweep's rules: never the default's set or one in use. */
+  deleteModel(id: string, by: string): { id: string; deleted: true; bytes: number } {
+    const shelf = this.shelf;
+    if (!shelf) throw new ModelRefused(409, "not_ready", "akou is still starting");
+    return shelf.delete(id, this.modelsHeld(), by);
+  }
+
+  /**
+   * Deletes the models unused for `server.models_unused_days` (0: never), in both modes: never
+   * the default's set, one in use, or one downloading. Server mode sweeps through its job service,
+   * which also knows the queue; the app runs this at start and hourly.
+   */
+  sweepModels(): void {
+    const jobs = this.jobService;
+    if (jobs) {
+      jobs.sweepModels();
+      return;
+    }
+    const held = this.modelsHeld();
+    this.shelf?.sweep(new Set([...held.defaults, ...held.inUse]));
+  }
+
+  /** The job queue of server mode, in `<config>/jobs`, started behind the API. */
+  private startJobs(): void {
+    const shelf = this.startShelf();
+    const keys = this.keyStore;
+    if (this.runMode !== "server" || !keys) {
+      this.sweepModels();
+      // clock: the hourly sweep of SV-M5, as server mode's job service runs it.
+      this.modelSweep = setInterval(() => this.sweepModels(), RETENTION_SWEEP_MS);
+      this.modelSweep.unref?.();
+      return;
+    }
+    const { modelStore: _store, ...jobSeams } = this.o.jobs ?? {};
+    const s = () => this.cfg.settings;
     this.jobService = new JobService({
       dir: join(this.configDir, "jobs"),
       version: this.version,
@@ -2111,6 +2256,8 @@ export class AkouApp implements ApiApp {
       await this.server?.stop();
       // After the API: no request is left holding the store. A running job is queued again at start.
       this.jobService?.close();
+      if (this.modelSweep) clearInterval(this.modelSweep);
+      this.shelf?.close();
       try {
         const rt = JSON.parse(readFileSync(this.runtimeFile, "utf8")) as { pid?: number };
         if (rt.pid === process.pid) unlinkSync(this.runtimeFile);

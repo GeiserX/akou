@@ -13,6 +13,9 @@
  *   and its terms fill what is left of the 24 after the keywords.
  * - `response_format`: `json`, `text`, `srt`, `vtt`, `verbose_json`, `diarized_json` (which turns on
  *   speaker labels). `timestamp_granularities[]` picks `words` and `segments` in `verbose_json`.
+ * - `interactive=true` (DICTATION.md DC-R2): a dictation, run in the reserved lane of
+ *   `server.dictation_slots` Workers in arrival order and never refused by the queue's limits; with
+ *   no model named it runs `server.dictation_engine`. Ignored when the server has no dictation slots.
  * - `stream=true`: Server-Sent Events, `transcript.text.delta` per segment (or
  *   `transcript.text.segment` for `diarized_json`), then `transcript.text.done`.
  * - Accepted and ignored: `temperature`, `chunking_strategy`, `include[]`, `languages[]`,
@@ -30,12 +33,14 @@ import {
   type Form,
   fileField,
   formOf,
+  interactiveOf,
   jobsOf,
   keywordsOf,
+  laneAsk,
   languageOf,
   MAX_KEYWORDS,
   queueFullError,
-  requireQueueRoom,
+  requireRoomUnlessLane,
   textField,
 } from "./jobs.ts";
 
@@ -65,6 +70,7 @@ const FIELDS = new Set([
   "chunking_strategy",
   "known_speaker_names",
   "known_speaker_references",
+  "interactive",
 ]);
 
 function bad(field: string, message: string): HttpError {
@@ -219,10 +225,21 @@ function streamOpenAI(r: Rendered, diarized: boolean): Response {
   });
 }
 
+/** Does `model` name a preset or recognizer this server knows (not `whisper-1` or empty)? */
+function namesModel(jobs: ReturnType<typeof jobsOf>, model: string | undefined): boolean {
+  if ((model ?? "").trim() === "") return false;
+  try {
+    return jobs.choose({ model }, true).source === "request";
+  } catch {
+    // A known name that cannot run: chooseModel refuses it with the reason.
+    return true;
+  }
+}
+
 async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
   const jobs = jobsOf(c);
   const who = caller(c);
-  requireQueueRoom(jobs, who.id, null);
+  requireRoomUnlessLane(jobs, who.id, null);
   const form = await formOf(c, jobs.uploadDir);
   // Every file but the job's is deleted, and the job's too when the request is refused first.
   let kept: SpooledFile | undefined;
@@ -258,7 +275,14 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     list(form, "known_speaker_names");
     list(form, "known_speaker_references");
     textField(form, "chunking_strategy");
-    const choice = chooseModel(jobs, { model: textField(form, "model") }, true);
+    const interactive = interactiveOf(jobs, form);
+    const asked = { model: textField(form, "model") };
+    // `whisper-1` and other unknown names are no opinion here, so the lane's engine decides.
+    const choice = chooseModel(
+      jobs,
+      interactive && !namesModel(jobs, asked.model) ? laneAsk(jobs, {}) : asked,
+      true,
+    );
     const submitted = jobs.submit({
       key_id: who.id,
       preset: choice.preset,
@@ -270,6 +294,7 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
       callback_url: null,
       metadata: null,
       idempotency_key: null,
+      interactive,
       file_sha256: file.sha256,
       audio: file.path,
     });
@@ -316,7 +341,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns; `stream=true` sends Server-Sent Events.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored.",
       access: "jobs",
       modes: ["server"],
       door: "compat",
@@ -331,6 +356,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
           "timestamp_granularities[]?": "string[]",
           "stream?": "boolean",
           "temperature?": "number",
+          "interactive?": "boolean",
         },
       },
       ok: 200,
