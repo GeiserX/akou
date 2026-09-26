@@ -1295,15 +1295,28 @@ const REQUEST_FIELDS = [
 ] as const satisfies readonly (keyof JobRequest)[];
 
 /**
+ * The options as compared, not as stored: keywords in any order and a language tag in any case
+ * (BCP-47 tags are case-insensitive) make the same transcript, so they are the same request. The
+ * row keeps the options as sent, so a job stored before this compares the same way.
+ */
+function comparable(r: JobRequest): JobRequest {
+  return {
+    ...r,
+    language: r.language.toLowerCase(),
+    keywords: [...new Set(r.keywords)].sort(),
+  };
+}
+
+/**
  * What a repeated `Idempotency-Key` changed against the job it names (SV-J2): `file` when the
  * upload differs, then each option of `JobRequest` sent otherwise. Empty for a plain retry. A job
  * stored before the options were kept is compared by its file only.
  */
 export function requestDiffers(held: Job, j: NewJob): string[] {
   const fields: string[] = held.file_sha256 === j.file_sha256 ? [] : ["file"];
-  const a = held.request;
-  const b = j.request;
-  if (!a || !b) return fields;
+  if (!held.request || !j.request) return fields;
+  const a = comparable(held.request);
+  const b = comparable(j.request);
   for (const k of REQUEST_FIELDS) {
     if (JSON.stringify(a[k] ?? null) !== JSON.stringify(b[k] ?? null)) fields.push(k);
   }

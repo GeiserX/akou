@@ -341,7 +341,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored.",
       access: "jobs",
       modes: ["server"],
       door: "compat",

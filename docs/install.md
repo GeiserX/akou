@@ -103,17 +103,19 @@ akou also runs as a transcription server that other programs send audio to. [ux/
 
 The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`. Both must be writable by uid 1000, `/models` too even when every model is already in it: the pull and the server write downloads and the models' `usage.json` there. Named volumes, as below, already are. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host), and a read-only mount (`:ro`) does not work: the pull stops with exit 70 and the server with exit 77, both naming the folder and `EROFS`.
 
-Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too, since the pull reads `asr.diarizer` from the settings there:
-
-```sh
-docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
-```
+Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this.
 
 The speaker model is Nemotron by default, and that needs no step. Only to use pyannote (`asr.diarizer` `embeddings`) instead, set it on the data volume before the pull; without it the pull fetches Nemotron. Skip this on a volume whose models are already pulled for Nemotron: with it the pull fetches pyannote too.
 
 ```sh
 docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:<version> -c \
   'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
+```
+
+Then pull. Mount the data volume too, since the pull reads `asr.diarizer` from the settings there:
+
+```sh
+docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 ```
 
 `fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
