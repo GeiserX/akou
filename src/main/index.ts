@@ -63,7 +63,7 @@ import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
-import type { DiarizerKind, ModelSpec } from "./asr/engine.ts";
+import type { DiarizerKind, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import {
@@ -353,6 +353,8 @@ export class AkouApp implements ApiApp {
    * the next start, and the final pass runs this one until then.
    */
   private asrDiarizer: DiarizerKind | null = null;
+  /** How the running recognizer decodes. `asr.parakeet.decoding` also waits for the next start. */
+  private asrDecoding: ParakeetDecoding | null = null;
 
   private cfg: LoadedConfig;
   private readonly clock: Clock;
@@ -395,7 +397,7 @@ export class AkouApp implements ApiApp {
   private lockPath: string;
   tokens: TokenSource;
   /** `server` when `server.enabled` is on (docs/ux/SERVER.md); fixed for the life of the process. */
-  readonly mode: "app" | "server";
+  private readonly runMode: "app" | "server";
   /** The API keys; server mode only (SV-K2). */
   private readonly keyStore: KeyStore | null;
 
@@ -410,8 +412,9 @@ export class AkouApp implements ApiApp {
     this.clock = o.clock ?? realClock;
     this.configDir = cfg.paths.configDir;
     this.headless = o.headless ?? cfg.settings["app.headless"];
-    this.mode = cfg.settings["server.enabled"] ? "server" : "app";
-    this.keyStore = this.mode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
+    this.runMode = cfg.settings["server.enabled"] ? "server" : "app";
+    this.keyStore =
+      this.runMode === "server" ? new KeyStore(this.configDir, () => Date.now()) : null;
     this.startedAt = this.clock.now();
     this.runtimeFile = join(this.configDir, RUNTIME_FILE);
     this.tokenPath = token.path;
@@ -429,7 +432,7 @@ export class AkouApp implements ApiApp {
       });
     this.manager = new CallManager({
       root: s["recordings.root"],
-      writer: { serverMode: this.mode === "server" },
+      writer: { serverMode: this.runMode === "server" },
       engine,
       clock: this.clock,
       user: s["user.name"],
@@ -579,6 +582,11 @@ export class AkouApp implements ApiApp {
     return this.asrDiarizer ?? (this.cfg.settings["asr.diarizer"] as DiarizerKind);
   }
 
+  /** How the running recognizer decodes, else the setting: the final pass decodes the same way. */
+  private runningDecoding(): ParakeetDecoding {
+    return this.asrDecoding ?? (this.cfg.settings["asr.parakeet.decoding"] as ParakeetDecoding);
+  }
+
   /**
    * Whether the running engine's model files are there: what a start and the final pass need. A
    * change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
@@ -589,13 +597,18 @@ export class AkouApp implements ApiApp {
   }
 
   /** The real engines on the models folder, with the speaker-label engine the settings choose. */
-  private sherpaSpec(s: Settings, diarizer = s["asr.diarizer"] as DiarizerKind): ModelSpec {
+  private sherpaSpec(
+    s: Settings,
+    diarizer = s["asr.diarizer"] as DiarizerKind,
+    decoding = s["asr.parakeet.decoding"] as ParakeetDecoding,
+  ): ModelSpec {
     return {
       kind: "sherpa",
       dir: s["asr.modelsDir"],
       cacheDir: join(s["asr.modelsDir"], ".cache"),
       threads: s["asr.threads"],
       diarizer,
+      decoding,
       diarizeHelper: locateHelper(s["asr.diarizeHelper"], { name: DIARIZE_HELPER_NAME }).command,
     };
   }
@@ -713,6 +726,7 @@ export class AkouApp implements ApiApp {
       return;
     }
     this.asrDiarizer = s["asr.diarizer"] as DiarizerKind;
+    this.asrDecoding = s["asr.parakeet.decoding"] as ParakeetDecoding;
     const asr = new LiveAsr(
       {
         models: spec,
@@ -1219,7 +1233,7 @@ export class AkouApp implements ApiApp {
       this.page = new PageServer({
         // Server mode serves the page on the API's own listener, behind the proxy (SV-U1).
         mounted:
-          this.mode === "server" && this.server
+          this.runMode === "server" && this.server
             ? {
                 origin: `http://127.0.0.1:${this.server.port}`,
                 hostAllowed: (host) =>
@@ -1470,6 +1484,8 @@ export class AkouApp implements ApiApp {
     return {
       app: {
         version: this.version,
+        // The host's OS: a page in another machine's browser must not read its own (DK-K4).
+        platform: process.platform,
         pid: process.pid,
         port: this.server?.port ?? null,
         headless: this.headless,
@@ -1502,6 +1518,7 @@ export class AkouApp implements ApiApp {
         ...this.asrState,
         loads: this.asr?.loads ?? {},
         diarizer: this.runningDiarizer(),
+        decoding: this.runningDecoding(),
       },
       models: this.models(),
       // The helper this app spawns, resolved from inside the bundle: `akou doctor` from the
@@ -1543,9 +1560,15 @@ export class AkouApp implements ApiApp {
     // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
     if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
     if (!this.runningModelsPresent()) return null;
-    return this.o.models !== undefined
-      ? this.o.models
-      : this.sherpaSpec(this.cfg.settings, this.runningDiarizer());
+    return this.o.models !== undefined ? this.o.models : this.finalSherpaSpec();
+  }
+
+  /**
+   * The real engines the final pass runs: the running recognizer's speaker-label engine and
+   * decoding, whatever the settings say now. Public so a test can read it without real models.
+   */
+  finalSherpaSpec(): ModelSpec {
+    return this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
   }
 
   /** Starts the final pass in the background. Returns why it cannot run, or null once started. */
@@ -1605,6 +1628,10 @@ export class AkouApp implements ApiApp {
     return this.keyStore;
   }
 
+  mode(): "app" | "server" {
+    return this.runMode;
+  }
+
   recognizer(): "loading" | "ready" | "unavailable" {
     return this.asrState.state;
   }
@@ -1653,7 +1680,7 @@ export class AkouApp implements ApiApp {
 
   async listen(): Promise<void> {
     const s = this.cfg.settings;
-    if (this.mode === "app" && s["api.bind"] !== "" && !isLoopback(s["api.bind"])) {
+    if (this.runMode === "app" && s["api.bind"] !== "" && !isLoopback(s["api.bind"])) {
       this.log("warn", "api.bind applies in server mode only; the app listens on 127.0.0.1");
     }
     const keys = this.keyStore;
@@ -1667,7 +1694,7 @@ export class AkouApp implements ApiApp {
         .filter((c): c is Cidr => c !== null),
       token: () => this.tokens.current(),
       page:
-        this.mode === "server"
+        this.runMode === "server"
           ? async (req, srv) => (await this.pageServer()).fetch(req, srv)
           : undefined,
       guard:

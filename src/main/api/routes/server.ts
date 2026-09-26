@@ -32,6 +32,13 @@ export function rootRoutes(r: Router<ApiApp>): void {
   r.add(
     "GET",
     "/healthz",
+    {
+      id: "server.health",
+      doc: "Whether akou answers and its speech models are ready. Needs no key. 200 when ready or with no models to load, 503 while the models download or load.",
+      access: "open",
+      modes: ["app", "server"],
+      ok: 200,
+    },
     (c) => {
       const { loading, ready } = modelState(c.app);
       return json(loading ? 503 : 200, {
@@ -41,7 +48,6 @@ export function rootRoutes(r: Router<ApiApp>): void {
         queue_depth: c.app.queueDepth?.() ?? 0,
       });
     },
-    { access: "open" },
   );
 }
 
@@ -49,6 +55,13 @@ export function serverRoutes(r: Router<ApiApp>): void {
   r.add(
     "GET",
     "/server",
+    {
+      id: "server.get",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, and which capabilities (jobs, events, the OpenAI route) exist. Needs no key.",
+      access: "open",
+      modes: ["app", "server"],
+      ok: 200,
+    },
     (c) => {
       const { ready } = modelState(c.app);
       const has = (method: string, path: string) =>
@@ -56,7 +69,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
       return json(200, {
         name: "akou",
         version: c.app.version,
-        mode: c.app.mode ?? "app",
+        mode: c.app.mode?.() ?? "app",
         presets: PRESETS.map((p) => ({
           name: p.name,
           available: p.built && ready,
@@ -78,12 +91,18 @@ export function serverRoutes(r: Router<ApiApp>): void {
         },
       });
     },
-    { access: "open" },
   );
 
   r.add(
     "GET",
     "/keys/me",
+    {
+      id: "keys.me",
+      doc: "The calling key: its id, name, scopes and creation time. The app's own token answers as `app` with the `admin` scope. Executor's health check calls it.",
+      access: "jobs",
+      modes: ["app", "server"],
+      ok: 200,
+    },
     (c) => {
       const me = caller(c);
       return json(200, {
@@ -93,6 +112,5 @@ export function serverRoutes(r: Router<ApiApp>): void {
         ...(me.created_at !== undefined ? { created_at: me.created_at } : {}),
       });
     },
-    { access: "jobs" },
   );
 }

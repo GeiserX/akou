@@ -11,6 +11,9 @@
  * 2. Any `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Mode` header is refused: our clients never send
  *    them, and browsers always do on a cross-origin request.
  * 3. `Authorization: Bearer <token>` on every request, GETs included, compared in constant time.
+ *    The one exception is a route the route table marks `access: "open"`: the OpenAPI file,
+ *    which holds no secrets and which Executor fetches with no credentials. Its tests, with their
+ *    positive control, are in `tests/openapi.test.ts` and `tests/scopes.test.ts`.
  * 4. Every method but GET and HEAD needs `Content-Type: application/json`; bodies are capped at
  *    64 KB. (Unknown body fields are refused by each route's body spec.) A route that takes an
  *    upload wants `multipart/form-data` instead, up to `server.max_upload_mb` (SV-D3).
@@ -39,7 +42,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { APP_IDENTITY, allows, type Identity, type RouteMeta } from "./access.ts";
+import { APP_IDENTITY, allows, type GuardRoute, type Identity } from "./access.ts";
 
 export const TOKEN_FILE = "token";
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -50,8 +53,11 @@ export interface GuardContext {
   port: number;
   /** The bearer token. */
   token: string;
-  /** The route asked for; an unknown path is checked as `UNKNOWN_ROUTE` (any key). */
-  route: RouteMeta;
+  /**
+   * The route asked for, from the route table (`routeMeta` in `server.ts`); an unknown path is
+   * checked as `UNKNOWN_ROUTE` (any key).
+   */
+  route: GuardRoute;
   /** The largest body an upload route takes, bytes (`server.max_upload_mb`). */
   maxUploadBytes: number;
   /** Where the request came from (`sourceAddress`), for the audit of a refusal. */

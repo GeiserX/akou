@@ -17,8 +17,10 @@ One line per document, in the order to read them.
 - [ux/DESKTOP.md](ux/DESKTOP.md): the tray, hotkeys, menus, floating indicator, notifications, first run, updates, the model manager and the settings registry.
 - [ux/CLI.md](ux/CLI.md): the command line: naming a call, output, exit codes, errors, help, `akou watch`, and parity with the other doors.
 - [ux/PROGRAMMABILITY.md](ux/PROGRAMMABILITY.md): the API, the event stream, MCP, skills, hooks, the webhook, `akou://` and the security model.
+- [api/openapi.json](api/openapi.json): the OpenAPI 3.1 file of the HTTP API, generated from the route table with `bun run openapi`; CI fails when it drifts.
 - [TESTING.md](TESTING.md): which suite proves what, the fakes, the model-gated and hardware tests, and the flake policy.
 - [CI-CD.md](CI-CD.md): the pipeline, branch protection, nightly jobs and releases.
 - [gates/M0-results.md](gates/M0-results.md): what each M0 gate measured on the reference Mac mini, with the raw outputs beside it.
 - [research/asr-benchmark.md](research/asr-benchmark.md): why akou ships the fp32 Parakeet build and stays on Parakeet rather than Qwen3-ASR, with the FLEURS numbers and the method.
+- [research/asr-architecture.md](research/asr-architecture.md): how akou makes the best transcript, live and final, from any number of engines: streaming live engines, the in-call upgrade, the final pass fused by confidence ROVER, the settings, what ships per OS, and the ASR- plan, with every benchmark number behind it. It replaces the decision above to stay on Parakeet alone.
 - [research/service-interface.md](research/service-interface.md): what a hosted akou exposes to Executor, services with signed callbacks, agents and OpenAI-speaking tools, all from one OpenAPI contract; why OAuth and remote MCP wait; and the SI- plan.

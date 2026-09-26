@@ -37,6 +37,7 @@ function repoCopy(): { dir: string; cleanup(): void } {
     "src/main/app-info.ts",
     "skills/akou/SKILL.md",
     "skills/akou-vocab/SKILL.md",
+    "docs/api/openapi.json",
   ]) {
     mkdirSync(join(t.dir, f, ".."), { recursive: true });
     cpSync(join(ROOT, f), join(t.dir, f));
@@ -77,6 +78,7 @@ describe("one version everywhere", () => {
         "src/main/app-info.ts",
         "skills/akou/SKILL.md",
         "skills/akou-vocab/SKILL.md",
+        "docs/api/openapi.json",
       ]),
     );
   });
@@ -116,7 +118,7 @@ describe("one version everywhere", () => {
     const t = repoCopy();
     expect(quiet(() => main(["--set", "0.1.0", "--root", t.dir]))).toBe(0);
     expect(readAll(t.dir).every((f) => f.version === "0.1.0")).toBe(true);
-    expect(readAll(t.dir)).toHaveLength(6);
+    expect(readAll(t.dir)).toHaveLength(7);
     expect(quiet(() => main(["--check", "--tag", "v0.1.0", "--root", t.dir]))).toBe(0);
     expect(quiet(() => main(["--check", "--tag", "v0.1.1", "--root", t.dir]))).toBe(1);
     expect(tagVersion("refs/tags/v1.2.3-rc.1")).toBe("1.2.3-rc.1");
@@ -237,6 +239,8 @@ describe("what the bundle carries beside the main process", () => {
     expect(builtCopies(none)).toEqual({});
     expect(builtCopies(all)).toEqual({
       "dist/ui": `${MAIN_OUT}/ui`,
+      // The command line the akou menu links into PATH (DK-M6).
+      "dist/app-cli/akou": `${MAIN_OUT}/akou`,
       "dist/workers/live-worker.js": `${MAIN_OUT}/live-worker.js`,
       "dist/workers/finalize-worker.js": `${MAIN_OUT}/finalize-worker.js`,
     });

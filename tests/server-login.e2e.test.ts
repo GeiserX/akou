@@ -26,7 +26,12 @@ async function setPassword(env: Record<string, string | undefined>, password: st
   const err: string[] = [];
   const code = await runCli(
     ["admin", "set-password"],
-    { env, out: (t) => out.push(t), err: (t) => err.push(t), stdin: async () => `${password}\n` },
+    {
+      env,
+      out: (t) => out.push(t),
+      err: (t) => err.push(t),
+      readStdin: async () => `${password}\n`,
+    },
     { launch: null },
   );
   return { code, out: out.join("\n"), err: err.join("\n") };
@@ -270,7 +275,7 @@ describe("SV-U1: the admin login", () => {
         out: () => {},
         err: (t) => err.push(t),
         stdinIsTTY: true,
-        stdin: async () => {
+        readStdin: async () => {
           read = true;
           return `${PASSWORD}\n`;
         },

@@ -12,14 +12,21 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Access } from "../src/main/api/access.ts";
 import { json } from "../src/main/api/http.ts";
-import { type ApiApp, type ApiServer, startApiServer } from "../src/main/api/server.ts";
+import {
+  type ApiApp,
+  type ApiServer,
+  buildRouter,
+  startApiServer,
+} from "../src/main/api/server.ts";
 import { type AppRig, appRig, declare, rawRequest } from "./api-helpers.ts";
 import { cli } from "./cli-helpers.ts";
+import { FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
 
 /** Who may call each route. Adding a route means adding its row here. */
 const TABLE: Record<string, Access> = {
   "GET /healthz": "open",
   "GET /v1/server": "open",
+  "GET /v1/openapi.json": "open",
   "GET /v1/keys/me": "jobs",
   "GET /v1/status": "admin",
   "GET /v1/config": "admin",
@@ -202,6 +209,11 @@ describe("SV-K3: scopes over every route", () => {
 const TOKEN = "t".repeat(64);
 const MB = 1024 * 1024;
 
+/** `POST /v1/jobs` as the route table will describe it: a multipart upload, for any key. */
+const JOBS_CREATE = (
+  FIXTURE_ROUTES.find((f) => f.doc.id === "jobs.create") as (typeof FIXTURE_ROUTES)[number]
+).doc;
+
 function uploadServer(maxUploadBytes?: number): ApiServer {
   return startApiServer({
     app: { version: "0.0.0-test" } as unknown as ApiApp,
@@ -209,17 +221,11 @@ function uploadServer(maxUploadBytes?: number): ApiServer {
     token: () => TOKEN,
     maxUploadBytes,
     // The job route's shape (SV-J1): an upload, for any key. It counts what arrives.
-    routes: (r) =>
-      r.add(
-        "POST",
-        "/jobs",
-        async (c) => {
-          let bytes = 0;
-          for await (const chunk of c.req.body ?? []) bytes += chunk.byteLength;
-          return json(202, { bytes });
-        },
-        { access: "jobs", upload: true },
-      ),
+    router: buildRouter().add("POST", "/jobs", JOBS_CREATE, async (c) => {
+      let bytes = 0;
+      for await (const chunk of c.req.body ?? []) bytes += chunk.byteLength;
+      return json(202, { bytes });
+    }),
   });
 }
 

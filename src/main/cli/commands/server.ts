@@ -34,10 +34,20 @@ const keys: Command = {
   usage:
     "akou keys create --name NAME [--scope jobs|admin] [--callback-host HOST ...] | akou keys list | akou keys revoke ID   [--json]",
   flags: {
-    name: { type: "string" },
-    scope: { type: "string" },
-    "callback-host": { type: "string", repeat: true },
+    name: { type: "string", value: "NAME", desc: "create: who the key is for, shown in the audit" },
+    scope: { type: "string", value: "S", desc: "create: jobs (default) or admin" },
+    "callback-host": {
+      type: "string",
+      repeat: true,
+      value: "HOST",
+      desc: "create: a host its callback URLs may name; repeat it, or `*` for any public host",
+    },
   },
+  examples: [
+    "akou keys create --name archive --callback-host archive.lan",
+    "akou keys list",
+    "akou keys revoke key_0123abcd",
+  ],
   run: async (ctx, p) => {
     const [sub, id, ...rest] = p.positional;
     if (sub === "create") {
@@ -106,6 +116,7 @@ const admin: Command = {
   name: "admin",
   summary: "Set the web UI's admin password in server mode, read from standard input",
   usage: "akou admin set-password < password-file   [--json]",
+  examples: ["akou admin set-password < password.txt"],
   run: async (ctx, p) => {
     const [sub, ...rest] = p.positional;
     if (sub !== "set-password" || rest.length > 0) {
@@ -119,7 +130,7 @@ const admin: Command = {
         EXIT.usage,
       );
     }
-    const input = (await ctx.io.stdin?.()) ?? "";
+    const input = (await ctx.io.readStdin?.()) ?? "";
     const password = input.replace(/\r?\n$/, "");
     if (password.length < MIN_PASSWORD || password.includes("\n")) {
       return refused(

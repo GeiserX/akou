@@ -10,7 +10,7 @@ import { join } from "node:path";
 import { INSTANCE_ID } from "../src/core/log/writer.ts";
 import { type ModelSpecEntry, NEMOTRON } from "../src/main/asr/models.ts";
 import { AlreadyRunningError, APP_LOCK, startApp } from "../src/main/index.ts";
-import { appRig, FAKE_HELPER, FAKE_MODELS, writeSettings } from "./api-helpers.ts";
+import { type AppRig, appRig, FAKE_HELPER, FAKE_MODELS, writeSettings } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { silence } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
@@ -160,6 +160,40 @@ describe("asr.diarizer changed while the app runs", () => {
       });
       expect((await next.api("GET", "/status")).body.asr.diarizer).toBe("embeddings");
       expect((await next.api("POST", "/calls", {})).body.error).toBe("models_missing");
+      await next.close();
+      home.cleanup();
+    },
+    LONG,
+  );
+});
+
+describe("asr.parakeet.decoding changed while the app runs", () => {
+  test(
+    "the running mode stays until the next start, so the final pass decodes as live did",
+    async () => {
+      const home = tempDir("akou-app-");
+      const rig = await appRig({ home: home.dir });
+      await until(
+        async () => (await rig.api("GET", "/status")).body.asr.state === "ready",
+        10_000,
+        "the recognizer",
+      );
+      const decoding = (app: AppRig["app"]) => {
+        const spec = app.finalSherpaSpec();
+        return spec.kind === "sherpa" ? spec.decoding : undefined;
+      };
+      expect((await rig.api("GET", "/status")).body.asr.decoding).toBe("greedy");
+      expect(decoding(rig.app)).toBe("greedy");
+      const patched = await rig.api("PATCH", "/config", { "asr.parakeet.decoding": "beam" });
+      expect(patched.status).toBe(200);
+      expect((await rig.api("GET", "/status")).body.asr.decoding).toBe("greedy");
+      // The final pass's recognizer spec keeps the mode live started with.
+      expect(decoding(rig.app)).toBe("greedy");
+      await rig.close();
+      // Positive control: the next start runs what the setting says, and the spec carries it.
+      const next = await appRig({ home: home.dir, settings: { "asr.parakeet.decoding": "beam" } });
+      expect((await next.api("GET", "/status")).body.asr.decoding).toBe("beam");
+      expect(decoding(next.app)).toBe("beam");
       await next.close();
       home.cleanup();
     },

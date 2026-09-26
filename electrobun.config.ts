@@ -6,14 +6,16 @@
  *
  * - The main process is `src/main/window/main.ts` (the app plus the tray, hotkey and window); the
  *   window's view is `src/ui/window.ts` with the same `index.html` and `theme.css` the browser
- *   loads.
+ *   loads, and the floating indicator's is `src/ui/indicator-window.ts` with `indicator.html`.
  * - Hutch bundles the main process into `Resources/app/bun/index.js` and copies nothing else the
  *   app reads at run time, so everything it loads by path is listed in `build.copy`, beside that
  *   file (TRAPS "Native libraries missing from the bundle"):
  *   - sherpa-onnx-node and its platform package under `bun/node_modules`, where the app's
  *     `createRequire` finds them; the `.node` file links its two libraries through `@rpath` with an
  *     `@loader_path` rpath, so they sit beside it in the platform package;
- *   - the two recognition Workers and the browser pages, which `build-app.ts` builds first;
+ *   - the two recognition Workers, the browser pages and the `akou` command line (a
+ *     `bun build --compile` binary the akou menu links into PATH), which `build-app.ts` builds
+ *     first;
  *   - the shipped note templates;
  *   - the tray icons (`scripts/tray-icons.ts`), which the tray loads by path;
  *   - the capture helper from `native/akou-capture` and the diarization helper from
@@ -56,6 +58,8 @@ export const SHERPA_LIBS: Readonly<Record<string, readonly string[]>> = {
 export const BUILT = {
   ui: "dist/ui",
   workers: ["dist/workers/live-worker.js", "dist/workers/finalize-worker.js"],
+  /** The `akou` command the app carries, for "Install Command-Line Tool…" (DK-M6). */
+  cli: "dist/app-cli/akou",
 } as const;
 
 type Exists = (path: string) => boolean;
@@ -91,10 +95,11 @@ export function helperCopies(
   return out;
 }
 
-/** The Workers and the browser pages beside the main process, when they have been built. */
+/** The Workers, the browser pages and the command line beside the main process, once built. */
 export function builtCopies(exists: Exists = projectFileExists): Record<string, string> {
   const out: Record<string, string> = {};
   if (exists(`${BUILT.ui}/index.js`)) out[BUILT.ui] = `${MAIN_OUT}/ui`;
+  if (exists(BUILT.cli)) out[BUILT.cli] = `${MAIN_OUT}/akou`;
   for (const w of BUILT.workers) {
     if (exists(w)) out[w] = `${MAIN_OUT}/${w.split("/").pop()}`;
   }
@@ -141,10 +146,16 @@ export default {
   build: {
     mainProcess: "bun",
     bun: { entrypoint: "src/main/window/main.ts" },
-    views: { main: { entrypoint: "src/ui/window.ts", format: "esm" } },
+    views: {
+      main: { entrypoint: "src/ui/window.ts", format: "esm" },
+      // The floating indicator (DK-F1): its own small page, no transcript.
+      indicator: { entrypoint: "src/ui/indicator-window.ts", format: "esm" },
+    },
     copy: {
       "src/ui/index.html": "views/main/index.html",
       "src/ui/theme.css": "views/main/theme.css",
+      "src/ui/indicator.html": "views/indicator/index.html",
+      "src/ui/indicator.css": "views/indicator/indicator.css",
       "src/main/notes/templates": `${MAIN_OUT}/templates`,
       "src/main/vocab/dictionaries": `${MAIN_OUT}/dictionaries`,
       "src/main/window/tray": `${MAIN_OUT}/tray`,
