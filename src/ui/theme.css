@@ -750,6 +750,9 @@ button.cite {
   display: grid;
   gap: 6px;
 }
+dialog.question {
+  max-width: 420px;
+}
 dialog {
   background: var(--bg);
   color: var(--fg);

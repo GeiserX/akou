@@ -7,7 +7,7 @@
 
 import { Electroview } from "electrobun/view";
 import type { LogEvent } from "../core/log/events.ts";
-import { boot, showCall, showSettings } from "./app.ts";
+import { askQuit, boot, showCall, showSettings } from "./app.ts";
 import type {
   AkouRpc,
   AppStatus,
@@ -16,6 +16,7 @@ import type {
   Levels,
   Method,
   PartialLine,
+  QuitQuestion,
   ReadLines,
   Reply,
   Transport,
@@ -65,6 +66,8 @@ const rpc = Electroview.defineRPC<AkouRpc>({
       },
       showCall: (m: { call?: string }) => showCall(m.call),
       showSettings: () => showSettings(),
+      askQuit: ({ id, ...q }: QuitQuestion) =>
+        void askQuit(q).then((go) => rpc.request.answerQuit({ id, go }).catch(() => {})),
     },
   },
 });
