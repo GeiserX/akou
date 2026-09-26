@@ -4,25 +4,27 @@ All notable changes to akou. Versions follow [semantic versioning](https://semve
 
 ## 0.2.0 — server mode
 
-akou now also runs as a transcription server. The Docker image, for amd64 and arm64, takes audio files from other programs and returns their transcripts. The app, the CLI and the agent tools grew too: a player you can drive from the keyboard, a floating recording indicator, `akou watch`, and MCP answers that never outgrow an agent's context.
+akou now also runs as a transcription server. The Docker image, for amd64 and arm64, takes audio files from other programs and returns their transcripts. It fetches the models it needs and has its own web page. The app, the CLI and the agent tools grew too: a player you can drive from the keyboard, a floating recording indicator, `akou watch`, and MCP answers that never outgrow an agent's context.
 
 ### Server mode
 - Image `geiserx/akou:0.2.0` for linux/amd64 and linux/arm64, built from the [Dockerfile](Dockerfile). It runs `akou serve`. There is no `latest` tag. `akou models pull fast` fetches the models into a volume before the first start, with no server running. See [docs/install.md](docs/install.md#the-server).
-- File jobs. `POST /v1/jobs` takes an audio file, such as an Ogg Opus voice note, M4A, MP3 or WebM. Wait on it with `?wait=`, read the result, or cancel and delete it. A retried submit with the same `Idempotency-Key` gets the first job back. Queued jobs survive a restart.
-- Results arrive three ways: long poll, an event feed (`GET /v1/events`, JSON or Server-Sent Events), or signed webhooks (Standard Webhooks, retried for up to 24 h).
+- File jobs. `POST /v1/jobs` takes an audio file, such as an Ogg Opus voice note, M4A, MP3 or WebM. Wait on it with `?wait=`, read the result, or cancel and delete it. A retried submit with the same `Idempotency-Key` gets the first job back. Queued jobs survive a restart. A file longer than 240 minutes fails as `too_long` (`server.max_audio_minutes`).
+- A job can name its model. Without one, akou uses `server.default_model`, then `fast`. A model akou does not have is downloaded while the job waits in the queue, and every file is checked against its pinned SHA-256. `server.auto_download` set to `false` turns that off. `server.default_language` and `server.default_diarize` apply when a request does not say.
+- akou deletes on its own. A job, its result and its events go after `server.retain_days`, 7 by default. A model nobody has used for 30 days goes too (`server.models_unused_days`, 0 for never), but never the default model or one a job needs. A download that would take the models folder past 40 GB is refused (`server.models_max_gb`).
+- Results arrive three ways: long poll, an event feed (`GET /v1/events`, JSON or Server-Sent Events), or signed webhooks (Standard Webhooks, retried for about three days).
 - An OpenAI-compatible `POST /v1/audio/transcriptions`, so an OpenAI client pointed at akou transcribes files.
 - One key per program. `akou keys create|list|revoke` issues keys with a `jobs` or `admin` scope and a list of hosts their webhooks may call. akou stores only a hash of each key, and refuses a revoked key on its next request.
-- An admin can log in from another machine with a password (`akou admin set-password`) or an admin key.
+- A web page for the server. An admin logs in from another machine with a password (`akou admin set-password`) or an admin key. The page has Jobs (watch, open, cancel and delete jobs), Keys (create and revoke), Settings (the server's defaults) and Models (state and download). The same key routes are at `/v1/keys`.
 - Uploads up to 512 MB (`server.max_upload_mb`) stream to disk, so a large file never sits in memory.
 - `GET /healthz` for container health checks. `GET /v1/server` lists presets, engines and how many days a job's result is kept.
-- `akou transcribe <file>` transcribes a file through the local server.
+- `akou transcribe <file>` sends a file to a server-mode akou and prints the transcript. That akou can be the image, `akou serve` in a source checkout, or one `AKOU_URL` names. The desktop app takes no file jobs.
 - `AKOU_URL` with a key from `AKOU_API_KEY` or `AKOU_API_KEY_FILE` points the CLI and `akou mcp` at an akou on another machine.
 
 ### API
-- akou serves its own OpenAPI file at `GET /v1/openapi.json`, with no key needed. akou generates it from its route table, and CI fails when the committed [docs/api/openapi.json](docs/api/openapi.json) differs. `?scope=jobs` returns only the job operations, which Executor loads as tools.
+- akou serves its own OpenAPI file at `GET /v1/openapi.json`, with no key needed. akou generates it from its route table, and CI fails when the committed [docs/api/openapi.json](docs/api/openapi.json) differs. `?scope=jobs` returns only what a `jobs` key may call, which Executor loads as tools.
 
 ### Transcript
-- Parakeet now decodes greedily by default. Beam search with name boosts dropped stretches of meeting speech and inserted names nobody said. On AMI meetings beam lost 651 words where greedy lost none. Pooled over the public sets we measured, word error rate fell from 11.23% to 9.50% ([docs/research/asr-architecture.md](docs/research/asr-architecture.md)). `asr.parakeet.decoding` set to `beam` brings beam back, with a lower boost. Your word list still corrects the transcript as before.
+- Parakeet now decodes greedily by default. Beam search with name boosts dropped stretches of meeting speech and inserted names nobody said. On AMI meetings beam lost 651 words where greedy lost none. Pooled over the public sets we measured, word error rate fell from 11.23% to 9.50% ([docs/research/asr-architecture.md](docs/research/asr-architecture.md)). `asr.parakeet.decoding` set to `beam` brings beam back, with a lower boost. Your word list still corrects the transcript after decoding, but under greedy its per-word decode boosts are not used.
 - Groundwork for more speech engines: one engine interface, and a model catalog that knows which platforms each model runs on. Nothing changes for you yet.
 
 ### Window
@@ -46,6 +48,7 @@ akou now also runs as a transcription server. The Docker image, for amd64 and ar
 - Every command that works on a call takes `-c/--call`. Help comes from the command registry, so every accepted flag shows, and every command has an example.
 - `akou config set KEY -` reads a secret from stdin. akou refuses a secret passed as an argument, because it is already in your shell history.
 - Colour on a terminal only, off with `NO_COLOR` or a pipe.
+- `akou doctor --grant` works. It used to exit with "not built".
 
 ### Agents
 - `akou skill install` also registers `akou mcp` with Claude Code and Codex. `akou skill uninstall` removes both.
@@ -55,11 +58,12 @@ akou now also runs as a transcription server. The Docker image, for amd64 and ar
 
 ### Known limitations
 - **Unsigned macOS build.** The first open needs a manual step, and macOS may ask for the microphone and system audio again after an update. See [docs/install.md](docs/install.md).
-- **macOS only as an app.** The release ships the macOS app (Apple Silicon), the CLI and the server image. There is still no packaged desktop app for Windows or Linux. The Linux and Windows CLI archives manage models, the skill and the settings, but cannot record.
+- **macOS only as an app.** The release ships the macOS app (Apple Silicon), the CLI and the server image. There is still no packaged desktop app for Windows or Linux. The Linux and Windows CLI archives manage models, the skill and the settings, but cannot record. The new `linux-arm64` archive has not been run on a Raspberry Pi yet.
 - **Server mode and the image are new in this release.** CI builds the image on amd64 and arm64 and transcribes a spoken sentence in each. Nobody has run it for long on a real server yet. The design and what is still missing are in [docs/ux/SERVER.md](docs/ux/SERVER.md). A container refuses to start until you set `server.behind_proxy`, because akou has no TLS of its own. See [docs/install.md](docs/install.md#the-server).
-- **The server's web page is not built yet.** After the admin login it shows the call window. There are no Jobs, Models or Keys pages yet, so you manage keys with the CLI.
-- **Models are not fetched on demand.** Pull them before the first start. akou refuses a job for a model it does not have, `auto` always means `fast`, and akou never deletes a model nobody uses. The `lite`, `best` and `fusion` presets exit with an error, because their engines do not exist yet.
-- **The single-file CLI cannot transcribe.** Its `akou serve` answers the API but carries no speech engine, and says so when it starts. Use the image, or a source checkout.
+- **The server's web page is partly built.** The Models page shows the models' state and a download button, but not each model's size, last use, deletion date or a Delete button. There is no preset picker yet, and the Jobs page polls twice a second instead of following the event feed.
+- **One engine, on the CPU.** Only the `fast` preset has an engine. `lite`, `best` and `fusion` are refused, and akou does not choose by hardware yet. The image uses no GPU. Results carry no word times or confidences: `words` is empty and both confidence fields are null.
+- **Transcribing a file needs server mode.** The single-file CLI's `akou serve` answers the API but carries no speech engine, and says so when it starts. On a Mac, use the image or a source checkout.
+- **The window is tested in Chromium, but the app draws it in WebKit.** CI runs the window tests in headless Chromium. The WebKit run is manual while some of its tests still fail there, so the new player, line menu and indicator are not tested in the app's own webview.
 - **Drift between two clocks is not measured.** One recording can take the mic and the call from two devices with separate clocks. How far they drift apart over an hour has not been measured on real hardware yet. See [docs/gates/M0-results.md](docs/gates/M0-results.md).
 - **The 1 s rebuild has not been seen on a real device.** It is proven in simulated capture, but no call audio died during the hour-long run on a real Mac.
 - **Large first download.** The speech and speaker models are about 3.0 GB, downloaded on first run.
