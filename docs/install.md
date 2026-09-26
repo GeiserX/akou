@@ -101,13 +101,13 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
 
-Pull the models into their volume first, so the first start is not a 2.5 GB download. No server needs to run for this:
+Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this:
 
 ```sh
 docker run --rm -v akou-models:/models geiserx/akou:<version> models pull fast
 ```
 
-`fast` is the only preset with an engine today. It fetches Parakeet TDT 0.6B v3 and the voice-activity model. A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows. Speaker labels need `nemotron-3-diarization`.
+`fast` is the only preset with an engine today. It fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
 
 Inside a container akou listens on every address, and it refuses to start that way until you say a reverse proxy with TLS is in front of it (`server.behind_proxy`), because akou has no TLS of its own. Say it once, in the data volume:
 

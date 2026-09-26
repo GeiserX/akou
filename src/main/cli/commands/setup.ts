@@ -203,14 +203,18 @@ function pullPlan(
   }
   const all = ctx.models ?? MODELS;
   if (isPreset(name)) {
-    const p = presetModels(name);
+    const reg = registry(ctx);
+    const p = presetModels(
+      name,
+      reg.map((m) => m.id),
+    );
     if ("unavailable" in p) {
       return {
         exit: EXIT.unavailable,
         message: `the ${name} preset has no engine in this version: ${p.unavailable}; \`akou models pull fast\` gets the one that exists`,
       };
     }
-    return { ids: [...p.models], registry: all, preset: name, named: name };
+    return { ids: [...p.models], registry: reg, preset: name, named: name };
   }
   if (all.some((m) => m.id === name)) return { ids: [name], registry: all, named: name };
   return {

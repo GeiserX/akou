@@ -402,7 +402,7 @@ jobs:
           mkdir -p "$MODELS"
           sudo chown -R 1000:1000 "$MODELS"
           docker run --rm -v "$MODELS:/models" akou:ci models pull fast
-      # Saved as soon as the pull is verified, so a later red step never costs the next run 2.5 GB.
+      # Saved as soon as the pull is verified, so a later red step never costs the next run 3 GB.
       - if: steps.models.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

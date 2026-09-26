@@ -82,15 +82,17 @@ function count(): Record<string, number> {
 }
 
 describe("[SV-P3] models pull by preset or model, with no app", () => {
-  test("pull fast on an empty volume leaves the recognizer's files with matching SHA-256; a second run downloads nothing; a truncated file is re-fetched", async () => {
+  test("pull fast on an empty volume leaves every file the server loads before it transcribes, with matching SHA-256; a second run downloads nothing; a truncated file is re-fetched", async () => {
     const v = volume();
     const before = count();
     const first = await cli(v.env, ["models", "pull", "fast", "--json"], { models: registry });
     expect([first.code, first.err]).toEqual([0, ""]);
+    // The recognizer starts only once every model this machine's settings need is there (the
+    // speaker models included), so fast fetches all of them: fewer and the server never transcribes.
     expect(first.json).toMatchObject({
       ok: true,
       preset: "fast",
-      models: [RECOGNIZER, "silero-vad"],
+      models: [RECOGNIZER, "silero-vad", NEMOTRON],
     });
     for (const f of (registry[0] as ModelSpecEntry).files) {
       const path = join(v.models, RECOGNIZER, f.name);
@@ -99,9 +101,8 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
     const afterFirst = count();
     expect(afterFirst["encoder.onnx"]).toBe((before["encoder.onnx"] ?? 0) + 1);
     expect(afterFirst["silero_vad.onnx"]).toBe((before["silero_vad.onnx"] ?? 0) + 1);
-    // fast has no diarizer: its model is never fetched.
-    expect(afterFirst["nemotron3_diar_v3.onnx"]).toBe(before["nemotron3_diar_v3.onnx"]);
-    expect(existsSync(join(v.models, NEMOTRON))).toBe(false);
+    expect(afterFirst["nemotron3_diar_v3.onnx"]).toBe((before["nemotron3_diar_v3.onnx"] ?? 0) + 1);
+    expect(existsSync(join(v.models, NEMOTRON, "nemotron3_diar_v3.onnx"))).toBe(true);
     // No app was started to do it.
     expect(existsSync(join(v.t.dir, ".config", "akou", "runtime.json"))).toBe(false);
 
@@ -137,12 +138,13 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
   });
 
   test("auto pulls what it resolves to on this machine, which is fast until hardware detection exists", async () => {
-    expect(presetModels("auto")).toEqual({ preset: "auto", models: [RECOGNIZER, "silero-vad"] });
-    expect(presetModels("fast")).toEqual({ preset: "fast", models: [RECOGNIZER, "silero-vad"] });
+    const machine = [RECOGNIZER, "silero-vad", NEMOTRON];
+    expect(presetModels("auto", machine)).toEqual({ preset: "auto", models: machine });
+    expect(presetModels("fast", machine)).toEqual({ preset: "fast", models: machine });
     const v = volume();
     const r = await cli(v.env, ["models", "pull", "auto", "--json"], { models: registry });
     expect(r.code).toBe(0);
-    expect(r.json).toMatchObject({ preset: "auto", models: [RECOGNIZER, "silero-vad"] });
+    expect(r.json).toMatchObject({ preset: "auto", models: machine });
     v.t.cleanup();
   });
 
@@ -164,15 +166,21 @@ describe("[SV-P3] models pull by preset or model, with no app", () => {
     expect(r.code).toBe(EXIT.usage);
     expect(r.err).toContain("lite, fast, best, fusion, auto");
     expect([...PRESET_NAMES]).toEqual(["lite", "fast", "best", "fusion", "auto"]);
-    for (const p of PRESET_NAMES) expect(presetModels(p)).toBeDefined();
+    for (const p of PRESET_NAMES) expect(presetModels(p, [])).toBeDefined();
     v.t.cleanup();
   });
 
-  test("every model a preset names is in the real registry", async () => {
-    const { MODELS } = await import("../src/main/asr/models.ts");
-    for (const p of PRESET_NAMES) {
-      const m = presetModels(p);
-      if ("models" in m) for (const id of m.models) expect(MODELS.map((x) => x.id)).toContain(id);
+  test("fast pulls exactly what the server waits for before it starts the recognizer, for either diarizer", async () => {
+    const { MODELS, modelsFor } = await import("../src/main/asr/models.ts");
+    for (const d of ["nemotron", "embeddings"] as const) {
+      const machine = modelsFor(d).map((m) => m.id);
+      const m = presetModels("fast", machine);
+      expect("models" in m && m.models).toEqual(machine);
+      for (const id of machine) expect(MODELS.map((x) => x.id)).toContain(id);
     }
+    // Positive control: the two diarizers need different files, so the list is not a constant.
+    expect(modelsFor("nemotron").map((m) => m.id)).not.toEqual(
+      modelsFor("embeddings").map((m) => m.id),
+    );
   });
 });
