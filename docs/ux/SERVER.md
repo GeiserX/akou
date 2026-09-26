@@ -9,7 +9,7 @@ The first client is [Telegram-Archive](https://github.com/GeiserX/Telegram-Archi
 - **One image, any box.** `docker run geiserx/akou:<version>` starts the same Bun core the desktop app runs, without ElectroBun, on linux/amd64 and linux/arm64. Models live on a volume. A CUDA tag exists for NVIDIA. TLS is the reverse proxy's job.
 - **One job, one result.** A client uploads a file to `POST /v1/jobs`, gets an id back at once, and reads the result by long-poll, by the per-key event feed, or by a signed webhook to a URL it names. The result is one JSON shape with text, language, words, segments and the engine that made it.
 - **Pull is the truth, push is the hint.** Every job's outcome sits in a per-key event feed a client can read after any cursor. Webhooks are signed per the Standard Webhooks spec, retried for a day, and never the only way to learn a result. A client behind NAT with no reachable URL loses nothing.
-- **Presets, not model names.** `lite`, `fast`, `best`, `fusion` and `auto`. A client says how much it cares; the server maps that to engines the hardware can run.
+- **Presets first, a model name when asked.** `lite`, `fast`, `best`, `fusion` and `auto`. A client says how much it cares; the server maps that to engines the hardware can run, or to its own default. A client that needs one exact model names its engine id, and akou fetches it if it is missing (section 12).
 - **Three dialects for free.** The OpenAI transcription endpoint, the Wyoming protocol and Bazarr's `/asr`. Nextcloud, Home Assistant, Bazarr and whisper-subs work with no code on their side.
 - **Self-hosted, still.** There is no akou cloud and no relay. Server mode is the user's own box reachable by the user's own programs.
 
@@ -204,7 +204,121 @@ What stays out, on purpose: an editor, a library, search across jobs, users and 
 | SV-T4 | A Wyoming `describe` and `transcribe` test with the `wyoming` package's client against the server in CI | P1 | SV-C2 | The info answer lists every preset; a chunk stream returns the expected text | missing |
 | SV-T5 | A key and scope test that walks every route in the OpenAPI file with a `jobs` key, an `admin` key, a revoked key and no key, and asserts each status against one table | P0 | SV-K3 | Adding a route without a row in the table fails the test | partial: `tests/scopes.test.ts` holds the table, fails on a route with no row, and walks every operation with no key, an unknown key and the app's token; the `jobs` column is checked against the served `?scope=jobs` view, and walking it with a real `jobs` key waits for SV-K2 and SV-K3 |
 
-## 12. Open points
+## 12. Running akou next to Telegram-Archive
+
+What a box needs to run akou in a container beside [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive). The archive sends every voice note it saves to akou. akou transcribes it with the model its own settings name, or the one the request names. It fetches a model it does not have, deletes a model nobody has used for 30 days, and shows all of it on a web page. Every row below is one bead under the server epic. The contract the archive's client already speaks does not change: the event feed stays `{events, cursor, has_more}` with an integer cursor, `Idempotency-Key` stays an opaque string of 1 to 255 characters, the job fields the archive sends stay `file`, `preset`, `language`, `metadata` and `callback_url`, and errors stay `{error, message}`. Everything added here is a field the archive does not send, a field it ignores, or a new route.
+
+### 12.1 Defaults on the server, overrides per request
+
+The archive sends `preset: auto` and `language: auto` unless its own `TRANSCRIPTION_PRESET` and `TRANSCRIPTION_LANGUAGE` say otherwise, and never sends `diarize`. So `auto` from a client means "no opinion", and the server's own defaults decide. A request that names something wins over the server.
+
+Which model a job runs, first match wins:
+
+1. The request's `model` field (SV-S1), a preset name or an engine id.
+2. The request's `preset`, when it is not `auto`.
+3. `server.default_model`, when it is not `auto`.
+4. The hardware choice of `auto` (SV-R2). Until SV-R2 lands this is `fast`.
+
+Language: the request's `language` when it is not `auto`, then `server.default_language`, then detection. Speakers: the request's `diarize` when the field is present, then `server.default_diarize`.
+
+Section 0 used to say "presets, not model names"; it now says presets first. Presets stay the first thing a client picks; an engine id is accepted when a client needs one exact model, as the OpenAI endpoint (SV-C1) already accepts.
+
+| Id | Feature | P | From | Acceptance | Today |
+|---|---|---|---|---|---|
+| SV-S1 | `server.default_model`, a preset name or an engine id from the model catalog, default `auto`, editable over `PATCH /v1/config` and on the settings page. `POST /v1/jobs` gains an optional `model` field with the same values, and the job's model follows the order above. `GET /v1/jobs/{id}` adds `model` (the recognizer id the job runs) and `model_source` (`request`, `server_default` or `hardware`); the result's `engine.models[0]` is that recognizer, as today. An unknown `model` answers 422 `unknown_model` naming the field; a preset whose engines are not built keeps 409 `preset_unavailable`. The OpenAI endpoint's `model` follows the same order, so `whisper-1` falls through to the server default | P0 | owner: defaults in akou, a model per request | With `server.default_model` set to engine id B and a request sending `preset: auto`, the job runs B with `model_source: server_default`; the same request with `model: A` runs A with `model_source: request`; with the setting back at `auto` it runs `fast` with `model_source: hardware`; `model: nope` gets 422 `unknown_model`; a request with exactly the archive's fields (`file`, `preset`, `language`, `metadata`, `callback_url`) still gets 202. Proven with a test catalog of two small models served from loopback, since the real catalog holds one recognizer until ASR-2 | missing: `auto` is `fast` in `resolvePreset` ([routes/jobs.ts](../../src/main/api/routes/jobs.ts)); the jobs route has no `model` field; `presetForModel` in [routes/openai.ts](../../src/main/api/routes/openai.ts) maps an engine id back to a preset |
+| SV-S2 | `server.default_language` (a BCP-47 tag or `auto`, default `auto`) and `server.default_diarize` (default `false`), editable over `PATCH /v1/config` and on the settings page. A job whose request sends `language: auto` or no language uses the first; a job whose request has no `diarize` field uses the second; an explicit `diarize: false` stays false | P1 | owner: defaults in akou; the archive sends `language: auto` and no `diarize` | With `server.default_language: es`, a job sent with `language: auto` runs with `es` and one sent with `language: en` runs with `en`; with `server.default_diarize: true`, a job with no `diarize` field comes back with speaker labels and one with `diarize: false` does not; an invalid tag in `PATCH /v1/config` gets 422 | missing: `languageOf` and `booleanOf` in [routes/jobs.ts](../../src/main/api/routes/jobs.ts) default to `auto` and `false` per request |
+
+### 12.2 Models on demand
+
+A job whose model is not on disk waits while akou fetches it, instead of being refused. Every file is still checked against its pinned SHA-256, as `akou models pull` does. Only models in the catalog can be fetched; a client cannot name a URL.
+
+| Id | Feature | P | From | Acceptance | Today |
+|---|---|---|---|---|---|
+| SV-M1 | A job whose resolved model, or whose speaker models when it asks for `diarize`, is missing starts that model's download and answers 202 as any job does. The job stays `queued`, and `GET /v1/jobs/{id}` adds `waiting_for: {model, bytes, total}` until the files are verified. One download runs per model id however many jobs wait on it. A waiting job holds no worker: queued jobs whose models are present run past it, in their own order. An on-demand download leaves `GET /healthz` at 200 with `models_ready` unchanged, so a compose `depends_on` never sees the container go unhealthy because a client asked for a new model. `server.auto_download`, default `true`, turns this off; with it off, a missing model answers 409 `preset_unavailable` with the `akou models pull` line, as today | P0 | owner: an override naming a missing model downloads it; the archive keeps a row queued on 409, so either answer keeps it working | Against a test catalog served from loopback with one model missing: two jobs naming it both answer 202, the registry sees each file requested once, both jobs show `waiting_for` with growing `bytes`, both finish `done`; a third job on a present model submitted after them finishes first; `/healthz` answers 200 throughout; with `server.auto_download: false` the same submit gets 409 `preset_unavailable` | missing: `resolvePreset` answers 409 when files are missing ([routes/jobs.ts](../../src/main/api/routes/jobs.ts)); `pullModels` in [index.ts](../../src/main/index.ts) fetches the whole set with no model argument; `GET /models` has one state for all models |
+| SV-M2 | Two limits checked before a download starts, from the sizes in the catalog: the models folder may not grow past `server.models_max_gb`, default 40, `0` for no cap; and the volume must keep the download's size plus 1 GB free. A request over either limit is refused at submit with 409 `preset_unavailable`, the one code the archive already treats as "the server cannot run this now", with `reason: models_max_gb` or `reason: disk_full`, the model id and the bytes needed in the body | P0 | any `jobs` key can now make akou download gigabytes; DK-O3 checks free space in the app | With `server.models_max_gb` set just under the folder size plus the missing model, the submit gets 409 with `reason: models_max_gb` and no file is fetched; with the cap at 0 and a fake free-space probe reporting too little room, it gets `reason: disk_full`; raising the cap makes the same submit answer 202 | missing |
+| SV-M3 | A download that fails, from the network or a checksum mismatch, is retried after 1, 5 and 15 minutes, resuming partial files as `downloadFile` does. After the last try every job waiting on it ends `failed` with error code `model_download_failed` and a message naming the model and the cause, delivered on the event feed and the webhook like any failure. A later submit of the same file under a new `Idempotency-Key`, as the archive's `<sha256>.<n>` retry does, starts a fresh download | P0 | a download is not guaranteed to succeed, and a job must never wait forever | With the loopback registry answering 500 for every try, a waiting job ends `failed` with `model_download_failed` after the fourth try and the feed holds one `transcription.failed` for it; with a registry that fails twice and then serves, the job finishes `done`; a file with a wrong SHA-256 is never kept (positive control: the same test with the checksum check removed must fail) | missing: `downloadModels` in [asr/models.ts](../../src/main/asr/models.ts) throws once, with no retry schedule |
+
+### 12.3 Deleting models nobody uses
+
+A model that no job has used for `server.models_unused_days` is deleted, so an override tried once does not hold disk forever. The default model and any model in use are never deleted. This runs in server mode only; the desktop app removes models by hand (DK-E2).
+
+| Id | Feature | P | From | Acceptance | Today |
+|---|---|---|---|---|---|
+| SV-M4 | A last-used ledger: `usage.json` in the models folder, `{model_id: last_used_at}`, written atomically. A model is used when a job that needs it starts and when it ends, and when `akou models pull` or an on-demand download finishes it. A model folder with no entry is recorded as used at the first sweep that sees it, so the first start after an upgrade deletes nothing. A worker built for a model other than the default's is closed once no queued or running job needs it, so an idle worker never pins a model the sweep should free | P0 | owner: delete a model unused for 30 days; only keys track last use today ([keys.ts](../../src/main/api/keys.ts)) | A job on model A moves A's `last_used_at` to the job's end time; a models folder with two unknown folders and no ledger gets two entries dated now after one sweep and loses nothing; after a job on a non-default model finishes with nothing queued, no worker holds that model | missing: `JobService.workerFor` in [server/jobs.ts](../../src/main/server/jobs.ts) keeps its worker until the next spec |
+| SV-M5 | An hourly sweep, beside the job retention sweep, deletes each model folder whose `last_used_at` is older than `server.models_unused_days`, default 30, `0` for never. It never deletes a model in the resolved default's set (the recognizer of `server.default_model` or of `auto`, with the VAD and speaker models it loads), a model a queued, waiting or running job needs, a model a live worker holds, or a model downloading. Each deletion writes one server log line `model.evicted` with the model id, its `last_used_at` and the bytes freed, and is one of the audit events of SV-K6. A job that later names a deleted model fetches it again (SV-M1) | P0 | owner: delete after 30 days unused, never break a default or a running job | With an injected clock 31 days on: an unused non-default model is gone and the log has one `model.evicted` line for it; the default model at the same age stays; a model with a queued job stays; with the setting at 0 nothing is deleted. Positive control: the same test with the default-set check removed deletes the default model and fails | missing: the only deletion is `pruneRetiredModels` for retired ids ([asr/models.ts](../../src/main/asr/models.ts)) |
+| SV-M6 | Per-model routes for the page and the CLI: `GET /models` adds `models: [{id, state, bytes, size, last_used_at, evicts_at, default, in_use}]` beside today's fields; `POST /models/pull` takes an optional `{model}` body and fetches that one model; `DELETE /models/{id}` (admin) deletes one model under the same rules as the sweep, answering 409 `model_in_use` for a default or busy model and logging `model.deleted` with the key id. The OpenAPI file covers all three | P1 | the Models page (SV-U6) and `akou models` need one model at a time; per-model pull exists only in the CLI ([setup.ts](../../src/main/cli/commands/setup.ts)) | `GET /models` lists every catalog model with its state; `POST /models/pull {"model": "A"}` fetches A only; `DELETE /models/A` removes an unused A and answers 409 for the default; the scope table (SV-T5) has a row for each route | partial: `GET /models` and `POST /models/pull` exist over the whole set ([routes/models.ts](../../src/main/api/routes/models.ts)) |
+
+### 12.4 The web page
+
+After the admin login (SV-U1) the server-mode page shows the server's own screens, not the call window. Four pages, each over routes a script can call too.
+
+| Id | Feature | P | From | Acceptance | Today |
+|---|---|---|---|---|---|
+| SV-U7 | The server-mode page: after login it opens on Jobs, with navigation to Jobs (SV-U4), Models (SV-U6), Keys (SV-U3) and Settings (SV-U2), and shows no recording control. App mode keeps the window as it is | P0 | owner: a working web page in the container; SV-U1 shows the call window until the dashboard exists | In a headless browser against a server-mode build: log in, see the four pages, no record button; the same bundle in app mode shows the call window | missing: the page shows the window in both modes ([page-server.ts](../../src/main/window/page-server.ts)) |
+| SV-U6 | A Models page: every catalog model with its state, size, last use and the date it will be deleted, marked "default" or "in use" where the sweep will not touch it; Download with live progress and Delete buttons over SV-M6; the eviction and size settings (`server.models_unused_days`, `server.models_max_gb`, `server.auto_download`) shown with their values | P1 | owner: see which models are there and why | Pressing Download on a missing model shows progress and then "on disk"; Delete on the default is disabled with the reason shown; Delete on an unused model removes it and the row shows "not downloaded" | missing |
+| SV-K7 | Keys over HTTP, admin only: `GET /v1/keys` lists id, name, scopes, callback hosts, created and last used; `POST /v1/keys {name, scopes, callback_hosts}` answers the `ak_` key and the `whsec_` secret once; `DELETE /v1/keys/{id}` revokes. The same `KeyStore` the CLI of SV-K2 writes, so a key made in either place works in the other. The OpenAPI file and the scope table cover all three | P1 | SV-U3 says "the same routes the CLI uses", and the CLI has no routes: only `GET /v1/keys/me` exists ([routes/server.ts](../../src/main/api/routes/server.ts)) | A key created over `POST /v1/keys` authenticates a job from curl; `GET /v1/keys` never returns a key or a secret; a `jobs` key calling any of the three gets 403; a key revoked over HTTP gets 401 on its next request | missing: create, list and revoke are CLI-only ([commands/server.ts](../../src/main/cli/commands/server.ts)) |
+
+The Jobs page is SV-U4, which also shows each job's `model`, `model_source` and `waiting_for` progress. The Keys page is SV-U3 over SV-K7. The Settings page is SV-U2, whose "Engines and presets" group holds `server.default_model`, `server.default_language` and `server.default_diarize`, with the picker of SV-U5 for the model.
+
+### 12.5 One compose file for both
+
+| Id | Feature | P | From | Acceptance | Today |
+|---|---|---|---|---|---|
+| SV-P11 | `AKOU_BEHIND_PROXY=true` in the environment sets `server.behind_proxy`, so a container starts on `0.0.0.0` with no `config.json` seeded first. Server mode already binds `0.0.0.0` when `api.bind` is empty, so no bind variable is needed | P0 | a compose file should need no one-off script; [install.md](../install.md) seeds the file with `bun -e` today | The image started with only `AKOU_BEHIND_PROXY=true` and an empty data folder answers `/healthz` from another container; started without it, it exits 78 naming `server.behind_proxy`; install.md drops the `bun -e` step | missing: `env` exists on `AKOU_HEADLESS`, `AKOU_SERVER` and `AKOU_MODELS_DIR` only ([schema.ts](../../src/main/config/schema.ts)) |
+| SV-P12 | At start in server mode, a `/data` or `/models` the process cannot write stops the server with exit 77 and one line naming the path and the user id the image runs as, instead of a stack trace later | P1 | a bind-mounted folder that Docker creates is owned by root, and the image runs as uid 1000 | Started with a root-owned bind mount for `/models`, the container exits 77 and its log names `/models` and uid 1000; after `chown 1000:1000` it starts | missing |
+| SV-T6 | `examples/compose/telegram-archive/`: `compose.akou.yml` (the block below), an `.env.example` with the variables it reads, and `scripts/compose-e2e.sh` that brings akou up from it, creates the key, submits one voice note with the viewer's callback URL, and checks that the callback was accepted and that a tampered replay was refused. It runs in the `server` CI job | P0 | owner: a working pair in containers; SV-T1 proves akou alone | The script exits 0 in CI; removing the receiver's signature check makes it fail on the tampered replay (positive control). Until Telegram-Archive publishes an image with its transcription client, the receiver of [server-roundtrip.ts](../../scripts/server-roundtrip.ts) stands in for the viewer on the same network name, and the bead stays open until the real viewer runs in the script | missing: the repo has no compose file; SV-T1's round trip uses `docker run` |
+
+The compose block goes beside Telegram-Archive's own [docker-compose.yml](https://github.com/GeiserX/Telegram-Archive/blob/main/docker-compose.yml), which it extends. Pin both versions in `.env`; there is no `latest` tag.
+
+```yaml
+# compose.akou.yml
+#   docker compose -f docker-compose.yml -f compose.akou.yml up -d
+services:
+  akou:
+    image: geiserx/akou:${AKOU_VERSION}
+    restart: unless-stopped
+    environment:
+      AKOU_BEHIND_PROXY: "true"   # the web page is reached through your TLS proxy
+    volumes:
+      - ./akou/data:/data         # settings, keys, jobs
+      - ./akou/models:/models     # speech models, fetched on demand
+    ports:
+      - "127.0.0.1:8476:8476"     # for the reverse proxy on this machine only
+    networks:
+      - telegram-network
+
+  telegram-backup:
+    depends_on:
+      - akou
+    environment:
+      TRANSCRIPTION_URL: http://akou:8476
+      TRANSCRIPTION_API_KEY: ${TRANSCRIPTION_API_KEY}
+      TRANSCRIPTION_PRESET: auto   # auto: akou's server.default_model decides
+      TRANSCRIPTION_CALLBACK_URL: http://telegram-viewer:8000/api/transcriptions/callback
+
+  telegram-viewer:
+    environment:
+      TRANSCRIPTION_URL: http://akou:8476
+      TRANSCRIPTION_WEBHOOK_SECRET: ${TRANSCRIPTION_WEBHOOK_SECRET}
+```
+
+`depends_on` has no health condition on purpose: the archive keeps a voice note queued while akou is down or refusing, so it never needs to wait for akou to start.
+
+Set it up once:
+
+```sh
+mkdir -p akou/data akou/models && sudo chown 1000:1000 akou/data akou/models
+docker compose -f docker-compose.yml -f compose.akou.yml up -d akou
+docker compose -f docker-compose.yml -f compose.akou.yml exec -T akou akou admin set-password < password.txt
+docker compose -f docker-compose.yml -f compose.akou.yml exec akou \
+  akou keys create --name archive --scope jobs --callback-host telegram-viewer
+# put the printed ak_ key in TRANSCRIPTION_API_KEY and the whsec_ secret in TRANSCRIPTION_WEBHOOK_SECRET in .env
+docker compose -f docker-compose.yml -f compose.akou.yml up -d
+```
+
+The key must list `telegram-viewer` by name: the callback is plain `http` to a private address on the compose network, and a key that allows only `*` is refused there (SV-K4, SV-E7). `akou models pull fast` before the first voice note is optional; without it the first job fetches the models (SV-M1). The two items the archive also waits for are the first published image tag (SV-P1) and `retain_days` on `GET /v1/server` (SV-K1b).
+
+## 13. Open points
 
 - **Fusion by the provider unattended.** Open decision 8 in [PRINCIPLES.md](PRINCIPLES.md) line 228 says the harness never runs unattended. In server mode there is no one at the keyboard, so the `fusion` preset's tie-break must use the OpenAI-compatible or Anthropic provider, or a deterministic vote, and never the harness. This document assumes that and the decision should be closed the same way.
 - **The 64 KB cap in app mode.** SV-D3 lifts it for upload routes only. `akou transcribe` in app mode goes through the same route, so the app's guard learns the upload exception too.
