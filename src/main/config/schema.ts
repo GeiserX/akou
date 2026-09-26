@@ -15,8 +15,8 @@
  * Parakeet decodes with beam search (TRAPS "The boost is a slider"), and a file that tries to set
  * one is told so.
  *
- * Environment: only `AKOU_HEADLESS`, `AKOU_SERVER`, `AKOU_MODELS_DIR`, `AKOU_ACCELERATOR` and `AKOU_HOME`
- * exist.
+ * Environment: only `AKOU_HEADLESS`, `AKOU_SERVER`, `AKOU_BEHIND_PROXY`, `AKOU_MODELS_DIR`,
+ * `AKOU_ACCELERATOR` and `AKOU_HOME` exist.
  * `AKOU_HOME` is not a setting: it moves the home folder itself (config and recordings), for tests.
  */
 
@@ -161,6 +161,8 @@ export const SETTINGS = {
   "server.behind_proxy": {
     type: "boolean",
     default: false,
+    // SV-P11: a container states it in its compose file, with no config.json seeded first.
+    env: "AKOU_BEHIND_PROXY",
     apiWritable: false,
     doc: "A reverse proxy in front of akou terminates TLS. Required for any bind that is not loopback; with no `server.public_host`, any Host header is accepted.",
   },

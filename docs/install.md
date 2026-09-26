@@ -101,7 +101,14 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](#a-gpu)). There is no `latest` tag: name the version you want.
 
-Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first with the `config.json` snippet below (`"asr.diarizer": "embeddings"` in place of `"server.behind_proxy": true`):
+Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first:
+
+```sh
+docker run --rm -v akou-data:/data --entrypoint sh geiserx/akou:<version> -c \
+  'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
+```
+
+Then pull:
 
 ```sh
 docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version> models pull fast
@@ -109,25 +116,16 @@ docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
 
 `fast` is the only preset with an engine today. It fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
 
-Inside a container akou listens on every address, and it refuses to start that way until you say a reverse proxy with TLS is in front of it (`server.behind_proxy`), because akou has no TLS of its own. Say it once, in the data volume:
+Inside a container akou listens on every address, and it refuses to start that way (exit 78) until you say a reverse proxy with TLS is in front of it, because akou has no TLS of its own. Say it with `AKOU_BEHIND_PROXY=true`, which sets `server.behind_proxy`, and publish the port on this machine's loopback only, for the proxy to reach:
 
 ```sh
-docker run --rm -v akou-data:/data --entrypoint bun geiserx/akou:<version> -e '
-  const fs = require("node:fs"), dir = "/data/.config/akou", file = dir + "/config.json";
-  fs.mkdirSync(dir, { recursive: true });
-  const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
-  fs.writeFileSync(file, JSON.stringify({ ...cfg, "server.behind_proxy": true }, null, 2));'
+docker run -d --name akou -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 \
+  -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
 ```
 
-It adds the one setting and keeps any others already in `config.json`.
+The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host): a folder the server cannot write stops it at start with exit 77 and the folder's name.
 
-Then start it, with the port published on this machine's loopback only, for the proxy to reach:
-
-```sh
-docker run -d --name akou -p 127.0.0.1:8476:8476 -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
-```
-
-The server runs as an unprivileged user, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly.
+To run it beside [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive), use the compose file in [examples/compose/telegram-archive](../examples/compose/telegram-archive/) and the one-time setup in [ux/SERVER.md section 12.5](ux/SERVER.md#125-one-compose-file-for-both).
 
 Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That is `akou serve`, the same server in the foreground. The single-file `akou` CLI runs `akou serve` too, on Linux x64 and arm64 and on macOS. It carries no speech engine, so it answers the API but cannot transcribe, and it says so when it starts.
 

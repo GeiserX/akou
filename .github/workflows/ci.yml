@@ -377,10 +377,11 @@ jobs:
   # The server image (docs/ux/SERVER.md SV-T1) on both architectures, each on its own runner: build
   # it, pull the fast preset into a cached models volume with the image's own CLI and no server
   # running, start it as install.md says (the port published on 127.0.0.1, `server.behind_proxy` set
-  # in the data volume, since a container binds 0.0.0.0 and SV-P5 refuses that without it), and ask
+  # by AKOU_BEHIND_PROXY, since a container binds 0.0.0.0 and SV-P5 refuses that without it), and ask
   # it for /healthz within 60 s, for /v1/server with no token and for `id -u`; then transcribe an Ogg
   # Opus voice note, an M4A, an MP3 and a WebM in it (SV-P6). The job round trip runs when the
   # server's own /v1/server says it has jobs, webhooks and the event feed, and warns when it does not.
+  # Last, akou from the compose example beside Telegram-Archive (SV-T6), on the same gate.
   server:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -417,12 +418,32 @@ jobs:
         with:
           path: ${{ env.MODELS }}
           key: akou-models-fast-${{ hashFiles('src/main/asr/models.ts', 'src/main/asr/presets.ts') }}
-      - name: start the server, behind the proxy it is told of (SV-P5)
+      # Both refusals are one line and an exit code, never a stack trace at the first write.
+      - name: the image refuses 0.0.0.0 without AKOU_BEHIND_PROXY (SV-P11) and a /models it cannot write (SV-P12)
         run: |
-          mkdir -p "$DATA/.config/akou"
-          echo '{ "server.behind_proxy": true }' > "$DATA/.config/akou/config.json"
-          sudo chown -R 1000:1000 "$DATA"
-          docker run -d --name akou --add-host=host.docker.internal:host-gateway \
+          set -uo pipefail
+          # A data folder of their own, so the server below still starts on an empty one.
+          scratch=$(mktemp -d)
+          sudo chown 1000:1000 "$scratch"
+          code=0
+          docker run --rm -v "$scratch:/data" -v "$MODELS:/models" akou:ci > refused.log 2>&1 || code=$?
+          cat refused.log
+          [ "$code" = 78 ] && grep -q 'server.behind_proxy' refused.log \
+            || { echo "want: exited 78 naming server.behind_proxy; got $code"; exit 1; }
+          # A folder Docker makes for a bind mount belongs to root; the image runs as uid 1000.
+          locked=$(mktemp -d)
+          sudo chown root:root "$locked"
+          code=0
+          docker run --rm -e AKOU_BEHIND_PROXY=true -v "$scratch:/data" -v "$locked:/models" akou:ci > locked.log 2>&1 || code=$?
+          cat locked.log
+          [ "$code" = 77 ] && grep -q '/models is not writable by uid 1000' locked.log \
+            || { echo "want: exited 77 naming /models and uid 1000; got $code"; exit 1; }
+      - name: start the server with only AKOU_BEHIND_PROXY and an empty data folder (SV-P5, SV-P11)
+        run: |
+          mkdir -p "$DATA"
+          sudo chown 1000:1000 "$DATA"
+          test -z "$(ls -A "$DATA")"
+          docker run -d --name akou --add-host=host.docker.internal:host-gateway -e AKOU_BEHIND_PROXY=true \
             -p 127.0.0.1:8476:8476 -v "$DATA:/data" -v "$MODELS:/models" akou:ci
       - name: GET /healthz answers within 60 s (SV-P1)
         run: |
@@ -463,6 +484,7 @@ jobs:
           echo "148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6  $work/en.wav" | sha256sum -c -
           chmod 0777 "$work"
           docker run --rm -v "$work:/work" --entrypoint ffmpeg akou:ci -nostdin -loglevel error -i /work/en.wav -c:a libopus /work/note.ogg
+          cp "$work/note.ogg" "$RUNNER_TEMP/note.ogg"
           docker exec akou akou keys create --name ci --scope jobs --callback-host host.docker.internal --json > "$work/key.json"
           AKOU_API_KEY=$(jq -r .key "$work/key.json")
           AKOU_WEBHOOK_SECRET=$(jq -r .secret "$work/key.json")
@@ -478,6 +500,17 @@ jobs:
       - name: the server's log
         if: always()
         run: docker logs akou 2>&1 | tail -n 200 || true
+      # SV-T6: the same image from examples/compose/telegram-archive beside Telegram-Archive's own
+      # compose file, set up as SERVER.md section 12.5 says. The archive's backup service sends the
+      # note with its own client, akou transcribes it with its default model, and the viewer stores
+      # the transcript from the signed callback; a tampered delivery must be refused. The script
+      # prints every service's log when it fails.
+      - name: akou beside Telegram-Archive from the compose example (SV-T6)
+        if: steps.caps.outputs.roundtrip == 'true'
+        run: |
+          docker rm -f akou
+          docker tag akou:ci geiserx/akou:ci
+          AKOU_VERSION=ci MODELS="$MODELS" scripts/compose-e2e.sh "$RUNNER_TEMP/note.ogg"
 
   # The diarization helper (native/akou-diarize) on every OS: format, lint, unit tests and the NOTICE
   # check, the release build, then the real Nemotron model through it in both modes, over a

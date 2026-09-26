@@ -1,5 +1,7 @@
 # Positioning
 
+akou is an open-source alternative to [Granola](https://www.granola.ai). It keeps Granola's loop of capture without a bot, rough notes during the call and clean notes after, and runs the rest on hardware and accounts you own. Transcription is local. Your own AI agent in the terminal follows and questions the call through MCP or the `akou` command, whether it is Claude Code, Codex or any other. The built-in brain uses your Claude Code or Codex subscription or any OpenAI-compatible or Anthropic endpoint. Notes land in your own tools, on macOS, Windows and Linux, or on a [server you host](ux/SERVER.md).
+
 ## Who akou is for
 
 People who spend their day in calls and already use a coding agent. They want the call recorded on their own machine, a live transcript they can glance at, and a notepad that turns into clean notes afterwards. They want to ask "what did she say about the deadline?" while the call is still going, from the app or from the terminal where their agent lives. They already keep their knowledge in Obsidian, Logseq, a Git repository, a wiki or a RAG index, and want the call to land there as plain files.

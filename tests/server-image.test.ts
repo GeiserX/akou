@@ -176,14 +176,19 @@ describe("[SV-T1] the server job in ci.yml", () => {
       "docker build",
       "models pull fast",
       // The container binds 0.0.0.0, which SV-P5 refuses without the operator's word that a proxy
-      // is in front; install.md publishes the port on loopback and says so in the data volume.
-      '"server.behind_proxy": true',
+      // is in front; install.md publishes the port on loopback and says so in the environment
+      // (SV-P11), and the job also watches the image refuse without it and a folder it cannot write.
+      "-e AKOU_BEHIND_PROXY=true",
+      "exited 78",
+      "exited 77",
       "-p 127.0.0.1:8476:8476",
       "http://127.0.0.1:8476/healthz",
       "http://127.0.0.1:8476/v1/server",
       "id -u",
       "scripts/server-smoke.ts",
       "scripts/server-roundtrip.ts",
+      // SV-T6: akou from the compose example beside Telegram-Archive.
+      "scripts/compose-e2e.sh",
     ]) {
       if (!runs.includes(want)) gaps.push(`no step runs ${want}`);
     }

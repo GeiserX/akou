@@ -1,0 +1,29 @@
+# compose.akou.yml
+#   docker compose -f docker-compose.yml -f compose.akou.yml up -d
+services:
+  akou:
+    image: geiserx/akou:${AKOU_VERSION}
+    restart: unless-stopped
+    environment:
+      AKOU_BEHIND_PROXY: "true"   # the web page is reached through your TLS proxy
+    volumes:
+      - ./akou/data:/data         # settings, keys, jobs
+      - ./akou/models:/models     # speech models, fetched on demand
+    ports:
+      - "127.0.0.1:8476:8476"     # for the reverse proxy on this machine only
+    networks:
+      - telegram-network
+
+  telegram-backup:
+    depends_on:
+      - akou
+    environment:
+      TRANSCRIPTION_URL: http://akou:8476
+      TRANSCRIPTION_API_KEY: ${TRANSCRIPTION_API_KEY}
+      TRANSCRIPTION_PRESET: auto   # auto: akou's server.default_model decides
+      TRANSCRIPTION_CALLBACK_URL: http://telegram-viewer:8000/api/transcriptions/callback
+
+  telegram-viewer:
+    environment:
+      TRANSCRIPTION_URL: http://akou:8476
+      TRANSCRIPTION_WEBHOOK_SECRET: ${TRANSCRIPTION_WEBHOOK_SECRET}
