@@ -6,10 +6,16 @@
 
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
-import { api, type Body, type Command, finish } from "../context.ts";
+import { api, type Body, type Command, finish, wall } from "../context.ts";
 import { usage } from "./calls.ts";
 
 const STATES = ["queued", "running", "done", "failed", "cancelled"];
+
+/** The server's ISO time as local date and wall-clock time, as `akou calls` shows a call's. */
+function when(iso: unknown): string {
+  const ms = typeof iso === "string" ? Date.parse(iso) : Number.NaN;
+  return Number.isNaN(ms) ? "" : `${new Date(ms).toLocaleDateString("en-CA")} ${wall(ms)}`;
+}
 
 export const jobsCommand: Command = {
   name: "jobs",
@@ -43,7 +49,7 @@ export const jobsCommand: Command = {
       const jobs = (b?.jobs ?? []) as Body[];
       if (jobs.length === 0) return "No jobs";
       return jobs
-        .map((j) => [j.id, j.status, j.created_at ?? ""].filter((x) => x !== "").join("  "))
+        .map((j) => [j.id, j.status, when(j.created_at)].filter((x) => x !== "").join("  "))
         .join("\n");
     });
   },

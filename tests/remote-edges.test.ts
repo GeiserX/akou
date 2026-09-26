@@ -20,6 +20,7 @@ import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { parseArgs } from "../src/main/cli/args.ts";
 import { ApiClient, EXIT, remoteTarget, TargetError, Unreachable } from "../src/main/cli/client.ts";
+import { wall } from "../src/main/cli/context.ts";
 import { CLI, cli } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -220,6 +221,45 @@ describe("local-only commands with AKOU_URL set", () => {
     expect(downApi?.detail).toContain(`${gone} (AKOU_URL)`);
     expect(down.code).toBe(EXIT.unavailable);
   }, 30_000);
+});
+
+describe("akou jobs list against a server", () => {
+  test("shows when each job was made as local wall-clock time, never the raw ISO string", async () => {
+    const created = "2026-09-25T10:00:00Z";
+    const srv = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch: () =>
+        Response.json({
+          jobs: [
+            { id: "job_1", status: "done", created_at: created },
+            { id: "job_2", status: "queued" },
+          ],
+        }),
+    });
+    try {
+      const r = await cli(env({ AKOU_URL: `http://127.0.0.1:${srv.port}`, AKOU_API_KEY: "k" }), [
+        "jobs",
+        "list",
+      ]);
+      expect(r.code).toBe(EXIT.ok);
+      const [first, second] = r.out.split("\n");
+      const ms = Date.parse(created);
+      expect(first).toBe(`job_1  done  ${new Date(ms).toLocaleDateString("en-CA")} ${wall(ms)}`);
+      expect(r.out).not.toContain(created);
+      // A job with no time is listed without one, not with "?" or "Invalid Date".
+      expect(second).toBe("job_2  queued");
+      // Positive control: --json keeps the server's value as it came.
+      const j = await cli(env({ AKOU_URL: `http://127.0.0.1:${srv.port}`, AKOU_API_KEY: "k" }), [
+        "jobs",
+        "list",
+        "--json",
+      ]);
+      expect((j.json as { jobs: { created_at?: string }[] }).jobs[0]?.created_at).toBe(created);
+    } finally {
+      srv.stop(true);
+    }
+  });
 });
 
 describe("akou jobs list against the desktop app", () => {
