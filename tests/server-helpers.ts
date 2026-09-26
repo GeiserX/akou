@@ -70,7 +70,7 @@ export async function submit(
   fields: Record<string, string> = {},
 ): Promise<Answer> {
   const form = new FormData();
-  form.append("file", new Blob([file], { type: "audio/wav" }), "note.wav");
+  form.append("file", new Blob([new Uint8Array(file)], { type: "audio/wav" }), "note.wav");
   for (const [k, v] of Object.entries(fields)) form.append(k, v);
   const res = await fetch(`http://127.0.0.1:${rig.port}/v1/jobs`, {
     method: "POST",
