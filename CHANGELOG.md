@@ -19,6 +19,8 @@ akou now also runs as a transcription server. The Docker image, for amd64 and ar
 - `GET /healthz` for container health checks. `GET /v1/server` lists presets, engines and how many days a job's result is kept.
 - `akou transcribe <file>` sends a file to a server-mode akou and prints the transcript. That akou can be the image, `akou serve` in a source checkout, or one `AKOU_URL` names. The desktop app takes no file jobs.
 - `AKOU_URL` with a key from `AKOU_API_KEY` or `AKOU_API_KEY_FILE` points the CLI and `akou mcp` at an akou on another machine.
+- A compose example runs akou beside Telegram-Archive ([examples/compose/telegram-archive/compose.akou.yml](examples/compose/telegram-archive/compose.akou.yml)). CI runs the pair end to end: a voice note goes in, and its transcript comes back through the signed webhook.
+- A data or models folder akou cannot write stops the start with one line naming the folder and the uid, not a stack trace later.
 
 ### API
 - akou serves its own OpenAPI file at `GET /v1/openapi.json`, with no key needed. akou generates it from its route table, and CI fails when the committed [docs/api/openapi.json](docs/api/openapi.json) differs. `?scope=jobs` returns only what a `jobs` key may call, which Executor loads as tools.
@@ -59,7 +61,7 @@ akou now also runs as a transcription server. The Docker image, for amd64 and ar
 ### Known limitations
 - **Unsigned macOS build.** The first open needs a manual step, and macOS may ask for the microphone and system audio again after an update. See [docs/install.md](docs/install.md).
 - **macOS only as an app.** The release ships the macOS app (Apple Silicon), the CLI and the server image. There is still no packaged desktop app for Windows or Linux. The Linux and Windows CLI archives manage models, the skill and the settings, but cannot record. The new `linux-arm64` archive has not been run on a Raspberry Pi yet.
-- **Server mode and the image are new in this release.** CI builds the image on amd64 and arm64 and transcribes a spoken sentence in each. Nobody has run it for long on a real server yet. The design and what is still missing are in [docs/ux/SERVER.md](docs/ux/SERVER.md). A container refuses to start until you set `server.behind_proxy`, because akou has no TLS of its own. See [docs/install.md](docs/install.md#the-server).
+- **Server mode and the image are new in this release.** CI builds the image on amd64 and arm64 and transcribes a spoken sentence in each. Nobody has run it for long on a real server yet. The design and what is still missing are in [docs/ux/SERVER.md](docs/ux/SERVER.md). A container refuses to start until you set `AKOU_BEHIND_PROXY=true` and put a reverse proxy with TLS in front of it, because akou has no TLS of its own. See [docs/install.md](docs/install.md#the-server).
 - **The server's web page is partly built.** The Models page shows the models' state and a download button, but not each model's size, last use, deletion date or a Delete button. There is no preset picker yet, and the Jobs page polls twice a second instead of following the event feed.
 - **One engine, on the CPU.** Only the `fast` preset has an engine. `lite`, `best` and `fusion` are refused, and akou does not choose by hardware yet. The image uses no GPU. Results carry no word times or confidences: `words` is empty and both confidence fields are null.
 - **Transcribing a file needs server mode.** The single-file CLI's `akou serve` answers the API but carries no speech engine, and says so when it starts. On a Mac, use the image or a source checkout.
