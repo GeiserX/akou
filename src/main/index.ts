@@ -245,7 +245,10 @@ export interface AppOptions {
    * Test-only: the file jobs' upload decoder, webhook network and clock (server mode), and the
    * on-demand downloads' retry waits and free-space probe.
    */
-  jobs?: Pick<JobServiceOptions, "decode" | "delivery" | "now"> & {
+  jobs?: Pick<
+    JobServiceOptions,
+    "decode" | "delivery" | "now" | "remoteProbeMs" | "remoteFetch"
+  > & {
     modelStore?: Pick<ModelStoreOptions, "retryMs" | "freeBytes" | "fetch">;
   };
   /**
@@ -1897,6 +1900,8 @@ export class AkouApp implements ApiApp {
         keys.list().some((k) => k.id === id && k.callback_hosts.includes(host.toLowerCase())),
       retainDays: () => this.cfg.settings["server.retain_days"],
       maxAudioMinutes: () => this.cfg.settings["server.max_audio_minutes"],
+      remotes: () => this.cfg.settings["server.remotes"],
+      env: this.o.env ?? process.env,
       concurrency: () => this.cfg.settings["server.concurrency"],
       queueMax: () => this.cfg.settings["server.queue_max"],
       queueMaxPerKey: () => this.cfg.settings["server.queue_max_per_key"],

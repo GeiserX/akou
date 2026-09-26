@@ -70,7 +70,7 @@ export function serverRoutes(r: Router<ApiApp>): void {
     "/server",
     {
       id: "server.get",
-      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, and `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), and `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog. Needs no key.",
+      doc: "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, the GPU the large speech model runs on (`gpu`, and `accelerator` with the setting, the build, the device, whether llama-server confirmed it, and why), which capabilities (jobs, events, the OpenAI route) exist, the remote akou servers jobs are sent to (`remotes`: url, state and the presets each offers, never a key), `retain_days`, the days akou keeps a job and its result, counted from the job's creation, before it deletes them (`server.retain_days`), and `queue`: `concurrency`, the limits `max` and `max_per_key` (0 for none), `depth`, `queued`, `running`, `jobs_last_hour`, `audio_seconds_last_hour`, `mean_job_seconds` and `eta_seconds`, so a client paces a backlog. Needs no key.",
       access: "open",
       modes: ["app", "server"],
       ok: 200,
@@ -80,13 +80,17 @@ export function serverRoutes(r: Router<ApiApp>): void {
       const accel = c.app.accelerator?.() ?? null;
       const has = (method: string, path: string) =>
         r.list().some((x) => x.method === method && x.path === path);
+      // Section 14: a preset a remote offers is available here too, since a job for it runs there.
+      const remotes = c.app.jobs?.()?.remotes;
       return json(200, {
         name: "akou",
         version: c.app.version,
         mode: c.app.mode?.() ?? "app",
         presets: PRESETS.map((p) => ({
           name: p.name,
-          available: p.built && (c.app.presetAvailable?.(p.name) ?? ready),
+          available:
+            (p.built && (c.app.presetAvailable?.(p.name) ?? ready)) ||
+            (remotes?.offered([p.name]) ?? false),
           engines: p.engines,
           hardware: p.hardware,
           speed: p.speed,
@@ -107,6 +111,8 @@ export function serverRoutes(r: Router<ApiApp>): void {
               reason: accel.reason,
             }
           : null,
+        // The remote akou servers jobs are sent to, and what each offers: never a key.
+        remotes: remotes?.view() ?? [],
         // SV-K1b: how long a job's result and events stay, counted from its creation, so a client knows when they go.
         retain_days: c.app.config().settings["server.retain_days"],
         // SV-Q4: the queue's settings, depth, throughput and ETA; null in the desktop app.

@@ -512,6 +512,86 @@ jobs:
           docker tag akou:ci drumsergio/akou:ci
           AKOU_VERSION=ci MODELS="$MODELS" scripts/compose-e2e.sh "$RUNNER_TEMP/note.ogg"
 
+  # SI-8 (docs/research/service-interface.md): `akou serve` natively on macOS arm64, from a source
+  # checkout with no Docker, since Docker on a Mac has no Metal. A Mac mini serving this way is the
+  # box another akou sends its GPU jobs to (docs/ux/SERVER.md section 14). The same round trip as
+  # the image's: `/healthz`, then one clip by long-poll, event feed and signed webhook, then
+  # `akou transcribe`, with an Ogg Opus voice note as Telegram-Archive sends, decoded by the
+  # Homebrew ffmpeg a Mac server needs too (install.md).
+  server-macos:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: macos-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: macOS arm64
+        run: |
+          test "$(uname -m)" = arm64 || { echo "this runner is $(uname -m), not arm64"; exit 1; }
+          sw_vers
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: ffmpeg, as install.md tells a Mac server to install it
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v ffmpeg || brew install ffmpeg
+          ffmpeg -version | head -n 1
+      - name: the models and home folders
+        run: |
+          echo "AKOU_MODELS_DIR=$RUNNER_TEMP/akou-models" >> "$GITHUB_ENV"
+          echo "AKOU_HOME=$RUNNER_TEMP/akou-home" >> "$GITHUB_ENV"
+      - name: the fast preset's models, by their pins
+        id: models
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.AKOU_MODELS_DIR }}
+          key: akou-models-fast-macos-${{ hashFiles('src/main/asr/models.ts', 'src/main/asr/presets.ts') }}
+      # akou refuses downloads when CI is set (models.ts); the image job pulls inside Docker, where
+      # it is not. Unset for this one step, as a person at a Mac would run it.
+      - name: akou models pull fast, with no server running
+        run: env -u CI bun src/main/cli/cli.ts models pull fast
+      - if: steps.models.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.AKOU_MODELS_DIR }}
+          key: akou-models-fast-macos-${{ hashFiles('src/main/asr/models.ts', 'src/main/asr/presets.ts') }}
+      - name: akou serve, on this machine only
+        run: |
+          mkdir -p "$AKOU_HOME/.config/akou"
+          echo '{ "api.bind": "127.0.0.1" }' > "$AKOU_HOME/.config/akou/config.json"
+          nohup bun src/main/cli/cli.ts serve > "$RUNNER_TEMP/serve.log" 2>&1 &
+      - name: GET /healthz answers within 120 s
+        run: |
+          for _ in $(seq 120); do
+            if curl -fsS http://127.0.0.1:8476/healthz; then echo; exit 0; fi
+            sleep 1
+          done
+          echo "no /healthz within 120 s"
+          exit 1
+      - name: GET /v1/server says server mode, fast available
+        run: curl -fsS http://127.0.0.1:8476/v1/server | tee server.json | jq -e '.mode == "server" and ([.presets[] | select(.name == "fast")][0].available)'
+      - name: a clip by long-poll, event feed and signed webhook, then akou transcribe
+        run: |
+          set -euo pipefail
+          work=$(mktemp -d)
+          curl -fsSL --retry 3 -o "$work/en.wav" https://huggingface.co/csukuangfj/sherpa-onnx-nemo-parakeet-tdt-0.6b-v3/resolve/1a468a35cbba69418f126de829e75261dea4a4e4/test_wavs/en.wav
+          echo "148b936b43ce7c546a866e64da059f0458aee2d65e617f16e9d94f06e8d99ed6  $work/en.wav" | shasum -a 256 -c -
+          ffmpeg -nostdin -loglevel error -i "$work/en.wav" -c:a libopus "$work/note.ogg"
+          bun src/main/cli/cli.ts keys create --name ci --scope jobs --callback-host 127.0.0.1 --json > "$work/key.json"
+          AKOU_API_KEY=$(jq -r .key "$work/key.json")
+          AKOU_WEBHOOK_SECRET=$(jq -r .secret "$work/key.json")
+          export AKOU_API_KEY AKOU_WEBHOOK_SECRET
+          AKOU_URL=http://127.0.0.1:8476 CALLBACK_HOST=127.0.0.1 bun scripts/server-roundtrip.ts "$work/note.ogg"
+          AKOU_URL=http://127.0.0.1:8476 bun src/main/cli/cli.ts transcribe "$work/note.ogg" | tee "$work/transcribe.txt"
+          tr 'A-Z' 'a-z' < "$work/transcribe.txt" | tr -cd 'a-z \n' | grep -q "ask not what your country"
+      - name: the server's log
+        if: always()
+        run: tail -n 200 "$RUNNER_TEMP/serve.log" || true
+
   # The diarization helper (native/akou-diarize) on every OS: format, lint, unit tests and the NOTICE
   # check, the release build, then the real Nemotron model through it in both modes, over a
   # generated two-voice conversation it must tell apart (docs/TESTING.md TS-20). That last step is
@@ -665,7 +745,7 @@ jobs:
   # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.
   ci-ok:
     if: always()
-    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, diarize, gpu-image, executor]
+    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, server-macos, diarize, gpu-image, executor]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
