@@ -533,8 +533,10 @@ jobs:
         with:
           path: ${{ env.AKOU_MODELS_DIR }}
           key: akou-models-fast-macos-${{ hashFiles('src/main/asr/models.ts', 'src/main/asr/presets.ts') }}
+      # akou refuses downloads when CI is set (models.ts); the image job pulls inside Docker, where
+      # it is not. Unset for this one step, as a person at a Mac would run it.
       - name: akou models pull fast, with no server running
-        run: bun src/main/cli/cli.ts models pull fast
+        run: env -u CI bun src/main/cli/cli.ts models pull fast
       - if: steps.models.outputs.cache-hit != 'true'
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
