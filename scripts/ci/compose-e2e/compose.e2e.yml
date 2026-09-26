@@ -1,0 +1,28 @@
+# The CI layer of the compose round trip (scripts/compose-e2e.sh, docs/ux/SERVER.md SV-T6), on top
+# of Telegram-Archive's own docker-compose.yml and akou's compose.akou.yml, both unchanged:
+#
+#   docker compose -f docker-compose.yml -f compose.akou.yml -f compose.e2e.yml up -d
+#
+# Telegram-Archive has published no image with its transcription client yet, so both of its
+# images are built from the pinned commit TA_REF. The backup service has no Telegram account
+# here: instead of its schedule it files one voice note with its own code and runs one
+# transcription drain (archive-note.py), then exits with the result.
+services:
+  telegram-backup:
+    image: telegram-archive:e2e
+    build:
+      context: https://github.com/GeiserX/Telegram-Archive.git#${TA_REF}
+    restart: "no"
+    command: ["python", "/e2e/archive-note.py", "/e2e/note.ogg"]
+    environment:
+      # For the tampered-replay check only: the backup never verifies a callback itself.
+      TRANSCRIPTION_WEBHOOK_SECRET: ${TRANSCRIPTION_WEBHOOK_SECRET}
+    volumes:
+      - ./e2e:/e2e:ro
+
+  telegram-viewer:
+    image: telegram-archive-viewer:e2e
+    build:
+      context: https://github.com/GeiserX/Telegram-Archive.git#${TA_REF}
+      dockerfile: Dockerfile.viewer
+    restart: "no"

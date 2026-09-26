@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { compiledServeWarning, serverEnv } from "../src/main/cli/commands/serve.ts";
 import { until } from "./capture-helpers.ts";
@@ -151,4 +151,58 @@ describe("[SV-P8] akou serve", () => {
     expect(code).toBe(78);
     expect(runtime(h.configDir)).toBeNull();
   }, 30_000);
+
+  test("[SV-P11] AKOU_BEHIND_PROXY=true starts the default bind with no proxy setting in the file", async () => {
+    const h = home();
+    writeFileSync(join(h.configDir, "config.json"), JSON.stringify({ "api.port": 0 }));
+    serve({ ...h.env, AKOU_BEHIND_PROXY: "true" });
+    await until(() => runtime(h.configDir) !== null, 15_000, "runtime.json");
+    const rt = runtime(h.configDir) as { port: number };
+    // 0.0.0.0 is reached on loopback too.
+    const res = await fetch(`http://127.0.0.1:${rt.port}/healthz`);
+    expect(res.status).toBe(200);
+  }, 30_000);
+});
+
+// A folder mode stops no one running as root, and Windows has no mode bits.
+const noModeBits = process.platform === "win32" || process.getuid?.() === 0;
+
+describe("[SV-P12] a folder the server cannot write", () => {
+  for (const which of ["models", "data"] as const) {
+    test.skipIf(noModeBits)(
+      `an unwritable ${which} folder stops akou serve with 77, naming the folder and the uid (skipped as root or on Windows)`,
+      async () => {
+        const h = home();
+        // The image's layout: AKOU_HOME is the data folder, the models folder is its own mount.
+        const data = join(h.dir, "data");
+        const models = join(h.dir, "models");
+        mkdirSync(data);
+        mkdirSync(models);
+        const env = {
+          ...h.env,
+          AKOU_HOME: data,
+          AKOU_MODELS_DIR: models,
+          AKOU_BEHIND_PROXY: "true",
+        };
+        const locked = which === "models" ? models : data;
+        chmodSync(locked, 0o555);
+        cleanups.push(() => chmodSync(locked, 0o755));
+        const proc = serve(env);
+        const code = await proc.exited;
+        const err = await new Response(proc.stderr).text();
+        expect(err).toContain(`${locked} is not writable by uid ${process.getuid?.()}`);
+        expect(code).toBe(77);
+        // One line, never a stack trace.
+        expect(err).not.toContain("    at ");
+        // Positive control: the same start with the folder writable serves.
+        chmodSync(locked, 0o755);
+        const configDir = join(data, ".config", "akou");
+        mkdirSync(configDir, { recursive: true });
+        writeFileSync(join(configDir, "config.json"), JSON.stringify({ "api.port": 0 }));
+        serve(env);
+        await until(() => runtime(configDir) !== null, 15_000, "runtime.json");
+      },
+      30_000,
+    );
+  }
 });

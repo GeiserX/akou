@@ -46,7 +46,9 @@ export const serveCommand: Command = {
     process.env.AKOU_SERVER = "1";
     process.env.AKOU_HEADLESS = "1";
     // Loaded only here, so the other commands never load the core.
-    const { AlreadyRunningError, StartRefused, startApp } = await import("../../index.ts");
+    const { AlreadyRunningError, NotWritable, StartRefused, startApp } = await import(
+      "../../index.ts"
+    );
     let app: Awaited<ReturnType<typeof startApp>>;
     try {
       app = await startApp({ env, headless: true, version: ctx.version });
@@ -59,6 +61,11 @@ export const serveCommand: Command = {
       if (err instanceof StartRefused) {
         ctx.io.err(`akou serve: cannot start: ${err.message}`);
         return EXIT.config;
+      }
+      // A data or models folder this user cannot write (SV-P12): 77, one line, no stack trace.
+      if (err instanceof NotWritable) {
+        ctx.io.err(`akou serve: cannot start: ${err.message}`);
+        return EXIT.permission;
       }
       ctx.io.err(`akou serve: cannot start: ${(err as Error).message}`);
       return EXIT.software;

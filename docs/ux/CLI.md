@@ -148,7 +148,7 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 | 69 | Something needed is unavailable | The app cannot be reached or launched; speech models missing; no provider answered (`ask` still prints the excerpts); a command not built yet; `akou wait --for final.done` on a call whose final pass cannot run |
 | 70 | akou failed | A bug; a stage that failed, reported by `akou wait` |
 | 75 | Already recording | `akou start` while a call is live |
-| 77 | Permission | The token is refused; an OS grant is missing |
+| 77 | Permission | The token is refused; an OS grant is missing; `akou serve` in server mode with a data or models folder it cannot write |
 | 78 | The settings refuse it | `akou serve` with `api.bind` not loopback and `server.behind_proxy` false (sysexits `EX_CONFIG`) |
 | 124 | Timed out | `akou wait --timeout` ran out (the GNU `timeout` convention, PG-S5) |
 | 130 | Interrupted | Ctrl-C during a one-shot command (`ask`, `wait`, `models pull`) |
@@ -243,7 +243,7 @@ Settings live in one JSON file, `config.json` in the config folder, validated by
 | `akou config unset KEY` | Back to the default |
 | `akou config path` | The file's path. File-only keys (`hooks`, `webhook.url`, `provider.baseUrl`, `provider.harnessPath`, `capture.helper`) are edited there, and `config show` marks them so |
 
-The environment has three akou variables for settings and no more (section 1): `AKOU_HOME` moves every akou folder (for tests), `AKOU_HEADLESS=1` starts the app with no window, `AKOU_MODELS_DIR` overrides where the models are. Three more point the CLI and `akou mcp` at a remote akou, as SI-1 in [service-interface.md](../research/service-interface.md) designs. `AKOU_URL` is its base URL. Its key comes from `AKOU_API_KEY` or the file `AKOU_API_KEY_FILE` names, never from a flag, and every command refuses `--key`, `--token` and the like. `akou serve` sets `AKOU_SERVER=1` for the server it runs. The CLI also reads `NO_COLOR` and `TERM`, and it adds the loopback names to `NO_PROXY` for itself and the app it launches, because a proxy on loopback broke both predecessors (DESIGN 6.3 rule 6).
+The environment has four akou variables for settings and no more (section 1): `AKOU_HOME` moves every akou folder (for tests), `AKOU_HEADLESS=1` starts the app with no window, `AKOU_MODELS_DIR` overrides where the models are, and `AKOU_BEHIND_PROXY=true` sets `server.behind_proxy`, so a container needs no seeded `config.json`. Three more point the CLI and `akou mcp` at a remote akou, as SI-1 in [service-interface.md](../research/service-interface.md) designs. `AKOU_URL` is its base URL. Its key comes from `AKOU_API_KEY` or the file `AKOU_API_KEY_FILE` names, never from a flag, and every command refuses `--key`, `--token` and the like. `akou serve` sets `AKOU_SERVER=1` for the server it runs. The CLI also reads `NO_COLOR` and `TERM`, and it adds the loopback names to `NO_PROXY` for itself and the app it launches, because a proxy on loopback broke both predecessors (DESIGN 6.3 rule 6).
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
