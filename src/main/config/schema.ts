@@ -15,13 +15,14 @@
  * Parakeet decodes with beam search (TRAPS "The boost is a slider"), and a file that tries to set
  * one is told so.
  *
- * Environment: only `AKOU_HEADLESS`, `AKOU_MODELS_DIR` and `AKOU_HOME` exist. `AKOU_HOME` is not a
- * setting: it moves the home folder itself (config and recordings), for tests.
+ * Environment: only `AKOU_HEADLESS`, `AKOU_SERVER`, `AKOU_MODELS_DIR` and `AKOU_HOME` exist.
+ * `AKOU_HOME` is not a setting: it moves the home folder itself (config and recordings), for tests.
  */
 
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parseCidr } from "../api/net.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
@@ -68,6 +69,8 @@ export interface SettingSpec {
   apiWritable?: boolean;
   /** A secret (an API key): never shown by `GET /config`, `config show` or `status`. */
   secret?: boolean;
+  /** A rule the type cannot say: the error, or null when the value is good. */
+  check?: (value: SettingValue) => string | null;
   doc: string;
 }
 
@@ -110,7 +113,12 @@ export const SETTINGS = {
     type: "string",
     max: 60,
     default: "",
-    doc: "Global shortcut that starts and stops a call, in accelerator form (`Control+Alt+R`). Empty: `Option+Command+R` on macOS, `Control+Alt+R` elsewhere.",
+    doc: "Global shortcut that starts and stops a call, in accelerator form (`Control+Shift+F9`). Empty: `Option+Command+R` on macOS, `Control+Shift+F9` elsewhere (never `Control+Alt`, which is AltGr on many layouts).",
+  },
+  "app.floatingIndicator": {
+    type: "boolean",
+    default: true,
+    doc: "While a call records and the akou window is not in front, a small always-on-top bar with the time, the levels, Mute, Ask and Stop. It shows no transcript text, so it can stay up during a screen share.",
   },
   "app.openAtLogin": {
     type: "boolean",
@@ -131,6 +139,74 @@ export const SETTINGS = {
     also: [0],
     default: 8477,
     doc: "Port of the read-only share link. 0 picks a free port.",
+  },
+  "api.bind": {
+    type: "string",
+    max: 45,
+    default: "",
+    // Where the API is reachable, and who may reach it below, change only in the file: the token
+    // must not become a way to put the API on the network.
+    apiWritable: false,
+    doc: "Address the API listens on in server mode: 127.0.0.1, 0.0.0.0 or ::, the binds akou's CLI on the same box reaches. Empty: 0.0.0.0. 0.0.0.0 and :: need `server.behind_proxy`. The app always listens on 127.0.0.1.",
+  },
+  "server.enabled": {
+    type: "boolean",
+    default: false,
+    env: "AKOU_SERVER",
+    apiWritable: false,
+    doc: "Server mode: per-key access instead of the one token, bound to `api.bind`, for other programs to call over the network.",
+  },
+  "server.behind_proxy": {
+    type: "boolean",
+    default: false,
+    apiWritable: false,
+    doc: "A reverse proxy in front of akou terminates TLS. Required for any bind that is not loopback; with no `server.public_host`, any Host header is accepted.",
+  },
+  "server.public_host": {
+    type: "string",
+    max: 253,
+    default: "",
+    apiWritable: false,
+    doc: "The host name clients use (`akou.example`, or with a port). Set: server mode accepts that Host header and loopback only.",
+  },
+  "server.trusted_proxies": {
+    type: "string[]",
+    default: [],
+    apiWritable: false,
+    check: (v) => {
+      const bad = (v as readonly string[]).find((c) => parseCidr(c) === null);
+      return bad === undefined ? null : `${bad} is not an address or a CIDR block`;
+    },
+    doc: "Addresses or CIDR blocks of the proxies whose X-Forwarded-For is believed for rate limits and audit. From any other peer the TCP address is the source.",
+  },
+  "server.max_upload_mb": {
+    type: "integer",
+    min: 1,
+    max: 16384,
+    default: 512,
+    doc: "Largest upload an upload route takes, in MiB. Every other route keeps the 64 KB JSON cap.",
+  },
+  "server.max_audio_minutes": {
+    type: "integer",
+    min: 1,
+    max: 1440,
+    default: 240,
+    doc: "Longest audio a file job transcribes, in minutes. A longer file fails as `too_long` before it is held in memory.",
+  },
+  "server.retain_days": {
+    type: "integer",
+    min: 1,
+    max: 3650,
+    default: 7,
+    doc: "Days a file job and its result are kept before they are deleted, as a client's delete would. The upload itself is deleted as soon as the job ends.",
+  },
+  "server.admin_password_hash": {
+    type: "string",
+    max: 512,
+    default: "",
+    secret: true,
+    apiWritable: false,
+    doc: "The web UI's admin password, hashed. Set it with `akou admin set-password`.",
   },
   "capture.helper": {
     type: "string[]",
@@ -414,6 +490,8 @@ export function validateSetting(
       ) {
         return { ok: false, error: `${key}: length must be ${range}` };
       }
+      const wrong = spec.check?.(value);
+      if (wrong) return { ok: false, error: `${key}: ${wrong}` };
       return { ok: true, key, value };
     }
     case "string[]": {
@@ -424,6 +502,8 @@ export function validateSetting(
       if (bad) {
         return { ok: false, error: `${key}: ${bad} is not one of ${spec.values?.join(", ")}` };
       }
+      const wrong = spec.check?.(value);
+      if (wrong) return { ok: false, error: `${key}: ${wrong}` };
       return { ok: true, key, value: [...value] };
     }
     case "hooks": {

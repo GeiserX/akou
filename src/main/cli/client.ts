@@ -36,6 +36,8 @@ export const EXIT = {
   software: 70,
   alreadyRecording: 75,
   permission: 77,
+  /** `akou wait` ran out of time, as `timeout(1)` reports it. */
+  timeout: 124,
 } as const;
 
 /** The design's wait for a cold app: `201` within 3 s of `akou start`. */
@@ -151,6 +153,8 @@ export interface ClientOptions {
 
 export interface RequestOptions {
   body?: unknown;
+  /** A multipart body instead of JSON: an upload route (`akou transcribe`). */
+  form?: FormData;
   query?: Record<string, string | number | boolean | undefined>;
   /** Launch the app if it is not running. Default true. */
   launch?: boolean;
@@ -251,9 +255,9 @@ export class ApiClient {
       headers: {
         authorization: `Bearer ${remote ? to.key : this.token()}`,
         "x-akou-client": o.client ?? this.o.client,
-        ...(hasBody ? { "content-type": "application/json" } : {}),
+        ...(hasBody && !o.form ? { "content-type": "application/json" } : {}),
       },
-      body: hasBody ? JSON.stringify(o.body ?? {}) : undefined,
+      body: o.form ?? (hasBody ? JSON.stringify(o.body ?? {}) : undefined),
       signal: o.signal
         ? AbortSignal.any([o.signal, AbortSignal.timeout(o.timeoutMs ?? 60_000)])
         : AbortSignal.timeout(o.timeoutMs ?? 60_000),

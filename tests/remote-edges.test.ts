@@ -317,9 +317,13 @@ describe("secret flags and the key file", () => {
   });
 
   test("a command cannot declare a secret flag, so the refusal holds on every command", () => {
-    expect(() => parseArgs([], { token: { type: "string" } })).toThrow("--token");
-    expect(() => parseArgs([], { key: { type: "string", short: "k" } })).toThrow("--key");
+    expect(() => parseArgs([], { token: { type: "string", desc: "x" } })).toThrow("--token");
+    expect(() => parseArgs([], { key: { type: "string", short: "k", desc: "x" } })).toThrow(
+      "--key",
+    );
     // Positive control: an ordinary flag still parses.
-    expect(parseArgs(["--title", "x"], { title: { type: "string" } }).flags.title).toBe("x");
+    expect(parseArgs(["--title", "x"], { title: { type: "string", desc: "x" } }).flags.title).toBe(
+      "x",
+    );
   });
 });

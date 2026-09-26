@@ -190,6 +190,11 @@ export interface FakeOptions {
   streamDiesAfter?: number;
   /** The fake stream diarizer never decides anything and never answers a flush. */
   streamStuck?: boolean;
+  /**
+   * A span with no word in it comes back as this text instead of empty: an engine that invents a
+   * sentence on noise, as Qwen3, Moonshine and Cohere did before sherpa-onnx 1.13.8 (SV-R5).
+   */
+  hallucinate?: string;
 }
 
 export interface DecodeCall {
@@ -252,6 +257,7 @@ export class FakeRecognizer implements Recognizer {
       const w = WORDS[k] as (typeof WORDS)[number];
       out.push(w.term && biased.has(w.term) ? w.term : (w.heard ?? w.sound));
     }
+    if (out.length === 0 && this.o.hallucinate) return { text: this.o.hallucinate };
     return { text: out.join(" ") };
   }
 }

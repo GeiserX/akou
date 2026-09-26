@@ -18,6 +18,8 @@
  * - the bundled Bun loads sherpa-onnx-node from inside the bundle, and the process has the `.node`
  *   file and both libraries open from the bundle's own folder (`lsof`; the hardened runtime ignores
  *   `DYLD_PRINT_LIBRARIES`) (TRAPS "Native libraries missing from the bundle");
+ * - the `akou` command line the akou menu links into PATH runs from the bundle and says the
+ *   version;
  * - the bundled Bun imports both Worker modules;
  * - the app's own helper resolver, bundled into the main folder and run by the bundled Bun, finds
  *   the helper there;
@@ -213,6 +215,16 @@ async function checkInner(
   ];
   const missing = need.filter((f) => !existsSync(join(main, f)));
   check(missing.length === 0, `${need.length} files beside the main process`, missing.join(", "));
+
+  // The command line the akou menu links into PATH (DK-M6), run from inside the bundle: it must
+  // start under the bundle's signature and say the app's version.
+  const cli = join(main, "akou");
+  const said = spawnSync(cli, ["--version"]);
+  check(
+    said.status === 0 && said.stdout.toString().trim() === version,
+    `the bundled akou command says ${version}`,
+    said.status === 0 ? said.stdout.toString().trim() : String(said.stderr ?? said.error),
+  );
 
   // sherpa-onnx-node, loaded by the bundled Bun the way the app loads it.
   const probe = join(work, "load-sherpa.mjs");

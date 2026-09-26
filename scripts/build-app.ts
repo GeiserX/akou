@@ -9,7 +9,8 @@
  *    `--allow-missing-helper` builds anyway, for checking the rest of the bundle before the helper
  *    is merged; the smoke check still reports the helper missing.
  * 3. The browser pages (`dist/ui`) and the two recognition Workers (`dist/workers`), which the
- *    ElectroBun bundler does not produce, are built with Bun's.
+ *    ElectroBun bundler does not produce, are built with Bun's, and the `akou` command line is
+ *    compiled into `dist/app-cli` for the app to carry (the akou menu links it into PATH, DK-M6).
  * 4. ElectroBun builds the stable app with the Hutch release its npm package pairs with it, checked
  *    against `PINS` before and after. Proxy variables are removed for Hutch (TRAPS "Hutch cannot
  *    fetch behind a proxy"). The `postBuild` and `postWrap` hooks patch both `Info.plist` files;
@@ -28,6 +29,7 @@ import { join } from "node:path";
 import { BUILT } from "../electrobun.config.ts";
 import pkg from "../package.json" with { type: "json" };
 import { writeUi } from "../src/main/window/bundle.ts";
+import { compileCli } from "./build-cli.ts";
 import { drift, sourceVersion } from "./stamp-version.ts";
 
 /** The toolchain the release is built with (DESIGN 9, ROADMAP M0). */
@@ -169,6 +171,10 @@ async function main(argv: string[]): Promise<void> {
     if (!r.success || !r.outputs[0]) fail(`the ${name} bundle failed: ${r.logs.join("; ")}`);
     await Bun.write(join(ROOT, out), r.outputs[0]);
   }
+
+  rmSync(join(ROOT, "dist", "app-cli"), { recursive: true, force: true });
+  mkdirSync(join(ROOT, "dist", "app-cli"), { recursive: true });
+  compileCli(join(ROOT, BUILT.cli), "darwin-arm64", version);
 
   // 4. ElectroBun, through the paired Hutch.
   rmSync(join(ROOT, "build"), { recursive: true, force: true });

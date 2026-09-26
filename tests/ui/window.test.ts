@@ -16,6 +16,7 @@ import { renderExport } from "../../src/main/handoff/export.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
 import {
+  CLIPBOARD_PERMISSIONS,
   FakeProvider,
   hiddenOffenders,
   launch,
@@ -1479,7 +1480,7 @@ describe("copy the transcript so far (W12.2)", () => {
       await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
         const id = await rig.startCall({ title: "Copy live" });
         const page = await rig.open(id);
-        await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+        await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
         await page.evaluate(() => navigator.clipboard.writeText("before"));
         await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
         await rig.write(id, seg("l000002", "which region", { spk: "c2" }));
@@ -1549,7 +1550,7 @@ describe("copy the transcript so far (W12.2)", () => {
         },
         async (rig) => {
           const page = await rig.open(id);
-          await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+          await page.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
           await page.waitForSelector("#lines .row");
           // The clipboard can outlive a browser context (Chromium on Linux keeps the earlier
           // test's copy), so wait for this click's write, not for any transcript.

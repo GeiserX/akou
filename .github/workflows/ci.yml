@@ -32,13 +32,16 @@ concurrency:
 
 jobs:
   # What a pull request needs. `code` is false only when every changed file is documentation
-  # (under docs/ or a Markdown file at the top); then only the Linux `check` leg runs, because
-  # some tests read the docs. A push to main and a dispatch run everything.
+  # (under docs/, the issue tracker's export under .beads/, or a Markdown file at the top); then
+  # only the Linux `check` leg runs, because some tests read the docs. `diarize` is true when the
+  # diarization helper, its client, its smoke or their fixtures changed; that leg downloads a model
+  # on three OSes, so it runs only then. A push to main and a dispatch run everything.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       code: ${{ steps.diff.outputs.code }}
+      diarize: ${{ steps.diff.outputs.diarize }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -50,14 +53,20 @@ jobs:
         run: |
           if [ "$EVENT" != pull_request ]; then
             echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "diarize=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           git diff --name-only HEAD^1 HEAD > changed.txt
           cat changed.txt
-          if grep -qvE '^(docs/|[^/]+\.md$)' changed.txt; then
+          if grep -qvE '^(docs/|\.beads/|[^/]+\.md$)' changed.txt; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
             echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+          if grep -qE '^(native/akou-diarize/|src/main/asr/(nemotron|models)\.ts$|scripts/diarize-smoke\.ts$|tests/fixtures/two-voices\.|\.github/workflows/ci\.yml$|NOTICE$)' changed.txt; then
+            echo "diarize=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "diarize=false" >> "$GITHUB_OUTPUT"
           fi
 
   check:
@@ -250,7 +259,7 @@ jobs:
           {
             echo "### live capture (${{ matrix.server }})"
             echo
-            grep -E '^left|"type":"(capturing|warn)"' live.log | sed 's/^/    /'
+            grep -E '^left|^tone runs|"type":"(capturing|warn)"' live.log | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
       - run: bun scripts/ci/test-floor.ts capture-live-${{ matrix.server }} .junit-live.xml
       - name: sound server logs
@@ -456,11 +465,104 @@ jobs:
         if: always()
         run: docker logs akou 2>&1 | tail -n 200 || true
 
+  # The diarization helper (native/akou-diarize) on every OS: format, lint, unit tests and the NOTICE
+  # check, the release build, then the real Nemotron model through it in both modes, over a
+  # generated two-voice conversation it must tell apart (docs/TESTING.md TS-20). That last step is
+  # the one that says the statically linked ONNX Runtime loads and infers on Windows, which no other
+  # job covers. The model is fetched here from its pinned URL, checked against its pinned SHA-256
+  # and cached by it; akou's own downloader stays off in CI.
+  diarize:
+    needs: changes
+    if: needs.changes.outputs.diarize == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      EXE: ${{ matrix.os == 'windows-latest' && '.exe' || '' }}
+      MODEL_URL: https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/nemotron-3-diarization/nemotron3_diar_v3.onnx
+      MODEL_SHA256: 915e4fa23b0192ed9fadeb1cdd26847df986d50c92012d177be28d0343bbe03a
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Rust 1.97.1
+        run: |
+          rustup toolchain install 1.97.1 --profile minimal --component clippy,rustfmt
+          rustup default 1.97.1
+      - name: cargo fmt --check
+        working-directory: native/akou-diarize
+        run: cargo fmt --check
+      - name: cargo clippy -D warnings
+        working-directory: native/akou-diarize
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: cargo test (unit and NOTICE)
+        working-directory: native/akou-diarize
+        run: cargo test --locked
+      - name: cargo build --release
+        working-directory: native/akou-diarize
+        run: |
+          cargo build --locked --release
+          bin="target/release/akou-diarize$EXE"
+          "$bin" --version
+          echo "### akou-diarize on ${{ runner.os }}: $(wc -c < "$bin") bytes" >> "$GITHUB_STEP_SUMMARY"
+      - name: the model, by its pinned SHA-256
+        id: model
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: models/nemotron3_diar_v3.onnx
+          key: nemotron3-diar-${{ env.MODEL_SHA256 }}
+      - name: fetch and check the model
+        if: steps.model.outputs.cache-hit != 'true'
+        run: |
+          mkdir -p models
+          curl -fsSL --retry 3 -o models/nemotron3_diar_v3.onnx "$MODEL_URL"
+      - name: the model matches its pin
+        run: |
+          got=$( (sha256sum models/nemotron3_diar_v3.onnx 2>/dev/null || shasum -a 256 models/nemotron3_diar_v3.onnx) | cut -d' ' -f1)
+          echo "sha256 $got"
+          test "$got" = "$MODEL_SHA256"
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: two voices through the real model, final and live
+        run: |
+          bun scripts/diarize-smoke.ts "native/akou-diarize/target/release/akou-diarize$EXE" models/nemotron3_diar_v3.onnx | tee smoke.log
+          { echo; sed 's/^/    /' smoke.log; } >> "$GITHUB_STEP_SUMMARY"
+
+  # docs/research/service-interface.md SI-2: a real Executor (executor@1.6.8, pinned by the
+  # lockfile in scripts/ci/executor/, in a throwaway home) adds akou from the served
+  # `GET /v1/openapi.json?scope=jobs` and must see the tools jobs.create, jobs.get and keys.me, no
+  # openai.transcribe and one auth template; the same against a server that wants a key on the
+  # file must fail with Executor's HTTP 401. A route not built yet comes from the test fixture,
+  # only where the table has none, and the job summary names it.
+  executor:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        with:
+          bun-version-file: .bun-version
+      - run: bun install --frozen-lockfile
+      - name: executor 1.6.8 from npm, from its lockfile
+        run: npm ci --no-audit --no-fund --prefix scripts/ci/executor
+      - run: bun scripts/ci/executor-roundtrip.ts --executor scripts/ci/executor/node_modules/.bin/executor
+
   # The one required check. `if: always()` so it reports even when a leg failed; it fails when any
   # leg failed or was cancelled, and passes when legs were skipped for a docs-only change.
   ci-ok:
     if: always()
-    needs: [changes, check, ui, helper, capture-linux, capture-windows, server]
+    needs: [changes, check, ui, helper, capture-linux, capture-windows, server, diarize, executor]
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:

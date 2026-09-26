@@ -76,7 +76,7 @@ Status words:
 
 ## Batch and file transcription
 
-- F1.8, F1.9, F1.10 transcribe a file, read audio from stdin, Unix piping: **changed (M1)**. `akou finalize CALL` re-runs the accurate pass on a call. Transcribing arbitrary files is not a product feature; `akou import hark-viewer` covers old folders.
+- F1.8 transcribe a file: **carried, as a job** ([SERVER.md SV-D1](ux/SERVER.md#2-decisions-this-reverses)). A file is a job, `POST /v1/jobs` in server mode, and `akou transcribe FILE` is the same job from the command line. F1.9, F1.10 read audio from stdin, Unix piping: **changed (M1)**. `akou finalize CALL` re-runs the accurate pass on a call; `akou import hark-viewer` covers old folders.
 - F1.11, F1.12, I1.12, I1.13 txt, srt, json transcript formats: **changed (M1)**. The log is the format; `akou show` and the export render `md | json | txt`. SRT is dropped.
 - F1.29 offline diarization during live capture: **changed (M1)**. The final pass runs after every call automatically.
 - F1.30 batch diarization with threshold and max speakers: **changed (M1)**. The final pass runs Nemotron 3 Diarization over the whole call, which finds up to 8 speakers itself with no threshold to tune; `asr.diarizer` `embeddings` keeps pyannote with its clustering threshold.

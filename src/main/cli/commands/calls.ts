@@ -6,7 +6,19 @@
 
 import { bool, int, list, str } from "../args.ts";
 import { EXIT, Unreachable } from "../client.ts";
-import { api, type Body, type Command, type Ctx, enc, finish, ref, wall } from "../context.ts";
+import { healthWord } from "../color.ts";
+import {
+  api,
+  type Body,
+  type Command,
+  type Ctx,
+  callFlag,
+  enc,
+  finish,
+  objectCall,
+  ref,
+  wall,
+} from "../context.ts";
 
 const start: Command = {
   name: "start",
@@ -14,15 +26,24 @@ const start: Command = {
   usage:
     "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--without-models] [--json]",
   flags: {
-    workspace: { type: "string", short: "w" },
-    title: { type: "string", short: "t" },
-    template: { type: "string" },
-    call: { type: "string" },
-    mic: { type: "string" },
-    vocab: { type: "string" },
+    workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the call goes in" },
+    title: { type: "string", short: "t", value: "TITLE", desc: "the call's title" },
+    template: { type: "string", value: "T", desc: "the notes template for this call" },
+    // Not `-c`: on `start` this is the call side's audio source, not a call to name.
+    call: {
+      type: "string",
+      value: "SRC",
+      desc: "what the call side records: system (default), app:ID or none",
+    },
+    mic: { type: "string", value: "ID", desc: "the microphone: a device id or none" },
+    vocab: { type: "string", value: "A,B", desc: "words for this call only, comma-separated" },
     // Audio only, before `akou models pull` has run: nothing is transcribed live.
-    "without-models": { type: "boolean" },
+    "without-models": {
+      type: "boolean",
+      desc: "record audio now and transcribe later, before the models are downloaded",
+    },
   },
+  examples: ['akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform'],
   run: async (ctx, p) => {
     // `-t Weekly sync` and `-t "Weekly sync"` both work: loose words after the flags join the title.
     const title = [str(p, "title"), ...p.positional].filter((x) => x !== undefined).join(" ");
@@ -49,9 +70,12 @@ function control(name: "stop" | "pause" | "resume" | "mute" | "unmute", summary:
   return {
     name,
     summary,
-    usage: `akou ${name} [--json]`,
-    run: async (ctx) => {
-      const r = await api(ctx, "POST", `/calls/live/${name}`);
+    usage: `akou ${name} [-c CALL] [--json]`,
+    // Controls act on the live call; the API refuses `last`, so none lands on a finished call.
+    flags: { call: callFlag("live") },
+    examples: [`akou ${name}`],
+    run: async (ctx, p) => {
+      const r = await api(ctx, "POST", `/calls/${ref(p)}/${name}`);
       return finish(ctx, r, (b) => `${b.call}: ${b.state}`);
     },
   };
@@ -60,8 +84,12 @@ function control(name: "stop" | "pause" | "resume" | "mute" | "unmute", summary:
 const restart: Command = {
   name: "restart",
   summary: "Start a new part in the same call, make before break",
-  usage: "akou restart [--force] [--call ID] [--json]",
-  flags: { force: { type: "boolean" }, call: { type: "string" } },
+  usage: "akou restart [--force] [-c CALL] [--json]",
+  flags: {
+    force: { type: "boolean", desc: "restart even when the capture looks healthy" },
+    call: callFlag("last"),
+  },
+  examples: ["akou restart"],
   run: async (ctx, p) => {
     const r = await api(ctx, "POST", `/calls/${ref(p, "last")}/restart`, {
       body: { force: bool(p, "force") || undefined },
@@ -70,7 +98,7 @@ const restart: Command = {
   },
 };
 
-function statusText(s: Body): string {
+function statusText(s: Body, color = false): string {
   const out: string[] = [];
   const a = s.app ?? {};
   out.push(`akou ${a.version}, pid ${a.pid}, port ${a.port}${a.headless ? ", headless" : ""}`);
@@ -80,7 +108,7 @@ function statusText(s: Body): string {
       `Live: "${live.title}" in ${live.workspace}, ${live.state}${live.muted ? ", muted" : ""}, ${live.parts} part${live.parts === 1 ? "" : "s"}, recognizer lag ${live.lag} s (${live.call})`,
     );
     for (const h of live.health ?? []) {
-      out.push(`  ${h.ch}: ${h.state}${h.detail ? ` (${h.detail})` : ""}`);
+      out.push(`  ${h.ch}: ${healthWord(color, h.state)}${h.detail ? ` (${h.detail})` : ""}`);
     }
   } else {
     out.push("Live: nothing is recording");
@@ -101,6 +129,7 @@ const status: Command = {
   name: "status",
   summary: "The app, the live call, health, recognizer lag, models, provider, sharing",
   usage: "akou status [--json]",
+  examples: ["akou status", "akou status --json"],
   run: async (ctx) => {
     let r: Awaited<ReturnType<typeof api>>;
     try {
@@ -112,16 +141,18 @@ const status: Command = {
       else ctx.io.err("akou is not running (`akou open` starts it and shows the window)");
       return EXIT.unavailable;
     }
-    return finish(ctx, r, statusText);
+    return finish(ctx, r, (b) => statusText(b, ctx.color));
   },
 };
 
 const open: Command = {
   name: "open",
   summary: "Show the window on a call; headless, print the address of the window in a browser",
-  usage: "akou open [CALL] [--json]",
+  usage: "akou open [CALL | -c CALL] [--json]",
+  flags: { call: callFlag("the window's own choice") },
+  examples: ["akou open", "akou open last"],
   run: async (ctx, p) => {
-    const call = p.positional[0];
+    const call = objectCall(p, p.positional[0]);
     const r = await api(ctx, "POST", "/window", { body: call ? { call } : {} });
     // The address carries a one-time code that works once, for one minute: open it, do not keep it.
     return finish(ctx, r, (b) =>
@@ -142,10 +173,11 @@ const calls: Command = {
   summary: "List calls by date, title and duration (no content search)",
   usage: "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json]",
   flags: {
-    workspace: { type: "string", short: "w" },
-    limit: { type: "string" },
-    failed: { type: "boolean" },
+    workspace: { type: "string", short: "w", value: "WS", desc: "only calls in this workspace" },
+    limit: { type: "string", value: "N", desc: "at most N calls, newest first" },
+    failed: { type: "boolean", desc: "only calls whose capture or final pass failed" },
   },
+  examples: ["akou calls -w work --limit 5"],
   run: async (ctx, p) => {
     const r = await api(ctx, "GET", "/calls", {
       query: {
@@ -170,10 +202,15 @@ const calls: Command = {
 const show: Command = {
   name: "show",
   summary: "One call's transcript",
-  usage: "akou show CALL [--layer best|live|final] [--format md|json|txt]",
-  flags: { layer: { type: "string" }, format: { type: "string" } },
+  usage: "akou show CALL | -c CALL [--layer best|live|final] [--format md|json|txt] [--json]",
+  flags: {
+    call: callFlag("none; name one"),
+    layer: { type: "string", value: "L", desc: "best (default), live or final" },
+    format: { type: "string", value: "F", desc: "md (default), txt or json" },
+  },
+  examples: ["akou show last --format txt", "akou show -c last"],
   run: async (ctx, p) => {
-    const call = p.positional[0];
+    const call = objectCall(p, p.positional[0]);
     if (!call) return usage(ctx, "show needs a call id (or `last`)");
     const format = ctx.json ? "json" : (str(p, "format") ?? "md");
     const r = await api(ctx, "GET", `/calls/${enc(call)}/transcript`, {
@@ -190,10 +227,14 @@ const show: Command = {
 const finalize: Command = {
   name: "finalize",
   summary: "Run the accurate final pass on an ended call",
-  usage: "akou finalize [CALL] [--force] [--json]",
-  flags: { force: { type: "boolean" } },
+  usage: "akou finalize [CALL | -c CALL] [--force] [--json]",
+  flags: {
+    call: callFlag("last"),
+    force: { type: "boolean", desc: "run it again on a call that already has a final layer" },
+  },
+  examples: ["akou finalize last --force"],
   run: async (ctx, p) => {
-    const call = p.positional[0] ?? "last";
+    const call = objectCall(p, p.positional[0]) ?? "last";
     const r = await api(ctx, "POST", `/calls/${enc(call)}/finalize`, {
       body: { force: bool(p, "force") || undefined },
     });
@@ -204,8 +245,12 @@ const finalize: Command = {
 const enhance: Command = {
   name: "enhance",
   summary: "Write enhanced notes with the configured provider (on a live call: so far)",
-  usage: "akou enhance [--template T] [--call ID] [--json]",
-  flags: { template: { type: "string" }, call: { type: "string" } },
+  usage: "akou enhance [--template T] [-c CALL] [--json]",
+  flags: {
+    template: { type: "string", value: "T", desc: "the template the notes follow" },
+    call: callFlag("last"),
+  },
+  examples: ["akou enhance --template standup"],
   run: async (ctx, p) => {
     const r = await api(ctx, "POST", `/calls/${ref(p, "last")}/enhance`, {
       body: { template: str(p, "template") },
@@ -231,6 +276,7 @@ const quit: Command = {
   name: "quit",
   summary: "Stop the app cleanly (the live call is stopped and its log ended first)",
   usage: "akou quit [--json]",
+  examples: ["akou quit"],
   run: async (ctx) => {
     // `runtime.json` is never read with a remote target, so the wait below could not see it go.
     if (ctx.io.env.AKOU_URL?.trim()) {

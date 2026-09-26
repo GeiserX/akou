@@ -23,10 +23,10 @@ import {
   verifyModels,
 } from "../../asr/models.ts";
 import { isPreset, PRESET_NAMES, presetModels } from "../../asr/presets.ts";
-import { loadConfig } from "../../config/schema.ts";
+import { isSettingKey, loadConfig, SETTINGS, type SettingSpec } from "../../config/schema.ts";
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
-import { api, type Body, type Command, type Ctx, finish, notBuilt } from "../context.ts";
+import { api, type Body, type Command, type Ctx, callFlag, finish, notBuilt } from "../context.ts";
 import { usage } from "./calls.ts";
 
 /** A value from the command line: JSON when it parses (`8476`, `true`, `["a"]`), else a string. */
@@ -41,7 +41,14 @@ export function parseValue(raw: string): unknown {
 const config: Command = {
   name: "config",
   summary: "Show, set or unset a setting (validated by the settings registry)",
-  usage: "akou config show | akou config set KEY VALUE | akou config unset KEY   [--json]",
+  usage:
+    "akou config show | akou config set KEY VALUE | akou config set KEY - (the value on stdin; required for secrets) | akou config unset KEY   [--json]",
+  examples: [
+    "akou config show",
+    "akou config set asr.threads 4",
+    "printf '%s' \"$KEY\" | akou config set provider.apiKey -",
+    "akou config unset asr.threads",
+  ],
   run: async (ctx, p) => {
     const [sub, key, ...rest] = p.positional;
     if (sub === "show") {
@@ -57,9 +64,27 @@ const config: Command = {
     }
     if (sub === "set") {
       if (!key || rest.length === 0) return usage(ctx, "config set needs a key and a value");
-      const r = await api(ctx, "PATCH", "/config", {
-        body: { [key]: parseValue(rest.join(" ")) },
-      });
+      const secret = isSettingKey(key) && (SETTINGS[key] as SettingSpec).secret === true;
+      const fromStdin = rest.length === 1 && rest[0] === "-";
+      if (secret && !fromStdin) {
+        // A secret on the command line lands in shell history and in `ps` (CLI-06).
+        return refuseSecretArg(ctx, key);
+      }
+      let value: unknown;
+      if (fromStdin) {
+        // Typed at a terminal, the read waits for the end of input: say so, or it looks hung.
+        if (ctx.io.keys) {
+          const end = process.platform === "win32" ? "Ctrl-Z then Enter" : "Ctrl-D";
+          ctx.io.err(`akou: reading the value from stdin; end it with ${end}`);
+        }
+        // One trailing newline is the shell's (`echo`), not the value's.
+        const raw = (await (ctx.io.readStdin?.() ?? Promise.resolve(""))).replace(/\r?\n$/, "");
+        if (raw === "") return usage(ctx, `config set ${key} - read nothing from stdin`);
+        value = secret ? raw : parseValue(raw);
+      } else {
+        value = parseValue(rest.join(" "));
+      }
+      const r = await api(ctx, "PATCH", "/config", { body: { [key]: value } });
       return finish(ctx, r, (b) => `${key} = ${JSON.stringify(b.settings[key])}\n${b.note}`);
     }
     if (sub === "unset") {
@@ -71,10 +96,20 @@ const config: Command = {
   },
 };
 
+/** Refuses a secret given as an argument: exit 64, nothing stored, and the stdin form to use. */
+function refuseSecretArg(ctx: Ctx, key: string): number {
+  const message = `${key} is a secret, so akou never takes it from the command line, where shell history and ps would keep it; if that was a real key, rotate it`;
+  const hint = `printf '%s' "$VALUE" | akou config set ${key} -`;
+  if (ctx.json) ctx.io.out(JSON.stringify({ error: "usage", message, hint }));
+  else ctx.io.err(`akou: ${message}\n  try: ${hint}`);
+  return EXIT.usage;
+}
+
 const token: Command = {
   name: "token",
   summary: "Where the API token is, or rotate it (the running app follows at once)",
   usage: "akou token path | akou token rotate   [--json]",
+  examples: ["akou token path", "akou token rotate"],
   run: async (ctx, p) => {
     const sub = p.positional[0];
     if (sub === "path") {
@@ -191,6 +226,12 @@ const models: Command = {
     "akou models list | akou models pull [PRESET|MODEL] | akou models import DIR   [--json]\n" +
     "  PRESET is lite, fast, best, fusion or auto; MODEL is an id from `akou models list`.\n" +
     "  No app needs to run: an image build or an entrypoint pulls before the server starts.",
+  examples: [
+    "akou models list",
+    "akou models pull fast",
+    "akou models pull",
+    "akou models import /Volumes/usb/akou-models",
+  ],
   run: async (ctx, p) => {
     const [sub, arg] = p.positional;
     const dir = modelsDir(ctx);
@@ -295,8 +336,15 @@ const models: Command = {
 const share: Command = {
   name: "share",
   summary: "A read-only live link to the call",
-  usage: "akou share on|off|status [--bind tailnet|lan|IP] [--notes] [--expires 3h] [--json]",
-  flags: { bind: { type: "string" }, notes: { type: "boolean" }, expires: { type: "string" } },
+  usage:
+    "akou share on|off|status [-c CALL] [--bind tailnet|lan|IP] [--notes] [--expires 3h] [--json]",
+  flags: {
+    call: callFlag("live; `off` without it stops every share"),
+    bind: { type: "string", value: "WHERE", desc: "tailnet, lan or an address (default: tailnet)" },
+    notes: { type: "boolean", desc: "share the notepad too" },
+    expires: { type: "string", value: "3h", desc: "turn the link off after this long" },
+  },
+  examples: ["akou share on --bind tailnet --expires 3h", "akou share status", "akou share off"],
   run: async (ctx, p) => {
     const sub = p.positional[0];
     if (sub === "status") {
@@ -306,6 +354,7 @@ const share: Command = {
     if (sub === "on") {
       const r = await api(ctx, "POST", "/share", {
         body: {
+          call: str(p, "call"),
           bind: str(p, "bind"),
           notes: p.flags.notes === true ? true : undefined,
           expires: str(p, "expires"),
@@ -314,7 +363,8 @@ const share: Command = {
       return finish(ctx, r, (b) => JSON.stringify(b, null, 2));
     }
     if (sub === "off") {
-      const r = await api(ctx, "DELETE", "/share");
+      const call = str(p, "call");
+      const r = await api(ctx, "DELETE", "/share", call ? { body: { call } } : {});
       return finish(ctx, r, () => "Sharing is off");
     }
     return usage(ctx, "share needs on, off or status");
@@ -333,6 +383,7 @@ function unbuilt(
     summary,
     usage: cmdUsage,
     flags,
+    examples: [cmdUsage],
     unbuilt: why,
     run: async (ctx) => notBuilt(ctx, why),
   };

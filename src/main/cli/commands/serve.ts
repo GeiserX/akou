@@ -33,6 +33,7 @@ export const serveCommand: Command = {
   name: "serve",
   summary: "Run the akou server in the foreground (server mode, no window) until Ctrl-C",
   usage: "akou serve",
+  examples: ["akou serve"],
   run: async (ctx, p) => {
     if (p.positional.length > 0) {
       ctx.io.err(

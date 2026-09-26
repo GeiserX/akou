@@ -73,7 +73,7 @@ What we deliberately did not take:
 | `akou` app | TypeScript on Bun, inside ElectroBun 2.0.1 with `build.mainProcess: "bun"` (Bun 1.4.0) | From login (optional) or first use until quit. Runs with or without a window. | Call state machine, the event log (single writer), speech recognition workers, speaker clustering, query engine, LLM providers, notes and enhancement, local HTTP API, share server, export, hooks, webhook, tray, hotkey, window | Open an audio device |
 | `akou-capture` helper | Rust, one binary per OS | One per recording part, child of the app | Mic and call streams, alignment, Opus file, health monitors, keep-awake | Write the event log, talk HTTP, load a model |
 | `akou-diarize` helper | Rust, one binary per OS, ONNX Runtime linked statically | One per live transcriber and one per final pass, child of the Worker that uses it | Nemotron 3 Diarization: who speaks when on the call channel (section 3.4) | Touch audio devices, write the event log, talk HTTP |
-| `akou` CLI and `akou mcp` | TypeScript on the bundled Bun (a shim), or a compiled binary in the Linux CLI tarball | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
+| `akou` CLI and `akou mcp` | One compiled binary (`bun build --compile`): the release ships it on its own, and the macOS app carries a copy (section 6.1) | Per command, or per agent session for MCP | Nothing durable | Capture, or read call folders directly |
 
 Inside the app, work is split across threads so the user interface and the API never wait on a model:
 
@@ -108,7 +108,7 @@ On Linux, a CLI-only tarball (M4) packages the same app code with `bun build --c
 
 The slow starts of the past (minutes, while people waited) came from the first agent request after a context compaction: the prompt cache was cold, so the harness reprocessed its whole context (instruction files, memory, the skill, re-injected skills) before it did anything. A skill that starts first still pays that cost on the first turn after a compaction. akou answers it three ways:
 
-- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Alt+R`, `Option+Cmd+R` on macOS), the Record button and `! akou start` typed into a harness all start a call directly.
+- **Paths with no model turn.** The tray item, the global hotkey (default `Ctrl+Shift+F9`, `Option+Cmd+R` on macOS; never `Ctrl+Alt`, which is AltGr on many layouts, DK-K4), the Record button and `! akou start` typed into a harness all start a call directly.
 - **Start first in the skill.** The skill makes `akou start` its first tool call, with no status check first, so the one unavoidable model turn is the start itself.
 - **A short turn.** `akou start --json` returns the `201` within 1 s, so that turn ends quickly.
 
@@ -507,7 +507,7 @@ A speaker named in the question boosts that speaker's turns by 1.5 and never har
 
 Unused budget flows to retrieval, then recency. Echo lines are excluded.
 
-**Whole-call mode.** If the whole rendered transcript fits 12k tokens (roughly the first 45 to 60 minutes), the in-app pack overrides the 8k budget with its own cap of 14k tokens in total. The pack is then the header plus the whole transcript. Speaker **ids** go in a stable prefix, and the roster, vocabulary hits, memo and "now" go in a dynamic tail, so naming a speaker does not invalidate a provider's prompt cache. MCP callers always get retrieval mode unless they ask for `budget ≥ 12000`: an agent's context is the scarce resource.
+**Whole-call mode.** If the whole rendered transcript fits 12k tokens (roughly the first 45 to 60 minutes), the in-app pack overrides the 8k budget with its own cap of 14k tokens in total. The pack is then the header plus the whole transcript. Speaker **ids** go in a stable prefix, and the roster, vocabulary hits, memo and "now" go in a dynamic tail, so naming a speaker does not invalidate a provider's prompt cache. MCP callers always get retrieval mode: `akou_context` takes a budget of at most 7,000 tokens, so its answer stays under the 8,000-token ceiling on every MCP answer (PG-M5). An agent's context is the scarce resource.
 
 **BM25.** An in-memory index per call, about 200 lines of TypeScript, no dependency. Documents are speaker turns (consecutive segments of one speaker, 60 to 200 words, one segment of overlap). Tokens are Unicode words, lowercase, accent-folded, no stemming, with small stopword lists per configured language. Corrected and raw tokens are both indexed. Query expansion adds the vocabulary's heard forms and speaker names. k = 6, minimum score, de-duplicated by time proximity. Updated on every `seg`, revision, retraction and merge. A committed line is searchable within 200 ms.
 
@@ -532,7 +532,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 
 ### 6.1 CLI
 
-A shim runs the bundled Bun on `cli.js` (installed from the menu "Install command-line tool": `~/.local/bin/akou`, `akou.cmd`, or a symlink). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
+`akou` is one compiled binary: the release ships it on its own, and the macOS app carries a copy beside its main process that the akou menu's "Install Command-Line Tool…" links into `/usr/local/bin`, asking for a password only when that folder needs one ([DESKTOP.md](ux/DESKTOP.md) DK-M6). It reads `runtime.json` (port, pid, version) and the token file. If nothing answers, it launches the app headless and waits up to 3 s.
 
 | Command | Does |
 |---|---|
@@ -549,6 +549,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 | `akou note "text"` · `akou remember "text"` · `akou remember --del ID` | Notepad line, agent memory, retract a remembered line |
 | `akou vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | The custom vocabulary: entries in force, add a word (mid-call with `--call`), proposals, ranked candidates from a call or text, decode safety of a word, import of older list formats, the post-call pass. |
 | `akou enhance [--template T] [--call ID]` · `akou finalize [CALL] [--force]` | Post-call |
+| `akou wait [CALL] --for final.done\|enhanced\|exported [--timeout 30m]` | Blocks until the call reaches the stage: exit 0, 69 when the final pass cannot run (`final.failed {step: unavailable}`), 70 when it failed, 124 at the timeout. A stage reached before a new part, or notes and an export made before a new final layer, do not count |
 | `akou calls [-w WS] [--limit N] [--failed]` | Lists calls by date, title, duration, participants. No content search |
 | `akou show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | One call's transcript or notes |
 | `akou export [CALL] [--to DIR]` · `akou hooks run CALL [--stage S]` | Hand-off, re-run |
@@ -560,7 +561,7 @@ A shim runs the bundled Bun on `cli.js` (installed from the menu "Install comman
 | `akou quit` · `akou mcp` | Stops the app cleanly; stdio MCP server |
 | `akou self-update` | CLI tarball only (M4): replaces the binary after verifying its cosign signature |
 
-Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission.
+Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission, 124 `akou wait` timed out.
 
 ### 6.2 HTTP API
 
@@ -578,7 +579,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
 | `GET /calls/{id}/events?after=SEQ&wait=25` | Raw log, long-poll |
 | `GET /calls/{id}/stream?after=SEQ` | SSE: events plus ephemeral `partial`, `level` and `read` (the app's text and `heard` for every line its vocabulary corrects, after the backlog and again whenever that changes) |
-| `GET /calls/{id}/transcript?layer=best&since&from&to&speaker&format=json\|md\|txt\|export&limitTokens` | Rendered, names and vocabulary applied; JSON rows carry `text` (corrected) and `heard` (raw, only when different); `export` is the export file's `## Transcript` section, what the window's Copy transcript copies |
+| `GET /calls/{id}/transcript?layer=best&since&from&to&speaker&format=json\|md\|txt\|export&limitTokens&offset&afterLine` | Rendered, names and vocabulary applied; JSON rows carry `text` (corrected) and `heard` (raw, only when different); `export` is the export file's `## Transcript` section, what the window's Copy transcript copies. `limitTokens` keeps the newest lines that fit; with `since`, the earliest changed after it and a `cursor` covering exactly them (`more` counts the rest); with `offset` or `afterLine` (the line a page ends on), one page oldest first, and `409 cursor_stale` when that line is gone |
 | `POST /calls/{id}/context` `{question, budget}` | The pack, `cursor`, `state`, `memoStale`, `provisional` |
 | `POST /calls/{id}/ask` `{question, stream}` | Needs a provider. Streams tokens when `stream` |
 | `GET /calls/{id}/search?q=&k=` | Hits |
@@ -603,13 +604,15 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 hark's remote-control agent accepted a cross-origin `POST /stop` from any web page. akou's guard, enforced in one middleware before routing, with a test for each rule:
 
 1. Bind `127.0.0.1` only, IPv4, no reverse DNS on bind. The share server is a separate listener.
-2. `Authorization: Bearer <token>` on every request, GETs included, because transcripts are sensitive. The token is 32 random bytes in `~/.config/akou/token`, mode 0600 (on Windows an ACL for the current user only), created atomically, rotated by `akou token rotate`.
+2. `Authorization: Bearer <token>` on every request, GETs included, because transcripts are sensitive. The one exception is a route the route table marks `access: "open"`: `GET /v1/openapi.json`, the generated API description, which holds no secrets and which Executor fetches with no credentials ([service-interface.md](research/service-interface.md) SI-2). The token is 32 random bytes in `~/.config/akou/token`, mode 0600 (on Windows an ACL for the current user only), created atomically, rotated by `akou token rotate`.
 3. `Host` must be exactly `127.0.0.1:<port>` or `localhost:<port>`, or 403. This blocks DNS rebinding.
 4. Any request carrying `Origin`, `Sec-Fetch-Site` or `Sec-Fetch-Mode` is refused with 403. Our clients never send them; browsers always do cross-origin.
 5. No CORS headers, ever. Mutations require `Content-Type: application/json`. Bodies are capped at 64 KB. Unknown fields are refused with 400.
 6. Loopback clients (CLI, MCP, the app's own main process) disable any HTTP proxy for `127.0.0.1`. Bun's `fetch` honours `HTTP_PROXY`, and a proxy on loopback traffic broke both predecessors.
 7. The window does not use HTTP at all. It talks to the main process over ElectroBun's typed RPC. That RPC runs over a WebSocket on `127.0.0.1` whose upgrade ElectroBun does not authenticate (ElectroBun #518): any local process that guesses the webview's number can take the socket over. Every frame is encrypted with a per-webview AES-GCM key, so the taker cannot read the window's traffic or send it requests; what it can do is detach the window, after which the page's requests and pushes go nowhere. The recording is not affected. The page treats that like any lost connection: its follower reconnects after 35 s of silence, and when it has been reconnecting past a follow request's timeout the window says to close it and open it again, which gets a new socket and key. The window's `index.html` carries its own Content Security Policy as a meta tag, because `views://` has no server to add the header: the page server's policy, plus the RPC socket's `ws://127.0.0.1:*` and the `views:` scheme. When ElectroBun ships an authenticated upgrade, pin that release and check the client code (`/socket?webviewId=`), not the changelog.
 8. A headless app shows the same page in a browser through a second loopback listener, the page server, which runs the page's requests through the same routes in process, as the user. The browser never gets the API token: `POST /window` puts a one-time code in the URL fragment (never sent to a server, never in a `Referer`), valid once for one minute; the page trades it for a session it keeps in memory and sends as `Authorization`, so there is no cookie for another site to ride on. The same `Host` rule applies, a request the browser marks cross-site is refused, no CORS header is sent, and every page carries a strict Content Security Policy (scripts from its own origin only) and `Referrer-Policy: no-referrer`.
+
+These rules are the app's. In both modes two routes need no token (rule 2): `GET /healthz` and `GET /v1/server`, which say whether akou is up and what it can do, and nothing about any call. Server mode ([ux/SERVER.md](ux/SERVER.md) SV-D2, SV-D3) changes more of them on purpose: it binds `api.bind` (`127.0.0.1`, `0.0.0.0` or `::`), and an address that is not loopback only with `server.behind_proxy` (rule 1); it takes per-client `ak_` keys with a scope beside the token (rule 2); `Host` must be `server.public_host` when set, anything behind a proxy, or loopback (rule 3); and a browser is a client like any other, so rule 4 does not apply. In both modes an upload route takes `multipart/form-data` up to `server.max_upload_mb` instead of 64 KB of JSON (rule 5).
 
 The CI security job starts the app headless with a fake helper, loads a page on another origin in a headless browser, fires `fetch('http://127.0.0.1:PORT/v1/calls/live/stop', {method: 'POST'})`, a form POST, a `no-cors` fetch and a request with a foreign `Host`, and asserts 403 for each with the fake call still recording. A positive control runs the same requests against a build with the guards compiled out and must see them succeed, which proves the test can fail.
 
@@ -631,7 +634,7 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 | `akou_memo_get` · `akou_memo_put {text, coversSeq}` | The agent writes the memo when no provider does |
 | `akou_vocab_add {term, heard?, scope = "call", workspace?, decode?, note?}` · `akou_vocab_propose {entries[], call?}` · `akou_vocab_approve {terms[], call?}` · `akou_vocab_reject {terms[], call?}` · `akou_vocab_list {workspace?, call?, unconfirmed?}` · `akou_vocab_suggest {text?, call?, k = 20}` · `akou_vocab_check {term}` | The custom vocabulary: a word the user just stated goes in mid-call with `scope: call`; anything the agent inferred is a proposal until the user says yes |
 | `akou_enhance_context {template?}` · `akou_enhanced_put {markdown, coversSeq}` · `akou_enhance {template?}` | The agent writes the enhancement, or asks akou's provider to |
-| `akou_list_calls {workspace?, limit = 20, failed?}` · `akou_get_call {call, layer = "best"}` · `akou_export {call}` | Past calls by name only |
+| `akou_list_calls {workspace?, limit = 20, failed?}` · `akou_get_call {call, layer = "best", cursor?}` (a page at a time, with `nextCursor`) · `akou_export {call}` | Past calls by name only |
 
 Tool descriptions carry the rules: cite wall time, never quote a draft line as fact, answer only from the live call unless a call is named, say when a call has ended.
 

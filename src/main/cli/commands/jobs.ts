@@ -15,7 +15,14 @@ export const jobsCommand: Command = {
   name: "jobs",
   summary: "The server's transcription jobs your key can see",
   usage: `akou jobs list [--status ${STATES.join("|")}]   [--json]`,
-  flags: { status: { type: "string" } },
+  flags: {
+    status: {
+      type: "string",
+      value: "STATE",
+      desc: `only the jobs in this state: ${STATES.join(", ")}`,
+    },
+  },
+  examples: ["akou jobs list", "akou jobs list --status failed --json"],
   run: async (ctx, p) => {
     const [sub, ...rest] = p.positional;
     if (sub !== "list" || rest.length > 0) return usage(ctx, "jobs needs list");

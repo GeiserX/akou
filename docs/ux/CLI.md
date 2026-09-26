@@ -60,7 +60,7 @@ These are the contract. Each has a check that runs over the whole command regist
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-23 | Probes never launch the app: `status`, `help`, `--version`, `completion`, `config path`, `token path` | P1 | clig.dev; rule 4; a probe that starts the app hides whether it was running | With the app down and a fresh `AKOU_HOME`, each probe exits and afterwards no akou app process exists and `runtime.json` is absent. Positive control: `akou tail` in the same setup does launch it | partial: `status` probes; the rest are not checked |
+| CLI-23 | Probes never launch the app: `status`, `help`, `--version`, `completion`, `config path`, `token path` | P1 | clig.dev; rule 4; a probe that starts the app hides whether it was running | With the app down and a fresh `AKOU_HOME`, each probe exits and afterwards no akou app process exists and `runtime.json` is absent. Positive control: `akou tail` in the same setup does launch it | has: `tests/cli-p1.e2e.test.ts` runs every probe with the real launcher, `akou tail` as the positive control |
 
 ## 4. The command tree
 
@@ -69,16 +69,16 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | Group | Commands | Today |
 |---|---|---|
 | Record | `start [-w WS] [-t TITLE] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab A,B] [--without-models]` · `stop [--discard]` · `pause` · `resume` · `mute` · `unmute` · `restart [--force]` · `extend [MIN]` **new** (REC-03) | has, except `--discard` (CLI-26) and `extend` |
-| See | `status` · `watch` **new** (CLI-24) · `open [CALL] [-w WS]` | has, except `watch` and `-w` (CLI-30) |
+| See | `status` · `watch` (CLI-24) · `open [CALL] [-w WS]` | has, except `-w` (CLI-30) |
 | Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
 | Vocabulary | `vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename\|move\|delete\|restore CALL …` **new** (CLI-26) · `import hark-viewer DIR… [-w WS]` | has, except the subcommands |
-| Share | `share on\|off\|status [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
-| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull\|import\|select` · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices`, `apps`, `doctor --grant` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
+| Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
+| Setup | `config show\|get\|set\|unset\|path` · `models list\|pull\|import\|select` · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
 | Agents | `skill install\|uninstall [--harness claude\|codex] [--dir DIR]` · `mcp` · `webhook test` **new** (PG-W2) · `api METHOD PATH` **new** (CLI-11) | has, except `webhook test`, `api` |
-| App | `quit` · `self-update` (Linux tarball, M4) · `version` · `help [CMD]` | partial: `help CMD` ignores the command |
+| App | `quit` · `self-update` (Linux tarball, M4) · `version` · `help [CMD]` | has, except `self-update` |
 
 ### Naming a call
 
@@ -95,7 +95,7 @@ This is resolved in the CLI from the API's `404 no_live_call {last}` answer, whi
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-03 | One way to name a call: `-c/--call` on every call command, the call as first word where it is the object | P1 | Audit: four forms in use | A registry test fails for any command with a call-scoped route that does not declare `call` with short `c`. `akou show -c X` and `akou show X` print the same bytes. The exit-code half of the matrix row moves to CLI-16 | partial |
+| CLI-03 | One way to name a call: `-c/--call` on every call command, the call as first word where it is the object | P1 | Audit: four forms in use | A registry test fails for any command with a call-scoped route that does not declare `call` with short `c`. `akou show -c X` and `akou show X` print the same bytes. The exit-code half of the matrix row moves to CLI-16 | has: the sweep in `tests/cli-registry.test.ts` reads each command's routes from what its examples request, fails a command whose examples send nothing, and counts `/share` (the call in the body) as call-scoped |
 | CLI-18 | Default call: live, else last, for everything except controls, with the stderr note; `-q/--quiet` drops notes and progress, never errors | P1 | intent: questions after a call are as easy as during it; audit asked for `--quiet` | With one ended call and nothing live, `akou ask "q"` answers from that call and stderr has one line naming its title and end time; with `-q` stderr is empty; `akou mute` exits 3 and prints nothing on stdout, and with `-q` still prints its error | missing: `ask` and `tail` exit 3, `enhance` exits 64 |
 
 ## 5. Output
@@ -144,7 +144,7 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 | 3 | There is no call to act on | `akou mute` with nothing live; any call command when there are no calls at all; `-c` names a call that does not exist |
 | 64 | The command line is wrong | Unknown command, flag or value; a missing question |
 | 65 | A vocabulary term fails validation | `akou vocab add` with a term that fails the checks |
-| 69 | Something needed is unavailable | The app cannot be reached or launched; speech models missing; no provider answered (`ask` still prints the excerpts); a command not built yet |
+| 69 | Something needed is unavailable | The app cannot be reached or launched; speech models missing; no provider answered (`ask` still prints the excerpts); a command not built yet; `akou wait --for final.done` on a call whose final pass cannot run |
 | 70 | akou failed | A bug; a stage that failed, reported by `akou wait` |
 | 75 | Already recording | `akou start` while a call is live |
 | 77 | Permission | The token is refused; an OS grant is missing |
@@ -194,7 +194,7 @@ A few of the texts, as they should read:
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-20 | Colour and terminal rules as above | P1 | clig.dev, no-color.org; the window's speaker hues | On a pty, `tail` output contains ANSI colour codes and each speaker keeps one colour across lines; with `NO_COLOR=1`, or piped, the output has no escape byte. A `status` snapshot on a pty with a dead channel shows both the colour and the word `dead` | missing: no colour at all |
+| CLI-20 | Colour and terminal rules as above | P1 | clig.dev, no-color.org; the window's speaker hues | On a pty, `tail` output contains ANSI colour codes and each speaker keeps one colour across lines; with `NO_COLOR=1`, or piped, the output has no escape byte. A `status` snapshot on a pty with a dead channel shows both the colour and the word `dead` | partial: the acceptance passes (speakers in `tail` and `watch`, health in `status` and `watch`); not built: dim ids and dim "(default)"; the second speaker's hue (orange, drawn as yellow) is the same yellow as quiet or degraded health |
 
 ## 9. Help, completions and "did you mean"
 
@@ -223,7 +223,7 @@ On an unknown command, subcommand, flag or setting key, akou suggests the closes
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-05 | Help generated from the registry: every flag, a description, an example; `help CMD` works; `-v` prints the version | P1 | Audit: `vocab --help` hides `--heard`, `--no-decode`, `--note`, `--text`, `-k` and `--unconfirmed`; `show --help` omits `--json`; `akou help start` ignores the command | A test over the registry fails for any flag the parser accepts that the command's help does not list, and for any command without an example. `akou help tail` and `akou tail --help` print identical bytes | partial |
+| CLI-05 | Help generated from the registry: every flag, a description, an example; `help CMD` works; `-v` prints the version | P1 | Audit: `vocab --help` hides `--heard`, `--no-decode`, `--note`, `--text`, `-k` and `--unconfirmed`; `show --help` omits `--json`; `akou help start` ignores the command | A test over the registry fails for any flag the parser accepts that the command's help does not list, and for any command without an example. `akou help tail` and `akou tail --help` print identical bytes | has |
 | CLI-08 | Completions for four shells, with call ids, workspaces, templates, speakers and setting keys | P2 | gh, Superwhisper | The zsh script, loaded in a pty test, completes `akou show <TAB>` with `live`, `last` and the fake app's call ids. With the app down, completion returns nothing within 300 ms and no app process starts | missing |
 | CLI-09 | "Did you mean" on commands, subcommands, flags and setting keys; never runs the guess | P2 | clig.dev | `akou strat` prints `did you mean "start"?` and exits 64; `akou config set asr.segmentPuase 1` names `asr.segmentPause` and changes nothing | missing |
 | CLI-32 | `akou` alone prints a probe-based overview and exits 0 | P2 | MacWhisper `mw`, clig.dev | With a live fake call it names the call; with the app down it says so and no app process starts; the exit code is 0 in both cases | partial: prints the full help, exits 64 |
@@ -246,7 +246,7 @@ The environment has three akou variables for settings and no more (section 1): `
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
 | CLI-10 | `config get KEY` prints the effective value alone | P2 | Audit | `akou config get api.port` prints `8476` and nothing else; an unknown key exits 64 with a CLI-09 suggestion | missing |
-| CLI-06 | `config set KEY -` reads stdin; a secret key given on the command line is refused. Owned here; PG-Z2 and DK-S5 describe the same item | P1 | clig.dev "never accept secrets via flags" | `printf 'sk-test' \| akou config set provider.apiKey -` stores the value and `config show` prints `(set)`. `akou config set provider.apiKey sk-test` exits 64, stores nothing, and its `try:` line shows the stdin form | partial: secrets are write-only, but only from argv |
+| CLI-06 | `config set KEY -` reads stdin; a secret key given on the command line is refused. Owned here; PG-Z2 and DK-S5 describe the same item | P1 | clig.dev "never accept secrets via flags" | `printf 'sk-test' \| akou config set provider.apiKey -` stores the value and `config show` prints `(set)`. `akou config set provider.apiKey sk-test` exits 64, stores nothing, and its `try:` line shows the stdin form | has |
 | CLI-35 | `config show` gives source, default, allowed values and when a change applies; `config set` says when this key applies | P1 | Audit: `app.headless` from `AKOU_HEADLESS` shows as "(default)"; every `set` says "takes effect at the next start", which is false for the hotkey and the login item once SET-03 lands. Needs DK-S1 (the registry fields) and PG-A3 (the route) | With `AKOU_HEADLESS=1`, `config show app.headless` names the variable as the source. For every key with a fixed set of values the output lists them. `config set app.hotkey …` prints `applies now`; `config set asr.threads …` prints `applies at restart`, both read from the registry's `applies`. Covers the CLI half of SET-02 and SET-03 | bug |
 | CLI-36 | `config path` | P2 | clig.dev | Prints the same path `doctor` reports, with the app down and no app process started | missing |
 
@@ -273,7 +273,7 @@ How it behaves:
 
 - **Output is append-only.** Committed lines, answers and health changes print above the prompt and stay in scrollback. The only line redrawn is the in-progress line just above the prompt. It works in any terminal, in tmux and over SSH.
 - **Typing a question asks the call.** Plain text goes to `ask` for the watched call and the answer streams in, with wall-time citations. With no provider it prints the excerpts and the `akou context` hint, as `ask` does.
-- **`/` runs a CLI command bound to this call.** `/note TEXT`, `/mark`, `/remember TEXT`, `/name c2 NAME`, `/mute`, `/unmute`, `/pause`, `/resume`, `/search Q`, `/help`. Each is exactly the CLI command with `-c` set to the watched call, run in the same process, so there is no second command set to keep in step. `/help` lists them from the registry. `/stop` asks "Stop recording "Weekly sync"? [y/N]" first, because one stray Enter must not end a call.
+- **`/` runs a CLI command bound to this call.** `/note TEXT`, `/mark`, `/remember TEXT`, `/name c2 NAME`, `/mute`, `/unmute`, `/pause`, `/resume`, `/search Q`, `/help`. Each is exactly the CLI command with `-c` set to the watched call, run in the same process, so there is no second command set to keep in step. What they write carries `by: agent:cli`, as the same command typed in a shell does: the API cannot tell a person from an agent that holds the same token, so no header makes a request the user's, and only the window writes `by: user`. A start or share from `watch` is announced like any other (PRINCIPLES 10). `/help` lists them from the registry. `/stop` asks "Stop recording "Weekly sync"? [y/N]" first, because one stray Enter must not end a call.
 - **Live labels look live.** An unnamed live cluster prints as `c2`; a named one prints the name. When the final pass lands, `watch` prints one line: `15:04 final transcript ready: akou show 01JB7…`.
 - **Health is loud.** A health change prints as its own line in its colour and with its word: `14:40 ! call side: no audio for 12 s`.
 - **It never stops the recording on exit.** Ctrl-C clears the input line; Ctrl-C on an empty line, Ctrl-D or `/quit` exits 0. The header says how.
@@ -284,7 +284,7 @@ The window's copy button already has a terminal form that needs nothing new: `ak
 
 | Id | Feature | P | From | Acceptance | Today |
 |---|---|---|---|---|---|
-| CLI-24 | `akou watch` as above | P1 | hark interactive mode (F1.42, F4.14); intent: CLI as good as the window; Buzz presentation window | A pty test against the fake app with a scripted call: committed lines appear in order with wall times; between two renders of the same in-progress segment the raw byte stream holds a carriage return and an erase-line sequence and no newline, and the segment gets its newline only when it commits; typing a question streams an answer from a fake provider; `/note hello` writes a `note` event with `by: user` on the watched call; `/stop` then Enter leaves the call recording; Ctrl-D exits 0 and `status` shows the call still recording. Piped, it exits 64 with the `tail -f` hint | missing |
+| CLI-24 | `akou watch` as above | P1 | hark interactive mode (F1.42, F4.14); intent: CLI as good as the window; Buzz presentation window | A pty test against the fake app with a scripted call: committed lines appear in order with wall times; between two renders of the same in-progress segment the raw byte stream holds a carriage return and an erase-line sequence and no newline, and the segment gets its newline only when it commits; typing a question streams an answer from a fake provider; `/note hello` writes a `note` event with `by: agent:cli` on the watched call (no header makes a request the user's: only the window writes `by: user`, PRINCIPLES 4 and 10); `/stop` then Enter leaves the call recording; Ctrl-D exits 0 and `status` shows the call still recording. Piped, it exits 64 with the `tail -f` hint | has |
 
 ## 12. Commands to add
 
@@ -292,7 +292,7 @@ The window's copy button already has a terminal form that needs nothing new: `ak
 |---|---|---|---|---|---|
 | CLI-07 | `akou devices` and `akou apps`, over a devices and apps route on the API (owned by [PROGRAMMABILITY.md](PROGRAMMABILITY.md)), so the window and MCP read the same list | P1 | Audit; `--mic ID` and `--call app:ID` need a way to find the id | Both list the fake helper's devices and apps, one per line with the id first; `--json` gives the route's body; the ids they print are accepted by `akou start --mic` and `--call app:`. The CLI e2e run with the recordings root unreadable (rule 1) still passes | missing: exit 69 |
 | CLI-26 | `akou calls rename CALL TITLE`, `calls move CALL -w WS`, `calls delete CALL`, `calls restore CALL` over PG-A4; `akou stop --discard` stops the live call and moves it to the trash before any hand-off runs (the CLI door of REC-05) | P1 | Granola trash, Minutes delete, Superwhisper discard; the way out of every state, including a recording started by mistake | `rename` changes the title in `akou calls` and the export file name; `delete` on a live call exits 75 with a `try: akou stop --discard` hint; `delete` then `restore` gives back an identical `akou show` output. `stop --discard` on a fake call leaves no export and runs no hook, and `calls restore` brings the call back. `delete` and `--discard` ask on a terminal and need `--yes` otherwise | missing |
-| CLI-38 | `akou doctor --grant`: checks the microphone and system-audio grants and, on a terminal, asks the OS for each missing one or opens its settings pane; plain `doctor` reports the grants (and the Accessibility grant from DK-K1) without asking | P1 | REQUIREMENTS F0.26 promises it; today it exits 69 "not built" | With a fake grant checker reporting the microphone missing, `doctor --grant` requests it once (the fake records the request) and reports `mic: requested`; with both granted it requests nothing and exits 0; `--json` lists each grant and its state. On macOS, a hardware check with the grant removed is recorded | bug: exits 69 |
+| CLI-38 | `akou doctor --grant`: checks the microphone and system-audio grants and, on a terminal, asks the OS for each missing one or opens its settings pane; plain `doctor` reports the grants (and the Accessibility grant from DK-K1) without asking | P1 | REQUIREMENTS F0.26 promises it; today it exits 69 "not built" | With a fake grant checker reporting the microphone missing, `doctor --grant` requests it once (the fake records the request) and reports `mic: requested`; with both granted it requests nothing and exits 0; `--json` lists each grant and its state. On macOS, a hardware check with the grant removed is recorded | partial: built against a fake checker; on macOS the command line cannot read the app's grants, so they read `unknown` and `--grant` opens their panes, one per run because each pane replaces the one before, and `--grant NAME` (`mic`, `system-audio`, `accessibility`) reaches the later ones; the hardware check with a grant removed is not recorded yet |
 | CLI-27 | `akou show --from 14:30 --to 14:45 --speaker NAME` | P2 | the API already filters by time and speaker | On a fixture call, the output holds only lines inside the window and from that speaker; times are wall times in and out | missing |
 | CLI-28 | The agent's write path without MCP: `akou memo [show\|put FILE]`, `akou enhance --context [--template T]`, `akou enhanced put FILE` | P2 | a harness without the MCP server registered can still do what `akou_memo_put`, `akou_enhance_context` and `akou_enhanced_put` do | Each command round-trips through the same route as its MCP tool; a test runs the pair and compares the log events they write | missing |
 | CLI-29 | `akou edit SEG "TEXT"` and `akou edit SEG --speaker SPK`, over PG-A5 | P2 | DESIGN 7 inline edit | The fold shows the edit, `akou show --format json` keeps `heard` with the raw text, and the log holds both revisions | missing |
@@ -362,7 +362,7 @@ Re-run the final pass and the export on every call in a workspace, for example a
 
 ```sh
 akou calls -w work --limit 1000 --json | jq -r '.calls[].id' | while read -r id; do
-  akou finalize "$id" --force && akou wait -c "$id" --for final.done && akou export "$id"
+  akou finalize "$id" --force && akou wait "$id" --for final.done && akou export "$id"
 done
 ```
 
