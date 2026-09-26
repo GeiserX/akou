@@ -23,6 +23,8 @@ on:
     paths:
       - .github/workflows/release.yml
       - electrobun.config.ts
+      - assets/brand/akou.iconset/**
+      - scripts/app-icon.ts
       - package.json
       - bun.lock
       - scripts/build-app.ts
@@ -192,7 +194,7 @@ jobs:
 
   # The server image (docs/ux/SERVER.md SV-P1), built natively on each architecture's runner from
   # the tag's tree. A tag pushes each build by digest, and `image-manifest` joins the two under
-  # geiserx/akou:<version>. There is never a `latest` tag. A pull request or a dry run builds both
+  # drumsergio/akou:<version>. There is never a `latest` tag. A pull request or a dry run builds both
   # and pushes nothing. Pushing needs DOCKERHUB_USERNAME and DOCKERHUB_TOKEN in the repository.
   image:
     needs: version
@@ -219,7 +221,7 @@ jobs:
         # Without the secrets `docker login` fails on an empty user name and says nothing of them.
         run: |
           if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            echo "::error::a tag pushes drumsergio/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
             exit 1
           fi
           echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
@@ -227,7 +229,7 @@ jobs:
         run: |
           docker buildx create --use --name akou
           if [ "$PUSH" = true ]; then
-            output="type=image,name=docker.io/geiserx/akou,push-by-digest=true,name-canonical=true,push=true"
+            output="type=image,name=docker.io/drumsergio/akou,push-by-digest=true,name-canonical=true,push=true"
           else
             output="type=docker,name=akou:dry-run"
           fi
@@ -261,20 +263,20 @@ jobs:
         # Without the secrets `docker login` fails on an empty user name and says nothing of them.
         run: |
           if [ -z "$DOCKERHUB_USERNAME" ] || [ -z "$DOCKERHUB_TOKEN" ]; then
-            echo "::error::a tag pushes geiserx/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
+            echo "::error::a tag pushes drumsergio/akou, so the repository needs the secrets DOCKERHUB_USERNAME and DOCKERHUB_TOKEN; add both, then run the release again"
             exit 1
           fi
           echo "$DOCKERHUB_TOKEN" | docker login --username "$DOCKERHUB_USERNAME" --password-stdin
-      - name: geiserx/akou:<version> for amd64 and arm64
+      - name: drumsergio/akou:<version> for amd64 and arm64
         env:
           TAG: ${{ github.ref_name }}
         run: |
           version="${TAG#v}"
-          refs=$(sed 's|^|docker.io/geiserx/akou@|' digests/*)
+          refs=$(sed 's|^|docker.io/drumsergio/akou@|' digests/*)
           test "$(echo "$refs" | wc -l)" = 2
           # shellcheck disable=SC2086
-          docker buildx imagetools create --tag "docker.io/geiserx/akou:$version" $refs
-          docker buildx imagetools inspect "docker.io/geiserx/akou:$version"
+          docker buildx imagetools create --tag "docker.io/drumsergio/akou:$version" $refs
+          docker buildx imagetools inspect "docker.io/drumsergio/akou:$version"
 
   # The image of the tag is part of the release: no GitHub release goes out while it failed.
   release:

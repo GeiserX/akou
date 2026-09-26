@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { startReceiver, tamperedRefused } from "../scripts/server-roundtrip.ts";
+import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { checkRemotes, parseRemote } from "../src/main/server/remotes.ts";
@@ -69,6 +70,8 @@ async function server(o: {
   home?: string;
   port?: number;
   installed: boolean;
+  /** Catalog entries this server knows but has not downloaded. */
+  absent?: ModelSpecEntry[];
   settings?: Record<string, unknown>;
   decode?: (p: string, s: AbortSignal) => Promise<Float32Array>;
   keyName?: string;
@@ -79,7 +82,7 @@ async function server(o: {
   if (o.installed) for (const m of catalog) reg.install(models, m);
   const rig = await appRig({
     home: t.dir,
-    modelRegistry: catalog,
+    modelRegistry: [...catalog, ...(o.absent ?? [])],
     settings: {
       "server.enabled": true,
       "api.bind": "127.0.0.1",
@@ -425,7 +428,7 @@ describe("[SV-X6] a job the primary can run stays here, unless its remote entry 
   });
 });
 
-describe("[SV-X7] best, which no local engine runs, goes to a remote that offers it", () => {
+describe("[SV-X7] best, which this server cannot run, goes to a remote that offers it", () => {
   const RID = "job_REMOTE1";
   const seen: {
     auth: string | null;
@@ -511,7 +514,12 @@ describe("[SV-X7] best, which no local engine runs, goes to a remote that offers
       home: pdir,
       installed: true,
       keyName: "archive",
-      settings: { "server.remotes": [`http://127.0.0.1:${fake.port} ${keyFile(pdir, FAKE_KEY)}`] },
+      // Qwen is not on disk and may not be fetched, so this server cannot run best itself.
+      absent: [reg.entry(QWEN_ASR, ["q.gguf"])],
+      settings: {
+        "server.remotes": [`http://127.0.0.1:${fake.port} ${keyFile(pdir, FAKE_KEY)}`],
+        "server.auto_download": false,
+      },
     });
     try {
       await remoteState(primary, "up");
@@ -566,7 +574,9 @@ describe("[SV-X7] best, which no local engine runs, goes to a remote that offers
       keyName: "archive",
       settings: {
         "server.remotes": [`http://127.0.0.1:${freePort()} ${keyFile(pdir, FAKE_KEY)}`],
+        "server.auto_download": false,
       },
+      absent: [reg.entry(QWEN_ASR, ["q.gguf"])],
     });
     try {
       await remoteState(primary, "down");

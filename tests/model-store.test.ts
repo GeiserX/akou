@@ -136,14 +136,20 @@ describe("[SV-S1] which model a job runs: request, then server default, then har
       "unknown_model",
       "model",
     ]);
-    const unbuilt = refusal(() => resolveModel({ model: "best" }, o("auto")));
+    const unbuilt = refusal(() => resolveModel({ model: "fusion" }, o("auto")));
     expect([unbuilt.status, unbuilt.code]).toEqual([409, "preset_unavailable"]);
-    const engine = refusal(() => resolveModel({ model: "qwen3-asr-1.7b" }, o("auto")));
+    const engine = refusal(() => resolveModel({ model: "canary-1b-v2" }, o("auto")));
     expect([engine.status, engine.code, engine.details.preset]).toEqual([
       409,
       "preset_unavailable",
-      "best",
+      "fusion",
     ]);
+    // best is built (akou-5an.93): it names Qwen, whatever the catalog holds.
+    expect(resolveModel({ model: "best" }, o("auto"))).toEqual({
+      model: "qwen3-asr-1.7b",
+      preset: "best",
+      source: "request",
+    });
     // A helper model is in the catalog but is no recognizer.
     expect(refusal(() => resolveModel({ model: "silero-vad" }, o("auto"))).code).toBe(
       "unknown_model",
@@ -176,6 +182,22 @@ describe("[SV-S1] which model a job runs: request, then server default, then har
 });
 
 describe("[SV-M1] a missing model is fetched once, whoever waits on it", () => {
+  test("needs() adds what the recognizer runs on (the llama-server build), and only for it", () => {
+    const withRuntime = [...catalog, reg.entry("runtime-x", ["rt.tar.gz"])];
+    const r = rig({
+      catalog: () => withRuntime,
+      requires: (id) => (id === B ? ["runtime-x"] : []),
+    });
+    try {
+      expect(r.store.needs(B)).toEqual([B, "runtime-x", "silero-vad", NEMOTRON]);
+      // The runtime is fetched with the model: both are missing until downloaded.
+      expect(r.store.missing(r.store.needs(B))).toEqual([B, "runtime-x"]);
+      expect(r.store.needs(RECOGNIZER)).not.toContain("runtime-x");
+    } finally {
+      r.cleanup();
+    }
+  });
+
   test("needs() is the recognizer with the helpers, never the other recognizer", () => {
     const r = rig();
     try {

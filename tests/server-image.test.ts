@@ -94,17 +94,26 @@ describe("[SV-P1] the server image", () => {
     expect(apt[0]?.args).toMatch(/--no-install-recommends ffmpeg\b/);
   });
 
+  test("[akou-5an.93] the runtime stage has libgomp1: llama-server's Linux builds load it at start", () => {
+    // Without it the pinned build exits with "libgomp.so.1: cannot open shared object file" in
+    // the image (checked on oven/bun:1.4.2-slim), and every best job fails.
+    const apt = finalStage(dockerfile).filter(
+      (x) => x.op === "RUN" && x.args.includes("apt-get install"),
+    );
+    expect(apt[0]?.args).toMatch(/\blibgomp1\b/);
+  });
+
   test("no image is ever tagged latest, in the Dockerfile or any workflow", () => {
     for (const f of ["Dockerfile", ".github/workflows/release.yml", ".github/workflows/ci.yml"]) {
       expect({ f, latest: latestTags(read(f)) }).toEqual({ f, latest: [] });
     }
     // Positive control: a latest tag is seen, and a runner label is not an image.
-    expect(latestTags("docker push geiserx/akou:latest\nruns-on: ubuntu-latest")).toEqual([
-      "geiserx/akou:latest",
+    expect(latestTags("docker push drumsergio/akou:latest\nruns-on: ubuntu-latest")).toEqual([
+      "drumsergio/akou:latest",
     ]);
   });
 
-  test("the release publishes geiserx/akou:<version> for amd64 and arm64, built on each architecture's runner", () => {
+  test("the release publishes drumsergio/akou:<version> for amd64 and arm64, built on each architecture's runner", () => {
     const wf = Bun.YAML.parse(read(".github", "workflows", "release.yml")) as {
       jobs: Record<
         string,
@@ -124,7 +133,7 @@ describe("[SV-P1] the server image", () => {
     const manifest = wf.jobs["image-manifest"];
     expect(manifest?.if).toContain("github.ref_type == 'tag'");
     const script = (manifest?.steps ?? []).map((s) => s.run ?? "").join("\n");
-    expect(script).toContain('--tag "docker.io/geiserx/akou:$version"');
+    expect(script).toContain('--tag "docker.io/drumsergio/akou:$version"');
     // The version is the tag without its v: a shell expansion, spelled out so it is not a template.
     expect(script).toContain(`version="$${"{"}TAG#v}"`);
     // A GitHub release never goes out while the image of the same tag failed.

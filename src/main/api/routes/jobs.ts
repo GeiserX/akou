@@ -3,9 +3,10 @@
  * sees its own jobs and events only; an admin sees every key's.
  *
  * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `preset`, `model`, `language`,
- *   `keywords[]`, `diarize`, `callback_url`, `metadata`, and the `Idempotency-Key` header. 202 with
- *   the new job, 200 with the existing one for a repeated key and file, 422 for the same key and
- *   another file. The model is the request's, else `server.default_model`, else the hardware's
+ *   `keywords[]`, `diarize`, `callback_url`, `metadata`, `priority`, and the `Idempotency-Key`
+ *   header. 202 with the new job, 200 with the existing one for a repeated key and file, 422 for the
+ *   same key and another file, 429 `queue_full` with `Retry-After` past a queue limit (SV-Q3),
+ *   answered before the upload is read. The model is the request's, else `server.default_model`, else the hardware's
  *   (SV-S1); a missing one is downloaded while the job waits (SV-M1).
  * - `GET /v1/jobs/{id}?wait=0..60` (SV-J3): the job, after holding the request until it ends.
  * - `GET /v1/jobs?status=&cursor=&limit=`: the key's jobs, newest first.
@@ -16,7 +17,7 @@
  *   `Last-Event-ID`.
  */
 
-import { eventView, type JobService } from "../../server/jobs.ts";
+import { eventView, type JobService, type QueueFull } from "../../server/jobs.ts";
 import { type ModelChoice, ModelRefused } from "../../server/model-store.ts";
 import { PRESET_NAMES } from "../../server/presets.ts";
 import { FORWARDED_HEADER } from "../../server/remotes.ts";
@@ -39,11 +40,35 @@ import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
 export const MAX_WAIT_SECONDS = 60;
 export const MAX_KEYWORDS = 24;
 export const MAX_METADATA_BYTES = 4096;
+/** A job's `priority` runs from -10 to 10, default 0 (SV-Q2). */
+export const MAX_PRIORITY = 10;
 const LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
 const IDEMPOTENCY = /^[\x21-\x7e]{1,255}$/;
 
 /** A multipart body, its file parts already on disk (SV-D3). */
 export type Form = StreamedForm;
+
+/**
+ * A full queue (SV-Q3): 429 `queue_full`, with `Retry-After` in seconds, the same number in the
+ * body. 429, not 503: a client reads it as "come back later", never as a failure of the file.
+ */
+export function queueFullError(full: QueueFull): HttpError {
+  return new HttpError(
+    429,
+    "queue_full",
+    full.limit === "server.queue_max"
+      ? `the queue holds ${full.depth} jobs, its limit (server.queue_max); retry after ${full.retry_after_s} s`
+      : `this key has ${full.depth} jobs queued or running, its limit (server.queue_max_per_key); retry after ${full.retry_after_s} s`,
+    { ...full },
+    { "retry-after": String(full.retry_after_s) },
+  );
+}
+
+/** Refuses a submit before its upload is read, when the queue has no room for it (SV-Q3). */
+export function requireQueueRoom(jobs: JobService, key: string, idem: string | null): void {
+  const full = jobs.queueFull(key, idem);
+  if (full) throw queueFullError(full);
+}
 
 /** The job service, or 404 where there is none (the desktop app). */
 export function jobsOf(c: RouteContext<ApiApp>): JobService {
@@ -142,8 +167,20 @@ function booleanOf(form: Form, name: string, fallback = false): boolean {
   throw bad(name, `"${name}" is true or false`);
 }
 
+/** `priority`, an integer from -10 to 10; absent or empty, 0. */
+function priorityOf(form: Form): number {
+  const v = textField(form, "priority")?.trim();
+  if (v === undefined || v === "") return 0;
+  const n = Number(v);
+  if (!/^-?\d+$/.test(v) || Math.abs(n) > MAX_PRIORITY) {
+    throw bad("priority", `priority is a whole number from -${MAX_PRIORITY} to ${MAX_PRIORITY}`);
+  }
+  return n;
+}
+
 const JOB_FIELDS = new Set([
   "file",
+  "priority",
   "preset",
   "model",
   "language",
@@ -200,6 +237,8 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
   if (idem !== null && !IDEMPOTENCY.test(idem)) {
     throw new HttpError(400, "bad_header", "Idempotency-Key is 1 to 255 printable characters");
   }
+  // A full queue answers before the upload is read: a client pacing itself sends no bytes twice.
+  requireQueueRoom(jobs, who.id, idem);
   const form = await formOf(c, jobs.uploadDir);
   // The job owns its file once submitted; every other file, and this one on a refusal, is deleted.
   let kept: SpooledFile | undefined;
@@ -219,6 +258,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
       preset: presetName,
       model: null,
       model_source: null,
+      priority: priorityOf(form),
       // A request with no opinion gets the server's defaults (SV-S2).
       language: languageOf(form, settings["server.default_language"]),
       keywords: keywordsOf(form),
@@ -259,6 +299,7 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
 }
 
 function answerSubmit(jobs: JobService, r: ReturnType<JobService["submit"]>): Response {
+  if ("full" in r) throw queueFullError(r.full);
   if ("conflict" in r) {
     throw new HttpError(
       422,
@@ -298,7 +339,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends.",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file return the first job. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds.",
       ...JOB_ROUTE,
       body: {
         multipart: {
@@ -310,6 +351,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
           "diarize?": "boolean",
           "callback_url?": "string",
           "metadata?": "string",
+          "priority?": "integer",
         },
       },
       ok: 202,

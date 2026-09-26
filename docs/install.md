@@ -99,28 +99,30 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 ## The server
 
-akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
 
 Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first:
 
 ```sh
-docker run --rm -v akou-data:/data --entrypoint sh geiserx/akou:<version> -c \
+docker run --rm -v akou-data:/data --entrypoint sh drumsergio/akou:<version> -c \
   'mkdir -p /data/.config/akou && echo "{ \"asr.diarizer\": \"embeddings\" }" > /data/.config/akou/config.json'
 ```
 
 Then pull:
 
 ```sh
-docker run --rm -v akou-data:/data -v akou-models:/models geiserx/akou:<version> models pull fast
+docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 ```
 
-`fast` is the only preset with an engine today. It fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
+`fast` fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
+
+`best` is the other preset with an engine: Qwen3-ASR-1.7B, run by llama.cpp's `llama-server`, with the same speaker models when a job asks for speakers. `models pull best` fetches Qwen (2.5 GB), the llama-server build for this machine and the speaker models, and leaves Parakeet out. Without the pull, the first `best` job fetches them. See [The best preset](#the-best-preset) for where it runs fast.
 
 Inside a container akou listens on every address, and it refuses to start that way (exit 78) until you say a reverse proxy with TLS is in front of it, because akou has no TLS of its own. Say it with `AKOU_BEHIND_PROXY=true`, which sets `server.behind_proxy`, and publish the port on this machine's loopback only, for the proxy to reach:
 
 ```sh
 docker run -d --name akou -e AKOU_BEHIND_PROXY=true -p 127.0.0.1:8476:8476 \
-  -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
+  -v akou-data:/data -v akou-models:/models drumsergio/akou:<version>
 ```
 
 The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host): a folder the server cannot write stops it at start with exit 77 and the folder's name.
@@ -139,6 +141,7 @@ Docker on a Mac has no Metal, so on a Mac the server runs natively, from a sourc
 git clone --branch v<version> https://github.com/GeiserX/akou.git && cd akou
 bun install --frozen-lockfile
 bun src/main/cli/cli.ts models pull fast
+bun src/main/cli/cli.ts models pull best   # Qwen3-ASR and its Metal llama-server, for the best preset
 bun src/main/cli/cli.ts serve
 ```
 
@@ -189,6 +192,57 @@ On the sending server, save the printed `ak_` key in a file only the server's us
 ```
 
 Restart the server. `GET /v1/server` then lists the remote under `remotes` with its state (`up`, `down` or `refused`) and the presets it offers, and a preset a remote offers shows as available. A job for a preset this server cannot run goes to a remote that offers it; one for a preset the entry names goes there first and runs here while the remote is down; everything else runs here. A remote that goes down leaves its jobs queued, never failed, until it or another remote that offers them is back.
+
+### The best preset
+
+`best` runs Qwen3-ASR-1.7B, the most accurate open model akou knows for English and Spanish, as a child process of akou (`llama-server`, pinned to llama.cpp release b11200 and downloaded like a model). A job asks for it with `preset=best`; a server makes it the default for every job that names nothing with `server.default_model`:
+
+```sh
+akou config set server.default_model best
+akou config set asr.languages '["en","es"]'
+```
+
+`asr.languages` lists the languages the people you transcribe speak. Qwen picks the language of each stretch of audio itself, and sometimes names one nobody spoke (a filler heard as Chinese); with the list set, such a stretch is decoded again in the listed language the model scores higher. A job that sends `language` gets that language instead.
+
+Where it runs is `asr.accelerator`:
+
+| Machine | Setting | What runs |
+|---|---|---|
+| A Mac with Apple silicon, akou run natively (`akou serve`) | `auto` (the default) | Metal. On a Mac mini M4 a 10-minute meeting with speaker labels took 94 s, a real-time factor of 0.16 |
+| The Docker image, any Linux box | `auto` | The CPU. It works everywhere and is several times slower than a GPU |
+| Linux or Windows with an NVIDIA card | `cuda` | llama.cpp's CUDA build. The host needs the CUDA 12 runtime (NVIDIA's runtime images carry it) |
+| Linux or Windows with an Intel or AMD GPU | `vulkan` | llama.cpp's Vulkan build, through Mesa. A container needs `/dev/dri` and the Vulkan loader, which the image does not carry yet |
+
+Docker on a Mac has no Metal, so on a Mac run akou natively rather than in a container. A server elsewhere on the network (a Telegram-Archive box, for example) then reaches it by URL and key like any client.
+
+`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda` or `cpu`). A setting with no build for the platform (`metal` on Linux) runs on the CPU, and the server log says so. For a GPU llama.cpp publishes no build for, such as Intel's SYCL or AMD's ROCm, build `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
+
+### A large backlog
+
+A client with thousands of files to send, such as Telegram-Archive transcribing a whole archive, leans on three settings:
+
+| Setting | Default | What it does |
+|---|---|---|
+| `server.concurrency` | 1 | Jobs run at once. Each running job loads its own copy of the model and uses `asr.threads` threads (default 2), so keep `server.concurrency` times `asr.threads` under the machine's cores: on a 20-thread box, 4 jobs of 4 threads leaves room for the rest |
+| `server.queue_max` | 1000 | Jobs queued or running at most, across every key. 0 means no limit |
+| `server.queue_max_per_key` | 500 | The same for one key, so one client cannot fill the queue. 0 means no limit |
+
+Set them on the web page's settings, with `PATCH /v1/config` and an admin key, or in `config.json` as above. A new `server.concurrency` applies from the next submit or job end.
+
+A submit past a limit is refused with `429 queue_full` and a `Retry-After` header in seconds, before akou reads the upload; wait that long and send it again. A job may carry `priority`, from -10 to 10 (default 0): a higher one runs first, then the oldest. The queue is kept in `jobs.db` in the data volume, so a restart resumes it in the same order.
+
+`GET /v1/server` and `GET /healthz` answer how the queue is doing, with no key:
+
+```sh
+curl -s http://127.0.0.1:8476/v1/server | jq .queue
+```
+
+```json
+{ "concurrency": 4, "max": 1000, "max_per_key": 500, "depth": 212, "queued": 208, "running": 4,
+  "jobs_last_hour": 610, "audio_seconds_last_hour": 21480, "mean_job_seconds": 23.5, "eta_seconds": 1246 }
+```
+
+`audio_seconds_last_hour` over 3600 is how many hours of audio the box transcribes per hour. `eta_seconds` is the time left at the pace of the last 50 jobs, and `null` until one has ended since the server started.
 
 ### The command line against a server
 

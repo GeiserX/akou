@@ -38,6 +38,7 @@ import type { DecodeList } from "../vocab/decode-list.ts";
 import {
   ASR_RATE,
   type DiarizedSpan,
+  type FinalEngine,
   loadModelSet,
   type ModelSet,
   type ModelSpec,
@@ -519,6 +520,36 @@ export async function runFinalPass(
   }
 }
 
+/**
+ * `decodeHalving` over a `FinalEngine` (Qwen through llama-server): the same halving of a span the
+ * engine refuses, but an error marked `fatal` (the engine is down) ends the pass instead of costing
+ * one span, so a job never comes back done with its text missing.
+ */
+async function decodeHalvingWith(
+  engine: FinalEngine,
+  unit: { lang: string; glossary: readonly string[] },
+  samples: Float32Array,
+  from: number,
+  to: number,
+  o: FinalOptions,
+  skip: (from: number, to: number, error: string) => void,
+): Promise<{ text: string; lang?: string }> {
+  try {
+    const h = await engine.decode({ ...unit, samples: prepareSpan(samples.subarray(from, to)) });
+    return { text: h.text.trim(), lang: h.lang };
+  } catch (err) {
+    if ((err as { fatal?: boolean }).fatal) throw err;
+    if (to - from > o.minSplitSeconds * ASR_RATE) {
+      const mid = from + Math.floor((to - from) / 2);
+      const a = await decodeHalvingWith(engine, unit, samples, from, mid, o, skip);
+      const b = await decodeHalvingWith(engine, unit, samples, mid, to, o, skip);
+      return { text: [a.text, b.text].filter((t) => t !== "").join(" "), lang: a.lang ?? b.lang };
+    }
+    skip(from, to, (err as Error).message);
+    return { text: "" };
+  }
+}
+
 /** Decodes `[from, to)`; a refused span is halved while longer than `minSplitSeconds`. */
 function decodeHalving(
   samples: Float32Array,
@@ -733,6 +764,10 @@ export interface JobPassInput {
   diarize: boolean;
   /** The job's hotwords, or null. */
   decode: DecodeList | null;
+  /** The job's language (`auto` or a tag): forced on an engine that takes one (Qwen). */
+  language?: string;
+  /** The job's keywords as a glossary, for an engine that takes one (Qwen's context). */
+  glossary?: readonly string[];
   options?: Partial<FinalOptions>;
 }
 
@@ -768,6 +803,7 @@ export async function runJobPass(
   input: JobPassInput,
   models: ModelSet,
   log: (level: "info" | "warn" | "error", msg: string) => void = () => {},
+  engine?: FinalEngine,
 ): Promise<JobPassResult> {
   const o = { ...DEFAULT_FINAL, ...input.options };
   const x = input.samples;
@@ -781,11 +817,14 @@ export async function runJobPass(
     skipped: [],
   };
   if (peak(x) < 10 ** (o.silenceDbfs / 20)) return empty;
-  const hw = models.prepare(input.decode);
-  for (const d of hw.dropped) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
+  // With an engine the model set's recognizer is never prepared, so it never loads.
+  const hw = engine ? null : models.prepare(input.decode);
+  for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
+  const modelId = engine ? engine.id : (hw as PreparedHotwords).recognizer.model;
+  const unit = { lang: input.language ?? "auto", glossary: input.glossary ?? [] };
   const { flags, window } = speechFlags(x, models);
   const first = flags.indexOf(true);
-  if (first < 0) return { ...empty, model: hw.recognizer.model };
+  if (first < 0) return { ...empty, model: modelId };
   const last = flags.lastIndexOf(true);
   const pad = Math.round((JOB_TRIM_PAD_SECONDS * ASR_RATE) / window);
   const w0 = Math.max(0, first - pad);
@@ -807,15 +846,27 @@ export async function runJobPass(
   const cuts = spans.flatMap((s) => [s.start * ASR_RATE, s.end * ASR_RATE]);
   const skipped: JobPassResult["skipped"] = [];
   const segments: JobSegment[] = [];
-  let language: string | null = null;
+  // Characters of text per detected language: the job's language is the one most of it is in, so
+  // a filler the model hears as another language at the start does not name the whole file.
+  const heard = new Map<string, number>();
   // The pad counts as speech, so it stays with the speech beside it and never becomes a piece of
   // noise on its own.
   const kept = flags.slice(w0, w1).map((f, i) => f || i < first - w0 || i > last - w0);
   for (const piece of timelinePieces(samples, kept, window, o, cuts)) {
-    const r = decodeHalving(samples, piece.from, piece.to, hw, o, (a, b, error) =>
-      skipped.push({ s: round3((from + a) / ASR_RATE), e: round3((from + b) / ASR_RATE), error }),
-    );
-    if (r.lang) language ??= r.lang;
+    // An engine that writes text on noise (Qwen answers a filler) never gets a piece in which the
+    // VAD found no speech: turn boundaries can leave one between two turns.
+    if (
+      engine &&
+      !kept.slice(Math.floor(piece.from / window), Math.ceil(piece.to / window)).includes(true)
+    ) {
+      continue;
+    }
+    const skip = (a: number, b: number, error: string) =>
+      skipped.push({ s: round3((from + a) / ASR_RATE), e: round3((from + b) / ASR_RATE), error });
+    const r = engine
+      ? await decodeHalvingWith(engine, unit, samples, piece.from, piece.to, o, skip)
+      : decodeHalving(samples, piece.from, piece.to, hw as PreparedHotwords, o, skip);
+    if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
     if (r.text === "") continue;
     segments.push({
       s: round3((from + piece.from) / ASR_RATE),
@@ -824,12 +875,15 @@ export async function runJobPass(
       speaker: input.diarize ? labelPiece(piece, spans, o.attachSeconds) : null,
     });
   }
+  let language: string | null = null;
+  for (const [lang, n] of heard)
+    if (language === null || n > (heard.get(language) as number)) language = lang;
   return {
     text: segments.map((s) => s.text).join(" "),
     segments,
     language,
     duration_s,
-    model: hw.recognizer.model,
+    model: modelId,
     skipped,
   };
 }
@@ -840,32 +894,72 @@ type ToJob = {
   models: ModelSpec;
   decode: DecodeList | null;
   diarize: boolean;
+  language?: string;
+  glossary?: readonly string[];
   options?: Partial<FinalOptions>;
 };
 
 type FromJob =
   | { type: "log"; level: "info" | "warn" | "error"; msg: string }
+  /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
+  | { type: "child"; pid: number; alive: boolean }
   | { type: "job.done"; result: JobPassResult; loads: Record<string, number> }
-  | { type: "job.failed"; error: string; loads: Record<string, number> };
+  | { type: "job.failed"; error: string; code?: string; loads: Record<string, number> };
 
 /** The job Worker keeps its models between jobs: loaded once per Worker, keyed by the spec. */
 let jobModels: { key: string; set: Promise<ModelSet> } | null = null;
+/** And its llama-server engine, kept running between jobs, keyed by its own spec. */
+let jobEngine: { key: string; engine: FinalEngine } | null = null;
+
+async function engineFor(m: ToJob, reply: (r: FromJob) => void): Promise<FinalEngine | undefined> {
+  const spec = m.models.final;
+  const key = spec ? JSON.stringify(spec) : "";
+  if (jobEngine && jobEngine.key !== key) {
+    await jobEngine.engine.unload();
+    jobEngine = null;
+  }
+  if (!spec) return undefined;
+  if (!jobEngine) {
+    const { createLlamaEngine } = await import("./llama-server.ts");
+    const engine = createLlamaEngine(spec, {
+      onChild: (pid, alive) => reply({ type: "child", pid, alive }),
+      log: (level, msg) => reply({ type: "log", level, msg }),
+    });
+    jobEngine = { key, engine };
+  }
+  return jobEngine.engine;
+}
 
 async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<void> {
-  const key = JSON.stringify(m.models);
-  if (jobModels?.key !== key) jobModels = { key, set: loadModelSet(m.models) };
+  const { final: _, ...setSpec } = m.models;
+  const key = JSON.stringify(setSpec);
+  if (jobModels?.key !== key) jobModels = { key, set: loadModelSet(setSpec as ModelSpec) };
   let models: ModelSet | null = null;
   try {
     models = await jobModels.set;
+    const engine = await engineFor(m, reply);
     const result = await runJobPass(
-      { samples: m.samples, diarize: m.diarize, decode: m.decode, options: m.options },
+      {
+        samples: m.samples,
+        diarize: m.diarize,
+        decode: m.decode,
+        language: m.language,
+        glossary: m.glossary,
+        options: m.options,
+      },
       models,
       (level, msg) => reply({ type: "log", level, msg }),
+      engine,
     );
     reply({ type: "job.done", result, loads: { ...models.loads } });
   } catch (err) {
     if (!models) jobModels = null;
-    reply({ type: "job.failed", error: (err as Error).message, loads: { ...models?.loads } });
+    reply({
+      type: "job.failed",
+      error: (err as Error).message,
+      code: (err as { code?: string }).code,
+      loads: { ...models?.loads },
+    });
   }
 }
 
@@ -878,6 +972,8 @@ export class JobWorker {
   private w: Worker | null = null;
   private busy: { reject(e: Error): void } | null = null;
   private lastLoads: Record<string, number> = {};
+  /** Child processes the Worker runs (llama-server): killed with it, never left behind. */
+  private readonly kids = new Set<number>();
 
   constructor(
     private readonly models: ModelSpec,
@@ -905,15 +1001,21 @@ export class JobWorker {
       w.onmessage = (e: MessageEvent<FromJob>) => {
         const r = e.data;
         if (r.type === "log") return this.onLog?.(r.level, r.msg);
+        if (r.type === "child") {
+          if (r.alive) this.kids.add(r.pid);
+          else this.kids.delete(r.pid);
+          return;
+        }
         this.lastLoads = r.loads;
         done();
         if (r.type === "job.done") resolve(r.result);
-        else reject(new Error(r.error));
+        else reject(Object.assign(new Error(r.error), r.code ? { code: r.code } : {}));
       };
       w.onerror = (e) => {
-        // A Worker that died is not reused.
+        // A Worker that died is not reused, and nor is anything it started.
         this.w = null;
         w.terminate();
+        this.killChildren();
         done();
         reject(new Error(e.message));
       };
@@ -923,6 +1025,8 @@ export class JobWorker {
         models: this.models,
         decode: input.decode,
         diarize: input.diarize,
+        language: input.language,
+        glossary: input.glossary,
         options: input.options,
       };
       // Transferred, not cloned: a long job's audio is held once, by the Worker.
@@ -935,7 +1039,25 @@ export class JobWorker {
     const w = this.w;
     this.w = null;
     w?.terminate();
+    this.killChildren();
     this.busy?.reject(new Error(reason));
+  }
+
+  /** The child processes the Worker runs now. */
+  children(): number[] {
+    return [...this.kids];
+  }
+
+  /** A terminated Worker cannot stop its children, so the host does. */
+  private killChildren(): void {
+    for (const pid of this.kids) {
+      try {
+        process.kill(pid, "SIGTERM");
+      } catch {
+        // Already gone.
+      }
+    }
+    this.kids.clear();
   }
 
   /** Model loads in the Worker so far, as of the last job. */
