@@ -57,6 +57,11 @@ export interface Job {
   remote_job: string | null;
   /** -10 to 10: a higher priority runs first, then submit order (SV-Q2). */
   priority: number;
+  /**
+   * A dictation (DICTATION.md DC-R2): run in the reserved lane of `server.dictation_slots`, in
+   * arrival order, and never counted against the queue's limits.
+   */
+  interactive: boolean;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -187,7 +192,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   remote TEXT,
   remote_job TEXT,
   priority INTEGER NOT NULL DEFAULT 0,
-  request TEXT
+  request TEXT,
+  interactive INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -231,6 +237,7 @@ function jobOf(r: Row): Job {
     remote: (r.remote as string | null) ?? null,
     remote_job: (r.remote_job as string | null) ?? null,
     priority: (r.priority as number | null) ?? 0,
+    interactive: r.interactive === 1,
     language: r.language as string,
     keywords: JSON.parse(r.keywords as string),
     diarize: r.diarize === 1,
@@ -286,6 +293,8 @@ export interface NewJob {
   route?: "remote" | "local" | null;
   /** Default 0 (SV-Q2). */
   priority?: number;
+  /** A dictation in the reserved lane (DC-R2). Default false. */
+  interactive?: boolean;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -332,6 +341,10 @@ export class JobStore {
     if (!cols.has("priority")) {
       this.db.run("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
     }
+    // One from before DC-R2 gains the interactive column; its jobs are ordinary ones.
+    if (!cols.has("interactive")) {
+      this.db.run("ALTER TABLE jobs ADD COLUMN interactive INTEGER NOT NULL DEFAULT 0");
+    }
     // The queue's order, after the column exists on an older file.
     this.db.run("CREATE INDEX IF NOT EXISTS jobs_queue ON jobs (status, priority DESC, seq)");
   }
@@ -359,9 +372,9 @@ export class JobStore {
       const id = `job_${ulid(now)}`;
       this.db
         .query(
-          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, route, priority, language,
-            keywords, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, route, priority, interactive,
+            language, keywords, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
+           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -371,6 +384,7 @@ export class JobStore {
           j.model_source ?? null,
           j.route ?? null,
           j.priority ?? 0,
+          j.interactive ? 1 : 0,
           j.language,
           JSON.stringify(j.keywords),
           j.diarize ? 1 : 0,
@@ -406,12 +420,15 @@ export class JobStore {
     return c.queued + c.running;
   }
 
-  /** The jobs waiting and running, of one key or (null) of every key. */
+  /**
+   * The jobs waiting and running, of one key or (null) of every key. Dictations in the reserved
+   * lane (DC-R2) are not the queue's, so they are not counted.
+   */
   counts(key: string | null): { queued: number; running: number } {
     const r = this.db
       .query(
         `SELECT coalesce(sum(status = 'queued'), 0) AS queued, coalesce(sum(status = 'running'), 0) AS running
-         FROM jobs WHERE status IN ('queued', 'running') ${key === null ? "" : "AND key_id = ?"}`,
+         FROM jobs WHERE status IN ('queued', 'running') AND interactive = 0 ${key === null ? "" : "AND key_id = ?"}`,
       )
       .get(...(key === null ? [] : [key])) as { queued: number; running: number };
     return { queued: r.queued, running: r.running };

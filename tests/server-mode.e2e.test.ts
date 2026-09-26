@@ -547,8 +547,10 @@ describe("SV-K1: GET /v1/server", () => {
         "qwen3-asr-1.7b",
       ]);
       expect(Object.keys(b.capabilities).sort()).toEqual(
-        ["bazarr", "events", "jobs", "openai", "webhooks", "wyoming"].sort(),
+        ["bazarr", "events", "interactive", "jobs", "openai", "webhooks", "wyoming"].sort(),
       );
+      // No dictation lane unless server.dictation_slots reserves one (DC-R2).
+      expect(b.capabilities.interactive).toBe(false);
       // Jobs, their feed and their signed deliveries exist in server mode only (SV-J1, SV-E1, SV-E2).
       for (const c of ["jobs", "events", "webhooks"])
         expect(b.capabilities[c]).toBe(mode === "server");
