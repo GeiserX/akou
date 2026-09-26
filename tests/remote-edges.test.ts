@@ -19,7 +19,7 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
 import { join } from "node:path";
 import { parseArgs } from "../src/main/cli/args.ts";
-import { ApiClient, EXIT, remoteTarget, Unreachable } from "../src/main/cli/client.ts";
+import { ApiClient, EXIT, remoteTarget, TargetError, Unreachable } from "../src/main/cli/client.ts";
 import { CLI, cli } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -254,6 +254,23 @@ describe("secret flags and the key file", () => {
     const inline = await cli(env({}), ["tail", "--token=ak_s3cret"]);
     expect(inline.err).toContain("akou tail");
     expect(inline.err).not.toContain("ak_s3cret");
+    // A second secret flag after the one that trips is dropped from the `try:` line too.
+    const two = await cli(env({}), ["status", "--key", "ak_first", "--token", "ak_second"]);
+    expect(two.code).toBe(EXIT.usage);
+    expect(two.err).toContain("akou status");
+    expect(two.err).not.toContain("ak_first");
+    expect(two.err).not.toContain("ak_second");
+    expect(two.err).not.toContain("--token");
+    const mixed = await cli(env({}), [
+      "status",
+      "--key=ak_first",
+      "--json",
+      "--password",
+      "ak_third",
+    ]);
+    expect(mixed.err).toContain("akou status --json");
+    expect(mixed.err).not.toContain("ak_first");
+    expect(mixed.err).not.toContain("ak_third");
   });
 
   test("AKOU_API_KEY_FILE may start with ~/, as docker -e and a systemd unit pass it unexpanded", () => {
@@ -275,6 +292,16 @@ describe("secret flags and the key file", () => {
       })?.key,
     ).toBe("ak_from_file");
     t.cleanup();
+  });
+
+  test("AKOU_URL with a query or a fragment is refused, since the API path would land inside it", () => {
+    for (const url of ["https://akou.example/x?y=1", "https://akou.example/x#top", "https://h/?"]) {
+      expect(() => remoteTarget({ AKOU_URL: url, AKOU_API_KEY: "k" })).toThrow(TargetError);
+    }
+    // Positive control: a path prefix and a trailing slash are fine.
+    expect(remoteTarget({ AKOU_URL: "https://akou.example/x/", AKOU_API_KEY: "k" })?.base).toBe(
+      "https://akou.example/x",
+    );
   });
 
   test("a blank AKOU_API_KEY does not hide the key in AKOU_API_KEY_FILE", () => {

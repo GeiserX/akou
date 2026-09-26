@@ -109,6 +109,14 @@ export function remoteTarget(env: Record<string, string | undefined>): RemoteTar
       EXIT.usage,
     );
   }
+  // The API path is appended to AKOU_URL, so a query or a fragment would swallow it. The
+  // serialized URL keeps an empty `?` or `#` that `search` and `hash` report as "".
+  if (/[?#]/.test(url.href)) {
+    throw new TargetError(
+      `AKOU_URL must not carry a query or a fragment, like https://akou.example/prefix; it is ${JSON.stringify(raw)}`,
+      EXIT.usage,
+    );
+  }
   const base = raw.replace(/\/+$/, "");
   // A blank AKOU_API_KEY (`-e AKOU_API_KEY=` in a compose file) falls through to the key file.
   const inline = env.AKOU_API_KEY?.trim();
