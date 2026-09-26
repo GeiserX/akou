@@ -103,6 +103,7 @@ const LOCAL_ONLY: Readonly<Record<string, string>> = {
   // Not local, but it reads FILE before it sends anything, and its routes (`/server`, `/jobs`)
   // never name a call.
   transcribe: "reads FILE first; its routes name no call",
+  serve: "is the server: it starts the core in this process and sends no request",
 };
 
 const CALL_ROUTE = /^[A-Z]+ \/calls\/[^/?]+/;

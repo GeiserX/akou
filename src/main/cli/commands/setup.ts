@@ -14,6 +14,7 @@ import type { DiarizerKind } from "../../asr/engine.ts";
 import {
   DownloadRefused,
   downloadModels,
+  MODELS,
   type ModelSpecEntry,
   modelFile,
   modelsFor,
@@ -21,6 +22,7 @@ import {
   sha256File,
   verifyModels,
 } from "../../asr/models.ts";
+import { isPreset, PRESET_NAMES, presetModels } from "../../asr/presets.ts";
 import { isSettingKey, loadConfig, SETTINGS, type SettingSpec } from "../../config/schema.ts";
 import { str } from "../args.ts";
 import { EXIT } from "../client.ts";
@@ -184,11 +186,56 @@ async function importModels(
   return { copied, missing };
 }
 
+/**
+ * What `models pull` fetches: with no name, every model this machine's settings need; with a preset
+ * (`fast`) or a model id, exactly those, from the whole registry. A preset with no engine yet, or
+ * a name that is neither, is an answer with no download.
+ */
+function pullPlan(
+  ctx: Ctx,
+  name: string | undefined,
+):
+  | { ids: string[]; registry: readonly ModelSpecEntry[]; preset?: string; named?: string }
+  | { exit: number; message: string } {
+  if (name === undefined) {
+    const reg = registry(ctx);
+    return { ids: reg.map((m) => m.id), registry: reg };
+  }
+  const all = ctx.models ?? MODELS;
+  if (isPreset(name)) {
+    const reg = registry(ctx);
+    const p = presetModels(
+      name,
+      reg.map((m) => m.id),
+    );
+    if ("unavailable" in p) {
+      return {
+        exit: EXIT.unavailable,
+        message: `the ${name} preset has no engine in this version: ${p.unavailable}; \`akou models pull fast\` gets the one that exists`,
+      };
+    }
+    return { ids: [...p.models], registry: reg, preset: name, named: name };
+  }
+  if (all.some((m) => m.id === name)) return { ids: [name], registry: all, named: name };
+  return {
+    exit: EXIT.usage,
+    message: `no preset or model is called "${name}": the presets are ${PRESET_NAMES.join(", ")}, and \`akou models list\` names the models`,
+  };
+}
+
 const models: Command = {
   name: "models",
   summary: "The speech models: list, pull (download, checksummed) or import from a folder",
-  usage: "akou models list | akou models pull | akou models import DIR   [--json]",
-  examples: ["akou models list", "akou models pull", "akou models import /Volumes/usb/akou-models"],
+  usage:
+    "akou models list | akou models pull [PRESET|MODEL] | akou models import DIR   [--json]\n" +
+    "  PRESET is lite, fast, best, fusion or auto; MODEL is an id from `akou models list`.\n" +
+    "  No app needs to run: an image build or an entrypoint pulls before the server starts.",
+  examples: [
+    "akou models list",
+    "akou models pull fast",
+    "akou models pull",
+    "akou models import /Volumes/usb/akou-models",
+  ],
   run: async (ctx, p) => {
     const [sub, arg] = p.positional;
     const dir = modelsDir(ctx);
@@ -212,33 +259,48 @@ const models: Command = {
       return EXIT.ok;
     }
     if (sub === "pull") {
+      const plan = pullPlan(ctx, arg);
+      if ("exit" in plan) {
+        const error = plan.exit === EXIT.usage ? "usage" : "preset_unavailable";
+        if (ctx.json) ctx.io.out(JSON.stringify({ error, message: plan.message }));
+        else ctx.io.err(`akou: ${plan.message}`);
+        return plan.exit;
+      }
       const shown = new Map<string, number>();
       try {
-        const done = await downloadModels(
-          dir,
-          registry(ctx).map((m) => m.id),
-          {
-            env: ctx.io.env as NodeJS.ProcessEnv,
-            registry: registry(ctx),
-            // One line per file every 10 %, on stderr, so a 2.4 GB file never looks stuck.
-            onProgress: (x) => {
-              if (ctx.json) return;
-              const key = `${x.model}/${x.name}`;
-              const pct = x.total > 0 ? Math.floor((10 * x.bytes) / x.total) * 10 : 100;
-              if ((shown.get(key) ?? -1) >= pct) return;
-              shown.set(key, pct);
-              ctx.io.err(
-                pct === 100
-                  ? `${key}: done, checking its SHA-256`
-                  : `${key}: ${pct} % of ${(x.total / 1e6).toFixed(0)} MB`,
-              );
-            },
+        const done = await downloadModels(dir, plan.ids, {
+          env: ctx.io.env as NodeJS.ProcessEnv,
+          registry: plan.registry,
+          // One line per file every 10 %, on stderr, so a 2.4 GB file never looks stuck.
+          onProgress: (x) => {
+            if (ctx.json) return;
+            const key = `${x.model}/${x.name}`;
+            const pct = x.total > 0 ? Math.floor((10 * x.bytes) / x.total) * 10 : 100;
+            if ((shown.get(key) ?? -1) >= pct) return;
+            shown.set(key, pct);
+            ctx.io.err(
+              pct === 100
+                ? `${key}: done, checking its SHA-256`
+                : `${key}: ${pct} % of ${(x.total / 1e6).toFixed(0)} MB`,
+            );
           },
-        );
-        const retired = pruneRetiredModels(dir);
-        if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, dir, files: done.length, retired }));
-        else {
-          ctx.io.out(`All ${done.length} model files are in ${dir} and verified`);
+        });
+        // Retired folders go only once everything this machine needs is verified, not a subset.
+        const retired = arg === undefined ? pruneRetiredModels(dir) : [];
+        if (ctx.json) {
+          ctx.io.out(
+            JSON.stringify({
+              ok: true,
+              dir,
+              files: done.length,
+              retired,
+              ...(plan.preset ? { preset: plan.preset } : {}),
+              models: plan.ids,
+            }),
+          );
+        } else {
+          const what = plan.named ? ` for ${plan.named}` : "";
+          ctx.io.out(`All ${done.length} model files${what} are in ${dir} and verified`);
           for (const id of retired) ctx.io.out(`Removed ${id}, which this version no longer uses`);
         }
         return EXIT.ok;

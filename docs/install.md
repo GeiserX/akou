@@ -7,7 +7,7 @@ akou 0.x runs on Macs with Apple silicon and macOS 14.4 or later. Every release 
 | `akou-<version>-macos-arm64.dmg` | The app, to drag into Applications |
 | `akou-<version>-macos-arm64.zip` | The same app, zipped |
 | `akou-cli-<version>-darwin-arm64.tar.gz` | The `akou` command line for macOS |
-| `akou-cli-<version>-linux-x64.tar.gz`, `akou-cli-<version>-windows-x64.zip` | The command line alone, for Linux and Windows. The app for those systems is not released yet, so these can manage models, the skill and the settings, but cannot record |
+| `akou-cli-<version>-linux-x64.tar.gz`, `akou-cli-<version>-linux-arm64.tar.gz`, `akou-cli-<version>-windows-x64.zip` | The command line alone, for Linux and Windows. The app for those systems is not released yet, so these can manage models, the skill and the settings, but cannot record |
 | `SHA256SUMS` | A checksum for every file above |
 
 To check a download, put it next to `SHA256SUMS` and run:
@@ -96,6 +96,54 @@ claude plugin install akou@akou
 ```
 
 It gives Claude Code the akou skills and the `akou_*` tools in one step, and updates them with the plugin. Its tools run `akou mcp`, so the `akou` command above must be on your `PATH`. Use the plugin or `akou skill install` for Claude Code, not both: with both, Claude Code lists every akou skill and tool twice.
+
+## The server
+
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
+
+Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this:
+
+```sh
+docker run --rm -v akou-models:/models geiserx/akou:<version> models pull fast
+```
+
+`fast` is the only preset with an engine today. It fetches everything the server loads before it transcribes: Parakeet TDT 0.6B v3, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet; pyannote in place of Nemotron with `asr.diarizer` set to `embeddings`). A second run checks every file's SHA-256 and downloads nothing. `akou models pull MODEL` fetches one model by the id `akou models list` shows.
+
+Inside a container akou listens on every address, and it refuses to start that way until you say a reverse proxy with TLS is in front of it (`server.behind_proxy`), because akou has no TLS of its own. Say it once, in the data volume:
+
+```sh
+docker run --rm -v akou-data:/data --entrypoint bun geiserx/akou:<version> -e '
+  const fs = require("node:fs"), dir = "/data/.config/akou", file = dir + "/config.json";
+  fs.mkdirSync(dir, { recursive: true });
+  const cfg = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf8")) : {};
+  fs.writeFileSync(file, JSON.stringify({ ...cfg, "server.behind_proxy": true }, null, 2));'
+```
+
+It adds the one setting and keeps any others already in `config.json`.
+
+Then start it, with the port published on this machine's loopback only, for the proxy to reach:
+
+```sh
+docker run -d --name akou -p 127.0.0.1:8476:8476 -v akou-data:/data -v akou-models:/models geiserx/akou:<version>
+```
+
+The server runs as an unprivileged user, keeps its settings, keys and jobs under `/data` and the models under `/models`, and decodes any audio file with the ffmpeg inside the image. `docker stop` ends it cleanly.
+
+Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That is `akou serve`, the same server in the foreground. The single-file `akou` CLI runs `akou serve` too, on Linux x64 and arm64 and on macOS. It carries no speech engine, so it answers the API but cannot transcribe, and it says so when it starts.
+
+`akou serve` binds every address by default too, so on a plain machine it refuses to start (exit 78) until you choose. Put `{ "api.bind": "127.0.0.1" }` in `~/.config/akou/config.json` to serve this machine only, or set `server.behind_proxy` to `true` once a reverse proxy with TLS is in front of it.
+
+### The command line against a server
+
+The CLI and `akou mcp` talk to a remote akou when `AKOU_URL` is set. The key comes from `AKOU_API_KEY`, or from a file named by `AKOU_API_KEY_FILE`, never from a flag:
+
+```sh
+export AKOU_URL=https://akou.example
+export AKOU_API_KEY_FILE=~/.config/akou/remote.key
+akou jobs list
+```
+
+With `AKOU_URL` set, akou never looks for the app on this machine and never starts it. A server that refuses the connection, or answers nothing within the request's time, exits 69 and names `AKOU_URL`; a wrong key exits 77. `akou quit` refuses to run, since it stops only the app on this machine, and `akou doctor` reports the server it reaches. `AKOU_API_KEY_FILE` may start with `~/`, as `docker -e` and a systemd unit pass it unexpanded.
 
 ## Uninstalling
 

@@ -11,12 +11,15 @@
  * - `akou skill install --dir DIR` installs the `SKILL.md` built into the binary, at the version;
  * - `akou start --json`, with no app running and none installed, exits 69 and says the app must be
  *   opened: the compiled CLI never tries to be the app.
+ * - `akou serve` runs the server in the foreground from this binary (SV-P8): `GET /healthz` answers
+ *   with no token, `akou status` through the same binary reaches it, and SIGTERM ends it with 0
+ *   (`akou quit` on Windows, where SIGTERM is TerminateProcess and no handler runs).
  *
- * Nothing here starts the app or opens a window.
+ * Nothing here opens a window; `akou serve` is the one server it starts, and it stops it.
  */
 
-import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { hostTarget } from "./build-cli.ts";
@@ -121,8 +124,83 @@ try {
       `exit ${start.code}: ${msg}`,
     );
   }
+
+  await serveCheck();
 } finally {
   rmSync(home, { recursive: true, force: true });
+}
+
+/** `akou serve` from the binary: the server answers, then SIGTERM takes the one quit path. */
+async function serveCheck(): Promise<void> {
+  const serveHome = join(home, "serve");
+  const configDir = join(serveHome, ".config", "akou");
+  mkdirSync(configDir, { recursive: true });
+  // A free port, so a release runner's other services never collide with it, on loopback: server
+  // mode's default bind, 0.0.0.0, starts only behind a proxy (SV-P5).
+  writeFileSync(
+    join(configDir, "config.json"),
+    JSON.stringify({ "api.port": 0, "api.bind": "127.0.0.1" }),
+  );
+  const serveEnv = { ...env, AKOU_HOME: serveHome, AKOU_MODELS_DIR: join(serveHome, "models") };
+  const child = spawn(exe, ["serve"], { env: serveEnv, stdio: ["ignore", "ignore", "pipe"] });
+  let stderr = "";
+  child.stderr?.on("data", (b) => {
+    stderr += String(b);
+  });
+  const exited = new Promise<number | null>((r) => child.on("exit", (code) => r(code)));
+  try {
+    let port = 0;
+    const deadline = performance.now() + 20_000;
+    while (performance.now() < deadline && port === 0) {
+      try {
+        port = JSON.parse(readFileSync(join(configDir, "runtime.json"), "utf8")).port ?? 0;
+      } catch {
+        await Bun.sleep(100);
+      }
+    }
+    check(port > 0, "akou serve writes runtime.json with the port it listens on", stderr.trim());
+    if (port === 0) return;
+    // A server that accepts and never answers must not hold the smoke past its budget.
+    const health = await fetch(`http://127.0.0.1:${port}/healthz`, {
+      signal: AbortSignal.timeout(5000),
+    }).catch((e: Error) => e);
+    check(
+      !(health instanceof Error) && health.status === 200,
+      "akou serve answers GET /healthz with no token",
+      health instanceof Error ? health.message : `HTTP ${health.status}`,
+    );
+    const status = spawnSync(exe, ["status", "--json"], {
+      env: serveEnv,
+      encoding: "utf8",
+      timeout: 30_000,
+    });
+    let pid = 0;
+    try {
+      pid = JSON.parse(status.stdout).app?.pid ?? 0;
+    } catch {}
+    check(
+      pid === child.pid,
+      "akou status through the same binary reaches the server",
+      status.stdout,
+    );
+  } finally {
+    const windows = process.platform === "win32";
+    if (windows) {
+      const q = spawnSync(exe, ["quit"], { env: serveEnv, encoding: "utf8", timeout: 30_000 });
+      check(q.status === 0, "akou quit through the same binary stops the server", q.stderr);
+    } else {
+      child.kill("SIGTERM");
+    }
+    const code = await Promise.race([exited, Bun.sleep(15_000).then(() => "timeout" as const)]);
+    check(code === 0, `akou serve exits 0 on ${windows ? "akou quit" : "SIGTERM"}`, String(code));
+    // Read once the process is gone, so every line it wrote has arrived.
+    check(
+      stderr.includes("cannot transcribe"),
+      "akou serve from the single-file CLI says it cannot transcribe",
+      stderr.trim(),
+    );
+    if (code !== 0) child.kill("SIGKILL");
+  }
 }
 
 if (failures > 0) {

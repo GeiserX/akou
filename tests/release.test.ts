@@ -182,6 +182,26 @@ describe("the toolchain pins", () => {
   });
 });
 
+describe("[SV-P8] a CLI for every machine the server runs on", () => {
+  test("linux-arm64 is released beside darwin-arm64, linux-x64 and windows-x64", () => {
+    expect(hostTarget("linux", "arm64")).toBe("linux-arm64");
+    expect(hostTarget("linux", "x64")).toBe("linux-x64");
+    expect(hostTarget("darwin", "arm64")).toBe("darwin-arm64");
+    expect(hostTarget("win32", "x64")).toBe("windows-x64");
+    // Positive control: a machine with no release still gets none.
+    expect(hostTarget("linux", "ia32")).toBeNull();
+  });
+
+  test("the release builds the Linux CLIs on their own runners, arm64 included", () => {
+    const wf = Bun.YAML.parse(
+      readFileSync(join(ROOT, ".github", "workflows", "release.yml"), "utf8"),
+    ) as { jobs: Record<string, { strategy?: { matrix?: { os?: string[] } } }> };
+    const os = wf.jobs.cli?.strategy?.matrix?.os ?? [];
+    expect(os).toContain("ubuntu-24.04-arm");
+    expect(os).toContain("ubuntu-24.04");
+  });
+});
+
 describe("signing is a seam, not a code change", () => {
   test("ad-hoc signs and never notarizes; a Developer ID with Apple credentials notarizes", () => {
     expect(signing({})).toEqual({ codesign: false, notarize: false });
