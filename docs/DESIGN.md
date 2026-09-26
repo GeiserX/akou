@@ -507,7 +507,7 @@ A speaker named in the question boosts that speaker's turns by 1.5 and never har
 
 Unused budget flows to retrieval, then recency. Echo lines are excluded.
 
-**Whole-call mode.** If the whole rendered transcript fits 12k tokens (roughly the first 45 to 60 minutes), the in-app pack overrides the 8k budget with its own cap of 14k tokens in total. The pack is then the header plus the whole transcript. Speaker **ids** go in a stable prefix, and the roster, vocabulary hits, memo and "now" go in a dynamic tail, so naming a speaker does not invalidate a provider's prompt cache. MCP callers always get retrieval mode unless they ask for `budget ≥ 12000`: an agent's context is the scarce resource.
+**Whole-call mode.** If the whole rendered transcript fits 12k tokens (roughly the first 45 to 60 minutes), the in-app pack overrides the 8k budget with its own cap of 14k tokens in total. The pack is then the header plus the whole transcript. Speaker **ids** go in a stable prefix, and the roster, vocabulary hits, memo and "now" go in a dynamic tail, so naming a speaker does not invalidate a provider's prompt cache. MCP callers always get retrieval mode: `akou_context` takes a budget of at most 7,000 tokens, so its answer stays under the 8,000-token ceiling on every MCP answer (PG-M5). An agent's context is the scarce resource.
 
 **BM25.** An in-memory index per call, about 200 lines of TypeScript, no dependency. Documents are speaker turns (consecutive segments of one speaker, 60 to 200 words, one segment of overlap). Tokens are Unicode words, lowercase, accent-folded, no stemming, with small stopword lists per configured language. Corrected and raw tokens are both indexed. Query expansion adds the vocabulary's heard forms and speaker names. k = 6, minimum score, de-duplicated by time proximity. Updated on every `seg`, revision, retraction and merge. A committed line is searchable within 200 ms.
 
@@ -549,6 +549,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 | `akou note "text"` · `akou remember "text"` · `akou remember --del ID` | Notepad line, agent memory, retract a remembered line |
 | `akou vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | The custom vocabulary: entries in force, add a word (mid-call with `--call`), proposals, ranked candidates from a call or text, decode safety of a word, import of older list formats, the post-call pass. |
 | `akou enhance [--template T] [--call ID]` · `akou finalize [CALL] [--force]` | Post-call |
+| `akou wait [CALL] --for final.done\|enhanced\|exported [--timeout 30m]` | Blocks until the call reaches the stage: exit 0, 69 when the final pass cannot run (`final.failed {step: unavailable}`), 70 when it failed, 124 at the timeout. A stage reached before a new part, or notes and an export made before a new final layer, do not count |
 | `akou calls [-w WS] [--limit N] [--failed]` | Lists calls by date, title, duration, participants. No content search |
 | `akou show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | One call's transcript or notes |
 | `akou export [CALL] [--to DIR]` · `akou hooks run CALL [--stage S]` | Hand-off, re-run |
@@ -560,7 +561,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 | `akou quit` · `akou mcp` | Stops the app cleanly; stdio MCP server |
 | `akou self-update` | CLI tarball only (M4): replaces the binary after verifying its cosign signature |
 
-Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission.
+Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validation, 69 unavailable (app, model, provider), 70 software, 75 already recording, 77 permission, 124 `akou wait` timed out.
 
 ### 6.2 HTTP API
 
@@ -578,7 +579,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
 | `GET /calls/{id}/events?after=SEQ&wait=25` | Raw log, long-poll |
 | `GET /calls/{id}/stream?after=SEQ` | SSE: events plus ephemeral `partial`, `level` and `read` (the app's text and `heard` for every line its vocabulary corrects, after the backlog and again whenever that changes) |
-| `GET /calls/{id}/transcript?layer=best&since&from&to&speaker&format=json\|md\|txt\|export&limitTokens` | Rendered, names and vocabulary applied; JSON rows carry `text` (corrected) and `heard` (raw, only when different); `export` is the export file's `## Transcript` section, what the window's Copy transcript copies |
+| `GET /calls/{id}/transcript?layer=best&since&from&to&speaker&format=json\|md\|txt\|export&limitTokens&offset&afterLine` | Rendered, names and vocabulary applied; JSON rows carry `text` (corrected) and `heard` (raw, only when different); `export` is the export file's `## Transcript` section, what the window's Copy transcript copies. `limitTokens` keeps the newest lines that fit; with `since`, the earliest changed after it and a `cursor` covering exactly them (`more` counts the rest); with `offset` or `afterLine` (the line a page ends on), one page oldest first, and `409 cursor_stale` when that line is gone |
 | `POST /calls/{id}/context` `{question, budget}` | The pack, `cursor`, `state`, `memoStale`, `provisional` |
 | `POST /calls/{id}/ask` `{question, stream}` | Needs a provider. Streams tokens when `stream` |
 | `GET /calls/{id}/search?q=&k=` | Hits |
@@ -633,7 +634,7 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 | `akou_memo_get` · `akou_memo_put {text, coversSeq}` | The agent writes the memo when no provider does |
 | `akou_vocab_add {term, heard?, scope = "call", workspace?, decode?, note?}` · `akou_vocab_propose {entries[], call?}` · `akou_vocab_approve {terms[], call?}` · `akou_vocab_reject {terms[], call?}` · `akou_vocab_list {workspace?, call?, unconfirmed?}` · `akou_vocab_suggest {text?, call?, k = 20}` · `akou_vocab_check {term}` | The custom vocabulary: a word the user just stated goes in mid-call with `scope: call`; anything the agent inferred is a proposal until the user says yes |
 | `akou_enhance_context {template?}` · `akou_enhanced_put {markdown, coversSeq}` · `akou_enhance {template?}` | The agent writes the enhancement, or asks akou's provider to |
-| `akou_list_calls {workspace?, limit = 20, failed?}` · `akou_get_call {call, layer = "best"}` · `akou_export {call}` | Past calls by name only |
+| `akou_list_calls {workspace?, limit = 20, failed?}` · `akou_get_call {call, layer = "best", cursor?}` (a page at a time, with `nextCursor`) · `akou_export {call}` | Past calls by name only |
 
 Tool descriptions carry the rules: cite wall time, never quote a draft line as fact, answer only from the live call unless a call is named, say when a call has ended.
 
