@@ -39,6 +39,7 @@
     <button id="share-start" type="button" hidden title="A read-only live link to this call">Share</button>
     <button id="copy-transcript" type="button" hidden title="Copy the transcript so far as Markdown">Copy transcript</button>
     <button id="dictation-open" type="button" title="Type what you say into any app">Dictation</button>
+    <button id="models-open" type="button" title="Speech and speaker models: download, delete, compare">Models</button>
     <button id="settings-open" type="button">Settings</button>
   </div>
   <fieldset id="meters"><legend>Levels</legend>
@@ -115,6 +116,10 @@
   <p id="review-status" role="status"></p>
   <ul id="review-list"></ul>
   <div class="bar"><button type="button" id="review-close">Close</button></div>
+</dialog>
+<dialog id="models" aria-label="Models">
+  <div id="models-body"></div>
+  <div class="bar"><button type="button" id="models-close">Close</button></div>
 </dialog>
 <dialog id="settings" aria-label="Settings">
   <!-- The registry validates every value (PATCH /config); the browser must not block a value the registry allows, such as port 0. -->

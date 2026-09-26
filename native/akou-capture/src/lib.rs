@@ -17,6 +17,7 @@
 pub mod aligner;
 pub mod clock;
 pub mod convert;
+pub mod dictate;
 pub mod engine;
 pub mod file_source;
 pub mod health;

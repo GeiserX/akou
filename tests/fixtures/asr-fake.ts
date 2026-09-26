@@ -165,6 +165,10 @@ export interface FakeOptions {
   model?: string;
   /** Each decode busy-waits this long (a slow machine). */
   slowMs?: number;
+  /** Each recognizer load busy-waits this long (a big model on a slow disk). */
+  loadMs?: number;
+  /** Each speaker-label pass busy-waits this long. */
+  diarizeMs?: number;
   /** A span longer than this is refused (throws), seconds. */
   refuseOver?: number;
   /** Terms the tokenization check would drop. */
@@ -202,6 +206,12 @@ export interface DecodeCall {
   hotwords: string | undefined;
   /** How many arguments the stream was created with, as sherpa-onnx would see it. */
   args: number;
+}
+
+/** Holds the thread, as a native call does. */
+function busyWait(ms: number): void {
+  const end = performance.now() + ms;
+  while (performance.now() < end) {}
 }
 
 export class FakeRecognizer implements Recognizer {
@@ -314,8 +324,10 @@ export class FakeEmbedder implements Embedder {
 
 export class FakeDiarizer implements Diarizer {
   calls = 0;
+  constructor(private readonly busyMs = 0) {}
   process(samples: Float32Array): DiarizedSpan[] {
     this.calls++;
+    busyWait(this.busyMs);
     const freqs = Array.from({ length: VOICES }, (_, k) => voiceFreq(k));
     const spans: DiarizedSpan[] = [];
     // Clusters are numbered by first appearance, as sherpa-onnx numbers them.
@@ -438,6 +450,7 @@ export class FakeModels implements ModelSet {
 
   private count(m: string): void {
     this.loads[m] = (this.loads[m] ?? 0) + 1;
+    if (m === this.recognizerModel) busyWait(this.o.loadMs ?? 0);
   }
 
   prepare(list: DecodeList | null): PreparedHotwords {
@@ -505,7 +518,7 @@ export class FakeModels implements ModelSet {
   }
 
   diarizer(): Diarizer {
-    const d = new FakeDiarizer();
+    const d = new FakeDiarizer(this.o.diarizeMs);
     this.diarizers.push(d);
     this.count("fake-segmentation");
     return d;

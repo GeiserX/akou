@@ -119,6 +119,13 @@ export interface FinalResult {
   skipped: SkippedSpan[];
   warning?: string;
   error?: string;
+  /** Seconds of call audio the pass decoded, for this machine's measured speed (SV-U6). */
+  audio_s?: number;
+  /**
+   * Seconds the VAD and the recognizer spent on that audio (SV-U6). Model loads and speaker labels
+   * are not in it, so it compares with the published decode speed.
+   */
+  decode_s?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -468,8 +475,9 @@ export async function runFinalPass(
       }
     }
 
-    // 2 and 4. Whole-timeline decode, per part.
+    // 2 and 4. Whole-timeline decode, per part. The recognizer loaded in `prepare` above.
     step = "decode";
+    const decodeFrom = performance.now();
     const languages = new Set<string>();
     let callText = false;
     let callEnergy = false;
@@ -522,6 +530,7 @@ export async function runFinalPass(
       }
       layer.push({ type: "final.part.done", part: p });
     }
+    const decode_s = (performance.now() - decodeFrom) / 1000;
     for (const d of layer) emit(d);
 
     // 4 (names). Final clusters to live clusters, jointly.
@@ -550,7 +559,8 @@ export async function runFinalPass(
       ...(languages.size > 0 ? { languages: [...languages].sort() } : {}),
       ...(warning ? { warning } : {}),
     });
-    return { ok: true, parts, skipped, ...(warning ? { warning } : {}) };
+    const audio_s = parts.reduce((n, p) => n + audio.length(p), 0) / ASR_RATE;
+    return { ok: true, parts, skipped, audio_s, decode_s, ...(warning ? { warning } : {}) };
   } catch (err) {
     const error = (err as Error).message;
     emit({ type: "final.failed", step, error });
@@ -829,6 +839,11 @@ export interface JobPassResult {
   /** The recognizer's registry name, or null when nothing was decoded. */
   model: string | null;
   skipped: { s: number; e: number; error: string }[];
+  /**
+   * Seconds the VAD and the recognizer spent on the file (SV-U6), without speaker labels or the
+   * recognizer's load. Absent when the pass did not decode, or when an engine had to start for it.
+   */
+  decode_s?: number;
 }
 
 /**
@@ -863,7 +878,9 @@ export async function runJobPass(
   for (const d of hw?.dropped ?? []) log("error", `hotword "${d.term}" dropped: ${d.reason}`);
   const modelId = engine ? engine.id : (hw as PreparedHotwords).recognizer.model;
   const unit = { lang: input.language ?? "auto", glossary: input.glossary ?? [] };
+  const vadFrom = performance.now();
   const { flags, window } = speechFlags(x, models);
+  const vadS = (performance.now() - vadFrom) / 1000;
   const first = flags.indexOf(true);
   if (first < 0) return { ...empty, model: modelId };
   const last = flags.lastIndexOf(true);
@@ -893,6 +910,7 @@ export async function runJobPass(
   // noise on its own.
   const heardSpeech = flags.slice(w0, w1);
   const kept = heardSpeech.map((f, i) => f || i < first - w0 || i > last - w0);
+  const decodeFrom = performance.now();
   for (const piece of timelinePieces(samples, kept, window, o, spans, heardSpeech)) {
     // A piece in which the VAD found no speech is never decoded: a turn edge inside the pad can
     // leave one, and an engine that writes text on noise (Qwen answers a filler) would put a
@@ -920,6 +938,7 @@ export async function runJobPass(
       speaker: spans.length > 0 ? labelPiece(piece, spans, Number.POSITIVE_INFINITY) : null,
     });
   }
+  const decode_s = vadS + (performance.now() - decodeFrom) / 1000;
   let language: string | null = null;
   for (const [lang, n] of heard)
     if (language === null || n > (heard.get(language) as number)) language = lang;
@@ -930,6 +949,7 @@ export async function runJobPass(
     duration_s,
     model: modelId,
     skipped,
+    decode_s,
   };
 }
 
@@ -982,6 +1002,10 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
   let models: ModelSet | null = null;
   try {
     models = await jobModels.set;
+    // An engine that starts for this job starts inside its first decode, so the job's decode time
+    // would carry the start: such a job reports none.
+    const starts =
+      m.models.final !== undefined && jobEngine?.key !== JSON.stringify(m.models.final);
     const engine = await engineFor(m, reply);
     const result = await runJobPass(
       {
@@ -996,6 +1020,7 @@ async function runJobInWorker(m: ToJob, reply: (r: FromJob) => void): Promise<vo
       (level, msg) => reply({ type: "log", level, msg }),
       engine,
     );
+    if (starts) delete result.decode_s;
     reply({ type: "job.done", result, loads: { ...models.loads } });
   } catch (err) {
     if (!models) jobModels = null;
