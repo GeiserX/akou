@@ -1,17 +1,19 @@
 /**
  * The speech models' first-run download (docs/DESIGN.md section 3: "first run offers one explicit
- * download"), and in server mode one model at a time (docs/ux/SERVER.md SV-M6). The models are never
- * bundled; the window's download card and `akou models pull` are the two ways to fetch them.
+ * download"), and one model at a time for the Models page and the CLI (docs/ux/SERVER.md SV-M6,
+ * SV-U6), the same in the app and in server mode. The models are never bundled; the window's
+ * download card, the Models page and `akou models pull` fetch them.
  *
- * - `GET /models`: `{state: missing|downloading|ready|failed, dir, bytes, total, file?, error?}`; in
- *   server mode also `models: [{id, state, bytes, size, last_used_at, evicts_at, default, in_use}]`,
- *   every catalog model.
+ * - `GET /models`: `{state: missing|downloading|ready|failed, dir, bytes, total, file?, error?}`,
+ *   and `models`: every catalog model with its kind, languages, state, size, last use, the date the
+ *   sweep deletes it, whether it is the default's or in use, its accuracy and speed scores with the
+ *   numbers behind them, this machine's measured speed, and the setting that makes it the default.
  * - `POST /models/pull`: starts the download of every missing file, each checked against its
  *   pinned SHA-256, and answers at once: `202` with the state while it runs, `200` when the models
- *   are already there. Progress is `GET /models`. In server mode `{"model": id}` fetches that one
- *   model under the on-demand limits (SV-M2).
- * - `DELETE /models/{id}` (server mode): deletes one model under the sweep's rules; 409
- *   `model_in_use` for the default's set or a model a job needs.
+ *   are already there. Progress is `GET /models`. `{"model": id}` fetches that one model under the
+ *   size cap and the free-space check (SV-M2).
+ * - `DELETE /models/{id}`: deletes one model under the sweep's rules; 409 `model_in_use` for the
+ *   default's set or a model in use.
  *
  * Until the models are there, `POST /calls` answers `503 models_missing`.
  */
@@ -38,22 +40,19 @@ export function modelRoutes(r: Router<ApiApp>): void {
     "/models",
     {
       id: "models.get",
-      doc: "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. In server mode, `models` lists every catalog model with its state, size, last use, the date the sweep will delete it, and whether it is the default's or in use.",
+      doc: "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default.",
       access: "admin",
       modes: ["app", "server"],
       ok: 200,
     },
-    (c) => {
-      const jobs = c.app.jobs?.();
-      return json(200, { ...c.app.models(), ...(jobs ? { models: jobs.modelList() } : {}) });
-    },
+    (c) => json(200, { ...c.app.models(), models: c.app.modelRows?.() ?? [] }),
   );
   r.add(
     "POST",
     "/models/pull",
     {
       id: "models.pull",
-      doc: "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get. In server mode `model` fetches that one catalog model, under `server.models_max_gb` and the free-space check.",
+      doc: "Download every missing model file, each checked against its pinned SHA-256. Answers at once: 202 while the download runs, 200 when the models are already there. Follow it with models.get. `model` fetches that one catalog model, under `server.models_max_gb` and the free-space check.",
       access: "admin",
       modes: ["app", "server"],
       body: { "model?": "string" },
@@ -62,20 +61,13 @@ export function modelRoutes(r: Router<ApiApp>): void {
     async (c) => {
       const b = await c.body<{ model?: unknown }>();
       if (b.model !== undefined) {
-        const jobs = c.app.jobs?.();
         if (typeof b.model !== "string" || b.model.trim() === "") {
           throw new HttpError(422, "bad_field", "model is a model id", { field: "model" });
         }
-        if (!jobs) {
-          throw new HttpError(
-            422,
-            "bad_field",
-            "a single model is pulled in server mode only; run `akou models pull <model>`",
-            { field: "model" },
-          );
-        }
+        const pull = c.app.pullModel;
+        if (!pull) throw new HttpError(404, "not_found", "this akou pulls no single model");
         const id = b.model.trim();
-        const m = answer(() => jobs.pullModel(id));
+        const m = answer(() => pull.call(c.app, id));
         return json(m.state === "ready" ? 200 : 202, m);
       }
       const s = c.app.pullModels();
@@ -87,19 +79,19 @@ export function modelRoutes(r: Router<ApiApp>): void {
     "/models/:id",
     {
       id: "models.delete",
-      doc: "Delete one model from disk, under the sweep's rules: 409 `model_in_use` for the default model's set, a model a queued or running job needs, or one downloading. A job that later names it downloads it again.",
+      doc: "Delete one model from disk, under the sweep's rules: 409 `model_in_use` for the default model's set, a model in use (a queued or running job, a worker, the recognizer), or one downloading. A job or a pull that later names it downloads it again.",
       access: "admin",
-      modes: ["server"],
+      modes: ["app", "server"],
       params: { id: "The model id, from models.get." },
       ok: 200,
     },
     (c) => {
-      const jobs = c.app.jobs?.();
-      if (!jobs) throw new HttpError(404, "not_found", "models are deleted in server mode only");
+      const del = c.app.deleteModel;
+      if (!del) throw new HttpError(404, "not_found", "this akou deletes no single model");
       const id = c.params.id as string;
       return json(
         200,
-        answer(() => jobs.deleteModel(id, caller(c).id)),
+        answer(() => del.call(c.app, id, caller(c).id)),
       );
     },
   );
