@@ -18,9 +18,9 @@ import type { CallView } from "../../../core/log/fold.ts";
 import { ProviderError } from "../../llm/provider.ts";
 import { type AskOptions, ask } from "../../query/ask.ts";
 import { MCP_BUDGET, SEARCH_K } from "../../query/context.ts";
-import { HttpError, intParam, json, type Router, readBody } from "../http.ts";
+import { HttpError, json, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
-import { callId } from "./common.ts";
+import { CALL_ID, callId } from "./common.ts";
 import { KEEPALIVE_MS } from "./follow.ts";
 
 export const MAX_BUDGET = 32_000;
@@ -28,91 +28,128 @@ export const MAX_QUESTION = 2000;
 
 export function queryRoutes(r: Router<ApiApp>): void {
   // A question is read, not a change, so `last` is accepted like on GET routes.
-  r.add("POST", "/calls/:id/context", async (c) => {
-    const b = await readBody<{ question: string; budget?: number }>(c.req, {
-      question: "string",
-      "budget?": "integer",
-    });
-    if (b.question.trim() === "") throw new HttpError(400, "bad_field", "question is empty");
-    if (b.budget !== undefined && (b.budget < 1 || b.budget > MAX_BUDGET)) {
-      throw new HttpError(400, "bad_field", `budget must be 1 to ${MAX_BUDGET}`);
-    }
-    const q = await c.app.query(callId(c, { allowLast: true }));
-    const pack = q.context(b.question, { now: c.app.now(), budget: b.budget ?? MCP_BUDGET });
-    return json(200, {
-      call: q.view.call?.id ?? null,
-      pack: pack.text,
-      tokens: pack.tokens,
-      budget: pack.budget,
-      mode: pack.mode,
-      state: pack.state,
-      status: pack.status,
-      cursor: pack.cursor,
-      memoStale: pack.memoStale,
-      memo: pack.memo,
-      provisional: pack.provisional,
-      analysis: pack.analysis.line,
-      blocks: pack.blocks,
-    });
-  });
-
-  r.add("GET", "/calls/:id/search", async (c) => {
-    const query = c.url.searchParams.get("q") ?? "";
-    if (query.trim() === "") throw new HttpError(400, "bad_param", "q is required", { param: "q" });
-    const k = intParam(c.url, "k", SEARCH_K, 1, 50) as number;
-    const q = await c.app.query(callId(c));
-    const hits = q.search(query, k);
-    return json(200, {
-      call: q.view.call?.id ?? null,
-      hits: hits.map((h) => ({
-        score: h.score,
-        w0: h.w0,
-        w1: h.w1,
-        citation: h.citation,
-        ids: h.lines.map((l) => l.id),
-        lines: h.rendered,
-      })),
-    });
-  });
-
-  r.add("POST", "/calls/:id/ask", async (c) => {
-    const b = await readBody<{ question: string; stream?: boolean }>(c.req, {
-      question: "string",
-      "stream?": "boolean",
-    });
-    const question = b.question.trim();
-    if (question === "") throw new HttpError(400, "bad_field", "question is empty");
-    if (question.length > MAX_QUESTION) {
-      throw new HttpError(400, "bad_field", `question is over ${MAX_QUESTION} characters`);
-    }
-    const id = callId(c, { allowLast: true });
-    const q = await c.app.query(id);
-    // A model may take longer than the server's idle limit; the deadline is the provider's.
-    c.timeout?.(0);
-    const opts = {
-      q,
-      question,
-      now: c.app.now(),
-      provider: c.app.provider(),
-      by: c.by,
-      write: (d: EventDraft | ((view: CallView) => EventDraft)) =>
-        c.app.write(id, typeof d === "function" ? (call) => d(call.view) : d),
-      timeoutMs: c.app.providerTimeoutMs(),
-      sessions: c.app.askSessions?.(),
-    };
-    if (!b.stream) {
-      try {
-        const r = await ask({ ...opts, signal: c.req.signal });
-        return json(200, { call: id, ...r });
-      } catch (err) {
-        if (err instanceof ProviderError && err.kind === "cancelled") {
-          return json(499, { error: "cancelled", message: "the question was cancelled" });
-        }
-        throw err;
+  r.add(
+    "POST",
+    "/calls/:id/context",
+    {
+      id: "calls.context",
+      doc: "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. Changes nothing.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      body: { question: "string", "budget?": "integer" },
+      ok: 200,
+    },
+    async (c) => {
+      const b = await c.body<{ question: string; budget?: number }>();
+      if (b.question.trim() === "") throw new HttpError(400, "bad_field", "question is empty");
+      if (b.budget !== undefined && (b.budget < 1 || b.budget > MAX_BUDGET)) {
+        throw new HttpError(400, "bad_field", `budget must be 1 to ${MAX_BUDGET}`);
       }
-    }
-    return sseAnswer(id, opts, c.req.signal);
-  });
+      const q = await c.app.query(callId(c, { allowLast: true }));
+      const pack = q.context(b.question, { now: c.app.now(), budget: b.budget ?? MCP_BUDGET });
+      return json(200, {
+        call: q.view.call?.id ?? null,
+        pack: pack.text,
+        tokens: pack.tokens,
+        budget: pack.budget,
+        mode: pack.mode,
+        state: pack.state,
+        status: pack.status,
+        cursor: pack.cursor,
+        memoStale: pack.memoStale,
+        memo: pack.memo,
+        provisional: pack.provisional,
+        analysis: pack.analysis.line,
+        blocks: pack.blocks,
+      });
+    },
+  );
+
+  r.add(
+    "GET",
+    "/calls/:id/search",
+    {
+      id: "calls.search",
+      doc: "Search one call's transcript for words, best matches first, each hit with its citation and lines. Never searches across calls.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      query: {
+        q: { type: "string", required: true, doc: "The words to look for." },
+        k: { type: "integer", min: 1, max: 50, default: SEARCH_K, doc: "At most this many hits." },
+      },
+      ok: 200,
+    },
+    async (c) => {
+      const query = c.query.raw("q") ?? "";
+      if (query.trim() === "")
+        throw new HttpError(400, "bad_param", "q is required", { param: "q" });
+      const k = c.query.int("k") as number;
+      const q = await c.app.query(callId(c));
+      const hits = q.search(query, k);
+      return json(200, {
+        call: q.view.call?.id ?? null,
+        hits: hits.map((h) => ({
+          score: h.score,
+          w0: h.w0,
+          w1: h.w1,
+          citation: h.citation,
+          ids: h.lines.map((l) => l.id),
+          lines: h.rendered,
+        })),
+      });
+    },
+  );
+
+  r.add(
+    "POST",
+    "/calls/:id/ask",
+    {
+      id: "calls.ask",
+      doc: "Ask the configured provider a question about the call and get its cited answer, written to the log as an `answer` event. `stream` sends the answer as server-sent events while it is written.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      body: { question: "string", "stream?": "boolean" },
+      ok: 200,
+    },
+    async (c) => {
+      const b = await c.body<{ question: string; stream?: boolean }>();
+      const question = b.question.trim();
+      if (question === "") throw new HttpError(400, "bad_field", "question is empty");
+      if (question.length > MAX_QUESTION) {
+        throw new HttpError(400, "bad_field", `question is over ${MAX_QUESTION} characters`);
+      }
+      const id = callId(c, { allowLast: true });
+      const q = await c.app.query(id);
+      // A model may take longer than the server's idle limit; the deadline is the provider's.
+      c.timeout?.(0);
+      const opts = {
+        q,
+        question,
+        now: c.app.now(),
+        provider: c.app.provider(),
+        by: c.by,
+        write: (d: EventDraft | ((view: CallView) => EventDraft)) =>
+          c.app.write(id, typeof d === "function" ? (call) => d(call.view) : d),
+        timeoutMs: c.app.providerTimeoutMs(),
+        sessions: c.app.askSessions?.(),
+      };
+      if (!b.stream) {
+        try {
+          const r = await ask({ ...opts, signal: c.req.signal });
+          return json(200, { call: id, ...r });
+        } catch (err) {
+          if (err instanceof ProviderError && err.kind === "cancelled") {
+            return json(499, { error: "cancelled", message: "the question was cancelled" });
+          }
+          throw err;
+        }
+      }
+      return sseAnswer(id, opts, c.req.signal);
+    },
+  );
 }
 
 /** Server-Sent Events: `excerpts` at once, `token` as the answer streams, then `answer`. */
