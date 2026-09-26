@@ -122,15 +122,21 @@ export function keywordsOf(form: Form, extra: string[] = []): string[] {
   return out;
 }
 
-export function languageOf(form: Form): string {
+/**
+ * The request's language; `auto` or none means no opinion, and `fallback` decides
+ * (`server.default_language`, SV-S2).
+ */
+export function languageOf(form: Form, fallback = "auto"): string {
   const l = textField(form, "language")?.trim() || "auto";
   if (!LANGUAGE.test(l)) throw bad("language", "language is a BCP-47 tag, or auto");
-  return l;
+  return l === "auto" ? fallback : l;
 }
 
-function booleanOf(form: Form, name: string): boolean {
+/** A true or false field; absent (or empty) it is `fallback`, so an explicit `false` stays false. */
+function booleanOf(form: Form, name: string, fallback = false): boolean {
   const v = textField(form, name)?.trim().toLowerCase();
-  if (v === undefined || v === "" || v === "false" || v === "0") return false;
+  if (v === undefined || v === "") return fallback;
+  if (v === "false" || v === "0") return false;
   if (v === "true" || v === "1") return true;
   throw bad(name, `"${name}" is true or false`);
 }
@@ -206,14 +212,16 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     if (!(PRESET_NAMES as readonly string[]).includes(presetName)) {
       throw bad("preset", `preset is one of ${PRESET_NAMES.join(", ")}`);
     }
+    const settings = c.app.config().settings;
     const job: Omit<NewJob, "file_sha256" | "audio"> = {
       key_id: who.id,
       preset: presetName,
       model: null,
       model_source: null,
-      language: languageOf(form),
+      // A request with no opinion gets the server's defaults (SV-S2).
+      language: languageOf(form, settings["server.default_language"]),
       keywords: keywordsOf(form),
-      diarize: booleanOf(form, "diarize"),
+      diarize: booleanOf(form, "diarize", settings["server.default_diarize"]),
       callback_url: callbackOf(c.app, who, textField(form, "callback_url")),
       metadata: metadataOf(form),
       idempotency_key: idem,
@@ -296,10 +304,14 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.list",
-      doc: "The key's jobs, newest first (an admin key sees every key's). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+      doc: "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
       ...JOB_ROUTE,
       query: {
         status: { type: "string", values: JOB_STATES, doc: "Only jobs in this state." },
+        key: {
+          type: "string",
+          doc: "Only the jobs of this key id. A key that is not admin sees its own jobs only.",
+        },
         cursor: {
           type: "integer",
           min: 1,
@@ -320,7 +332,13 @@ export function jobRoutes(r: Router<ApiApp>): void {
       }
       const before = c.query.int("cursor");
       const limit = c.query.int("limit") as number;
-      const list = jobs.list(caller(c), { status: status as JobStatus | undefined, before, limit });
+      const key = c.query.raw("key") || undefined;
+      const list = jobs.list(caller(c), {
+        key,
+        status: status as JobStatus | undefined,
+        before,
+        limit,
+      });
       return json(200, {
         jobs: list.map((j) => jobs.view(j)),
         cursor: list.length === limit ? (list.at(-1)?.seq ?? null) : null,
