@@ -36,7 +36,14 @@ export const SERVER_GROUPS: readonly { title: string; keys: readonly string[]; h
   },
   {
     title: "Jobs and retention",
-    keys: ["server.retain_days", "server.max_audio_minutes", "server.max_upload_mb"],
+    keys: [
+      "server.concurrency",
+      "server.queue_max",
+      "server.queue_max_per_key",
+      "server.retain_days",
+      "server.max_audio_minutes",
+      "server.max_upload_mb",
+    ],
   },
   {
     title: "Webhooks",

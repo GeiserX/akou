@@ -13,6 +13,8 @@ export class HttpError extends Error {
     readonly code: string,
     message: string,
     readonly extra: Record<string, unknown> = {},
+    /** Response headers the refusal carries, such as a 429's `Retry-After`. */
+    readonly headers: Record<string, string> = {},
   ) {
     super(message);
   }
@@ -29,7 +31,7 @@ export function json(
 }
 
 export function errorResponse(e: HttpError): Response {
-  return json(e.status, { error: e.code, message: e.message, ...e.extra });
+  return json(e.status, { error: e.code, message: e.message, ...e.extra }, e.headers);
 }
 
 /** An `Outcome` from the call layer, as HTTP: the success body, or its status and code. */

@@ -46,6 +46,8 @@ export interface Job {
   model: string | null;
   /** Who chose it: `request`, `server_default` or `hardware`. */
   model_source: string | null;
+  /** -10 to 10: a higher priority runs first, then submit order (SV-Q2). */
+  priority: number;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -150,7 +152,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   result TEXT,
   error TEXT,
   model TEXT,
-  model_source TEXT
+  model_source TEXT,
+  priority INTEGER NOT NULL DEFAULT 0
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -190,6 +193,7 @@ function jobOf(r: Row): Job {
     preset: r.preset as string,
     model: (r.model as string | null) ?? null,
     model_source: (r.model_source as string | null) ?? null,
+    priority: (r.priority as number | null) ?? 0,
     language: r.language as string,
     keywords: JSON.parse(r.keywords as string),
     diarize: r.diarize === 1,
@@ -240,6 +244,8 @@ export interface NewJob {
   /** The recognizer the job runs (SV-S1); absent, the server's default at run time. */
   model?: string | null;
   model_source?: string | null;
+  /** Default 0 (SV-Q2). */
+  priority?: number;
   language: string;
   keywords: string[];
   diarize: boolean;
@@ -278,6 +284,12 @@ export class JobStore {
     for (const c of ["model", "model_source"]) {
       if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
     }
+    // A jobs.db from before SV-Q2 gains the priority column; its jobs are priority 0.
+    if (!cols.has("priority")) {
+      this.db.run("ALTER TABLE jobs ADD COLUMN priority INTEGER NOT NULL DEFAULT 0");
+    }
+    // The queue's order, after the column exists on an older file.
+    this.db.run("CREATE INDEX IF NOT EXISTS jobs_queue ON jobs (status, priority DESC, seq)");
   }
 
   close(): void {
@@ -303,9 +315,9 @@ export class JobStore {
       const id = `job_${ulid(now)}`;
       this.db
         .query(
-          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, language, keywords,
-            diarize, callback_url, metadata, idempotency_key, file_sha256, audio, created_at)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, priority, language,
+            keywords, diarize, callback_url, metadata, idempotency_key, file_sha256, audio, created_at)
+           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
@@ -313,6 +325,7 @@ export class JobStore {
           j.preset,
           j.model ?? null,
           j.model_source ?? null,
+          j.priority ?? 0,
           j.language,
           JSON.stringify(j.keywords),
           j.diarize ? 1 : 0,
@@ -332,27 +345,39 @@ export class JobStore {
     return r ? jobOf(r) : null;
   }
 
-  /** The oldest queued job, by submit order. */
-  nextQueued(): Job | null {
-    const r = this.db
-      .query("SELECT * FROM jobs WHERE status = 'queued' ORDER BY seq LIMIT 1")
-      .get() as Row | null;
-    return r ? jobOf(r) : null;
-  }
-
-  /** Every queued job, oldest first. */
+  /** Every queued job in the order they run: highest priority first, then submit order. */
   queued(): Job[] {
     return (
-      this.db.query("SELECT * FROM jobs WHERE status = 'queued' ORDER BY seq").all() as Row[]
+      this.db
+        .query("SELECT * FROM jobs WHERE status = 'queued' ORDER BY priority DESC, seq")
+        .all() as Row[]
     ).map(jobOf);
   }
 
   /** Jobs waiting or running. */
   depth(): number {
+    const c = this.counts(null);
+    return c.queued + c.running;
+  }
+
+  /** The jobs waiting and running, of one key or (null) of every key. */
+  counts(key: string | null): { queued: number; running: number } {
     const r = this.db
-      .query("SELECT count(*) AS n FROM jobs WHERE status IN ('queued', 'running')")
-      .get() as { n: number };
-    return r.n;
+      .query(
+        `SELECT coalesce(sum(status = 'queued'), 0) AS queued, coalesce(sum(status = 'running'), 0) AS running
+         FROM jobs WHERE status IN ('queued', 'running') ${key === null ? "" : "AND key_id = ?"}`,
+      )
+      .get(...(key === null ? [] : [key])) as { queued: number; running: number };
+    return { queued: r.queued, running: r.running };
+  }
+
+  /** Does the key hold a job under this idempotency key? */
+  hasIdempotent(key: string, idem: string): boolean {
+    return (
+      this.db
+        .query("SELECT 1 FROM jobs WHERE key_id = ? AND idempotency_key = ?")
+        .get(key, idem) !== null
+    );
   }
 
   markRunning(id: string): Job | null {

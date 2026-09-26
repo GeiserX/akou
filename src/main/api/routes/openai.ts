@@ -34,6 +34,8 @@ import {
   keywordsOf,
   languageOf,
   MAX_KEYWORDS,
+  queueFullError,
+  requireQueueRoom,
   textField,
 } from "./jobs.ts";
 
@@ -220,6 +222,7 @@ function streamOpenAI(r: Rendered, diarized: boolean): Response {
 async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
   const jobs = jobsOf(c);
   const who = caller(c);
+  requireQueueRoom(jobs, who.id, null);
   const form = await formOf(c, jobs.uploadDir);
   // Every file but the job's is deleted, and the job's too when the request is refused first.
   let kept: SpooledFile | undefined;
@@ -272,6 +275,7 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     });
     // The job owns its file from here, and deletes it when it is removed below.
     kept = file;
+    if ("full" in submitted) throw queueFullError(submitted.full);
     if ("conflict" in submitted) throw new Error("a job with no idempotency key cannot conflict");
     const id = submitted.job.id;
     // Synchronous: no idle cut while the queue and the pass run; a caller that hangs up cancels.
