@@ -1,6 +1,6 @@
 # Positioning
 
-akou is an open-source alternative to [Granola](https://www.granola.ai). It keeps Granola's loop of capture without a bot, rough notes during the call and clean notes after, and runs the rest on hardware and accounts you own: local transcription, your own Claude Code or Codex as the brain, notes in your own tools, on macOS, Windows and Linux or as a [server you host](ux/SERVER.md).
+akou is an open-source alternative to [Granola](https://www.granola.ai). It keeps Granola's loop of capture without a bot, rough notes during the call and clean notes after, and runs the rest on hardware and accounts you own. Transcription is local. Your own AI agent in the terminal follows and questions the call through MCP or the `akou` command, whether it is Claude Code, Codex or any other. The built-in brain uses your Claude Code or Codex subscription or any OpenAI-compatible or Anthropic endpoint. Notes land in your own tools, on macOS, Windows and Linux, or on a [server you host](ux/SERVER.md).
 
 ## Who akou is for
 
