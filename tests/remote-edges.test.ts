@@ -304,6 +304,76 @@ describe("secret flags and the key file", () => {
     );
   });
 
+  test("AKOU_URL with a user name or password is refused, and the password is never printed", async () => {
+    const url = "http://alice:hunter2@127.0.0.1:9";
+    for (const u of [url, "http://alice@127.0.0.1:9", "http://:hunter2@127.0.0.1:9"]) {
+      const err = (() => {
+        try {
+          remoteTarget({ AKOU_URL: u, AKOU_API_KEY: "k" });
+        } catch (e) {
+          return e as TargetError;
+        }
+        throw new Error(`${u} was accepted`);
+      })();
+      expect(err).toBeInstanceOf(TargetError);
+      expect(err.exit).toBe(EXIT.usage);
+      expect(err.message).toContain("AKOU_API_KEY");
+      expect(err.message).not.toContain("hunter2");
+    }
+    for (const argv of [
+      ["jobs", "list"],
+      ["jobs", "list", "--json"],
+    ]) {
+      const r = await cli(env({ AKOU_URL: url, AKOU_API_KEY: "k" }), argv);
+      expect(r.code).toBe(EXIT.usage);
+      expect(`${r.out}\n${r.err}`).not.toContain("hunter2");
+    }
+    // Positive control: the same address with no user name is taken as given.
+    expect(remoteTarget({ AKOU_URL: "http://127.0.0.1:9", AKOU_API_KEY: "k" })?.base).toBe(
+      "http://127.0.0.1:9",
+    );
+  });
+
+  test("a 401 from a remote when no key was set names AKOU_API_KEY and AKOU_API_KEY_FILE", async () => {
+    const seen: string[] = [];
+    const guard = Bun.serve({
+      hostname: "127.0.0.1",
+      port: 0,
+      fetch(req) {
+        const auth = req.headers.get("authorization") ?? "";
+        seen.push(auth);
+        if (auth !== "Bearer good") {
+          return Response.json(
+            { error: "unauthorized", message: "the key is missing or wrong" },
+            { status: 401 },
+          );
+        }
+        return Response.json({ jobs: [] });
+      },
+    });
+    try {
+      const base = `http://127.0.0.1:${guard.port}`;
+      const none = await cli(env({ AKOU_URL: base }), ["jobs", "list"]);
+      expect(none.code).toBe(EXIT.permission);
+      expect(none.err).toContain("the key is missing or wrong");
+      expect(none.err).toContain("AKOU_API_KEY_FILE");
+      const noneJson = await cli(env({ AKOU_URL: base }), ["jobs", "list", "--json"]);
+      expect(noneJson.code).toBe(EXIT.permission);
+      expect((noneJson.json as { error: string; message: string }).error).toBe("unauthorized");
+      expect((noneJson.json as { message: string }).message).toContain("AKOU_API_KEY_FILE");
+      // Positive controls: a wrong key that was sent gets the server's text alone, and the right
+      // key gets through; the request still went out with no key, as /v1/server needs none.
+      const wrong = await cli(env({ AKOU_URL: base, AKOU_API_KEY: "bad" }), ["jobs", "list"]);
+      expect(wrong.code).toBe(EXIT.permission);
+      expect(wrong.err).not.toContain("AKOU_API_KEY");
+      const good = await cli(env({ AKOU_URL: base, AKOU_API_KEY: "good" }), ["jobs", "list"]);
+      expect([good.code, good.out]).toEqual([EXIT.ok, "No jobs"]);
+      expect(seen[0]).toBe("Bearer");
+    } finally {
+      guard.stop(true);
+    }
+  });
+
   test("a blank AKOU_API_KEY does not hide the key in AKOU_API_KEY_FILE", () => {
     const t = tempDir();
     const file = join(t.dir, "remote.key");

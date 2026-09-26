@@ -121,6 +121,14 @@ export function remoteTarget(env: Record<string, string | undefined>): RemoteTar
       EXIT.usage,
     );
   }
+  // akou never uses basic auth, and every message names the base URL: a password there would be
+  // printed back. The URL is not echoed here for the same reason.
+  if (url.username || url.password) {
+    throw new TargetError(
+      "AKOU_URL must not carry a user name or password; the key goes in AKOU_API_KEY, or in a file named by AKOU_API_KEY_FILE",
+      EXIT.usage,
+    );
+  }
   const base = raw.replace(/\/+$/, "");
   // A blank AKOU_API_KEY (`-e AKOU_API_KEY=` in a compose file) falls through to the key file.
   const inline = env.AKOU_API_KEY?.trim();
@@ -273,6 +281,17 @@ export class ApiClient {
     try {
       body = JSON.parse(text);
     } catch {}
+    // No key was set, so the server's "missing or wrong" cannot say which variable to set. The
+    // request still goes out: `/v1/server` and `/healthz` need no key.
+    if (res.status === 401 && "base" in to && to.key === "") {
+      const b = (body !== null && typeof body === "object" ? body : {}) as Record<string, unknown>;
+      const msg = typeof b.message === "string" ? b.message : text.trim() || "HTTP 401";
+      body = {
+        error: "unauthorized",
+        ...b,
+        message: `${msg}; no key was set: set AKOU_API_KEY, or AKOU_API_KEY_FILE to a file that holds it`,
+      };
+    }
     return {
       status: res.status,
       body,
