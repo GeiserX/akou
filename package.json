@@ -11,7 +11,8 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.ui.json",
     "test": "bun test",
     "test:ui": "bun test --path-ignore-patterns='nothing/**' --timeout 60000 ./tests/ui/",
-    "build:ui": "bun src/main/window/bundle.ts"
+    "build:ui": "bun src/main/window/bundle.ts",
+    "openapi": "bun scripts/openapi.ts"
   },
   "devDependencies": {
     "@biomejs/biome": "2.5.14",
