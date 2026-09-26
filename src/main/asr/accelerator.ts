@@ -10,12 +10,14 @@
  *
  * What can run is the builds this install has: in an image, the ones it carries
  * (`AKOU_ACCELERATORS`, set by the Dockerfile per variant, since the drivers are in the image);
- * natively, every build the pinned release has for the platform (llama-builds.ts).
+ * natively, every build of the platform in llama-catalog.ts's table, the same table the best
+ * preset downloads its build from, so the choice made here is always a build that exists.
  *
  * Then the build itself is asked: `llama-server --list-devices` lists the devices its backend can
  * really open. A GPU it does not list (a render node the container user cannot open, a missing
  * driver) turns the choice into the CPU, with the reason, so `GET /v1/server` never claims a GPU
- * nothing runs on. Mesa's software renderer, llvmpipe, is a CPU and never counts.
+ * nothing runs on. Mesa's software renderer, llvmpipe, is a CPU and never counts. A native
+ * install has no build to ask until the best preset first unpacks one; the app asks it then.
  *
  * Speech engines on ONNX Runtime stay on the CPU: sherpa-onnx's npm packages are CPU builds on
  * Linux and Windows, and the Nemotron diarizer (100M parameters) and Parakeet (0.6B) already run
@@ -24,8 +26,8 @@
 
 import { accessSync, constants, existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { LLAMA_RELEASE, llamaAccelerators, llamaServerName } from "./llama-builds.ts";
-import { llamaBuildId } from "./llama-catalog.ts";
+import { llamaAccelerators, llamaServerName } from "./llama-builds.ts";
+import { LLAMA_RELEASE, llamaBuildId } from "./llama-catalog.ts";
 import { ACCELERATORS, type Accelerator, hostPlatform } from "./models.ts";
 
 export const ACCELERATOR_SETTINGS = ["auto", ...ACCELERATORS] as const;

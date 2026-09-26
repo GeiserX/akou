@@ -236,7 +236,7 @@ To see what it chose:
 curl -s http://127.0.0.1:8476/v1/server | jq '.gpu, .accelerator'
 ```
 
-`gpu` is `vulkan`, `cuda`, `metal` or null for the CPU. `accelerator.device` is the GPU's name as llama-server lists it, `verified` is true once llama-server itself confirmed the device, and `reason` says why when it runs on the CPU. The setting `asr.accelerator` overrides the choice: `auto` (the default), `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or `rocm`, also as the environment variable `AKOU_ACCELERATOR`. `auto` never picks SYCL or ROCm, which need Intel's oneAPI or AMD's ROCm runtime on the host; Vulkan runs the same cards. OpenVINO is not offered: its llama.cpp backend does not run speech models yet.
+`gpu` is the GPU backend (`metal`, `vulkan`, `cuda`, `sycl` or `rocm`) or null for the CPU. `accelerator.device` is the GPU's name as llama-server lists it, `verified` is true once llama-server itself confirmed the device, and `reason` says why when it runs on the CPU. The setting `asr.accelerator` overrides the choice: `auto` (the default), `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or `rocm`, also as the environment variable `AKOU_ACCELERATOR`. `auto` never picks SYCL or ROCm, which need Intel's oneAPI or AMD's ROCm runtime on the host; Vulkan runs the same cards. OpenVINO is not offered: its llama.cpp backend does not run speech models yet.
 
 The GPU runs the `best` preset's Qwen3-ASR ([The best preset](#the-best-preset)); Parakeet (`fast`) stays on the CPU, where it already runs far faster than real time.
 
@@ -257,12 +257,14 @@ Where it runs is `asr.accelerator`:
 |---|---|---|
 | A Mac with Apple silicon, akou run natively (`akou serve`) | `auto` (the default) | Metal. On a Mac mini M4 a 10-minute meeting with speaker labels took 94 s, a real-time factor of 0.16 |
 | The Docker image, any Linux box | `auto` | The GPU the image can open, else the CPU: the `-vulkan` image on an Intel or AMD GPU, the `-cuda` image on NVIDIA ([A GPU](#a-gpu)). The plain image runs the CPU, several times slower |
-| Linux or Windows, akou run natively, with an NVIDIA card | `auto` or `cuda` | llama.cpp's CUDA build, downloaded with Qwen. On Linux the host needs the CUDA 12 runtime; on Windows akou downloads it with the build |
+| Linux or Windows, akou run natively, with an NVIDIA card | `auto` or `cuda` | llama.cpp's CUDA build and NVIDIA's CUDA runtime, both downloaded with Qwen, so the host needs only the driver |
 | Linux or Windows, akou run natively, with an Intel or AMD GPU | `auto` or `vulkan` | llama.cpp's Vulkan build, through the GPU's Vulkan driver (Mesa on Linux) |
+| Linux or Windows x64, akou run natively, with Intel's oneAPI or AMD's ROCm installed | `sycl` or `rocm` | llama.cpp's SYCL or ROCm build, downloaded with Qwen. `auto` never picks these |
+| Any machine, akou run natively | `cpu` | llama.cpp's CPU build (on a Mac, the Metal build with no GPU device) |
 
 Docker on a Mac has no Metal, so on a Mac run akou natively rather than in a container. A server elsewhere on the network (a Telegram-Archive box, for example) then reaches it by URL and key like any client.
 
-`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda` or `cpu`), and `gpu` and `accelerator` say which GPU was found and why. A setting with no build for the platform (`metal` on Linux) runs on what `auto` finds, the CPU when there is no GPU, and the server log says so. For a GPU llama.cpp publishes no build for, such as Intel's SYCL or AMD's ROCm, build `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
+`GET /v1/server` shows where Qwen runs, in the `provider` of its entry in `engines` (`metal`, `vulkan`, `cuda`, `sycl`, `rocm` or `cpu`), and `gpu` and `accelerator` say which GPU was found and why. A setting with no build here (`metal` on Linux, or `sycl` in an image) runs on what `auto` finds, the CPU when there is no GPU, and `accelerator.reason` says so. Natively, akou asks the build which devices it can open once `best` has downloaded it; a GPU it cannot open runs on the CPU build. For a build akou does not pin, compile `llama-server` on the machine and name it in `asr.llamaServer` in `config.json` (for example `["/opt/llama.cpp/build/bin/llama-server"]`); akou adds the model and port arguments.
 
 ### A large backlog
 
