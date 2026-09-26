@@ -7,6 +7,7 @@
 import { describe, expect, test } from "bun:test";
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { INSTANCE_ID } from "../src/core/log/writer.ts";
 import { type ModelSpecEntry, NEMOTRON } from "../src/main/asr/models.ts";
 import { AlreadyRunningError, APP_LOCK, startApp } from "../src/main/index.ts";
 import { type AppRig, appRig, FAKE_HELPER, FAKE_MODELS, writeSettings } from "./api-helpers.ts";
@@ -41,7 +42,7 @@ describe("single instance", () => {
     writeFileSync(join(t.dir, ".config", "akou", APP_LOCK), "2147483646\n");
     const app = await startApp({ env: { AKOU_HOME: t.dir }, models: null, onLog: () => {} });
     expect(readFileSync(join(t.dir, ".config", "akou", APP_LOCK), "utf8").trim()).toBe(
-      String(process.pid),
+      `${process.pid} ${INSTANCE_ID}`,
     );
     await app.quit();
     t.cleanup();

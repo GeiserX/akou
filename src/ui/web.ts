@@ -45,6 +45,64 @@ async function openSession(): Promise<string | null> {
   return sessionStorage.getItem(SESSION_KEY);
 }
 
+/**
+ * Server mode's admin login (docs/ux/SERVER.md SV-U1): with no code and no session, the page asks
+ * for the admin password or an `admin` key and trades it for a session, kept in `sessionStorage`
+ * like any other, so it dies with the tab. Null when this akou has no login (the app on loopback).
+ */
+async function login(): Promise<string | null> {
+  let offered = false;
+  try {
+    const r = await fetch("/session");
+    offered = r.ok && ((await r.json()) as { login?: boolean }).login === true;
+  } catch {}
+  if (!offered) return null;
+  loginMode = true;
+  const form = document.getElementById("login") as HTMLFormElement;
+  const input = document.getElementById("login-secret") as HTMLInputElement;
+  const go = document.getElementById("login-go") as HTMLButtonElement;
+  const error = document.getElementById("login-error") as HTMLElement;
+  form.hidden = false;
+  input.focus();
+  return new Promise((resolve) => {
+    form.addEventListener("submit", (e) => {
+      e.preventDefault();
+      void (async () => {
+        const secret = input.value;
+        go.disabled = true;
+        error.textContent = "";
+        try {
+          const r = await fetch("/session", {
+            method: "POST",
+            headers: { "content-type": "application/json" },
+            body: JSON.stringify(secret.startsWith("ak_") ? { key: secret } : { password: secret }),
+          });
+          if (r.ok) {
+            const { session } = (await r.json()) as { session: string };
+            sessionStorage.setItem(SESSION_KEY, session);
+            sessionStorage.setItem(LOGIN_KEY, "1");
+            input.value = "";
+            form.hidden = true;
+            resolve(session);
+            return;
+          }
+          error.textContent =
+            r.status === 401 ? "Wrong password or key." : `The login failed (HTTP ${r.status}).`;
+        } catch {
+          error.textContent = "akou did not answer.";
+        } finally {
+          go.disabled = false;
+        }
+        input.select();
+      })();
+    });
+  });
+}
+
+/** This tab logged in with a password or key (server mode), not with a one-time code. */
+const LOGIN_KEY = "akou.login";
+let loginMode = sessionStorage.getItem(LOGIN_KEY) === "1";
+
 class HttpTransport implements Transport {
   readonly kind = "browser" as const;
 
@@ -180,11 +238,16 @@ function sessionEnded(): void {
   if (ended) return;
   ended = true;
   sessionStorage.removeItem(SESSION_KEY);
+  // In server mode the way back in is the login, which a reload shows.
+  if (loginMode) {
+    location.reload();
+    return;
+  }
   showFatal("This window's session has ended (akou restarted). Run `akou open` for a new one.");
 }
 
 void (async () => {
-  const session = await openSession();
+  const session = (await openSession()) ?? (await login());
   if (!session) {
     showFatal("This link was used already or has expired. Run `akou open` for a new one.");
     return;

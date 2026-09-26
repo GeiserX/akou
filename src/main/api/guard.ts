@@ -15,9 +15,14 @@
  *    which holds no secrets and which Executor fetches with no credentials. Its tests, with their
  *    positive control, are in `tests/openapi.test.ts` and `tests/scopes.test.ts`.
  * 4. Every method but GET and HEAD needs `Content-Type: application/json`; bodies are capped at
- *    64 KB. (Unknown body fields are refused by each route's body spec.)
+ *    64 KB. (Unknown body fields are refused by each route's body spec.) A route that takes an
+ *    upload wants `multipart/form-data` instead, up to `server.max_upload_mb` (SV-D3).
  *
- * No CORS header is ever sent, and the server binds 127.0.0.1 only (`server.ts`).
+ * An `open` route (`/healthz`, `GET /v1/server`) needs no token; the other rules still hold. The
+ * caller's scope is checked against the route's access before the body rules (`access.ts`).
+ *
+ * No CORS header is ever sent, and the app binds 127.0.0.1 only (`server.ts`). Server mode uses
+ * `serverGuard` instead: per-key auth, a `Host` rule for a proxy, and browsers allowed (SV-D2).
  */
 
 import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
@@ -37,7 +42,7 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { RouteMeta } from "./access.ts";
+import { APP_IDENTITY, allows, type GuardRoute, type Identity } from "./access.ts";
 
 export const TOKEN_FILE = "token";
 export const MAX_BODY_BYTES = 64 * 1024;
@@ -48,15 +53,36 @@ export interface GuardContext {
   port: number;
   /** The bearer token. */
   token: string;
-  /** The route asked for, from the route table; an unknown path is checked as `admin` (`ADMIN_ROUTE`). */
-  route: RouteMeta;
+  /**
+   * The route asked for, from the route table (`routeMeta` in `server.ts`); an unknown path is
+   * checked as `UNKNOWN_ROUTE` (any key).
+   */
+  route: GuardRoute;
+  /** The largest body an upload route takes, bytes (`server.max_upload_mb`). */
+  maxUploadBytes: number;
+  /** Where the request came from (`sourceAddress`), for the audit of a refusal. */
+  source: string;
 }
 
-/** Answers a refused request, or null to let it through. */
-export type Guard = (req: Request, ctx: GuardContext) => Response | null;
+/** A refusal, or who is calling: null on an `open` route reached with no key. */
+export type GuardResult = { refused: Response } | { identity: Identity | null };
 
-function refuse(status: number, error: string, message: string): Response {
-  return Response.json({ error, message }, { status });
+export type Guard = (req: Request, ctx: GuardContext) => GuardResult;
+
+function refuse(status: number, error: string, message: string): { refused: Response } {
+  return { refused: Response.json({ error, message }, { status }) };
+}
+
+function unauthorized(): { refused: Response } {
+  return {
+    refused: new Response(
+      JSON.stringify({ error: "unauthorized", message: "a valid bearer token is required" }),
+      {
+        status: 401,
+        headers: { "content-type": "application/json", "www-authenticate": "Bearer" },
+      },
+    ),
+  };
 }
 
 /** Constant-time comparison of two strings of any length. */
@@ -64,6 +90,61 @@ export function tokenMatches(given: string, expected: string): boolean {
   const a = createHash("sha256").update(given).digest();
   const b = createHash("sha256").update(expected).digest();
   return timingSafeEqual(a, b) && given.length === expected.length;
+}
+
+function bearerOf(req: Request): string | null {
+  const m = /^Bearer (\S+)$/.exec(req.headers.get("authorization") ?? "");
+  return m ? (m[1] as string) : null;
+}
+
+/**
+ * SV-K3: the caller's scope reaches the route (`allows`), checked before the body rules, so a
+ * `jobs` key learns it has no business on an admin route whatever it sends.
+ */
+function scopeRule(
+  req: Request,
+  identity: Identity | null,
+  ctx: GuardContext,
+): { refused: Response } | null {
+  if (allows(identity, ctx.route.access)) return null;
+  return refuse(
+    403,
+    "forbidden",
+    `this key's scope does not reach ${req.method} ${new URL(req.url).pathname}; it needs ${ctx.route.access}`,
+  );
+}
+
+/**
+ * Rule 4, with the one exception of SV-D3: a route that takes an upload wants
+ * `multipart/form-data` and takes up to `maxUploadBytes`; every other route wants JSON and 64 KB.
+ */
+function bodyRule(req: Request, ctx: GuardContext): { refused: Response } | null {
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    const type = (req.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
+    if (ctx.route.upload) {
+      if (type !== "multipart/form-data") {
+        return refuse(
+          415,
+          "multipart_required",
+          "an upload needs Content-Type: multipart/form-data",
+        );
+      }
+    } else if (type !== "application/json") {
+      return refuse(
+        415,
+        "json_required",
+        "requests that change something need Content-Type: application/json",
+      );
+    }
+  }
+  // A declared size over the limit is refused before a byte of the body is read; a body that is
+  // chunked, or lies about its size, is cut off at the same limit by `readBody`.
+  const cap = ctx.route.upload ? ctx.maxUploadBytes : MAX_BODY_BYTES;
+  const length = Number(req.headers.get("content-length") ?? "0");
+  if (length > cap) {
+    return refuse(413, "body_too_large", `bodies are capped at ${cap} bytes`);
+  }
+  return null;
 }
 
 export const guard: Guard = (req, ctx) => {
@@ -76,38 +157,89 @@ export const guard: Guard = (req, ctx) => {
       return refuse(403, "browser_request", `requests from a browser are refused (${h})`);
     }
   }
-  const auth = req.headers.get("authorization") ?? "";
-  const m = /^Bearer (\S+)$/.exec(auth);
-  if (ctx.route.access !== "open" && (!m || !tokenMatches(m[1] as string, ctx.token))) {
-    return new Response(
-      JSON.stringify({ error: "unauthorized", message: "a valid bearer token is required" }),
-      {
-        status: 401,
-        headers: { "content-type": "application/json", "www-authenticate": "Bearer" },
-      },
-    );
+  let identity: Identity | null = null;
+  if (ctx.route.access !== "open") {
+    const given = bearerOf(req);
+    if (given === null || !tokenMatches(given, ctx.token)) return unauthorized();
+    identity = APP_IDENTITY;
   }
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    const type = (req.headers.get("content-type") ?? "").split(";")[0]?.trim().toLowerCase();
-    if (type !== "application/json") {
-      return refuse(
-        415,
-        "json_required",
-        "requests that change something need Content-Type: application/json",
-      );
-    }
-  }
-  // A declared size over the limit is refused before a byte of the body is read; a body that is
-  // chunked, or lies about its size, is cut off at the same limit by `readBody`.
-  const length = Number(req.headers.get("content-length") ?? "0");
-  if (length > MAX_BODY_BYTES) {
-    return refuse(413, "body_too_large", `bodies are capped at ${MAX_BODY_BYTES} bytes`);
-  }
-  return null;
+  return scopeRule(req, identity, ctx) ?? bodyRule(req, ctx) ?? { identity };
 };
 
+export interface ServerGuardOptions {
+  /** `server.public_host`: when set, the one Host accepted besides loopback. */
+  publicHost: string;
+  /** `server.behind_proxy`: with no public host, any Host is accepted. */
+  behindProxy: boolean;
+  keys: { authenticate(bearer: string): Identity | null; touch(id: string): void };
+  /**
+   * A request refused for the key it carried, for the audit (SV-K6): where from, and the key's
+   * first bytes when it is an `ak_` key (else ""; a client may send another service's secret). A
+   * request with no key is not reported: a scanner would grow the log by a line a request.
+   */
+  onRefused?(r: { source: string; keyPrefix: string; path: string }): void;
+}
+
+/**
+ * Rule 3 in server mode (SV-D2): `Host` must be `server.public_host` when it is set, or anything
+ * when `server.behind_proxy` is on, or loopback. A loopback Host on akou's port is always accepted:
+ * DNS rebinding makes a browser send the attacker's name, never `127.0.0.1`, and the CLI on the
+ * same box talks to the server that way.
+ */
+export function serverHostAllowed(
+  host: string | null,
+  port: number,
+  o: Pick<ServerGuardOptions, "publicHost" | "behindProxy">,
+): boolean {
+  if (host === null) return false;
+  const h = host.trim().toLowerCase();
+  if (h === `127.0.0.1:${port}` || h === `localhost:${port}`) return true;
+  const pub = o.publicHost.trim().toLowerCase();
+  if (pub !== "") {
+    if (h === pub) return true;
+    // A public host named without a port matches that name on any port the proxy uses.
+    return !pub.includes(":") && h.replace(/:\d+$/, "") === pub;
+  }
+  return o.behindProxy;
+}
+
+/**
+ * The guard of server mode (docs/ux/SERVER.md SV-D2, SV-K2, SV-K3): per-key auth instead of the
+ * one token, the Host rule above, and browser headers allowed, because a browser is a legitimate
+ * client of the web UI on the network; the web UI's own door is the admin login (SV-U1). The
+ * bearer is the app's token (`admin`, SV-K3) or an `ak_` key. The scope is checked after, in one
+ * place, against the route's access (`allows`).
+ */
+export function serverGuard(o: ServerGuardOptions): Guard {
+  return (req, ctx) => {
+    if (!serverHostAllowed(req.headers.get("host"), ctx.port, o)) {
+      return refuse(403, "bad_host", "Host must be server.public_host, or loopback");
+    }
+    const given = bearerOf(req);
+    let identity: Identity | null = null;
+    if (given !== null) {
+      if (tokenMatches(given, ctx.token)) identity = APP_IDENTITY;
+      else {
+        identity = o.keys.authenticate(given);
+        if (identity) o.keys.touch(identity.id);
+      }
+    }
+    if (identity === null && ctx.route.access !== "open") {
+      if (given !== null) {
+        o.onRefused?.({
+          source: ctx.source,
+          keyPrefix: given.startsWith("ak_") ? given.slice(0, 7) : "",
+          path: new URL(req.url).pathname,
+        });
+      }
+      return unauthorized();
+    }
+    return scopeRule(req, identity, ctx) ?? bodyRule(req, ctx) ?? { identity };
+  };
+}
+
 /** No checks at all. Only the security tests' positive control uses it; no setting reaches it. */
-export const openGuard: Guard = () => null;
+export const openGuard: Guard = () => ({ identity: APP_IDENTITY });
 
 // ---------------------------------------------------------------------------
 // The token file
@@ -125,6 +257,15 @@ export function newToken(): string {
  * then gets the bytes; a rename keeps that ACL.
  */
 function writeTokenFile(path: string, token: string, replace: boolean): boolean {
+  return writePrivateFile(path, `${token}\n`, replace);
+}
+
+/**
+ * The token file's atomic, private write for any secret file (the keys file too, SV-K2): `text`
+ * lands whole with mode 0600 (or a user-only ACL) from its creation, or not at all. With `replace`
+ * false it is created only if absent, and false says another writer won.
+ */
+export function writePrivateFile(path: string, text: string, replace: boolean): boolean {
   const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
   const fd = openSync(tmp, "wx", 0o600);
   try {
@@ -133,7 +274,7 @@ function writeTokenFile(path: string, token: string, replace: boolean): boolean 
       if (process.platform === "win32" && !restrictToUser(tmp)) {
         throw new Error(`could not restrict ${tmp} to the current user`);
       }
-      writeSync(fd, `${token}\n`);
+      writeSync(fd, text);
     } finally {
       closeSync(fd);
     }

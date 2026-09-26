@@ -310,6 +310,7 @@ body:not(.busy) .busy {
 #final,
 #models-card,
 #fatal,
+#login,
 .confirm-row {
   flex: none;
   padding: 6px 24px;
@@ -331,6 +332,9 @@ body:not(.busy) .busy {
 }
 #final.done {
   color: var(--ok);
+}
+#login-error {
+  color: var(--rec);
 }
 #fatal {
   background: var(--rec);

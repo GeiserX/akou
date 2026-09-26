@@ -45,6 +45,7 @@
   </fieldset>
 </header>
 <div id="fatal" role="alert" hidden></div>
+<form id="login" aria-label="Admin login" hidden><label for="login-secret">Admin password or admin key</label> <input id="login-secret" type="password" autocomplete="current-password" required> <button id="login-go" class="go" type="submit">Log in</button> <span id="login-error" role="alert"></span></form>
 <div id="banner" role="status" hidden><span id="banner-text"></span> <button id="banner-action" type="button" hidden></button></div>
 <section id="models-card" aria-label="Speech models" hidden><span id="models-text"></span> <progress id="models-progress" max="1" value="0" hidden></progress> <button id="models-pull" class="go" type="button">Download speech models</button></section>
 <div id="final" hidden><span id="final-text"></span> <progress id="final-progress" max="1" value="0" hidden></progress> <span id="handoff"></span></div>
