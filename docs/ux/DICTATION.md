@@ -438,19 +438,26 @@ The protocol is `akou-dictate/1`: JSON lines on stderr and stdin like `akou-capt
 
 | Direction | Message | Meaning |
 |---|---|---|
-| helper to app | `ready {grants: {mic, accessibility}, backend, swallow_keys}` | up, with what it can do; `swallow_keys` is false on the portal and CLI backends (DC-A4) |
+| helper to app | `ready {protocol, version, grants: {mic, accessibility}, backend, swallow_keys}` | up, with what it can do; a grant is `granted`, `denied` or `not-needed`; `swallow_keys` is false on the portal and CLI backends (DC-A4) |
 | helper to app | `session.started {id, target: {app, pid, window, field: editable\|not-editable\|unknown\|secure}, capture_ns}` | the key went down and audio is flowing, pre-roll included |
 | helper to app | `level {rms}` | for the meter, 20 per second |
-| helper to app | `key {name}` | Escape, Enter or Shift+Enter during a session; any key, Fn included, while the recorder is open (DC-U3) |
+| helper to app | `key {name}` | Escape, Enter or Shift+Enter during a session and until its insert settles; the hotkey's name when it is pressed while a session is still transcribing (DC-A4's flash); any key, Fn included, while the recorder is open (DC-U3) |
 | helper to app | `grant.lost {name}` | a grant present at `ready` is gone (DC-N1) |
-| helper to app | `session.ended {id, reason: release\|tap\|cancel\|silence\|max}` | audio stops after the post-roll |
+| helper to app | `session.ended {id, reason: release\|tap\|key\|cancel\|silence\|max\|stop}` | audio stops after the post-roll; `key` is Enter or Shift+Enter ending it (the `key` line comes first), `cancel` and `stop` end at once |
 | helper to app | `inserted {id, method, receipt_ms}` or `insert.failed {id, reason}` | the result of an insert |
 | helper to app | `edit {id, hunks: [...]}` or `edit.unreadable {id, reason}` | DC-L2's read-back |
 | helper to app | `secure_input {on}` | Secure Input changed; the app tells the pill |
+| helper to app | `mic {open}` | the warm stream opened or closed (DC-N4) |
+| helper to app | `rebound {hotkey}` or `rebind.failed {hotkey, reason}` | the answer to `rebind`; on a refusal the old binding stays (DC-A7) |
+| helper to app | `warn {code, msg}`, `stopped {reason}` | as the capture protocol |
 | app to helper | `rebind {hotkey, draft, fixLast, pasteLast, activation}` | DC-A7 |
 | app to helper | `insert {id, text, method, send_key, target}` | insert this text where the session began |
+| app to helper | `settled {id}` | this session will not be inserted (empty, drafted, cancelled while transcribing): stop swallowing Escape and Enter now rather than after 8 s |
 | app to helper | `focus {target}` | return focus to the target after the draft box |
+| app to helper | `session.start`, `session.stop`, `session.cancel` | the tray's and the CLI's door (DC-G1, DC-G3): a latched session, as if the key were tapped |
 | app to helper | `rebuild_mic {device}`, `warm {mode}`, `record_keys {on}`, `stop` | as the capture protocol; `record_keys` streams `key` for the recorder |
+
+Every line in both directions is one JSON object tagged by `type`; a `capture_ns` is a decimal string. The helper's side, with the exact field names, is [dictate/protocol.rs](../../native/akou-capture/src/dictate/protocol.rs).
 
 Crates: `handy-keys` 0.3.4 (MIT) for hotkeys on the three OSes including evdev on Linux, `enigo` 0.6 (MIT) for typing and chords, Handy's `paste_tx` receipt logic ported with its notice, and akou-capture's own capture path. Each crate's reason is written in the commit that adds it.
 
