@@ -3151,7 +3151,7 @@
         "tags": [
           "server"
         ],
-        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, and which capabilities (jobs, events, the OpenAI route) exist. Needs no key.",
+        "description": "What this akou is and can do: its version and mode, the presets and whether each is available, the engines, which capabilities (jobs, events, the OpenAI route) exist, and `retain_days`, the days a finished job and its result are kept before akou deletes them (`server.retain_days`). Needs no key.",
         "responses": {
           "200": {
             "description": "OK",
