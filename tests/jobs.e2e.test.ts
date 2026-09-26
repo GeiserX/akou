@@ -457,6 +457,44 @@ describe("SV-J2: Idempotency-Key", () => {
     }
   });
 
+  test("keywords in another order and a language in another case are the same request", async () => {
+    const rig = await appRig({ settings: SERVER });
+    try {
+      const k = await newKey(rig, "normalised");
+      const idem = { "idempotency-key": "normalised-1" };
+      // The row keeps the options as sent, the way every job before this change stored them.
+      const first = await submit(
+        rig,
+        k.key,
+        NOTE,
+        { language: "ES", "keywords[]": ["b", "a"] },
+        idem,
+      );
+      expect(first.status).toBe(202);
+      const retries = [
+        { language: "ES", "keywords[]": ["b", "a"] },
+        { language: "es", "keywords[]": ["a", "b"] },
+        { language: "Es", "keywords[]": ["a", "b", "a"] },
+      ];
+      for (const fields of retries) {
+        const r = await submit(rig, k.key, NOTE, fields, idem);
+        expect(`${r.status} ${r.body.id}`).toBe(`200 ${first.body.id}`);
+      }
+      // A real change still conflicts.
+      const other = await submit(
+        rig,
+        k.key,
+        NOTE,
+        { language: "en", "keywords[]": ["a", "c"] },
+        idem,
+      );
+      expect([other.status, other.body.fields]).toEqual([422, ["language", "keywords"]]);
+      await call(rig, k.key, "GET", `/jobs/${first.body.id}?wait=60`);
+    } finally {
+      await rig.close();
+    }
+  });
+
   test("[akou-5an.98] the options survive a restart; a job stored before them is compared by file only", async () => {
     const home = tempDir("akou-jobs-idem-");
     const first = await appRig({ settings: SERVER, home: home.dir });
