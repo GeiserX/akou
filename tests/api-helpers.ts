@@ -75,7 +75,21 @@ export interface RigOptions {
   jobs?: AppOptions["jobs"];
   /** The capture engine, instead of the helper `capture.helper` names. */
   engine?: CaptureEngine;
+  /** The machine `asr.accelerator` reads; by default a Linux box with no GPU, whatever runs the test. */
+  accelerator?: AppOptions["accelerator"];
 }
+
+/** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
+export const NO_GPU: NonNullable<AppOptions["accelerator"]> = {
+  probe: {
+    platform: "linux-x64",
+    env: {},
+    exists: () => false,
+    read: () => null,
+    list: () => [],
+    usable: () => false,
+  },
+};
 
 /** A WAV the fake recognizer reads as words: "hello world" on the mic, "ok great" on the call. */
 export function speechWav(dir: string): string {
@@ -124,6 +138,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     clock: o.clock,
     jobs: o.jobs,
     engine: o.engine,
+    accelerator: o.accelerator ?? NO_GPU,
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

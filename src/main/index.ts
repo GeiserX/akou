@@ -63,6 +63,15 @@ import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
+import {
+  type AcceleratorSetting,
+  type AcceleratorState,
+  detectAccelerator,
+  hostProbe,
+  llamaServerBin,
+  type Probe,
+  verifyAccelerator,
+} from "./asr/accelerator.ts";
 import type { DiarizerKind, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
@@ -235,6 +244,14 @@ export interface AppOptions {
    */
   jobs?: Pick<JobServiceOptions, "decode" | "delivery" | "now"> & {
     modelStore?: Pick<ModelStoreOptions, "retryMs" | "freeBytes" | "fetch">;
+  };
+  /**
+   * What `asr.accelerator` reads of the machine, and how llama-server is asked for its devices
+   * (akou-5an.94). Tests pass a fake machine; by default the real one and the real binary.
+   */
+  accelerator?: {
+    probe?: Probe;
+    run?: (bin: string) => Promise<{ output?: string; error?: string }>;
   };
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
@@ -422,6 +439,8 @@ export class AkouApp implements ApiApp {
   private readonly keyStore: KeyStore | null;
   /** File jobs; server mode only (docs/ux/SERVER.md section 5). */
   private jobService: JobService | null = null;
+  /** The GPU llama-server runs on: detected at start, then confirmed by the build itself. */
+  private accel: AcceleratorState | null = null;
 
   constructor(
     private readonly o: AppOptions,
@@ -1686,6 +1705,30 @@ export class AkouApp implements ApiApp {
     return this.jobService?.depth() ?? 0;
   }
 
+  accelerator(): AcceleratorState | null {
+    return this.accel;
+  }
+
+  /**
+   * Reads the machine once for `asr.accelerator`, then asks the llama-server build which devices
+   * it can open, behind the API: until it answers, the choice is reported unverified.
+   */
+  private detectAccelerator(): void {
+    const s = this.cfg.settings;
+    const probe = this.o.accelerator?.probe ?? hostProbe(this.o.env ?? process.env);
+    const first = detectAccelerator(s["asr.accelerator"] as AcceleratorSetting, probe);
+    this.accel = first;
+    const bin = llamaServerBin(probe, s["asr.modelsDir"], first.active);
+    void verifyAccelerator(first, bin, this.o.accelerator?.run).then((st) => {
+      if (this.quitting) return;
+      this.accel = st;
+      this.log(
+        "info",
+        `accelerator ${st.active}${st.device ? ` (${st.device})` : ""}${st.verified ? "" : " unverified"}: ${st.reason}`,
+      );
+    });
+  }
+
   /**
    * The engine a file job runs for one recognizer id (SV-S1). The job service has checked its
    * files first. A recognizer given on purpose (tests) runs as given, or, with a test catalog, as
@@ -1840,6 +1883,7 @@ export class AkouApp implements ApiApp {
         ),
     });
     this.writeRuntime();
+    this.detectAccelerator();
     this.startJobs();
     // Recovery and the final-pass catch-up run behind the API, never before it.
     void this.manager

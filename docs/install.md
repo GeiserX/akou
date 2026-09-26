@@ -99,7 +99,7 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 ## The server
 
-akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64. There is no `latest` tag: name the version you want.
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `geiserx/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](#a-gpu)). There is no `latest` tag: name the version you want.
 
 Pull the models into their volume first, so the first start is not a 3.0 GB download. No server needs to run for this. Mount the data volume too: the pull reads `asr.diarizer` from the settings there, and without it an `embeddings` choice is ignored and it fetches Nemotron instead of pyannote. On a new volume, set `asr.diarizer` first with the `config.json` snippet below (`"asr.diarizer": "embeddings"` in place of `"server.behind_proxy": true`):
 
@@ -132,6 +132,43 @@ The server runs as an unprivileged user, keeps its settings, keys and jobs under
 Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That is `akou serve`, the same server in the foreground. The single-file `akou` CLI runs `akou serve` too, on Linux x64 and arm64 and on macOS. It carries no speech engine, so it answers the API but cannot transcribe, and it says so when it starts.
 
 `akou serve` binds every address by default too, so on a plain machine it refuses to start (exit 78) until you choose. Put `{ "api.bind": "127.0.0.1" }` in `~/.config/akou/config.json` to serve this machine only, or set `server.behind_proxy` to `true` once a reverse proxy with TLS is in front of it.
+
+### A GPU
+
+The large speech model, Qwen3-ASR, runs on llama-server, and a GPU makes it many times faster than the CPU. Every image carries a llama-server build, uses the GPU it can open, and falls back to the CPU. Pick the image for your GPU:
+
+| GPU | Image | Add to `docker run` |
+|---|---|---|
+| None | `geiserx/akou:<version>` | Nothing |
+| Intel (integrated or Arc) or AMD | `geiserx/akou:<version>-vulkan` | `--device /dev/dri --group-add $(stat -c %g /dev/dri/renderD128)` |
+| NVIDIA | `geiserx/akou:<version>-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
+| Apple silicon | None: Docker on macOS has no GPU | Run akou on the Mac itself (`akou serve`); it uses Metal |
+
+`--group-add` gives the container's user the group that owns the render node on the host (`render` on most distributions). Without it the GPU is there but akou cannot open it, and it says so. In compose, the Vulkan image takes:
+
+```yaml
+    devices: ["/dev/dri:/dev/dri"]
+    group_add: ["993"] # the number `stat -c %g /dev/dri/renderD128` prints on the host
+```
+
+and the CUDA image:
+
+```yaml
+    deploy:
+      resources:
+        reservations:
+          devices: [{ driver: nvidia, count: all, capabilities: [gpu] }]
+```
+
+To see what it chose:
+
+```sh
+curl -s http://127.0.0.1:8476/v1/server | jq '.gpu, .accelerator'
+```
+
+`gpu` is `vulkan`, `cuda`, `metal` or null for the CPU. `accelerator.device` is the GPU's name as llama-server lists it, `verified` is true once llama-server itself confirmed the device, and `reason` says why when it runs on the CPU. The setting `asr.accelerator` overrides the choice: `auto` (the default), `cpu`, `metal`, `vulkan`, `cuda`, `sycl` or `rocm`, also as the environment variable `AKOU_ACCELERATOR`. `auto` never picks SYCL or ROCm, which need Intel's oneAPI or AMD's ROCm runtime on the host; Vulkan runs the same cards. OpenVINO is not offered: its llama.cpp backend does not run speech models yet.
+
+Only the choice and the report exist today. The Qwen engine that runs on the GPU is not built yet, so every job still runs Parakeet on the CPU.
 
 ### The command line against a server
 

@@ -46,7 +46,8 @@ export type Platform = (typeof PLATFORMS)[number];
 export const RUNTIMES = ["sherpa-onnx", "akou-diarize"] as const;
 export type Runtime = (typeof RUNTIMES)[number];
 
-export const ACCELERATORS = ["cpu", "metal", "cuda", "vulkan"] as const;
+/** The llama.cpp backends akou ships builds of (llama-builds.ts), in the order `asr.accelerator` lists them. */
+export const ACCELERATORS = ["cpu", "metal", "vulkan", "cuda", "sycl", "rocm"] as const;
 export type Accelerator = (typeof ACCELERATORS)[number];
 
 /** The interfaces of engine.ts an entry serves. */

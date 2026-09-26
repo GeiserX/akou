@@ -15,7 +15,8 @@
  * Parakeet decodes with beam search (TRAPS "The boost is a slider"), and a file that tries to set
  * one is told so.
  *
- * Environment: only `AKOU_HEADLESS`, `AKOU_SERVER`, `AKOU_MODELS_DIR` and `AKOU_HOME` exist.
+ * Environment: only `AKOU_HEADLESS`, `AKOU_SERVER`, `AKOU_MODELS_DIR`, `AKOU_ACCELERATOR` and `AKOU_HOME`
+ * exist.
  * `AKOU_HOME` is not a setting: it moves the home folder itself (config and recordings), for tests.
  */
 
@@ -23,6 +24,7 @@ import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { parseCidr } from "../api/net.ts";
+import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
@@ -337,6 +339,13 @@ export const SETTINGS = {
     values: ["nemotron", "embeddings"],
     default: "nemotron",
     doc: "Who speaks when on the call channel: `nemotron` (NVIDIA Nemotron 3 Diarization, live at 2 s latency and in the final pass, through the akou-diarize helper) or `embeddings` (voice-embedding clusters live, pyannote in the final pass). `akou models pull` fetches what the choice needs; takes effect at the next start.",
+  },
+  "asr.accelerator": {
+    type: "string",
+    values: ACCELERATOR_SETTINGS,
+    default: "auto",
+    env: "AKOU_ACCELERATOR",
+    doc: "The GPU the large speech model (Qwen3-ASR, on llama-server) runs on: `auto`, `cpu`, `metal`, `vulkan` (Intel and AMD, and NVIDIA without CUDA), `cuda`, `sycl` (Intel oneAPI) or `rocm` (AMD). `auto` picks Metal on Apple silicon, CUDA for an NVIDIA card, Vulkan for an Intel or AMD GPU, else the CPU, and never SYCL or ROCm. A build that cannot open the GPU falls back to the CPU; `GET /v1/server` says which runs and why. Takes effect at the next start.",
   },
   "asr.parakeet.decoding": {
     type: "string",
