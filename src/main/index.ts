@@ -118,6 +118,7 @@ import {
   type EngineVerdict,
   resolveDictationEngine,
 } from "./dictation/engines.ts";
+import { formatPass } from "./dictation/format.ts";
 import type { Bindings, SendKey } from "./dictation/protocol.ts";
 import { loadPunctuation } from "./dictation/punctuation.ts";
 import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
@@ -2015,6 +2016,20 @@ export class AkouApp implements ApiApp {
       fillers: () => this.cfg.settings["dictation.fillers"],
       punctuation: () =>
         this.cfg.settings["dictation.spokenPunctuation"] ? loadPunctuation(this.configDir) : null,
+      format: (text) =>
+        formatPass(
+          text,
+          {
+            format: this.cfg.settings["dictation.format"],
+            prompt: this.cfg.settings["dictation.formatPrompt"],
+            timeoutSeconds: this.cfg.settings["dictation.formatTimeoutSeconds"],
+          },
+          {
+            configDir: this.configDir,
+            provider: () => this.provider(),
+            onLog: (level, msg) => this.log(level, msg),
+          },
+        ),
       languages: () =>
         dictationLanguages(
           this.cfg.settings["dictation.languages"],

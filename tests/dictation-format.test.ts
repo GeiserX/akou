@@ -4,22 +4,31 @@
  * harness or calls a model.
  */
 
-import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import type { Packet } from "../src/main/capture/protocol.ts";
 import {
   DEFAULT_FORMAT_PROMPT,
   DICTATION_CLOSE,
   DICTATION_HEADER,
   DICTATION_OPEN,
+  FORMAT_PROMPTS_DIR,
   formatDictation,
   formatRequestText,
   formatTimeoutMs,
   loadFormatPrompt,
 } from "../src/main/dictation/format.ts";
+import type { AppToHelper } from "../src/main/dictation/protocol.ts";
+import { DictationService } from "../src/main/dictation/service.ts";
+import { DictationSession, FORMAT_SKIPPED } from "../src/main/dictation/session.ts";
+import { DictationLog } from "../src/main/dictation/store.ts";
 import { HarnessProvider } from "../src/main/llm/harness.ts";
 import { OpenAiCompatibleProvider } from "../src/main/llm/openai-compatible.ts";
 import type { CompleteRequest, Provider } from "../src/main/llm/provider.ts";
+import { appRig, FAKE_HELPER } from "./api-helpers.ts";
+import { concat, silence, speak } from "./fixtures/asr-fake.ts";
+import { monoWav } from "./fixtures/audio.ts";
 import { tempDir } from "./helpers.ts";
 
 const FIX = join(import.meta.dir, "fixtures", "harness");
@@ -185,4 +194,239 @@ describe("DC-U6: the prompt a user picks", () => {
     }
     tmp.cleanup();
   });
+});
+
+// ---------------------------------------------------------------------------
+// The pass between the decode and the insert
+
+const cleanups: (() => void | Promise<void>)[] = [];
+afterEach(async () => {
+  for (const c of cleanups.splice(0).reverse()) await c();
+});
+
+describe("DC-U6: a spoken dictation goes through the pass before it is inserted", () => {
+  const TARGET = { app: "a", pid: 1, window: "w", field: "editable" as const };
+  const packet: Packet = {
+    ch: "mic",
+    zeroFilled: false,
+    captureNs: 0n,
+    fileSeconds: 0,
+    samples: new Float32Array(1600),
+  };
+
+  /** A session whose engine hears "um three apples", with `format` as its formatting pass. */
+  function session(
+    format: (text: string) => Promise<{ text: string; skipped: string | null } | null>,
+  ) {
+    const t = tempDir("akou-dict-format-");
+    cleanups.push(t.cleanup);
+    const log = new DictationLog(t.dir);
+    cleanups.push(() => log.close());
+    const sent: AppToHelper[] = [];
+    const notices: string[] = [];
+    const asked: string[] = [];
+    const s = new DictationSession({
+      log,
+      engine: () => ({
+        name: "fast",
+        decode: async () => ({
+          text: "um three apples",
+          words: [],
+          language: "en",
+          model: "m",
+          ms: 1,
+          spans: 1,
+        }),
+      }),
+      send: (c) => sent.push(c),
+      bindings: () => ({
+        hotkey: "RightCommand",
+        draft: "",
+        fixLast: "",
+        pasteLast: "",
+        activation: "hold",
+      }),
+      now: () => Date.now(),
+      format: (text) => {
+        asked.push(text);
+        return format(text);
+      },
+      onNotice: (_id, n) => notices.push(n),
+    });
+    const dictate = async (field: "editable" | "secure" = "editable") => {
+      s.onMessage({
+        type: "session.started",
+        id: "1",
+        target: { ...TARGET, field },
+        capture_ns: "0",
+      });
+      s.onPacket(packet);
+      s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+      for (let i = 0; i < 200 && !sent.some((c) => c.type === "insert"); i++) await Bun.sleep(10);
+      await s.settled();
+      return sent.find((c) => c.type === "insert") as { text: string } | undefined;
+    };
+    return { dictate, log, notices, asked };
+  }
+
+  test('with the fake harness, "um three apples" is inserted as "Three apples." and the raw text is kept', async () => {
+    const r = session((raw) => formatDictation({ raw, provider: fakeHarness() }));
+    expect((await r.dictate())?.text).toBe("Three apples.");
+    expect(r.log.items()[0]).toMatchObject({ raw: "um three apples", text: "Three apples." });
+    expect(r.notices).toEqual([]);
+  });
+
+  test("a skipped pass inserts the raw text and the pill says so", async () => {
+    const r = session(async (text) => ({ text, skipped: "no answer within 4 s" }));
+    expect((await r.dictate())?.text).toBe("um three apples");
+    expect(r.notices).toEqual([FORMAT_SKIPPED]);
+  });
+
+  test("a pass that throws is a skip, never a lost dictation", async () => {
+    const r = session(async () => {
+      throw new Error("boom");
+    });
+    expect((await r.dictate())?.text).toBe("um three apples");
+    expect(r.notices).toEqual([FORMAT_SKIPPED]);
+  });
+
+  test("a password field's text never reaches the provider", async () => {
+    const r = session(async () => ({ text: "leaked", skipped: null }));
+    expect((await r.dictate("secure"))?.text).toBe("um three apples");
+    expect(r.asked).toEqual([]);
+  });
+});
+
+describe("DC-U6: the service hands the pass to the spoken session", () => {
+  test("a hold over the fake helper is inserted as the pass returns it", async () => {
+    const t = tempDir("akou-dict-format-svc-");
+    cleanups.push(t.cleanup);
+    const keys = join(t.dir, "keys.jsonl");
+    writeFileSync(
+      keys,
+      [
+        { at: 800, key: "RightCommand", down: true },
+        { at: 1600, key: "RightCommand", down: false },
+      ]
+        .map((k) => JSON.stringify(k))
+        .join("\n"),
+    );
+    const wav = join(t.dir, "mic.wav");
+    writeFileSync(wav, monoWav(concat(silence(1), speak(["hello"]), silence(3))));
+    const inserted = join(t.dir, "inserted.jsonl");
+    const svc = new DictationService({
+      configDir: t.dir,
+      now: () => Date.now(),
+      engine: () => ({
+        name: "fast",
+        decode: async () => ({
+          text: "hello",
+          words: [],
+          language: "en",
+          model: "m",
+          ms: 1,
+          spans: 1,
+        }),
+      }),
+      format: async (text) => ({ text: `${text.toUpperCase()}!`, skipped: null }),
+    });
+    cleanups.push(() => svc.close());
+    svc.start(
+      [
+        process.execPath,
+        FAKE_HELPER,
+        "dictate",
+        "--wav",
+        wav,
+        "--keys",
+        keys,
+        "--inserter-log",
+        inserted,
+      ],
+      () => ({ hotkey: "RightCommand", draft: "", fixLast: "", pasteLast: "", activation: "hold" }),
+    );
+    const lines = () =>
+      existsSync(inserted)
+        ? readFileSync(inserted, "utf8")
+            .split("\n")
+            .filter(Boolean)
+            .map((l) => JSON.parse(l))
+        : [];
+    for (let i = 0; i < 1000 && lines().length === 0; i++) await Bun.sleep(10);
+    expect(lines()[0]).toMatchObject({ text: "HELLO!" });
+    expect(svc.log.items()[0]).toMatchObject({ raw: "hello", text: "HELLO!" });
+  }, 20_000);
+});
+
+describe("DC-U6: the app runs the pass from its settings and provider", () => {
+  /** A clip the fake recognizer reads as "hello", sent to `POST /v1/dictations`. */
+  async function upload(port: number, token: string): Promise<Record<string, unknown>> {
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([monoWav(concat(silence(0.5), speak(["hello"]), silence(1)))]),
+      "c.wav",
+    );
+    const res = await fetch(`http://127.0.0.1:${port}/v1/dictations`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${token}` },
+      body: form,
+    });
+    return (await res.json()) as Record<string, unknown>;
+  }
+
+  async function rig(settings: Record<string, unknown>, provider: Provider) {
+    const r = await appRig({ settings, provider });
+    cleanups.push(() => r.close());
+    return r;
+  }
+
+  test("dictation.format provider: the provider's text goes in, the raw text is kept, and the request carries the header", async () => {
+    const p = scripted("Hello.");
+    const r = await rig({ "dictation.format": "provider" }, p);
+    expect(await upload(r.port, r.token)).toMatchObject({ raw: "hello", text: "Hello." });
+    expect(p.req?.prompt).toBe(formatRequestText("hello"));
+    expect(p.req?.system).toBe(DEFAULT_FORMAT_PROMPT);
+  });
+
+  test("positive control: with dictation.format off the provider is never asked", async () => {
+    const p = scripted("Hello.");
+    const r = await rig({}, p);
+    expect(await upload(r.port, r.token)).toMatchObject({ raw: "hello", text: "hello" });
+    expect(p.req).toBeNull();
+  });
+
+  test("the prompt the settings name is read from the prompts folder; a missing one is a skip with its reason", async () => {
+    const p = scripted("HELLO.");
+    const r = await rig({ "dictation.format": "provider", "dictation.formatPrompt": "shout" }, p);
+    expect(await upload(r.port, r.token)).toMatchObject({ text: "hello" });
+    expect(p.req).toBeNull();
+    expect(r.logs.map((l) => l.msg)).toContain("format.skipped: no prompt named shout (shout.md)");
+    const dir = join(r.app.configDir, FORMAT_PROMPTS_DIR);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(join(dir, "shout.md"), "Shout it.\n");
+    expect(await upload(r.port, r.token)).toMatchObject({ raw: "hello", text: "HELLO." });
+    expect(p.req?.system).toBe("Shout it.");
+  });
+
+  test("an API provider slower than the default 4 s: the raw text goes in without its answer, and the log holds format.skipped", async () => {
+    // Answers only when its signal fires, which runProvider does at the deadline.
+    const slow: Provider = {
+      id: "openai-compatible",
+      available: async () => ({ ok: true, detail: "slow" }),
+      complete: (_req, _tok, signal) =>
+        new Promise((_res, rej) => {
+          const t = setTimeout(() => rej(new Error("answered too late")), 6000);
+          signal.addEventListener("abort", () => {
+            clearTimeout(t);
+            rej(new Error("aborted"));
+          });
+        }),
+    };
+    const r = await rig({ "dictation.format": "provider" }, slow);
+    const t0 = performance.now();
+    expect(await upload(r.port, r.token)).toMatchObject({ raw: "hello", text: "hello" });
+    expect(performance.now() - t0).toBeLessThan(6000);
+    expect(r.logs.map((l) => l.msg)).toContain("format.skipped: no answer within 4 s");
+  }, 15_000);
 });
