@@ -517,13 +517,16 @@ jobs:
                       }
                       return false;
                   }
-                  // A helper that already exited has closed its stdin: its log says why.
+                  // Bytes straight to the pipe: Windows PowerShell's StandardInput writer puts a
+                  // UTF-8 byte order mark before the first line, which turns that line into
+                  // bad-command. A helper that already exited has closed its stdin: its log says why.
                   public void Send(string line) {
-                      try { p.StandardInput.WriteLine(line); p.StandardInput.Flush(); } catch (Exception) { }
+                      byte[] b = new System.Text.UTF8Encoding(false).GetBytes(line + "\n");
+                      try { p.StandardInput.BaseStream.Write(b, 0, b.Length); p.StandardInput.BaseStream.Flush(); } catch (Exception) { }
                   }
                   public string Stop() {
                       Send("{\"type\":\"stop\"}");
-                      try { p.StandardInput.Close(); } catch (Exception) { }
+                      try { p.StandardInput.BaseStream.Close(); } catch (Exception) { }
                       if (!p.WaitForExit(10000)) p.Kill();
                       p.WaitForExit();
                       lock (lines) return string.Join("\n", lines.ToArray()) + "\nexit " + p.ExitCode;
@@ -575,6 +578,7 @@ jobs:
           $log = $h.Stop()
           $log
           Check ($log -match '"backend":"llhook","swallow_keys":true') 'the helper installed no hook'
+          Check ($log -notmatch 'bad-command') 'the helper could not read a line this step sent'
           Check ($log -notmatch 'no-tap') 'the helper reported no hook'
           # No microphone on this runner: the press reaching the session shows as the open it tried.
           Check ($log -match '"code":"mic-open"|"type":"mic","open":true') 'the press never reached the session'
@@ -604,6 +608,7 @@ jobs:
           $clip = Get-Clipboard -Raw
           "field: $field"
           "clipboard: $clip"
+          Check ($log -notmatch 'bad-command') 'the helper could not read a line this step sent'
           Check ($log -match '"type":"inserted","id":"p1","method":"paste"') 'the paste was not read'
           Check ($log -match '"type":"inserted","id":"t1","method":"type"') 'the typing failed'
           $want = "pasted by akou`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600)
