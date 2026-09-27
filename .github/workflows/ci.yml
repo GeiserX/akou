@@ -517,13 +517,16 @@ jobs:
                       }
                       return false;
                   }
-                  public void Send(string line) { p.StandardInput.WriteLine(line); p.StandardInput.Flush(); }
+                  // A helper that already exited has closed its stdin: its log says why.
+                  public void Send(string line) {
+                      try { p.StandardInput.WriteLine(line); p.StandardInput.Flush(); } catch (Exception) { }
+                  }
                   public string Stop() {
                       Send("{\"type\":\"stop\"}");
-                      p.StandardInput.Close();
+                      try { p.StandardInput.Close(); } catch (Exception) { }
                       if (!p.WaitForExit(10000)) p.Kill();
                       p.WaitForExit();
-                      lock (lines) return string.Join("\n", lines.ToArray());
+                      lock (lines) return string.Join("\n", lines.ToArray()) + "\nexit " + p.ExitCode;
                   }
               }
 
@@ -556,6 +559,7 @@ jobs:
           }
           '@
           $exe = (Resolve-Path 'target\shipping\akou-capture.exe').Path
+          # Both arguments are evaluated first: never put a call with an effect in `$why`.
           function Check($ok, $why) { if (-not $ok) { throw $why } }
 
           # The hook swallows the dictation key and passes the rest.
@@ -565,7 +569,7 @@ jobs:
           "control: $control"
           Check ($control -match 'down:20') 'with no helper Space must get through'
           $h = New-Object 'Probe+Helper' $exe, 'dictate --hotkey Control+Shift+Space --warm off'
-          Check ($h.Wait('"type":"ready"', 10000)) ('the helper never got ready: ' + $h.Stop())
+          if (-not $h.Wait('"type":"ready"', 10000)) { throw ('the helper never got ready: ' + $h.Stop()) }
           $tapped = [Probe]::Play($chord)
           "hooked: $tapped"
           $log = $h.Stop()
@@ -587,12 +591,12 @@ jobs:
           $tj = '{"app":"' + $app + '","pid":' + $PID + ',"window":"' + $target.Hwnd.ToInt64() + '","field":"editable"}'
           Check ($target.Text() -eq '') 'the box was not empty'
           $h = New-Object 'Probe+Helper' $exe, 'dictate --warm off'
-          Check ($h.Wait('"type":"ready"', 10000)) ('the helper never got ready: ' + $h.Stop())
+          if (-not $h.Wait('"type":"ready"', 10000)) { throw ('the helper never got ready: ' + $h.Stop()) }
           $h.Send('{"type":"focus","target":' + $tj + '}')
           $h.Send('{"type":"insert","id":"p1","text":"pasted by akou","method":"paste","send_key":"Enter","target":' + $tj + '}')
-          Check ($h.Wait('"id":"p1"', 15000)) ('no answer to the paste: ' + $h.Stop())
-          $h.Send('{"type":"insert","id":"t1","text":"typed é 😀","method":"type","send_key":"none","target":' + $tj + '}')
-          Check ($h.Wait('"id":"t1"', 15000)) ('no answer to the typing: ' + $h.Stop())
+          if (-not $h.Wait('"id":"p1"', 15000)) { throw ('no answer to the paste: ' + $h.Stop()) }
+          $h.Send('{"type":"insert","id":"t1","text":"typed \u00e9 \ud83d\ude00","method":"type","send_key":"none","target":' + $tj + '}')
+          if (-not $h.Wait('"id":"t1"', 15000)) { throw ('no answer to the typing: ' + $h.Stop()) }
           [Probe]::Pump(500)
           $log = $h.Stop()
           $log
@@ -609,7 +613,7 @@ jobs:
           # A lone Right Win bound to dictation is masked.
           $lone = 'd:5C u:5C'
           $h = New-Object 'Probe+Helper' $exe, 'dictate --hotkey RightWin --warm off'
-          Check ($h.Wait('"type":"ready"', 10000)) ('the helper never got ready: ' + $h.Stop())
+          if (-not $h.Wait('"type":"ready"', 10000)) { throw ('the helper never got ready: ' + $h.Stop()) }
           $masked = [Probe]::Play($lone)
           "hooked: $masked"
           $null = $h.Stop()
