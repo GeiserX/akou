@@ -99,6 +99,7 @@ import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
 import {
+  buildSettings,
   HOOK_STAGES,
   type HookStage,
   type LoadedConfig,
@@ -110,7 +111,10 @@ import {
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
+import type { Bindings } from "./dictation/protocol.ts";
+import { RemoteEngine } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
+import type { DictationEngine } from "./dictation/session.ts";
 import { type ExportResult, exportCall } from "./handoff/export.ts";
 import {
   buildPayload,
@@ -166,13 +170,15 @@ import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
 import { mergeVocab, readVocabFile, toFoldEntries, vocabPaths } from "./vocab/files.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
-import { dictationHotkeyDefault } from "./window/hotkey.ts";
+import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
 import { PageServer, type SettingsPane } from "./window/page-server.ts";
 
 export { APP_VERSION, RUNTIME_FILE };
 export const APP_LOCK = "akou.lock";
 /** A final pass still running at quit gets this long, then is left for the next start. */
 export const QUIT_FINAL_GRACE_MS = 5_000;
+/** How long a settings change waits for the dictation helper to take or refuse new keys. */
+const REBIND_ANSWER_MS = 3_000;
 /** Names, merges and vocabulary change in bursts; a re-export waits this long for the last one. */
 export const REEXPORT_DEBOUNCE_MS = 1_500;
 
@@ -469,6 +475,8 @@ export class AkouApp implements ApiApp {
   private accel: AcceleratorState | null = null;
   /** Dictation (docs/ux/DICTATION.md); app mode only, since a server has no keyboard. */
   private dictationSvc: DictationService | null = null;
+  /** The `remote` dictation engine, made at the first remote dictation; it reads its settings live. */
+  private remoteDictation: RemoteEngine | null = null;
   /** The machine that detection read: its env names the image's llama-server. */
   private accelProbe: Probe | null = null;
 
@@ -1376,30 +1384,54 @@ export class AkouApp implements ApiApp {
     return this.cfg;
   }
 
-  async saveConfig(file: Partial<Record<SettingKey, SettingValue>>): Promise<LoadedConfig> {
+  async saveConfig(
+    file: Partial<Record<SettingKey, SettingValue>>,
+    o: { keep?: readonly SettingKey[] } = {},
+  ): Promise<LoadedConfig> {
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
+    const env = this.o.env ?? process.env;
     // The keys the API cannot write are the file's: what is on disk now wins over this process's
     // copy, so a save never drops a value written since the start (`akou admin set-password`).
-    const onDisk = loadConfig(this.o.env ?? process.env, this.o.platform).file;
+    // `keep` names the window-only keys the desktop window set in this request.
+    const onDisk = loadConfig(env, this.o.platform).file;
     const next: Partial<Record<SettingKey, SettingValue>> = { ...file };
     for (const k of SETTING_KEYS) {
-      if ((SETTINGS[k] as SettingSpec).apiWritable !== false) continue;
+      if ((SETTINGS[k] as SettingSpec).apiWritable !== false || o.keep?.includes(k)) continue;
       if (onDisk[k] === undefined) delete next[k];
       else next[k] = onDisk[k];
     }
-    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(next, null, 2)}\n`);
+    // A changed dictation key applies at once, and one the helper cannot bind is refused here,
+    // before anything is written, so the old key stays in the file and in the helper (DC-A7).
     const before = this.cfg.settings;
-    this.cfg = loadConfig(this.o.env ?? process.env, this.o.platform);
+    const target = buildSettings(this.cfg.paths, next, env).settings;
+    const keys = this.dictationBindings(target);
+    const rebound =
+      before["dictation.enabled"] &&
+      target["dictation.enabled"] &&
+      JSON.stringify(keys) !== JSON.stringify(this.dictationBindings(before)) &&
+      this.dictationSvc?.session()?.ready != null;
+    if (rebound) {
+      const answer = await withDeadline(
+        realClock,
+        (this.dictationSvc as DictationService).rebind(keys),
+        REBIND_ANSWER_MS,
+      );
+      if (!answer.ok) this.log("warn", "the dictation helper did not answer a rebind in time");
+      else if (!answer.value.ok) {
+        const error = `dictation.hotkey: the dictation helper cannot bind ${keys.hotkey}: ${answer.value.reason}`;
+        throw new HttpError(400, "bad_setting", error, { errors: [error] });
+      }
+    }
+    writePrivate(this.cfg.paths.configFile, `${JSON.stringify(next, null, 2)}\n`);
+    this.cfg = loadConfig(env, this.o.platform);
     const after = this.cfg.settings;
     const same = (k: "vocab.extraFiles" | "vocab.languages") =>
       before[k].join("\n") === after[k].join("\n");
     // Other files or other word lists: every open call reads its vocabulary again.
     if (!same("vocab.extraFiles") || !same("vocab.languages")) this.vocabChanged();
-    if (
-      before["dictation.enabled"] !== after["dictation.enabled"] ||
-      before["dictation.activation"] !== after["dictation.activation"]
-    )
-      this.applyDictation();
+    // Keys changed while the helper is still starting need nothing: it is bound from the
+    // settings once it reports `ready`.
+    if (before["dictation.enabled"] !== after["dictation.enabled"]) this.applyDictation();
     return this.cfg;
   }
 
@@ -1931,13 +1963,59 @@ export class AkouApp implements ApiApp {
     this.dictationSvc ??= new DictationService({
       configDir: this.configDir,
       now: () => this.clock.now(),
-      engine: () => {
-        const asr = this.asr;
-        return asr ? { name: "fast", decode: (samples, o) => asr.decode(samples, o) } : null;
-      },
+      engine: (name) => this.dictationEngine(name),
       onLog: (level, msg) => this.log(level, msg),
     });
     this.applyDictation();
+  }
+
+  /** The live Worker's Parakeet, already loaded at start, or null while no model is there. */
+  private fastEngine(): DictationEngine | null {
+    const asr = this.asr;
+    return asr ? { name: "fast", decode: (samples, o) => asr.decode(samples, o) } : null;
+  }
+
+  /**
+   * The engine a dictation decodes on, read at each press: `remote` sends the audio to
+   * `dictation.remote.url` with the key as it is now, so a changed key or URL needs no restart;
+   * `auto` and `fast` decode on the loaded Parakeet (`best` is refused at save until DC-E2).
+   */
+  private dictationEngine(name?: string): DictationEngine | null {
+    if ((name ?? this.cfg.settings["dictation.engine"]) !== "remote") return this.fastEngine();
+    this.remoteDictation ??= new RemoteEngine({
+      settings: () => {
+        const c = this.cfg.settings;
+        const language = c["dictation.language"];
+        return {
+          url: c["dictation.remote.url"],
+          key: c["dictation.remote.key"],
+          fallback: c["dictation.remote.fallback"],
+          timeoutSeconds: c["dictation.remote.timeoutSeconds"],
+          ...(language !== "auto" ? { language } : {}),
+          // No learned dictation words exist yet (DC-L6), so glossary `on` sends none.
+          glossary: c["dictation.glossary"] === "on" ? [] : null,
+        };
+      },
+      local: () => this.fastEngine(),
+      onLog: (level, msg) => this.log(level, msg),
+    });
+    return this.remoteDictation;
+  }
+
+  /**
+   * The keys the helper binds, from the settings: each empty one resolved to its platform default,
+   * fix last to Shift held before a modifier-only dictation key (DC-A2, DC-A5).
+   */
+  private dictationBindings(s: Settings): Bindings {
+    const platform = this.o.platform ?? process.platform;
+    const hotkey = s["dictation.hotkey"].trim() || dictationHotkeyDefault(platform);
+    return {
+      hotkey,
+      draft: s["dictation.hotkeyDraft"].trim(),
+      fixLast: s["dictation.hotkeyFixLast"].trim() || fixLastDefault(hotkey),
+      pasteLast: s["dictation.hotkeyPasteLast"].trim(),
+      activation: s["dictation.activation"] as Activation,
+    };
   }
 
   /** Starts or stops the helper to match `dictation.enabled`, and sends it the keys. */
@@ -1950,17 +2028,12 @@ export class AkouApp implements ApiApp {
       return;
     }
     if (d.session()) {
-      d.rebind();
+      void d.rebind();
       return;
     }
-    const platform = this.o.platform ?? process.platform;
-    d.start([...locateHelper(s["capture.helper"]).command, "dictate"], () => ({
-      hotkey: dictationHotkeyDefault(platform),
-      draft: "",
-      fixLast: "",
-      pasteLast: "",
-      activation: this.cfg.settings["dictation.activation"] as Activation,
-    }));
+    d.start([...locateHelper(s["capture.helper"]).command, "dictate"], () =>
+      this.dictationBindings(this.cfg.settings),
+    );
   }
 
   /** The models' store, both modes: what the Models page, `/models` and the sweep work on. */
@@ -2105,6 +2178,8 @@ export class AkouApp implements ApiApp {
       concurrency: () => this.cfg.settings["server.concurrency"],
       queueMax: () => this.cfg.settings["server.queue_max"],
       queueMaxPerKey: () => this.cfg.settings["server.queue_max_per_key"],
+      dictationSlots: () => this.cfg.settings["server.dictation_slots"],
+      dictationEngine: () => this.cfg.settings["server.dictation_engine"],
       ...jobSeams,
       log: (level, msg) => this.log(level, msg),
     });
@@ -2251,6 +2326,7 @@ export class AkouApp implements ApiApp {
           this.log("info", "a final pass is still running; it runs again at the next start");
       }
       await this.dictationSvc?.close();
+      this.remoteDictation?.close();
       await this.asr?.close();
       await this.page?.stop();
       await this.server?.stop();

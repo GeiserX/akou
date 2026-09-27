@@ -22,12 +22,21 @@ import type { Packet } from "../capture/protocol.ts";
 import type { AppToHelper, Bindings, EndReason, HelperToApp } from "./protocol.ts";
 import { type DictationLog, newDictationId } from "./store.ts";
 
-/** Decodes a dictation's buffer: the live Worker (`fast`) today, `best` and `remote` later. */
+/**
+ * What an engine answers: the decode, and when an engine fell back to another (the remote to the
+ * local engine, DC-R3), the engine that decoded it and the one it fell back from.
+ */
+export type EngineDecoded = Omit<Decoded, "spans"> & { engine?: string; fallback_from?: string };
+
+/** Decodes a dictation's buffer: the live Worker (`fast`), a remote akou (`remote`). */
 export interface DictationEngine {
   /** What the log records as the engine: `fast`, `best`, `remote`. */
   readonly name: string;
-  decode(samples: Float32Array, o: { language?: string }): Promise<Decoded>;
+  decode(samples: Float32Array, o: { language?: string }): Promise<EngineDecoded>;
 }
+
+/** The helper's answer to a `rebind` (DC-A7): on a refusal the old binding stays. */
+export type RebindAnswer = { ok: true } | { ok: false; reason: string };
 
 export type SessionState = "starting" | "idle" | "listening" | "transcribing" | "inserting";
 
@@ -71,6 +80,8 @@ export class DictationSession {
   private readonly inserts = new Map<string, string>();
   /** Every decode and insert in flight, for tests and a clean stop. */
   private work: Promise<void> = Promise.resolve();
+  /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
+  private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
 
   constructor(private readonly o: SessionOptions) {}
 
@@ -88,9 +99,14 @@ export class DictationSession {
     }
   }
 
-  /** Sends the bindings again, once the helper is ready. */
-  rebind(): void {
-    if (this.ready) this.o.send({ type: "rebind", ...this.o.bindings() });
+  /**
+   * Sends the helper these bindings (the settings' by default) and resolves with its answer. Before
+   * `ready` nothing is sent: the helper is bound from the settings once it is up.
+   */
+  rebind(b?: Bindings): Promise<RebindAnswer> {
+    if (!this.ready) return Promise.resolve({ ok: true });
+    this.o.send({ type: "rebind", ...(b ?? this.o.bindings()) });
+    return new Promise((res) => this.rebinds.push(res));
   }
 
   /** Resolves once every decode and insert started so far has settled. */
@@ -103,10 +119,14 @@ export class DictationSession {
       case "ready":
         this.ready = m;
         this.set("idle");
-        this.o.send({ type: "rebind", ...this.o.bindings() });
+        void this.rebind();
+        return;
+      case "rebound":
+        this.rebinds.shift()?.({ ok: true });
         return;
       case "rebind.failed":
         this.o.onLog?.("warn", `dictation key ${m.hotkey} not bound: ${m.reason}`);
+        this.rebinds.shift()?.({ ok: false, reason: m.reason });
         return;
       case "secure_input":
         this.secureInput = m.on;
@@ -153,8 +173,8 @@ export class DictationSession {
         return;
       }
       default:
-        // level, key, grant.lost, edit, edit.unreadable, mic, rebound, stopped: the pill's and
-        // learning's, in later items.
+        // level, key, grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's,
+        // in later items.
         return;
     }
   }
@@ -183,6 +203,8 @@ export class DictationSession {
       this.write({ type: "dictation.failed", id, error: "the dictation helper stopped" });
     }
     this.inserts.clear();
+    // Nothing refused them: the next helper is bound from the settings when it is ready.
+    for (const answer of this.rebinds.splice(0)) answer({ ok: true });
     this.ready = null;
     this.set("starting");
   }
@@ -234,7 +256,7 @@ export class DictationSession {
       });
       return;
     }
-    let d: Decoded;
+    let d: EngineDecoded;
     try {
       d = await engine.decode(samples, {});
     } catch (err) {
@@ -254,9 +276,10 @@ export class DictationSession {
         text: d.text,
         language: d.language,
         words: d.words,
-        engine: engine.name,
+        engine: d.engine ?? engine.name,
         model: d.model,
         ms: d.ms,
+        ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
       });
     this.inserts.set(c.helperId, id);
     this.set("inserting");

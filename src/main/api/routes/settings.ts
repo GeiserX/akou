@@ -9,10 +9,12 @@
 
 import { join } from "node:path";
 import {
+  isSettingKey,
   patchConfig,
   redactSettings,
   SETTING_KEYS,
   SETTINGS,
+  type SettingKey,
   type SettingSpec,
 } from "../../config/schema.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
@@ -64,6 +66,8 @@ export function settingsRoutes(r: Router<ApiApp>): void {
                 secret: s.secret,
                 // File only when false: it names a program akou runs or where transcripts are sent.
                 apiWritable: s.apiWritable !== false,
+                // With apiWritable false: the desktop window may still set it.
+                ...(s.windowWritable ? { windowWritable: true } : {}),
                 doc: s.doc,
               },
             ];
@@ -87,11 +91,17 @@ export function settingsRoutes(r: Router<ApiApp>): void {
     async (c) => {
       const body = await c.body<Record<string, unknown>>();
       const cfg = c.app.config();
-      const res = patchConfig(cfg.file, body, cfg.paths);
+      // The window's bridge runs in process with no identity; every HTTP request has one.
+      const inProcess = c.identity === undefined;
+      const res = patchConfig(cfg.file, body, cfg.paths, { inProcess });
       if (!res.ok) {
         throw new HttpError(400, "bad_setting", res.errors.join("; "), { errors: res.errors });
       }
-      const next = await c.app.saveConfig(res.file);
+      const keep = Object.keys(body).filter(
+        (k): k is SettingKey =>
+          isSettingKey(k) && (SETTINGS[k] as SettingSpec).apiWritable === false,
+      );
+      const next = await c.app.saveConfig(res.file, { keep: inProcess ? keep : [] });
       return json(200, {
         ok: true,
         settings: redactSettings(next.settings),
