@@ -183,11 +183,14 @@ describe("SV-U6: the Models page in the desktop window", () => {
         await page.emulateMedia({ colorScheme: scheme });
         const overflow = await page.$eval("#models", (d) => d.scrollWidth - d.clientWidth);
         expect([scheme, overflow <= 0]).toEqual([scheme, true]);
-        const track = await page.$eval(
-          `#models .model[data-id="${RECOGNIZER}"] .mbar.accuracy .track`,
-          (el) => el.getBoundingClientRect().width,
-        );
-        expect(track).toBeGreaterThan(40);
+        const width = () =>
+          page.$$eval(
+            `#models .model[data-id="${RECOGNIZER}"] .mbar.accuracy .track`,
+            (els) => els[0]?.getBoundingClientRect().width ?? 0,
+          );
+        // The settings save above re-renders the rows; measure once the new row is laid out.
+        await until(async () => (await width()) > 0, 3000, "the rebuilt row's layout");
+        expect(await width()).toBeGreaterThan(40);
         const colors = await page.$eval(
           `#models .model[data-id="${RECOGNIZER}"] .mbar.accuracy .fill`,
           (el) => [getComputedStyle(el).backgroundColor, getComputedStyle(document.body).color],
