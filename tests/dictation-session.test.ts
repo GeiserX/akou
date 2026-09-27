@@ -4,7 +4,7 @@
  * device, no key, no clipboard: the fake records what it would have inserted.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KeyInput } from "../src/core/dictation/activation.ts";
@@ -24,6 +24,9 @@ import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { tempDir } from "./helpers.ts";
+
+// Many tests here run the fake helper in real time; a loaded runner passes bun's 5 s default.
+setDefaultTimeout(30_000);
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {

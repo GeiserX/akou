@@ -85,7 +85,8 @@ function phrases(
   lists: PunctuationLists,
 ): { words: string[]; mark: string }[] {
   const langs = [...new Set(languages.map(base))].filter((l) => lists[l]);
-  const use = langs.length > 0 ? langs : Object.keys(lists);
+  // No language known: every list applies. A known language with no list replaces nothing.
+  const use = languages.length === 0 ? Object.keys(lists) : langs;
   const out = use.flatMap((l) =>
     Object.entries(lists[l] ?? {}).map(([p, mark]) => ({
       words: p.split(/\s+/).map(norm).filter(Boolean),

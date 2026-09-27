@@ -104,6 +104,12 @@ describe("DC-S6: a phrase between pauses is a mark", () => {
     expect(spokenPunctuation("hello comma world", said, [])).toBe("hello, world");
   });
 
+  test("a known language with no list replaces nothing, not every list", () => {
+    const said = timed("il est dans le | coma");
+    expect(spokenPunctuation("il est dans le coma", said, ["fr"])).toBe("il est dans le coma");
+    expect(spokenPunctuation("il est dans le coma", [], ["fr"])).toBe("il est dans le coma");
+  });
+
   test("the vocabulary changed the count: that phrase is left alone", () => {
     // The engine heard "comma" twice, the first alone; the vocabulary made that one "Karma", so
     // the one left in the text is the second, said in one breath.
@@ -127,6 +133,10 @@ describe("DC-S6: an engine with no word times", () => {
 
   test("only the phrase at the very end: one earlier stays a word", () => {
     expect(spokenPunctuation("El punto es este punto", [], ["es"])).toBe("El punto es este.");
+  });
+
+  test("a phrase that is the whole utterance stays a word", () => {
+    expect(spokenPunctuation("punto", [], ["es"])).toBe("punto");
   });
 });
 
