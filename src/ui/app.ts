@@ -167,7 +167,7 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
-    const dictation = mountDictationDialog(t);
+    const dictation = mountDictationDialog(t, () => this.view()?.call?.workspace);
     const settings = new SettingsPane(
       t,
       () => void dictation.open(),

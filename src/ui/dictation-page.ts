@@ -557,7 +557,11 @@ export class DictationSettings {
  * Settings; its History button opens the history (DC-H1) over it, and Dictionary the dictionary
  * and replacements (DC-U5).
  */
-export function mountDictationDialog(t: Transport): {
+export function mountDictationDialog(
+  t: Transport,
+  /** The workspace of the call the window shows, whose words the dictionary lists read only. */
+  workspace?: () => string | undefined,
+): {
   open(): Promise<void>;
   /** The dictionary editor (DC-U5), which Settings opens too. */
   dictionary: { open(): Promise<void> };
@@ -580,7 +584,7 @@ export function mountDictationDialog(t: Transport): {
     page.stopRecording();
     void history.open();
   });
-  const dictionary = mountDictionaryDialog(t);
+  const dictionary = mountDictionaryDialog(t, workspace);
   document.getElementById("dictation-dictionary-open")?.addEventListener("click", () => {
     // A live recorder would take every key typed into the dictionary's fields.
     page.stopRecording();
