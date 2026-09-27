@@ -136,7 +136,12 @@ describe("DC-A1: dictation.enabled is the master switch", () => {
     await until(() => r.app.dictation()?.status().state === "idle", 5000, "the helper to be ready");
     const off = await r.api("PATCH", "/config", { "dictation.enabled": false });
     expect(off.status).toBe(200);
-    await until(() => r.app.dictation()?.status().enabled === false, 5000, "the helper to stop");
-    expect(readFileSync(commands, "utf8")).toContain('"type":"stop"');
+    // `enabled` turns false as soon as the stop begins; the helper reads `stop` a moment later.
+    await until(() => r.app.dictation()?.status().enabled === false, 5000, "the stop to begin");
+    await until(
+      () => readFileSync(commands, "utf8").includes('"type":"stop"'),
+      5000,
+      "the helper to read stop",
+    );
   });
 });
