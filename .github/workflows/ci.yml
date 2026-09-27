@@ -449,6 +449,8 @@ jobs:
               [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
               [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
               [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
+              [DllImport("kernel32.dll", CharSet = CharSet.Unicode)]
+              static extern bool QueryFullProcessImageName(IntPtr h, int flags, System.Text.StringBuilder name, ref int size);
               [StructLayout(LayoutKind.Sequential)]
               struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
               [StructLayout(LayoutKind.Explicit, Size = 40)]
@@ -477,6 +479,16 @@ jobs:
                   IntPtr h = GetForegroundWindow();
                   GetWindowThreadProcessId(h, out pid);
                   return h.ToInt64() + " pid " + pid;
+              }
+
+              // This process's executable named the way the helper names a target's app, from the
+              // image name; the module name .NET reports can differ from it.
+              public static string Exe() {
+                  System.Text.StringBuilder name = new System.Text.StringBuilder(1024);
+                  int size = name.Capacity;
+                  if (!QueryFullProcessImageName(Process.GetCurrentProcess().Handle, 0, name, ref size)) throw new Exception("no image name");
+                  string path = name.ToString(0, size);
+                  return path.Substring(path.LastIndexOfAny(new char[] { '\\', '/' }) + 1);
               }
 
               // Puts a window in front the way a user's click would, sharing input with the thread
@@ -620,7 +632,8 @@ jobs:
           $target = New-Object 'Probe+Target'
           [Probe]::Raise($target.Hwnd)
           "in front: $([Probe]::Front()), target: $($target.Hwnd.ToInt64()) pid $PID"
-          $app = [Diagnostics.Process]::GetCurrentProcess().MainModule.ModuleName
+          $app = [Probe]::Exe()
+          "app: $app, module name: $([Diagnostics.Process]::GetCurrentProcess().MainModule.ModuleName)"
           $tj = '{"app":"' + $app + '","pid":' + $PID + ',"window":"' + $target.Hwnd.ToInt64() + '","field":"editable"}'
           Check ($target.Text() -eq '') 'the box was not empty'
           $h = New-Object 'Probe+Helper' $exe, 'dictate --warm off'
