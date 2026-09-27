@@ -24,6 +24,11 @@ objc2-core-audio = { version = "0.3", default-features = false, features = ["std
 objc2-core-audio-types = { version = "0.3", default-features = false, features = ["std", "CoreAudioBaseTypes"] }
 objc2-core-foundation = "0.3"
 objc2-foundation = "0.3"
+# Dictation (DC-N1, DC-N8, DC-N9, DC-L2): the accessibility reads (AXUIElement, AXIsProcessTrusted)
+# and the key tap (CGEventTap). Generated from Apple's headers by the objc2 project, like the Core
+# Audio bindings above; handy-keys, the tap DICTATION.md names, is built on the same crate.
+objc2-application-services = { version = "0.3", default-features = false, features = ["std", "libc", "HIServices", "AXError", "AXUIElement", "AXValue"] }
+objc2-core-graphics = { version = "0.3", default-features = false, features = ["std", "libc", "CGEvent", "CGEventSource", "CGEventTypes", "CGRemoteOperation", "CGWindow"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # The PulseAudio native protocol in pure Rust: PipeWire (pipewire-pulse) and PulseAudio both

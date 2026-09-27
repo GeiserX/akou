@@ -106,7 +106,8 @@ export interface Transport {
   dictationKeys?(fn: (name: string) => void): { close(): void };
   /**
    * The dictation mic's level in dBFS (-60 to 0) while dictation's setup shows its meter
-   * (DC-N3), proving audio arrives. Absent where the page cannot hear the helper (a browser).
+   * (DC-N3), proving audio arrives, and while the Dictation page shows the microphone picker
+   * (DC-U4). Absent where the page cannot hear the helper (a browser).
    */
   dictationLevels?(fn: (db: number) => void): { close(): void };
 }
