@@ -25,7 +25,7 @@ import { DictationSession, FORMAT_SKIPPED } from "../src/main/dictation/session.
 import { DictationLog } from "../src/main/dictation/store.ts";
 import { HarnessProvider } from "../src/main/llm/harness.ts";
 import { OpenAiCompatibleProvider } from "../src/main/llm/openai-compatible.ts";
-import type { CompleteRequest, Provider } from "../src/main/llm/provider.ts";
+import { type CompleteRequest, type Provider, ProviderError } from "../src/main/llm/provider.ts";
 import { appRig, FAKE_HELPER } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
@@ -114,6 +114,39 @@ describe("DC-U6: the formatting pass", () => {
       "format.skipped: the provider gave no text",
       "format.skipped: the provider echoed the prompt",
     ]);
+  });
+
+  test("a provider's error text never reaches the log, only its kind; the pill still gets the reason", async () => {
+    // A provider whose refusal quotes the request, as a model's errored turn or an API's 400 can.
+    const quoting = (err: (req: CompleteRequest) => Error): Provider => ({
+      id: "openai-compatible",
+      available: async () => ({ ok: true, detail: "quoting" }),
+      complete: async (req) => {
+        throw err(req);
+      },
+    });
+    const raw = "my card number is four two four two";
+    for (const [make, logged] of [
+      [
+        (req: CompleteRequest) => new ProviderError("auth", `refused: ${req.prompt}`),
+        "provider error (auth)",
+      ],
+      [
+        (req: CompleteRequest) => new TypeError(`bad body: ${req.prompt}`),
+        "provider error (other)",
+      ],
+    ] as const) {
+      const log: string[] = [];
+      const r = await formatDictation({
+        raw,
+        provider: quoting(make),
+        onLog: (_l, m) => log.push(m),
+      });
+      expect(r.text).toBe(raw);
+      expect(r.skipped).toContain("four two four two");
+      expect(log).toEqual([`format.skipped: ${logged}`]);
+      for (const word of ["card", "four", "two"]) expect(log.join("\n")).not.toContain(word);
+    }
   });
 
   test("a provider that cannot answer is skipped with its reason", async () => {

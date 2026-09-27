@@ -40,6 +40,11 @@ export interface ReviewDeps {
   ended(): boolean;
   /** Scrolls to a line and plays it. */
   cite(lineId: string): void;
+  /**
+   * More words under their own heading after the call's, with or without a call: those fixed while
+   * dictating (DC-L5, `dictation-review.ts`). `answered` reads the list again and says `said`.
+   */
+  more?(answered: (said: string) => Promise<void>): Promise<HTMLElement | null>;
 }
 
 export class ReviewPane {
@@ -62,17 +67,26 @@ export class ReviewPane {
 
   async open(): Promise<void> {
     const call = this.d.call();
-    if (!call) return;
-    const r = await this.d.t.request<{ review?: Review }>("GET", `/calls/${call}/vocab`);
-    if (r.status >= 400 || !r.body.review) {
-      toast(message(r.body, "the words to review could not be read"));
-      return;
+    if (!call && !this.d.more) return;
+    let review: Review = { proposals: [], unconfirmed: [] };
+    if (call) {
+      const r = await this.d.t.request<{ review?: Review }>("GET", `/calls/${call}/vocab`);
+      if (r.status >= 400 || !r.body.review) {
+        toast(message(r.body, "the words to review could not be read"));
+        return;
+      }
+      review = r.body.review;
     }
-    this.draw(call, r.body.review);
+    const more = await this.d.more?.(async (said) => {
+      await this.open();
+      this.status.textContent = said;
+    });
+    // Without a call the rows below carry no call's words, so `call` is never sent empty.
+    this.draw(call ?? "", review, more ?? null);
     if (!this.dialog.open) this.dialog.showModal();
   }
 
-  private draw(call: string, review: Review): void {
+  private draw(call: string, review: Review, more: HTMLElement | null): void {
     const items = review.proposals.map((p) =>
       h(
         "li",
@@ -153,11 +167,11 @@ export class ReviewPane {
         ),
       ),
     );
-    if (items.length + extra.length === 0) {
+    if (items.length + extra.length === 0 && !more) {
       replace(this.list, h("li", { class: "hint" }, "No words to review."));
       return;
     }
-    replace(this.list, ...items, ...extra);
+    replace(this.list, ...items, ...extra, more);
   }
 
   private async decide(call: string, term: string, action: "approve" | "reject"): Promise<void> {

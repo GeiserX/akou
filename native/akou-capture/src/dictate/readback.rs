@@ -32,6 +32,19 @@ pub const MAX_WORDS: usize = 2_000;
 
 const MS: u64 = 1_000_000;
 
+/// A UTF-16 offset (what macOS `AXSelectedTextRange` and a Windows text range count) as a
+/// character index.
+pub fn char_index(value: &str, utf16: usize) -> usize {
+    let mut units = 0;
+    for (i, c) in value.chars().enumerate() {
+        if units >= utf16 {
+            return i;
+        }
+        units += c.len_utf16();
+    }
+    value.chars().count()
+}
+
 /// One read of the focused field.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Field {
@@ -227,6 +240,14 @@ mod tests {
             now: now.into(),
             at,
         }
+    }
+
+    #[test]
+    fn a_utf16_caret_is_a_character_index() {
+        assert_eq!(char_index("hello", 5), 5);
+        assert_eq!(char_index("a😀b", 3), 2, "the emoji is two UTF-16 units");
+        assert_eq!(char_index("a😀b", 4), 3);
+        assert_eq!(char_index("ab", 9), 2);
     }
 
     #[test]

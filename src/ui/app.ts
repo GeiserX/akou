@@ -14,6 +14,7 @@ import { formatWall, formatZone } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
 import { mountDictationDialog } from "./dictation-page.ts";
+import { dictationReview } from "./dictation-review.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
@@ -167,7 +168,11 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
-    const dictation = mountDictationDialog(t, () => this.view()?.call?.workspace);
+    const dictation = mountDictationDialog(
+      t,
+      () => this.view()?.call?.workspace,
+      () => this.review.open(),
+    );
     const settings = new SettingsPane(
       t,
       () => void dictation.open(),
@@ -186,6 +191,7 @@ class App {
       t,
       call,
       cite,
+      more: dictationReview(t),
       ended: () => {
         const v = this.view();
         return !!v?.call && !v.live;

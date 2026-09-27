@@ -66,7 +66,7 @@ use super::live::{self, Device, Stdio};
 use super::mac_insert::{self, Events, Pasteboard};
 use super::mac_keys;
 use super::protocol::{self as p, Target};
-use super::readback::Field;
+use super::readback::{Field, char_index};
 use super::session::{Config, Dictate, Out};
 use super::tap::{Gate, TapEvent};
 use crate::clock;
@@ -238,18 +238,6 @@ fn focused(pid: i32) -> Option<CFRetained<AXUIElement>> {
     // SAFETY: any pid; returns a +1 reference.
     let app = unsafe { AXUIElement::new_application(pid) };
     attr_element(&app, "AXFocusedUIElement")
-}
-
-/// A UTF-16 offset (what `AXSelectedTextRange` counts) as a character index.
-pub fn char_index(value: &str, utf16: usize) -> usize {
-    let mut units = 0;
-    for (i, c) in value.chars().enumerate() {
-        if units >= utf16 {
-            return i;
-        }
-        units += c.len_utf16();
-    }
-    value.chars().count()
 }
 
 pub struct Screen;
@@ -696,13 +684,5 @@ mod tests {
         assert_eq!(field_kind(Some("AXWebArea"), None, true), "editable");
         assert_eq!(field_kind(Some("AXButton"), None, false), "not-editable");
         assert_eq!(field_kind(None, None, false), "unknown");
-    }
-
-    #[test]
-    fn a_utf16_caret_is_a_character_index() {
-        assert_eq!(char_index("hello", 5), 5);
-        assert_eq!(char_index("a😀b", 3), 2, "the emoji is two UTF-16 units");
-        assert_eq!(char_index("a😀b", 4), 3);
-        assert_eq!(char_index("ab", 9), 2);
     }
 }
