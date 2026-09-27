@@ -118,6 +118,14 @@ pub trait Targets {
     fn elevated(&mut self, target: &Target) -> bool;
     /// Brings the target back to the front (after the draft box, DC-N9).
     fn focus(&mut self, target: &Target);
+    /// Reads the field the insert went into (DC-L2): macOS `AXValue` and `AXSelectedTextRange` of
+    /// the element focused at the insert, Windows UI Automation, Linux AT-SPI; at most 200 ms.
+    /// There is deliberately no way here to write to another process: a dormant accessibility
+    /// tree is `Unreadable`, never woken by setting a flag on the app.
+    fn read_field(&mut self, target: &Target) -> super::readback::Field;
+    /// The non-prompting trust check (macOS `AXIsProcessTrusted`, never the prompting variant).
+    /// True where no grant exists.
+    fn trusted(&mut self) -> bool;
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,10 +172,22 @@ const LINUX_TERMINALS: [&str; 14] = [
     "com.mitchellh.ghostty",
 ];
 
+/// Terminals by bundle id or name (macOS), lowercase. A paste there needs no other chord; the
+/// list keeps the field read-back (DC-L2) away from a shell.
+const MAC_TERMINALS: [&str; 7] = [
+    "com.apple.terminal",
+    "com.googlecode.iterm2",
+    "dev.warp.warp-stable",
+    "net.kovidgoyal.kitty",
+    "org.alacritty",
+    "com.github.wez.wezterm",
+    "com.mitchellh.ghostty",
+];
+
 pub fn is_terminal(os: Os, app: &str) -> bool {
     let a = app.to_ascii_lowercase();
     match os {
-        Os::Mac => false,
+        Os::Mac => MAC_TERMINALS.contains(&a.as_str()) || a == "terminal" || a == "iterm2",
         Os::Windows => WINDOWS_TERMINALS.contains(&a.as_str()),
         Os::Linux => LINUX_TERMINALS.contains(&a.as_str()) || a.contains("terminal"),
     }
