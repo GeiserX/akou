@@ -87,8 +87,15 @@ declare module "electrobun/main" {
       transparent?: boolean;
       /** False: the window opens without taking the focus from the app in front. */
       activate?: boolean;
+      /**
+       * macOS window style bits over the SDK's defaults; `NonactivatingPanel` makes it an
+       * `NSPanel` that a click never activates (the dictation pill, DC-O1).
+       */
+      styleMask?: { NonactivatingPanel?: boolean; Resizable?: boolean };
     });
     readonly id: number;
+    /** The native window: `NSWindow*` on macOS, the `HWND` on Windows; null once closed. */
+    readonly ptr: import("bun:ffi").Pointer | null;
     show(): void;
     /** Shows the window without taking the focus. */
     showInactive(): void;

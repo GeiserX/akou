@@ -147,7 +147,11 @@ export interface DictationStatus {
  * What a follower of the dictation stream gets (DC-G2): every event the log appends, and the
  * helper's mic level during a session, which is never written anywhere.
  */
-export type DictationFollow = { kind: "event"; e: DictationEvent } | { kind: "level"; rms: number };
+export type DictationFollow =
+  | { kind: "event"; e: DictationEvent }
+  | { kind: "level"; rms: number }
+  /** The engine's line for the pill about dictation `id` (DC-E2, DC-R3), never written anywhere. */
+  | { kind: "notice"; id: string; notice: string };
 
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -166,6 +170,8 @@ export class DictationService {
   private stopping: Promise<void> | null = null;
   /** A start asked for while the last helper was stopping; a `stop` drops it. */
   private wanted: { argv: readonly string[]; bindings: () => Bindings } | null = null;
+  /** The keys of the last start, for the pill's hint. */
+  private keys: (() => Bindings) | null = null;
 
   /** Where `POST /v1/dictations` spools a clip while it is decoded; emptied at every start. */
   readonly uploadDir: string;
@@ -383,6 +389,11 @@ export class DictationService {
     return { ok: true, state };
   }
 
+  /** The dictation key the helper is bound to, or null before the first start. */
+  hotkey(): string | null {
+    return this.keys?.().hotkey ?? null;
+  }
+
   /** The session over the running helper, or null with dictation off. */
   session(): DictationSession | null {
     return this.helper?.session ?? null;
@@ -421,6 +432,7 @@ export class DictationService {
         });
       return;
     }
+    this.keys = bindings;
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
     try {
       proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -437,6 +449,7 @@ export class DictationService {
       ...(this.o.language ? { language: this.o.language } : {}),
       onState: () => this.emit(),
       onLevel: (rms) => this.tell({ kind: "level", rms }),
+      onNotice: (id, notice) => this.tell({ kind: "notice", id, notice }),
       saveAudio: (id, samples) => this.audio.write(id, samples),
       send: (c) => {
         try {

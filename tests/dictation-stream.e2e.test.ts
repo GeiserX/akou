@@ -156,11 +156,19 @@ describe("DC-G2: GET /v1/dictation/stream", () => {
     expect((await r.api("POST", "/dictation/start")).status).toBe(200);
     // The fake's mic runs in real time from the start: let "hello" be spoken before the stop.
     await Bun.sleep(1000);
+    // An engine's notice is the pill's alone: it never reaches the stream, as a level or at all.
+    (r.app.dictation() as unknown as { tell(m: unknown): void }).tell({
+      kind: "notice",
+      id: "d1",
+      notice: "best failed, used fast",
+    });
     expect((await r.api("POST", "/dictation/stop")).status).toBe(200);
     await until(() => s.frames.some((f) => f.event === "level"), 5000, "a level");
     const level = s.frames.find((f) => f.event === "level");
     expect(level?.id).toBeNull();
     expect(typeof level?.data.rms).toBe("number");
+    const levels = s.frames.filter((f) => f.event === "level");
+    expect(levels.every((f) => typeof f.data.rms === "number")).toBe(true);
     await until(
       () => r.app.dictation()?.log.items()[0]?.state === "inserted",
       10_000,

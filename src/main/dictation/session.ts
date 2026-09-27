@@ -101,6 +101,8 @@ export interface SessionOptions extends TextRules {
   onState?(state: SessionState): void;
   /** The helper's mic level during a session, 20 a second, for the pill and the stream (DC-G2). */
   onLevel?(rms: number): void;
+  /** The engine's line for the pill about a dictation (`best failed, used fast`), never logged. */
+  onNotice?(id: string, notice: string): void;
   /**
    * Keeps a dictation's audio for Retry and the learning check (DC-H2), called once its
    * `dictation.started` is written. Never called for a password field (DC-N8).
@@ -148,6 +150,8 @@ export class DictationSession {
   private secureInput = false;
   /** Dictations waiting for their insert's result, by the helper's session id. */
   private readonly inserts = new Map<string, string>();
+  /** Dictations ended and not yet decoded: a decode runs one at a time, after the last. */
+  private decoding = 0;
   /** Every decode and insert in flight, for tests and a clean stop. */
   private work: Promise<void> = Promise.resolve();
   /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
@@ -159,6 +163,15 @@ export class DictationSession {
     if (state === this.state) return;
     this.state = state;
     this.o.onState?.(state);
+  }
+
+  /**
+   * The state once a dictation's decode or insert settles: what is still in flight, else `idle`.
+   * A newer session listening owns the state, and so does a helper starting again.
+   */
+  private settle(): void {
+    if (this.cur || this.state === "starting") return;
+    this.set(this.decoding > 0 ? "transcribing" : this.inserts.size > 0 ? "inserting" : "idle");
   }
 
   private write(d: DictationDraft): void {
@@ -216,6 +229,9 @@ export class DictationSession {
         this.o.onLevel?.(m.rms);
         return;
       case "session.started":
+        // The last session is still draining its pipe: it ends now, with the audio it has, since
+        // everything it sent was written before this line.
+        if (this.cur?.end) this.ended(this.cur);
         this.cur = {
           helperId: m.id,
           target: m.target,
@@ -243,7 +259,7 @@ export class DictationSession {
           method: m.method,
           receipt_ms: m.receipt_ms,
         });
-        if (this.inserts.size === 0 && this.state === "inserting") this.set("idle");
+        this.settle();
         return;
       }
       case "insert.failed": {
@@ -251,7 +267,7 @@ export class DictationSession {
         if (!id) return;
         this.inserts.delete(m.id);
         this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
-        if (this.inserts.size === 0 && this.state === "inserting") this.set("idle");
+        this.settle();
         return;
       }
       default:
@@ -264,7 +280,13 @@ export class DictationSession {
   /** An `AKP1` packet from the helper's stdout: a session's audio, mic channel. */
   onPacket(p: Packet): void {
     if (p.ch !== "mic") return;
-    const c = this.cur;
+    let c = this.cur;
+    // A packet at 0 while the last session drains, once that one has audio, is the next session's
+    // first: the last one got every packet of its own before it.
+    if (c?.end && c.samples > 0 && p.fileSeconds === 0) {
+      this.ended(c);
+      c = null;
+    }
     if (!c) {
       // A session's first packet starts it again; a later one with none before it is the tail
       // of a session already transcribed.
@@ -324,9 +346,10 @@ export class DictationSession {
     this.write({ type: "dictation.ended", id, reason, seconds });
     if (reason === "cancel" || reason === "stop") {
       this.write({ type: "dictation.cancelled", id });
-      this.set("idle");
+      this.settle();
       return;
     }
+    this.decoding++;
     this.set("transcribing");
     this.work = this.work.then(() => this.transcribe(id, c, samples, engine));
   }
@@ -343,9 +366,10 @@ export class DictationSession {
 
   /** The session will not be inserted: the helper stops holding Escape and Enter now. */
   private notInserted(helperId: string, d: DictationDraft): void {
+    this.decoding--;
     this.write(d);
     this.o.send({ type: "settled", id: helperId });
-    this.set("idle");
+    this.settle();
   }
 
   private async transcribe(
@@ -370,6 +394,7 @@ export class DictationSession {
       this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
       return;
     }
+    if (r.kind === "text" && r.d.notice) this.o.onNotice?.(id, r.d.notice);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
     if (r.kind === "empty" || r.text === "") {
@@ -377,8 +402,9 @@ export class DictationSession {
       return;
     }
     const text = r.text;
+    this.decoding--;
     this.inserts.set(c.helperId, id);
-    this.set("inserting");
+    this.settle();
     this.o.send({
       type: "insert",
       id: c.helperId,

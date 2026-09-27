@@ -265,6 +265,9 @@ describe("DC-S7: filler words", () => {
     // No language known: the hesitations, never a word of a list.
     ["uh the plan, este.", [], "the plan, este."],
     ["Hmm, the plan", [], "The plan"],
+    // A known language with no list replaces nothing; only an unknown one takes the sounds above.
+    ["uh the plan, este.", ["fr"], "uh the plan, este."],
+    ["euh, uh, le plan", ["fr-FR"], "euh, uh, le plan"],
     // Gated by language: `um` is Portuguese for "a", `este` English for nothing.
     ["um livro", ["pt"], "um livro"],
     ["um livro", ["pt", "en"], "um livro"],
