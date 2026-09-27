@@ -14,18 +14,19 @@
 
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
-import type { DictationItem } from "../../core/dictation/events.ts";
+import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
 import type { RemoteFallback, RemoteHealth } from "./remote.ts";
 import {
-  correctOrRaw,
   type DictationEngine,
   DictationSession,
-  languageForced,
+  decodeDictation,
   type RebindAnswer,
   type SessionState,
+  type TextRules,
+  textEvent,
 } from "./session.ts";
 import { DICTATION_DIR, DictationLog, expiredDictations, newDictationId } from "./store.ts";
 
@@ -50,14 +51,12 @@ export type ControlResult =
       message: string;
     };
 
-export interface DictationServiceOptions {
+export interface DictationServiceOptions extends TextRules {
   /** The config folder: the log is `dictation/events.jsonl` in it. */
   configDir: string;
   /** The engine `dictation.engine` picks, or the one named (`fast`, `remote`); null with none. */
   engine(name?: string): DictationEngine | null;
   now(): number;
-  /** The decoded text after the dictation vocabulary (DC-L6); absent, inserted as decoded. */
-  correct?(raw: string, language: string | null): Promise<string>;
   /** `dictation.language` when it is set, else undefined: the engine chooses (DC-E4). */
   language?(): string | undefined;
   /** Why the engine is the one it is ("best on metal"), for `GET /v1/dictation` (DC-E3). */
@@ -68,7 +67,6 @@ export interface DictationServiceOptions {
   remote?(): DictationRemoteStatus | null;
   /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
   retainDays?(): number;
-  onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
 /** The remote engine as `GET /v1/dictation` shows it. */
@@ -96,6 +94,12 @@ export interface DictationStatus {
   remote: DictationRemoteStatus | null;
 }
 
+/**
+ * What a follower of the dictation stream gets (DC-G2): every event the log appends, and the
+ * helper's mic level during a session, which is never written anywhere.
+ */
+export type DictationFollow = { kind: "event"; e: DictationEvent } | { kind: "level"; rms: number };
+
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   session: DictationSession;
@@ -113,6 +117,7 @@ export class DictationService {
   /** Where `POST /v1/dictations` spools a clip while it is decoded; emptied at every start. */
   readonly uploadDir: string;
   private readonly watchers = new Set<(state: DictationStatus["state"]) => void>();
+  private readonly followers = new Set<(m: DictationFollow) => void>();
   private readonly sweeper: ReturnType<typeof setInterval>;
 
   constructor(private readonly o: DictationServiceOptions) {
@@ -128,6 +133,7 @@ export class DictationService {
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
+      this.tell({ kind: "event", e });
     };
     this.sweep();
     this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
@@ -156,6 +162,25 @@ export class DictationService {
   watch(fn: (state: DictationStatus["state"]) => void): () => void {
     this.watchers.add(fn);
     return () => this.watchers.delete(fn);
+  }
+
+  /**
+   * Called with every event the log appends and every mic level, from now on (DC-G2). Returns the
+   * unsubscribe.
+   */
+  follow(fn: (m: DictationFollow) => void): () => void {
+    this.followers.add(fn);
+    return () => this.followers.delete(fn);
+  }
+
+  private tell(m: DictationFollow): void {
+    for (const fn of this.followers) {
+      try {
+        fn(m);
+      } catch (err) {
+        this.o.onLog?.("error", `dictation follower: ${(err as Error).message}`);
+      }
+    }
   }
 
   private emit(): void {
@@ -247,9 +272,10 @@ export class DictationService {
       engine: this.o.engine,
       bindings,
       now: this.o.now,
-      ...(this.o.correct ? { correct: this.o.correct } : {}),
+      ...textRules(this.o),
       ...(this.o.language ? { language: this.o.language } : {}),
       onState: () => this.emit(),
+      onLevel: (rms) => this.tell({ kind: "level", rms }),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -355,22 +381,9 @@ export class DictationService {
       this.log.append({ type: "dictation.failed", id, error: "no speech model is loaded" });
     } else {
       try {
-        const d = await engine.decode(samples, language ? { language } : {});
-        if (d.text === "") this.log.append({ type: "dictation.empty", id });
-        else
-          this.log.append({
-            type: "dictation.text",
-            id,
-            raw: d.text,
-            text: await correctOrRaw(this.o, d),
-            language: d.language,
-            words: d.words,
-            engine: d.engine ?? engine.name,
-            model: d.model,
-            ms: d.ms,
-            ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
-            ...languageForced(language, d.engine ?? engine.name),
-          });
+        const r = await decodeDictation(this.o, engine, samples, language);
+        if (r.kind === "text") this.log.append(textEvent(id, r, engine.name, language));
+        if (r.kind === "empty" || r.text === "") this.log.append({ type: "dictation.empty", id });
       } catch (err) {
         this.log.append({ type: "dictation.failed", id, error: (err as Error).message });
       }
@@ -385,4 +398,14 @@ export class DictationService {
     await this.stop();
     this.log.close();
   }
+}
+
+/** The text rules the service hands each session (DC-E6, DC-L6, DC-S7). */
+function textRules(o: TextRules): TextRules {
+  const r: TextRules = {};
+  if (o.correct) r.correct = o.correct;
+  if (o.speech) r.speech = o.speech;
+  if (o.fillers) r.fillers = o.fillers;
+  if (o.languages) r.languages = o.languages;
+  return r;
 }

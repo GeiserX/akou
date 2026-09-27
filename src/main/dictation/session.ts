@@ -14,9 +14,16 @@
  *
  * A password field gets nothing logged but that the dictation happened (DC-N8): no text, no words,
  * and the text goes to the helper for the clipboard only.
+ *
+ * Two guards stand before an insert (DC-E6): a buffer in which the VAD finds no speech is never
+ * decoded, so no engine can invent a sentence from room noise; and an answer that is the engine's
+ * context echoed back is decoded again with no context. After the vocabulary, filler words leave
+ * the inserted text (DC-S7); the log keeps what the engine heard.
  */
 
+import { isEcho } from "../../core/dictation/echo.ts";
 import type { DictationDraft, Target } from "../../core/dictation/events.ts";
+import { removeFillers } from "../../core/dictation/fillers.ts";
 import type { Decoded } from "../asr/live-worker.ts";
 import type { Packet } from "../capture/protocol.ts";
 import { forcesLanguage } from "./engines.ts";
@@ -34,11 +41,40 @@ export type EngineDecoded = Decoded & {
   notice?: string | null;
 };
 
+/**
+ * How a decode is asked for: the forced language, and `context: false` for DC-E6's second decode,
+ * which an engine that sends context (DC-L7's glossary) must send without it. No engine sends
+ * context today, so every one ignores it.
+ */
+export interface DecodeRequest {
+  language?: string;
+  context?: boolean;
+}
+
 /** Decodes a dictation's buffer: the live Worker (`fast`), a remote akou (`remote`). */
 export interface DictationEngine {
   /** What the log records as the engine: `fast`, `best`, `remote`. */
   readonly name: string;
-  decode(samples: Float32Array, o: { language?: string }): Promise<EngineDecoded>;
+  decode(samples: Float32Array, o: DecodeRequest): Promise<EngineDecoded>;
+}
+
+/** What turns a dictation's buffer into the text to insert, beside the engine (DC-E6, DC-S7). */
+export interface TextRules {
+  /**
+   * The decoded text after the dictation vocabulary (DC-L6), in the language the engine found.
+   * Absent, the text is inserted as decoded.
+   */
+  correct?(raw: string, language: string | null): Promise<string>;
+  /**
+   * Whether the VAD hears speech in the buffer; null when no VAD is loaded (a machine with no local
+   * model, whose remote runs its own guard). False: nothing is decoded.
+   */
+  speech?(samples: Float32Array): Promise<boolean | null>;
+  /** `dictation.fillers`: leave filler words out of the inserted text. */
+  fillers?(): boolean;
+  /** The languages a dictation may be in when the engine names none: the fillers' gate. */
+  languages?(): readonly string[];
+  onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
 /** The helper's answer to a `rebind` (DC-A7): on a refusal the old binding stays. */
@@ -46,7 +82,7 @@ export type RebindAnswer = { ok: true } | { ok: false; reason: string };
 
 export type SessionState = "starting" | "idle" | "listening" | "transcribing" | "inserting";
 
-export interface SessionOptions {
+export interface SessionOptions extends TextRules {
   log: DictationLog;
   /** The engine now, or null when none is loaded (the models are missing). */
   engine(): DictationEngine | null;
@@ -55,13 +91,9 @@ export interface SessionOptions {
   now(): number;
   /** `dictation.language` when it is set, else undefined: the engine chooses (DC-E4). */
   language?(): string | undefined;
-  /**
-   * The decoded text after the dictation vocabulary (DC-L6), in the language the engine found.
-   * Absent, the text is inserted as decoded.
-   */
-  correct?(raw: string, language: string | null): Promise<string>;
   onState?(state: SessionState): void;
-  onLog?(level: "info" | "warn" | "error", msg: string): void;
+  /** The helper's mic level during a session, 20 a second, for the pill and the stream (DC-G2). */
+  onLevel?(rms: number): void;
 }
 
 interface Listening {
@@ -155,6 +187,9 @@ export class DictationSession {
       case "warn":
         this.o.onLog?.("warn", `dictation helper: ${m.code}: ${m.msg}`);
         return;
+      case "level":
+        this.o.onLevel?.(m.rms);
+        return;
       case "session.started":
         this.cur = {
           helperId: m.id,
@@ -194,7 +229,7 @@ export class DictationSession {
         return;
       }
       default:
-        // level, key, grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's,
+        // key, grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's,
         // in later items.
         return;
     }
@@ -278,34 +313,20 @@ export class DictationSession {
       return;
     }
     const language = this.o.language?.();
-    let d: EngineDecoded;
+    let r: DictationResult;
     try {
-      d = await engine.decode(samples, language ? { language } : {});
+      r = await decodeDictation(this.o, engine, samples, language, c.secure);
     } catch (err) {
       this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
       return;
     }
-    if (d.text === "") {
+    // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
+    if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
+    if (r.kind === "empty" || r.text === "") {
       this.notInserted(c.helperId, { type: "dictation.empty", id });
       return;
     }
-    // A password field gets exactly what was heard (DC-N8): no learned rewrite of a secret.
-    const text = c.secure ? d.text : await correctOrRaw(this.o, d);
-    // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
-    if (!c.secure)
-      this.write({
-        type: "dictation.text",
-        id,
-        raw: d.text,
-        text,
-        language: d.language,
-        words: d.words,
-        engine: d.engine ?? engine.name,
-        model: d.model,
-        ms: d.ms,
-        ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
-        ...languageForced(language, d.engine ?? engine.name),
-      });
+    const text = r.text;
     this.inserts.set(c.helperId, id);
     this.set("inserting");
     this.o.send({
@@ -318,6 +339,82 @@ export class DictationSession {
       target: c.target,
     });
   }
+}
+
+/** What a dictation's buffer became: nothing heard, or the text to insert and what was decoded. */
+export type DictationResult =
+  | { kind: "empty" }
+  | { kind: "text"; d: EngineDecoded; text: string; echoRetry: boolean };
+
+/**
+ * A dictation's buffer through the guards and the text rules (DC-E6, DC-L6, DC-S7): no speech is
+ * no decode; an echoed context is decoded again without it; the text is the vocabulary's, less its
+ * fillers. A password field (`secure`) gets exactly what was heard. Throws when the engine fails.
+ */
+export async function decodeDictation(
+  o: TextRules,
+  engine: DictationEngine,
+  samples: Float32Array,
+  language: string | undefined,
+  secure = false,
+): Promise<DictationResult> {
+  if ((await hearsSpeech(o, samples)) === false) return { kind: "empty" };
+  const ask = language ? { language } : {};
+  let d = await engine.decode(samples, ask);
+  let echoRetry = false;
+  // No engine sends a glossary yet (DC-L7), so only the wrapper text can give an echo away.
+  if (isEcho(d.text)) {
+    o.onLog?.("warn", `dictation: ${d.engine ?? engine.name} echoed its context, decoding again`);
+    d = await engine.decode(samples, { ...ask, context: false });
+    // Sent with no context, the second answer is what was said, even if it reads like the wrapper.
+    echoRetry = true;
+  }
+  if (d.text === "") return { kind: "empty" };
+  if (secure) return { kind: "text", d, text: d.text, echoRetry };
+  let text = await correctOrRaw(o, d);
+  if (o.fillers?.()) {
+    const known = d.language ?? language;
+    text = removeFillers(text, known ? [known] : (o.languages?.() ?? []));
+  }
+  return { kind: "text", d, text, echoRetry };
+}
+
+/** The VAD's verdict, or null when it has none or fails: a guard that breaks never loses audio. */
+async function hearsSpeech(o: TextRules, samples: Float32Array): Promise<boolean | null> {
+  if (!o.speech) return null;
+  try {
+    return await o.speech(samples);
+  } catch (err) {
+    o.onLog?.(
+      "warn",
+      `dictation: the speech check failed, decoding anyway: ${(err as Error).message}`,
+    );
+    return null;
+  }
+}
+
+/** The log's `dictation.text` for a decoded dictation. */
+export function textEvent(
+  id: string,
+  r: Extract<DictationResult, { kind: "text" }>,
+  engine: string,
+  language: string | undefined,
+): DictationDraft {
+  const d = r.d;
+  return {
+    type: "dictation.text",
+    id,
+    raw: d.text,
+    text: r.text,
+    language: d.language,
+    words: d.words,
+    engine: d.engine ?? engine,
+    model: d.model,
+    ms: d.ms,
+    ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
+    ...languageForced(language, d.engine ?? engine),
+    ...(r.echoRetry ? { echo_retry: true } : {}),
+  };
 }
 
 /**
