@@ -545,10 +545,11 @@ async function runDictate(): Promise<void> {
             say({ type: "inserted", id: c.id, method: "clipboard", receipt_ms: 0 });
             return;
           }
-          say({ type: "inserted", id: c.id, method: c.method, receipt_ms: receiptMs });
-          // The send key only after the target read the text, as the real inserter (DC-S2).
+          // The send key only after the target read the text, and before the receipt is
+          // reported, as the real inserter (DC-S2): whoever sees `inserted` sees the send too.
           if (c.method !== "clipboard" && c.send_key !== "none")
             log(opt("--inserter-log"), { type: "send", key: c.send_key, at: now() });
+          say({ type: "inserted", id: c.id, method: c.method, receipt_ms: receiptMs });
           if (flag("--dormant-tree")) say({ type: "edit.unreadable", id: c.id, reason: "dormant" });
         }, receiptMs);
         return;
