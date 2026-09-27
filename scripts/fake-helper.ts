@@ -414,7 +414,8 @@ async function runDictate(): Promise<void> {
           ch: "mic",
           zeroFilled: false,
           captureNs: BigInt(Math.round((at / CAPTURE_RATE) * 1e9)),
-          fileSeconds: at / CAPTURE_RATE,
+          // As the real helper: a session's audio is numbered from 0.
+          fileSeconds: (at - a) / CAPTURE_RATE,
           samples,
         }),
       );

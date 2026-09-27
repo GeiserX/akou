@@ -123,18 +123,22 @@ interface Listening {
 export const AUDIO_DRAIN_MS = 100;
 
 /**
- * How long an end read before any of its session's audio waits for the first packet. A release,
- * a tap, a key, silence or the cap always carries the ring and the post-roll, so no audio at all
- * means the app has not read its stdout yet: a busy event loop runs the quiet window's timer
- * before it polls the pipe. That cost a Windows runner every word of a hold. A session whose mic
- * never delivered is still empty, this much later.
+ * The same two pipes the other way round: a session's first packets can be read before its
+ * `session.started` line. The helper sends audio only inside a session and numbers it from 0
+ * (`fileSeconds`), so what arrives with no session open, from a packet at 0 on, is the next
+ * session's start. A Windows runner lost the first half second of every hold before this.
  */
-export const FIRST_PACKET_MS = 2000;
+interface Early {
+  chunks: Float32Array[];
+  samples: number;
+}
 
 export class DictationSession {
   state: SessionState = "starting";
   ready: Extract<HelperToApp, { type: "ready" }> | null = null;
   private cur: Listening | null = null;
+  /** Audio read before its `session.started` line (see `Early`). */
+  private early: Early = { chunks: [], samples: 0 };
   /** macOS Secure Input, as the helper last reported it. */
   private secureInput = false;
   /** Dictations waiting for their insert's result, by the helper's session id. */
@@ -210,18 +214,18 @@ export class DictationSession {
         this.cur = {
           helperId: m.id,
           target: m.target,
-          chunks: [],
-          samples: 0,
+          chunks: this.early.chunks,
+          samples: this.early.samples,
           secure: this.secureInput || m.target.field === "secure",
           end: null,
         };
+        this.early = { chunks: [], samples: 0 };
         this.set("listening");
         return;
       case "session.ended": {
         const c = this.cur;
         if (!c || c.helperId !== m.id || c.end) return;
-        const waitsForAudio = c.samples === 0 && m.reason !== "cancel" && m.reason !== "stop";
-        c.end = { reason: m.reason, timer: this.drain(c, waitsForAudio ? FIRST_PACKET_MS : 0) };
+        c.end = { reason: m.reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
         return;
       }
       case "inserted": {
@@ -254,26 +258,28 @@ export class DictationSession {
 
   /** An `AKP1` packet from the helper's stdout: a session's audio, mic channel. */
   onPacket(p: Packet): void {
+    if (p.ch !== "mic") return;
     const c = this.cur;
-    if (!c || p.ch !== "mic") return;
+    if (!c) {
+      // A session's first packet starts it again; a later one with none before it is the tail
+      // of a session already transcribed.
+      if (p.fileSeconds === 0) this.early = { chunks: [], samples: 0 };
+      else if (this.early.chunks.length === 0) return;
+      this.early.chunks.push(p.samples);
+      this.early.samples += p.samples.length;
+      return;
+    }
     c.chunks.push(p.samples);
     c.samples += p.samples.length;
     // Audio read after the end: the pipe is still draining, so the quiet window starts again.
-    if (c.end) {
-      clearTimeout(c.end.timer);
-      c.end.timer = this.drain(c, 0);
-    }
-  }
-
-  /** The quiet window after the end, or the wait for the first packet when `ms` is longer. */
-  private drain(c: Listening, ms: number): ReturnType<typeof setTimeout> {
-    return setTimeout(() => this.ended(c), Math.max(ms, AUDIO_DRAIN_MS));
+    if (c.end) c.end.timer.refresh();
   }
 
   /** The helper exited: a session in progress is lost with it, and says so. */
   helperGone(): void {
     const c = this.cur;
     this.cur = null;
+    this.early = { chunks: [], samples: 0 };
     if (c?.end) clearTimeout(c.end.timer);
     if (c) {
       const id = newDictationId(this.o.now());

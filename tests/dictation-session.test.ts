@@ -357,11 +357,11 @@ describe("DC-T1: the scripted accessibility tree (--ax)", () => {
 
 describe("the helper's stdout and stderr are two pipes", () => {
   const TARGET = { app: "a", pid: 1, window: "w", field: "editable" as const };
-  const packet = (n: number): Packet => ({
+  const packet = (n: number, fileSeconds = 0): Packet => ({
     ch: "mic",
     zeroFilled: false,
     captureNs: 0n,
-    fileSeconds: 0,
+    fileSeconds,
     samples: new Float32Array(n),
   });
 
@@ -406,26 +406,26 @@ describe("the helper's stdout and stderr are two pipes", () => {
     expect(got).toEqual([960]);
   });
 
-  test("`session.ended` read before any packet waits for the first one past the quiet window", async () => {
+  test("packets read before `session.started` are the session's first audio", async () => {
     const { s, got } = session();
+    // stdout ran ahead of stderr: the ring is read before the line that opens the session.
+    s.onPacket(packet(320, 0));
+    s.onPacket(packet(320, 0.02));
     s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320, 0.04));
     s.onMessage({ type: "session.ended", id: "1", reason: "release" });
-    // The stdout reader is behind: nothing has arrived three quiet windows after the end.
-    await wait(AUDIO_DRAIN_MS * 3);
-    expect(s.state).toBe("listening");
-    s.onPacket(packet(320));
-    s.onPacket(packet(320));
     await until(() => got.length === 1, 2000, "the decode");
-    expect(got).toEqual([640]);
+    expect(got).toEqual([960]);
   });
 
-  test("a cancel with no audio read yet is cancelled within the quiet window", async () => {
-    const { s, got, log } = session();
+  test("a packet left from a transcribed session is never the next session's", async () => {
+    const { s, got } = session();
+    s.onPacket(packet(320, 1.5));
     s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
-    s.onMessage({ type: "session.ended", id: "1", reason: "cancel" });
-    await until(() => s.state === "idle", AUDIO_DRAIN_MS * 5, "the cancel");
-    expect(log.items()[0]?.state).toBe("cancelled");
-    expect(got).toEqual([]);
+    s.onPacket(packet(160, 0));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => got.length === 1, 2000, "the decode");
+    expect(got).toEqual([160]);
   });
 
   test("an empty dictation is settled back to the helper at once (DC-A4)", async () => {
