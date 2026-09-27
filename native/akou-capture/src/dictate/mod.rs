@@ -25,9 +25,11 @@ pub mod insert;
 pub mod keys;
 pub mod mic;
 pub mod protocol;
+pub mod readback;
 pub mod session;
 #[cfg(feature = "simulate")]
 pub mod sim;
+pub mod tap;
 
 use crate::protocol::exit;
 use activation::Mode;
@@ -126,6 +128,7 @@ pub fn main(argv: &[String]) -> i32 {
             warm: args.warm,
             bluetooth: false,
             ring_ms: mic::RING_MS,
+            os: insert::Os::current(),
         };
         return sim::run(
             args.sim,

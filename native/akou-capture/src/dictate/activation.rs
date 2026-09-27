@@ -14,8 +14,13 @@
 //! - **Keys during a session**: from the press until the insert settles (`settled`, or
 //!   `SETTLE_MS` after the last session end or insert), Escape, Enter and Shift+Enter are
 //!   swallowed and reported. Outside a session nothing is swallowed.
+//! - **Which rule wins**: before a press is a session (a modifier-only key held under `HOLD_MS`)
+//!   every other key, Enter included, is the interrupt rule, since nothing is swallowed outside a
+//!   session. Once it is a session, Escape, Enter and Shift+Enter are DC-A4's even while the
+//!   modifier is still held, so Enter during a push-to-talk hold ends it and sends instead of
+//!   reaching the app as Command+Enter; any other key is still the interrupt rule.
 
-use super::keys::Hotkey;
+use super::keys::{self, Hotkey};
 
 /// A press held this long is push-to-talk (Handy's `HoldOrToggle` threshold).
 pub const HOLD_MS: u64 = 300;
@@ -120,6 +125,11 @@ impl Activation {
         self.record = on;
     }
 
+    /// The keys down now, as the tap saw them.
+    pub fn held(&self) -> &[String] {
+        &self.held
+    }
+
     pub fn is_listening(&self) -> bool {
         matches!(self.state, State::Listening { .. })
     }
@@ -127,16 +137,16 @@ impl Activation {
     /// One key event. Returns whether the key is swallowed.
     pub fn key(&mut self, down: bool, name: &str, t_ns: u64, out: &mut Vec<Action>) -> bool {
         if !down {
-            self.held.retain(|k| k != name);
-            let swallowed = self.swallowed.iter().position(|k| k == name);
+            self.held.retain(|k| !keys::same(k, name));
+            let swallowed = self.swallowed.iter().position(|k| keys::same(k, name));
             if let Some(i) = swallowed {
                 self.swallowed.remove(i);
             }
             return self.key_up(name, t_ns, out) || swallowed.is_some();
         }
-        if self.held.iter().any(|k| k == name) {
+        if self.held.iter().any(|k| keys::same(k, name)) {
             // Auto-repeat: the first down already decided.
-            return self.swallowed.iter().any(|k| k == name);
+            return self.swallowed.iter().any(|k| keys::same(k, name));
         }
         let press = self.hotkey.pressed_by(name, &self.held);
         self.held.push(name.to_string());
@@ -163,10 +173,12 @@ impl Activation {
         }
     }
 
+    /// A Shift other than the hotkey itself (a `RightShift` hotkey held is not Shift+Enter).
     fn shift_held(&self) -> bool {
-        self.held
-            .iter()
-            .any(|k| matches!(super::keys::modifier(k), Some((super::keys::Mod::Shift, _))))
+        self.held.iter().any(|k| {
+            matches!(keys::modifier(k), Some((keys::Mod::Shift, _)))
+                && !keys::same(k, self.hotkey.trigger())
+        })
     }
 
     fn key_down(&mut self, name: &str, press: bool, t_ns: u64, out: &mut Vec<Action>) -> bool {
@@ -210,7 +222,8 @@ impl Activation {
                         self.state = State::Idle;
                         true
                     }
-                    Some(k) if !(held && !chord) => {
+                    // DC-A4 wins over the interrupt rule once the press is a session.
+                    Some(k) => {
                         out.push(Action::Key(k.into()));
                         out.push(Action::End { reason: "key" });
                         self.state = self.awaiting(t_ns);
@@ -243,8 +256,20 @@ impl Activation {
         }
     }
 
+    /// The hotkey itself went down or up, from a source that reports the binding and not its
+    /// keys: the GlobalShortcuts portal's `Activated` and `Deactivated` (DC-N1). The held
+    /// modifiers are the portal's to check, so a chord is not matched against them here.
+    pub fn trigger(&mut self, down: bool, t_ns: u64, out: &mut Vec<Action>) -> bool {
+        let name = self.hotkey.trigger().to_string();
+        if down {
+            self.key_down(&name, true, t_ns, out)
+        } else {
+            self.key_up(&name, t_ns, out)
+        }
+    }
+
     fn key_up(&mut self, name: &str, t_ns: u64, out: &mut Vec<Action>) -> bool {
-        if name != self.hotkey.trigger() {
+        if !keys::same(name, self.hotkey.trigger()) {
             return false;
         }
         match self.state {
@@ -481,6 +506,132 @@ mod tests {
             ]
         );
         assert!(swallowed.is_empty());
+    }
+
+    /// DC-A1 and DC-A4 together: Enter during a confirmed push-to-talk hold ends the session as
+    /// `key` and is swallowed, so the app never sees Right Command + Enter; the same Enter while
+    /// the press is still under `HOLD_MS` is the interrupt rule and passes (positive control).
+    #[test]
+    fn enter_during_a_confirmed_hold_is_dc_a4_and_before_it_the_interrupt_rule() {
+        let (acts, swallowed) = play(
+            "RightCommand",
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "RightCommand"),
+                (800, true, "Enter"),
+                (850, false, "Enter"),
+                (1000, false, "RightCommand"),
+            ],
+            1200,
+        );
+        assert_eq!(
+            sessions(&acts),
+            vec![
+                (300, Action::Start { t_ns: 0 }),
+                (800, Action::End { reason: "key" })
+            ]
+        );
+        assert!(acts.contains(&(800, Action::Key("Enter".into()))));
+        assert_eq!(
+            swallowed,
+            vec![(800, true, "Enter".into()), (850, false, "Enter".into())]
+        );
+        let (acts, swallowed) = play(
+            "RightCommand",
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "RightCommand"),
+                (100, true, "Enter"),
+                (150, false, "Enter"),
+                (200, false, "RightCommand"),
+            ],
+            500,
+        );
+        assert_eq!(sessions(&acts), vec![]);
+        assert!(
+            swallowed.is_empty(),
+            "a shortcut, not a session: {swallowed:?}"
+        );
+    }
+
+    /// A `RightShift` hotkey held is not Shift for Enter: Enter during its hold is Enter.
+    #[test]
+    fn the_hotkeys_own_shift_does_not_make_enter_shift_enter() {
+        let (acts, _) = play(
+            "RightShift",
+            Mode::HoldOrToggle,
+            &[(0, true, "RightShift"), (800, true, "Enter")],
+            900,
+        );
+        assert!(
+            acts.contains(&(800, Action::Key("Enter".into()))),
+            "{acts:?}"
+        );
+    }
+
+    /// A chord held past `HOLD_MS` ends at its key's release however the OS spells the key, so a
+    /// hold never runs on because the up said `space` and the binding `Space`.
+    #[test]
+    fn a_chord_hold_ends_at_release_whatever_the_case_of_the_key() {
+        let (acts, swallowed) = play(
+            "Control+Shift+Space",
+            Mode::HoldOrToggle,
+            &[
+                (0, true, "LeftCtrl"),
+                (10, true, "LeftShift"),
+                (20, true, "space"),
+                (900, false, "SPACE"),
+            ],
+            1000,
+        );
+        assert_eq!(
+            sessions(&acts),
+            vec![
+                (20, Action::Start { t_ns: 20 * MS }),
+                (900, Action::End { reason: "release" })
+            ]
+        );
+        assert_eq!(swallowed.len(), 2, "down and up: {swallowed:?}");
+    }
+
+    /// DC-A6: a mouse button runs a session like a key: held, it ends at the button-up.
+    #[test]
+    fn dc_a6_a_mouse_button_down_and_up_runs_a_session() {
+        let (acts, swallowed) = play(
+            "Mouse4",
+            Mode::HoldOrToggle,
+            &[(0, true, "Mouse4"), (900, false, "Mouse4")],
+            1000,
+        );
+        assert_eq!(
+            sessions(&acts),
+            vec![
+                (0, Action::Start { t_ns: 0 }),
+                (900, Action::End { reason: "release" })
+            ]
+        );
+        assert_eq!(swallowed.len(), 2, "back is not also a page back");
+    }
+
+    /// The portal reports the binding, not its keys: `trigger` runs a hold with no modifier seen.
+    #[test]
+    fn the_portal_trigger_runs_a_chord_with_no_modifier_seen() {
+        let mut a = Activation::new(
+            Hotkey::parse("Control+Shift+Space").unwrap(),
+            Mode::HoldOrToggle,
+        );
+        let mut out = Vec::new();
+        a.trigger(true, 0, &mut out);
+        a.tick(500 * MS, &mut out);
+        a.trigger(false, 900 * MS, &mut out);
+        assert_eq!(
+            out,
+            vec![
+                Action::Arm { t_ns: 0 },
+                Action::Start { t_ns: 0 },
+                Action::End { reason: "release" }
+            ]
+        );
     }
 
     #[test]
