@@ -16,6 +16,8 @@
  * - `interactive=true` (DICTATION.md DC-R2): a dictation, run in the reserved lane of
  *   `server.dictation_slots` Workers in arrival order and never refused by the queue's limits; with
  *   no model named it runs `server.dictation_engine`. Ignored when the server has no dictation slots.
+ *   A dictation may stream its body during the hold (DC-R6): chunked, with a WAV whose length says
+ *   "to the end"; nothing is decoded until the body ends, as for any other upload.
  * - `stream=true`: Server-Sent Events, `transcript.text.delta` per segment (or
  *   `transcript.text.segment` for `diarized_json`), then `transcript.text.done`.
  * - Accepted and ignored: `temperature`, `chunking_strategy`, `include[]`, `languages[]`,
@@ -341,7 +343,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
       access: "jobs",
       modes: ["server"],
       door: "compat",
