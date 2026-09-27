@@ -51,6 +51,12 @@ windows = { version = "0.62", features = [
   "Win32_System_WindowsProgramming",
 ] }
 
+# The macOS pasteboard and layout checks run on the main thread, where AppKit serves a pasteboard
+# promise; the default harness runs tests on other threads, so this one is its own `main`.
+[[test]]
+name = "mac_pasteboard"
+harness = false
+
 [profile.release]
 lto = "thin"
 codegen-units = 1

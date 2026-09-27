@@ -22,6 +22,11 @@
 //!   (a dormant tree, no grant) `unknown`. Every accessibility read times out at 200 ms
 //!   (`AXUIElementSetMessagingTimeout` on the system-wide element). Nothing here writes to another
 //!   process's accessibility tree.
+//! - **The insert** is `mac_insert`: the general pasteboard's promise and key events from a
+//!   private source. The worker loop stays on the main thread, because AppKit serves the promise
+//!   only on the main run loop, which `mac_insert::wait` turns between messages. After `focus`
+//!   the worker waits (turning the run loop) until the target is frontmost, at most `FOCUS_MS`,
+//!   so the insert that follows compares against the window that now has the keyboard.
 //! - **The microphone** is `macos::mic::MicWorker`, the same cpal stream `run` records with, opened
 //!   and closed as `live` asks; a Bluetooth device (`kAudioDeviceTransportTypeBluetooth`) is never
 //!   kept warm.
@@ -41,7 +46,7 @@ use objc2::runtime::{AnyClass, AnyObject};
 use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
     CFDictionary, CFMachPort, CFNumber, CFRange, CFRetained, CFRunLoop, CFString, CFType,
-    kCFRunLoopCommonModes,
+    kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventMask, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
@@ -51,8 +56,9 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::NSString;
 
-use super::insert::Targets;
+use super::insert::{Inserter, Os, Targets};
 use super::live::{self, Device, Stdio};
+use super::mac_insert::{self, Events, Pasteboard};
 use super::mac_keys;
 use super::protocol::{self as p, Target};
 use super::readback::Field;
@@ -70,6 +76,8 @@ pub const AKOU_EVENT: i64 = 0x616B_6F75;
 const AX_TIMEOUT_S: f32 = 0.2;
 const MIC_OPEN: Duration = Duration::from_secs(3);
 const MIC_CLOSE: Duration = Duration::from_millis(1500);
+/// The longest `focus` waits for the target to come to the front.
+const FOCUS_MS: u64 = 500;
 
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" {
@@ -288,6 +296,17 @@ impl Targets for Screen {
                 let _: bool = unsafe { msg_send![&app, activateWithOptions: 1usize] };
             }
         });
+        // Activation lands on a later turn of the window server: wait for it (turning the run
+        // loop, so a pending promise is still served), or the insert right after would compare
+        // against the window that had the keyboard before.
+        let sys = system_wide();
+        for _ in 0..FOCUS_MS / 20 {
+            if front_pid(&sys) == Some(pid) {
+                break;
+            }
+            // SAFETY: a CF constant.
+            CFRunLoop::run_in_mode(unsafe { kCFRunLoopDefaultMode }, 0.02, false);
+        }
     }
 
     fn read_field(&mut self, t: &Target) -> Field {
@@ -535,7 +554,12 @@ pub fn run(cfg: Config) -> i32 {
     // SAFETY: the system-wide element sets the default for every element.
     let _ = unsafe { system_wide().set_messaging_timeout(AX_TIMEOUT_S) };
     let (tx, rx) = mpsc::channel();
-    let mut d = Dictate::new(cfg, Box::new(Screen), None);
+    let inserter = match (Pasteboard::general(), Events::new()) {
+        (Some(clip), Some(sink)) => Some(Inserter::new(Os::Mac, Box::new(clip), Box::new(sink))),
+        _ => None,
+    };
+    let no_inserter = inserter.is_none();
+    let mut d = Dictate::new(cfg, Box::new(Screen), inserter);
     let (mic, ax) = grants();
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
@@ -549,12 +573,25 @@ pub fn run(cfg: Config) -> i32 {
     if let Err(e) = tapped {
         out.line(p::warn("no-tap", &e));
     }
+    if no_inserter {
+        // Every insert answers `insert.failed no-inserter` and the app opens the draft box.
+        out.line(p::warn("no-inserter", "no pasteboard or event source"));
+    }
     live::read_lines(
         Box::new(std::io::BufReader::new(std::io::stdin())),
         tx.clone(),
     );
     let mut dev = MacMic::default();
-    live::serve(&mut d, &mut dev, tx, rx, &mut clock::now, &mut out)
+    // The worker stays on this, the main thread: see `mac_insert::wait`.
+    live::serve_with(
+        &mut d,
+        &mut dev,
+        tx,
+        rx,
+        &mut clock::now,
+        &mut mac_insert::wait,
+        &mut out,
+    )
 }
 
 #[cfg(test)]
