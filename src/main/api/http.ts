@@ -307,7 +307,7 @@ export interface RouteDoc extends RouteMeta {
   /** The status of a success. */
   ok: number;
   /** What a success carries. Default `json`. */
-  type?: "json" | "sse" | "text" | "markdown" | "audio";
+  type?: "json" | "sse" | "text" | "markdown" | "audio" | "wav";
 }
 
 /** The query parameters of one request, read through the route's declared `query`. */

@@ -9,7 +9,12 @@
  * the key were tapped.
  *
  * Retention (DC-H2): `dictation.retainDays` is applied when the service starts, every hour, and at
- * each new dictation, so with 0 the one before is deleted as the next one begins.
+ * each new dictation, so with 0 the one before is deleted as the next one begins. A spoken
+ * dictation's audio is kept beside the log for Retry and the learning check; deleting a dictation
+ * deletes its audio. With `dictation.keepAudio` off, the audio goes when the dictation's learn
+ * window closes: at once for one that was not inserted or with `dictation.learn` off, else
+ * `LEARN_WINDOW_MS` after the insert, DC-L2's longest read-back. A window never outlives the app:
+ * at the next start, and at every sweep, the audio of a finished dictation with no open window goes.
  */
 
 import { mkdirSync, rmSync } from "node:fs";
@@ -17,6 +22,7 @@ import { join } from "node:path";
 import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
+import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
 import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
 import type { RemoteFallback, RemoteHealth } from "./remote.ts";
 import {
@@ -28,7 +34,7 @@ import {
   type TextRules,
   textEvent,
 } from "./session.ts";
-import { DICTATION_DIR, DictationLog, expiredDictations, newDictationId } from "./store.ts";
+import { DICTATION_DIR, DictationLog, expiredDictations, FINAL, newDictationId } from "./store.ts";
 
 /** How long `stop` waits for the helper to exit before it is killed. */
 const STOP_MS = 2000;
@@ -38,6 +44,43 @@ const SWEEP_MS = 60 * 60 * 1000;
 
 /** How long `control` waits for the helper to act on a session command. */
 export const CONTROL_MS = 3000;
+
+/**
+ * How long a dictation's audio outlives its insert with `dictation.keepAudio` off: DC-L2 reads the
+ * field back within 60 s, and the learning check runs on the audio after that read.
+ */
+export const LEARN_WINDOW_MS = 60_000;
+
+/** The events after which a dictation's learn window can open or close. */
+const SETTLED = new Set([
+  "dictation.inserted",
+  "dictation.cancelled",
+  "dictation.empty",
+  "dictation.failed",
+]);
+
+/** A retry's answer (DC-G1): the same audio decoded again, beside the dictation, never over it. */
+export interface RetryAnswer {
+  id: string;
+  text: string;
+  raw: string;
+  language: string | null;
+  words: DictationItem["words"];
+  engine: string;
+  model: string | null;
+  ms: number | null;
+  fallback_from?: string;
+  language_forced?: boolean;
+  echo_retry?: boolean;
+}
+
+export type RetryResult =
+  | { ok: true; answer: RetryAnswer }
+  | {
+      ok: false;
+      code: "not_found" | "no_audio" | "models_missing" | "transcription_failed";
+      message: string;
+    };
 
 /** The session commands of the tray and the CLI (DC-G1). */
 export type ControlAction = "start" | "stop" | "cancel";
@@ -67,6 +110,12 @@ export interface DictationServiceOptions extends TextRules {
   remote?(): DictationRemoteStatus | null;
   /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
   retainDays?(): number;
+  /** `dictation.keepAudio` as it is now; absent, the audio is kept. */
+  keepAudio?(): boolean;
+  /** Whether `dictation.learn` is on: off, no candidate is computed, so no learn window opens. */
+  learns?(): boolean;
+  /** How long a learn window stays open after an insert; `LEARN_WINDOW_MS` by default. */
+  learnWindowMs?: number;
 }
 
 /** The remote engine as `GET /v1/dictation` shows it. */
@@ -108,6 +157,10 @@ interface Helper {
 
 export class DictationService {
   readonly log: DictationLog;
+  /** A spoken dictation's audio, beside the log (DC-H2). */
+  readonly audio: DictationAudio;
+  /** The open learn windows with `dictation.keepAudio` off: the timer that closes each. */
+  private readonly windows = new Map<string, ReturnType<typeof setTimeout>>();
   private helper: Helper | null = null;
   /** The helper being stopped: a new one waits for it, so two never hold the key at once. */
   private stopping: Promise<void> | null = null;
@@ -122,6 +175,7 @@ export class DictationService {
 
   constructor(private readonly o: DictationServiceOptions) {
     this.log = new DictationLog(join(o.configDir, DICTATION_DIR), o.now);
+    this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO));
     this.uploadDir = join(o.configDir, DICTATION_DIR, "uploads");
     // A clip left by a crash mid-decode: akou keeps no copy of an upload.
     rmSync(this.uploadDir, { recursive: true, force: true });
@@ -133,6 +187,7 @@ export class DictationService {
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
+      if (SETTLED.has(e.type)) this.settledAudio(e.id, e.type === "dictation.inserted");
       this.tell({ kind: "event", e });
     };
     this.sweep();
@@ -146,15 +201,121 @@ export class DictationService {
    */
   sweep(): string[] {
     const days = this.o.retainDays?.();
-    if (days === undefined) return [];
+    let gone: string[] = [];
     try {
-      const gone = this.log.forget(expiredDictations(this.log.items(), this.o.now(), days));
-      if (gone.length > 0)
-        this.o.onLog?.("info", `dictation: ${gone.length} past retention deleted`);
-      return gone;
+      if (days !== undefined) {
+        gone = this.forget(expiredDictations(this.log.items(), this.o.now(), days));
+        if (gone.length > 0)
+          this.o.onLog?.("info", `dictation: ${gone.length} past retention deleted`);
+      }
+      this.sweepAudio();
     } catch (err) {
       this.o.onLog?.("error", `dictation retention: ${(err as Error).message}`);
-      return [];
+    }
+    return gone;
+  }
+
+  /**
+   * Deletes dictations (DC-H2): the log keeps a tombstone each, and their audio is gone. Returns
+   * the ids deleted.
+   */
+  forget(ids: Iterable<string>): string[] {
+    const gone = this.log.forget(ids);
+    for (const id of gone) this.dropAudio(id);
+    return gone;
+  }
+
+  /**
+   * The audio no dictation needs any more: a file whose dictation is gone (a crash between the
+   * tombstone and the delete), and with `dictation.keepAudio` off, a finished dictation's whose
+   * learn window is not open.
+   */
+  private sweepAudio(): void {
+    const keep = this.o.keepAudio?.() ?? true;
+    const items = new Map(this.log.items().map((it) => [it.id, it]));
+    for (const id of this.audio.ids()) {
+      const it = items.get(id);
+      if (!it || (!keep && FINAL.has(it.state) && !this.windows.has(id))) this.dropAudio(id);
+    }
+  }
+
+  /** A dictation settled: with `dictation.keepAudio` off, its learn window opens or it is closed. */
+  private settledAudio(id: string, inserted: boolean): void {
+    if ((this.o.keepAudio?.() ?? true) || !this.audio.has(id)) return;
+    clearTimeout(this.windows.get(id));
+    this.windows.delete(id);
+    // Only an inserted dictation can be fixed and learned from.
+    if (!inserted || !(this.o.learns?.() ?? true)) {
+      this.dropAudio(id);
+      return;
+    }
+    const t = setTimeout(() => this.closeLearnWindow(id), this.o.learnWindowMs ?? LEARN_WINDOW_MS);
+    t.unref?.();
+    this.windows.set(id, t);
+  }
+
+  /**
+   * The learning of this dictation is over (the chip closed or ignored, the read-back done or past
+   * its time): with `dictation.keepAudio` off, its audio is deleted now, and its text stays.
+   */
+  closeLearnWindow(id: string): void {
+    clearTimeout(this.windows.get(id));
+    this.windows.delete(id);
+    if (!(this.o.keepAudio?.() ?? true)) this.dropAudio(id);
+  }
+
+  private dropAudio(id: string): void {
+    clearTimeout(this.windows.get(id));
+    this.windows.delete(id);
+    try {
+      this.audio.remove(id);
+    } catch (err) {
+      this.o.onLog?.("error", `dictation audio ${id} not deleted: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Decodes a dictation's kept audio again with `engine` (DC-G1, DC-H1): the same guards and text
+   * rules as a new dictation, answered beside the first reading. The dictation and its log are not
+   * changed.
+   */
+  async retry(id: string, o: { engine?: string } = {}): Promise<RetryResult> {
+    if (!this.log.item(id)) return { ok: false, code: "not_found", message: `no dictation ${id}` };
+    const samples = await this.audio.read(id);
+    if (!samples) {
+      return {
+        ok: false,
+        code: "no_audio",
+        message: `dictation ${id} has no audio kept (a clip sent to the API, a password field, or dictation.keepAudio off)`,
+      };
+    }
+    const engine = this.o.engine(o.engine);
+    if (!engine) return { ok: false, code: "models_missing", message: "no speech model is loaded" };
+    const language = this.o.language?.();
+    try {
+      const r = await decodeDictation(this.o, engine, samples, language);
+      if (r.kind === "empty") {
+        return {
+          ok: true,
+          answer: {
+            id,
+            text: "",
+            raw: "",
+            language: null,
+            words: [],
+            engine: engine.name,
+            model: null,
+            ms: null,
+          },
+        };
+      }
+      const { type: _, ...t } = textEvent(id, r, engine.name, language) as Extract<
+        ReturnType<typeof textEvent>,
+        { type: "dictation.text" }
+      >;
+      return { ok: true, answer: t };
+    } catch (err) {
+      return { ok: false, code: "transcription_failed", message: (err as Error).message };
     }
   }
 
@@ -276,6 +437,7 @@ export class DictationService {
       ...(this.o.language ? { language: this.o.language } : {}),
       onState: () => this.emit(),
       onLevel: (rms) => this.tell({ kind: "level", rms }),
+      saveAudio: (id, samples) => this.audio.write(id, samples),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -395,6 +557,8 @@ export class DictationService {
 
   async close(): Promise<void> {
     clearInterval(this.sweeper);
+    for (const t of this.windows.values()) clearTimeout(t);
+    this.windows.clear();
     await this.stop();
     this.log.close();
   }

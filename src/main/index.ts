@@ -1461,6 +1461,12 @@ export class AkouApp implements ApiApp {
     if (before["dictation.enabled"] !== after["dictation.enabled"]) this.applyDictation();
     else if (after["dictation.enabled"] && WARM_KEYS.some((k) => !sameValue(before[k], after[k])))
       this.warmDictation();
+    // Fewer days, or the audio no longer kept: what is past it goes now, not at the next sweep.
+    if (
+      before["dictation.retainDays"] !== after["dictation.retainDays"] ||
+      before["dictation.keepAudio"] !== after["dictation.keepAudio"]
+    )
+      this.dictationSvc?.sweep();
     return this.cfg;
   }
 
@@ -2013,6 +2019,8 @@ export class AkouApp implements ApiApp {
           this.cfg.settings["asr.languages"],
         ),
       retainDays: () => this.cfg.settings["dictation.retainDays"],
+      keepAudio: () => this.cfg.settings["dictation.keepAudio"],
+      learns: () => this.cfg.settings["dictation.learn"] !== "off",
       remote: () => {
         const c = this.cfg.settings;
         if (c["dictation.engine"] !== "remote") return null;
