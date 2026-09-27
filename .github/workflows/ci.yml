@@ -296,7 +296,8 @@ jobs:
           if grep -qwE 'down:49|up:49' tapped.txt; then echo "the dictation key reached the app"; exit 1; fi
       # DC-N6, DC-N7, DC-N9 on a real Mac: the shipping helper pastes into a real text view and
       # types into it, on this runner only (it changes the clipboard and posts keys). A throwaway
-      # AppKit window holds the field and writes its text to a file. The helper brings it to the
+      # AppKit window holds the field, with an Edit menu so Command+V pastes, and writes its text
+      # to a file. The helper brings it to the
       # front (`focus`), pastes with Enter as the send key, then types; the field must hold both
       # and the clipboard must hold what it held before. The field starts empty and the clipboard
       # starts with other text, so neither check can pass without the insert and the restore.
@@ -308,6 +309,12 @@ jobs:
           import AppKit
           let app = NSApplication.shared
           app.setActivationPolicy(.regular)
+          // Command+V reaches a text view through the menu's key equivalent, as in any app.
+          let bar = NSMenu(), edit = NSMenu(title: "Edit"), item = NSMenuItem()
+          item.submenu = edit
+          bar.addItem(item)
+          edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+          app.mainMenu = bar
           let win = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 240),
             styleMask: [.titled], backing: .buffered, defer: false)
           let view = NSTextView(frame: win.contentView!.bounds)
@@ -352,10 +359,11 @@ jobs:
           wait "$helper"
           kill "$app" || true
           cat insert.err
-          grep -q '"type":"inserted","id":"p1","method":"paste"' insert.err || { echo "the paste was not read"; exit 1; }
-          grep -q '"type":"inserted","id":"t1","method":"type"' insert.err || { echo "the typing failed"; exit 1; }
           field=$(cat field.txt)
           echo "field: $field"
+          echo "clipboard: $(pbpaste)"
+          grep -q '"type":"inserted","id":"p1","method":"paste"' insert.err || { echo "the paste was not read"; exit 1; }
+          grep -q '"type":"inserted","id":"t1","method":"type"' insert.err || { echo "the typing failed"; exit 1; }
           [ "$field" = "$(printf 'pasted by akou\ntyped é 😀')" ] || { echo "the field holds the wrong text"; exit 1; }
           [ "$(pbpaste)" = 'copied before akou' ] || { echo "the clipboard was not restored: $(pbpaste)"; exit 1; }
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
