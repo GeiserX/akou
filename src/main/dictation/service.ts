@@ -635,5 +635,6 @@ function textRules(o: TextRules): TextRules {
   if (o.speech) r.speech = o.speech;
   if (o.fillers) r.fillers = o.fillers;
   if (o.languages) r.languages = o.languages;
+  if (o.format) r.format = o.format;
   return r;
 }

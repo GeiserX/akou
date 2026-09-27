@@ -7,10 +7,20 @@
  * nothing left for any other host.
  */
 
-import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  describe,
+  expect,
+  setDefaultTimeout,
+  test,
+} from "bun:test";
 import { rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import type { Packet } from "../src/main/capture/protocol.ts";
+import type { AppToHelper } from "../src/main/dictation/protocol.ts";
 import {
   type LocalEngine,
   REMOTE_DOWN_AFTER,
@@ -28,12 +38,14 @@ import {
   transcribeRemote,
   vetRemote,
 } from "../src/main/dictation/remote.ts";
-import type { DictationEngine } from "../src/main/dictation/session.ts";
+import { type DictationEngine, DictationSession } from "../src/main/dictation/session.ts";
+import { DictationLog } from "../src/main/dictation/store.ts";
 import type { AppOptions } from "../src/main/index.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import type { Resolver } from "../src/main/server/webhooks.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
+import { tempDir } from "./helpers.ts";
 import { newKey, SERVER } from "./server-helpers.ts";
 
 setDefaultTimeout(30_000);
@@ -1019,5 +1031,145 @@ describe("a remote's own message is bounded before it reaches the pill, the page
     } finally {
       server.stop(true);
     }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DC-R6 in the session: the request opens at the press and takes each packet of the hold
+
+describe("DC-R6: a spoken session streams to the remote while the key is held", () => {
+  const cleanups: (() => void | Promise<void>)[] = [];
+  afterEach(async () => {
+    for (const c of cleanups.splice(0).reverse()) await c();
+  });
+  const TARGET = { app: "a", pid: 1, window: "w", field: "editable" as const };
+  const packet = (samples: Float32Array, fileSeconds: number): Packet => ({
+    ch: "mic",
+    zeroFilled: false,
+    captureNs: 0n,
+    fileSeconds,
+    samples,
+  });
+
+  /** A session on `engine`, over a log in a scratch folder, recording what it sends the helper. */
+  function session(engine: DictationEngine, o: { speech?: boolean } = {}) {
+    const t = tempDir("akou-dict-stream-");
+    cleanups.push(t.cleanup);
+    const log = new DictationLog(t.dir);
+    cleanups.push(() => log.close());
+    const sent: AppToHelper[] = [];
+    const s = new DictationSession({
+      log,
+      engine: () => engine,
+      send: (c) => sent.push(c),
+      bindings: () => ({
+        hotkey: "RightCommand",
+        draft: "",
+        fixLast: "",
+        pasteLast: "",
+        activation: "hold",
+      }),
+      now: () => Date.now(),
+      ...(o.speech !== undefined ? { speech: async () => o.speech as boolean } : {}),
+    });
+    const inserted = () => sent.find((c) => c.type === "insert") as { text: string } | undefined;
+    return { s, sent, log, inserted };
+  }
+
+  /** Plays a hold of `samples` into the session, `pause` ms between packets. */
+  async function hold(s: DictationSession, samples: Float32Array, id: string, pause = 0) {
+    s.onMessage({ type: "session.started", id, target: TARGET, capture_ns: "0" });
+    let at = 0;
+    for (const p of packets(samples)) {
+      s.onPacket(packet(p, at));
+      at += p.length / 16000;
+      if (pause) await Bun.sleep(pause);
+    }
+  }
+
+  async function until(ok: () => boolean, what: string, ms = 5000) {
+    for (const t0 = performance.now(); !ok(); await Bun.sleep(5)) {
+      if (performance.now() - t0 > ms) throw new Error(`timed out waiting for ${what}`);
+    }
+  }
+
+  test("the audio reaches the remote before release, in one request, and its transcript is inserted", async () => {
+    const r = streamRemote();
+    cleanups.push(r.stop);
+    const net = network();
+    const local = localEngine();
+    const { s, inserted, log } = session(engine({ url: r.url }, { local, fetch: net.fetch }));
+    await hold(s, HELLO, "1");
+    await until(() => r.got.bytes > HELLO.length, "the audio of the hold to reach the remote");
+    expect(r.got.ended).toBe(0);
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => inserted() !== undefined, "the insert");
+    expect(inserted()?.text).toBe("hello from the stream");
+    expect(r.got).toMatchObject({ ended: 1, broken: 0 });
+    expect(r.got.chunked).toEqual(["chunked"]);
+    expect(net.sent).toHaveLength(1);
+    expect(local.calls).toBe(0);
+    expect(log.items()[0]).toMatchObject({ engine: "remote", raw: "hello from the stream" });
+  });
+
+  test("a cancelled hold drops the request: the remote sees it broken, never ended, and nothing is inserted", async () => {
+    const r = streamRemote();
+    cleanups.push(r.stop);
+    const local = localEngine();
+    const { s, sent, log } = session(engine({ url: r.url }, { local }));
+    await hold(s, HELLO, "1");
+    await until(() => r.got.bytes > 0, "the request to open");
+    s.onMessage({ type: "session.ended", id: "1", reason: "cancel" });
+    await until(() => r.got.broken === 1, "the request to be dropped");
+    await s.settled();
+    expect(r.got.ended).toBe(0);
+    expect(sent.some((c) => c.type === "insert")).toBe(false);
+    expect(local.calls).toBe(0);
+    expect(log.items()[0]?.state).toBe("cancelled");
+  });
+
+  test("a hold the VAD hears no speech in drops the request, and nothing is inserted", async () => {
+    const r = streamRemote();
+    cleanups.push(r.stop);
+    const { s, sent } = session(engine({ url: r.url }), { speech: false });
+    await hold(s, HELLO, "1");
+    await until(() => r.got.bytes > 0, "the request to open");
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => r.got.broken === 1, "the request to be dropped");
+    await s.settled();
+    expect(r.got.ended).toBe(0);
+    expect(sent.some((c) => c.type === "insert")).toBe(false);
+  });
+
+  test("against the server rig over a slow link, a 20 s hold's release-to-text is within 200 ms of a 3 s hold's; an engine that cannot stream is not", async () => {
+    const rig = await appRig({
+      settings: { ...SERVER },
+      jobs: { dictationSlots: () => 1 } as AppOptions["jobs"],
+    });
+    cleanups.push(() => rig.close());
+    const key = (await newKey(rig, "dictation")).key;
+    // 800 KB/s up; the hold's 32 KB/s of audio is played here at ten times real time.
+    const remote = engine(
+      { url: `http://127.0.0.1:${rig.port}`, key },
+      { fetch: slowLink(800_000) },
+    );
+    const audio = (seconds: number) => concat(HELLO, silence(seconds - HELLO.length / 16000));
+    let n = 0;
+    const releaseToText = async (e: DictationEngine, seconds: number) => {
+      const { s, inserted } = session(e);
+      const id = String(++n);
+      await hold(s, audio(seconds), id, 10);
+      const t0 = performance.now();
+      s.onMessage({ type: "session.ended", id, reason: "release" });
+      await until(() => inserted() !== undefined, "the insert", 20_000);
+      expect(inserted()?.text).toContain("hello world");
+      return performance.now() - t0;
+    };
+    const [s3, s20] = [await releaseToText(remote, 3), await releaseToText(remote, 20)];
+    expect(Math.abs(s20 - s3)).toBeLessThan(200);
+    // The positive control: the same engine without `open` sends the whole buffer at release.
+    const atRelease: DictationEngine = { name: "remote", decode: (b, o) => remote.decode(b, o) };
+    const [o3, o20] = [await releaseToText(atRelease, 3), await releaseToText(atRelease, 20)];
+    expect(o20 - o3).toBeGreaterThan(200);
   });
 });
