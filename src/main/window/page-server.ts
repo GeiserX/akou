@@ -87,9 +87,16 @@ const SECURITY_HEADERS: Record<string, string> = {
   "cache-control": "no-store",
 };
 
-/** Panes the permission banner's button may open. */
-export const SETTINGS_PANES = ["microphone", "system-audio"] as const;
+/** Panes the permission banner's button and dictation's setup (DC-N3) may open. */
+export const SETTINGS_PANES = ["microphone", "system-audio", "accessibility"] as const;
 export type SettingsPane = (typeof SETTINGS_PANES)[number];
+
+/** Each pane's anchor in macOS System Settings, Privacy & Security. */
+export const MAC_PANES: Readonly<Record<SettingsPane, string>> = {
+  microphone: "Privacy_Microphone",
+  "system-audio": "Privacy_AudioCapture",
+  accessibility: "Privacy_Accessibility",
+};
 
 /** A wrong admin password or key is answered after this long (SV-U1). */
 export const LOGIN_FAIL_MS = 2_000;
