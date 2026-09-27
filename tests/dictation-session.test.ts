@@ -238,6 +238,8 @@ describe("the insert", () => {
         [1600, RC, false],
       ],
       ["--field", "secure"],
+      // A learned rewrite that would change the text: a password gets what was heard.
+      { correct: async (raw) => raw.replace("hello", "Hallo") },
     );
     await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the receipt");
     expect(lines(r.inserted)[0]).toMatchObject({ method: "clipboard", text: "hello" });

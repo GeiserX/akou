@@ -272,7 +272,8 @@ export class DictationSession {
       this.notInserted(c.helperId, { type: "dictation.empty", id });
       return;
     }
-    const text = await correctOrRaw(this.o, d);
+    // A password field gets exactly what was heard (DC-N8): no learned rewrite of a secret.
+    const text = c.secure ? d.text : await correctOrRaw(this.o, d);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (!c.secure)
       this.write({

@@ -25,6 +25,7 @@ import { ProviderError } from "../../llm/provider.ts";
 import { reasonText } from "../../query/ask.ts";
 import { STOPWORDS } from "../../query/bm25.ts";
 import {
+  callEntries,
   emptyVocab,
   importGlossary,
   type LoadedVocab,
@@ -127,6 +128,8 @@ async function mergedFor(app: ApiApp, workspace: string | undefined) {
  */
 async function vocabState(app: ApiApp, view: CallView) {
   const files = await mergedFor(app, view.call?.workspace);
+  // A `scope: dictation` entry is never in force for a call (DC-L6).
+  const entries = callEntries(files.entries);
   const known = new Map<string, KnownTerm & { heard: string[] }>();
   const put = (term: string, heard: readonly string[]) => {
     const key = termKey(term);
@@ -135,7 +138,7 @@ async function vocabState(app: ApiApp, view: CallView) {
     for (const h of heard) if (!cur.heard.some((x) => termKey(x) === termKey(h))) cur.heard.push(h);
     known.set(key, cur);
   };
-  for (const e of files.entries) if (e.confirmed) put(e.term, e.heard);
+  for (const e of entries) if (e.confirmed) put(e.term, e.heard);
   for (const v of view.callVocabulary()) put(v.term, v.heard);
   for (const p of view.proposals("accepted")) put(p.term, p.heard);
   for (const r of view.roster()) if (r.name) put(r.name, []);
@@ -143,7 +146,7 @@ async function vocabState(app: ApiApp, view: CallView) {
   const rejected = new Set(files.rejected);
   for (const p of view.proposals("rejected")) rejected.add(p.term);
   const input: PassInput = { known: [...known.values()], rejected: [...rejected] };
-  return { input, files };
+  return { input, entries };
 }
 
 /** The words to review for a call: its open proposals with the lines they rest on. */
@@ -196,6 +199,8 @@ export function vocabRoutes(r: Router<ApiApp>): void {
       const call = await callOf(c);
       const v = call.view;
       const files = await mergedFor(c.app, v.call?.workspace);
+      // A `scope: dictation` entry is never in force for a call (DC-L6); GET /vocab lists it.
+      const entries = callEntries(files.entries);
       return json(200, {
         call: call.id,
         callVocab: v.callVocabulary(),
@@ -205,10 +210,10 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         proposals: v.proposals(),
         review: reviewList(
           v,
-          files.entries.filter((e) => !e.confirmed),
+          entries.filter((e) => !e.confirmed),
         ),
         files: files.files,
-        entries: files.entries,
+        entries,
       });
     },
   );
@@ -610,7 +615,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         const st = await vocabState(c.app, view);
         known = st.input.known.map((x) => x.term);
         rejected = [...st.input.rejected];
-        for (const e of st.files.entries) if (!e.confirmed) known.push(e.term);
+        for (const e of st.entries) if (!e.confirmed) known.push(e.term);
         for (const p of view.proposals("proposed")) known.push(p.term);
       } else {
         const files = await mergedFor(c.app, undefined);
