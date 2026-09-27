@@ -202,3 +202,9 @@ FrequencyWords (content CC BY-SA 4.0, code MIT), https://github.com/hermitdave/F
   licence, https://creativecommons.org/licenses/by-sa/4.0/, which Creative Commons declared
   compatible with GPLv3 (https://creativecommons.org/share-your-work/licensing-considerations/compatible-licenses/);
   the adapted lists are distributed under GPLv3 with the rest of akou.
+
+double-metaphone 2.0.1 (MIT), https://github.com/words/double-metaphone
+  Copyright (c) 2014 Titus Wormer.
+  The English sound-alike key that scores a dictation fix as a learning candidate
+  (src/core/dictation/learn.ts). Bundled into the app's main process from npm; its MIT notice is
+  in the package.
