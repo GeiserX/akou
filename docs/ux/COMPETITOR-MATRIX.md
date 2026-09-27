@@ -194,7 +194,7 @@ The **Owner** column says where the item lives:
 | EXP-06 | Import an audio file as a call | hark, anarlog, Minutes, MacWhisper, VoiceInk | decision (2) |
 | EXP-07 | Watch folder | Minutes, MacWhisper, Scriberr, Buzz | decision (2) |
 | EXP-08 | Import from Granola and other tools | Minutes, Open Granola | parked |
-| EXP-09 | Dictation to the clipboard | hark, Minutes, anarlog | decision (2) |
+| EXP-09 | Dictation to the clipboard | hark, Minutes, anarlog | DC-A1 |
 
 ## Settings, models and onboarding
 

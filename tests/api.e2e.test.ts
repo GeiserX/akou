@@ -571,6 +571,7 @@ describe("settings over the API", () => {
         "asr.diarizeHelper",
         "asr.llamaServer",
         "capture.helper",
+        "dictation.remote.url",
         "hooks",
         "provider.baseUrl",
         "provider.harnessPath",

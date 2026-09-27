@@ -55,6 +55,9 @@
  *   --receipt-ms N          the fake target reads the clipboard N ms after the insert (default 5)
  *   --no-receipt            the target never reads it: no `inserted` ever comes
  *   --bind-fail             every `rebind` is refused with `rebind.failed`
+ *   --refuse-hotkey KEY     a `rebind` to this hotkey is refused; the binding in force stays (DC-A7)
+ *   --play-after-rebinds N  the scripted keys play after the Nth `rebind` (default 1), refused or
+ *                           not, so a test can change the key first and then press it
  *
  * The traps (DC-T1), one switch each:
  *
@@ -369,6 +372,8 @@ async function runDictate(): Promise<void> {
   const tapDisabledAt = num("--tap-disabled-at");
   let tapDisabled = tapDisabledAt !== undefined;
   let played = false;
+  let rebinds = 0;
+  const playAfter = num("--play-after-rebinds") ?? 1;
   let sessions = 0;
   let stopping = false;
 
@@ -450,20 +455,27 @@ async function runDictate(): Promise<void> {
   const handle = (c: AppToHelper) => {
     switch (c.type) {
       case "rebind": {
+        rebinds++;
+        const playNow = () => {
+          if (!played && machine && rebinds >= playAfter) {
+            played = true;
+            void play();
+          }
+        };
         let m: ActivationMachine;
         try {
           if (flag("--bind-fail")) throw new Error("fake refusal");
+          if (c.hotkey === opt("--refuse-hotkey"))
+            throw new Error(`the fake cannot bind ${c.hotkey}`);
           m = new ActivationMachine(parseBinding(c.hotkey), c.activation as Activation);
         } catch (err) {
           say({ type: "rebind.failed", hotkey: c.hotkey, reason: (err as Error).message });
+          playNow();
           return;
         }
         machine = m;
         say({ type: "rebound", hotkey: c.hotkey });
-        if (!played) {
-          played = true;
-          void play();
-        }
+        playNow();
         return;
       }
       case "settled":
