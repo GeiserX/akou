@@ -429,7 +429,12 @@ impl Inserter {
 
     fn collect(&mut self) {
         let Some(tx) = self.tx.as_mut() else { return };
-        for r in self.clip.reads() {
+        let reads = self.clip.reads();
+        // A chord that never posted pasted nothing: a read now is a poller, never the target.
+        if tx.failed.is_some() {
+            return;
+        }
+        for r in reads {
             if r >= tx.chord_ns {
                 tx.first_read.get_or_insert(r);
                 tx.last_read = Some(tx.last_read.map_or(r, |l| l.max(r)));
@@ -461,7 +466,8 @@ impl Inserter {
         let Some(tx) = self.tx.take() else { return };
         let owned = self.clip.change_count() == tx.count;
         let outcome = match (tx.first_read, tx.failed) {
-            (Some(first), _) => {
+            (_, Some(e)) => Outcome::Failed(e),
+            (Some(first), None) => {
                 self.send(&tx.send_key);
                 Outcome::Inserted {
                     method: "paste",
@@ -469,7 +475,6 @@ impl Inserter {
                     reason: None,
                 }
             }
-            (None, Some(e)) => Outcome::Failed(e),
             (None, None) if !owned => Outcome::Failed("clipboard-changed".into()),
             (None, None) => Outcome::Failed("no-receipt".into()),
         };
@@ -625,6 +630,19 @@ mod tests {
             "old",
             "restored 500 ms after the failed chord"
         );
+    }
+
+    /// A chord that never posted pasted nothing, so a stray read after it (a clipboard manager,
+    /// a poller) is not a receipt: no send key, and the answer is the chord's failure.
+    #[test]
+    fn dc_n6_a_read_after_a_failed_chord_presses_no_send_key() {
+        let mut r = Rig::new(Os::Mac);
+        r.w.borrow_mut().layout.clear();
+        r.insert(&req("paste", "Enter"), &cap());
+        r.read_at(50);
+        r.until(600);
+        assert!(!r.posted().iter().any(|p| p.contains("Return")));
+        assert_eq!(r.done, [("1".into(), Outcome::Failed("no-v-key".into()))]);
     }
 
     /// A held Right Option is released before the chord and pressed again after it.
