@@ -82,6 +82,10 @@
  *   --deaf-start            `session.start` is read and dropped, as the real helper drops it while
  *                           an insert settles: the app must not answer that it is listening
  *
+ * A line from the app that asks for a permission prompt (`"prompt": true` anywhere in it) fails the
+ * run: a `warn prompting-grant` line and exit 70, so the test that sent it fails. The helper only
+ * ever asks the non-prompting checks, and no test may show a permission dialog (DC-N10, DC-N3).
+ *
  * `session.start`, `session.stop` and `session.cancel` (the tray's and the CLI's door) run through
  * the same rule: a latched session from the key time reached so far, whose audio lasts as long as
  * the session did in real time.
@@ -586,6 +590,15 @@ async function runDictate(): Promise<void> {
     const lines = rest.split("\n");
     rest = lines.pop() ?? "";
     for (const line of lines) {
+      if (asksToPrompt(line)) {
+        log(opt("--commands-log"), line);
+        say({
+          type: "warn",
+          code: "prompting-grant",
+          msg: "the app asked for a permission prompt; the helper only asks without prompting",
+        });
+        process.exit(EXIT.software);
+      }
       const c = parseCommand(line);
       log(opt("--commands-log"), c ?? line);
       if (c) handle(c);
@@ -596,6 +609,21 @@ async function runDictate(): Promise<void> {
   stdout.flush();
   say({ type: "stopped", reason: "stop" });
   process.exit(EXIT.ok);
+}
+
+/** A line with `"prompt": true` at any depth: a request for a permission dialog (DC-N10). */
+function asksToPrompt(line: string): boolean {
+  let o: unknown;
+  try {
+    o = JSON.parse(line);
+  } catch {
+    return false;
+  }
+  const walk = (v: unknown): boolean =>
+    typeof v === "object" &&
+    v !== null &&
+    Object.entries(v).some(([k, x]) => (k === "prompt" && x === true) || walk(x));
+  return walk(o);
 }
 
 /** An `--ax` script: `<ms> {target}` per line; blank lines and `#` lines are skipped. */
