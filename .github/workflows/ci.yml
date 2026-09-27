@@ -443,6 +443,12 @@ jobs:
               [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr wp, IntPtr lp);
               [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
               [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+              [DllImport("user32.dll")] static extern IntPtr GetForegroundWindow();
+              [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+              [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+              [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
+              [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
+              [DllImport("kernel32.dll")] static extern uint GetCurrentThreadId();
               [StructLayout(LayoutKind.Sequential)]
               struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
               [StructLayout(LayoutKind.Explicit, Size = 40)]
@@ -463,6 +469,27 @@ jobs:
               public static void Hook() {
                   keep = Record;
                   if (SetWindowsHookEx(13, keep, GetModuleHandle(null), 0) == IntPtr.Zero) throw new Exception("no recorder hook");
+              }
+
+              // "<window> pid <pid>" of the window in front, the way the helper's target names it.
+              public static string Front() {
+                  uint pid;
+                  IntPtr h = GetForegroundWindow();
+                  GetWindowThreadProcessId(h, out pid);
+                  return h.ToInt64() + " pid " + pid;
+              }
+
+              // Puts a window in front the way a user's click would, sharing input with the thread
+              // in front so the foreground lock lets it through.
+              public static void Raise(IntPtr h) {
+                  uint pid;
+                  uint front = GetWindowThreadProcessId(GetForegroundWindow(), out pid);
+                  uint me = GetCurrentThreadId();
+                  bool joined = front != 0 && front != me && AttachThreadInput(me, front, true);
+                  BringWindowToTop(h);
+                  SetForegroundWindow(h);
+                  if (joined) AttachThreadInput(me, front, false);
+                  Pump(200);
               }
 
               public static void Pump(int ms) {
@@ -591,6 +618,8 @@ jobs:
           Set-Clipboard -Value 'copied before akou'
           Check ((Get-Clipboard) -eq 'copied before akou') 'Set-Clipboard did not take'
           $target = New-Object 'Probe+Target'
+          [Probe]::Raise($target.Hwnd)
+          "in front: $([Probe]::Front()), target: $($target.Hwnd.ToInt64()) pid $PID"
           $app = [Diagnostics.Process]::GetCurrentProcess().MainModule.ModuleName
           $tj = '{"app":"' + $app + '","pid":' + $PID + ',"window":"' + $target.Hwnd.ToInt64() + '","field":"editable"}'
           Check ($target.Text() -eq '') 'the box was not empty'
@@ -602,6 +631,7 @@ jobs:
           $h.Send('{"type":"insert","id":"t1","text":"typed \u00e9 \ud83d\ude00","method":"type","send_key":"none","target":' + $tj + '}')
           if (-not $h.Wait('"id":"t1"', 15000)) { throw ('no answer to the typing: ' + $h.Stop()) }
           [Probe]::Pump(500)
+          "in front after the inserts: $([Probe]::Front())"
           $log = $h.Stop()
           $log
           $field = $target.Text()
