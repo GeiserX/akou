@@ -4,6 +4,8 @@
 //! under `--from-wav` with fakes and, per OS, with the real backends.
 
 use super::activation::{Action, Activation, Mode};
+pub use super::insert::Targets;
+use super::insert::{Captured, Inserter, Outcome, Request};
 use super::keys::Hotkey;
 use super::mic::{Mic, MicEvent, Warm};
 use super::protocol::{self as p, Command, Target};
@@ -13,25 +15,6 @@ use crate::protocol::{Ch, encode_packet};
 pub trait Out {
     fn line(&mut self, line: String);
     fn packet(&mut self, bytes: Vec<u8>);
-}
-
-/// What has the keyboard, read when a session starts (DC-N9).
-pub trait Targets {
-    fn target(&mut self, t_ns: u64) -> Target;
-}
-
-/// Puts text into the target app (DC-N6, DC-N7), or records that it would have.
-pub trait Inserter {
-    /// Returns the method used and the receipt time in ms, or why it failed.
-    fn insert(
-        &mut self,
-        id: &str,
-        text: &str,
-        method: &str,
-        send_key: &str,
-        target: &Target,
-    ) -> Result<(String, u64), String>;
-    fn focus(&mut self, target: &Target);
 }
 
 pub struct Config {
@@ -47,16 +30,17 @@ pub struct Dictate {
     mic: Mic,
     warm: Warm,
     targets: Box<dyn Targets>,
-    inserter: Box<dyn Inserter>,
+    /// None: this process has no inserter (a simulate run without `--inserter`), never a real one.
+    inserter: Option<Inserter>,
     next_id: u64,
-    /// The live session: its id and target.
-    live: Option<(String, Target)>,
+    /// The live session: its id and what it saw at key-down.
+    live: Option<(String, Captured)>,
     /// The last ended session, whose text the app inserts next.
-    last: Option<(String, Target)>,
+    last: Option<(String, Captured)>,
 }
 
 impl Dictate {
-    pub fn new(cfg: Config, targets: Box<dyn Targets>, inserter: Box<dyn Inserter>) -> Dictate {
+    pub fn new(cfg: Config, targets: Box<dyn Targets>, inserter: Option<Inserter>) -> Dictate {
         Dictate {
             act: Activation::new(cfg.hotkey, cfg.mode),
             mic: Mic::new(cfg.warm, cfg.bluetooth, cfg.ring_ms),
@@ -88,6 +72,11 @@ impl Dictate {
         self.mic.is_open()
     }
 
+    /// A paste is waiting for its receipt, so time must keep passing.
+    pub fn busy(&self) -> bool {
+        self.inserter.as_ref().is_some_and(Inserter::busy)
+    }
+
     /// One key event from the tap; returns whether it is swallowed.
     pub fn key(&mut self, down: bool, name: &str, t_ns: u64, out: &mut dyn Out) -> bool {
         let mut acts = Vec::new();
@@ -103,6 +92,28 @@ impl Dictate {
         let mut ev = Vec::new();
         self.mic.tick(t_ns, &mut ev);
         self.mic_events(ev, out);
+        let mut done = Vec::new();
+        if let Some(ins) = self.inserter.as_mut() {
+            ins.tick(t_ns, &mut done);
+        }
+        self.report(done, out);
+    }
+
+    /// `inserted` or `insert.failed`; the session's keys pass again once its insert settled.
+    fn report(&mut self, done: Vec<(String, Outcome)>, out: &mut dyn Out) {
+        for (id, o) in done {
+            out.line(match o {
+                Outcome::Inserted {
+                    method,
+                    receipt_ms,
+                    reason,
+                } => p::inserted(&id, method, receipt_ms, reason),
+                Outcome::Failed(reason) => p::insert_failed(&id, &reason),
+            });
+            if self.last.as_ref().is_some_and(|(l, _)| *l == id) {
+                self.act.settled();
+            }
+        }
     }
 
     /// Mic samples, 16 kHz mono, the first at `t_ns`.
@@ -119,6 +130,15 @@ impl Dictate {
             Command::Stop => {
                 self.act.end("stop", t_ns, &mut acts);
                 self.apply(acts, t_ns, out);
+                // A session in its post-roll ends now too, and says so.
+                let mut ev = Vec::new();
+                self.mic.end(t_ns, "stop", &mut ev);
+                self.mic_events(ev, out);
+                let mut done = Vec::new();
+                if let Some(ins) = self.inserter.as_mut() {
+                    ins.finish(t_ns, &mut done);
+                }
+                self.report(done, out);
                 return false;
             }
             Command::Rebind { hotkey, activation } => {
@@ -142,27 +162,37 @@ impl Dictate {
                 method,
                 send_key,
                 target,
+                restore,
             } => {
                 self.act.insert_started(t_ns);
-                let target = target
-                    .or_else(|| {
-                        self.last
-                            .as_ref()
-                            .filter(|(l, _)| *l == id)
-                            .map(|(_, t)| t.clone())
-                    })
-                    .unwrap_or_else(Target::unknown);
-                match self
-                    .inserter
-                    .insert(&id, &text, &method, &send_key, &target)
-                {
-                    Ok((m, ms)) => out.line(p::inserted(&id, &m, ms)),
-                    Err(reason) => out.line(p::insert_failed(&id, &reason)),
+                // The session's own record, with the app's target when it names one (the draft
+                // box inserts where the session began).
+                let mut cap = self.last.as_ref().filter(|(l, _)| *l == id).map_or_else(
+                    || Captured {
+                        target: Target::unknown(),
+                        secure_input: false,
+                    },
+                    |(_, c)| c.clone(),
+                );
+                if let Some(t) = target {
+                    cap.target = t;
                 }
-                self.act.settled();
+                let req = Request {
+                    id: id.clone(),
+                    text,
+                    method,
+                    send_key,
+                    restore,
+                };
+                let mut done = Vec::new();
+                match self.inserter.as_mut() {
+                    Some(ins) => ins.insert(&req, &cap, &mut *self.targets, t_ns, &mut done),
+                    None => done.push((id, Outcome::Failed("no-inserter".into()))),
+                }
+                self.report(done, out);
             }
             Command::Settled { .. } => self.act.settled(),
-            Command::Focus { target } => self.inserter.focus(&target),
+            Command::Focus { target } => self.targets.focus(&target),
             Command::SessionStart => self.act.start(t_ns, &mut acts),
             Command::SessionStop => self.act.end("tap", t_ns, &mut acts),
             Command::SessionCancel => self.act.end("cancel", t_ns, &mut acts),
@@ -192,7 +222,11 @@ impl Dictate {
                 Action::Start { t_ns: at } => {
                     let id = self.next_id.to_string();
                     self.next_id += 1;
-                    self.live = Some((id, self.targets.target(at)));
+                    let cap = Captured {
+                        target: self.targets.target(at),
+                        secure_input: self.targets.secure_input(),
+                    };
+                    self.live = Some((id, cap));
                     self.mic.start(at, &mut ev);
                 }
                 Action::End { reason } => self.mic.end(t_ns, reason, &mut ev),
@@ -207,8 +241,8 @@ impl Dictate {
             match e {
                 MicEvent::Stream(open) => out.line(p::mic(open)),
                 MicEvent::Started { capture_ns } => {
-                    if let Some((id, target)) = &self.live {
-                        out.line(p::session_started(id, target, capture_ns));
+                    if let Some((id, cap)) = &self.live {
+                        out.line(p::session_started(id, &cap.target, capture_ns));
                     }
                 }
                 MicEvent::Audio {
@@ -229,9 +263,9 @@ impl Dictate {
                 }
                 MicEvent::Level(rms) => out.line(p::level(rms)),
                 MicEvent::Ended { reason } => {
-                    if let Some((id, target)) = self.live.take() {
+                    if let Some((id, cap)) = self.live.take() {
                         out.line(p::session_ended(&id, reason));
-                        self.last = Some((id, target));
+                        self.last = Some((id, cap));
                     }
                 }
                 MicEvent::Vanished => {
@@ -246,9 +280,9 @@ impl Dictate {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dictate::fake::{Board, Keys, Screen, Shared, World};
+    use crate::dictate::insert::Os;
     use crate::protocol::decode_packets;
-    use std::cell::RefCell;
-    use std::rc::Rc;
 
     const MS: u64 = 1_000_000;
 
@@ -266,42 +300,7 @@ mod tests {
         }
     }
 
-    struct Fixed(Target);
-    impl Targets for Fixed {
-        fn target(&mut self, _: u64) -> Target {
-            self.0.clone()
-        }
-    }
-
-    type Log = Rc<RefCell<Vec<(String, String, Target)>>>;
-    struct Recorder(Log);
-    impl Inserter for Recorder {
-        fn insert(
-            &mut self,
-            id: &str,
-            text: &str,
-            method: &str,
-            _: &str,
-            target: &Target,
-        ) -> Result<(String, u64), String> {
-            self.0
-                .borrow_mut()
-                .push((id.into(), text.into(), target.clone()));
-            Ok((method.into(), 0))
-        }
-        fn focus(&mut self, _: &Target) {}
-    }
-
-    fn slack() -> Target {
-        Target {
-            app: "Slack".into(),
-            pid: 9,
-            window: "w".into(),
-            field: "editable".into(),
-        }
-    }
-
-    fn dictate(log: &Log) -> Dictate {
+    fn dictate(w: &Shared) -> Dictate {
         Dictate::new(
             Config {
                 hotkey: Hotkey::parse("RightCommand").unwrap(),
@@ -310,8 +309,12 @@ mod tests {
                 bluetooth: false,
                 ring_ms: 500,
             },
-            Box::new(Fixed(slack())),
-            Box::new(Recorder(log.clone())),
+            Box::new(Screen(w.clone())),
+            Some(Inserter::new(
+                Os::Mac,
+                Box::new(Board(w.clone())),
+                Box::new(Keys(w.clone())),
+            )),
         )
     }
 
@@ -346,8 +349,8 @@ mod tests {
     /// `insert` reaching the inserter with that target and answered by `inserted`.
     #[test]
     fn a_hold_runs_one_session_and_its_insert_goes_to_the_captured_target() {
-        let log: Log = Rc::default();
-        let mut d = dictate(&log);
+        let w = World::new();
+        let mut d = dictate(&w);
         let mut out = Rec::default();
         d.begin("simulate", true, ("granted", "granted"), &mut out);
         run(&mut d, &mut out, 0, 1000);
@@ -381,26 +384,119 @@ mod tests {
         assert!(packets.iter().all(|p| p.ch == Ch::Mic));
         assert_eq!(packets[0].file_seconds, 0.0);
 
-        // Enter before the insert settles is swallowed (DC-A4), then the insert lands.
+        // Enter before the insert settles is swallowed (DC-A4); the paste is posted to Slack,
+        // and Enter stays swallowed until the target read the clipboard.
         assert!(d.key(true, "Enter", 2600 * MS, &mut out));
-        let cmd = Command::parse(r#"{"type":"insert","id":"1","text":"hello","method":"paste"}"#)
-            .unwrap();
+        d.key(false, "Enter", 2610 * MS, &mut out);
+        let cmd = Command::parse(
+            r#"{"type":"insert","id":"1","text":"hello","method":"paste","send_key":"Enter"}"#,
+        )
+        .unwrap();
         assert!(d.command(cmd, 2700 * MS, &mut out));
-        assert_eq!(
-            log.borrow().as_slice(),
-            &[("1".into(), "hello".into(), slack())]
-        );
-        assert!(out.lines.last().unwrap().contains(r#""type":"inserted""#));
+        assert_eq!(w.borrow().posted, ["Command+Code(9)"]);
+        assert!(d.busy());
+        run(&mut d, &mut out, 2700, 3000);
         assert!(
-            !d.key(true, "Escape", 2800 * MS, &mut out),
+            d.key(true, "Escape", 3000 * MS, &mut out),
+            "not settled yet"
+        );
+        d.key(false, "Escape", 3010 * MS, &mut out);
+        w.borrow_mut().pending_reads.push(3000 * MS);
+        run(&mut d, &mut out, 3010, 3300);
+        assert!(!d.busy());
+        assert!(
+            out.lines
+                .iter()
+                .any(|l| l == r#"{"type":"inserted","id":"1","method":"paste","receipt_ms":300}"#),
+            "{:?}",
+            out.lines
+        );
+        assert_eq!(
+            w.borrow().posted,
+            ["Command+Code(9)", "Named(\"Return\")"],
+            "the send key after the read"
+        );
+        assert!(
+            !d.key(true, "Escape", 3400 * MS, &mut out),
             "settled: keys pass again"
+        );
+    }
+
+    /// DC-N9 through the core: the session captured Slack; the insert comes while Mail has the
+    /// keyboard, so nothing is posted and the app hears why. DC-N8: a session that began under
+    /// Secure Input goes to the clipboard.
+    #[test]
+    fn the_insert_goes_where_the_session_began_or_nowhere() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        d.command(Command::SessionStart, 0, &mut out);
+        run(&mut d, &mut out, 0, 100);
+        d.command(Command::SessionStop, 100 * MS, &mut out);
+        run(&mut d, &mut out, 100, 400);
+        w.borrow_mut().target.app = "Mail".into();
+        let insert = r#"{"type":"insert","id":"1","text":"hi","send_key":"Enter"}"#;
+        d.command(Command::parse(insert).unwrap(), 400 * MS, &mut out);
+        assert!(w.borrow().posted.is_empty());
+        assert_eq!(
+            out.lines.last().unwrap(),
+            r#"{"type":"insert.failed","id":"1","reason":"focus-changed"}"#
+        );
+        let focus =
+            r#"{"type":"focus","target":{"app":"Slack","pid":9,"window":"w","field":"editable"}}"#;
+        d.command(Command::parse(focus).unwrap(), 500 * MS, &mut out);
+        d.command(Command::parse(insert).unwrap(), 600 * MS, &mut out);
+        assert_eq!(
+            w.borrow().posted,
+            ["Command+Code(9)"],
+            "after focus it lands"
+        );
+
+        let w = World::new();
+        w.borrow_mut().secure_input = true;
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.command(Command::SessionStart, 0, &mut out);
+        w.borrow_mut().secure_input = false;
+        run(&mut d, &mut out, 0, 100);
+        d.command(Command::SessionStop, 100 * MS, &mut out);
+        run(&mut d, &mut out, 100, 400);
+        d.command(Command::parse(insert).unwrap(), 400 * MS, &mut out);
+        assert!(w.borrow().posted.is_empty());
+        assert_eq!(
+            out.lines.last().unwrap(),
+            r#"{"type":"inserted","id":"1","method":"clipboard","receipt_ms":0,"reason":"secure"}"#
+        );
+    }
+
+    /// `stop` during the post-roll still ends the session, and a paste still waiting settles.
+    #[test]
+    fn stop_in_the_post_roll_ends_the_session() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 600);
+        d.key(true, "RightCommand", 600 * MS, &mut out);
+        run(&mut d, &mut out, 600, 1200);
+        d.key(false, "RightCommand", 1200 * MS, &mut out);
+        run(&mut d, &mut out, 1200, 1300);
+        assert!(!types(&out).contains(&"session.ended".to_string()));
+        assert!(!d.command(Command::Stop, 1300 * MS, &mut out));
+        assert!(
+            out.lines
+                .iter()
+                .any(|l| l.contains(r#""type":"session.ended","id":"1","reason":"stop""#)),
+            "{:?}",
+            out.lines
         );
     }
 
     #[test]
     fn rebind_answers_and_a_refused_binding_keeps_the_old_one() {
-        let log: Log = Rc::default();
-        let mut d = dictate(&log);
+        let w = World::new();
+        let mut d = dictate(&w);
         let mut out = Rec::default();
         let bad = Command::parse(r#"{"type":"rebind","hotkey":"LeftOption+RightOption"}"#).unwrap();
         d.command(bad, 0, &mut out);
@@ -422,8 +518,8 @@ mod tests {
     /// `stop` ends a live session at once and says so.
     #[test]
     fn the_session_commands_drive_a_session_and_stop_ends_it() {
-        let log: Log = Rc::default();
-        let mut d = dictate(&log);
+        let w = World::new();
+        let mut d = dictate(&w);
         let mut out = Rec::default();
         d.begin("simulate", true, ("granted", "granted"), &mut out);
         run(&mut d, &mut out, 0, 100);

@@ -13,6 +13,13 @@ hark (MIT), https://github.com/PhantomYdn/hark
   probe tap that tells a dead tap from a quiet call, and the dead-tap rebuild rule. No hark code
   is copied.
 
+Handy (MIT), https://github.com/cjpais/Handy
+  Copyright (c) 2025 CJ Pais.
+  The receipt rules of the dictation paste in native/akou-capture/src/dictate/insert.rs are
+  ported from Handy's paste_tx: only reads after the paste chord count, the old clipboard comes
+  back a quiet period after the last read or at a bounded timeout (a short one after a failed
+  chord), and only while the clipboard is still ours. The MIT notice is in that file.
+
 libopus (BSD-3-Clause), https://opus-codec.org
   Copyright (c) Xiph.Org Foundation, Skype Limited, Octasic, Jean-Marc Valin, Timothy B.
   Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo and contributors.
