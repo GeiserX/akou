@@ -253,6 +253,11 @@ export interface LlamaServerOptions {
   lockDir?: string;
   /** How long the model may take to load before the start fails. Default 5 minutes. */
   healthTimeoutMs?: number;
+  /**
+   * Give way to another Metal server instead of stopping it: the start fails while one runs. The
+   * server kept warm for dictation (DC-E2) sets it, so a dictation never kills a call's final pass.
+   */
+  yieldMetal?: boolean;
   /** Told of every process started (`true`) and ended (`false`), so a host can kill orphans. */
   onChild?(pid: number, alive: boolean): void;
   log?(level: "info" | "warn" | "error", msg: string): void;
@@ -437,9 +442,18 @@ export class LlamaServer {
     }
   }
 
-  /** Stops every other Metal server: this thread's, then one a pid file names. */
+  /**
+   * Stops every other Metal server: this thread's, then one a pid file names. With `yieldMetal`,
+   * another one running is an error instead, and nothing is stopped.
+   */
   private async takeMetal(): Promise<void> {
-    for (const other of [...metalServers]) if (other !== this) await other.stop();
+    const busy =
+      "another Metal llama-server is running (a final pass), and only one fits at a time";
+    for (const other of [...metalServers]) {
+      if (other === this) continue;
+      if (this.o.yieldMetal && other.pid() !== null) throw new Error(busy);
+      await other.stop();
+    }
     const dir = this.o.lockDir;
     if (!dir || process.platform === "win32") return;
     const file = join(dir, METAL_PID_FILE);
@@ -454,6 +468,7 @@ export class LlamaServer {
     // Only a llama-server on the port the file records: a reused pid is someone else's process.
     const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
     if (!(r.stdout ?? "").includes(`--port ${held.port}`)) return;
+    if (this.o.yieldMetal) throw new Error(busy);
     this.o.log?.("info", `stopping llama-server ${pid}: one Metal engine at a time`);
     process.kill(pid, "SIGTERM");
     if (!(await waitGone(pid, 5000))) process.kill(pid, "SIGKILL");
@@ -488,9 +503,18 @@ export function createLlamaEngine(
   spec: LlamaEngineSpec,
   hooks: Pick<LlamaServerOptions, "onChild" | "log"> = {},
 ): QwenEngine {
+  const server = createLlamaServer(spec, hooks);
+  return new QwenEngine({ id: spec.engine, server, allowed: spec.languages, log: hooks.log });
+}
+
+/** The supervised llama-server a `LlamaEngineSpec` names; nothing starts until `url()`. */
+export function createLlamaServer(
+  spec: LlamaEngineSpec,
+  hooks: Pick<LlamaServerOptions, "onChild" | "log" | "yieldMetal"> = {},
+): LlamaServer {
   const build = spec.build;
   if (!spec.command && !build) throw new Error(`${spec.engine}: no llama-server to run`);
-  const server = new LlamaServer({
+  return new LlamaServer({
     command:
       spec.command ??
       (() => [extractBuild(build?.dir as string, build?.archives ?? [], build?.platform ?? "")]),
@@ -502,5 +526,4 @@ export function createLlamaEngine(
     lockDir: build?.dir,
     ...hooks,
   });
-  return new QwenEngine({ id: spec.engine, server, allowed: spec.languages, log: hooks.log });
 }

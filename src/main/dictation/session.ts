@@ -19,14 +19,20 @@
 import type { DictationDraft, Target } from "../../core/dictation/events.ts";
 import type { Decoded } from "../asr/live-worker.ts";
 import type { Packet } from "../capture/protocol.ts";
+import { forcesLanguage } from "./engines.ts";
 import type { AppToHelper, Bindings, EndReason, HelperToApp } from "./protocol.ts";
 import { type DictationLog, newDictationId } from "./store.ts";
 
 /**
  * What an engine answers: the decode, and when an engine fell back to another (the remote to the
- * local engine, DC-R3), the engine that decoded it and the one it fell back from.
+ * local engine, DC-R3; `best` to `fast`, DC-E2), the engine that decoded it, the one it fell back
+ * from, and the pill's line saying so.
  */
-export type EngineDecoded = Decoded & { engine?: string; fallback_from?: string };
+export type EngineDecoded = Decoded & {
+  engine?: string;
+  fallback_from?: string;
+  notice?: string | null;
+};
 
 /** Decodes a dictation's buffer: the live Worker (`fast`), a remote akou (`remote`). */
 export interface DictationEngine {
@@ -47,6 +53,8 @@ export interface SessionOptions {
   send(c: AppToHelper): void;
   bindings(): Bindings;
   now(): number;
+  /** `dictation.language` when it is set, else undefined: the engine chooses (DC-E4). */
+  language?(): string | undefined;
   /**
    * The decoded text after the dictation vocabulary (DC-L6), in the language the engine found.
    * Absent, the text is inserted as decoded.
@@ -269,9 +277,10 @@ export class DictationSession {
       });
       return;
     }
+    const language = this.o.language?.();
     let d: EngineDecoded;
     try {
-      d = await engine.decode(samples, {});
+      d = await engine.decode(samples, language ? { language } : {});
     } catch (err) {
       this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
       return;
@@ -295,6 +304,7 @@ export class DictationSession {
         model: d.model,
         ms: d.ms,
         ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
+        ...languageForced(language, d.engine ?? engine.name),
       });
     this.inserts.set(c.helperId, id);
     this.set("inserting");
@@ -325,6 +335,17 @@ export async function correctOrRaw(
     o.onLog?.("warn", `dictation vocabulary not applied: ${(err as Error).message}`);
     return d.text;
   }
+}
+
+/**
+ * `language_forced` for the log: with a language set, whether the engine that decoded took it;
+ * with none, nothing (DC-E4).
+ */
+export function languageForced(
+  language: string | undefined,
+  engine: string,
+): { language_forced?: boolean } {
+  return language ? { language_forced: forcesLanguage(engine) } : {};
 }
 
 function concat(chunks: readonly Float32Array[], n: number): Float32Array {

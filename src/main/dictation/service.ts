@@ -23,6 +23,7 @@ import {
   correctOrRaw,
   type DictationEngine,
   DictationSession,
+  languageForced,
   type RebindAnswer,
   type SessionState,
 } from "./session.ts";
@@ -57,6 +58,12 @@ export interface DictationServiceOptions {
   now(): number;
   /** The decoded text after the dictation vocabulary (DC-L6); absent, inserted as decoded. */
   correct?(raw: string, language: string | null): Promise<string>;
+  /** `dictation.language` when it is set, else undefined: the engine chooses (DC-E4). */
+  language?(): string | undefined;
+  /** Why the engine is the one it is ("best on metal"), for `GET /v1/dictation` (DC-E3). */
+  verdict?(): string;
+  /** Whether the engine is loading its model now: a press is kept and decoded once it is ready. */
+  loading?(): boolean;
   /** The remote engine's standing while `dictation.engine` is `remote`, else null (DC-R3). */
   remote?(): DictationRemoteStatus | null;
   /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
@@ -78,6 +85,10 @@ export interface DictationStatus {
   /** `off` with dictation disabled or the helper gone, else the session's state. */
   state: "off" | SessionState;
   engine: string | null;
+  /** Why it is that engine on this machine: "best on metal", "fast: best needs a GPU" (DC-E3). */
+  verdict: string | null;
+  /** The engine is loading its model: a press now is kept and decoded once it is ready. */
+  loading: boolean;
   grants: { mic: Grant; accessibility: Grant } | null;
   backend: string | null;
   /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
@@ -197,6 +208,8 @@ export class DictationService {
       enabled: this.helper !== null,
       state: s ? s.state : "off",
       engine: this.o.engine()?.name ?? null,
+      verdict: this.o.verdict?.() ?? null,
+      loading: this.o.loading?.() ?? false,
       grants: s?.ready?.grants ?? null,
       backend: s?.ready?.backend ?? null,
       swallow_keys: s?.ready?.swallow_keys ?? null,
@@ -235,6 +248,7 @@ export class DictationService {
       bindings,
       now: this.o.now,
       ...(this.o.correct ? { correct: this.o.correct } : {}),
+      ...(this.o.language ? { language: this.o.language } : {}),
       onState: () => this.emit(),
       send: (c) => {
         try {
@@ -326,6 +340,7 @@ export class DictationService {
     o: { by: string; language?: string; engine?: string },
   ): Promise<DictationItem> {
     const engine = this.o.engine(o.engine);
+    const language = o.language ?? this.o.language?.();
     const id = newDictationId(this.o.now());
     const seconds = Math.round((samples.length / 16000) * 1000) / 1000;
     this.log.append({
@@ -340,7 +355,7 @@ export class DictationService {
       this.log.append({ type: "dictation.failed", id, error: "no speech model is loaded" });
     } else {
       try {
-        const d = await engine.decode(samples, { language: o.language });
+        const d = await engine.decode(samples, language ? { language } : {});
         if (d.text === "") this.log.append({ type: "dictation.empty", id });
         else
           this.log.append({
@@ -354,6 +369,7 @@ export class DictationService {
             model: d.model,
             ms: d.ms,
             ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
+            ...languageForced(language, d.engine ?? engine.name),
           });
       } catch (err) {
         this.log.append({ type: "dictation.failed", id, error: (err as Error).message });
