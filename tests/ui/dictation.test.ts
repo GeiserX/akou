@@ -673,8 +673,9 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       const page = await rig.open(undefined, {
         before: async (p) => {
           fx = await dictationFixture(p);
+          // Keys in another order than the editor writes them, as a hand-edited file has them.
           fx.settings["dictation.apps"] = [
-            { app: "com.example.term", insert: "type", sendKey: "none" },
+            { sendKey: "none", insert: "type", app: "com.example.term" },
           ];
         },
       });
@@ -688,6 +689,25 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       // A field the rule leaves out follows the global setting.
       expect(await page.inputValue(cell(1, "mode"))).toBe("");
       expect(await text(page, `${cell(1, "mode")} option:checked`)).toBe("global");
+
+      // The table fits the dialog: no column clipped, Remove reachable without scrolling sideways.
+      const fit = await page.$eval("#dictation", (d) => {
+        const remove = d.querySelector(".apps-remove") as HTMLElement;
+        const spill = [...d.querySelectorAll<HTMLElement>(".apps-rules tbody td > *")].filter(
+          (el) =>
+            el.getBoundingClientRect().right >
+            (el.parentElement as HTMLElement).getBoundingClientRect().right + 0.5,
+        );
+        return {
+          overflow: d.scrollWidth - d.clientWidth,
+          removeInside: remove.getBoundingClientRect().right <= d.getBoundingClientRect().right,
+          spill: spill.map((el) => el.dataset.field ?? el.className),
+        };
+      });
+      expect(fit).toEqual({ overflow: 0, removeInside: true, spill: [] });
+
+      // Picking the value a field already holds is no edit, whatever order the file has the keys in.
+      await page.selectOption(cell(1, "insert"), "type");
 
       // A new row saves nothing until it names its app.
       await page.click("#dictation .apps-add");
@@ -744,11 +764,11 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
   const toggle = "#dictation .dictation-enable input[data-key='dictation.enabled']";
   const step = (page: Page, s: string) =>
     page.waitForSelector(`#dictation .dictation-setup[data-step='${s}']`);
-  const browserPage = async (grants: DictationGrants) => {
+  const browserPage = async (grants: DictationGrants, platform = "darwin") => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
       before: async (p) => {
-        fx = await dictationFixture(p, { platform: "darwin", grants });
+        fx = await dictationFixture(p, { platform, grants });
         fx.settings["dictation.hotkey"] = "RightCommand";
       },
     });
@@ -783,6 +803,8 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         expect(await text(p, "#dictation-setup-note")).toContain(
           "akou has no access to the microphone, so dictation stays off",
         );
+        // The step says it, and a line above it would go stale once the grant arrives.
+        expect(await p.$("#dictation-off-reason")).toBeNull();
         await p.click("#dictation-setup-open-microphone");
         await until(() => asked("openSettingsPane").length === 1, 5000, "the microphone pane");
         expect(asked("openSettingsPane")).toEqual([{ pane: "microphone" }]);
@@ -893,7 +915,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         { "dictation.enabled": true },
       ]);
       expect(await text(page, "#dictation-setup-note")).toContain(
-        "akou copies what you said: press ⌘V to paste it here",
+        "hold ⌃ ⇧ Space, say a few words and let go. akou copies what you said: press ⌘V to paste it here",
       );
     },
     UI_TIMEOUT,
@@ -926,6 +948,20 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       await until(() => fx.patches.length === 1, 5000, "the switch saved");
       expect(fx.patches).toEqual([{ "dictation.enabled": true }]);
       expect(await page.$("#dictation .dictation-setup")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "on Linux the microphone step names the sound server, not a privacy pane",
+    async () => {
+      const { page } = await browserPage({ mic: "denied", accessibility: "not-needed" }, "linux");
+      await page.click(toggle);
+      await step(page, "mic");
+      expect(await text(page, "#dictation-setup-note")).toContain(
+        "Check that PipeWire or PulseAudio is running",
+      );
+      expect(await page.$("#dictation-setup-open-microphone")).toBeNull();
     },
     UI_TIMEOUT,
   );

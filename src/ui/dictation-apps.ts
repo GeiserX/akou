@@ -41,8 +41,7 @@ export function appsEditor(
   value: unknown,
   disabled: boolean,
 ): { root: HTMLElement; input: HTMLInputElement; shown: string } {
-  const shown = JSON.stringify(Array.isArray(value) ? value : []);
-  const input = h("input", { id, type: "hidden", value: shown });
+  const input = h("input", { id, type: "hidden" });
   const body = h("tbody", {});
   const rules = () => {
     const out: Rule[] = [];
@@ -130,6 +129,10 @@ export function appsEditor(
   for (const r of Array.isArray(value) ? value : []) {
     if (typeof r === "object" && r !== null) body.append(row(r as Record<string, unknown>));
   }
+  // What was shown, in the shape an edit writes: a saved rule whose keys come in another order is
+  // no edit.
+  const shown = JSON.stringify(rules());
+  input.value = shown;
   const add = h(
     "button",
     {

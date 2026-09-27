@@ -173,15 +173,19 @@ export class DictationSetup {
     this.meter = null;
     const g = this.host.grants();
     if (!grantOk(g?.mic)) {
+      // Linux has no microphone grant to turn on: akou hears whatever PipeWire or PulseAudio gives.
+      const linux = this.host.platform === "linux";
       return [
         h("h4", {}, "Microphone"),
         h(
           "p",
           { id: "dictation-setup-note", class: "notice", role: "note" },
-          `akou has no access to the microphone, so dictation stays off. Turn akou on in ${this.where("Microphone")}; this step goes on by itself once you do.`,
+          linux
+            ? "akou cannot open the microphone, so dictation stays off. Check that PipeWire or PulseAudio is running and a microphone is connected; this step goes on by itself once akou hears it."
+            : `akou has no access to the microphone, so dictation stays off. Turn akou on in ${this.where("Microphone")}; this step goes on by itself once you do.`,
         ),
-        this.paneButton("microphone", "Open Microphone settings"),
-      ];
+        linux ? null : this.paneButton("microphone", "Open Microphone settings"),
+      ].filter((x) => x !== null);
     }
     const meter = h("meter", {
       id: "dictation-setup-level",
@@ -296,7 +300,7 @@ export class DictationSetup {
         "p",
         { id: "dictation-setup-note" },
         this.clipboardOnly
-          ? `Click in the field, press ${caps}, say a few words and press it again. akou copies what you said: press ${paste} to paste it here. It does the same in every app.`
+          ? `Click in the field, hold ${caps}, say a few words and let go. akou copies what you said: press ${paste} to paste it here. It does the same in every app.`
           : `Click in the field, hold ${caps}, say a few words and let go. The text lands here, and the same key works in every app.`,
       ),
       h("textarea", {

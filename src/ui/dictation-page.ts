@@ -207,7 +207,13 @@ export class DictationSettings {
     this.shown = {};
     const top =
       this.mode === "app" && ENABLE_KEY in this.schema
-        ? h("div", { class: "dictation-enable" }, this.field(ENABLE_KEY), this.offReason())
+        ? h(
+            "div",
+            { class: "dictation-enable" },
+            this.field(ENABLE_KEY),
+            // The setup's microphone step says it, and knows when the grant arrives.
+            this.setup ? null : this.offReason(),
+          )
         : null;
     if (this.setup) {
       replace(this.root, top, this.setup.root);
