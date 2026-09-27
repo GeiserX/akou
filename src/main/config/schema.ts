@@ -30,8 +30,41 @@ import { defaultModelsDir } from "../asr/models.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
+import { checkDictationHotkey, checkExtraHotkey } from "../window/hotkey.ts";
 
-export type SettingType = "integer" | "number" | "boolean" | "string" | "string[]" | "hooks";
+export type SettingType =
+  | "integer"
+  | "number"
+  | "boolean"
+  | "string"
+  | "string[]"
+  | "hooks"
+  | "apps";
+
+/** What a dictation inserts with, and the key pressed after it (DC-N6, DC-S2). */
+export const DICTATION_INSERTS = ["paste", "type", "clipboard"] as const;
+export const DICTATION_SEND_KEYS = ["Enter", "Ctrl+Enter", "Cmd+Enter", "Shift+Enter", "none"];
+export const DICTATION_ENGINES = ["auto", "fast", "best", "remote"] as const;
+export const DICTATION_FORMATS = ["off", "provider"] as const;
+export const APP_MODES = ["direct", "draft", "draft-send"] as const;
+
+/**
+ * One per-app dictation rule (`dictation.apps`, DC-U9), keyed by the app captured at session
+ * start: a bundle id (macOS), an executable name (Windows) or a window class (Linux). A field left
+ * out means the global setting.
+ */
+export interface AppRule {
+  app: string;
+  mode?: (typeof APP_MODES)[number];
+  insert?: (typeof DICTATION_INSERTS)[number];
+  sendKey?: string;
+  engine?: (typeof DICTATION_ENGINES)[number];
+  language?: string;
+  format?: (typeof DICTATION_FORMATS)[number];
+}
+
+/** An ISO 639 code, as `asr.languages` takes them. */
+const LANGUAGE = /^[a-z]{2,3}$/;
 
 /** The stages a hand-off hook or the webhook runs at: the event type names (DESIGN 8.2). */
 export const HOOK_STAGES = ["call.ended", "final.done", "enhanced"] as const;
@@ -71,6 +104,12 @@ export interface SettingSpec {
    * written over the local API, so the API token cannot become a way to run a chosen command.
    */
   apiWritable?: boolean;
+  /**
+   * With `apiWritable: false`: also writable from the desktop window, whose requests run in
+   * process, never from an HTTP client. For an address the user sets on the page that decides
+   * where their audio goes (`dictation.remote.url`).
+   */
+  windowWritable?: boolean;
   /** A secret (an API key): never shown by `GET /config`, `config show` or `status`. */
   secret?: boolean;
   /** A rule the type cannot say: the error, or null when the value is good. */
@@ -78,7 +117,13 @@ export interface SettingSpec {
   doc: string;
 }
 
-export type SettingValue = number | boolean | string | readonly string[] | readonly HookConfig[];
+export type SettingValue =
+  | number
+  | boolean
+  | string
+  | readonly string[]
+  | readonly HookConfig[]
+  | readonly AppRule[];
 
 const home = homedir();
 
@@ -529,6 +574,303 @@ export const SETTINGS = {
     default: "hold-or-toggle",
     doc: "How the dictation key works: `hold-or-toggle` (a press of 300 ms or more is push-to-talk, a shorter tap latches listening on until the next tap), `hold` (push-to-talk only) or `toggle` (a tap starts, the next tap stops).",
   },
+  "dictation.hotkey": {
+    type: "string",
+    max: 60,
+    default: "",
+    check: (v) => checkDictationHotkey(v as string),
+    doc: "The dictation key: a modifier alone with its side (`RightCommand`, `RightControl`, `RightOption`, `RightShift`, the Left ones, `Fn`) or a chord (`Control+Shift+Space`). Empty: `RightCommand` on macOS, `RightControl` on Windows, `Control+Shift+Space` on Linux, where the desktop's shortcut portal binds chords only. A change applies at once; a key the helper cannot bind is refused and the old one stays.",
+  },
+  "dictation.hotkeyFixLast": {
+    type: "string",
+    max: 60,
+    default: "",
+    check: (v) => checkExtraHotkey(v as string),
+    doc: "Opens the last dictation in the draft box to correct it and teach akou the word. Empty: Shift held before a modifier-only dictation key goes down (`Shift+RightCommand`), else `Control+Shift+Period`.",
+  },
+  "dictation.hotkeyDraft": {
+    type: "string",
+    max: 60,
+    default: "",
+    check: (v) => checkExtraHotkey(v as string),
+    doc: "A second key that dictates into the draft box instead of the app, so you read the text before it goes anywhere. Empty: none.",
+  },
+  "dictation.hotkeyPasteLast": {
+    type: "string",
+    max: 60,
+    default: "",
+    check: (v) => checkExtraHotkey(v as string),
+    doc: "Inserts the last dictation's text again. Empty: none.",
+  },
+  "dictation.silenceStopSeconds": {
+    type: "integer",
+    min: 0,
+    max: 600,
+    default: 30,
+    doc: "A latched dictation (tapped on, not held) stops after this many seconds without speech, and its audio is still transcribed. 0: never.",
+  },
+  "dictation.maxMinutes": {
+    type: "integer",
+    min: 1,
+    max: 60,
+    default: 20,
+    doc: "Any dictation stops at this length, with a warning a minute before; its audio is still transcribed.",
+  },
+  "dictation.mic": {
+    type: "string",
+    max: 200,
+    default: "",
+    doc: "The microphone dictation listens on, a device id from `GET /devices`. Empty: the system default.",
+  },
+  "dictation.preferBuiltInOverBluetooth": {
+    type: "boolean",
+    default: true,
+    doc: "When the default microphone is a Bluetooth headset and the built-in one is there, dictate on the built-in one, so the headset keeps its good sound profile.",
+  },
+  "dictation.warmMic": {
+    type: "string",
+    values: ["off", "auto", "always"],
+    default: "auto",
+    doc: "How long the microphone stays open. `auto`: from the first press until 30 s after each dictation, so a quick follow-up keeps its first syllable; `always`: while dictation is on; `off`: only while the key is down. Never kept open on a Bluetooth microphone.",
+  },
+  "dictation.engine": {
+    type: "string",
+    values: DICTATION_ENGINES,
+    default: "auto",
+    check: (v) =>
+      v === "best"
+        ? "best (Qwen3-ASR kept warm for dictation, DC-E2) is not built yet; use auto, fast or remote"
+        : null,
+    doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR where a GPU runs it; `auto`: best on a GPU, fast elsewhere; `remote`: another akou (`dictation.remote.url`), with no local model needed.",
+  },
+  "dictation.localTimeoutSeconds": {
+    type: "integer",
+    min: 2,
+    max: 120,
+    default: 10,
+    doc: "How long a local `best` may take, plus 0.2 s per second of audio, before the dictation is decoded with `fast` instead and says so.",
+  },
+  "dictation.remote.url": {
+    type: "string",
+    max: 2000,
+    default: "",
+    // Where dictation audio goes: set on the page in the desktop window or in the file, never by
+    // an HTTP client, so the API token cannot send your dictations to a chosen host.
+    apiWritable: false,
+    windowWritable: true,
+    check: (v) => {
+      const url = (v as string).trim();
+      if (url === "") return null;
+      // The URL checks of `server.remotes`, whose lines also name a key file; any path does here.
+      if (/\s/.test(url)) return `${JSON.stringify(url)} is not a URL`;
+      return (
+        checkRemotes([`${url} /`])?.replace(
+          "its key goes in the key file",
+          "the key is dictation.remote.key",
+        ) ?? null
+      );
+    },
+    doc: "The other akou a `remote` dictation is sent to: an `https` address, or `http` to a loopback, private or Tailscale address only. Set it in the akou window or the config file, never over the API: it decides where your dictation audio goes.",
+  },
+  "dictation.remote.key": {
+    type: "string",
+    max: 400,
+    default: "",
+    secret: true,
+    doc: "A `jobs` key of the remote akou, sent as the bearer of every remote dictation. Never shown back or logged; applies to the next dictation.",
+  },
+  "dictation.remote.fallback": {
+    type: "string",
+    values: ["local", "error"],
+    default: "local",
+    doc: "When the remote gives no transcript: `local` decodes on this machine and says so; `error` shows the error with Retry, Copy and Open draft. With no local model installed it is `error`.",
+  },
+  "dictation.remote.timeoutSeconds": {
+    type: "integer",
+    min: 1,
+    max: 60,
+    default: 6,
+    doc: "How long the remote may take before any audio, plus 0.25 s per second of audio, before the fallback runs.",
+  },
+  "asr.qwenIdleMinutes": {
+    type: "integer",
+    min: 0,
+    max: 1440,
+    default: 0,
+    doc: "Stop the Qwen3-ASR server kept warm for dictation after this many idle minutes, to get its memory back; the next dictation starts it again. 0: never.",
+  },
+  "dictation.language": {
+    type: "string",
+    max: 4,
+    default: "auto",
+    check: (v) =>
+      v === "auto" || LANGUAGE.test(v as string) ? null : "is auto or an ISO 639 code (en, es)",
+    doc: "The language of a dictation: `auto` lets the engine choose among `dictation.languages`; a code (`en`) forces it on `best` and on a remote. `fast` picks the language itself.",
+  },
+  "dictation.languages": {
+    type: "string[]",
+    default: [],
+    check: (v) =>
+      (v as readonly string[]).every((c) => LANGUAGE.test(c))
+        ? null
+        : "is a list of ISO 639 codes, for example en and es",
+    doc: "The languages an `auto` dictation may choose among. Empty: `asr.languages`, so editing this never changes how calls are transcribed.",
+  },
+  "dictation.glossary": {
+    type: "string",
+    values: ["off", "on"],
+    default: "off",
+    doc: "Send your learned dictation words to the recognizer as context. Off until a measured evaluation shows it helps without inventing names; learned words are always applied as replacements either way.",
+  },
+  "dictation.glossaryMax": {
+    type: "integer",
+    min: 1,
+    max: 24,
+    default: 24,
+    doc: "The most learned words sent as context, by recency and use; 24 is what the decoder and the remote route take.",
+  },
+  "dictation.insert": {
+    type: "string",
+    values: DICTATION_INSERTS,
+    default: "paste",
+    doc: "How the text goes in: `paste` through the clipboard, which comes back afterwards; `type` as key presses, for remote desktops and fields that refuse a paste; `clipboard` only, and you paste.",
+  },
+  "dictation.sendKey": {
+    type: "string",
+    values: DICTATION_SEND_KEYS,
+    default: "Enter",
+    doc: "The key pressed to send after the text is in, once the app has read it: on Enter during a dictation, Ctrl+Enter in the draft box, or after every dictation with `dictation.sendAlways`. `none`: never.",
+  },
+  "dictation.sendAlways": {
+    type: "boolean",
+    default: false,
+    doc: "Press the send key after every direct dictation.",
+  },
+  "dictation.restoreClipboard": {
+    type: "boolean",
+    default: true,
+    doc: "Put the old clipboard back once the app has read the dictation. Off: the dictation stays in the clipboard.",
+  },
+  "dictation.smartSpacing": {
+    type: "boolean",
+    default: true,
+    doc: "Add the spaces around the text, and lower-case its first word mid-sentence, from the text around the cursor.",
+  },
+  "dictation.trailingSpace": {
+    type: "boolean",
+    default: false,
+    doc: "Where the text around the cursor cannot be read, end every dictation with a space.",
+  },
+  "dictation.spokenPunctuation": {
+    type: "boolean",
+    default: false,
+    doc: "Replace spoken punctuation (`comma`, `new line`; Spanish `coma`, `nueva línea`) when it stands alone between pauses. Off until measured, since both engines punctuate already and `period` is often just a word.",
+  },
+  "dictation.fillers": {
+    type: "boolean",
+    default: true,
+    doc: "Leave out filler words (`um`, `uh`; Spanish `eh`, `este` alone) from the inserted text; history keeps what was said.",
+  },
+  "dictation.spokenSend": {
+    type: "boolean",
+    default: false,
+    doc: "A dictation ending in `send it` (Spanish `envíalo`) leaves those words out and presses the send key.",
+  },
+  "dictation.format": {
+    type: "string",
+    values: DICTATION_FORMATS,
+    default: "off",
+    doc: "`provider`: pass the text through your configured provider first, with the prompt `dictation.formatPrompt`, to fix punctuation and casing. History keeps the raw text; a provider past the timeout is skipped.",
+  },
+  "dictation.formatPrompt": {
+    type: "string",
+    min: 1,
+    max: 100,
+    default: "default",
+    check: (v) =>
+      /^[A-Za-z0-9._-]+$/.test(v as string) ? null : "is a preset name: letters, digits, . _ -",
+    doc: "The formatting prompt: `default`, or the name of a file in `dictation-prompts/` in the config folder, without `.md`.",
+  },
+  "dictation.formatTimeoutSeconds": {
+    type: "integer",
+    min: 0,
+    max: 60,
+    default: 0,
+    doc: "How long the formatting pass may take before the raw text is inserted. 0: 15 s for Claude Code, 4 s for an API or a local model.",
+  },
+  "dictation.muteMedia": {
+    type: "boolean",
+    default: false,
+    doc: "Pause playing media while you dictate, through the system's media controls, and resume only what akou paused.",
+  },
+  "dictation.learn": {
+    type: "string",
+    values: ["off", "ask", "auto"],
+    default: "ask",
+    doc: "When you fix a word akou heard wrong: `ask` offers to learn it once, and ignoring the offer changes nothing; `auto` learns it with an Undo; `off` never looks.",
+  },
+  "dictation.readField": {
+    type: "boolean",
+    default: true,
+    doc: "Read the field you dictated into, for smart spacing and to learn from your fixes there. Never a password field or a terminal; on macOS only once the Accessibility grant the paste needs is there.",
+  },
+  "dictation.learn.audioCheck": {
+    type: "boolean",
+    default: true,
+    doc: "Before offering a word, decode the dictation again with it on Qwen3-ASR and offer it only if the audio agrees. Where Qwen3-ASR does not run here, the offer says it was not checked.",
+  },
+  "dictation.apps": {
+    type: "apps",
+    default: [],
+    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); a field left out follows the global setting.',
+  },
+  "dictation.pill": {
+    type: "string",
+    values: ["bottom", "top", "left", "right", "off"],
+    default: "bottom",
+    doc: "Where the dictation pill shows `listening` and `transcribing`. On Linux a compositor may give the pill the keyboard and the text would land in it, so turn it on there knowingly; the tray and the sounds carry the state instead.",
+  },
+  "dictation.pillPreview": {
+    type: "boolean",
+    default: false,
+    check: (v) =>
+      v === true
+        ? "needs akou's windows hidden from screen capture (app.hideFromCapture, DK-P3), which this version does not have, so the pill never shows your words"
+        : null,
+    doc: "Show the words recognised so far in the pill during a latched dictation. Stays off until akou can hide its windows from screen capture (DK-P3), so a screen share never shows what you dictate.",
+  },
+  "dictation.sounds": {
+    type: "string",
+    values: ["auto", "off", "soft", "click"],
+    default: "auto",
+    doc: "Cues at start, stop, cancel and done. `auto`: `soft` while the pill is off, silent while it shows, so a dictation is never both silent and invisible.",
+  },
+  "dictation.retainDays": {
+    type: "integer",
+    min: 0,
+    max: 3650,
+    default: 30,
+    doc: "Days a dictation's text and audio are kept; older ones leave only a tombstone. 0: only the last one, for paste last and fix last.",
+  },
+  "dictation.keepAudio": {
+    type: "boolean",
+    default: true,
+    doc: "Keep each dictation's audio for Retry and for checking a learned word. Off: deleted once the offer to learn is closed.",
+  },
+  "server.dictation_slots": {
+    type: "integer",
+    min: 0,
+    max: 8,
+    default: 1,
+    doc: "Workers kept for dictating clients (`interactive=true`): they never take queued jobs, and a dictation is never refused by the queue limits. 0: a dictation queues like any job. Applies at the next start.",
+  },
+  "server.dictation_engine": {
+    type: "string",
+    min: 1,
+    max: 100,
+    default: "auto",
+    doc: "The preset or model a dictating client's request runs when it names none. `auto`: the server's default.",
+  },
 } as const satisfies Record<string, SettingSpec>;
 
 export type SettingKey = keyof typeof SETTINGS;
@@ -541,7 +883,9 @@ type ValueOf<T extends SettingType> = T extends "integer" | "number"
       ? string
       : T extends "hooks"
         ? readonly HookConfig[]
-        : readonly string[];
+        : T extends "apps"
+          ? readonly AppRule[]
+          : readonly string[];
 
 export type Settings = { -readonly [K in SettingKey]: ValueOf<(typeof SETTINGS)[K]["type"]> };
 
@@ -591,9 +935,12 @@ export function validateSetting(
       }
       return { ok: true, key, value };
     }
-    case "boolean":
+    case "boolean": {
       if (typeof value !== "boolean") return { ok: false, error: `${key}: must be true or false` };
+      const wrong = spec.check?.(value);
+      if (wrong) return { ok: false, error: `${key}: ${wrong}` };
       return { ok: true, key, value };
+    }
     case "string": {
       if (typeof value !== "string") return { ok: false, error: `${key}: must be a string` };
       if (spec.values && !spec.values.includes(value)) {
@@ -625,7 +972,63 @@ export function validateSetting(
       const h = validateHooks(value);
       return h.ok ? { ok: true, key, value: h.value } : { ok: false, error: `${key}: ${h.error}` };
     }
+    case "apps": {
+      const a = validateApps(value);
+      return a.ok ? { ok: true, key, value: a.value } : { ok: false, error: `${key}: ${a.error}` };
+    }
   }
+}
+
+/** Each field of a per-app rule and the values it takes; `app` and `language` are checked apart. */
+const APP_FIELDS: Readonly<Record<string, readonly string[] | null>> = {
+  app: null,
+  mode: APP_MODES,
+  insert: DICTATION_INSERTS,
+  sendKey: DICTATION_SEND_KEYS,
+  engine: DICTATION_ENGINES,
+  language: null,
+  format: DICTATION_FORMATS,
+};
+
+/** Checks `dictation.apps` (DC-U9): every rule names an app once, with known fields only. */
+export function validateApps(
+  value: unknown,
+): { ok: true; value: AppRule[] } | { ok: false; error: string } {
+  if (!Array.isArray(value)) return { ok: false, error: "must be a list of app rules" };
+  const out: AppRule[] = [];
+  const seen = new Set<string>();
+  for (const [i, r] of value.entries()) {
+    const at = `rule ${i + 1}`;
+    if (typeof r !== "object" || r === null || Array.isArray(r)) {
+      return { ok: false, error: `${at} must be an object` };
+    }
+    const o = r as Record<string, unknown>;
+    const unknown = Object.keys(o).find((k) => !Object.hasOwn(APP_FIELDS, k));
+    if (unknown) return { ok: false, error: `${at}: unknown field "${unknown}"` };
+    if (typeof o.app !== "string" || o.app.trim() === "" || o.app.length > 200) {
+      return {
+        ok: false,
+        error: `${at}: app must be a bundle id, executable name or window class`,
+      };
+    }
+    if (seen.has(o.app)) return { ok: false, error: `${at}: ${o.app} already has a rule` };
+    seen.add(o.app);
+    for (const [k, values] of Object.entries(APP_FIELDS)) {
+      const v = o[k];
+      if (v === undefined || values === null) continue;
+      if (!values.includes(v as string)) {
+        return { ok: false, error: `${at}: ${k} must be one of ${values.join(", ")}` };
+      }
+    }
+    if (
+      o.language !== undefined &&
+      (typeof o.language !== "string" || !(o.language === "auto" || LANGUAGE.test(o.language)))
+    ) {
+      return { ok: false, error: `${at}: language must be auto or an ISO 639 code` };
+    }
+    out.push({ ...(o as unknown as AppRule) });
+  }
+  return { ok: true, value: out };
 }
 
 const HOOK_FIELDS = new Set(["stage", "command", "timeoutSec", "workspace", "name"]);
@@ -692,6 +1095,7 @@ function fromEnv(spec: SettingSpec, raw: string): unknown {
       return raw.split(",").filter((s) => s !== "");
     case "string":
     case "hooks":
+    case "apps":
       return raw;
   }
 }
@@ -747,6 +1151,12 @@ function crossCheck(s: Settings): { key: SettingKey; message: string }[] {
       message: `asr.segmentPause (${s["asr.segmentPause"]}) must be below asr.segmentWindow (${s["asr.segmentWindow"]})`,
     });
   }
+  if (s["dictation.engine"] === "remote" && s["dictation.remote.url"].trim() === "") {
+    out.push({
+      key: "dictation.engine",
+      message: "dictation.engine: remote needs dictation.remote.url, the akou to send the audio to",
+    });
+  }
   return out;
 }
 
@@ -784,10 +1194,14 @@ export function buildSettings(
   }
   for (const bad of crossCheck(settings as Settings)) {
     issues.push({ key: bad.key, source, message: `${bad.message}; using the defaults` });
-    settings["asr.segmentPause"] = defaults["asr.segmentPause"];
-    settings["asr.segmentWindow"] = defaults["asr.segmentWindow"];
-    delete file["asr.segmentPause"];
-    delete file["asr.segmentWindow"];
+    const reset: readonly SettingKey[] =
+      bad.key === "dictation.engine"
+        ? ["dictation.engine"]
+        : ["asr.segmentPause", "asr.segmentWindow"];
+    for (const k of reset) {
+      settings[k] = defaults[k];
+      delete file[k];
+    }
   }
   return { settings: settings as Settings, file, issues, paths };
 }
@@ -827,17 +1241,26 @@ export function loadConfig(
 
 /**
  * Validates a `PATCH /config` body: `{key: value}` to set, `{key: null}` to go back to the default.
- * Returns the new file contents, or every error at once. Settings that name a program are refused.
+ * Returns the new file contents, or every error at once. Settings that name a program are refused;
+ * a `windowWritable` one is taken only `inProcess`, from the desktop window.
  */
 export function patchConfig(
   current: Partial<Record<SettingKey, SettingValue>>,
   patch: Record<string, unknown>,
   paths: Paths,
+  o: { inProcess?: boolean } = {},
 ): { ok: true; file: Partial<Record<SettingKey, SettingValue>> } | { ok: false; errors: string[] } {
   const next = { ...current };
   const errors: string[] = [];
   for (const [key, value] of Object.entries(patch)) {
-    if (isSettingKey(key) && (SETTINGS[key] as SettingSpec).apiWritable === false) {
+    const spec = isSettingKey(key) ? (SETTINGS[key] as SettingSpec) : null;
+    if (spec?.apiWritable === false && !(o.inProcess && spec.windowWritable)) {
+      if (spec.windowWritable) {
+        errors.push(
+          `${key}: set it in the akou window or config.json; it is not writable over the API`,
+        );
+        continue;
+      }
       errors.push(`${key}: set it in config.json; it is not writable over the API`);
       continue;
     }
@@ -877,7 +1300,7 @@ export function settingsReference(): string {
         ? `${s.min} to ${s.max}${s.also ? ` or ${s.also.join(", ")}` : ""}`
         : "";
     const d = Array.isArray(s.default)
-      ? s.type === "hooks"
+      ? s.type === "hooks" || s.type === "apps"
         ? "[]"
         : `[${(s.default as readonly string[]).join(", ")}]`
       : String(s.default);
