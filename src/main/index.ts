@@ -118,6 +118,7 @@ import {
   resolveDictationEngine,
 } from "./dictation/engines.ts";
 import type { Bindings } from "./dictation/protocol.ts";
+import { loadPunctuation } from "./dictation/punctuation.ts";
 import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
 import type { DictationEngine } from "./dictation/session.ts";
@@ -2004,6 +2005,8 @@ export class AkouApp implements ApiApp {
       correct: (raw, language) => this.correctDictation(raw, language),
       speech: (samples) => this.dictationSpeech(samples),
       fillers: () => this.cfg.settings["dictation.fillers"],
+      punctuation: () =>
+        this.cfg.settings["dictation.spokenPunctuation"] ? loadPunctuation(this.configDir) : null,
       languages: () =>
         dictationLanguages(
           this.cfg.settings["dictation.languages"],

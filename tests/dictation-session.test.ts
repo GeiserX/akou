@@ -4,7 +4,7 @@
  * device, no key, no clipboard: the fake records what it would have inserted.
  */
 
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KeyInput } from "../src/core/dictation/activation.ts";
@@ -24,6 +24,9 @@ import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { tempDir } from "./helpers.ts";
+
+// Many tests here run the fake helper in real time; a loaded runner passes bun's 5 s default.
+setDefaultTimeout(30_000);
 
 const cleanups: (() => void | Promise<void>)[] = [];
 afterEach(async () => {
@@ -159,7 +162,8 @@ describe("DC-E4: a spoken dictation's language", () => {
     await until(() => auto.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
     expect(asked).toEqual(["es", undefined]);
     expect(auto.svc.log.items()[0]?.language_forced).toBeNull();
-  });
+    // Two real-time runs of the fake helper: past bun's 5 s default on a slow Windows runner.
+  }, 30_000);
 });
 
 describe("DC-A1 over the fake helper", () => {
@@ -196,7 +200,8 @@ describe("DC-A1 over the fake helper", () => {
     // The key-down to the tap, plus the ring before and the post-roll after.
     expect(items[0]?.seconds as number).toBeGreaterThan(3);
     expect(items[0]?.seconds as number).toBeLessThan(3.6);
-  });
+    // A 3 s real-time run of the fake helper: close to bun's 5 s default on a Windows runner.
+  }, 30_000);
 
   test("Right Command+C is a copy: nothing is kept, and C reaches the app", async () => {
     const r = rig([
@@ -300,13 +305,66 @@ describe("the insert", () => {
   });
 });
 
+describe("DC-T1: the scripted accessibility tree (--ax)", () => {
+  const hold: [number, string, boolean][] = [
+    [800, RC, true],
+    [1600, RC, false],
+  ];
+  const NOTES = { app: "com.example.notes", pid: 7, window: "n1", field: "editable" };
+
+  /** A rig whose tree is `lines`: `[ms, target]`, in the real helper's `<ms> {json}` form. */
+  function treeRig(tree: [number, Record<string, unknown>][]): Rig {
+    const t = tempDir("akou-dict-ax-");
+    cleanups.push(t.cleanup);
+    const ax = join(t.dir, "ax.txt");
+    writeFileSync(ax, tree.map(([ms, o]) => `${ms} ${JSON.stringify(o)}`).join("\n"));
+    return rig(hold, ["--ax", ax]);
+  }
+
+  test("the session's target is what had the keyboard at the key-down", async () => {
+    const r = treeRig([[0, NOTES]]);
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
+    expect(r.svc.log.items()[0]).toMatchObject({ target: NOTES, text: "hello" });
+    expect(lines(r.inserted)[0]).toMatchObject({ method: "paste", target: NOTES });
+  });
+
+  test("another window before the insert fails it focus-changed, and nothing is inserted", async () => {
+    const r = treeRig([
+      [0, NOTES],
+      [1200, { ...NOTES, window: "n2" }],
+    ]);
+    await until(() => r.svc.log.items()[0]?.state === "failed", 10_000, "the failure");
+    expect(r.svc.log.items()[0]).toMatchObject({
+      target: NOTES,
+      text: "hello",
+      error: "insert: focus-changed",
+    });
+  });
+
+  test("a field that stopped being editable fails not-editable", async () => {
+    const r = treeRig([
+      [0, NOTES],
+      [1200, { ...NOTES, field: "not-editable" }],
+    ]);
+    await until(() => r.svc.log.items()[0]?.state === "failed", 10_000, "the failure");
+    expect(r.svc.log.items()[0]?.error).toBe("insert: not-editable");
+  });
+
+  test("a password field at the key-down gets the clipboard only and no text in the log", async () => {
+    const r = treeRig([[0, { ...NOTES, field: "secure" }]]);
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the receipt");
+    expect(lines(r.inserted)[0]).toMatchObject({ method: "clipboard", text: "hello" });
+    expect(r.svc.log.items()[0]).toMatchObject({ state: "inserted", text: null });
+  });
+});
+
 describe("the helper's stdout and stderr are two pipes", () => {
   const TARGET = { app: "a", pid: 1, window: "w", field: "editable" as const };
-  const packet = (n: number): Packet => ({
+  const packet = (n: number, fileSeconds = 0): Packet => ({
     ch: "mic",
     zeroFilled: false,
     captureNs: 0n,
-    fileSeconds: 0,
+    fileSeconds,
     samples: new Float32Array(n),
   });
 
@@ -349,6 +407,28 @@ describe("the helper's stdout and stderr are two pipes", () => {
     s.onPacket(packet(320));
     await until(() => got.length === 1, 2000, "the decode");
     expect(got).toEqual([960]);
+  });
+
+  test("packets read before `session.started` are the session's first audio", async () => {
+    const { s, got } = session();
+    // stdout ran ahead of stderr: the ring is read before the line that opens the session.
+    s.onPacket(packet(320, 0));
+    s.onPacket(packet(320, 0.02));
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320, 0.04));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => got.length === 1, 2000, "the decode");
+    expect(got).toEqual([960]);
+  });
+
+  test("a packet left from a transcribed session is never the next session's", async () => {
+    const { s, got } = session();
+    s.onPacket(packet(320, 1.5));
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(160, 0));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => got.length === 1, 2000, "the decode");
+    expect(got).toEqual([160]);
   });
 
   test("an empty dictation is settled back to the helper at once (DC-A4)", async () => {

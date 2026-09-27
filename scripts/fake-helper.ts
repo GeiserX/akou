@@ -49,6 +49,15 @@
  *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4)
  *   --field KIND            the target field: editable (default), not-editable, unknown, secure
  *   --target-app ID         the target app (default `com.example.editor`)
+ *   --ax FILE               the scripted accessibility tree, the same lines as the real helper's
+ *                           `--ax fake FILE`: `<ms> {"app","pid","window","field"}` per line, the
+ *                           last line at or before a moment being what has the keyboard then (at
+ *                           a key-down, and at the insert, which lands at the key time reached).
+ *                           The insert then runs the real helper's guards in its order: a secure
+ *                           field gets the clipboard only; another app, pid or window fails it
+ *                           `focus-changed`; a field that is not editable fails it `not-editable`,
+ *                           an unknown one `field-unknown` (DC-N8, DC-N9). Replaces --field and
+ *                           --target-app
  *   --tap-log FILE          every key, JSON lines `{key, down, swallowed}` (or `lost`)
  *   --inserter-log FILE     every `insert`, JSON lines, with the fake's time `at` (ms)
  *   --commands-log FILE     every command the app sent, one JSON line each
@@ -93,6 +102,7 @@ import {
   DICTATE_PROTOCOL,
   type FieldKind,
   parseCommand,
+  type Target,
 } from "../src/main/dictation/protocol.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import { readStereoWav, speechLike } from "../tests/fixtures/audio.ts";
@@ -365,12 +375,19 @@ async function runDictate(): Promise<void> {
   };
   const grants = (opt("--grants") ?? "mic,accessibility").split(",");
   const field = (opt("--field") ?? "editable") as FieldKind;
-  const target = {
+  const target: Target = {
     app: opt("--target-app") ?? "com.example.editor",
     pid: 4242,
     window: "w1",
     field,
   };
+  const axFile = opt("--ax");
+  const ax = axFile ? parseAx(readFileSync(axFile, "utf8")) : null;
+  /** What has the keyboard at key time `ms`: the tree's last line at or before it. */
+  const targetAt = (ms: number): Target =>
+    ax ? (ax.findLast((l) => l.at <= ms)?.target ?? UNKNOWN_TARGET) : target;
+  /** The sessions' targets captured at key-down, by session id, for the insert's guards. */
+  const captured = new Map<string, Target>();
   const t0 = performance.now();
   const now = () => Math.round(performance.now() - t0);
   const receiptMs = num("--receipt-ms") ?? 5;
@@ -397,7 +414,8 @@ async function runDictate(): Promise<void> {
           ch: "mic",
           zeroFilled: false,
           captureNs: BigInt(Math.round((at / CAPTURE_RATE) * 1e9)),
-          fileSeconds: at / CAPTURE_RATE,
+          // As the real helper: a session's audio is numbered from 0.
+          fileSeconds: (at - a) / CAPTURE_RATE,
           samples,
         }),
       );
@@ -422,10 +440,11 @@ async function runDictate(): Promise<void> {
       else if (o.type === "start") {
         if (slowMic > 0) await sleep(slowMic);
         open = { id: String(++sessions), at: o.at };
+        captured.set(open.id, targetAt(o.at));
         say({
           type: "session.started",
           id: open.id,
-          target,
+          target: targetAt(o.at),
           capture_ns: String(BigInt(Math.round(o.at)) * 1_000_000n),
         });
       } else if (open) {
@@ -492,10 +511,17 @@ async function runDictate(): Promise<void> {
       case "insert": {
         log(opt("--inserter-log"), { ...c, at: now() });
         if (flag("--no-receipt")) return;
+        // The guards look at the tree now, when the insert arrives, not after the receipt.
+        const refused = ax ? axRefusal(captured.get(c.id) ?? target, targetAt(clock)) : null;
         setTimeout(() => {
           machine?.settled();
-          if (flag("--focus-change")) {
-            say({ type: "insert.failed", id: c.id, reason: "focus-changed" });
+          const failed = flag("--focus-change") ? "focus-changed" : refused;
+          if (failed && c.method !== "clipboard" && failed !== "secure") {
+            say({ type: "insert.failed", id: c.id, reason: failed });
+            return;
+          }
+          if (failed === "secure") {
+            say({ type: "inserted", id: c.id, method: "clipboard", receipt_ms: 0 });
             return;
           }
           say({ type: "inserted", id: c.id, method: c.method, receipt_ms: receiptMs });
@@ -560,6 +586,36 @@ async function runDictate(): Promise<void> {
   stdout.flush();
   say({ type: "stopped", reason: "stop" });
   process.exit(EXIT.ok);
+}
+
+/** An `--ax` script: `<ms> {target}` per line; blank lines and `#` lines are skipped. */
+function parseAx(text: string): { at: number; target: Target }[] {
+  const out: { at: number; target: Target }[] = [];
+  text.split("\n").forEach((raw, n) => {
+    const line = raw.trim();
+    if (line === "" || line.startsWith("#")) return;
+    const m = /^(\d+)\s+(\{.*\})$/.exec(line);
+    if (!m) throw new Error(`ax line ${n + 1}: expected \`<ms> {...}\``);
+    out.push({ at: Number(m[1]), target: JSON.parse(m[2] as string) as Target });
+  });
+  return out;
+}
+
+/** Before the tree's first line nothing is known about the keyboard, as the real helper says. */
+const UNKNOWN_TARGET: Target = { app: "", pid: 0, window: "", field: "unknown" };
+
+/**
+ * The real helper's guards before an insert (native/akou-capture/src/dictate/insert.rs), from the
+ * target the session captured and the one that has the keyboard now: `secure` means the clipboard
+ * only; any other answer fails the insert. Null: insert.
+ */
+function axRefusal(cap: Target, now: Target): string | null {
+  if (cap.field === "secure" || now.field === "secure") return "secure";
+  if (cap.app !== now.app || cap.pid !== now.pid || cap.window !== now.window)
+    return "focus-changed";
+  if (now.field === "not-editable") return "not-editable";
+  if (now.field !== "editable") return "field-unknown";
+  return null;
 }
 
 if (argv.includes("dictate")) {
