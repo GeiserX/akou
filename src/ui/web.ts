@@ -21,6 +21,7 @@ import type {
   PartialLine,
   ReadLines,
   Reply,
+  SettingsPane,
   Transport,
 } from "./protocol.ts";
 import { bootServer } from "./server-page.ts";
@@ -223,7 +224,7 @@ class HttpTransport implements Transport {
     return { close: () => ctl.abort() };
   }
 
-  async openSettingsPane(pane: "microphone" | "system-audio"): Promise<boolean> {
+  async openSettingsPane(pane: SettingsPane): Promise<boolean> {
     const r = await fetch("/app/open-settings", {
       method: "POST",
       headers: this.headers({ "content-type": "application/json" }),

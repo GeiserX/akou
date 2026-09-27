@@ -381,6 +381,7 @@ export const DICTATION_SCHEMA: Schema = {
   "dictation.learn": pick(["off", "ask", "auto"], "Suggests words to learn."),
   "dictation.readField": bool("Reads the field you dictated into."),
   "dictation.learn.audioCheck": bool("Confirms a word against the audio."),
+  "dictation.apps": { type: "apps", apiWritable: true, doc: "Per-app dictation rules." },
   "dictation.pill": pick(["bottom", "top", "left", "right", "off"], "Where the pill shows."),
   "dictation.pillPreview": bool("Shows the words as you speak."),
   "dictation.sounds": pick(["auto", "off", "soft", "click"], "Start and stop sounds."),
@@ -403,7 +404,7 @@ function defaults(schema: Schema): Record<string, unknown> {
         ? false
         : s.type === "integer"
           ? (s.min ?? 0)
-          : s.type === "string[]"
+          : s.type === "string[]" || s.type === "apps"
             ? []
             : (s.values?.[0] ?? "");
   }
@@ -698,9 +699,15 @@ export async function viewPage(
  */
 export async function windowPage(
   rig: AppRig,
-  o: { platform?: string; grants?: DictationGrants } = {},
+  o: {
+    platform?: string;
+    /** Read at every `GET /dictation`, so a test changes the grants as the OS would. */
+    grants?: DictationGrants;
+    /** Saved values over the section 6 defaults. */
+    settings?: Record<string, unknown>;
+  } = {},
 ): Promise<ViewPage & { patches: Record<string, unknown>[] }> {
-  const settings = defaults(DICTATION_SCHEMA);
+  const settings = { ...defaults(DICTATION_SCHEMA), ...o.settings };
   const patches: Record<string, unknown>[] = [];
   const status = async () => {
     const r = await rig.api("GET", "/status");
@@ -712,7 +719,7 @@ export async function windowPage(
       return {
         status: 200,
         body: {
-          enabled: false,
+          enabled: settings["dictation.enabled"],
           state: "idle",
           grants: o.grants ?? { mic: "granted", accessibility: "granted" },
         },

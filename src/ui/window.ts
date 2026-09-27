@@ -19,6 +19,7 @@ import type {
   QuitQuestion,
   ReadLines,
   Reply,
+  SettingsPane,
   Transport,
 } from "./protocol.ts";
 
@@ -29,6 +30,7 @@ const followers = new Map<string, FollowSink>();
 const askers = new Map<string, AskSink>();
 const statusWatchers = new Set<(s: AppStatus) => void>();
 const keyWatchers = new Set<(name: string) => void>();
+const levelWatchers = new Set<(db: number) => void>();
 
 const rpc = Electroview.defineRPC<AkouRpc>({
   maxRequestTime: 30_000,
@@ -71,6 +73,9 @@ const rpc = Electroview.defineRPC<AkouRpc>({
         void askQuit(q).then((go) => rpc.request.answerQuit({ id, go }).catch(() => {})),
       dictationKey: ({ name }: { name: string }) => {
         for (const fn of keyWatchers) fn(name);
+      },
+      dictationLevel: ({ db }: { db: number }) => {
+        for (const fn of levelWatchers) fn(db);
       },
     },
   },
@@ -130,7 +135,7 @@ class RpcTransport implements Transport {
     return { close: () => statusWatchers.delete(fn) };
   }
 
-  async openSettingsPane(pane: "microphone" | "system-audio"): Promise<boolean> {
+  async openSettingsPane(pane: SettingsPane): Promise<boolean> {
     return (await rpc.request.openSettingsPane({ pane })) as boolean;
   }
 
@@ -142,6 +147,18 @@ class RpcTransport implements Transport {
       close: () => {
         if (keyWatchers.delete(fn) && keyWatchers.size === 0)
           void rpc.request.recordDictationKeys({ on: false }).catch(() => {});
+      },
+    };
+  }
+
+  dictationLevels(fn: (db: number) => void): { close(): void } {
+    levelWatchers.add(fn);
+    // An app without the meter's main side sends no level; the setup still goes on.
+    if (levelWatchers.size === 1) void rpc.request.watchDictationMic({ on: true }).catch(() => {});
+    return {
+      close: () => {
+        if (levelWatchers.delete(fn) && levelWatchers.size === 0)
+          void rpc.request.watchDictationMic({ on: false }).catch(() => {});
       },
     };
   }

@@ -208,7 +208,8 @@ Status words:
 
 ## Examples
 
-- F4.4, F4.5, I4.6 shell recipes for meetings, notes and dictation: **dropped**. akou is an app; `akou start` plus hooks cover the meeting recipe.
+- F4.4, F4.5 shell recipes for meetings and notes: **dropped**. akou is an app; `akou start` plus hooks cover the meeting recipe.
+- I4.6, the dictation recipe: **carried, as dictation** ([DICTATION.md](ux/DICTATION.md)).
 - F4.6, I4.7 Google Meet userscript: **dropped**. Meeting detection, if built, uses OS signals, never page DOM.
 
 ## Custom vocabulary (new, no predecessor feature)

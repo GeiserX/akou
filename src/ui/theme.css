@@ -783,8 +783,35 @@ dialog {
 .setting.refused textarea {
   border-color: var(--rec);
 }
-.setting .issue {
+.setting .issue,
+.dictation-enable .issue {
   color: var(--rec);
+}
+.apps-rules {
+  border-collapse: collapse;
+  table-layout: fixed;
+  width: 100%;
+}
+.apps-rules th,
+.apps-rules td {
+  padding: 2px;
+  text-align: left;
+}
+.apps-rules th:first-child {
+  width: 26%;
+}
+.apps-rules th:last-child {
+  width: 36px;
+}
+.apps-rules input,
+.apps-rules select {
+  box-sizing: border-box;
+  min-width: 0;
+  padding: 6px 4px;
+  width: 100%;
+}
+.apps-rules button {
+  padding: 6px 8px;
 }
 .vocab-entries {
   border-collapse: collapse;
