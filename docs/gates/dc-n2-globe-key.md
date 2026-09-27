@@ -21,6 +21,8 @@ The helper job in [ci.yml](../../.github/workflows/ci.yml) runs the shipping hel
 3. starts it bound to `Fn` and kills it with `SIGKILL`: the value still reads `0`, which proves the next check is a real repair;
 4. starts it bound to `RightCommand`: the value reads `2`, and after `stop` akou's saved copy is gone.
 
+First run: <https://github.com/GeiserX/akou/actions/runs/36301411076> (job `helper (macos-latest)`, 2026-09-27), every check passed. The same run's real key-tap session named its mic from Core Audio's list: `"mic":{"transport":"built-in","why":"default"}` (DC-N5).
+
 ## Still open
 
 - **Whether the system follows the change at once.** The check reads the stored value; it does not press a real Fn key, since a runner has no keyboard. Some `com.apple.HIToolbox` values only take effect after the next login. On a real Mac with an Apple keyboard, bind Fn, press it alone, and check that no emoji picker or input source switch appears; then rebind and check the old action is back. If it needs a login, the helper must also tell the text input system to reload its settings.
