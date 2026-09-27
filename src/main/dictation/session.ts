@@ -63,6 +63,20 @@ export interface DictationEngine {
   /** What the log records as the engine: `fast`, `best`, `remote`. */
   readonly name: string;
   decode(samples: Float32Array, o: DecodeRequest): Promise<EngineDecoded>;
+  /**
+   * DC-R6: opens the dictation's request at the press, for an engine that takes the audio while
+   * the key is held (the remote). Absent, the whole buffer is decoded at release.
+   */
+  open?(o: DecodeRequest): EngineHold;
+}
+
+/** A dictation's request opened at the press (DC-R6): packets as they arrive, then the release. */
+export interface EngineHold {
+  push(samples: Float32Array): void;
+  /** At release, with the whole buffer: the decode, as `DictationEngine.decode` answers it. */
+  decode(samples: Float32Array): Promise<EngineDecoded>;
+  /** The dictation is not decoded (cancelled, no speech, the helper gone): drop the request. */
+  cancel(): void;
 }
 
 /** What turns a dictation's buffer into the text to insert, beside the engine (DC-E6, DC-S7). */
@@ -86,6 +100,11 @@ export interface TextRules {
    * it is off. Throws when the user's file cannot be read; the text then goes in as it was.
    */
   punctuation?(): PunctuationLists | null;
+  /**
+   * `dictation.format: provider` (DC-U6): the text to insert through the user's provider, after
+   * every other rule; the raw text and why when the pass was skipped; null while it is off.
+   */
+  format?(text: string): Promise<{ text: string; skipped: string | null } | null>;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -144,6 +163,8 @@ interface Listening {
   samples: number;
   /** Secure Input was on at the start, or the field is a password field (DC-N8). */
   secure: boolean;
+  /** The engine picked at the press, and its request opened then (DC-R6); null for the others. */
+  hold: { engine: DictationEngine; request: EngineHold } | null;
   /** Set by `session.ended`: the reason, and the timer that waits for the pipe to drain. */
   end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
 }
@@ -299,8 +320,10 @@ export class DictationSession {
           chunks: this.early.chunks,
           samples: this.early.samples,
           secure: this.secureInput || m.target.field === "secure",
+          hold: this.open(),
           end: null,
         };
+        for (const chunk of this.cur.chunks) this.cur.hold?.request.push(chunk);
         this.early = { chunks: [], samples: 0 };
         this.set("listening");
         return;
@@ -383,6 +406,7 @@ export class DictationSession {
     }
     c.chunks.push(p.samples);
     c.samples += p.samples.length;
+    c.hold?.request.push(p.samples);
     // Audio read after the end: the pipe is still draining, so the quiet window starts again.
     if (c.end) c.end.timer.refresh();
   }
@@ -393,6 +417,7 @@ export class DictationSession {
     this.cur = null;
     this.early = { chunks: [], samples: 0 };
     if (c?.end) clearTimeout(c.end.timer);
+    c?.hold?.request.cancel();
     if (c) {
       const id = newDictationId(this.o.now());
       this.write({ type: "dictation.started", id, target: c.target, engine: "auto", by: "user" });
@@ -419,7 +444,8 @@ export class DictationSession {
     clearTimeout(c.end.timer);
     const reason = c.end.reason;
     const id = newDictationId(this.o.now());
-    const engine = this.o.engine();
+    // A request opened at the press is decoded by the engine that opened it.
+    const engine = c.hold?.engine ?? this.o.engine();
     const seconds = Math.round((c.samples / 16000) * 1000) / 1000;
     this.write({
       type: "dictation.started",
@@ -433,6 +459,7 @@ export class DictationSession {
     this.keep(id, c, samples);
     this.write({ type: "dictation.ended", id, reason, seconds });
     if (reason === "cancel" || reason === "stop") {
+      c.hold?.request.cancel();
       this.write({ type: "dictation.cancelled", id });
       this.settle();
       return;
@@ -440,6 +467,26 @@ export class DictationSession {
     this.decoding++;
     this.set("transcribing");
     this.work = this.work.then(() => this.transcribe(id, c, samples, engine));
+  }
+
+  /**
+   * DC-R6: the request of an engine that takes the audio during the hold, opened at the press with
+   * the engine the settings pick now; null for any other engine, or when opening it fails, and the
+   * buffer then goes at release.
+   */
+  private open(): Listening["hold"] {
+    const engine = this.o.engine();
+    if (!engine?.open) return null;
+    const language = this.o.language?.();
+    try {
+      return { engine, request: engine.open(language ? { language } : {}) };
+    } catch (err) {
+      this.o.onLog?.(
+        "warn",
+        `dictation: ${engine.name} not opened at the press: ${(err as Error).message}`,
+      );
+      return null;
+    }
   }
 
   /** Hands the audio to be kept, never a password field's (DC-N8); a failure costs only Retry. */
@@ -477,7 +524,7 @@ export class DictationSession {
     const language = this.o.language?.();
     let r: DictationResult;
     try {
-      r = await decodeDictation(this.o, engine, samples, language, c.secure);
+      r = await decodeDictation(this.o, engine, samples, language, c.secure, c.hold?.request);
     } catch (err) {
       this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
       return;
@@ -521,10 +568,15 @@ export async function decodeDictation(
   samples: Float32Array,
   language: string | undefined,
   secure = false,
+  hold?: EngineHold,
 ): Promise<DictationResult> {
-  if ((await hearsSpeech(o, samples)) === false) return { kind: "empty" };
+  if ((await hearsSpeech(o, samples)) === false) {
+    hold?.cancel();
+    return { kind: "empty" };
+  }
   const ask = language ? { language } : {};
-  let d = await engine.decode(samples, ask);
+  // The request opened at the press (DC-R6) takes the tail; any other decode sends the buffer.
+  let d = await (hold ? hold.decode(samples) : engine.decode(samples, ask));
   let echoRetry = false;
   // No engine sends a glossary yet (DC-L7), so only the wrapper text can give an echo away.
   if (isEcho(d.text)) {
@@ -541,7 +593,27 @@ export async function decodeDictation(
   if (o.fillers?.()) text = removeFillers(text, langs);
   const lists = punctuationLists(o);
   if (lists) text = spokenPunctuation(text, d.words, langs, lists);
-  return { kind: "text", d, text, echoRetry };
+  const f = await formatted(o, text);
+  if (f?.skipped)
+    d = { ...d, notice: d.notice ? `${d.notice}; ${FORMAT_SKIPPED}` : FORMAT_SKIPPED };
+  return { kind: "text", d, text: f?.text ?? text, echoRetry };
+}
+
+/** The pill's line when the formatting pass was skipped and the raw text went in (DC-U6). */
+export const FORMAT_SKIPPED = "formatting skipped";
+
+/** The formatting pass (DC-U6), or null while it is off; a pass that throws is a skip. */
+async function formatted(
+  o: TextRules,
+  text: string,
+): Promise<{ text: string; skipped: string | null } | null> {
+  if (!o.format || text.trim() === "") return null;
+  try {
+    return await o.format(text);
+  } catch (err) {
+    o.onLog?.("warn", `format.skipped: ${(err as Error).message}`);
+    return { text, skipped: (err as Error).message };
+  }
 }
 
 /** The spoken punctuation lists, or null when it is off or its file is broken (which is said). */
