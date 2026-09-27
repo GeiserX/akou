@@ -38,15 +38,25 @@
  * decoded, so no engine can invent a sentence from room noise; and an answer that is the engine's
  * context echoed back is decoded again with no context. After the vocabulary, filler words leave
  * the inserted text (DC-S7), and spoken marks that stand alone become punctuation when
- * `dictation.spokenPunctuation` is on (DC-S6); the log keeps what the engine heard.
+ * `dictation.spokenPunctuation` is on (DC-S6); the log keeps what the engine heard. With
+ * `dictation.spokenSend` on, a spoken dictation that ends in "send it" leaves those words out and
+ * presses the send key as Enter would (DC-S5).
+ *
+ * A session ends by itself too (DC-A3): any session at `dictation.maxMinutes` of audio, after a
+ * pill line one minute before, and a latched one (tapped on, not held) after
+ * `dictation.silenceStopSeconds` in which the VAD heard no speech. The app asks the helper for
+ * `session.stop`, and the dictation is logged as ended by `max` or `silence`; its audio is
+ * transcribed like any other. A session is latched when the tray or the CLI started it, when
+ * `dictation.activation` is `toggle`, or when the helper says so (`latched`).
  */
 
 import { isEcho } from "../../core/dictation/echo.ts";
 import type { DictationDraft, Target } from "../../core/dictation/events.ts";
 import { removeFillers } from "../../core/dictation/fillers.ts";
 import { type PunctuationLists, spokenPunctuation } from "../../core/dictation/punctuation.ts";
+import { spokenSend } from "../../core/dictation/send.ts";
 import type { Decoded } from "../asr/live-worker.ts";
-import type { Packet } from "../capture/protocol.ts";
+import { CAPTURE_RATE, type Packet } from "../capture/protocol.ts";
 import { forcesLanguage } from "./engines.ts";
 import type {
   AppToHelper,
@@ -196,7 +206,36 @@ export interface SessionOptions extends TextRules {
   insertPolicy?(): InsertPolicy;
   /** The dictation key was pressed while a dictation is still transcribing: refused (DC-A4). */
   onBusy?(): void;
+  /**
+   * `dictation.silenceStopSeconds` and `dictation.maxMinutes` as they are now (DC-A3); absent, a
+   * session ends only when the helper ends it.
+   */
+  autoStop?(): AutoStop;
+  /** A line for the pill while listening (`1 minute left`), never logged (DC-A3). */
+  onWarning?(note: string): void;
+  /** `dictation.spokenSend`: a dictation ending in "send it" presses the send key (DC-S5). */
+  spokenSend?(): boolean;
 }
+
+/** When a session ends by itself (DC-A3). */
+export interface AutoStop {
+  /** A latched session ends after this many seconds without speech; 0 never. */
+  silenceSeconds: number;
+  /** Any session ends at this length. */
+  maxMinutes: number;
+}
+
+/** The pill's line one minute before `dictation.maxMinutes` (DC-A3). */
+export const MAX_WARNING = "1 minute left";
+
+/** The VAD judges a latched session's audio in windows of this many samples: one second. */
+export const SILENCE_WINDOW = CAPTURE_RATE;
+
+/**
+ * How long after the tray's or the CLI's `session.start` a `session.started` is taken as its
+ * answer, so latched: `CONTROL_MS` of the service. A start the helper dropped then marks nothing.
+ */
+const DOOR_MS = 3000;
 
 /** The helper's refusals that send the text to the draft box rather than failing it (DC-N9). */
 export const DRAFT_REASONS: ReadonlySet<string> = new Set([
@@ -228,6 +267,20 @@ interface Listening {
   end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
   /** What the keys during the session, or while it transcribes, asked for (DC-A4). */
   asked: Asked;
+  /** Tapped on rather than held: only such a session ends after silence (DC-A3). */
+  latched: boolean;
+  /** Why the app asked the helper to stop it (DC-A3): its `tap` is logged as this. */
+  stopping: "silence" | "max" | null;
+  /** The pill was told one minute is left. */
+  warned: boolean;
+  /** The audio not judged by the VAD yet, less than a window of it. */
+  window: Float32Array;
+  filled: number;
+  /** Samples judged so far, and where the last window with speech ended. */
+  judged: number;
+  heard: number;
+  /** The VAD's verdicts run one at a time, in order. */
+  vad: Promise<void>;
 }
 
 /**
@@ -273,6 +326,8 @@ export class DictationSession {
   private work: Promise<void> = Promise.resolve();
   /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
   private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
+  /** When the tray or the CLI last asked for `session.start`: its session is latched (DC-A3). */
+  private doorAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly o: SessionOptions) {}
 
@@ -314,6 +369,7 @@ export class DictationSession {
    * helper answers with `session.started` and `session.ended` as for a key.
    */
   command(action: "start" | "stop" | "cancel"): void {
+    if (action === "start") this.doorAt = this.o.now();
     this.o.send({ type: `session.${action}` });
   }
 
@@ -379,28 +435,49 @@ export class DictationSession {
       case "key":
         this.key(m.name);
         return;
-      case "session.started":
+      case "session.started": {
         // The last session is still draining its pipe: it ends now, with the audio it has, since
         // everything it sent was written before this line.
         if (this.cur?.end) this.ended(this.cur);
-        this.cur = {
+        // A start with no end before it (a helper that restarted or misbehaved): the old session
+        // is dropped, and so is the request it opened, rather than left open on the remote.
+        else this.cur?.hold?.request.cancel();
+        const door = this.o.now() - this.doorAt <= DOOR_MS;
+        this.doorAt = Number.NEGATIVE_INFINITY;
+        const c: Listening = {
           helperId: m.id,
           target: m.target,
-          chunks: this.early.chunks,
-          samples: this.early.samples,
+          chunks: [],
+          samples: 0,
           secure: this.secureInput || m.target.field === "secure",
           hold: this.open(),
           end: null,
           asked: "insert",
+          latched: door || this.o.bindings().activation === "toggle",
+          stopping: null,
+          warned: false,
+          window: new Float32Array(SILENCE_WINDOW),
+          filled: 0,
+          judged: 0,
+          heard: 0,
+          vad: Promise.resolve(),
         };
-        for (const chunk of this.cur.chunks) this.cur.hold?.request.push(chunk);
+        this.cur = c;
+        const early = this.early.chunks;
         this.early = { chunks: [], samples: 0 };
         this.set("listening");
+        for (const chunk of early) this.take(c, chunk);
+        return;
+      }
+      case "latched":
+        if (this.cur?.helperId === m.id) this.cur.latched = true;
         return;
       case "session.ended": {
         const c = this.cur;
         if (!c || c.helperId !== m.id || c.end) return;
-        c.end = { reason: m.reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
+        // The helper ends the app's `session.stop` as a tap: the log says why the app asked.
+        const reason = c.stopping && m.reason === "tap" ? c.stopping : m.reason;
+        c.end = { reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
         return;
       }
       case "inserted": {
@@ -495,11 +572,73 @@ export class DictationSession {
       this.early.samples += p.samples.length;
       return;
     }
-    c.chunks.push(p.samples);
-    c.samples += p.samples.length;
-    c.hold?.request.push(p.samples);
+    this.take(c, p.samples);
     // Audio read after the end: the pipe is still draining, so the quiet window starts again.
     if (c.end) c.end.timer.refresh();
+  }
+
+  /** A session's audio: kept, sent on to a request opened at the press, and watched (DC-A3). */
+  private take(c: Listening, samples: Float32Array): void {
+    c.chunks.push(samples);
+    c.samples += samples.length;
+    c.hold?.request.push(samples);
+    if (c.end || c.stopping) return;
+    const a = this.o.autoStop?.();
+    if (!a) return;
+    const limit = a.maxMinutes * 60 * CAPTURE_RATE;
+    if (!c.warned && c.samples >= limit - 60 * CAPTURE_RATE) {
+      c.warned = true;
+      this.o.onWarning?.(MAX_WARNING);
+    }
+    if (c.samples >= limit) {
+      this.stopBy(c, "max");
+      return;
+    }
+    if (!c.latched || a.silenceSeconds <= 0 || !this.o.speech) return;
+    // The VAD hears the audio a window at a time; the last window with speech in it sets the time.
+    let at = 0;
+    while (at < samples.length) {
+      const n = Math.min(SILENCE_WINDOW - c.filled, samples.length - at);
+      c.window.set(samples.subarray(at, at + n), c.filled);
+      c.filled += n;
+      at += n;
+      if (c.filled < SILENCE_WINDOW) break;
+      const window = c.window.slice();
+      c.filled = 0;
+      c.judged += SILENCE_WINDOW;
+      const end = c.judged;
+      c.vad = c.vad.then(() => this.judge(c, window, end, a.silenceSeconds));
+    }
+  }
+
+  /**
+   * The VAD's verdict on one window of a latched session: speech moves the last time heard, and
+   * `silenceSeconds` with none since stops the session. A VAD that has no verdict or fails counts
+   * as speech: a guard that cannot hear never ends a session.
+   */
+  private async judge(
+    c: Listening,
+    window: Float32Array,
+    end: number,
+    silenceSeconds: number,
+  ): Promise<void> {
+    if (this.cur !== c || c.end || c.stopping) return;
+    let speech: boolean | null = null;
+    try {
+      speech = (await this.o.speech?.(window)) ?? null;
+    } catch {
+      speech = null;
+    }
+    if (speech !== false) c.heard = end;
+    if (this.cur !== c || c.end || c.stopping) return;
+    if (end - c.heard >= silenceSeconds * CAPTURE_RATE) this.stopBy(c, "silence");
+  }
+
+  /** Asks the helper to end the session (DC-A3); its audio is transcribed as for a tap. */
+  private stopBy(c: Listening, why: "silence" | "max"): void {
+    c.stopping = why;
+    this.o.onLog?.("info", `dictation: stopped by ${why === "max" ? "the maximum length" : why}`);
+    this.o.send({ type: "session.stop" });
   }
 
   /** The helper exited: a session in progress is lost with it, and says so. */
@@ -623,6 +762,15 @@ export class DictationSession {
       this.notInserted(c, { type: "dictation.failed", id, error: (err as Error).message });
       return;
     }
+    // "send it" at the very end (DC-S5): the words go, and the send key goes with the insert.
+    let spoken = false;
+    if (r.kind === "text" && !c.secure && this.o.spokenSend?.()) {
+      const s = spokenSend(r.text);
+      if (s.send) {
+        r = { ...r, text: s.text };
+        spoken = true;
+      }
+    }
     if (r.kind === "text" && r.d.notice) this.o.onNotice?.(id, r.d.notice);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
@@ -652,7 +800,7 @@ export class DictationSession {
     // would press send in a chat app.
     const method: InsertMethod = c.secure || p.method === "clipboard" ? "clipboard" : "paste";
     // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
-    const send = method !== "clipboard" && (c.asked === "send" || p.sendAlways);
+    const send = method !== "clipboard" && (c.asked === "send" || p.sendAlways || spoken);
     this.decoding--;
     if (this.latest === c) this.latest = null;
     this.inserts.set(c.helperId, id);

@@ -2038,6 +2038,11 @@ export class AkouApp implements ApiApp {
       retainDays: () => this.cfg.settings["dictation.retainDays"],
       keepAudio: () => this.cfg.settings["dictation.keepAudio"],
       learns: () => this.cfg.settings["dictation.learn"] !== "off",
+      autoStop: () => ({
+        silenceSeconds: this.cfg.settings["dictation.silenceStopSeconds"],
+        maxMinutes: this.cfg.settings["dictation.maxMinutes"],
+      }),
+      spokenSend: () => this.cfg.settings["dictation.spokenSend"],
       insert: () => {
         const c = this.cfg.settings;
         return {
