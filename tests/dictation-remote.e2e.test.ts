@@ -28,6 +28,7 @@ import {
   transcribeRemote,
   vetRemote,
 } from "../src/main/dictation/remote.ts";
+import type { DictationEngine } from "../src/main/dictation/session.ts";
 import type { AppOptions } from "../src/main/index.ts";
 import { readUploadAudio } from "../src/main/server/audio.ts";
 import type { Resolver } from "../src/main/server/webhooks.ts";
@@ -451,6 +452,7 @@ function localEngine(name = "fast"): LocalEngine & { calls: number } {
         language: "en",
         model: "parakeet-tdt-0.6b-v3",
         ms: 5,
+        spans: 1,
       };
     },
   };
@@ -783,7 +785,7 @@ describe("DC-R6: the audio goes to the remote during the hold", () => {
     }
   });
 
-  test("against the server rig, a streamed dictation returns the rig's transcript; the tail left at release is sent", async () => {
+  test("against the server rig, a streamed dictation returns the rig's transcript; the tail left at release, which holds every word, is sent", async () => {
     const rig = await appRig({
       settings: { ...SERVER },
       jobs: { dictationSlots: () => 1 } as AppOptions["jobs"],
@@ -793,11 +795,16 @@ describe("DC-R6: the audio goes to the remote during the hold", () => {
       const net = network();
       const local = localEngine();
       const e = engine({ url: `http://127.0.0.1:${rig.port}`, key }, { local, fetch: net.fetch });
+      // The words are in the second half, and only the first half is pushed during the hold: the
+      // transcript comes from the tail sent at release, or not at all.
+      const lead = silence(2);
+      const late = concat(lead, speak(["hello", "world"]), silence(0.4));
+      const ps = packets(late);
+      const half = ps.slice(0, Math.floor(ps.length / 2));
+      expect(half.reduce((a, p) => a + p.length, 0)).toBeLessThanOrEqual(lead.length);
       const hold = e.open();
-      // Half the packets during the hold; the rest reach the session after the release.
-      const ps = packets(HELLO);
-      for (const p of ps.slice(0, ps.length / 2)) hold.push(p);
-      const r = await hold.decode(HELLO);
+      for (const p of half) hold.push(p);
+      const r = await hold.decode(late);
       expect(r.text).toContain("hello world");
       expect(r).toMatchObject({ engine: "remote", notice: null, words: [] });
       expect(local.calls).toBe(0);
@@ -911,10 +918,13 @@ describe("DC-R6: the audio goes to the remote during the hold", () => {
     const slow = await fakeRemote({ delayMs: 400 });
     try {
       const url = `http://127.0.0.1:${slow.port}`;
-      // A hold longer than the whole budget: the timer has not started yet.
+      // A hold longer than the whole budget (0.1 s plus 0.25 s x 4 s = 1.1 s): had the timer
+      // started at the press, the request would be aborted before the release.
+      const holdMs = 1400;
+      expect(holdMs).toBeGreaterThan(remoteTimeoutMs(0.1, 4) + 200);
       const long = new RemoteUpload({ url, key: "k", timeoutSeconds: 0.1 });
       long.push(new Float32Array(4 * 16000));
-      await Bun.sleep(300);
+      await Bun.sleep(holdMs);
       expect((await long.finish(new Float32Array(4 * 16000))).text).toBe("hello from the fake");
       // 0.1 s plus 0.25 s x 0.5 s = 0.225 s: the 0.4 s answer comes too late.
       const short = new RemoteUpload({ url, key: "k", timeoutSeconds: 0.1 });
@@ -923,6 +933,65 @@ describe("DC-R6: the audio goes to the remote during the hold", () => {
       expect(e.message).toContain("no answer within 225 ms");
     } finally {
       slow.stop();
+    }
+  });
+
+  test("once the request has failed, audio pushed during the rest of the hold is dropped, not held in memory", async () => {
+    // Refused at the press: nothing is ever sent, so nothing is kept either.
+    const refusedUp = new RemoteUpload({ url: "http://203.0.113.5", key: "k" });
+    refusedUp.push(new Float32Array(1600));
+    await Bun.sleep(20);
+    for (const p of packets(silence(20))) refusedUp.push(p);
+    expect(refusedUp.pending).toBe(0);
+    expect((await refused(refusedUp.finish(silence(20.1)))).kind).toBe("refused");
+    // A remote that is down: the request opened, then failed. What it had queued goes too.
+    const up = new RemoteUpload({ url: await stoppedRemote(), key: "k" });
+    up.push(new Float32Array(1600));
+    await Bun.sleep(50);
+    for (const p of packets(silence(20))) up.push(p);
+    // 20 s of audio is 640 KB; none of it is held once the failure is known.
+    expect(up.pending).toBe(0);
+    expect((await refused(up.finish(silence(20.1)))).kind).toBe("unreachable");
+  });
+
+  test("a hold that is decoded after it was cancelled, or with a shorter buffer, is dropped: no fallback, and the remote's health is untouched", async () => {
+    const r = streamRemote();
+    try {
+      const net = network();
+      const local = localEngine();
+      const e = engine({ url: r.url }, { local, fetch: net.fetch });
+      const cancelled = e.open();
+      for (const p of packets(HELLO).slice(0, 5)) cancelled.push(p);
+      cancelled.cancel();
+      expect(await refused(cancelled.decode(HELLO))).toMatchObject({ kind: "dropped" });
+      const shorter = e.open();
+      for (const p of packets(HELLO)) shorter.push(p);
+      const d = await refused(shorter.decode(HELLO.subarray(0, 1600)));
+      expect(d).toMatchObject({ kind: "dropped" });
+      expect(d.message).toContain("shorter");
+      expect(local.calls).toBe(0);
+      expect(e.health()).toMatchObject({ failures: 0, error: null, down: false });
+      // Nothing went again: one request per hold, and neither ended.
+      expect(net.sent).toHaveLength(2);
+      for (let i = 0; i < 100 && r.got.broken < 2; i++) await Bun.sleep(10);
+      expect(r.got).toMatchObject({ ended: 0 });
+    } finally {
+      r.stop();
+    }
+  });
+
+  test("the remote engine is a dictation engine: a remote result carries what the session reads", async () => {
+    const fake = await fakeRemote();
+    try {
+      const e: DictationEngine = engine({ url: `http://127.0.0.1:${fake.port}` });
+      expect(e.name).toBe("remote");
+      expect(await e.decode(HELLO, {})).toMatchObject({
+        text: "hello from the fake",
+        words: [],
+        spans: 1,
+      });
+    } finally {
+      fake.stop();
     }
   });
 });
