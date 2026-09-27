@@ -110,6 +110,8 @@ export type AppToHelper =
       method: InsertMethod;
       send_key: SendKey;
       target: Target;
+      /** `dictation.restoreClipboard`: absent, the helper puts the old clipboard back. */
+      restore?: boolean;
     }
   /** This session will not be inserted: the helper stops holding Escape and Enter now. */
   | { type: "settled"; id: string }

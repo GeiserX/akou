@@ -12,6 +12,20 @@
  * A session that will not be inserted (empty, failed, no model) is `settled` back to the helper at
  * once, so it stops holding Escape and Enter then rather than 8 s later (DC-A4).
  *
+ * The keys during a session (DC-A4, DC-S3): the helper swallows Escape, Enter and Shift+Enter from
+ * the press until the insert settles and reports each as `key`, and this decides what they do to
+ * the press. While listening, Enter asks for the text and then the send key (DC-S2) and Shift+Enter
+ * for the draft box, taking the keyboard; the helper ends the session on either (`key`), and on
+ * Escape (`cancel`). While the last dictation is still transcribing, Enter still means send after
+ * the insert, Shift+Enter the draft box, and Escape keeps its text in history as `cancelled` and
+ * inserts nothing. Once the text went to the helper it is too late for either. The dictation key
+ * pressed while transcribing starts nothing (the helper refuses it) and flashes the pill.
+ *
+ * How the text goes in (DC-S2): `dictation.insert` picks paste or the clipboard only (`type`
+ * pastes until DC-N7); the send key goes with the insert, and the helper presses it only after the target read the
+ * clipboard, never on a timer. Nothing is sent after a clipboard-only insert, since nothing was
+ * pasted.
+ *
  * The focus guard (DC-N9): when the helper refuses an insert because the keyboard moved
  * (`focus-changed`) or the field cannot take it (`not-editable`, `field-unknown`), the text goes to
  * the draft box (`onDraft`) and the dictation is `drafted`, never lost. The draft box's own insert
@@ -34,7 +48,14 @@ import { type PunctuationLists, spokenPunctuation } from "../../core/dictation/p
 import type { Decoded } from "../asr/live-worker.ts";
 import type { Packet } from "../capture/protocol.ts";
 import { forcesLanguage } from "./engines.ts";
-import type { AppToHelper, Bindings, EndReason, HelperToApp, SendKey } from "./protocol.ts";
+import type {
+  AppToHelper,
+  Bindings,
+  EndReason,
+  HelperToApp,
+  InsertMethod,
+  SendKey,
+} from "./protocol.ts";
 import { type DictationLog, newDictationId } from "./store.ts";
 
 /**
@@ -113,6 +134,39 @@ export type RebindAnswer = { ok: true } | { ok: false; reason: string };
 
 export type SessionState = "starting" | "idle" | "listening" | "transcribing" | "inserting";
 
+/**
+ * How a spoken dictation's text goes in (DC-S2): `dictation.insert`, `dictation.sendKey`,
+ * `dictation.sendAlways` and `dictation.restoreClipboard`.
+ */
+export interface InsertPolicy {
+  method: InsertMethod;
+  sendKey: SendKey;
+  /** Press the send key after every direct insert, not only after Enter. */
+  sendAlways: boolean;
+  restore: boolean;
+}
+
+/** With no settings: paste, restore the clipboard, and never a send key. */
+export const DEFAULT_INSERT: InsertPolicy = {
+  method: "paste",
+  sendKey: "none",
+  sendAlways: false,
+  restore: true,
+};
+
+/**
+ * What the keys during a session asked of a press (DC-A4, DC-S3): the text inserted, inserted and
+ * then sent, opened in the draft box, or dropped.
+ */
+export type Asked = "insert" | "send" | "draft" | "cancel";
+
+/** The key the helper reports during a session, and what it asks for. */
+const KEY_ASKS: Readonly<Record<string, Asked>> = {
+  Enter: "send",
+  "Shift+Enter": "draft",
+  Escape: "cancel",
+};
+
 export interface SessionOptions extends TextRules {
   log: DictationLog;
   /** The engine now, or null when none is loaded (the models are missing). */
@@ -133,10 +187,15 @@ export interface SessionOptions extends TextRules {
    */
   saveAudio?(id: string, samples: Float32Array): void;
   /**
-   * The helper refused a dictation's insert for the focus guard (DC-N9): opens the draft box on it
-   * without taking the keyboard, and answers whether it did. False: the dictation fails as before.
+   * Opens the draft box on a dictation and answers whether it did: without the keyboard when the
+   * helper refused its insert for the focus guard (DC-N9), taking it (`focus`) for Shift+Enter
+   * (DC-A4). False: the dictation fails.
    */
-  onDraft?(id: string, reason: string): boolean;
+  onDraft?(id: string, reason: string, focus: boolean): boolean;
+  /** How the text goes in (DC-S2); `DEFAULT_INSERT` when absent. */
+  insertPolicy?(): InsertPolicy;
+  /** The dictation key was pressed while a dictation is still transcribing: refused (DC-A4). */
+  onBusy?(): void;
 }
 
 /** The helper's refusals that send the text to the draft box rather than failing it (DC-N9). */
@@ -167,6 +226,8 @@ interface Listening {
   hold: { engine: DictationEngine; request: EngineHold } | null;
   /** Set by `session.ended`: the reason, and the timer that waits for the pipe to drain. */
   end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
+  /** What the keys during the session, or while it transcribes, asked for (DC-A4). */
+  asked: Asked;
 }
 
 /**
@@ -203,6 +264,11 @@ export class DictationSession {
   private explicitSeq = 0;
   /** Dictations ended and not yet decoded: a decode runs one at a time, after the last. */
   private decoding = 0;
+  /**
+   * The last session ended whose text has not gone to the helper yet: the one the helper's keys
+   * still belong to while it waits for the insert (DC-A4).
+   */
+  private latest: Listening | null = null;
   /** Every decode and insert in flight, for tests and a clean stop. */
   private work: Promise<void> = Promise.resolve();
   /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
@@ -310,6 +376,9 @@ export class DictationSession {
       case "level":
         this.o.onLevel?.(m.rms);
         return;
+      case "key":
+        this.key(m.name);
+        return;
       case "session.started":
         // The last session is still draining its pipe: it ends now, with the audio it has, since
         // everything it sent was written before this line.
@@ -322,6 +391,7 @@ export class DictationSession {
           secure: this.secureInput || m.target.field === "secure",
           hold: this.open(),
           end: null,
+          asked: "insert",
         };
         for (const chunk of this.cur.chunks) this.cur.hold?.request.push(chunk);
         this.early = { chunks: [], samples: 0 };
@@ -370,7 +440,7 @@ export class DictationSession {
         if (!id) return;
         this.inserts.delete(m.id);
         // The keyboard moved or the field cannot take it: the text waits in the draft box.
-        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason)) {
+        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason, false)) {
           this.write({ type: "dictation.drafted", id, reason: m.reason });
         } else {
           this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
@@ -379,10 +449,31 @@ export class DictationSession {
         return;
       }
       default:
-        // key, grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's,
-        // in later items.
+        // grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's, in later
+        // items.
         return;
     }
+  }
+
+  /**
+   * A key the helper swallowed and reported (DC-A4): Escape, Enter or Shift+Enter for the session
+   * listening or the last one still transcribing; any other name is the dictation key, pressed
+   * while a dictation transcribes, which the helper refused.
+   */
+  private key(name: string): void {
+    const asked = KEY_ASKS[name];
+    if (asked === undefined) {
+      if (!this.cur && (this.state === "transcribing" || this.state === "inserting"))
+        this.o.onBusy?.();
+      return;
+    }
+    const c = this.cur ?? this.latest;
+    if (!c) {
+      // The text is on its way into the app already: too late to send it or hold it back.
+      this.o.onLog?.("info", `dictation: ${name} came after the insert began, so it did nothing`);
+      return;
+    }
+    c.asked = asked;
   }
 
   /** An `AKP1` packet from the helper's stdout: a session's audio, mic channel. */
@@ -415,6 +506,7 @@ export class DictationSession {
   helperGone(): void {
     const c = this.cur;
     this.cur = null;
+    this.latest = null;
     this.early = { chunks: [], samples: 0 };
     if (c?.end) clearTimeout(c.end.timer);
     c?.hold?.request.cancel();
@@ -465,6 +557,7 @@ export class DictationSession {
       return;
     }
     this.decoding++;
+    this.latest = c;
     this.set("transcribing");
     this.work = this.work.then(() => this.transcribe(id, c, samples, engine));
   }
@@ -500,10 +593,11 @@ export class DictationSession {
   }
 
   /** The session will not be inserted: the helper stops holding Escape and Enter now. */
-  private notInserted(helperId: string, d: DictationDraft): void {
+  private notInserted(c: Listening, d: DictationDraft): void {
     this.decoding--;
+    if (this.latest === c) this.latest = null;
     this.write(d);
-    this.o.send({ type: "settled", id: helperId });
+    this.o.send({ type: "settled", id: c.helperId });
     this.settle();
   }
 
@@ -514,7 +608,7 @@ export class DictationSession {
     engine: DictationEngine | null,
   ): Promise<void> {
     if (!engine) {
-      this.notInserted(c.helperId, {
+      this.notInserted(c, {
         type: "dictation.failed",
         id,
         error: "no speech model is loaded",
@@ -526,28 +620,51 @@ export class DictationSession {
     try {
       r = await decodeDictation(this.o, engine, samples, language, c.secure, c.hold?.request);
     } catch (err) {
-      this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
+      this.notInserted(c, { type: "dictation.failed", id, error: (err as Error).message });
       return;
     }
     if (r.kind === "text" && r.d.notice) this.o.onNotice?.(id, r.d.notice);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
     if (r.kind === "empty" || r.text === "") {
-      this.notInserted(c.helperId, { type: "dictation.empty", id });
+      this.notInserted(c, { type: "dictation.empty", id });
       return;
     }
-    const text = r.text;
+    // Escape while it transcribed: the text stays in history, and nothing goes in (DC-A4).
+    if (c.asked === "cancel") {
+      this.notInserted(c, { type: "dictation.cancelled", id });
+      return;
+    }
+    // Shift+Enter: the draft box, taking the keyboard. Never a password field's text in it.
+    if (c.asked === "draft" && !c.secure) {
+      const opened = this.o.onDraft?.(id, "key", true) ?? false;
+      this.notInserted(
+        c,
+        opened
+          ? { type: "dictation.drafted", id, reason: "key" }
+          : { type: "dictation.failed", id, error: "the draft box needs the desktop window" },
+      );
+      return;
+    }
+    const p = this.o.insertPolicy?.() ?? DEFAULT_INSERT;
+    // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only. `type`
+    // pastes until DC-N7 lands: its typed Return for every `\n` of a spoken `new line` (DC-S6)
+    // would press send in a chat app.
+    const method: InsertMethod = c.secure || p.method === "clipboard" ? "clipboard" : "paste";
+    // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
+    const send = method !== "clipboard" && (c.asked === "send" || p.sendAlways);
     this.decoding--;
+    if (this.latest === c) this.latest = null;
     this.inserts.set(c.helperId, id);
     this.settle();
     this.o.send({
       type: "insert",
       id: c.helperId,
-      text,
-      // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.
-      method: c.secure ? "clipboard" : "paste",
-      send_key: "none",
+      text: r.text,
+      method,
+      send_key: send ? p.sendKey : "none",
       target: c.target,
+      ...(p.restore ? {} : { restore: false }),
     });
   }
 }

@@ -73,7 +73,8 @@ export type DictationDraft =
   /**
    * The text went to the draft box instead of the app (DC-S1): `reason` is the helper's refusal
    * when the focus guard sent it there (`focus-changed`, `not-editable`, `field-unknown`, DC-N9),
-   * `insert` for a draft reopened after its own insert failed, `fix` or `api` for a deliberate open.
+   * `insert` for a draft reopened after its own insert failed, `fix` or `api` for a deliberate open,
+   * `key` for Shift+Enter during the session or while it transcribed (DC-A4).
    */
   | { type: "dictation.drafted"; id: string; reason: string }
   /** Escape or the close in the draft box: nothing was inserted, the text stays in history. */

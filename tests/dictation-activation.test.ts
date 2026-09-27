@@ -225,6 +225,56 @@ describe("DC-A4", () => {
     ]);
   });
 
+  test("Enter during a confirmed hold ends it as key and is swallowed; before HOLD_MS it is the interrupt rule", () => {
+    const held = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, RC],
+        [800, true, "Enter"],
+        [850, false, "Enter"],
+        [1000, false, RC],
+      ],
+      1200,
+    );
+    expect(sessions(held.acts)).toEqual([
+      [300, { type: "start", at: 0 }],
+      [800, { type: "end", reason: "key" }],
+    ]);
+    expect(held.acts).toContainEqual([800, { type: "key", name: "Enter" }]);
+    expect(held.swallowed).toEqual([
+      [800, true, "Enter"],
+      [850, false, "Enter"],
+    ]);
+    // Positive control: the same Enter under HOLD_MS is a shortcut, not a session.
+    const early = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, RC],
+        [100, true, "Enter"],
+        [150, false, "Enter"],
+        [200, false, RC],
+      ],
+      500,
+    );
+    expect(sessions(early.acts)).toEqual([]);
+    expect(early.swallowed).toEqual([]);
+  });
+
+  test("the hotkey's own Shift does not make Enter Shift+Enter", () => {
+    const { acts } = play(
+      "RightShift",
+      "hold-or-toggle",
+      [
+        [0, true, "RightShift"],
+        [800, true, "Enter"],
+      ],
+      900,
+    );
+    expect(acts).toContainEqual([800, { type: "key", name: "Enter" }]);
+  });
+
   test("positive control: with no session the same keys pass", () => {
     const { acts, swallowed } = play(
       RC,

@@ -46,7 +46,9 @@
  *   --grants LIST           the grants `ready` reports as `granted`: `mic,accessibility`
  *                           (default), or fewer; the others are `denied`
  *   --backend NAME          the key source `ready` reports (default `fake`)
- *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4)
+ *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4): Escape
+ *                           and Enter never reach the activation rule, so they pass through to
+ *                           the app and are never reported
  *   --field KIND            the target field: editable (default), not-editable, unknown, secure
  *   --target-app ID         the target app (default `com.example.editor`)
  *   --ax FILE               the scripted accessibility tree, the same lines as the real helper's
@@ -59,7 +61,10 @@
  *                           an unknown one `field-unknown` (DC-N8, DC-N9). Replaces --field and
  *                           --target-app
  *   --tap-log FILE          every key, JSON lines `{key, down, swallowed}` (or `lost`)
- *   --inserter-log FILE     every `insert`, JSON lines, with the fake's time `at` (ms)
+ *   --inserter-log FILE     every `insert`, JSON lines, with the fake's time `at` (ms), and the
+ *                           send key it pressed after the receipt, `{"type":"send","key","at"}`
+ *                           (DC-S2): never before the target read, never after a clipboard-only
+ *                           insert or a refused one
  *   --commands-log FILE     every command the app sent, one JSON line each
  *   --receipt-ms N          the fake target reads the clipboard N ms after the insert (default 5)
  *   --no-receipt            the target never reads it: no `inserted` ever comes
@@ -407,6 +412,7 @@ async function runDictate(): Promise<void> {
   const playAfter = num("--play-after-rebinds") ?? 1;
   let sessions = 0;
   let stopping = false;
+  const noSwallow = flag("--no-swallow");
 
   const sessionAudio = (from: number, to: number): number => {
     // The ring holds the half second before the key-down; the post-roll runs past the release.
@@ -478,6 +484,11 @@ async function runDictate(): Promise<void> {
         log(opt("--tap-log"), { key: k.key, down: k.down, lost: true });
         continue;
       }
+      // A key source that cannot swallow never shows the rule Escape or Enter (DC-A4).
+      if (noSwallow && PASS_THROUGH.has(k.key)) {
+        log(opt("--tap-log"), { key: k.key, down: k.down, swallowed: false });
+        continue;
+      }
       // Time passes before the key, as the helper's tick does: a held modifier becomes a session.
       const m = machine as ActivationMachine;
       const outs: ActivationOut[] = [];
@@ -538,6 +549,10 @@ async function runDictate(): Promise<void> {
             say({ type: "inserted", id: c.id, method: "clipboard", receipt_ms: 0 });
             return;
           }
+          // The send key only after the target read the text, and before the receipt is
+          // reported, as the real inserter (DC-S2): whoever sees `inserted` sees the send too.
+          if (c.method !== "clipboard" && c.send_key !== "none")
+            log(opt("--inserter-log"), { type: "send", key: c.send_key, at: now() });
           say({ type: "inserted", id: c.id, method: c.method, receipt_ms: receiptMs });
           if (flag("--dormant-tree")) say({ type: "edit.unreadable", id: c.id, reason: "dormant" });
         }, receiptMs);
@@ -610,6 +625,9 @@ async function runDictate(): Promise<void> {
   say({ type: "stopped", reason: "stop" });
   process.exit(EXIT.ok);
 }
+
+/** The keys a key source without `swallow_keys` never holds back (DC-A4). */
+const PASS_THROUGH: ReadonlySet<string> = new Set(["Escape", "Enter", "Return", "KeypadEnter"]);
 
 /** A line with `"prompt": true` at any depth: a request for a permission dialog (DC-N10). */
 function asksToPrompt(line: string): boolean {
