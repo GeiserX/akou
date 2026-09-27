@@ -5,11 +5,13 @@
 //!   file is one step, keys and commands land on the step they fall in, and after the file ends
 //!   the mic is silence until one second past the last scripted key.
 //! - `--keys FILE`: the key tap, `<ms> down|up <Key>` per line (`keys::parse_script`).
-//! - `--inserter fake[:FILE]`: the inserter, which appends what it was asked to insert or focus
-//!   to FILE as JSON lines and answers `inserted` at once.
-//! - `--clipboard fake`: the clipboard, in memory; `method: clipboard` writes it and the log says so.
+//! - `--inserter fake[:FILE]`: the event sink (`fake::Keys`), which appends every key event, every
+//!   clipboard write and restore, and every focus to FILE as JSON lines. The app under the cursor
+//!   reads the clipboard the moment a paste chord arrives, so a paste answers `inserted` at once.
+//! - `--clipboard fake`: the clipboard, in memory. Without it a paste or a clipboard insert fails
+//!   with `no-clipboard`.
 //! - `--ax fake FILE`: what has the keyboard, `<ms> {"app","pid","window","field"}` per line; the
-//!   last line at or before a key-down is the session's target.
+//!   last line at or before a moment is the target then (at a key-down, and at the insert).
 //! - `--speed X`: 0 (the default) runs as fast as it goes, 1 in real time.
 //! - `--mic-open-delay MS`: the stream delivers its first sample MS after it opens (a slow device).
 //! - `--mic-bluetooth`: the mic reports a Bluetooth transport, so it is never kept warm.
@@ -23,10 +25,11 @@ use std::path::PathBuf;
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+use super::fake::{Board, Keys, Screen, World};
+use super::insert::{Inserter, Os};
 use super::keys::{Scripted, parse_script};
 use super::protocol::{self as p, Command, Target, Value};
-use super::session::{Config, Dictate, Inserter, Out, Targets};
-use crate::json::Json;
+use super::session::{Config, Dictate, Out};
 use crate::protocol::exit;
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -95,18 +98,6 @@ impl Switches {
     }
 }
 
-struct FakeTargets(Vec<(u64, Target)>);
-
-impl Targets for FakeTargets {
-    fn target(&mut self, t_ns: u64) -> Target {
-        self.0
-            .iter()
-            .rev()
-            .find(|(ms, _)| ms * 1_000_000 <= t_ns)
-            .map_or_else(Target::unknown, |(_, t)| t.clone())
-    }
-}
-
 fn parse_ax(text: &str) -> Result<Vec<(u64, Target)>, String> {
     let mut out = Vec::new();
     for (n, raw) in text.lines().enumerate() {
@@ -125,82 +116,6 @@ fn parse_ax(text: &str) -> Result<Vec<(u64, Target)>, String> {
         out.push((ms, t));
     }
     Ok(out)
-}
-
-struct FakeInserter {
-    log: Option<PathBuf>,
-    clipboard: Option<String>,
-    clipboard_fake: bool,
-}
-
-impl FakeInserter {
-    fn write(&self, j: Json) {
-        if let Some(path) = &self.log {
-            let mut f = std::fs::OpenOptions::new()
-                .create(true)
-                .append(true)
-                .open(path)
-                .expect("the fake inserter's log opens");
-            writeln!(f, "{}", j.to_line()).expect("the fake inserter's log is written");
-        }
-    }
-}
-
-impl Inserter for FakeInserter {
-    fn insert(
-        &mut self,
-        id: &str,
-        text: &str,
-        method: &str,
-        send_key: &str,
-        target: &Target,
-    ) -> Result<(String, u64), String> {
-        if method == "clipboard" {
-            if !self.clipboard_fake {
-                return Err("no-clipboard".into());
-            }
-            self.clipboard = Some(text.to_string());
-        }
-        self.write(Json::obj(vec![
-            ("type", Json::str("insert")),
-            ("id", Json::str(id)),
-            ("text", Json::str(text)),
-            ("method", Json::str(method)),
-            ("send_key", Json::str(send_key)),
-            ("app", Json::str(&target.app)),
-            (
-                "clipboard",
-                self.clipboard.as_deref().map_or(Json::Null, Json::str),
-            ),
-        ]));
-        Ok((method.to_string(), 0))
-    }
-
-    fn focus(&mut self, target: &Target) {
-        self.write(Json::obj(vec![
-            ("type", Json::str("focus")),
-            ("app", Json::str(&target.app)),
-            ("pid", Json::Int(target.pid)),
-        ]));
-    }
-}
-
-/// With no inserter switch a simulate build has no inserter at all: it never falls back to a
-/// real one.
-struct NoInserter;
-
-impl Inserter for NoInserter {
-    fn insert(
-        &mut self,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &str,
-        _: &Target,
-    ) -> Result<(String, u64), String> {
-        Err("no-inserter".into())
-    }
-    fn focus(&mut self, _: &Target) {}
 }
 
 struct Stdio<'a> {
@@ -272,17 +187,36 @@ pub fn run(
             return code;
         }
     };
-    let inserter: Box<dyn Inserter> = match &sw.inserter {
-        Some(log) => Box::new(FakeInserter {
-            log: log.clone(),
-            clipboard: None,
-            clipboard_fake: sw.clipboard_fake,
-        }),
-        None => Box::new(NoInserter),
-    };
+    let world = World::new();
+    {
+        let mut w = world.borrow_mut();
+        w.board.clear();
+        w.target = Target::unknown();
+        w.script = ax;
+        w.no_clipboard = !sw.clipboard_fake;
+        w.auto_read = true;
+        w.log = sw.inserter.clone().flatten();
+    }
+    // With no inserter switch a simulate build has no inserter at all: never a real one.
+    let inserter = sw.inserter.is_some().then(|| {
+        Inserter::new(
+            Os::current(),
+            Box::new(Board(world.clone())),
+            Box::new(Keys(world.clone())),
+        )
+    });
     let mut cfg = cfg;
     cfg.bluetooth = sw.mic_bluetooth;
-    let mut d = Dictate::new(cfg, Box::new(FakeTargets(ax)), inserter);
+    let mut d = Dictate::new(cfg, Box::new(Screen(world.clone())), inserter);
+    // A paste waits for its receipt; after the timeline, time moves on in 10 ms steps until it
+    // settles, so a run never ends with one pending.
+    let settle = |d: &mut Dictate, t: &mut u64, out: &mut Stdio| {
+        while d.busy() {
+            *t += 10_000_000;
+            world.borrow_mut().now = *t;
+            d.tick(*t, out);
+        }
+    };
 
     let (tx, rx) = mpsc::channel::<Option<String>>();
     std::thread::spawn(move || {
@@ -329,6 +263,7 @@ pub fn run(
             }
         }
         let t = ms * 1_000_000;
+        world.borrow_mut().now = t;
         // At speed 0 the timeline takes no time, so a command has no moment within it: commands
         // are read once it is over. Paced, they land on the step they arrive in.
         while sw.speed > 0.0
@@ -358,9 +293,11 @@ pub fn run(
         }
         d.tick(t, &mut out);
     }
-    let t_end = end_ms * 1_000_000;
+    let mut t_end = end_ms * 1_000_000;
+    world.borrow_mut().now = t_end;
     while running {
         running = handle(&mut d, rx.recv().unwrap_or(None), t_end, &mut out);
+        settle(&mut d, &mut t_end, &mut out);
     }
     out.line(p::stopped("stop"));
     exit::OK
@@ -450,7 +387,7 @@ mod tests {
             ..Switches::default()
         };
         let stdin =
-            "{\"type\":\"insert\",\"id\":\"1\",\"text\":\"hello\",\"method\":\"clipboard\"}\n";
+            "{\"type\":\"insert\",\"id\":\"1\",\"text\":\"hello\",\"send_key\":\"Enter\"}\n";
         let (code, lines, stdout) = sim(sw, Warm::Always, stdin);
         assert_eq!(code, 0, "{lines:?}");
         assert!(lines[0].starts_with(r#"{"type":"ready","protocol":"akou-dictate/1""#));
@@ -469,7 +406,8 @@ mod tests {
         assert!(
             lines
                 .iter()
-                .any(|l| l.contains(r#""type":"inserted","id":"1","method":"clipboard""#))
+                .any(|l| l.contains(r#""type":"inserted","id":"1","method":"paste""#)),
+            "{lines:?}"
         );
         assert_eq!(
             lines.last().unwrap(),
@@ -482,13 +420,65 @@ mod tests {
             .filter(|x| (**x - 0.5).abs() < 1e-3)
             .count();
         assert_eq!(word, 300 * 16, "the whole word is in the session");
+        let logged: Vec<String> = std::fs::read_to_string(&log)
+            .unwrap()
+            .lines()
+            .map(String::from)
+            .collect();
+        assert_eq!(logged.len(), 4, "{logged:?}");
+        assert_eq!(logged[0], r#"{"type":"publish","text":"hello"}"#);
+        assert!(
+            logged[1].contains("+Code(9)"),
+            "the paste chord: {logged:?}"
+        );
+        assert_eq!(
+            logged[2], r#"{"type":"key","event":"Named(\"Return\")"}"#,
+            "the send key after the read"
+        );
+        assert_eq!(logged[3], r#"{"type":"restore"}"#);
+    }
+
+    /// DC-N9 through the switches: the scripted window moves to Mail after the key-up, so the
+    /// insert fails with `focus-changed`; after `focus` on Notes the same insert lands.
+    #[test]
+    fn dc_n10_a_focus_change_is_caught_and_focus_brings_it_back() {
+        let log = dir().join("focus.jsonl");
+        let _ = std::fs::remove_file(&log);
+        let sw = Switches {
+            from_wav: Some(wav("focus.wav", 2.0, (0.0, 0.3))),
+            keys: Some(file(
+                "focus.keys",
+                "400 down RightCommand\n1400 up RightCommand\n",
+            )),
+            inserter: Some(Some(log.clone())),
+            clipboard_fake: true,
+            ax: Some(file(
+                "focus-ax.txt",
+                "0 {\"app\":\"Notes\",\"pid\":5,\"window\":\"n\",\"field\":\"editable\"}\n\
+                 1500 {\"app\":\"Mail\",\"pid\":6,\"window\":\"m\",\"field\":\"editable\"}\n",
+            )),
+            ..Switches::default()
+        };
+        let insert = "{\"type\":\"insert\",\"id\":\"1\",\"text\":\"hi\"}\n";
+        let focus = "{\"type\":\"focus\",\"target\":{\"app\":\"Notes\",\"pid\":5,\"window\":\"n\",\"field\":\"editable\"}}\n";
+        let (code, lines, _) = sim(sw, Warm::Always, &format!("{insert}{focus}{insert}"));
+        assert_eq!(code, 0);
+        let answers: Vec<&String> = lines.iter().filter(|l| l.contains(r#""id":"1""#)).collect();
+        assert!(
+            answers
+                .iter()
+                .any(|l| l.contains(r#""type":"insert.failed","id":"1","reason":"focus-changed""#)),
+            "{answers:?}"
+        );
+        assert!(
+            answers.last().unwrap().contains(r#""type":"inserted""#),
+            "{answers:?}"
+        );
         let logged = std::fs::read_to_string(&log).unwrap();
         assert!(
-            logged.contains(r#""text":"hello","method":"clipboard""#),
+            logged.starts_with(r#"{"type":"focus","app":"Notes","pid":5}"#),
             "{logged}"
         );
-        assert!(logged.contains(r#""app":"Notes""#), "{logged}");
-        assert!(logged.contains(r#""clipboard":"hello""#), "{logged}");
     }
 
     /// DC-N4 through the switches: `off` with a device that takes 300 ms reports the session only
