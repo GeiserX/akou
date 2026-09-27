@@ -785,7 +785,8 @@ dialog {
 }
 .setting .issue,
 .dictation-enable .issue,
-.dictation-dictionary .issue {
+.dictation-dictionary .issue,
+.dictation-remote .issue {
   color: var(--rec);
 }
 .apps-rules {
