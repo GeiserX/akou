@@ -13,14 +13,18 @@
  * - `POST /dictation/start|stop|cancel`: the live session, as the tray and `akou dictate start`
  *   drive it (a latched session, as if the key were tapped).
  * - `GET /dictation/remote-test`: DC-R4's Test of `dictation.remote.url` with the key.
+ * - `GET /dictation/stream`: Server-Sent Events (DC-G2), the call stream's contract (PG-S1): every
+ *   dictation event after a cursor, each once, then each new one; and the mic's `level` during a
+ *   session, which is never written anywhere.
  */
 
 import type { DictationItem } from "../../../core/dictation/events.ts";
 import { testRemote } from "../../dictation/remote.ts";
-import type { ControlAction, DictationService } from "../../dictation/service.ts";
+import type { ControlAction, DictationFollow, DictationService } from "../../dictation/service.ts";
 import { readUploadAudio } from "../../server/audio.ts";
 import { HttpError, json, type RouteContext, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
+import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
 import { fileField, formOf, languageOf, textField } from "./jobs.ts";
 
 /** The longest clip taken, seconds: `dictation.maxMinutes` at its top. */
@@ -53,6 +57,7 @@ export function dictationBody(it: DictationItem) {
     ms: it.ms,
     ...(it.fallback_from ? { fallback_from: it.fallback_from } : {}),
     ...(it.language_forced !== null ? { language_forced: it.language_forced } : {}),
+    ...(it.echo_retry ? { echo_retry: true } : {}),
     ...(it.error ? { error: it.error } : {}),
   };
 }
@@ -307,4 +312,92 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       );
     },
   );
+  r.add(
+    "GET",
+    "/dictation/stream",
+    {
+      id: "dictation.stream",
+      doc: "The dictation log as server-sent events: every event after the cursor (`event`, its `seq` as the id), then each new one as it is written, and the mic's `level` (`{rms}`, 20 a second) while a dictation listens, which is never stored. A reconnecting client sends `Last-Event-ID` and resumes after it; a deleted dictation shows only its tombstone.",
+      access: "admin",
+      modes: ["app"],
+      query: {
+        after: {
+          type: "integer",
+          min: 0,
+          max: Number.MAX_SAFE_INTEGER,
+          default: 0,
+          doc: "The log cursor: only events after this `seq`.",
+        },
+      },
+      ok: 200,
+      type: "sse",
+    },
+    (c) => {
+      const d = service(c);
+      c.timeout?.(0);
+      const after = Math.max(c.query.int("after") as number, lastEventId(c.req));
+      return sseDictation(d, after, c.req.signal);
+    },
+  );
+}
+
+/**
+ * The dictation stream (DC-G2): the backlog after `after`, then live events, each exactly once in
+ * `seq` order, since every send reads the log from the last `seq` sent; levels as they come.
+ */
+function sseDictation(d: DictationService, after: number, signal: AbortSignal): Response {
+  const enc = new TextEncoder();
+  let cleanup = () => {};
+  const stream = new ReadableStream<Uint8Array>({
+    start: (ctl) => {
+      let closed = false;
+      let cursor = after;
+      const send = (text: string) => {
+        if (closed) return;
+        try {
+          ctl.enqueue(enc.encode(text));
+        } catch {
+          stop();
+        }
+      };
+      const flush = () => {
+        const all = d.log.events();
+        let i = all.length;
+        while (i > 0 && (all[i - 1]?.seq ?? 0) > cursor) i--;
+        for (const e of all.slice(i)) {
+          send(`id: ${e.seq}\nevent: event\ndata: ${JSON.stringify(e)}\n\n`);
+          cursor = e.seq;
+        }
+      };
+      const unfollow = d.follow((m: DictationFollow) => {
+        if (m.kind === "event") flush();
+        else send(`event: level\ndata: ${JSON.stringify({ rms: m.rms })}\n\n`);
+      });
+      // clock: a keep-alive comment, so a reader can tell a quiet stream from a dead connection.
+      const keepalive = setInterval(() => send(": keep-alive\n\n"), KEEPALIVE_MS);
+      const stop = () => {
+        if (closed) return;
+        closed = true;
+        unfollow();
+        clearInterval(keepalive);
+        signal.removeEventListener("abort", stop);
+        try {
+          ctl.close();
+        } catch {}
+      };
+      cleanup = stop;
+      signal.addEventListener("abort", stop);
+      send("retry: 1000\n\n");
+      flush();
+    },
+    cancel: () => cleanup(),
+  });
+  return new Response(stream, {
+    status: 200,
+    headers: {
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-store",
+      "x-accel-buffering": "no",
+    },
+  });
 }
