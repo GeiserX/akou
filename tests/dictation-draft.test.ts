@@ -219,6 +219,44 @@ describe("DC-S1: the draft box's keys", () => {
     expect(f.opens.at(-1)).toMatchObject({ id: b, text: FIXED, engine: "best (q)", ms: 9 });
   });
 
+  test("a draft answered while its retry decodes is not shown again, so it is never inserted twice", async () => {
+    let decoded: () => void = () => {};
+    const f = box({
+      retry: () =>
+        new Promise((done) => {
+          decoded = () =>
+            done({
+              ok: true,
+              answer: { text: FIXED, words: [], engine: "best", model: "q", ms: 9 },
+            });
+        }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: true });
+    const retried = f.b.handlers.retry({ id: a, engine: "best" });
+    // Enter with a fix: the chip keeps the box on this dictation while the retry decodes.
+    expect(await f.b.handlers.insert({ id: a, text: FIXED, send: false })).toBe(true);
+    expect(f.chips).toHaveLength(1);
+    const opens = f.opens.length;
+    decoded();
+    expect(await retried).toBe(false);
+    expect(f.opens).toHaveLength(opens);
+    expect(await f.b.handlers.insert({ id: a, text: FIXED, send: false })).toBe(false);
+    expect(f.inserts).toHaveLength(1);
+  });
+
+  test("a draft left unanswered when another opens over it closes its learn window", async () => {
+    const closed: string[] = [];
+    const f = box({ closeLearnWindow: (id) => closed.push(id) });
+    const a = f.dictation();
+    f.b.open(a, { focus: false });
+    f.b.open(a, { focus: true });
+    expect(closed).toEqual([]);
+    const b = f.dictation();
+    f.b.open(b, { focus: false });
+    expect(closed).toEqual([a]);
+  });
+
   test("a dictation with no text, or a clip with no target outside Fix, does not open", () => {
     const f = box();
     expect(f.b.open("dnone", { focus: true })).toMatchObject({ ok: false, code: "not_found" });

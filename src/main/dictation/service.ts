@@ -13,7 +13,8 @@
  * dictation's audio is kept beside the log for Retry and the learning check; deleting a dictation
  * deletes its audio. With `dictation.keepAudio` off, the audio goes when the dictation's learn
  * window closes: at once for one that was not inserted or with `dictation.learn` off, else
- * `LEARN_WINDOW_MS` after the insert, DC-L2's longest read-back. A window never outlives the app:
+ * `LEARN_WINDOW_MS` after the insert, DC-L2's longest read-back. A drafted one's stays open while
+ * the draft waits in the box, and closes when the box answers it. A window never outlives the app:
  * at the next start, and at every sweep, the audio of a finished dictation with no open window goes.
  */
 
@@ -187,7 +188,7 @@ export class DictationService {
   /** The draft box's main side (DC-S1); the shell attaches the window. */
   readonly draft: DraftBox;
   /** The open learn windows with `dictation.keepAudio` off: the timer that closes each. */
-  private readonly windows = new Map<string, ReturnType<typeof setTimeout>>();
+  private readonly windows = new Map<string, ReturnType<typeof setTimeout> | undefined>();
   private helper: Helper | null = null;
   /** The helper being stopped: a new one waits for it, so two never hold the key at once. */
   private stopping: Promise<void> | null = null;
@@ -236,9 +237,7 @@ export class DictationService {
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
-      // A draft can still be fixed and learned from, like an insert.
-      if (SETTLED.has(e.type))
-        this.settledAudio(e.id, e.type === "dictation.inserted" || e.type === "dictation.drafted");
+      if (SETTLED.has(e.type)) this.settledAudio(e.id, e.type);
       this.tell({ kind: "event", e });
     };
     this.sweep();
@@ -291,12 +290,18 @@ export class DictationService {
   }
 
   /** A dictation settled: with `dictation.keepAudio` off, its learn window opens or it is closed. */
-  private settledAudio(id: string, inserted: boolean): void {
+  private settledAudio(id: string, type: string): void {
     if ((this.o.keepAudio?.() ?? true) || !this.audio.has(id)) return;
     clearTimeout(this.windows.get(id));
     this.windows.delete(id);
+    // A draft waits in the box for as long as the user takes, and the box's Retry decodes this
+    // audio again: its window has no timer, and the box closes it when the draft is answered.
+    if (type === "dictation.drafted") {
+      this.windows.set(id, undefined);
+      return;
+    }
     // Only an inserted dictation can be fixed and learned from.
-    if (!inserted || !(this.o.learns?.() ?? true)) {
+    if (type !== "dictation.inserted" || !(this.o.learns?.() ?? true)) {
       this.dropAudio(id);
       return;
     }

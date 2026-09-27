@@ -211,6 +211,10 @@ export class DraftBox {
       ms?: number | null;
     },
   ): void {
+    // Another dictation's draft left unanswered in the box: its learn window closes with it.
+    const prev = this.cur;
+    if (prev && prev.id !== it.id && !prev.answered && !this.chips.has(prev.id))
+      this.o.closeLearnWindow?.(prev.id);
     this.cur = {
       id: it.id,
       fix: o.fix === true,
@@ -306,7 +310,8 @@ export class DraftBox {
     if (!c || c.id !== id || !w) return false;
     const r = await this.o.retry(id, engine);
     const it = this.o.log.item(id);
-    if (!r.ok || !it || r.answer.text === "" || this.cur !== c) return false;
+    // Enter or Escape during a slow retry answered this draft: the new reading comes too late.
+    if (!r.ok || !it || r.answer.text === "" || this.cur !== c || c.answered) return false;
     const a = r.answer;
     this.show(w, it, {
       focus: true,
