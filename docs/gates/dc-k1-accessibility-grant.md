@@ -47,6 +47,7 @@ No second bundle was left under `~/Library/Application Support`, so the wrapper 
 ### Still open
 
 - The same on a real Mac, with the grant switched in System Settings. The rows written here carry no code requirement. A grant System Settings writes does, and an ad hoc signature changes with every build, so a new build can lose the grant; `grant.lost` ([DC-N1](../ux/DICTATION.md#9-the-platform-layer)) is how the helper reports that.
+- Whether `mach_absolute_time` stops during sleep on Apple Silicon. The on-wake grant re-check ([live.rs](../../native/akou-capture/src/dictate/live.rs) `Sleep`) sees a sleep only as the continuous clock running ahead of it. No Mac we measured had slept since boot, so this is unproven: close the lid for 60 s, compare `CLOCK_UPTIME_RAW` with `CLOCK_MONOTONIC_RAW`, and write the numbers here. If they stay equal, the re-check needs the OS wake notification instead.
 - The real app with a row for `io.github.geiserx.akou`. The app starts no helper at launch, so this run measured the chain but not the grant through it. The model covers the rule.
 
 ### The probe

@@ -544,7 +544,8 @@ pub fn run(cfg: Config) -> i32 {
     } else {
         Err("Accessibility is not granted, so no key reaches dictation".into())
     };
-    d.begin(BACKEND, true, (mic, ax), &mut out);
+    // With no tap nothing is swallowed, so the app shows no Enter hint (DC-A4).
+    d.begin(BACKEND, tapped.is_ok(), (mic, ax), &mut out);
     if let Err(e) = tapped {
         out.line(p::warn("no-tap", &e));
     }

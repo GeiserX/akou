@@ -280,7 +280,7 @@ pub fn serve(
                         break;
                     }
                 }
-                Err(e) => out.line(p::warn("bad-command", &format!("{e}: {l}"))),
+                Err(e) => out.line(p::warn("bad-command", &e)),
             },
             Ok(Msg::Line(None)) | Err(RecvTimeoutError::Disconnected) => {
                 d.command(Command::Stop, t, out);
@@ -506,6 +506,34 @@ mod tests {
             "{l:?}"
         );
         assert!(l.last().unwrap().contains("stopped"));
+    }
+
+    /// A malformed `insert` is refused without its dictated text reaching stderr (the app logs it).
+    #[test]
+    fn a_bad_command_does_not_echo_the_dictated_text() {
+        let w = World::new();
+        let mut d = dictate(&w, Warm::Off);
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let mut out = Rec(lines.clone());
+        d.begin("test", true, ("granted", "granted"), &mut out);
+        let (tx, rx) = mpsc::channel();
+        let bad = r#"{"type":"insert","id":"s1","text":"private words","method":"shout"}"#;
+        let _ = tx.send(Msg::Line(Some(bad.into())));
+        let _ = tx.send(Msg::Line(None));
+        let mut now = || Now {
+            awake_ns: 10 * MS,
+            cont_ns: 10 * MS,
+        };
+        let mut dev = Dev {
+            fail: false,
+            opens: Rc::default(),
+            events: Rc::default(),
+        };
+        let fwd = tx.clone();
+        serve(&mut d, &mut dev, fwd, rx, &mut now, &mut out);
+        let l = lines.borrow();
+        assert!(l.iter().any(|x| x.contains("bad-command")), "{l:?}");
+        assert!(!l.iter().any(|x| x.contains("private words")), "{l:?}");
     }
 
     /// A press with no microphone: said once, the grant re-checked, the session never starts and
