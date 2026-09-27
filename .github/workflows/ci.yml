@@ -289,6 +289,10 @@ jobs:
           cat helper.err
           grep -q '"type":"stopped"' helper.err
           grep -q '"type":"mic","open":true' helper.err || { echo "the press never reached the session"; exit 1; }
+          # DC-N5: a session on a real device says which input it chose, from Core Audio's list.
+          if grep -q '"type":"session.started"' helper.err; then
+            grep '"type":"session.started"' helper.err | grep -q '"mic":{"transport":' || { echo "session.started names no mic"; exit 1; }
+          fi
           echo "audio packets: $(wc -c < helper.out) bytes"
           for k in flags:59 flags:56 down:0 up:0; do
             grep -qw "$k" tapped.txt || { echo "$k was swallowed"; exit 1; }
@@ -366,6 +370,46 @@ jobs:
           grep -q '"type":"inserted","id":"t1","method":"type"' insert.err || { echo "the typing failed"; exit 1; }
           [ "$field" = "$(printf 'pasted by akou\ntyped é 😀')" ] || { echo "the field holds the wrong text"; exit 1; }
           [ "$(pbpaste)" = 'copied before akou' ] || { echo "the clipboard was not restored: $(pbpaste)"; exit 1; }
+      # DC-N2 on a real Mac: bound to Fn, the shipping helper sets the Globe key's action to Do
+      # Nothing and gives the runner's value back on stop; killed while it owns the key, the next
+      # start gives it back. The runner starts from a value that is not Do Nothing, and the kill is
+      # checked to leave Do Nothing behind, so neither check can pass without the write and the
+      # repair. This changes a user preference: on this runner only, never in `cargo test`.
+      - name: Fn as the key silences the Globe action and gives it back (macOS)
+        if: runner.os == 'macOS'
+        working-directory: native/akou-capture
+        run: |
+          defaults write com.apple.HIToolbox AppleFnUsageType -int 2
+          usage() { defaults read com.apple.HIToolbox AppleFnUsageType 2>/dev/null || echo unset; }
+          start() {
+            rm -f globe.in
+            mkfifo globe.in
+            "target/shipping/akou-capture" dictate --hotkey "$1" --warm off < globe.in > /dev/null 2> globe.err &
+            helper=$!
+            exec 5> globe.in
+            for _ in $(seq 1 100); do grep -q '"type":"ready"' globe.err && break; sleep 0.1; done
+            grep -q '"type":"ready"' globe.err || { echo "the helper never got ready"; cat globe.err; exit 1; }
+          }
+          stop() {
+            echo '{"type":"stop"}' >&5
+            exec 5>&-
+            wait "$helper"
+          }
+          start Fn
+          [ "$(usage)" = 0 ] || { echo "bound to Fn, the Globe action is $(usage)"; exit 1; }
+          stop
+          [ "$(usage)" = 2 ] || { echo "after stop the Globe action is $(usage), not 2"; exit 1; }
+          start Fn
+          kill -9 "$helper"
+          exec 5>&-
+          wait "$helper" || true
+          [ "$(usage)" = 0 ] || { echo "the killed helper left $(usage), so the repair proves nothing"; exit 1; }
+          start RightCommand
+          [ "$(usage)" = 2 ] || { echo "the next start did not repair the crash: $(usage)"; exit 1; }
+          stop
+          if defaults read io.github.geiserx.akou.dictate globeSavedFnUsageType 2>/dev/null; then
+            echo "akou's saved copy was left behind"; exit 1
+          fi
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version

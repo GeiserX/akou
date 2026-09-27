@@ -28,8 +28,10 @@
 //!   the worker waits (turning the run loop) until the target is frontmost, at most `FOCUS_MS`,
 //!   so the insert that follows compares against the window that now has the keyboard.
 //! - **The microphone** is `macos::mic::MicWorker`, the same cpal stream `run` records with, opened
-//!   and closed as `live` asks; a Bluetooth device (`kAudioDeviceTransportTypeBluetooth`) is never
-//!   kept warm.
+//!   and closed as `live` asks, on the device `inputs::choose` picks from Core Audio's inputs and
+//!   their transport (`kAudioDeviceTransportTypeBuiltIn`, `...Bluetooth`, `...BluetoothLE`,
+//!   DC-N5). A Bluetooth device is never kept warm. A closed lid is IOKit's `AppleClamshellState`
+//!   on `IOPMrootDomain`, which a desktop Mac does not have (read as open).
 //!
 //! Nothing in this module runs in `cargo test`: a tap would take the developer's own keys. The CI
 //! macOS runner drives it with posted events (`.github/workflows/ci.yml`, the helper job).
@@ -45,8 +47,9 @@ use objc2::rc::{Retained, autoreleasepool};
 use objc2::runtime::{AnyClass, AnyObject};
 use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXValue, AXValueType};
 use objc2_core_foundation::{
-    CFDictionary, CFMachPort, CFNumber, CFRange, CFRetained, CFRunLoop, CFString, CFType,
-    kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
+    CFBoolean, CFDictionary, CFMachPort, CFNumber, CFPreferencesAppSynchronize,
+    CFPreferencesCopyAppValue, CFPreferencesSetAppValue, CFRange, CFRetained, CFRunLoop, CFString,
+    CFType, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventMask, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
@@ -56,6 +59,8 @@ use objc2_core_graphics::{
 };
 use objc2_foundation::NSString;
 
+use super::globe::{Globe, Prefs};
+use super::inputs::{Input, Transport};
 use super::insert::{Inserter, Os, Targets};
 use super::live::{self, Device, Stdio};
 use super::mac_insert::{self, Events, Pasteboard};
@@ -477,31 +482,93 @@ fn start_tap(gate: Gate) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // The microphone
 
-/// `kAudioHardwarePropertyDevices`, `kAudioDevicePropertyTransportType` and the Bluetooth
-/// transports (`'dev#'`, `'tran'`, `'blue'`, `'blea'`).
+/// `kAudioHardwarePropertyDevices`, `kAudioDevicePropertyTransportType` and its values
+/// (`'dev#'`, `'tran'`; built-in `'bltn'`, Bluetooth `'blue'` and `'blea'`).
 const DEVICES: u32 = 0x6465_7623;
 const TRANSPORT: u32 = 0x7472_616E;
+const BUILT_IN: u32 = 0x626C_746E;
 const BLUETOOTH: [u32; 2] = [0x626C_7565, 0x626C_6561];
 
-fn is_bluetooth(uid: &str) -> bool {
-    use objc2_core_audio::{
-        kAudioDevicePropertyDeviceUID, kAudioHardwarePropertyDefaultInputDevice,
-        kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
-    };
-    let sys = kAudioObjectSystemObject as u32;
-    let global = kAudioObjectPropertyScopeGlobal;
-    let id = if uid == "default" {
-        props::get::<u32>(sys, kAudioHardwarePropertyDefaultInputDevice, global).ok()
+pub fn transport_of(code: u32) -> Transport {
+    if code == BUILT_IN {
+        Transport::BuiltIn
+    } else if BLUETOOTH.contains(&code) {
+        Transport::Bluetooth
     } else {
-        props::get_ids(sys, DEVICES, global)
-            .unwrap_or_default()
-            .into_iter()
-            .find(|d| {
-                props::get_string(*d, kAudioDevicePropertyDeviceUID, global).as_deref() == Ok(uid)
-            })
+        Transport::Other
+    }
+}
+
+/// Each Core Audio device's UID (what cpal calls its id) with its transport.
+fn transports() -> Vec<(String, Transport)> {
+    use objc2_core_audio::{
+        kAudioDevicePropertyDeviceUID, kAudioObjectPropertyScopeGlobal, kAudioObjectSystemObject,
     };
-    id.and_then(|d| props::get::<u32>(d, TRANSPORT, global).ok())
-        .is_some_and(|t| BLUETOOTH.contains(&t))
+    let global = kAudioObjectPropertyScopeGlobal;
+    props::get_ids(kAudioObjectSystemObject as u32, DEVICES, global)
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|d| {
+            let uid = props::get_string(d, kAudioDevicePropertyDeviceUID, global).ok()?;
+            let code = props::get::<u32>(d, TRANSPORT, global).unwrap_or(0);
+            Some((uid, transport_of(code)))
+        })
+        .collect()
+}
+
+#[link(name = "IOKit", kind = "framework")]
+unsafe extern "C" {
+    fn IOServiceMatching(name: *const std::ffi::c_char) -> *mut c_void;
+    fn IOServiceGetMatchingService(main_port: u32, matching: *mut c_void) -> u32;
+    fn IORegistryEntryCreateCFProperty(
+        entry: u32,
+        key: &CFString,
+        allocator: *const c_void,
+        options: u32,
+    ) -> *mut CFType;
+    fn IOObjectRelease(object: u32) -> i32;
+}
+
+/// A MacBook's lid is closed (`AppleClamshellState`); a Mac with no lid reads open.
+fn lid_closed() -> bool {
+    // SAFETY: `IOServiceMatching` returns a dictionary that `IOServiceGetMatchingService`
+    // consumes; the service is released below; the property is a +1 CF object or null.
+    unsafe {
+        let service = IOServiceGetMatchingService(0, IOServiceMatching(c"IOPMrootDomain".as_ptr()));
+        if service == 0 {
+            return false;
+        }
+        let key = CFString::from_str("AppleClamshellState");
+        let v = IORegistryEntryCreateCFProperty(service, &key, std::ptr::null(), 0);
+        IOObjectRelease(service);
+        let Some(v) = NonNull::new(v) else {
+            return false;
+        };
+        let v: CFRetained<CFType> = CFRetained::from_raw(v);
+        v.downcast_ref::<CFBoolean>().is_some_and(CFBoolean::value)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Preferences
+
+/// `CFPreferences` for the current user on any host, the domain `defaults` reads and writes: the
+/// Globe key's action and akou's copy of it (DC-N2).
+pub struct CfPrefs;
+
+impl Prefs for CfPrefs {
+    fn get(&mut self, domain: &str, key: &str) -> Option<i64> {
+        let v = CFPreferencesCopyAppValue(&CFString::from_str(key), &CFString::from_str(domain))?;
+        v.downcast_ref::<CFNumber>()?.as_i64()
+    }
+
+    fn set(&mut self, domain: &str, key: &str, value: Option<i64>) {
+        let (key, domain) = (CFString::from_str(key), CFString::from_str(domain));
+        let n = value.map(CFNumber::new_i64);
+        // SAFETY: a CFString key and domain and a CFNumber (or none, which removes the key).
+        unsafe { CFPreferencesSetAppValue(&key, n.as_deref().map(|n| n.as_ref()), &domain) };
+        CFPreferencesAppSynchronize(&domain);
+    }
 }
 
 #[derive(Default)]
@@ -510,17 +577,35 @@ pub struct MacMic {
 }
 
 impl Device for MacMic {
-    fn open(&mut self, device: &str, events: SyncSender<Event>) -> Result<bool, String> {
+    fn inputs(&mut self) -> Vec<Input> {
+        let Ok(list) = crate::macos::list_devices() else {
+            return Vec::new();
+        };
+        let kinds = transports();
+        list.inputs
+            .into_iter()
+            .map(|e| Input {
+                transport: kinds
+                    .iter()
+                    .find(|(uid, _)| *uid == e.id)
+                    .map_or(Transport::Other, |(_, t)| *t),
+                id: e.id,
+                default: e.default,
+            })
+            .collect()
+    }
+
+    fn lid_closed(&mut self) -> bool {
+        lid_closed()
+    }
+
+    fn open(&mut self, device: &str, events: SyncSender<Event>) -> Result<(), String> {
         self.close();
         let w = MicWorker::spawn(device.to_string(), events);
         match w.open(MIC_OPEN) {
-            Ok(info) => {
+            Ok(_) => {
                 self.worker = Some(w);
-                Ok(is_bluetooth(if device == "default" {
-                    "default"
-                } else {
-                    &info.id
-                }))
+                Ok(())
             }
             Err(e) => {
                 w.close(MIC_CLOSE);
@@ -560,6 +645,7 @@ pub fn run(cfg: Config) -> i32 {
     };
     let no_inserter = inserter.is_none();
     let mut d = Dictate::new(cfg, Box::new(Screen), inserter);
+    d.set_globe(Globe::new(Box::new(CfPrefs)));
     let (mic, ax) = grants();
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
