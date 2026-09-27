@@ -314,8 +314,13 @@ describe("DC-A4: Escape, Enter and Shift+Enter during a session", () => {
     });
     expect(r.opened).toHaveLength(1);
     expect(r.opened[0]).toMatchObject({ text: "hello", focus: true });
-    // The helper stops holding the keys at once rather than 8 s later.
-    expect(lines(r.commands).some((c) => c.type === "settled")).toBe(true);
+    // The helper stops holding the keys at once rather than 8 s later. The fake logs each command
+    // as it reads it, so the line may land a moment after the draft opened.
+    await until(
+      () => lines(r.commands).some((c) => c.type === "settled"),
+      5000,
+      "settled sent to the helper",
+    );
   });
 
   test("Escape while transcribing: the text stays in history as cancelled, nothing goes in", async () => {
