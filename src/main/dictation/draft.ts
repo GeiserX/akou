@@ -130,6 +130,17 @@ const realLater = (ms: number, fn: () => void) => {
   return () => clearTimeout(t);
 };
 
+/**
+ * What a learn or undo failure puts in the app log: the error's code or name, never its message.
+ * Those messages quote the dictated word and its heard form (see learnPair), and the app log
+ * never holds what the user dictated.
+ */
+function failure(err: unknown): string {
+  const e = err as { code?: unknown; name?: unknown } | null;
+  if (typeof e?.code === "string") return e.code;
+  return typeof e?.name === "string" ? e.name : "error";
+}
+
 export class DraftBox {
   private win: DraftWindow | null = null;
   private cur: Open | null = null;
@@ -357,7 +368,7 @@ export class DraftBox {
         null,
       );
     } catch (err) {
-      this.o.onLog?.("warn", `dictation ${c.id}: no learning: ${(err as Error).message}`);
+      this.o.onLog?.("warn", `dictation ${c.id}: no learning (${failure(err)})`);
       return null;
     }
     found = found.filter((x) => !offered.has(pairKey(x.heard, x.term)));
@@ -387,7 +398,7 @@ export class DraftBox {
     try {
       await this.o.learnEntry({ id, term: x.term, heard: x.heard });
     } catch (err) {
-      this.o.onLog?.("warn", `dictation ${id}: "${x.term}" not learned: ${(err as Error).message}`);
+      this.o.onLog?.("warn", `dictation ${id}: a word was not learned (${failure(err)})`);
       return;
     }
     p.learned.push(x);
@@ -422,7 +433,7 @@ export class DraftBox {
             await this.o.unlearnEntry({ id: a.id, term: x.term, heard: x.heard });
             this.learnEvent(a.id, x, "ignored");
           } catch (err) {
-            this.o.onLog?.("warn", `dictation ${a.id}: undo failed: ${(err as Error).message}`);
+            this.o.onLog?.("warn", `dictation ${a.id}: undo failed (${failure(err)})`);
           }
         }
         this.chipDone(a.id, 0);
