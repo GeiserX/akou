@@ -107,6 +107,41 @@ export function checkExtraHotkey(s: string): string | null {
   return "error" in h ? h.error : null;
 }
 
+/** Modifier names as keycaps: macOS's symbol, else the word on the key. */
+const CAPS: Record<string, [mac: string, other: string]> = {
+  command: ["⌘", "Win"],
+  cmd: ["⌘", "Win"],
+  super: ["⌘", "Super"],
+  commandorcontrol: ["⌘", "Ctrl"],
+  control: ["⌃", "Ctrl"],
+  ctrl: ["⌃", "Ctrl"],
+  option: ["⌥", "Alt"],
+  alt: ["⌥", "Alt"],
+  shift: ["⇧", "Shift"],
+  fn: ["fn", "Fn"],
+};
+
+/**
+ * A dictation binding as the pill's hint names it (DC-O1): `RightCommand` is `Right ⌘` on macOS,
+ * `Control+Shift+Space` is `⌃⇧Space` there and `Ctrl+Shift+Space` elsewhere.
+ */
+export function hotkeyLabel(binding: string, platform: string): string {
+  const mac = platform === "darwin";
+  const cap = (name: string) => {
+    const c = CAPS[name.toLowerCase()];
+    return c ? (mac ? c[0] : c[1]) : name;
+  };
+  const parts = binding
+    .split("+")
+    .map((p) => p.trim())
+    .filter((p) => p !== "")
+    .map((p) => {
+      const side = /^(Left|Right)(.+)$/.exec(p);
+      return side ? `${side[1]} ${cap(side[2] as string)}` : cap(p);
+    });
+  return parts.join(mac && parts.every((p) => !p.includes(" ")) ? "" : "+");
+}
+
 /** An accelerator as its modifiers (lower case, one name each) and its key. */
 export function parseAccelerator(accel: string): { mods: Set<string>; key: string } {
   const names: Record<string, string> = {

@@ -30,17 +30,19 @@ import { join } from "node:path";
 import type { AppStatus, QuitQuestion } from "../../ui/protocol.ts";
 import type { AkouApp, Announcement, WindowShell } from "../index.ts";
 import type { Bridge } from "./bridge.ts";
-import { hotkeyFor } from "./hotkey.ts";
+import { hotkeyFor, hotkeyLabel } from "./hotkey.ts";
 import { type IndicatorRpcHandlers, type IndicatorSend, indicatorRpc } from "./indicator.ts";
 import { type InstallOutcome, installMessage } from "./install-cli.ts";
 import { DEDUP_MS, type NotifyEvent, notifyFor, originOf } from "./notify.ts";
 import type { SettingsPane } from "./page-server.ts";
+import { type PillDictation, type PillRpcHandlers, type PillSend, pillRpc } from "./pill.ts";
 import { type WindowRpc, type WindowSend, windowRpc } from "./rpc.ts";
 
 export { hotkeyFor };
 
 export const WINDOW_URL = "views://main/index.html";
 export const INDICATOR_URL = "views://indicator/index.html";
+export const PILL_URL = "views://pill/index.html";
 
 /** Where the tray images are: beside the main process in the bundle, beside this file in a checkout. */
 export const TRAY_DIR = join(import.meta.dir, "tray");
@@ -62,6 +64,9 @@ export interface ShellState {
   window?: Rect;
   /** The floating indicator's last frame (DK-F1). */
   indicator?: Rect;
+  /** The dictation pill's frame after a drag (DC-O1), and the `dictation.pill` edge it was on. */
+  pill?: Rect;
+  pillEdge?: string;
 }
 
 export interface NativeWindow {
@@ -82,6 +87,31 @@ export interface IndicatorWindow {
   close(): void;
   onClose(fn: () => void): void;
   onFrame(fn: (frame: Rect) => void): void;
+}
+
+/** The dictation pill's window (DC-O1): always on top, never takes the focus, a click included. */
+export interface PillWindow {
+  showInactive(): void;
+  hide(): void;
+  close(): void;
+  onClose(fn: () => void): void;
+  onFrame(fn: (frame: Rect) => void): void;
+}
+
+/**
+ * How the pill's window refuses the focus on each OS (DC-O1): an `NSPanel` with the
+ * `NonactivatingPanel` style on macOS, `WS_EX_NOACTIVATE` on Windows. `activate: false` alone
+ * governs only the first show; a click on a plain window still activates it.
+ */
+export interface PillStyle {
+  styleMask?: { NonactivatingPanel: true };
+  noActivate?: true;
+}
+
+export function pillStyle(platform: string): PillStyle {
+  if (platform === "darwin") return { styleMask: { NonactivatingPanel: true } };
+  if (platform === "win32") return { noActivate: true };
+  return {};
 }
 
 export type TrayMenuItem =
@@ -113,6 +143,11 @@ export interface NativeUi {
   openIndicator(o: { url: string; rpc: IndicatorRpcHandlers; frame: Rect }): {
     window: IndicatorWindow;
     send: IndicatorSend;
+  };
+  /** The dictation pill (DC-O1): hidden until shown, above every other window, never focused. */
+  openPill?(o: { url: string; rpc: PillRpcHandlers; frame: Rect; style: PillStyle }): {
+    window: PillWindow;
+    send: PillSend;
   };
   /** `image` is a file path; `template` lets macOS recolour it for the menu bar. */
   createTray(o: { title: string; image: string; template: boolean }): NativeTray;
@@ -152,14 +187,20 @@ export interface ShellApp {
   dictation?: ShellDictation;
 }
 
-/** Dictation as the tray sees it: its state, the same session door as the API, and its changes. */
-export interface ShellDictation {
+/**
+ * Dictation as the tray and the pill see it: its state, the same session door as the API, its
+ * changes, and for the pill its events and levels.
+ */
+export interface ShellDictation extends Pick<PillDictation, "follow"> {
   /** `off`, `starting`, `idle`, `listening`, `transcribing` or `inserting`. */
   state(): string;
-  /** `POST /v1/dictation/start` and `/stop`: a latched session, as if the key were tapped. */
-  control(action: "start" | "stop"): Promise<unknown>;
+  status(): ReturnType<PillDictation["status"]>;
+  /** `POST /v1/dictation/start`, `/stop` and `/cancel`; true when the helper acted. */
+  control(action: "start" | "stop" | "cancel"): Promise<boolean>;
   /** Called at every change of the state. Returns the unsubscribe function. */
   watch(fn: () => void): () => void;
+  /** The dictation key the helper is bound to (`RightCommand`), empty before it starts. */
+  hotkey(): string;
 }
 
 /** The app as the shell sees it. */
@@ -184,8 +225,18 @@ export function appForShell(app: AkouApp): ShellApp {
     onAnnounce: (fn) => app.onAnnounce(fn),
     dictation: {
       state: () => app.dictation()?.status().state ?? "off",
-      control: async (action) => app.dictation()?.control(action),
+      status: () => {
+        const s = app.dictation()?.status();
+        return {
+          state: s?.state ?? "off",
+          loading: s?.loading ?? false,
+          swallow_keys: s?.swallow_keys ?? null,
+        };
+      },
+      control: async (action) => (await app.dictation()?.control(action))?.ok === true,
       watch: (fn) => app.dictation()?.watch(fn) ?? (() => {}),
+      follow: (fn) => app.dictation()?.follow(fn) ?? (() => {}),
+      hotkey: () => app.dictation()?.hotkey() ?? "",
     },
   };
 }
@@ -218,6 +269,13 @@ const MIN_WINDOW = { width: 480, height: 360 } as const;
 export const INDICATOR_SIZE = { width: 330, height: 40 } as const;
 /** Its distance from the work area's edge the first time it shows. */
 const INDICATOR_MARGIN = 16;
+/**
+ * The dictation pill's size: the widest state (listening with the hints and Stop and Cancel, or an
+ * error with three buttons) and the learn chip under it, at the page's 420 px measure.
+ */
+export const PILL_SIZE = { width: 440, height: 132 } as const;
+/** Its distance from the work area's edge on the side `dictation.pill` names. */
+const PILL_MARGIN = 24;
 
 /** A frame with an area. The SDK reports {0,0,0,0} for a window that is already gone. */
 const hasArea = (r: Rect) => r.width > 0 && r.height > 0;
@@ -258,6 +316,36 @@ export function placeIndicator(saved: Rect | undefined, areas: readonly Rect[]):
   };
   const want = { x: at.x, y: at.y, ...INDICATOR_SIZE };
   return primary ? fitInto(want, areas, INDICATOR_SIZE) : want;
+}
+
+/**
+ * Where the dictation pill shows (DC-O1): where it was dragged last while on this edge, else
+ * centred on the edge of the primary work area that `dictation.pill` names, and pulled whole onto a
+ * display either way.
+ */
+export function placePill(
+  saved: { frame?: Rect; edge?: string },
+  edge: string,
+  areas: readonly Rect[],
+): Rect {
+  const primary = areas.find((a) => a.width > 0 && a.height > 0);
+  const { width, height } = PILL_SIZE;
+  if (saved.frame && saved.edge === edge) {
+    const want = { x: saved.frame.x, y: saved.frame.y, width, height };
+    return primary ? fitInto(want, areas, PILL_SIZE) : want;
+  }
+  if (!primary) return { x: 0, y: 0, width, height };
+  const cx = primary.x + Math.round((primary.width - width) / 2);
+  const cy = primary.y + Math.round((primary.height - height) / 2);
+  const at =
+    edge === "top"
+      ? { x: cx, y: primary.y + PILL_MARGIN }
+      : edge === "left"
+        ? { x: primary.x + PILL_MARGIN, y: cy }
+        : edge === "right"
+          ? { x: primary.x + primary.width - width - PILL_MARGIN, y: cy }
+          : { x: cx, y: primary.y + primary.height - height - PILL_MARGIN };
+  return fitInto({ ...at, width, height }, areas, PILL_SIZE);
 }
 
 /** `want` on the display it overlaps most (the primary when none), whole and no bigger than it. */
@@ -416,6 +504,14 @@ export class Shell implements WindowShell {
   } | null = null;
   /** Bumped by every close, so an open still reading the status knows it is stale. */
   private indicatorGen = 0;
+  /** The dictation pill while dictation runs (DC-O1), the edge it opened on, and a drag. */
+  private pill: {
+    window: PillWindow;
+    rpc: PillRpcHandlers;
+    edge: string;
+    frame: Rect;
+    moved: boolean;
+  } | null = null;
   private unwatch: () => void = () => {};
   private live = false;
   /** Only the window's focus and blur events set this: a shown window may not have the focus. */
@@ -459,7 +555,11 @@ export class Shell implements WindowShell {
     this.ui.onReopen(() => void this.app.openWindow().catch(() => {}));
     const unwatchLifecycle = this.bridge.watchLifecycle(() => void this.refresh());
     const unannounce = this.app.onAnnounce((a) => this.onAnnounce(a));
-    const undictation = this.app.dictation?.watch(() => void this.refresh()) ?? (() => {});
+    const undictation =
+      this.app.dictation?.watch(() => {
+        this.syncPill();
+        void this.refresh();
+      }) ?? (() => {});
     const unhealth = this.bridge.app.watch((call, e) => {
       if (e.type === "health") this.notify({ type: "capture", call, ch: e.ch, state: e.state });
       // The indicator lives with the recording: from the call's start (or a new part) to its end.
@@ -473,6 +573,7 @@ export class Shell implements WindowShell {
       unhealth();
       undictation();
     };
+    this.syncPill();
     await this.refresh();
   }
 
@@ -778,6 +879,87 @@ export class Shell implements WindowShell {
     ind.window.close();
   }
 
+  /**
+   * The pill exists while dictation runs and `dictation.pill` is not `off`, hidden between
+   * sessions, so its page has booted before the first press; a changed edge opens it again there.
+   * Then it is told the session's state. The setting is read at each change of the state, so a
+   * change applies from the next session.
+   */
+  private syncPill(): void {
+    const d = this.app.dictation;
+    const edge = String(this.app.config().settings["dictation.pill"] ?? "bottom");
+    const want =
+      !!d && !!this.ui.openPill && !this.quitting && edge !== "off" && d.state() !== "off";
+    if (this.pill && (!want || this.pill.edge !== edge)) this.closePill();
+    if (want && d && !this.pill) {
+      try {
+        this.createPill(d, edge);
+      } catch (err) {
+        // The tray and the cues still carry the state; a session never fails for the pill.
+        this.o.onLog?.("warn", `the dictation pill did not open: ${(err as Error).message}`);
+      }
+    }
+    this.pill?.rpc.update();
+  }
+
+  private createPill(d: ShellDictation, edge: string): void {
+    const open = this.ui.openPill;
+    if (!open) return;
+    const saved = this.o.state?.load() ?? {};
+    const frame = placePill({ frame: saved.pill, edge: saved.pillEdge }, edge, this.ui.workAreas());
+    let send: PillSend | null = null;
+    let win: PillWindow | null = null;
+    const drop = () => {};
+    const rpc = pillRpc(d, () => send ?? { state: drop, level: drop, preview: drop, chip: drop }, {
+      platform: this.o.platform,
+      hotkey: () => d.hotkey(),
+      label: hotkeyLabel,
+      now: () => this.o.now?.() ?? Date.now(),
+      onVisible: (visible) => {
+        if (visible) win?.showInactive();
+        else win?.hide();
+      },
+      // No window of akou is hidden from screen capture before DK-P3, so no preview passes.
+      preview: {
+        setting: () => this.app.config().settings["dictation.pillPreview"],
+        hiddenFromCapture: () => false,
+      },
+    });
+    let w: ReturnType<typeof open>;
+    try {
+      w = open.call(this.ui, { url: PILL_URL, rpc, frame, style: pillStyle(this.o.platform) });
+    } catch (err) {
+      rpc.close();
+      throw err;
+    }
+    send = w.send;
+    win = w.window;
+    const p = { window: w.window, rpc, edge, frame, moved: false };
+    this.pill = p;
+    w.window.onFrame((f) => {
+      if (!hasArea(f)) return;
+      p.frame = f;
+      p.moved = true;
+    });
+    w.window.onClose(() => {
+      if (this.pill === p) this.closePill();
+    });
+  }
+
+  private closePill(): void {
+    const p = this.pill;
+    if (!p) return;
+    this.pill = null;
+    const store = this.o.state;
+    try {
+      if (store && p.moved) store.save({ ...store.load(), pill: p.frame, pillEdge: p.edge });
+    } catch (err) {
+      this.o.onLog?.("warn", `the pill's place was not saved: ${(err as Error).message}`);
+    }
+    p.rpc.close();
+    p.window.close();
+  }
+
   private saveFrame(): void {
     const store = this.o.state;
     const frame = this.frame;
@@ -793,6 +975,7 @@ export class Shell implements WindowShell {
     if (this.question) this.answerQuit(this.question.id, false);
     if (this.window) this.saveFrame();
     this.closeIndicator();
+    this.closePill();
     this.unwatch();
     this.rpc?.close();
     this.window?.close();

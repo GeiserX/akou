@@ -443,7 +443,8 @@ function sseDictation(d: DictationService, after: number, signal: AbortSignal): 
       };
       const unfollow = d.follow((m: DictationFollow) => {
         if (m.kind === "event") flush();
-        else send(`event: level\ndata: ${JSON.stringify({ rms: m.rms })}\n\n`);
+        else if (m.kind === "level")
+          send(`event: level\ndata: ${JSON.stringify({ rms: m.rms })}\n\n`);
       });
       // clock: a keep-alive comment, so a reader can tell a quiet stream from a dead connection.
       const keepalive = setInterval(() => send(": keep-alive\n\n"), KEEPALIVE_MS);

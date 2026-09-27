@@ -65,13 +65,17 @@ describe("DC-O4: the tray's dictation item and title", () => {
       onAnnounce: () => () => {},
       dictation: {
         state: () => d.state,
+        status: () => ({ state: d.state, loading: false, swallow_keys: false }),
         control: async (a) => {
           d.calls.push(a);
+          return true;
         },
         watch: (fn) => {
           d.fire = fn;
           return () => {};
         },
+        follow: () => () => {},
+        hotkey: () => "Control+Shift+Space",
       },
     };
     const bridge = {
