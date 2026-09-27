@@ -146,14 +146,19 @@ describe("DC-E6: the silence guard", () => {
     expect(it?.state).toBe("empty");
     expect(it?.text).toBeNull();
     expect(lines(r.inserted)).toEqual([]);
-    // The helper stops holding Escape and Enter at once rather than after 8 s.
-    expect(lines(r.commands).map((c) => c.type)).toContain("settled");
+    // The helper stops holding Escape and Enter at once rather than after 8 s. The fake logs
+    // each command as it reads it, so the line may land a moment after the log's event.
+    await until(
+      () => lines(r.commands).some((c) => c.type === "settled"),
+      5000,
+      "settled sent to the helper",
+    );
     expect(r.svc.log.events().map((e) => e.type)).toEqual([
       "dictation.started",
       "dictation.ended",
       "dictation.empty",
     ]);
-  });
+  }, 15_000);
 
   test("positive control: without the guard the same noise is inserted as the invented sentence", async () => {
     const asr = fakeAsr(INVENTED);
