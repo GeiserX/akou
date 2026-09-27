@@ -155,7 +155,7 @@ export class DictationService {
   /**
    * The tray's and the CLI's door (DC-G1, DC-O4): `start` a latched session as if the key were
    * tapped, `stop` it (its audio is transcribed and inserted), or `cancel` it (nothing is). Resolves
-   * once the helper acted, or after `CONTROL_MS` with the state as it is then.
+   * once the helper acted; a helper that did not act within `CONTROL_MS` is a refusal.
    */
   async control(action: ControlAction, waitMs = CONTROL_MS): Promise<ControlResult> {
     const s = this.helper?.session;
@@ -173,7 +173,17 @@ export class DictationService {
     const done = () => (action === "start" ? s.state !== "idle" : s.state !== "listening");
     const t0 = Date.now();
     while (!done() && Date.now() - t0 < waitMs) await Bun.sleep(10);
-    return { ok: true, state: this.helper?.session.state ?? "off" };
+    const state = this.helper?.session.state ?? "off";
+    // The helper can drop the command (still settling an insert, say): a script must not be told
+    // it is dictating when nothing started.
+    if (!done()) {
+      return {
+        ok: false,
+        code: action === "start" ? "dictation_busy" : "not_dictating",
+        message: `the dictation helper did not ${action} within ${waitMs / 1000} s (still ${state})`,
+      };
+    }
+    return { ok: true, state };
   }
 
   /** The session over the running helper, or null with dictation off. */

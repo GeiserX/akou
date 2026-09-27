@@ -68,6 +68,8 @@
  *                           (DC-L2)
  *   --tap-disabled-at MS    the first key event at or after MS finds the tap disabled and is lost;
  *                           the tap is re-enabled from that callback (DC-N1)
+ *   --deaf-start            `session.start` is read and dropped, as the real helper drops it while
+ *                           an insert settles: the app must not answer that it is listening
  *
  * `session.start`, `session.stop` and `session.cancel` (the tray's and the CLI's door) run through
  * the same rule: a latched session from the key time reached so far, whose audio lasts as long as
@@ -504,6 +506,7 @@ async function runDictate(): Promise<void> {
       case "session.start": {
         // The tray's and the CLI's door: a latched session, as if the key were tapped. Its audio
         // runs on the key clock from here, as long as the session lasts in real time.
+        if (flag("--deaf-start")) return;
         const outs: ActivationOut[] = [];
         machine?.start(clock, outs);
         if (outs.length > 0) started = { at: clock, real: now() };

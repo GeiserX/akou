@@ -41,14 +41,14 @@ interface Rig extends AppRig {
 }
 
 /** An app with dictation on, over the fake helper with "hello" on the mic from the start. */
-async function rig(settings: Record<string, unknown> = {}): Promise<Rig> {
+async function rig(settings: Record<string, unknown> = {}, extra: string[] = []): Promise<Rig> {
   const dir = scratch();
   const wav = join(dir, "mic.wav");
   writeFileSync(wav, monoWav(concat(speak(["hello"]), silence(3))));
   const commands = join(dir, "commands.jsonl");
   const inserted = join(dir, "inserted.jsonl");
   const r = await appRig({
-    helperArgs: ["--wav", wav, "--commands-log", commands, "--inserter-log", inserted],
+    helperArgs: ["--wav", wav, "--commands-log", commands, "--inserter-log", inserted, ...extra],
     settings: { "dictation.enabled": true, ...settings },
   });
   cleanups.push(() => r.close());
@@ -136,6 +136,14 @@ describe("DC-G1: the live session over the API", () => {
     const off = await rig({ "dictation.enabled": false });
     const res = await off.api("POST", "/dictation/start");
     expect([res.status, res.body.error]).toEqual([409, "dictation_off"]);
+  });
+
+  test("a start the helper drops is a 409, never a 200 that says idle", async () => {
+    const r = await rig({}, ["--deaf-start"]);
+    const res = await r.api("POST", "/dictation/start");
+    expect([res.status, res.body.error]).toEqual([409, "dictation_busy"]);
+    expect(res.body.message).toContain("did not start");
+    expect(lines(r.commands).map((c) => c.type)).toContain("session.start");
   });
 });
 
