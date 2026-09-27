@@ -881,11 +881,12 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_vocab_list",
     {
       description:
-        "The vocabulary in force: a call's own words and proposals (with `call`), or the files for a workspace. With `call` and `unconfirmed`, the words to review: the call's open proposals with the lines they rest on, and the workspace's unconfirmed entries. Ask the user before approving any.",
+        "The vocabulary in force: a call's own words and proposals (with `call`), or the files for a workspace. With `call` and `unconfirmed`, the words to review: the call's open proposals with the lines they rest on, and the workspace's unconfirmed entries. With `dictation`, also the words the user fixed while dictating, each pair at its latest status (proposed, ignored, accepted, rejected). Ask the user before approving any.",
       inputSchema: z.object({
         workspace: z.string().optional(),
         call: z.string().optional(),
         unconfirmed: z.boolean().optional(),
+        dictation: z.boolean().optional(),
       }),
       outputSchema: OUT.vocab,
     },
@@ -893,7 +894,11 @@ export function createMcpServer(o: McpOptions): McpServer {
       const r = a.call
         ? await req("GET", `/calls/${id(a.call)}/vocab`)
         : await req("GET", "/vocab", {
-            query: { workspace: a.workspace, unconfirmed: a.unconfirmed || undefined },
+            query: {
+              workspace: a.workspace,
+              unconfirmed: a.unconfirmed || undefined,
+              dictation: a.dictation || undefined,
+            },
           });
       const callOf = (b: Body) => ({ call: b.call ?? null });
       if (a.call && a.unconfirmed && r.status === 200) {

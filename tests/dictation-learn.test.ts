@@ -12,6 +12,7 @@ import {
   type LearnInput,
   learn,
   PROPOSE_AT,
+  reviewPairs,
   soundAlike,
   spanishKey,
 } from "../src/core/dictation/learn.ts";
@@ -184,5 +185,31 @@ describe("DC-L3: the audio check", () => {
     };
     const [c] = found();
     expect(await checkAudio(c as Candidate, broken)).toMatchObject({ evidence: "none" });
+  });
+});
+
+describe("DC-L5: the pairs of the words to review", () => {
+  const ev = (t: number, id: string, heard: string, term: string, status: string) => ({
+    type: "dictation.learn",
+    id,
+    t,
+    heard,
+    term,
+    status,
+    evidence: "none",
+  });
+
+  test("one row per pair at its latest status, newest first, whatever the case", () => {
+    const rows = reviewPairs([
+      ev(1, "d1", "cooper netties", "Kubernetes", "proposed"),
+      ev(2, "d2", "versal", "Vercel", "proposed"),
+      ev(3, "d1", "cooper netties", "Kubernetes", "ignored"),
+      ev(4, "d3", "Cooper Netties", "kubernetes", "accepted"),
+      { type: "dictation.text", id: "d9", t: 5 },
+    ]);
+    expect(rows.map((r) => [r.heard, r.term, r.status, r.id, r.at])).toEqual([
+      ["Cooper Netties", "kubernetes", "accepted", "d3", 4],
+      ["versal", "Vercel", "proposed", "d2", 2],
+    ]);
   });
 });

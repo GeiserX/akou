@@ -2300,7 +2300,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "The user's vocabulary: the files read and their entries, global and for a workspace.",
+        "description": "The user's vocabulary: the files read and their entries, global and for a workspace. With `dictation`, also the words fixed while dictating, each pair at its latest status: `proposed` and `ignored` wait for an answer (`POST /vocab/approve` or `/reject` with `dictation: true`), `accepted` and `rejected` have one.",
         "parameters": [
           {
             "name": "workspace",
@@ -2316,6 +2316,15 @@
             "in": "query",
             "required": false,
             "description": "Only the entries waiting for the user's yes.",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "dictation",
+            "in": "query",
+            "required": false,
+            "description": "Add `dictation`: the words fixed while dictating, newest first (DC-L5).",
             "schema": {
               "type": "boolean"
             }
@@ -2474,7 +2483,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed.",
+        "description": "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2493,6 +2502,9 @@
                   },
                   "workspace": {
                     "type": "string"
+                  },
+                  "dictation": {
+                    "type": "boolean"
                   }
                 },
                 "required": [
@@ -2530,7 +2542,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Reject words: unconfirmed entries of the file, or a call's proposals when `call` is named. A rejected word is not proposed again.",
+        "description": "Reject words: unconfirmed entries of the file, or a call's proposals when `call` is named. A rejected word is not proposed again. With `dictation: true`, the words fixed while dictating, as the chip's Not a word: a learned pair also leaves the file.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2549,6 +2561,9 @@
                   },
                   "workspace": {
                     "type": "string"
+                  },
+                  "dictation": {
+                    "type": "boolean"
                   }
                 },
                 "required": [

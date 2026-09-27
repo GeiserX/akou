@@ -1,17 +1,19 @@
 /**
  * The custom vocabulary from the command line (docs/DESIGN.md sections 5.4 and 6.1):
  *
- *   akou vocab list [-w WS] [--call ID] [--unconfirmed]
+ *   akou vocab list [-w WS] [--call ID] [--unconfirmed] [--dictation]
  *   akou vocab add TERM [--heard a,b] [--call ID | -w WS] [--no-decode] [--note TEXT]
  *   akou vocab remove TERM [-w WS]  |  akou vocab remove --call ID VID
- *   akou vocab approve|reject TERM… [--call ID] [-w WS]
+ *   akou vocab approve|reject TERM… [--call ID] [-w WS] [--dictation]
  *   akou vocab suggest [--text TEXT] [--call ID] [-k N]
  *   akou vocab check TERM
  *   akou vocab import FILE [-w WS]
  *   akou vocab pass [CALL]
  *
  * `list --call ID --unconfirmed` is the words to review for that call: its open proposals, with the
- * lines each rests on, and the workspace's unconfirmed entries. `pass` runs the post-call pass on
+ * lines each rests on, and the workspace's unconfirmed entries. `list --dictation` is the words fixed
+ * while dictating, each pair at its latest status, and `approve`/`reject --dictation` answers them
+ * as the dictation chip does (docs/ux/DICTATION.md DC-L5). `pass` runs the post-call pass on
  * the configured provider (the last call by default) and prints what it corrected and proposed.
  *
  * `add` with `--call` is a call-scoped `vocab.add` (mid-call, applies at once); without it the word
@@ -81,6 +83,10 @@ export const vocab: Command = {
       desc: "a call's own words instead of the workspace list (live, last or a call id)",
     },
     unconfirmed: { type: "boolean", desc: "list: only the words waiting for your yes" },
+    dictation: {
+      type: "boolean",
+      desc: "list, approve, reject: the words fixed while dictating",
+    },
     heard: { type: "string", value: "A,B", desc: "add: how the recognizer mishears it" },
     "no-decode": {
       type: "boolean",
@@ -98,6 +104,8 @@ export const vocab: Command = {
     "akou vocab remove Hetzner -w work",
     "akou vocab approve Hetzner -c last",
     "akou vocab reject Hetsner -c last",
+    "akou vocab list --dictation",
+    "akou vocab approve Kubernetes --dictation",
     'akou vocab suggest --text "we deploy on Hetzner with Terraform" -k 5',
     "akou vocab check Hetzner",
     "akou vocab import glossary.txt -w work",
@@ -109,6 +117,15 @@ export const vocab: Command = {
     const call = str(p, "call");
     switch (sub) {
       case "list": {
+        if (bool(p, "dictation")) {
+          const r = await api(ctx, "GET", "/vocab", { query: { dictation: true } });
+          return finish(ctx, r, (b) => {
+            const out = (b.dictation ?? []).map(
+              (d: Body) => `${d.term} (heard: ${d.heard})  [dictation, ${d.status}]`,
+            );
+            return out.length > 0 ? out.join("\n") : "No words fixed while dictating.";
+          });
+        }
         const r = call
           ? await api(ctx, "GET", `/calls/${enc(call)}/vocab`)
           : await api(ctx, "GET", "/vocab", {
@@ -153,7 +170,7 @@ export const vocab: Command = {
       case "reject": {
         if (args.length === 0) return usage(ctx, `vocab ${sub} needs at least one term`);
         const r = await api(ctx, "POST", `/vocab/${sub}`, {
-          body: { terms: args, call, workspace: ws },
+          body: { terms: args, call, workspace: ws, dictation: bool(p, "dictation") || undefined },
         });
         return finish(ctx, r, (b) => {
           const done: string[] = b.approved ?? b.rejected ?? [];
