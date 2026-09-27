@@ -11,9 +11,16 @@
  *
  * `fast` is required. `lite` runs when `GET /v1/server` lists it as available, and the summary says
  * plainly when it did not.
+ *
+ * Then the dictation trip (docs/ux/DICTATION.md DC-R1, DC-R2, DC-R4): the same note sent the way
+ * the desktop app's remote engine sends a dictation, by the app's own client code, after the app's
+ * Test of the remote. It must run in the dictation lane: `served_last_hour` rises by one for it and
+ * not for a plain request of the same note, which is the control that the lane is what answered.
  */
 
 import { createHmac, timingSafeEqual } from "node:crypto";
+import { testRemote, transcribeRemote } from "../src/main/dictation/remote.ts";
+import { readUploadAudio } from "../src/main/server/audio.ts";
 
 // ---------------------------------------------------------------------------
 // The receiver
@@ -130,6 +137,9 @@ export async function tamperedRefused(r: Receiver, delivery: Delivery): Promise<
 // biome-ignore lint/suspicious/noExplicitAny: API answers are read field by field.
 type Json = any;
 
+/** What the note says, as `plain` reads it. */
+const HEARD = "ask not what your country";
+
 /** The fields every path must agree on (SV-J4). */
 // biome-ignore lint/suspicious/noExplicitAny: results are compared field by field.
 export function projection(r: any): Record<string, unknown> {
@@ -142,6 +152,94 @@ export function projection(r: any): Record<string, unknown> {
     engine: r?.engine,
     metadata: r?.metadata,
   };
+}
+
+/** Lower case letters and spaces only, for a transcript check that ignores punctuation. */
+function plain(text: unknown): string {
+  return String(text)
+    .toLowerCase()
+    .replace(/[^a-z ]/g, "");
+}
+
+export interface DictationTrip {
+  /** The server, as `dictation.remote.url` holds it. */
+  base: string;
+  /** A `jobs` key, as `dictation.remote.key` holds it. */
+  key: string;
+  /** Any audio file; it is read to 16 kHz mono as the app holds a dictation's buffer. */
+  note: string;
+  /** Words the transcript must contain, in lower case. */
+  heard: string;
+  /** `dictation.remote.timeoutSeconds`; the lane loads its model on its first dictation. */
+  timeoutSeconds?: number;
+  /** Test seam: the network. */
+  fetch?: typeof fetch;
+}
+
+/**
+ * The dictation trip: the Test, a plain request as the control, then the dictation. Returns the
+ * lines to print; throws when the server has no lane, the transcript is wrong, or the dictation
+ * was not the lane's.
+ */
+export async function dictationTrip(o: DictationTrip): Promise<string[]> {
+  const net = o.fetch ?? fetch;
+  const base = o.base.replace(/\/+$/, "");
+  const lane = async () => {
+    const res = await net(`${base}/v1/server`);
+    if (!res.ok) throw new Error(`GET /v1/server: HTTP ${res.status}`);
+    const s: Json = await res.json();
+    return {
+      served: Number(s.dictation?.served_last_hour),
+      jobs: Number(s.queue?.jobs_last_hour),
+    };
+  };
+  const tested = await testRemote({
+    url: base,
+    key: o.key,
+    ...(o.timeoutSeconds ? { timeoutSeconds: o.timeoutSeconds } : {}),
+    fetch: net,
+  });
+  if (!tested.ok || !tested.interactive || tested.warning) {
+    throw new Error(`dictation: the Test of the remote says: ${tested.summary}`);
+  }
+  const samples = await readUploadAudio(o.note);
+  const wav = new Blob([new Uint8Array(await Bun.file(o.note).arrayBuffer())]);
+
+  // The control: the same note with no `interactive` is the queue's, and the lane does not count it.
+  const before = await lane();
+  const form = new FormData();
+  form.set("file", wav, "note");
+  const res = await net(`${base}/v1/audio/transcriptions`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${o.key}` },
+    body: form,
+  });
+  if (!res.ok) throw new Error(`dictation: the plain request answered ${res.status}`);
+  const queued = await lane();
+  if (queued.served !== before.served || queued.jobs !== before.jobs + 1) {
+    throw new Error(
+      `dictation: a plain request moved the lane (served ${before.served} -> ${queued.served}, queue jobs ${before.jobs} -> ${queued.jobs})`,
+    );
+  }
+
+  const r = await transcribeRemote({
+    url: base,
+    key: o.key,
+    samples,
+    ...(o.timeoutSeconds ? { timeoutSeconds: o.timeoutSeconds } : {}),
+    fetch: net,
+  });
+  if (!plain(r.text).includes(o.heard)) throw new Error(`dictation: wrong transcript: ${r.text}`);
+  const after = await lane();
+  if (after.served !== queued.served + 1 || after.jobs !== queued.jobs) {
+    throw new Error(
+      `dictation: the dictation did not run in the lane (served ${queued.served} -> ${after.served}, queue jobs ${queued.jobs} -> ${after.jobs})`,
+    );
+  }
+  return [
+    `dictation: the Test says ${tested.summary}`,
+    `dictation: answered by the lane in ${r.ms} ms: ${r.text}`,
+  ];
 }
 
 async function main(): Promise<void> {
@@ -226,10 +324,7 @@ async function main(): Promise<void> {
           `${preset}: the three paths disagree\npoll:  ${a}\nfeed:  ${b}\nhook:  ${c}`,
         );
       }
-      const heard = String(polled.text)
-        .toLowerCase()
-        .replace(/[^a-z ]/g, "");
-      if (!heard.includes("ask not what your country")) {
+      if (!plain(polled.text).includes(HEARD)) {
         throw new Error(`${preset}: wrong transcript: ${polled.text}`);
       }
       if (JSON.stringify(polled.metadata) !== JSON.stringify({ ci: preset })) {
@@ -244,6 +339,9 @@ async function main(): Promise<void> {
     console.log("positive control: a tampered delivery was refused");
   } finally {
     receiver.stop();
+  }
+  for (const line of await dictationTrip({ base, key, note, heard: HEARD, timeoutSeconds: 120 })) {
+    console.log(line);
   }
 }
 
