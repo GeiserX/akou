@@ -425,10 +425,50 @@ export const PARITY: readonly Row[] = [
   },
   {
     action: "Dictation history",
-    cli: { none: "`akou dictations list` and `show` come with the rest of DC-G3" },
+    cli: ["dictations"],
     api: ["GET /dictations", "GET /dictations/:id"],
-    mcp: { none: "akou_dictation_list and akou_dictation_get come with DC-G5 (P1)" },
-    window: { none: "the History page comes with DC-H1" },
+    mcp: ["akou_dictation_list", "akou_dictation_get"],
+    window: [ui("dictation-history.ts", '"GET", `/dictations?#{params}`')],
+  },
+  {
+    action: "Delete dictations",
+    cli: ["dictations"],
+    api: ["DELETE /dictations/:id", "DELETE /dictations"],
+    mcp: {
+      none: "MCP reads dictation history only; deleting it is the user's (DICTATION.md DC-G5)",
+    },
+    window: [
+      ui("dictation-history.ts", '"DELETE", `/dictations/#{encodeURIComponent(id)}`'),
+      ui("dictation-page.ts", '"DELETE", "/dictations"'),
+    ],
+  },
+  {
+    action: "Start, stop and cancel a dictation",
+    cli: ["dictate"],
+    api: ["POST /dictation/start", "POST /dictation/stop", "POST /dictation/cancel"],
+    mcp: {
+      none: "an agent never starts a dictation: its text is typed into whatever app the user is looking at (DICTATION.md DC-G5)",
+    },
+    // The tray's Start and Stop (DC-O4); the key itself is the helper's.
+    window: [{ file: "src/main/window/shell.ts", has: 'action: "dictate"' }],
+  },
+  {
+    action: "Dictation status",
+    cli: {
+      none: "the tray and the Dictation page show it; `akou dictate toggle` reads it to pick start or stop",
+    },
+    api: ["GET /dictation"],
+    mcp: { none: "MCP reads dictation history only (DICTATION.md DC-G5)" },
+    window: [ui("dictation-page.ts", '"GET", "/dictation"')],
+  },
+  {
+    action: "Test the remote dictation engine",
+    cli: ["dictate"],
+    api: ["GET /dictation/remote-test"],
+    mcp: {
+      none: "the remote's key and URL are the user's settings, which no tool touches (DC-G5)",
+    },
+    window: { none: "the page's Test button is DC-R4's page side, not written yet" },
   },
   {
     action: "The admin password (server mode)",

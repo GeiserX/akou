@@ -114,6 +114,14 @@ export class DictationSession {
     return new Promise((res) => this.rebinds.push(res));
   }
 
+  /**
+   * The tray's and the CLI's door (DC-G1): `session.start`, `session.stop` or `session.cancel`. The
+   * helper answers with `session.started` and `session.ended` as for a key.
+   */
+  command(action: "start" | "stop" | "cancel"): void {
+    this.o.send({ type: `session.${action}` });
+  }
+
   /** Resolves once every decode and insert started so far has settled. */
   settled(): Promise<void> {
     return this.work;

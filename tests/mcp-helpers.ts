@@ -91,6 +91,8 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_list_calls: {},
   akou_get_call: { call: "last" },
   akou_export: { call: "last" },
+  akou_dictation_list: {},
+  akou_dictation_get: { id: "d1" },
 };
 
 /**
@@ -231,6 +233,24 @@ export function sampleApi(n = 3): ApiClient {
       };
     }
     if (path.endsWith("/export")) return { call: "c1", path: "/export/c1.md" };
+    const dictation = (i: number) => ({
+      id: `d${i}`,
+      at: 1_700_000_000_000 + i,
+      state: "inserted",
+      by: "user",
+      app: "com.example.chat",
+      text: say(i),
+      raw: say(i),
+      language: "en",
+      words: [],
+      engine: "fast",
+      model: "fake",
+      ms: 12,
+    });
+    if (path === "/dictations") {
+      return { items: Array.from({ length: n }, (_, i) => dictation(i)), next_cursor: null };
+    }
+    if (path.startsWith("/dictations/")) return dictation(1);
     return {};
   };
   // A new vocabulary entry answers 201, as the real route does.

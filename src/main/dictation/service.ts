@@ -4,7 +4,12 @@
  * helper process runs and no key is taken; on, `akou-capture dictate` is started and bound.
  *
  * `POST /v1/dictations` goes through `transcribeClip`: the same engine and the same log as a
- * spoken dictation, with no helper, no key and no insert.
+ * spoken dictation, with no helper, no key and no insert. `control` is the tray's and the CLI's
+ * door to the live session (DC-G1, DC-O4): a latched session started, stopped or cancelled as if
+ * the key were tapped.
+ *
+ * Retention (DC-H2): `dictation.retainDays` is applied when the service starts, every hour, and at
+ * each new dictation, so with 0 the one before is deleted as the next one begins.
  */
 
 import { mkdirSync, rmSync } from "node:fs";
@@ -13,6 +18,7 @@ import type { DictationItem } from "../../core/dictation/events.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
+import type { RemoteFallback, RemoteHealth } from "./remote.ts";
 import {
   correctOrRaw,
   type DictationEngine,
@@ -20,10 +26,28 @@ import {
   type RebindAnswer,
   type SessionState,
 } from "./session.ts";
-import { DICTATION_DIR, DictationLog, newDictationId } from "./store.ts";
+import { DICTATION_DIR, DictationLog, expiredDictations, newDictationId } from "./store.ts";
 
 /** How long `stop` waits for the helper to exit before it is killed. */
 const STOP_MS = 2000;
+
+/** How often `dictation.retainDays` is applied while the app runs. */
+const SWEEP_MS = 60 * 60 * 1000;
+
+/** How long `control` waits for the helper to act on a session command. */
+export const CONTROL_MS = 3000;
+
+/** The session commands of the tray and the CLI (DC-G1). */
+export type ControlAction = "start" | "stop" | "cancel";
+
+/** Why a session command was refused: the code the API answers with, and a sentence. */
+export type ControlResult =
+  | { ok: true; state: DictationStatus["state"] }
+  | {
+      ok: false;
+      code: "dictation_off" | "dictation_starting" | "dictation_busy" | "not_dictating";
+      message: string;
+    };
 
 export interface DictationServiceOptions {
   /** The config folder: the log is `dictation/events.jsonl` in it. */
@@ -33,7 +57,20 @@ export interface DictationServiceOptions {
   now(): number;
   /** The decoded text after the dictation vocabulary (DC-L6); absent, inserted as decoded. */
   correct?(raw: string, language: string | null): Promise<string>;
+  /** The remote engine's standing while `dictation.engine` is `remote`, else null (DC-R3). */
+  remote?(): DictationRemoteStatus | null;
+  /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
+  retainDays?(): number;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
+}
+
+/** The remote engine as `GET /v1/dictation` shows it. */
+export interface DictationRemoteStatus {
+  url: string;
+  /** `dictation.remote.fallback` as it applies: `error` with no local model to fall back to. */
+  fallback: RemoteFallback;
+  /** Null before the first remote dictation of this run. */
+  health: RemoteHealth | null;
 }
 
 export interface DictationStatus {
@@ -43,6 +80,9 @@ export interface DictationStatus {
   engine: string | null;
   grants: { mic: Grant; accessibility: Grant } | null;
   backend: string | null;
+  /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
+  swallow_keys: boolean | null;
+  remote: DictationRemoteStatus | null;
 }
 
 interface Helper {
@@ -61,6 +101,8 @@ export class DictationService {
 
   /** Where `POST /v1/dictations` spools a clip while it is decoded; emptied at every start. */
   readonly uploadDir: string;
+  private readonly watchers = new Set<(state: DictationStatus["state"]) => void>();
+  private readonly sweeper: ReturnType<typeof setInterval>;
 
   constructor(private readonly o: DictationServiceOptions) {
     this.log = new DictationLog(join(o.configDir, DICTATION_DIR), o.now);
@@ -72,6 +114,76 @@ export class DictationService {
     if (r.truncated > 0)
       o.onLog?.("warn", `dictation log: a torn last line was cut (${r.truncated} bytes)`);
     if (r.invalidLines > 0) o.onLog?.("warn", `dictation log: ${r.invalidLines} bad lines skipped`);
+    // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
+    this.log.onAppend = (e) => {
+      if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
+    };
+    this.sweep();
+    this.sweeper = setInterval(() => this.sweep(), SWEEP_MS);
+    this.sweeper.unref?.();
+  }
+
+  /**
+   * Deletes what `dictation.retainDays` no longer keeps (DC-H2), leaving a tombstone each. Returns
+   * the ids deleted.
+   */
+  sweep(): string[] {
+    const days = this.o.retainDays?.();
+    if (days === undefined) return [];
+    try {
+      const gone = this.log.forget(expiredDictations(this.log.items(), this.o.now(), days));
+      if (gone.length > 0)
+        this.o.onLog?.("info", `dictation: ${gone.length} past retention deleted`);
+      return gone;
+    } catch (err) {
+      this.o.onLog?.("error", `dictation retention: ${(err as Error).message}`);
+      return [];
+    }
+  }
+
+  /** Called with the session's state at every change, `off` included. Returns the unsubscribe. */
+  watch(fn: (state: DictationStatus["state"]) => void): () => void {
+    this.watchers.add(fn);
+    return () => this.watchers.delete(fn);
+  }
+
+  private emit(): void {
+    const state = this.helper?.session.state ?? "off";
+    for (const fn of this.watchers) fn(state);
+  }
+
+  /**
+   * The tray's and the CLI's door (DC-G1, DC-O4): `start` a latched session as if the key were
+   * tapped, `stop` it (its audio is transcribed and inserted), or `cancel` it (nothing is). Resolves
+   * once the helper acted; a helper that did not act within `CONTROL_MS` is a refusal.
+   */
+  async control(action: ControlAction, waitMs = CONTROL_MS): Promise<ControlResult> {
+    const s = this.helper?.session;
+    if (!s)
+      return { ok: false, code: "dictation_off", message: "dictation is off (dictation.enabled)" };
+    if (!s.ready)
+      return { ok: false, code: "dictation_starting", message: "the dictation helper is starting" };
+    if (action === "start" && s.state !== "idle") {
+      return { ok: false, code: "dictation_busy", message: `a dictation is ${s.state} already` };
+    }
+    if (action !== "start" && s.state !== "listening") {
+      return { ok: false, code: "not_dictating", message: "no dictation is listening" };
+    }
+    s.command(action);
+    const done = () => (action === "start" ? s.state !== "idle" : s.state !== "listening");
+    const t0 = Date.now();
+    while (!done() && Date.now() - t0 < waitMs) await Bun.sleep(10);
+    const state = this.helper?.session.state ?? "off";
+    // The helper can drop the command (still settling an insert, say): a script must not be told
+    // it is dictating when nothing started.
+    if (!done()) {
+      return {
+        ok: false,
+        code: action === "start" ? "dictation_busy" : "not_dictating",
+        message: `the dictation helper did not ${action} within ${waitMs / 1000} s (still ${state})`,
+      };
+    }
+    return { ok: true, state };
   }
 
   /** The session over the running helper, or null with dictation off. */
@@ -87,6 +199,8 @@ export class DictationService {
       engine: this.o.engine()?.name ?? null,
       grants: s?.ready?.grants ?? null,
       backend: s?.ready?.backend ?? null,
+      swallow_keys: s?.ready?.swallow_keys ?? null,
+      remote: this.o.remote?.() ?? null,
     };
   }
 
@@ -121,6 +235,7 @@ export class DictationService {
       bindings,
       now: this.o.now,
       ...(this.o.correct ? { correct: this.o.correct } : {}),
+      onState: () => this.emit(),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -162,9 +277,11 @@ export class DictationService {
       if (this.helper === h) {
         this.helper = null;
         this.o.onLog?.("warn", `dictation helper exited (code ${proc.exitCode})`);
+        this.emit();
       }
     })();
     this.helper = h;
+    this.emit();
   }
 
   /**
@@ -181,6 +298,7 @@ export class DictationService {
     const h = this.helper;
     if (!h) return this.stopping ?? undefined;
     this.helper = null;
+    this.emit();
     const done = (async () => {
       try {
         h.proc.stdin.write(encodeCommand({ type: "stop" }));
@@ -241,10 +359,13 @@ export class DictationService {
         this.log.append({ type: "dictation.failed", id, error: (err as Error).message });
       }
     }
-    return this.log.item(id) as DictationItem;
+    const it = this.log.item(id);
+    if (!it) throw new Error("the dictation was deleted while it was decoded");
+    return it;
   }
 
   async close(): Promise<void> {
+    clearInterval(this.sweeper);
     await this.stop();
     this.log.close();
   }

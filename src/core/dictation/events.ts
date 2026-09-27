@@ -59,7 +59,12 @@ export type DictationDraft =
   | { type: "dictation.empty"; id: string }
   | { type: "dictation.inserted"; id: string; method: string; receipt_ms: number }
   | { type: "dictation.cancelled"; id: string }
-  | { type: "dictation.failed"; id: string; error: string };
+  | { type: "dictation.failed"; id: string; error: string }
+  /**
+   * The tombstone (DC-H2): the dictation was deleted, by the user or by `dictation.retainDays`.
+   * Every other event of the dictation is gone from the log; this line is all that is left.
+   */
+  | { type: "dictation.deleted"; id: string };
 
 export type DictationEvent = DictationDraft & { v: 1; seq: number; t: number };
 
@@ -71,6 +76,7 @@ export const DICTATION_TYPES: readonly DictationDraft["type"][] = [
   "dictation.inserted",
   "dictation.cancelled",
   "dictation.failed",
+  "dictation.deleted",
 ];
 
 const isStr = (v: unknown): v is string => typeof v === "string";
@@ -121,6 +127,7 @@ export function checkDictationDraft(o: Record<string, unknown>): string | null {
       return isStr(o.error) ? null : "dictation.failed";
     case "dictation.empty":
     case "dictation.cancelled":
+    case "dictation.deleted":
       return null;
     default:
       return `unknown type ${String(o.type)}`;
@@ -165,7 +172,10 @@ export interface DictationItem {
   error: string | null;
 }
 
-/** Every dictation in the log, oldest first. Events of an unknown dictation are skipped. */
+/**
+ * Every dictation in the log, oldest first. Events of an unknown dictation are skipped, and a
+ * deleted one is left out, whatever its tombstone follows.
+ */
 export function foldDictations(events: readonly DictationEvent[]): DictationItem[] {
   const items = new Map<string, DictationItem>();
   for (const e of events) {
@@ -221,6 +231,9 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
       case "dictation.failed":
         it.state = "failed";
         it.error = e.error;
+        break;
+      case "dictation.deleted":
+        items.delete(e.id);
         break;
     }
   }

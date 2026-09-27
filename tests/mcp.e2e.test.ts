@@ -57,6 +57,8 @@ const DESIGN_TOOLS = [
   "akou_list_calls",
   "akou_get_call",
   "akou_export",
+  "akou_dictation_list",
+  "akou_dictation_get",
 ];
 
 let rig: AppRig;
