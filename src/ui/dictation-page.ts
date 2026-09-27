@@ -27,6 +27,7 @@ import { mountDictionaryDialog } from "./dictation-dictionary.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
 import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
+import { remotePanel } from "./dictation-remote.ts";
 import { type DictationReview, readDictationReview, waitingTerms } from "./dictation-review.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
@@ -257,6 +258,9 @@ export class DictationSettings {
           g.hint ? h("p", { class: "hint" }, g.hint) : null,
           ...keys.map((k) => this.field(k)),
           g.title === "Privacy" ? this.deleteAll() : null,
+          keys.includes(REMOTE_URL_KEY)
+            ? remotePanel(this.t, () => this.settings["dictation.remote.fallback"])
+            : null,
           g.title === "Learning" ? this.reviewRow() : null,
         ),
       );

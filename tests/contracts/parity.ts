@@ -508,7 +508,7 @@ export const PARITY: readonly Row[] = [
     mcp: {
       none: "the remote's key and URL are the user's settings, which no tool touches (DC-G5)",
     },
-    window: { none: "the page's Test button is DC-R4's page side, not written yet" },
+    window: [ui("dictation-remote.ts", '"GET", "/dictation/remote-test"')],
   },
   {
     action: "The admin password (server mode)",
