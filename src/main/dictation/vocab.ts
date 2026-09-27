@@ -22,13 +22,29 @@ export function dictationRules(entries: readonly MergedEntry[]): VocabRule[] {
     }));
 }
 
+/**
+ * A replacement that is written against the word before it (DC-U5): one that opens with a closing
+ * mark (`,`, `;`, `)`), or with a dot not followed by a capital. So "example dot com" to `.com` is
+ * `example.com`, while `.NET` stays a word of its own ("use .NET").
+ */
+const GLUES_LEFT = /^(?:[,;:!?%)\]}]|\.(?!\p{Lu}))/u;
+
 /** A dictation's text after its vocabulary. */
 export function correctDictation(
   raw: string,
   entries: readonly MergedEntry[],
   isDictionaryWord: ((word: string) => boolean) | undefined,
 ): string {
-  return correctText(raw, dictationRules(entries), { isDictionaryWord }).text;
+  const r = correctText(raw, dictationRules(entries), { isDictionaryWord });
+  let text = "";
+  let at = 0;
+  for (const c of r.corrections) {
+    const between = raw.slice(at, c.start);
+    text +=
+      (GLUES_LEFT.test(c.term) && text + between !== "" ? between.trimEnd() : between) + c.term;
+    at = c.end;
+  }
+  return text + raw.slice(at);
 }
 
 /** A pair the user taught while dictating (DC-L4): the fix, the form heard, the dictation. */

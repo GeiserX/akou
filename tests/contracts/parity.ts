@@ -210,7 +210,7 @@ export const PARITY: readonly Row[] = [
     cli: ["vocab"],
     api: ["DELETE /vocab/:term", "DELETE /calls/:id/vocab/:vid"],
     mcp: { none: "no tool yet, and no design item names one" },
-    window: { none: "W9.2 designs it (remove in the Words dialog)" },
+    window: [ui("dictation-dictionary.ts", '"DELETE", `/vocab/#{encodeURIComponent(term)}`')],
   },
   {
     action: "Vocabulary: suggest and check",

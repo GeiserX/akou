@@ -63,6 +63,14 @@ function checkWorkspace(ws: string | undefined | null): string | undefined {
   return ws;
 }
 
+/** An entry's own `scope` key from a request: `dictation` (DC-L6), or none. */
+function checkScope(scope: string | undefined): "dictation" | undefined {
+  if (scope === undefined) return undefined;
+  if (scope !== "dictation")
+    throw new HttpError(400, "bad_field", 'scope is "dictation" or left out', { field: "scope" });
+  return scope;
+}
+
 function today(now: number): string {
   return new Date(now).toISOString().slice(0, 10);
 }
@@ -400,7 +408,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
     "/vocab",
     doc({
       id: "vocab.add",
-      doc: "Add or update a word in the user's vocabulary file. A word the user stated goes in confirmed; send `confirmed: false` for an inferred one, which does nothing until the user approves it.",
+      doc: "Add or update a word in the user's vocabulary file. A word the user stated goes in confirmed; send `confirmed: false` for an inferred one, which does nothing until the user approves it. `scope: dictation` makes it a dictation word, applied in every dictation and never in a call (DC-L6). An update replaces the entry but keeps its `source` and `added_at`.",
       body: {
         term: "string",
         "heard?": "string[]",
@@ -408,6 +416,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         "decode?": "boolean",
         "note?": "string",
         "confirmed?": "boolean",
+        "scope?": "string",
       },
       ok: 201,
     }),
@@ -419,9 +428,11 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         decode?: boolean;
         note?: string;
         confirmed?: boolean;
+        scope?: string;
       }>();
       const term = checkTermOr400(b.term);
       const workspace = checkWorkspace(b.workspace);
+      const scope = checkScope(b.scope);
       // A word the user stated goes in confirmed; an inferred one is sent with `confirmed: false`
       // (or as a call proposal) and does nothing until the user approves it.
       const confirmed = b.confirmed ?? true;
@@ -435,16 +446,23 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         added_at: today(c.app.now()),
         ...(b.decode === false ? { decode: false } : {}),
         ...(b.note ? { note: b.note } : {}),
+        ...(scope ? { entryScope: scope } : {}),
       };
       const path = targetPath(c.app, workspace);
+      let written: VocabEntry | null;
       try {
-        await editFile(path, (file) => ({ file: upsertEntry(file, entry), result: null }));
+        written = await editFile(path, (file) => {
+          // An update keeps who added the word and when; everything else is the request's.
+          const had = file.entries.find((e) => termKey(e.term) === termKey(term));
+          const next = had ? { ...entry, source: had.source, added_at: had.added_at } : entry;
+          return { file: upsertEntry(file, next), result: next };
+        });
       } catch (err) {
         if (err instanceof HttpError) throw err;
         throw new HttpError(400, "bad_entry", (err as Error).message);
       }
       c.app.vocabChanged();
-      return json(201, { ok: true, path, entry });
+      return json(201, { ok: true, path, entry: written ?? entry });
     },
   );
 
@@ -568,19 +586,24 @@ export function vocabRoutes(r: Router<ApiApp>): void {
     "/vocab/import",
     doc({
       id: "vocab.import",
-      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines.",
-      body: { text: "string", "workspace?": "string" },
+      doc: "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
+      body: { text: "string", "workspace?": "string", "scope?": "string" },
       ok: 200,
     }),
     async (c) => {
-      const b = await c.body<{ text: string; workspace?: string }>();
+      const b = await c.body<{ text: string; workspace?: string; scope?: string }>();
       const workspace = checkWorkspace(b.workspace);
+      const scope = checkScope(b.scope);
       const res = importGlossary(b.text, { source: "import:api", date: today(c.app.now()) });
       const path = targetPath(c.app, workspace);
       if (res.entries.length > 0) {
         await editFile(path, (file) => {
           let next = file ?? emptyVocab();
-          for (const e of res.entries) next = upsertEntry(next, e);
+          for (const e of res.entries) {
+            const had = next.entries.find((x) => termKey(x.term) === termKey(e.term));
+            const dictation = scope && (!had || had.entryScope === "dictation");
+            next = upsertEntry(next, dictation ? { ...e, entryScope: scope } : e);
+          }
           return { file: next, result: null };
         });
         c.app.vocabChanged();
