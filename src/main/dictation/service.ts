@@ -23,6 +23,7 @@ import type { DictationEvent, DictationItem } from "../../core/dictation/events.
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
+import { DraftBox, type DraftBoxOptions } from "./draft.ts";
 import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
 import type { RemoteFallback, RemoteHealth } from "./remote.ts";
 import {
@@ -54,6 +55,8 @@ export const LEARN_WINDOW_MS = 60_000;
 /** The events after which a dictation's learn window can open or close. */
 const SETTLED = new Set([
   "dictation.inserted",
+  "dictation.drafted",
+  "dictation.discarded",
   "dictation.cancelled",
   "dictation.empty",
   "dictation.failed",
@@ -116,6 +119,24 @@ export interface DictationServiceOptions extends TextRules {
   learns?(): boolean;
   /** How long a learn window stays open after an insert; `LEARN_WINDOW_MS` by default. */
   learnWindowMs?: number;
+  /**
+   * What the draft box needs beside the log and the session (DC-S1, DC-L1, DC-L4); absent, the
+   * box sends nothing, learns nothing and inserts with no send key.
+   */
+  draft?: Partial<
+    Pick<
+      DraftBoxOptions,
+      | "platform"
+      | "sendKey"
+      | "learnMode"
+      | "engines"
+      | "knownPairs"
+      | "commonWords"
+      | "learnEntry"
+      | "unlearnEntry"
+      | "later"
+    >
+  >;
 }
 
 /** The remote engine as `GET /v1/dictation` shows it. */
@@ -163,6 +184,8 @@ export class DictationService {
   readonly log: DictationLog;
   /** A spoken dictation's audio, beside the log (DC-H2). */
   readonly audio: DictationAudio;
+  /** The draft box's main side (DC-S1); the shell attaches the window. */
+  readonly draft: DraftBox;
   /** The open learn windows with `dictation.keepAudio` off: the timer that closes each. */
   private readonly windows = new Map<string, ReturnType<typeof setTimeout>>();
   private helper: Helper | null = null;
@@ -183,6 +206,26 @@ export class DictationService {
     this.log = new DictationLog(join(o.configDir, DICTATION_DIR), o.now);
     this.audio = new DictationAudio(join(o.configDir, DICTATION_DIR, DICTATION_AUDIO));
     this.uploadDir = join(o.configDir, DICTATION_DIR, "uploads");
+    const d = o.draft ?? {};
+    this.draft = new DraftBox({
+      log: this.log,
+      platform: d.platform ?? process.platform,
+      session: () => this.session(),
+      sendKey: d.sendKey ?? (() => "none"),
+      learnMode: d.learnMode ?? (() => "off"),
+      engines: d.engines ?? (() => []),
+      retry: async (id, engine) => {
+        const r = await this.retry(id, engine === "auto" ? {} : { engine });
+        return r.ok ? r : { ok: false, message: r.message };
+      },
+      ...(d.knownPairs ? { knownPairs: d.knownPairs } : {}),
+      ...(d.commonWords ? { commonWords: d.commonWords } : {}),
+      learnEntry: d.learnEntry ?? (async () => {}),
+      unlearnEntry: d.unlearnEntry ?? (async () => {}),
+      closeLearnWindow: (id) => this.closeLearnWindow(id),
+      ...(d.later ? { later: d.later } : {}),
+      ...(o.onLog ? { onLog: o.onLog } : {}),
+    });
     // A clip left by a crash mid-decode: akou keeps no copy of an upload.
     rmSync(this.uploadDir, { recursive: true, force: true });
     mkdirSync(this.uploadDir, { recursive: true, mode: 0o700 });
@@ -193,7 +236,9 @@ export class DictationService {
     // A new dictation is where `retainDays: 0` lets the one before go; after the append returns.
     this.log.onAppend = (e) => {
       if (e.type === "dictation.started") queueMicrotask(() => this.sweep());
-      if (SETTLED.has(e.type)) this.settledAudio(e.id, e.type === "dictation.inserted");
+      // A draft can still be fixed and learned from, like an insert.
+      if (SETTLED.has(e.type))
+        this.settledAudio(e.id, e.type === "dictation.inserted" || e.type === "dictation.drafted");
       this.tell({ kind: "event", e });
     };
     this.sweep();
@@ -451,6 +496,7 @@ export class DictationService {
       onLevel: (rms) => this.tell({ kind: "level", rms }),
       onNotice: (id, notice) => this.tell({ kind: "notice", id, notice }),
       saveAudio: (id, samples) => this.audio.write(id, samples),
+      onDraft: (id) => this.draft.open(id, { focus: false }).ok,
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));

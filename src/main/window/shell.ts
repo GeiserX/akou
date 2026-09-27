@@ -27,7 +27,10 @@
  */
 
 import { join } from "node:path";
+import type { DraftOpen, DraftRpc } from "../../ui/dictation-protocol.ts";
+import type { Chip } from "../../ui/pill-protocol.ts";
 import type { AppStatus, QuitQuestion } from "../../ui/protocol.ts";
+import type { DraftWindow } from "../dictation/draft.ts";
 import type { AkouApp, Announcement, WindowShell } from "../index.ts";
 import type { Bridge } from "./bridge.ts";
 import { hotkeyFor, hotkeyLabel } from "./hotkey.ts";
@@ -43,6 +46,7 @@ export { hotkeyFor };
 export const WINDOW_URL = "views://main/index.html";
 export const INDICATOR_URL = "views://indicator/index.html";
 export const PILL_URL = "views://pill/index.html";
+export const DRAFT_URL = "views://draft/index.html";
 
 /** Where the tray images are: beside the main process in the bundle, beside this file in a checkout. */
 export const TRAY_DIR = join(import.meta.dir, "tray");
@@ -99,6 +103,33 @@ export interface PillWindow {
 }
 
 /**
+ * The draft box's window (DC-S1): above every other window, shown taking the keyboard for a
+ * deliberate open and without it for an automatic one.
+ */
+export interface DraftNativeWindow {
+  show(): void;
+  showInactive(): void;
+  hide(): void;
+  close(): void;
+  onClose(fn: () => void): void;
+}
+
+/** What the shell pushes to the draft box's page; ElectroBun's `rpc.send`. */
+export interface DraftSend {
+  open(d: DraftOpen): void;
+  chip(c: Chip): void;
+}
+
+type DraftRequests = DraftRpc["bun"]["requests"];
+
+/** The draft box's request handlers, answered by `DraftBox` (src/main/dictation/draft.ts). */
+export type DraftHandlers = {
+  [K in keyof DraftRequests]: (
+    p: DraftRequests[K]["params"],
+  ) => Promise<DraftRequests[K]["response"]>;
+};
+
+/**
  * How the pill's window refuses the focus on each OS (DC-O1): an `NSPanel` with the
  * `NonactivatingPanel` style on macOS, `WS_EX_NOACTIVATE` on Windows. `activate: false` alone
  * governs only the first show; a click on a plain window still activates it.
@@ -148,6 +179,11 @@ export interface NativeUi {
   openPill?(o: { url: string; rpc: PillRpcHandlers; frame: Rect; style: PillStyle }): {
     window: PillWindow;
     send: PillSend;
+  };
+  /** The draft box (DC-S1): hidden until a draft opens, above every other window. */
+  openDraft?(o: { url: string; handlers: DraftHandlers; frame: Rect }): {
+    window: DraftNativeWindow;
+    send: DraftSend;
   };
   /** `image` is a file path; `template` lets macOS recolour it for the menu bar. */
   createTray(o: { title: string; image: string; template: boolean }): NativeTray;
@@ -201,6 +237,8 @@ export interface ShellDictation extends Pick<PillDictation, "follow"> {
   watch(fn: () => void): () => void;
   /** The dictation key the helper is bound to (`RightCommand`), empty before it starts. */
   hotkey(): string;
+  /** The draft box's main side, or null with no dictation service. */
+  draft?(): { handlers: DraftHandlers; attach(w: DraftWindow | null): void } | null;
 }
 
 /** The app as the shell sees it. */
@@ -237,6 +275,7 @@ export function appForShell(app: AkouApp): ShellApp {
       watch: (fn) => app.dictation()?.watch(fn) ?? (() => {}),
       follow: (fn) => app.dictation()?.follow(fn) ?? (() => {}),
       hotkey: () => app.dictation()?.hotkey() ?? "",
+      draft: () => app.dictation()?.draft ?? null,
     },
   };
 }
@@ -274,6 +313,8 @@ const INDICATOR_MARGIN = 16;
  * error with three buttons) and the learn chip under it, at the page's 420 px measure.
  */
 export const PILL_SIZE = { width: 440, height: 132 } as const;
+/** The draft box's size: the field, the chip under it, the engine line and the key hints. */
+export const DRAFT_SIZE = { width: 560, height: 320 } as const;
 /** Its distance from the work area's edge on the side `dictation.pill` names. */
 const PILL_MARGIN = 24;
 
@@ -346,6 +387,20 @@ export function placePill(
           ? { x: primary.x + primary.width - width - PILL_MARGIN, y: cy }
           : { x: cx, y: primary.y + primary.height - height - PILL_MARGIN };
   return fitInto({ ...at, width, height }, areas, PILL_SIZE);
+}
+
+/** Where the draft box opens: centred on the primary work area. */
+export function placeDraft(areas: readonly Rect[]): Rect {
+  const primary = areas.find((a) => a.width > 0 && a.height > 0);
+  const { width, height } = DRAFT_SIZE;
+  if (!primary) return { x: 0, y: 0, width, height };
+  const want = {
+    x: primary.x + Math.round((primary.width - width) / 2),
+    y: primary.y + Math.round((primary.height - height) / 2),
+    width,
+    height,
+  };
+  return fitInto(want, areas, DRAFT_SIZE);
 }
 
 /** `want` on the display it overlaps most (the primary when none), whole and no bigger than it. */
@@ -512,6 +567,11 @@ export class Shell implements WindowShell {
     frame: Rect;
     moved: boolean;
   } | null = null;
+  /** The draft box while dictation runs (DC-S1), hidden between drafts. */
+  private draft: {
+    window: DraftNativeWindow;
+    detach(): void;
+  } | null = null;
   private unwatch: () => void = () => {};
   private live = false;
   /** Only the window's focus and blur events set this: a shown window may not have the focus. */
@@ -558,6 +618,7 @@ export class Shell implements WindowShell {
     const undictation =
       this.app.dictation?.watch(() => {
         this.syncPill();
+        this.syncDraft();
         void this.refresh();
       }) ?? (() => {});
     const unhealth = this.bridge.app.watch((call, e) => {
@@ -574,6 +635,7 @@ export class Shell implements WindowShell {
       undictation();
     };
     this.syncPill();
+    this.syncDraft();
     await this.refresh();
   }
 
@@ -960,6 +1022,57 @@ export class Shell implements WindowShell {
     p.window.close();
   }
 
+  /**
+   * The draft box exists while dictation runs, hidden between drafts, so its page has booted
+   * before the first draft is sent to it; `DraftBox` decides when it shows.
+   */
+  private syncDraft(): void {
+    const d = this.app.dictation;
+    const box = d?.draft?.() ?? null;
+    const want = !!box && !!this.ui.openDraft && !this.quitting && d?.state() !== "off";
+    if (this.draft && !want) this.closeDraft();
+    if (!want || this.draft || !box) return;
+    const open = this.ui.openDraft;
+    if (!open) return;
+    try {
+      const w = open.call(this.ui, {
+        url: DRAFT_URL,
+        handlers: box.handlers,
+        frame: placeDraft(this.ui.workAreas()),
+      });
+      const win = w.window;
+      box.attach({
+        open: (o) => {
+          w.send.open(o);
+          if (o.focus) win.show();
+          else win.showInactive();
+        },
+        chip: (c) => w.send.chip(c),
+        showInactive: () => win.showInactive(),
+        hide: () => win.hide(),
+      });
+      const entry = { window: win, detach: () => box.attach(null) };
+      this.draft = entry;
+      win.onClose(() => {
+        if (this.draft === entry) {
+          this.draft = null;
+          entry.detach();
+        }
+      });
+    } catch (err) {
+      // A draft that cannot open fails its dictation as before; nothing else depends on it.
+      this.o.onLog?.("warn", `the draft box did not open: ${(err as Error).message}`);
+    }
+  }
+
+  private closeDraft(): void {
+    const d = this.draft;
+    if (!d) return;
+    this.draft = null;
+    d.detach();
+    d.window.close();
+  }
+
   private saveFrame(): void {
     const store = this.o.state;
     const frame = this.frame;
@@ -976,6 +1089,7 @@ export class Shell implements WindowShell {
     if (this.window) this.saveFrame();
     this.closeIndicator();
     this.closePill();
+    this.closeDraft();
     this.unwatch();
     this.rpc?.close();
     this.window?.close();
