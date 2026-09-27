@@ -167,7 +167,7 @@ import { mergeVocab, readVocabFile, toFoldEntries, vocabPaths } from "./vocab/fi
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault } from "./window/hotkey.ts";
-import { PageServer, type SettingsPane } from "./window/page-server.ts";
+import { MAC_PANES, PageServer, type SettingsPane } from "./window/page-server.ts";
 
 export { APP_VERSION, RUNTIME_FILE };
 export const APP_LOCK = "akou.lock";
@@ -1350,7 +1350,7 @@ export class AkouApp implements ApiApp {
     const platform = this.o.platform ?? process.platform;
     const url =
       platform === "darwin"
-        ? `x-apple.systempreferences:com.apple.preference.security?${pane === "microphone" ? "Privacy_Microphone" : "Privacy_AudioCapture"}`
+        ? `x-apple.systempreferences:com.apple.preference.security?${MAC_PANES[pane]}`
         : platform === "win32" && pane === "microphone"
           ? "ms-settings:privacy-microphone"
           : null;
