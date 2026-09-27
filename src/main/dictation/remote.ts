@@ -17,6 +17,11 @@
  *   address that was checked, so a name that later resolves elsewhere is refused, never followed.
  * - **DC-R3, the timeout.** `dictation.remote.timeoutSeconds` plus 0.25 s per second of audio. There
  *   is no retry and no other host: a failure is thrown for the caller's fallback.
+ * - **DC-R3, the fallback.** `RemoteEngine` is the `remote` engine a dictation session calls. When
+ *   the remote gives no transcript, `dictation.remote.fallback` decides: `local` decodes the same
+ *   buffer on the local engine and says so (`fallback_from: remote`, `remote down, used fast`);
+ *   `error`, or no local engine at all, throws for the error state. A remote down for three
+ *   dictations in a row is probed every `REMOTE_PROBE_MS` until it answers again.
  * - **DC-R4, the test.** `GET /v1/server` and `GET /v1/keys/me` on the remote: its mode, the engine
  *   a dictation runs, its accelerator, whether it will bias, the round trip, and a warning when it
  *   has no interactive lane.
@@ -29,7 +34,7 @@ import { type Cidr, inCidr, parseCidr } from "../api/net.ts";
 import { MAX_KEYWORDS } from "../api/routes/jobs.ts";
 import { ASR_RATE } from "../asr/engine.ts";
 import { wavBytes } from "../asr/qwen.ts";
-import { parseRemote } from "../server/remotes.ts";
+import { parseRemote, REMOTE_PROBE_MS } from "../server/remotes.ts";
 import { type Resolver, systemResolver } from "../server/webhooks.ts";
 
 /** Where cleartext dictation audio may go: loopback, RFC 1918, unique-local and shared. */
@@ -386,5 +391,211 @@ export async function testRemote(o: RemoteTestOptions): Promise<RemoteTest> {
   } catch (err) {
     if (err instanceof RemoteDictationError) return failed(err);
     return failed(new RemoteDictationError("unreachable", (err as Error).message));
+  }
+}
+
+// ---------------------------------------------------------------------------
+// DC-R3: the remote engine and its explicit fallback
+
+/** `dictation.remote.fallback` as it applies: `local` needs a local engine, else it is `error`. */
+export type RemoteFallback = "local" | "error";
+
+/** The fallback that applies: `local` only when it is set and a local engine is there to run. */
+export function remoteFallback(setting: string, hasLocal: boolean): RemoteFallback {
+  return setting === "local" && hasLocal ? "local" : "error";
+}
+
+/** What a local engine answers for a dictation (the live Worker's `decoded`, DC-E1). */
+export interface LocalDecoded {
+  text: string;
+  words: { w: string; s: number; e: number; c: number }[];
+  language: string | null;
+  /** The recognizer's registry name. */
+  model: string;
+  ms: number;
+}
+
+/** The engine a fallback decodes on: `fast` or `best` on this machine. */
+export interface LocalEngine {
+  readonly name: string;
+  decode(samples: Float32Array, o: { language?: string }): Promise<LocalDecoded>;
+}
+
+/** A remote dictation's result, or the local engine's after a fallback, with what the item records. */
+export interface RemoteDecoded extends LocalDecoded {
+  /** The engine that decoded it: `remote`, or the local engine's name after a fallback. */
+  engine: string;
+  /** `remote` when the remote failed and the local engine decoded it. */
+  fallback_from?: "remote";
+  /** The remote's round trip, request to answer, in ms; absent after a fallback. */
+  round_trip_ms?: number;
+  /** What the pill says beside the text: `remote down, used fast`; null when nothing went wrong. */
+  notice: string | null;
+  /** Why the remote gave no transcript, when it fell back; never names the key. */
+  remote_error?: string;
+}
+
+/** The `dictation.remote.*` settings a dictation reads, read at each press. */
+export interface RemoteSettings {
+  url: string;
+  key: string;
+  /** `dictation.remote.fallback`: `local` or `error`. */
+  fallback: string;
+  timeoutSeconds?: number;
+  language?: string;
+  model?: string;
+  /** The glossary's terms while `dictation.glossary` is on; null while it is off. */
+  glossary?: readonly string[] | null;
+}
+
+export interface RemoteEngineOptions {
+  settings(): RemoteSettings;
+  /** The local engine a fallback runs on, or null when no local model is installed. */
+  local(): LocalEngine | null;
+  onLog?(level: "info" | "warn", msg: string): void;
+  /** Test seams: the network, DNS and the down-probe's interval. */
+  fetch?: typeof fetch;
+  resolve?: Resolver;
+  probeMs?: number;
+}
+
+/** What the page shows about the remote (DC-R3): down after three dictations in a row. */
+export interface RemoteHealth {
+  down: boolean;
+  /** Dictations in a row the remote was down for. */
+  failures: number;
+  /** The last failure's reason, never the key; null once the remote answers. */
+  error: string | null;
+  /** Whether the down-probe is running. */
+  probing: boolean;
+}
+
+/** Dictations in a row that fail before the remote counts as down and is probed. */
+export const REMOTE_DOWN_AFTER = 3;
+
+/** A failure that says the remote is down, not misconfigured: no answer, or a 5xx. */
+function isDown(e: RemoteDictationError): boolean {
+  return (
+    e.kind === "unreachable" ||
+    e.kind === "timeout" ||
+    (e.kind === "status" && (e.status ?? 0) >= 500)
+  );
+}
+
+/**
+ * The `remote` engine (DC-R1, DC-R3): one request to the remote per dictation; when it gives no
+ * transcript, the fallback is explicit. The local engine decodes the same buffer on this machine,
+ * so no request ever leaves for another host.
+ */
+export class RemoteEngine {
+  readonly name = "remote";
+  private failures = 0;
+  private error: string | null = null;
+  private probe: ReturnType<typeof setInterval> | null = null;
+  private probing = false;
+
+  constructor(private readonly o: RemoteEngineOptions) {}
+
+  async decode(samples: Float32Array, d: { language?: string } = {}): Promise<RemoteDecoded> {
+    const s = this.o.settings();
+    const language = d.language ?? s.language;
+    try {
+      const r = await transcribeRemote({
+        url: s.url,
+        key: s.key,
+        samples,
+        language,
+        model: s.model,
+        glossary: s.glossary,
+        timeoutSeconds: s.timeoutSeconds,
+        fetch: this.o.fetch,
+        resolve: this.o.resolve,
+      });
+      this.answered();
+      return {
+        text: r.text,
+        words: r.words,
+        language: r.language,
+        model: s.model?.trim() || "remote",
+        ms: r.ms,
+        engine: "remote",
+        round_trip_ms: r.ms,
+        notice: null,
+      };
+    } catch (err) {
+      if (!(err instanceof RemoteDictationError)) throw err;
+      this.failed(err);
+      const local = this.o.local();
+      if (remoteFallback(s.fallback, local !== null) === "error" || local === null) throw err;
+      this.o.onLog?.("warn", `dictation: the remote failed (${err.message}); using ${local.name}`);
+      const l = await local.decode(samples, { language });
+      return {
+        ...l,
+        engine: local.name,
+        fallback_from: "remote",
+        notice: `remote down, used ${local.name}`,
+        remote_error: err.message,
+      };
+    }
+  }
+
+  health(): RemoteHealth {
+    return {
+      down: this.failures >= REMOTE_DOWN_AFTER,
+      failures: this.failures,
+      error: this.error,
+      probing: this.probe !== null,
+    };
+  }
+
+  /** Stops the down-probe. */
+  close(): void {
+    if (this.probe) clearInterval(this.probe);
+    this.probe = null;
+  }
+
+  private answered(): void {
+    if (this.failures >= REMOTE_DOWN_AFTER) this.o.onLog?.("info", "dictation: the remote is back");
+    this.failures = 0;
+    this.error = null;
+    this.close();
+  }
+
+  private failed(e: RemoteDictationError): void {
+    this.error = e.message;
+    // A refused key or URL is a setting to fix, not a remote that is down.
+    if (!isDown(e)) {
+      this.failures = 0;
+      this.close();
+      return;
+    }
+    this.failures++;
+    if (this.failures >= REMOTE_DOWN_AFTER && this.probe === null) {
+      this.o.onLog?.("warn", `dictation: the remote is down (${e.message}); probing it`);
+      this.probe = setInterval(() => void this.probeOnce(), this.o.probeMs ?? REMOTE_PROBE_MS);
+      this.probe.unref?.();
+    }
+  }
+
+  /** One down-probe: `GET /v1/server` with no key, as the Test's first request. */
+  private async probeOnce(): Promise<void> {
+    if (this.probing) return;
+    this.probing = true;
+    try {
+      const s = this.o.settings();
+      const target = await vetRemote(s.url, this.o.resolve);
+      const { url, host } = aimed(target, "/server");
+      const res = await (this.o.fetch ?? fetch)(url, {
+        headers: host,
+        redirect: "manual",
+        signal: AbortSignal.timeout((s.timeoutSeconds ?? REMOTE_TIMEOUT_SECONDS) * 1000),
+      });
+      const body = (await res.json().catch(() => null)) as { name?: unknown } | null;
+      if (res.ok && body?.name === "akou" && this.probe !== null) this.answered();
+    } catch {
+      // Still down; the next probe tries again.
+    } finally {
+      this.probing = false;
+    }
   }
 }

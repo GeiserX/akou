@@ -8,9 +8,14 @@
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import {
+  type LocalEngine,
+  REMOTE_DOWN_AFTER,
   REMOTE_TIMEOUT_SECONDS,
   RemoteDictationError,
+  RemoteEngine,
+  type RemoteSettings,
   remoteBase,
+  remoteFallback,
   remoteKeywords,
   remoteTimeoutMs,
   testRemote,
@@ -420,5 +425,212 @@ describe("DC-R4: a remote without the interactive lane", () => {
     expect(t.ok).toBe(false);
     expect(t.error).toContain("https only");
     expect(net.sent).toEqual([]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DC-R3: the fallback
+
+/** A local engine that answers "hello world" and counts its decodes. */
+function localEngine(name = "fast"): LocalEngine & { calls: number } {
+  const e = {
+    name,
+    calls: 0,
+    async decode() {
+      e.calls++;
+      return {
+        text: "hello world",
+        words: [{ w: "hello", s: 0.4, e: 0.7, c: 0.9 }],
+        language: "en",
+        model: "parakeet-tdt-0.6b-v3",
+        ms: 5,
+      };
+    },
+  };
+  return e;
+}
+
+function engine(
+  s: Partial<RemoteSettings> & { url: string },
+  o: { local?: LocalEngine | null; fetch?: typeof fetch; probeMs?: number; log?: string[] } = {},
+): RemoteEngine {
+  return new RemoteEngine({
+    settings: () => ({ key: "secret-key-3", fallback: "local", ...s }),
+    local: () => (o.local === undefined ? localEngine() : o.local),
+    fetch: o.fetch,
+    probeMs: o.probeMs,
+    onLog: (level, msg) => o.log?.push(`${level} ${msg}`),
+  });
+}
+
+async function stoppedRemote(): Promise<string> {
+  const dead = await fakeRemote();
+  dead.stop();
+  return `http://127.0.0.1:${dead.port}`;
+}
+
+describe("DC-R3: the fallback is explicit", () => {
+  test("a remote that answers is used: engine remote, the round trip, no fallback, no local decode", async () => {
+    const fake = await fakeRemote();
+    try {
+      const local = localEngine();
+      const r = await engine({ url: `http://127.0.0.1:${fake.port}` }, { local }).decode(HELLO);
+      expect(r).toMatchObject({ text: "hello from the fake", engine: "remote", notice: null });
+      expect(r.fallback_from).toBeUndefined();
+      expect(r.round_trip_ms).toBeGreaterThanOrEqual(0);
+      expect(r.words).toEqual([]);
+      expect(local.calls).toBe(0);
+    } finally {
+      fake.stop();
+    }
+  });
+
+  test("with the remote stopped and fallback local, the local engine decodes it and says so; only the remote was contacted", async () => {
+    const url = await stoppedRemote();
+    const net = network();
+    const log: string[] = [];
+    const r = await engine({ url }, { fetch: net.fetch, log }).decode(HELLO);
+    expect(r).toMatchObject({
+      text: "hello world",
+      engine: "fast",
+      fallback_from: "remote",
+      notice: "remote down, used fast",
+    });
+    expect(r.remote_error).toContain("could not be reached");
+    // The local result keeps its word times: only a remote result has none.
+    expect(r.words).toHaveLength(1);
+    expect(net.sent.map((x) => new URL(x.url).host)).toEqual([new URL(url).host]);
+    expect(log.join("\n")).not.toContain("secret-key-3");
+  });
+
+  test("an answer other than 2xx falls back too, with the remote's reason", async () => {
+    const full = await fakeRemote({ status: 429 });
+    try {
+      const r = await engine({ url: `http://127.0.0.1:${full.port}` }).decode(HELLO);
+      expect(r).toMatchObject({ engine: "fast", fallback_from: "remote" });
+      expect(r.remote_error).toContain("429");
+    } finally {
+      full.stop();
+    }
+  });
+
+  test("with fallback error nothing is decoded locally, and the error is thrown for the error state", async () => {
+    const url = await stoppedRemote();
+    const local = localEngine();
+    const e = await refused(engine({ url, fallback: "error" }, { local }).decode(HELLO));
+    expect(e.kind).toBe("unreachable");
+    expect(local.calls).toBe(0);
+  });
+
+  test("with no local model, fallback local resolves to error", async () => {
+    expect(remoteFallback("local", true)).toBe("local");
+    expect(remoteFallback("local", false)).toBe("error");
+    expect(remoteFallback("error", true)).toBe("error");
+    const url = await stoppedRemote();
+    const e = await refused(engine({ url }, { local: null }).decode(HELLO));
+    expect(e.kind).toBe("unreachable");
+  });
+
+  test("a slow answer to a long clip is used, not fallen back from; the same wait on a short clip falls back", async () => {
+    const slow = await fakeRemote({ delayMs: 400 });
+    try {
+      const url = `http://127.0.0.1:${slow.port}`;
+      // The 600 s clip answered after 100 s, scaled: 0.1 s + 0.25 s x 4 s = 1.1 s, answered at 0.4 s.
+      const long = await engine({ url, timeoutSeconds: 0.1 }).decode(new Float32Array(4 * 16000));
+      expect(long).toMatchObject({ text: "hello from the fake", engine: "remote" });
+      const short = await engine({ url, timeoutSeconds: 0.1 }).decode(new Float32Array(8000));
+      expect(short).toMatchObject({ engine: "fast", fallback_from: "remote" });
+      expect(short.remote_error).toContain("no answer within 225 ms");
+    } finally {
+      slow.stop();
+    }
+  });
+
+  test("an http URL that now resolves to a public address falls back locally, and the audio goes nowhere", async () => {
+    const net = network();
+    const dns = resolver({ "box.example": ["203.0.113.5"] });
+    const r = await new RemoteEngine({
+      settings: () => ({ url: "http://box.example:8476", key: "k", fallback: "local" }),
+      local: () => localEngine(),
+      fetch: net.fetch,
+      resolve: dns,
+    }).decode(HELLO);
+    expect(r).toMatchObject({ engine: "fast", fallback_from: "remote" });
+    expect(r.remote_error).toContain("203.0.113.5");
+    expect(net.sent).toEqual([]);
+  });
+});
+
+describe("DC-R3: a remote down three dictations in a row is probed", () => {
+  /** A remote that answers 503 to everything while `down` is set, and records every request. */
+  function flaky() {
+    const state = { down: true, requests: [] as string[] };
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (req) => {
+        const path = new URL(req.url).pathname;
+        state.requests.push(`${req.method} ${path}`);
+        if (req.method === "POST") await req.formData();
+        if (state.down) return Response.json({ error: "down" }, { status: 503 });
+        if (path === "/v1/server") return Response.json({ name: "akou" });
+        return Response.json({ language: "en", text: "hello from the fake", words: [] });
+      },
+    });
+    return { state, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
+  }
+
+  test("three failures in a row mark it down and start the probe; the probe's answer brings it back", async () => {
+    const f = flaky();
+    const log: string[] = [];
+    const e = engine({ url: f.url }, { probeMs: 20, log });
+    try {
+      for (let i = 1; i < REMOTE_DOWN_AFTER; i++) await e.decode(HELLO);
+      expect(e.health()).toMatchObject({ down: false, failures: 2, probing: false });
+      await e.decode(HELLO);
+      expect(e.health()).toMatchObject({ down: true, failures: 3, probing: true });
+      expect(e.health().error).toContain("503");
+      // The probe asks GET /v1/server with no key while the remote is down.
+      await Bun.sleep(80);
+      expect(f.state.requests).toContain("GET /v1/server");
+      expect(e.health().down).toBe(true);
+      f.state.down = false;
+      for (let i = 0; i < 50 && e.health().down; i++) await Bun.sleep(10);
+      expect(e.health()).toEqual({ down: false, failures: 0, error: null, probing: false });
+      expect(log.some((l) => l.includes("the remote is back"))).toBe(true);
+    } finally {
+      e.close();
+      f.stop();
+    }
+  });
+
+  test("a refused key is a setting to fix, not a remote that is down: it never starts the probe", async () => {
+    const fake = await fakeRemote({ status: 401 });
+    const e = engine({ url: `http://127.0.0.1:${fake.port}` }, { probeMs: 20 });
+    try {
+      for (let i = 0; i < REMOTE_DOWN_AFTER + 1; i++) await e.decode(HELLO);
+      expect(e.health()).toMatchObject({ down: false, failures: 0, probing: false });
+      expect(e.health().error).toContain("the key was refused");
+    } finally {
+      e.close();
+      fake.stop();
+    }
+  });
+
+  test("a dictation the remote answers resets the count", async () => {
+    const f = flaky();
+    const e = engine({ url: f.url }, { probeMs: 60_000 });
+    try {
+      await e.decode(HELLO);
+      await e.decode(HELLO);
+      f.state.down = false;
+      expect((await e.decode(HELLO)).engine).toBe("remote");
+      f.state.down = true;
+      await e.decode(HELLO);
+      expect(e.health()).toMatchObject({ down: false, failures: 1 });
+    } finally {
+      e.close();
+      f.stop();
+    }
   });
 });
