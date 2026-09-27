@@ -4,14 +4,15 @@
  * of dictation requests served in the last hour, and nothing of the app's groups: no key, no
  * engine picker, and never the remote's address. Over plain http from another host the page says
  * it has no microphone instead of offering to record. The dictation keys and the count come from
- * fixtures (`rig.ts`), and once from the server's own registry and `GET /v1/server`.
+ * fixtures (`rig.ts`), and twice from the server's own registry and `GET /v1/server`: once as
+ * it starts, once after a real interactive transcription, whose key the Keys page then shows used.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { BrowserContext, Page } from "playwright-core";
 import { NO_MIC_NOTICE } from "../../src/ui/dictation-page.ts";
 import { type AppRig, appRig } from "../api-helpers.ts";
-import { SERVER } from "../server-helpers.ts";
+import { clip, newKey, SERVER } from "../server-helpers.ts";
 import {
   DICTATION_SCHEMA,
   DICTATION_SERVER_SCHEMA,
@@ -148,6 +149,48 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
         5000,
         "the value saved",
       );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "an interactive request raises the count, and the dictating client is a key with its last use",
+    async () => {
+      const set = await rig.api("PATCH", "/config", { "server.dictation_slots": 1 });
+      expect(set.status).toBe(200);
+      const k = await newKey(rig, "dictating-client");
+      const { page } = await dictationPage(undefined, { fixture: false });
+      const served = async () =>
+        Number((await page.textContent("#dictation-served"))?.split(": ").at(-1));
+      const before = await served();
+      const row = "#keys-table tr[data-name='dictating-client'] td:nth-child(6)";
+      await page.click("#server-nav [data-page='keys']");
+      await page.waitForSelector(row);
+      // Positive control: no request came from it yet.
+      expect(await page.textContent(row)).toBe("never");
+
+      // A dictation as a client sends it: the OpenAI endpoint, marked interactive.
+      const form = new FormData();
+      form.append("file", new Blob([new Uint8Array(clip(["hello", "world"], 2))]), "d.wav");
+      form.append("interactive", "true");
+      const res = await fetch(`http://127.0.0.1:${rig.port}/v1/audio/transcriptions`, {
+        method: "POST",
+        headers: { authorization: `Bearer ${k.key}` },
+        body: form,
+      });
+      expect(res.status).toBe(200);
+      expect(((await res.json()) as { text: string }).text).toContain("hello world");
+
+      await page.click("#server-nav [data-page='dictation']");
+      await page.waitForFunction(
+        (n) => document.getElementById("dictation-served")?.textContent?.endsWith(`: ${n}`),
+        before + 1,
+      );
+      await page.click("#server-nav [data-page='keys']");
+      await page.waitForFunction((sel) => {
+        const t = document.querySelector(sel)?.textContent;
+        return !!t && t !== "never";
+      }, row);
     },
     UI_TIMEOUT,
   );

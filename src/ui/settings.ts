@@ -18,7 +18,7 @@
  */
 
 import { hotkeyWarning } from "../main/window/hotkey.ts";
-import { appsEditor } from "./dictation-apps.ts";
+import { appsEditor, type NextApp } from "./dictation-apps.ts";
 import { onDictationPage } from "./dictation-page.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
@@ -195,13 +195,15 @@ function hotkeyHint(
 /**
  * One setting as a row: its label, an input of its type, its description and any problem the file
  * has with it. A file-only key is shown disabled; a secret is never shown back. `shown` is what
- * the input holds now, for `changedSettings` to tell an edit from no edit.
+ * the input holds now, for `changedSettings` to tell an edit from no edit. `nextApp` gives an
+ * `apps` editor its "Use the app I dictate into next" button.
  */
 export function settingField(
   key: string,
   spec: SchemaEntry,
   value: unknown,
   issue?: string,
+  o: { nextApp?: NextApp } = {},
 ): {
   row: HTMLElement;
   input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
@@ -213,7 +215,7 @@ export function settingField(
   let shown: string;
   let editor: HTMLElement | null = null;
   if (spec.type === "apps") {
-    const e = appsEditor(id, value, fileOnly);
+    const e = appsEditor(id, value, fileOnly, o.nextApp);
     ({ input, shown } = e);
     editor = e.root;
   } else if (spec.type === "boolean") {

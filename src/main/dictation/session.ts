@@ -12,6 +12,20 @@
  * A session that will not be inserted (empty, failed, no model) is `settled` back to the helper at
  * once, so it stops holding Escape and Enter then rather than 8 s later (DC-A4).
  *
+ * The keys during a session (DC-A4, DC-S3): the helper swallows Escape, Enter and Shift+Enter from
+ * the press until the insert settles and reports each as `key`, and this decides what they do to
+ * the press. While listening, Enter asks for the text and then the send key (DC-S2) and Shift+Enter
+ * for the draft box, taking the keyboard; the helper ends the session on either (`key`), and on
+ * Escape (`cancel`). While the last dictation is still transcribing, Enter still means send after
+ * the insert, Shift+Enter the draft box, and Escape keeps its text in history as `cancelled` and
+ * inserts nothing. Once the text went to the helper it is too late for either. The dictation key
+ * pressed while transcribing starts nothing (the helper refuses it) and flashes the pill.
+ *
+ * How the text goes in (DC-S2): `dictation.insert` picks paste or the clipboard only (`type`
+ * pastes until DC-N7); the send key goes with the insert, and the helper presses it only after the target read the
+ * clipboard, never on a timer. Nothing is sent after a clipboard-only insert, since nothing was
+ * pasted.
+ *
  * The focus guard (DC-N9): when the helper refuses an insert because the keyboard moved
  * (`focus-changed`) or the field cannot take it (`not-editable`, `field-unknown`), the text goes to
  * the draft box (`onDraft`) and the dictation is `drafted`, never lost. The draft box's own insert
@@ -24,17 +38,34 @@
  * decoded, so no engine can invent a sentence from room noise; and an answer that is the engine's
  * context echoed back is decoded again with no context. After the vocabulary, filler words leave
  * the inserted text (DC-S7), and spoken marks that stand alone become punctuation when
- * `dictation.spokenPunctuation` is on (DC-S6); the log keeps what the engine heard.
+ * `dictation.spokenPunctuation` is on (DC-S6); the log keeps what the engine heard. With
+ * `dictation.spokenSend` on, a spoken dictation that ends in "send it" leaves those words out and
+ * presses the send key as Enter would (DC-S5).
+ *
+ * A session ends by itself too (DC-A3): any session at `dictation.maxMinutes` of audio, after a
+ * pill line one minute before, and a latched one (tapped on, not held) after
+ * `dictation.silenceStopSeconds` in which the VAD heard no speech. The app asks the helper for
+ * `session.stop`, and the dictation is logged as ended by `max` or `silence`; its audio is
+ * transcribed like any other. A session is latched when the tray or the CLI started it, when
+ * `dictation.activation` is `toggle`, or when the helper says so (`latched`).
  */
 
 import { isEcho } from "../../core/dictation/echo.ts";
 import type { DictationDraft, Target } from "../../core/dictation/events.ts";
 import { removeFillers } from "../../core/dictation/fillers.ts";
 import { type PunctuationLists, spokenPunctuation } from "../../core/dictation/punctuation.ts";
+import { spokenSend } from "../../core/dictation/send.ts";
 import type { Decoded } from "../asr/live-worker.ts";
-import type { Packet } from "../capture/protocol.ts";
+import { CAPTURE_RATE, type Packet } from "../capture/protocol.ts";
 import { forcesLanguage } from "./engines.ts";
-import type { AppToHelper, Bindings, EndReason, HelperToApp, SendKey } from "./protocol.ts";
+import type {
+  AppToHelper,
+  Bindings,
+  EndReason,
+  HelperToApp,
+  InsertMethod,
+  SendKey,
+} from "./protocol.ts";
 import { type DictationLog, newDictationId } from "./store.ts";
 
 /**
@@ -113,6 +144,39 @@ export type RebindAnswer = { ok: true } | { ok: false; reason: string };
 
 export type SessionState = "starting" | "idle" | "listening" | "transcribing" | "inserting";
 
+/**
+ * How a spoken dictation's text goes in (DC-S2): `dictation.insert`, `dictation.sendKey`,
+ * `dictation.sendAlways` and `dictation.restoreClipboard`.
+ */
+export interface InsertPolicy {
+  method: InsertMethod;
+  sendKey: SendKey;
+  /** Press the send key after every direct insert, not only after Enter. */
+  sendAlways: boolean;
+  restore: boolean;
+}
+
+/** With no settings: paste, restore the clipboard, and never a send key. */
+export const DEFAULT_INSERT: InsertPolicy = {
+  method: "paste",
+  sendKey: "none",
+  sendAlways: false,
+  restore: true,
+};
+
+/**
+ * What the keys during a session asked of a press (DC-A4, DC-S3): the text inserted, inserted and
+ * then sent, opened in the draft box, or dropped.
+ */
+export type Asked = "insert" | "send" | "draft" | "cancel";
+
+/** The key the helper reports during a session, and what it asks for. */
+const KEY_ASKS: Readonly<Record<string, Asked>> = {
+  Enter: "send",
+  "Shift+Enter": "draft",
+  Escape: "cancel",
+};
+
 export interface SessionOptions extends TextRules {
   log: DictationLog;
   /** The engine now, or null when none is loaded (the models are missing). */
@@ -133,11 +197,45 @@ export interface SessionOptions extends TextRules {
    */
   saveAudio?(id: string, samples: Float32Array): void;
   /**
-   * The helper refused a dictation's insert for the focus guard (DC-N9): opens the draft box on it
-   * without taking the keyboard, and answers whether it did. False: the dictation fails as before.
+   * Opens the draft box on a dictation and answers whether it did: without the keyboard when the
+   * helper refused its insert for the focus guard (DC-N9), taking it (`focus`) for Shift+Enter
+   * (DC-A4). False: the dictation fails.
    */
-  onDraft?(id: string, reason: string): boolean;
+  onDraft?(id: string, reason: string, focus: boolean): boolean;
+  /** How the text goes in (DC-S2); `DEFAULT_INSERT` when absent. */
+  insertPolicy?(): InsertPolicy;
+  /** The dictation key was pressed while a dictation is still transcribing: refused (DC-A4). */
+  onBusy?(): void;
+  /**
+   * `dictation.silenceStopSeconds` and `dictation.maxMinutes` as they are now (DC-A3); absent, a
+   * session ends only when the helper ends it.
+   */
+  autoStop?(): AutoStop;
+  /** A line for the pill while listening (`1 minute left`), never logged (DC-A3). */
+  onWarning?(note: string): void;
+  /** `dictation.spokenSend`: a dictation ending in "send it" presses the send key (DC-S5). */
+  spokenSend?(): boolean;
 }
+
+/** When a session ends by itself (DC-A3). */
+export interface AutoStop {
+  /** A latched session ends after this many seconds without speech; 0 never. */
+  silenceSeconds: number;
+  /** Any session ends at this length. */
+  maxMinutes: number;
+}
+
+/** The pill's line one minute before `dictation.maxMinutes` (DC-A3). */
+export const MAX_WARNING = "1 minute left";
+
+/** The VAD judges a latched session's audio in windows of this many samples: one second. */
+export const SILENCE_WINDOW = CAPTURE_RATE;
+
+/**
+ * How long after the tray's or the CLI's `session.start` a `session.started` is taken as its
+ * answer, so latched: `CONTROL_MS` of the service. A start the helper dropped then marks nothing.
+ */
+const DOOR_MS = 3000;
 
 /** The helper's refusals that send the text to the draft box rather than failing it (DC-N9). */
 export const DRAFT_REASONS: ReadonlySet<string> = new Set([
@@ -167,6 +265,22 @@ interface Listening {
   hold: { engine: DictationEngine; request: EngineHold } | null;
   /** Set by `session.ended`: the reason, and the timer that waits for the pipe to drain. */
   end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
+  /** What the keys during the session, or while it transcribes, asked for (DC-A4). */
+  asked: Asked;
+  /** Tapped on rather than held: only such a session ends after silence (DC-A3). */
+  latched: boolean;
+  /** Why the app asked the helper to stop it (DC-A3): its `tap` is logged as this. */
+  stopping: "silence" | "max" | null;
+  /** The pill was told one minute is left. */
+  warned: boolean;
+  /** The audio not judged by the VAD yet, less than a window of it. */
+  window: Float32Array;
+  filled: number;
+  /** Samples judged so far, and where the last window with speech ended. */
+  judged: number;
+  heard: number;
+  /** The VAD's verdicts run one at a time, in order. */
+  vad: Promise<void>;
 }
 
 /**
@@ -203,10 +317,17 @@ export class DictationSession {
   private explicitSeq = 0;
   /** Dictations ended and not yet decoded: a decode runs one at a time, after the last. */
   private decoding = 0;
+  /**
+   * The last session ended whose text has not gone to the helper yet: the one the helper's keys
+   * still belong to while it waits for the insert (DC-A4).
+   */
+  private latest: Listening | null = null;
   /** Every decode and insert in flight, for tests and a clean stop. */
   private work: Promise<void> = Promise.resolve();
   /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
   private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
+  /** When the tray or the CLI last asked for `session.start`: its session is latched (DC-A3). */
+  private doorAt = Number.NEGATIVE_INFINITY;
 
   constructor(private readonly o: SessionOptions) {}
 
@@ -248,6 +369,7 @@ export class DictationSession {
    * helper answers with `session.started` and `session.ended` as for a key.
    */
   command(action: "start" | "stop" | "cancel"): void {
+    if (action === "start") this.doorAt = this.o.now();
     this.o.send({ type: `session.${action}` });
   }
 
@@ -310,27 +432,52 @@ export class DictationSession {
       case "level":
         this.o.onLevel?.(m.rms);
         return;
-      case "session.started":
+      case "key":
+        this.key(m.name);
+        return;
+      case "session.started": {
         // The last session is still draining its pipe: it ends now, with the audio it has, since
         // everything it sent was written before this line.
         if (this.cur?.end) this.ended(this.cur);
-        this.cur = {
+        // A start with no end before it (a helper that restarted or misbehaved): the old session
+        // is dropped, and so is the request it opened, rather than left open on the remote.
+        else this.cur?.hold?.request.cancel();
+        const door = this.o.now() - this.doorAt <= DOOR_MS;
+        this.doorAt = Number.NEGATIVE_INFINITY;
+        const c: Listening = {
           helperId: m.id,
           target: m.target,
-          chunks: this.early.chunks,
-          samples: this.early.samples,
+          chunks: [],
+          samples: 0,
           secure: this.secureInput || m.target.field === "secure",
           hold: this.open(),
           end: null,
+          asked: "insert",
+          latched: door || this.o.bindings().activation === "toggle",
+          stopping: null,
+          warned: false,
+          window: new Float32Array(SILENCE_WINDOW),
+          filled: 0,
+          judged: 0,
+          heard: 0,
+          vad: Promise.resolve(),
         };
-        for (const chunk of this.cur.chunks) this.cur.hold?.request.push(chunk);
+        this.cur = c;
+        const early = this.early.chunks;
         this.early = { chunks: [], samples: 0 };
         this.set("listening");
+        for (const chunk of early) this.take(c, chunk);
+        return;
+      }
+      case "latched":
+        if (this.cur?.helperId === m.id) this.cur.latched = true;
         return;
       case "session.ended": {
         const c = this.cur;
         if (!c || c.helperId !== m.id || c.end) return;
-        c.end = { reason: m.reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
+        // The helper ends the app's `session.stop` as a tap: the log says why the app asked.
+        const reason = c.stopping && m.reason === "tap" ? c.stopping : m.reason;
+        c.end = { reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
         return;
       }
       case "inserted": {
@@ -370,7 +517,7 @@ export class DictationSession {
         if (!id) return;
         this.inserts.delete(m.id);
         // The keyboard moved or the field cannot take it: the text waits in the draft box.
-        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason)) {
+        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason, false)) {
           this.write({ type: "dictation.drafted", id, reason: m.reason });
         } else {
           this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
@@ -379,10 +526,31 @@ export class DictationSession {
         return;
       }
       default:
-        // key, grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's,
-        // in later items.
+        // grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's, in later
+        // items.
         return;
     }
+  }
+
+  /**
+   * A key the helper swallowed and reported (DC-A4): Escape, Enter or Shift+Enter for the session
+   * listening or the last one still transcribing; any other name is the dictation key, pressed
+   * while a dictation transcribes, which the helper refused.
+   */
+  private key(name: string): void {
+    const asked = KEY_ASKS[name];
+    if (asked === undefined) {
+      if (!this.cur && (this.state === "transcribing" || this.state === "inserting"))
+        this.o.onBusy?.();
+      return;
+    }
+    const c = this.cur ?? this.latest;
+    if (!c) {
+      // The text is on its way into the app already: too late to send it or hold it back.
+      this.o.onLog?.("info", `dictation: ${name} came after the insert began, so it did nothing`);
+      return;
+    }
+    c.asked = asked;
   }
 
   /** An `AKP1` packet from the helper's stdout: a session's audio, mic channel. */
@@ -404,17 +572,80 @@ export class DictationSession {
       this.early.samples += p.samples.length;
       return;
     }
-    c.chunks.push(p.samples);
-    c.samples += p.samples.length;
-    c.hold?.request.push(p.samples);
+    this.take(c, p.samples);
     // Audio read after the end: the pipe is still draining, so the quiet window starts again.
     if (c.end) c.end.timer.refresh();
+  }
+
+  /** A session's audio: kept, sent on to a request opened at the press, and watched (DC-A3). */
+  private take(c: Listening, samples: Float32Array): void {
+    c.chunks.push(samples);
+    c.samples += samples.length;
+    c.hold?.request.push(samples);
+    if (c.end || c.stopping) return;
+    const a = this.o.autoStop?.();
+    if (!a) return;
+    const limit = a.maxMinutes * 60 * CAPTURE_RATE;
+    if (!c.warned && c.samples >= limit - 60 * CAPTURE_RATE) {
+      c.warned = true;
+      this.o.onWarning?.(MAX_WARNING);
+    }
+    if (c.samples >= limit) {
+      this.stopBy(c, "max");
+      return;
+    }
+    if (!c.latched || a.silenceSeconds <= 0 || !this.o.speech) return;
+    // The VAD hears the audio a window at a time; the last window with speech in it sets the time.
+    let at = 0;
+    while (at < samples.length) {
+      const n = Math.min(SILENCE_WINDOW - c.filled, samples.length - at);
+      c.window.set(samples.subarray(at, at + n), c.filled);
+      c.filled += n;
+      at += n;
+      if (c.filled < SILENCE_WINDOW) break;
+      const window = c.window.slice();
+      c.filled = 0;
+      c.judged += SILENCE_WINDOW;
+      const end = c.judged;
+      c.vad = c.vad.then(() => this.judge(c, window, end, a.silenceSeconds));
+    }
+  }
+
+  /**
+   * The VAD's verdict on one window of a latched session: speech moves the last time heard, and
+   * `silenceSeconds` with none since stops the session. A VAD that has no verdict or fails counts
+   * as speech: a guard that cannot hear never ends a session.
+   */
+  private async judge(
+    c: Listening,
+    window: Float32Array,
+    end: number,
+    silenceSeconds: number,
+  ): Promise<void> {
+    if (this.cur !== c || c.end || c.stopping) return;
+    let speech: boolean | null = null;
+    try {
+      speech = (await this.o.speech?.(window)) ?? null;
+    } catch {
+      speech = null;
+    }
+    if (speech !== false) c.heard = end;
+    if (this.cur !== c || c.end || c.stopping) return;
+    if (end - c.heard >= silenceSeconds * CAPTURE_RATE) this.stopBy(c, "silence");
+  }
+
+  /** Asks the helper to end the session (DC-A3); its audio is transcribed as for a tap. */
+  private stopBy(c: Listening, why: "silence" | "max"): void {
+    c.stopping = why;
+    this.o.onLog?.("info", `dictation: stopped by ${why === "max" ? "the maximum length" : why}`);
+    this.o.send({ type: "session.stop" });
   }
 
   /** The helper exited: a session in progress is lost with it, and says so. */
   helperGone(): void {
     const c = this.cur;
     this.cur = null;
+    this.latest = null;
     this.early = { chunks: [], samples: 0 };
     if (c?.end) clearTimeout(c.end.timer);
     c?.hold?.request.cancel();
@@ -465,6 +696,7 @@ export class DictationSession {
       return;
     }
     this.decoding++;
+    this.latest = c;
     this.set("transcribing");
     this.work = this.work.then(() => this.transcribe(id, c, samples, engine));
   }
@@ -500,10 +732,11 @@ export class DictationSession {
   }
 
   /** The session will not be inserted: the helper stops holding Escape and Enter now. */
-  private notInserted(helperId: string, d: DictationDraft): void {
+  private notInserted(c: Listening, d: DictationDraft): void {
     this.decoding--;
+    if (this.latest === c) this.latest = null;
     this.write(d);
-    this.o.send({ type: "settled", id: helperId });
+    this.o.send({ type: "settled", id: c.helperId });
     this.settle();
   }
 
@@ -514,7 +747,7 @@ export class DictationSession {
     engine: DictationEngine | null,
   ): Promise<void> {
     if (!engine) {
-      this.notInserted(c.helperId, {
+      this.notInserted(c, {
         type: "dictation.failed",
         id,
         error: "no speech model is loaded",
@@ -526,28 +759,60 @@ export class DictationSession {
     try {
       r = await decodeDictation(this.o, engine, samples, language, c.secure, c.hold?.request);
     } catch (err) {
-      this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
+      this.notInserted(c, { type: "dictation.failed", id, error: (err as Error).message });
       return;
+    }
+    // "send it" at the very end (DC-S5): the words go, and the send key goes with the insert.
+    let spoken = false;
+    if (r.kind === "text" && !c.secure && this.o.spokenSend?.()) {
+      const s = spokenSend(r.text);
+      if (s.send) {
+        r = { ...r, text: s.text };
+        spoken = true;
+      }
     }
     if (r.kind === "text" && r.d.notice) this.o.onNotice?.(id, r.d.notice);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
     if (r.kind === "empty" || r.text === "") {
-      this.notInserted(c.helperId, { type: "dictation.empty", id });
+      this.notInserted(c, { type: "dictation.empty", id });
       return;
     }
-    const text = r.text;
+    // Escape while it transcribed: the text stays in history, and nothing goes in (DC-A4).
+    if (c.asked === "cancel") {
+      this.notInserted(c, { type: "dictation.cancelled", id });
+      return;
+    }
+    // Shift+Enter: the draft box, taking the keyboard. Never a password field's text in it.
+    if (c.asked === "draft" && !c.secure) {
+      const opened = this.o.onDraft?.(id, "key", true) ?? false;
+      this.notInserted(
+        c,
+        opened
+          ? { type: "dictation.drafted", id, reason: "key" }
+          : { type: "dictation.failed", id, error: "the draft box needs the desktop window" },
+      );
+      return;
+    }
+    const p = this.o.insertPolicy?.() ?? DEFAULT_INSERT;
+    // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only. `type`
+    // pastes until DC-N7 lands: its typed Return for every `\n` of a spoken `new line` (DC-S6)
+    // would press send in a chat app.
+    const method: InsertMethod = c.secure || p.method === "clipboard" ? "clipboard" : "paste";
+    // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
+    const send = method !== "clipboard" && (c.asked === "send" || p.sendAlways || spoken);
     this.decoding--;
+    if (this.latest === c) this.latest = null;
     this.inserts.set(c.helperId, id);
     this.settle();
     this.o.send({
       type: "insert",
       id: c.helperId,
-      text,
-      // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.
-      method: c.secure ? "clipboard" : "paste",
-      send_key: "none",
+      text: r.text,
+      method,
+      send_key: send ? p.sendKey : "none",
       target: c.target,
+      ...(p.restore ? {} : { restore: false }),
     });
   }
 }
