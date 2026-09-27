@@ -8,7 +8,7 @@ Tools compared: Granola, Minutes, anarlog, Meetily, Otter, Fireflies, Fathom, tl
 
 The **Owner** column says where the item lives:
 
-- An id such as `W1.1` or `DK-M1`: the row in [WINDOW.md](WINDOW.md) (`W`), [DESKTOP.md](DESKTOP.md) (`DK`), [CLI.md](CLI.md) (`CLI`), [PROGRAMMABILITY.md](PROGRAMMABILITY.md) (`PG`), [TESTING.md](../TESTING.md) (`TS`) or [CI-CD.md](../CI-CD.md) (`CI`). The first id owns the item; ids after "with" are the other doors' rows that cite it.
+- An id such as `W1.1` or `DK-M1`: the row in [WINDOW.md](WINDOW.md) (`W`), [DESKTOP.md](DESKTOP.md) (`DK`), [CLI.md](CLI.md) (`CLI`), [PROGRAMMABILITY.md](PROGRAMMABILITY.md) (`PG`), [SERVER.md](SERVER.md) (`SV`), [DICTATION.md](DICTATION.md) (`DC`), [TESTING.md](../TESTING.md) (`TS`) or [CI-CD.md](../CI-CD.md) (`CI`). The first id owns the item; ids after "with" are the other doors' rows that cite it.
 - `here`: no surface doc designs it yet, so this file holds its priority and acceptance in [Rows this file owns](#rows-this-file-owns). When a surface doc takes it, they move there.
 - `parked`: P3, seen and recorded, no bead until someone asks for it. When a surface doc keeps it in its own parking list, that doc's id follows in brackets.
 - `decision`: waits on an [open decision](PRINCIPLES.md#open-decisions). No bead until then.

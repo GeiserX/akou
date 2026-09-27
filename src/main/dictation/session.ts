@@ -47,6 +47,11 @@ export interface SessionOptions {
   send(c: AppToHelper): void;
   bindings(): Bindings;
   now(): number;
+  /**
+   * The decoded text after the dictation vocabulary (DC-L6), in the language the engine found.
+   * Absent, the text is inserted as decoded.
+   */
+  correct?(raw: string, language: string | null): Promise<string>;
   onState?(state: SessionState): void;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
@@ -267,13 +272,15 @@ export class DictationSession {
       this.notInserted(c.helperId, { type: "dictation.empty", id });
       return;
     }
+    // A password field gets exactly what was heard (DC-N8): no learned rewrite of a secret.
+    const text = c.secure ? d.text : await correctOrRaw(this.o, d);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (!c.secure)
       this.write({
         type: "dictation.text",
         id,
         raw: d.text,
-        text: d.text,
+        text,
         language: d.language,
         words: d.words,
         engine: d.engine ?? engine.name,
@@ -286,12 +293,29 @@ export class DictationSession {
     this.o.send({
       type: "insert",
       id: c.helperId,
-      text: d.text,
+      text,
       // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.
       method: c.secure ? "clipboard" : "paste",
       send_key: "none",
       target: c.target,
     });
+  }
+}
+
+/**
+ * The text to insert: the decoded text through the dictation vocabulary, or the decoded text as it
+ * is when that fails, since a vocabulary file that cannot be read must not lose the dictation.
+ */
+export async function correctOrRaw(
+  o: Pick<SessionOptions, "correct" | "onLog">,
+  d: { text: string; language: string | null },
+): Promise<string> {
+  if (!o.correct) return d.text;
+  try {
+    return await o.correct(d.text, d.language);
+  } catch (err) {
+    o.onLog?.("warn", `dictation vocabulary not applied: ${(err as Error).message}`);
+    return d.text;
   }
 }
 

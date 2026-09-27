@@ -145,3 +145,32 @@ describe("DC-A1: dictation.enabled is the master switch", () => {
     );
   });
 });
+
+describe("DC-L6: a dictation goes through its vocabulary", () => {
+  test("a `scope: dictation` entry fixes the next dictation, the raw text stays, and removing it undoes that", async () => {
+    const r = await rig();
+    const vocab = join(r.app.configDir, "vocabulary.yaml");
+    writeFileSync(
+      vocab,
+      [
+        "version: 1",
+        "entries:",
+        '  - term: "Hetzner"',
+        '    heard: ["hetzna"]',
+        '    source: "dictation:d1"',
+        "    confirmed: true",
+        '    added_at: "2026-09-27"',
+        '    scope: "dictation"',
+        "",
+      ].join("\n"),
+    );
+    const path = clip(scratch(), ["deploy", "hetzner"]);
+    const first = await upload(r, path);
+    expect(first.body).toMatchObject({ raw: "deploy hetzna", text: "deploy Hetzner" });
+    // The entry leaves the file; the next dictation reads the file again and inserts what it heard.
+    writeFileSync(vocab, "version: 1\nentries: []\n");
+    r.app.vocabChanged();
+    const second = await upload(r, path);
+    expect(second.body).toMatchObject({ raw: "deploy hetzna", text: "deploy hetzna" });
+  });
+});

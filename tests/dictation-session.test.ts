@@ -12,7 +12,7 @@ import type { Decoded } from "../src/main/asr/live-worker.ts";
 import { LiveAsr } from "../src/main/asr/live-worker.ts";
 import type { Packet } from "../src/main/capture/protocol.ts";
 import type { AppToHelper } from "../src/main/dictation/protocol.ts";
-import { DictationService } from "../src/main/dictation/service.ts";
+import { DictationService, type DictationServiceOptions } from "../src/main/dictation/service.ts";
 import {
   AUDIO_DRAIN_MS,
   type DictationEngine,
@@ -70,7 +70,11 @@ interface Rig {
   played(): Promise<void>;
 }
 
-function rig(keys: [number, string, boolean][], switches: string[] = []): Rig {
+function rig(
+  keys: [number, string, boolean][],
+  switches: string[] = [],
+  extra: Partial<DictationServiceOptions> = {},
+): Rig {
   const t = tempDir("akou-dict-session-");
   cleanups.push(t.cleanup);
   const keyFile = join(t.dir, "keys.jsonl");
@@ -84,6 +88,7 @@ function rig(keys: [number, string, boolean][], switches: string[] = []): Rig {
     configDir: t.dir,
     engine: fastEngine,
     now: () => Date.now(),
+    ...extra,
   });
   cleanups.push(() => svc.close());
   svc.start(
@@ -196,6 +201,35 @@ describe("DC-A1 over the fake helper", () => {
   });
 });
 
+describe("DC-L6: the vocabulary between the decode and the insert", () => {
+  const hold: [number, string, boolean][] = [
+    [800, RC, true],
+    [1600, RC, false],
+  ];
+
+  test("the inserted text is the corrected one, and the log keeps the raw beside it", async () => {
+    const r = rig(hold, [], {
+      correct: async (raw) => raw.replace("hello", "Hallo"),
+    });
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
+    expect(lines(r.inserted)[0]).toMatchObject({ type: "insert", text: "Hallo" });
+    expect(r.svc.log.items()[0]).toMatchObject({ raw: "hello", text: "Hallo" });
+  });
+
+  test("a vocabulary that cannot be read inserts the decoded text and says why", async () => {
+    const logs: string[] = [];
+    const r = rig(hold, [], {
+      correct: async () => {
+        throw new Error("vocabulary.yaml: permission denied");
+      },
+      onLog: (_level, msg) => logs.push(msg),
+    });
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
+    expect(lines(r.inserted)[0]).toMatchObject({ type: "insert", text: "hello" });
+    expect(logs).toContain("dictation vocabulary not applied: vocabulary.yaml: permission denied");
+  });
+});
+
 describe("the insert", () => {
   test("into a password field only the clipboard is written, and the log keeps no text (DC-N8)", async () => {
     const r = rig(
@@ -204,6 +238,8 @@ describe("the insert", () => {
         [1600, RC, false],
       ],
       ["--field", "secure"],
+      // A learned rewrite that would change the text: a password gets what was heard.
+      { correct: async (raw) => raw.replace("hello", "Hallo") },
     );
     await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the receipt");
     expect(lines(r.inserted)[0]).toMatchObject({ method: "clipboard", text: "hello" });

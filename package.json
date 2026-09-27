@@ -25,6 +25,7 @@
   },
   "dependencies": {
     "@modelcontextprotocol/server": "2.1.0",
+    "double-metaphone": "2.0.1",
     "sherpa-onnx-node": "1.13.8",
     "zod": "4.6.5"
   }
