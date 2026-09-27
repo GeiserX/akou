@@ -282,7 +282,7 @@ One page in the shared bundle, `#dictation` in the desktop window beside Setting
 | Per app                                                                      |
 |   Slack        draft + send    engine: auto    insert: paste      [Edit] [x] |
 |   Terminal     insert: type    send: none                         [Edit] [x] |
-|   [+ Add app]                                                                |
+|   [+ Add app]   [Use the app I dictate into next]                            |
 |                                                                              |
 | Pill and sounds                                                              |
 |   Pill position       [ bottom v ]   [ ] Show words as I speak               |

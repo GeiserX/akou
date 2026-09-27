@@ -27,6 +27,7 @@ import { mountDictionaryDialog } from "./dictation-dictionary.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
 import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
+import { type DictationReview, readDictationReview, waitingTerms } from "./dictation-review.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
@@ -176,16 +177,20 @@ export class DictationSettings {
   private meter: { close(): void } | null = null;
   /** The wait for the next dictation's app, for a per-app rule (DC-U9). */
   private waitApp: { stop(): void } | null = null;
+  /** The words fixed while dictating, for the Learning group's count (DC-L5); null in server mode. */
+  private review: DictationReview | null = null;
 
   constructor(
     private readonly t: Transport,
     private readonly mode: "app" | "server",
+    /** Opens the words to review, whose Dictation heading lists them (DC-L5). */
+    private readonly openReview?: () => Promise<void>,
   ) {}
 
   async load(): Promise<void> {
     const read = ++this.reads;
     const app = this.mode === "app";
-    const [cfg, server, status, grants, mics] = await Promise.all([
+    const [cfg, server, status, grants, mics, review] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config"),
       app
         ? Promise.resolve(null)
@@ -193,8 +198,10 @@ export class DictationSettings {
       app ? this.t.request<{ app?: { platform?: string } }>("GET", "/status") : null,
       app ? this.readGrants() : null,
       app ? readMics(this.t) : null,
+      app && this.openReview ? readDictationReview(this.t) : null,
     ]);
     if (read !== this.reads) return;
+    this.review = review;
     this.platform = String(status?.body?.app?.platform ?? "");
     this.grants = grants;
     this.mics = mics;
@@ -250,6 +257,7 @@ export class DictationSettings {
           g.hint ? h("p", { class: "hint" }, g.hint) : null,
           ...keys.map((k) => this.field(k)),
           g.title === "Privacy" ? this.deleteAll() : null,
+          g.title === "Learning" ? this.reviewRow() : null,
         ),
       );
     replace(
@@ -450,6 +458,54 @@ export class DictationSettings {
     setup.start();
   }
 
+  /**
+   * `Words to review (N) [Open]` in the Learning group: N terms fixed while dictating still wait
+   * for an answer (DC-L5, and DC-O4's count with the pill off). Left out where akou keeps no list.
+   */
+  private reviewRow(): HTMLElement | null {
+    const r = this.review;
+    const open = this.openReview;
+    if (!r || !open || ("pairs" in r && r.pairs === null)) return null;
+    if ("error" in r)
+      return h("p", { id: "dictation-review-row", class: "hint" }, `Words to review: ${r.error}`);
+    const n = waitingTerms(r.pairs ?? []);
+    return h(
+      "p",
+      { id: "dictation-review-row" },
+      `Words to review (${n}) `,
+      h(
+        "button",
+        {
+          type: "button",
+          id: "dictation-review-open",
+          on: {
+            click: () => {
+              // A live recorder would take every key pressed over the list.
+              this.stopRecording();
+              void open();
+            },
+          },
+        },
+        "Open",
+      ),
+    );
+  }
+
+  /** Reads the count again, after the words to review answered some, and redraws its row alone. */
+  async refreshReview(): Promise<void> {
+    if (this.mode !== "app" || !this.openReview) return;
+    const reads = this.reads;
+    const review = await readDictationReview(this.t);
+    // A load since then has read its own.
+    if (reads !== this.reads) return;
+    this.review = review;
+    const row = this.reviewRow();
+    const old = this.root.querySelector("#dictation-review-row");
+    if (old && row) old.replaceWith(row);
+    else if (old) old.remove();
+    else if (row) this.root.querySelector("fieldset[data-group='Learning']")?.append(row);
+  }
+
   /** Stops any key recording: the dialog closed or the page redrew. */
   stopRecording(): void {
     for (const r of this.recorders) r.stop();
@@ -592,6 +648,8 @@ export function mountDictationDialog(
   t: Transport,
   /** The workspace of the call the window shows, whose words the dictionary lists read only. */
   workspace?: () => string | undefined,
+  /** Opens the words to review (`review.ts`), whose Dictation heading lists dictation's words. */
+  openReview?: () => Promise<void>,
 ): {
   open(): Promise<void>;
   /** The dictionary editor (DC-U5), which Settings opens too. */
@@ -599,8 +657,12 @@ export function mountDictationDialog(
 } {
   const dialog = document.getElementById("dictation") as HTMLDialogElement;
   const body = document.getElementById("dictation-fields") as HTMLElement;
-  const page = new DictationSettings(t, "app");
+  const page = new DictationSettings(t, "app", openReview);
   body.append(page.root);
+  // An answer given in the words to review changes the count on this page.
+  document.getElementById("review")?.addEventListener("close", () => {
+    if (dialog.open) void page.refreshReview();
+  });
   const open = async () => {
     await page.load();
     if (!dialog.open) dialog.showModal();
