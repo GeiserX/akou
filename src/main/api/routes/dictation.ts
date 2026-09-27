@@ -25,8 +25,8 @@ import { fileField, formOf, languageOf, textField } from "./jobs.ts";
 
 /** The longest clip taken, seconds: `dictation.maxMinutes` at its top. */
 export const MAX_CLIP_SECONDS = 60 * 60;
-/** The engines a clip can name; `auto` is `dictation.engine`. `best` arrives with DC-E2. */
-const ENGINES = ["auto", "fast", "remote"];
+/** The engines a clip can name; `auto` is `dictation.engine`. */
+const ENGINES = ["auto", "fast", "best", "remote"];
 const FIELDS = new Set(["file", "engine", "language"]);
 
 function service(c: RouteContext<ApiApp>): DictationService {
@@ -52,6 +52,7 @@ export function dictationBody(it: DictationItem) {
     model: it.model,
     ms: it.ms,
     ...(it.fallback_from ? { fallback_from: it.fallback_from } : {}),
+    ...(it.language_forced !== null ? { language_forced: it.language_forced } : {}),
     ...(it.error ? { error: it.error } : {}),
   };
 }
@@ -62,7 +63,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations",
     {
       id: "dictations.create",
-      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto (`dictation.engine`), fast, or remote (the akou at `dictation.remote.url`); `language` a BCP-47 tag or auto: a remote akou gets it, and the fast engine (Parakeet) ignores it, since it detects the language itself. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
+      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto (`dictation.engine`), fast, best (Qwen3-ASR, falling back to fast when it fails or is missing), or remote (the akou at `dictation.remote.url`); `language` a BCP-47 tag or auto (`dictation.language`): best and a remote akou are forced into it, and the fast engine (Parakeet) ignores it, since it detects the language itself, so `language_forced` says whether it was used. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, the decode time, and `fallback_from` when another engine decoded it.",
       access: "admin",
       modes: ["app"],
       body: { multipart: { file: "file", "engine?": "string", "language?": "string" } },
@@ -222,7 +223,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictation",
     {
       id: "dictation.status",
-      doc: "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied or not-needed), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).",
+      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied or not-needed), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
       access: "admin",
       modes: ["app"],
       ok: 200,
@@ -234,6 +235,8 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         enabled: c.app.config().settings["dictation.enabled"] === true,
         state: st.state,
         engine: st.engine,
+        verdict: st.verdict,
+        loading: st.loading,
         fallback: r?.fallback ?? null,
         remote: r
           ? {

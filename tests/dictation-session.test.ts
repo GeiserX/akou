@@ -125,6 +125,43 @@ async function settle(r: Rig): Promise<void> {
   await r.svc.session()?.settled();
 }
 
+describe("DC-E4: a spoken dictation's language", () => {
+  const hold: [number, string, boolean][] = [
+    [800, RC, true],
+    [1600, RC, false],
+  ];
+
+  /** An engine named `name` that answers "hola" and records the language it was given. */
+  function engine(name: string, asked: (string | undefined)[]): () => DictationEngine {
+    return () => ({
+      name,
+      decode: async (_s, o) => {
+        asked.push(o.language);
+        return { text: "hola", words: [], language: "es", model: "stub", ms: 1, spans: 1 };
+      },
+    });
+  }
+
+  test("dictation.language reaches the engine, and the item says it was forced", async () => {
+    const asked: (string | undefined)[] = [];
+    const r = rig(hold, [], { engine: engine("best", asked), language: () => "es" });
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
+    expect(asked).toEqual(["es"]);
+    expect(r.svc.log.items()[0]).toMatchObject({ language: "es", language_forced: true });
+  });
+
+  test("on fast the item says the tag was not used; with auto, nothing is sent", async () => {
+    const asked: (string | undefined)[] = [];
+    const r = rig(hold, [], { engine: engine("fast", asked), language: () => "es" });
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
+    expect(r.svc.log.items()[0]?.language_forced).toBe(false);
+    const auto = rig(hold, [], { engine: engine("best", asked), language: () => undefined });
+    await until(() => auto.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
+    expect(asked).toEqual(["es", undefined]);
+    expect(auto.svc.log.items()[0]?.language_forced).toBeNull();
+  });
+});
+
 describe("DC-A1 over the fake helper", () => {
   test("a push-to-talk hold is transcribed and sent to the fake inserter", async () => {
     const r = rig([

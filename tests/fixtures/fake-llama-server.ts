@@ -12,12 +12,15 @@
  * - the system message is the context: a glossary term there fixes the word the engine mishears.
  *
  *   bun tests/fixtures/fake-llama-server.ts [--fake-log FILE] [--fake-lang NAME] [--fake-lp NAME=LP]
- *     [--fake-die-after N] [--fake-500 N] [--fake-loading-ms MS] [--fake-refuse-cache] <llama-server args>
+ *     [--fake-die-after N] [--fake-die-on N] [--fake-hang] [--fake-500 N] [--fake-loading-ms MS]
+ *     [--fake-refuse-cache] <llama-server args>
  *
  * `--fake-log FILE` appends one JSON line per start (`{argv}`) and per request (`{body}`);
  * `--fake-lang` is the language an auto decode answers (default English); `--fake-lp Spanish=-0.9`
  * sets the per-token log-prob of the words decoded in that language (default -0.05);
- * `--fake-die-after N` exits 70 after answering N completions; `--fake-500 N` answers the first N
+ * `--fake-die-after N` exits 70 after answering N completions; `--fake-die-on N` exits 70 on
+ * receiving its Nth completion, with no answer (a server that dies mid-request); `--fake-hang` never
+ * answers a completion; `--fake-500 N` answers the first N
  * completions with HTTP 500 (a Metal out-of-memory server), counted across restarts; `--fake-loading-ms` answers 503 on
  * `/health` for that long; `--fake-refuse-cache` exits 64 unless started with `--cache-ram 0`.
  */
@@ -39,6 +42,9 @@ const log = (o: unknown) => {
 const autoLang = opt("--fake-lang") ?? "English";
 const lps = new Map(all("--fake-lp").map((kv) => kv.split("=") as [string, string]));
 const dieAfter = Number(opt("--fake-die-after") ?? Number.POSITIVE_INFINITY);
+const dieOn = Number(opt("--fake-die-on") ?? Number.POSITIVE_INFINITY);
+const hang = argv.includes("--fake-hang");
+let received = 0;
 // The 500s left survive a restart (a state file beside the log), as a real broken GPU would.
 const failFile = `${logFile ?? `/tmp/fake-llama-${process.pid}`}.500`;
 if (opt("--fake-500") && !existsSync(failFile))
@@ -148,6 +154,8 @@ Bun.serve({
     if (url.pathname === "/v1/chat/completions" && req.method === "POST") {
       const body = (await req.json()) as { messages: Message[]; logprobs?: boolean };
       log({ body: { ...body, messages: body.messages.map(redactAudio) } });
+      if (++received >= dieOn) process.exit(70);
+      if (hang) return await new Promise<Response>(() => {});
       if (takeFailure()) {
         return Response.json(
           { error: { code: 500, message: "ggml_metal: out of memory" } },

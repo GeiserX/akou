@@ -637,11 +637,7 @@ export const SETTINGS = {
     type: "string",
     values: DICTATION_ENGINES,
     default: "auto",
-    check: (v) =>
-      v === "best"
-        ? "best (Qwen3-ASR kept warm for dictation, DC-E2) is not built yet; use auto, fast or remote"
-        : null,
-    doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR where a GPU runs it; `auto`: best on a GPU, fast elsewhere; `remote`: another akou (`dictation.remote.url`), with no local model needed.",
+    doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR, kept warm while dictation is on, falling back to fast when it fails or is too slow, and downloaded when missing (fast until it lands); `auto`: best where Qwen runs on a GPU and is downloaded, fast elsewhere; `remote`: another akou (`dictation.remote.url`), with no local model needed.",
   },
   "dictation.localTimeoutSeconds": {
     type: "integer",
