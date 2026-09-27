@@ -651,17 +651,13 @@ export interface VocabFixture {
   calls: { method: string; path: string; body?: unknown }[];
   /** Refuses the next `POST /vocab` with this message, as the route refuses a bad term. */
   refuse: string | null;
-  /** Refuses `scope` in `POST /vocab` as an unknown field, as today's route does (DC-L6). */
-  noScope: boolean;
 }
 
 /** The global vocabulary file of the fixture. */
 export const VOCAB_FILE = "/config/vocabulary.yaml";
 
 /**
- * Answers the Dictionary's requests from `entries`, as the vocabulary routes will once
- * `POST /vocab` takes the entry's `scope` (DC-L6): today the route refuses that field (`noScope`).
- * As the route does, a post builds a fresh entry from the body alone (`confirmed` true unless sent,
+ * Answers the Dictionary's requests from `entries`, as the vocabulary routes do. As the route does, a post builds a fresh entry from the body alone (`confirmed` true unless sent,
  * `note` and `decode: false` only when sent) and replaces the entry of the same term under the
  * server's key (`termKey`), as `upsertEntry` does. `POST /vocab/import` goes to the app.
  */
@@ -670,7 +666,7 @@ export async function vocabFixture(
   entries: DictionaryEntry[] = [],
   prefix = "/api/v1",
 ): Promise<VocabFixture> {
-  const fx: VocabFixture = { entries, calls: [], refuse: null, noScope: false };
+  const fx: VocabFixture = { entries, calls: [], refuse: null };
   await page.route(
     (u) =>
       (u.pathname === `${prefix}/vocab` || u.pathname.startsWith(`${prefix}/vocab/`)) &&
@@ -700,11 +696,6 @@ export async function vocabFixture(
           fx.refuse = null;
           return route.fulfill({ status: 400, json: { error: "bad_term", message } });
         }
-        if (fx.noScope && "scope" in sent)
-          return route.fulfill({
-            status: 400,
-            json: { error: "unknown_field", message: 'unknown field "scope"', field: "scope" },
-          });
         const b = sent as {
           term: string;
           heard?: string[];

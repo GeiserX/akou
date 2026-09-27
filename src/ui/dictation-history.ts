@@ -183,7 +183,13 @@ export class DictationHistory {
       "div",
       { class: `result ${which}`, attrs: { "data-engine": d.engine } },
       which === "retry"
-        ? h("small", { class: "hint" }, `${d.engine}${d.ms !== null ? ` ${took(d.ms)}` : ""}`)
+        ? h(
+            "small",
+            { class: "hint" },
+            `${d.engine}${d.ms !== null ? ` ${took(d.ms)}` : ""}`,
+            // The engine asked for could not run: say which one decoded it instead.
+            d.fallback_from ? ` (instead of ${d.fallback_from})` : "",
+          )
         : null,
       h("p", { class: "text" }, text),
       h(

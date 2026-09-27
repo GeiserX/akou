@@ -2346,7 +2346,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Add or update a word in the user's vocabulary file. A word the user stated goes in confirmed; send `confirmed: false` for an inferred one, which does nothing until the user approves it.",
+        "description": "Add or update a word in the user's vocabulary file. A word the user stated goes in confirmed; send `confirmed: false` for an inferred one, which does nothing until the user approves it. `scope: dictation` makes it a dictation word, applied in every dictation and never in a call (DC-L6). An update replaces the entry but keeps its `source` and `added_at`.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2374,6 +2374,9 @@
                   },
                   "confirmed": {
                     "type": "boolean"
+                  },
+                  "scope": {
+                    "type": "string"
                   }
                 },
                 "required": [
@@ -2583,7 +2586,7 @@
         "tags": [
           "vocab"
         ],
-        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines.",
+        "description": "Import a word list into the user's vocabulary file, confirmed: one word per line, or the predecessor's `Word <= heard | heard` lines. With `scope: dictation` a new word is a dictation word (DC-L6); a word the file already holds for calls stays one.",
         "requestBody": {
           "required": true,
           "content": {
@@ -2595,6 +2598,9 @@
                     "type": "string"
                   },
                   "workspace": {
+                    "type": "string"
+                  },
+                  "scope": {
                     "type": "string"
                   }
                 },
