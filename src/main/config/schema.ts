@@ -776,7 +776,7 @@ export const SETTINGS = {
     type: "string",
     values: DICTATION_FORMATS,
     default: "off",
-    doc: "`provider`: pass the text through your configured provider first, with the prompt `dictation.formatPrompt`, to fix punctuation and casing. History keeps the raw text; a provider past the timeout is skipped.",
+    doc: "`provider`: pass the text through your configured provider first, with the prompt `dictation.formatPrompt`, to fix punctuation and casing. History keeps the raw text; a provider past the timeout is skipped. It runs on Retry and on every clip sent to `POST /v1/dictations` (`akou dictate FILE`) too, so a script posting clips asks the provider once per clip.",
   },
   "dictation.formatPrompt": {
     type: "string",
