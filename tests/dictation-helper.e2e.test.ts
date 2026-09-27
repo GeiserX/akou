@@ -60,7 +60,27 @@ interface Rig {
   svc: DictationService;
   /** What the helper's fake inserter recorded: clipboard writes, key events, focus. */
   inserter: string;
+  /** What the service logged: the helper's lines that are not messages, its warnings. */
+  said: string[];
 }
+
+/** `until`, and on a timeout everything the rig saw, so a CI-only failure says what happened. */
+async function waitFor(r: Rig, cond: () => boolean, what: string): Promise<void> {
+  try {
+    await until(cond, 15_000, what);
+  } catch (err) {
+    const seen = {
+      status: r.svc.status(),
+      events: r.svc.log.events(),
+      said: r.said,
+      inserter: jsonLines(r.inserter),
+    };
+    throw new Error(`${(err as Error).message}\n${JSON.stringify(seen, null, 1)}`);
+  }
+}
+
+/** Past `waitFor`'s 15 s, so its report is what a slow run shows, not bun's bare timeout. */
+const SLOW = 30_000;
 
 /**
  * The service over the helper. `keys` are `[ms, key, down]`; `tree` is the accessibility tree,
@@ -87,7 +107,13 @@ function rig(
   const ax = join(t.dir, "ax.txt");
   writeFileSync(ax, tree.map(([ms, o]) => `${ms} ${JSON.stringify(o)}`).join("\n"));
   const inserter = join(t.dir, "inserter.jsonl");
-  const svc = new DictationService({ configDir: t.dir, engine: fastEngine, now: () => Date.now() });
+  const said: string[] = [];
+  const svc = new DictationService({
+    configDir: t.dir,
+    engine: fastEngine,
+    now: () => Date.now(),
+    onLog: (level, msg) => said.push(`${level}: ${msg}`),
+  });
   cleanups.push(() => svc.close());
   svc.start(
     [
@@ -109,7 +135,7 @@ function rig(
     ],
     () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold-or-toggle" }),
   );
-  return { svc, inserter };
+  return { svc, inserter, said };
 }
 
 const hold: [number, string, boolean][] = [
@@ -127,73 +153,97 @@ if (!BIN) {
   const bin = BIN;
 
   describe("DC-T1: the dictation service over akou-capture dictate (simulate)", () => {
-    test("a push-to-talk hold is decoded, pasted by the fake inserter and logged as inserted", async () => {
-      const r = rig(bin, hold);
-      await until(() => r.svc.log.items()[0]?.state === "inserted", 20_000, "the dictation");
-      expect(r.svc.log.items()[0]).toMatchObject({ by: "user", text: "hello", target: NOTES });
-      // The text went through the fake clipboard, never a real one.
-      expect(jsonLines(r.inserter).some((e) => e.text === "hello")).toBe(true);
-      expect(r.svc.status()).toMatchObject({ state: "idle", backend: "simulate" });
-    });
+    test(
+      "a push-to-talk hold is decoded, pasted by the fake inserter and logged as inserted",
+      async () => {
+        const r = rig(bin, hold);
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "inserted", "the dictation");
+        expect(r.svc.log.items()[0]).toMatchObject({ by: "user", text: "hello", target: NOTES });
+        // The text went through the fake clipboard, never a real one.
+        expect(jsonLines(r.inserter).some((e) => e.text === "hello")).toBe(true);
+        expect(r.svc.status()).toMatchObject({ state: "idle", backend: "simulate" });
+      },
+      SLOW,
+    );
 
-    test("a tap latches and a tap at 3 s ends one session with both words", async () => {
-      const r = rig(bin, [
-        [0, RC, true],
-        [120, RC, false],
-        [3000, RC, true],
-        [3100, RC, false],
-      ]);
-      await until(() => r.svc.log.items()[0]?.state === "inserted", 20_000, "the dictation");
-      expect(r.svc.log.items().map((i) => i.text)).toEqual(["hello world"]);
-    });
+    test(
+      "a tap latches and a tap at 3 s ends one session with both words",
+      async () => {
+        const r = rig(bin, [
+          [0, RC, true],
+          [120, RC, false],
+          [3000, RC, true],
+          [3100, RC, false],
+        ]);
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "inserted", "the dictation");
+        expect(r.svc.log.items().map((i) => i.text)).toEqual(["hello world"]);
+      },
+      SLOW,
+    );
 
-    test("Right Command+C is a copy: no dictation, nothing inserted", async () => {
-      const r = rig(bin, [
-        [800, RC, true],
-        [840, "C", true],
-        [880, "C", false],
-        [920, RC, false],
-      ]);
-      await until(() => r.svc.status().state === "idle", 20_000, "the helper's ready");
-      // The timeline is over before the helper reads its first command, so the rebind's answer
-      // means every key has been played.
-      expect(await r.svc.session()?.rebind()).toEqual({ ok: true });
-      await r.svc.session()?.settled();
-      expect(r.svc.log.events()).toEqual([]);
-      expect(jsonLines(r.inserter).filter((e) => e.type !== "focus")).toEqual([]);
-      expect(r.svc.status().state).toBe("idle");
-    });
+    test(
+      "Right Command+C is a copy: no dictation, nothing inserted",
+      async () => {
+        const r = rig(bin, [
+          [800, RC, true],
+          [840, "C", true],
+          [880, "C", false],
+          [920, RC, false],
+        ]);
+        await waitFor(r, () => r.svc.status().state === "idle", "the helper's ready");
+        // The timeline is over before the helper reads its first command, so the rebind's answer
+        // means every key has been played.
+        expect(await r.svc.session()?.rebind()).toEqual({ ok: true });
+        await r.svc.session()?.settled();
+        expect(r.svc.log.events()).toEqual([]);
+        expect(jsonLines(r.inserter).filter((e) => e.type !== "focus")).toEqual([]);
+        expect(r.svc.status().state).toBe("idle");
+      },
+      SLOW,
+    );
 
-    test("positive control: the same presses without C latch listening on", async () => {
-      const r = rig(bin, [
-        [800, RC, true],
-        [920, RC, false],
-      ]);
-      await until(() => r.svc.status().state === "listening", 20_000, "the latched session");
-    });
+    test(
+      "positive control: the same presses without C latch listening on",
+      async () => {
+        const r = rig(bin, [
+          [800, RC, true],
+          [920, RC, false],
+        ]);
+        await waitFor(r, () => r.svc.status().state === "listening", "the latched session");
+      },
+      SLOW,
+    );
 
-    test("the tree says another window has the keyboard at the insert: focus-changed", async () => {
-      const r = rig(bin, hold, [
-        [0, NOTES],
-        [1200, { ...NOTES, window: "n2" }],
-      ]);
-      await until(() => r.svc.log.items()[0]?.state === "failed", 20_000, "the failure");
-      expect(r.svc.log.items()[0]).toMatchObject({
-        target: NOTES,
-        text: "hello",
-        error: "insert: focus-changed",
-      });
-      expect(jsonLines(r.inserter).some((e) => e.text === "hello")).toBe(false);
-    });
+    test(
+      "the tree says another window has the keyboard at the insert: focus-changed",
+      async () => {
+        const r = rig(bin, hold, [
+          [0, NOTES],
+          [1200, { ...NOTES, window: "n2" }],
+        ]);
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "failed", "the failure");
+        expect(r.svc.log.items()[0]).toMatchObject({
+          target: NOTES,
+          text: "hello",
+          error: "insert: focus-changed",
+        });
+        expect(jsonLines(r.inserter).some((e) => e.text === "hello")).toBe(false);
+      },
+      SLOW,
+    );
 
-    test("a password field in the tree gets the clipboard only, and the log keeps no text", async () => {
-      const r = rig(bin, hold, [[0, { ...NOTES, field: "secure" }]]);
-      await until(() => r.svc.log.items()[0]?.state === "inserted", 20_000, "the receipt");
-      expect(r.svc.log.items()[0]).toMatchObject({ text: null, target: { field: "secure" } });
-      // Written to the fake clipboard, and no paste chord pressed.
-      const inserted = jsonLines(r.inserter);
-      expect(inserted.some((e) => e.text === "hello")).toBe(true);
-      expect(inserted.some((e) => e.type === "key")).toBe(false);
-    });
+    test(
+      "a password field in the tree gets the clipboard only, and the log keeps no text",
+      async () => {
+        const r = rig(bin, hold, [[0, { ...NOTES, field: "secure" }]]);
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "inserted", "the receipt");
+        expect(r.svc.log.items()[0]).toMatchObject({ text: null, target: { field: "secure" } });
+        // Written to the fake clipboard, and no paste chord pressed.
+        const inserted = jsonLines(r.inserter);
+        expect(inserted.some((e) => e.text === "hello")).toBe(true);
+        expect(inserted.some((e) => e.type === "key")).toBe(false);
+      },
+      SLOW,
+    );
   });
 }
