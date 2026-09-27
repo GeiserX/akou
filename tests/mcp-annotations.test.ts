@@ -71,6 +71,8 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_list_calls: READ,
   akou_get_call: READ,
   akou_export: WRITE,
+  akou_dictation_list: READ,
+  akou_dictation_get: READ,
 };
 
 /** What is wrong with a tool list against the table: one line per problem, empty when none. */

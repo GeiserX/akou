@@ -148,6 +148,18 @@ export interface ShellApp {
   openWindow(call?: string): Promise<unknown>;
   /** Every start and share from any door, with who asked. Returns the unsubscribe function. */
   onAnnounce(fn: (a: Announcement) => void): () => void;
+  /** Dictation (docs/ux/DICTATION.md DC-O4); absent where the app runs none (server mode). */
+  dictation?: ShellDictation;
+}
+
+/** Dictation as the tray sees it: its state, the same session door as the API, and its changes. */
+export interface ShellDictation {
+  /** `off`, `starting`, `idle`, `listening`, `transcribing` or `inserting`. */
+  state(): string;
+  /** `POST /v1/dictation/start` and `/stop`: a latched session, as if the key were tapped. */
+  control(action: "start" | "stop"): Promise<unknown>;
+  /** Called at every change of the state. Returns the unsubscribe function. */
+  watch(fn: () => void): () => void;
 }
 
 /** The app as the shell sees it. */
@@ -170,6 +182,11 @@ export function appForShell(app: AkouApp): ShellApp {
     openSettingsPane: (pane) => app.openSettingsPane(pane),
     openWindow: (call) => app.openWindow(call),
     onAnnounce: (fn) => app.onAnnounce(fn),
+    dictation: {
+      state: () => app.dictation()?.status().state ?? "off",
+      control: async (action) => app.dictation()?.control(action),
+      watch: (fn) => app.dictation()?.watch(fn) ?? (() => {}),
+    },
   };
 }
 
@@ -325,12 +342,37 @@ export function appMenu(platform: string): AppMenuItem[] | null {
   ];
 }
 
+/** The dictation item of the tray's menu (DC-O4), or none while dictation is off. */
+function dictationItem(state: string | undefined): TrayMenuItem[] {
+  switch (state) {
+    case undefined:
+    case "off":
+      return [];
+    case "idle":
+      return [{ type: "normal", label: "Start dictation", action: "dictate" }];
+    case "listening":
+      return [{ type: "normal", label: "■ Stop dictation", action: "dictate-stop" }];
+    case "starting":
+      return [{ type: "normal", label: "Dictation is starting", action: "none", enabled: false }];
+    default:
+      return [
+        { type: "normal", label: "Transcribing the dictation", action: "none", enabled: false },
+      ];
+  }
+}
+
 /** The tray's menu for the app's state. */
-export function trayMenu(o: { live: boolean; openAtLogin: boolean }): TrayMenuItem[] {
+export function trayMenu(o: {
+  live: boolean;
+  openAtLogin: boolean;
+  /** The dictation session's state; absent or `off` without dictation. */
+  dictation?: string;
+}): TrayMenuItem[] {
   return [
     o.live
       ? { type: "normal", label: "■ Stop recording", action: "stop" }
       : { type: "normal", label: "● Record", action: "record" },
+    ...dictationItem(o.dictation),
     { type: "normal", label: "Show akou", action: "show" },
     { type: "separator" },
     { type: "normal", label: "Open at login", action: "login", checked: o.openAtLogin },
@@ -339,8 +381,14 @@ export function trayMenu(o: { live: boolean; openAtLogin: boolean }): TrayMenuIt
   ];
 }
 
-/** The tray's title: what a glance at the menu bar needs. */
-export function trayTitle(s: Pick<AppStatus, "live" | "share">): string {
+/**
+ * The tray's title: what a glance at the menu bar needs. A dictation shows while it listens or
+ * transcribes, whatever the pill setting (DC-O4), since it lasts seconds and a call's state is
+ * back right after.
+ */
+export function trayTitle(s: Pick<AppStatus, "live" | "share">, dictation?: string): string {
+  if (dictation === "listening") return "● dictating";
+  if (dictation === "transcribing" || dictation === "inserting") return "… transcribing";
   if (s.share?.active) return "● shared";
   if (!s.live) return "";
   return s.live.state === "paused" ? "❚❚" : "● rec";
@@ -411,6 +459,7 @@ export class Shell implements WindowShell {
     this.ui.onReopen(() => void this.app.openWindow().catch(() => {}));
     const unwatchLifecycle = this.bridge.watchLifecycle(() => void this.refresh());
     const unannounce = this.app.onAnnounce((a) => this.onAnnounce(a));
+    const undictation = this.app.dictation?.watch(() => void this.refresh()) ?? (() => {});
     const unhealth = this.bridge.app.watch((call, e) => {
       if (e.type === "health") this.notify({ type: "capture", call, ch: e.ch, state: e.state });
       // The indicator lives with the recording: from the call's start (or a new part) to its end.
@@ -422,6 +471,7 @@ export class Shell implements WindowShell {
       unwatchLifecycle();
       unannounce();
       unhealth();
+      undictation();
     };
     await this.refresh();
   }
@@ -564,6 +614,12 @@ export class Shell implements WindowShell {
       case "stop":
         await this.toggle("tray");
         break;
+      case "dictate":
+        await this.app.dictation?.control("start");
+        break;
+      case "dictate-stop":
+        await this.app.dictation?.control("stop");
+        break;
       case "show":
         await this.app.openWindow();
         break;
@@ -583,11 +639,13 @@ export class Shell implements WindowShell {
   private async refresh(): Promise<void> {
     const s = (await this.app.status()) as unknown as AppStatus;
     this.live = !!s.live;
-    this.tray?.setTitle(trayTitle(s));
+    const dictation = this.app.dictation?.state();
+    this.tray?.setTitle(trayTitle(s, dictation));
     this.tray?.setMenu(
       trayMenu({
         live: this.live,
         openAtLogin: this.app.config().settings["app.openAtLogin"] === true,
+        dictation,
       }),
     );
   }

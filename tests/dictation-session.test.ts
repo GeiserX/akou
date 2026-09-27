@@ -258,7 +258,7 @@ describe("the insert", () => {
       ["--focus-change"],
     );
     await until(() => r.svc.log.items()[0]?.state === "failed", 10_000, "the failure");
-    expect(r.svc.log.items()[0]?.error).toBe("insert: focus_changed");
+    expect(r.svc.log.items()[0]?.error).toBe("insert: focus-changed");
     expect(r.svc.log.items()[0]?.text).toBe("hello");
   });
 });

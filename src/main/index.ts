@@ -112,7 +112,7 @@ import {
   type SettingValue,
 } from "./config/schema.ts";
 import type { Bindings } from "./dictation/protocol.ts";
-import { RemoteEngine } from "./dictation/remote.ts";
+import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
 import type { DictationEngine } from "./dictation/session.ts";
 import { correctDictation } from "./dictation/vocab.ts";
@@ -1978,6 +1978,16 @@ export class AkouApp implements ApiApp {
       now: () => this.clock.now(),
       engine: (name) => this.dictationEngine(name),
       correct: (raw, language) => this.correctDictation(raw, language),
+      retainDays: () => this.cfg.settings["dictation.retainDays"],
+      remote: () => {
+        const c = this.cfg.settings;
+        if (c["dictation.engine"] !== "remote") return null;
+        return {
+          url: c["dictation.remote.url"],
+          fallback: remoteFallback(c["dictation.remote.fallback"], this.fastEngine() !== null),
+          health: this.remoteDictation?.health() ?? null,
+        };
+      },
       onLog: (level, msg) => this.log(level, msg),
     });
     this.applyDictation();
