@@ -19,8 +19,9 @@
 //!
 //! On macOS the real process runs the key tap, the accessibility reads and the microphone (`mac`,
 //! through the worker loop in `live`) and inserts through the general pasteboard and posted key
-//! events (`mac_insert`). On Windows and Linux there is no
-//! backend yet: the process says so and exits 69. `--probe` prints the `ready` line the process
+//! events (`mac_insert`). On Windows it runs a low-level keyboard hook, UI Automation and the
+//! WASAPI microphone (`win`) and inserts through the clipboard and `SendInput` (`win_insert`). On
+//! Linux there is no backend yet: the process says so and exits 69. `--probe` prints the `ready` line the process
 //! would send (backend, `swallow_keys`, grants read without asking) and exits, on every OS.
 
 pub mod activation;
@@ -44,6 +45,11 @@ pub mod session;
 #[cfg(feature = "simulate")]
 pub mod sim;
 pub mod tap;
+#[cfg(target_os = "windows")]
+pub mod win;
+#[cfg(target_os = "windows")]
+pub mod win_insert;
+pub mod win_keys;
 
 use crate::protocol::exit;
 use activation::Mode;
@@ -179,7 +185,9 @@ pub fn main(argv: &[String]) -> i32 {
     }
     #[cfg(target_os = "macos")]
     return mac::run(cfg);
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return win::run(cfg);
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = cfg;
         fail(
@@ -195,7 +203,9 @@ pub fn main(argv: &[String]) -> i32 {
 pub fn probe() -> String {
     #[cfg(target_os = "macos")]
     return mac::probe();
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    return win::probe();
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     protocol::ready("none", false, "not-needed", "not-needed")
 }
 

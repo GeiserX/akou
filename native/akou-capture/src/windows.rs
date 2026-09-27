@@ -865,3 +865,31 @@ pub fn list_devices() -> Result<Endpoints, OpenError> {
     rx.recv_timeout(OPEN_BUDGET)
         .map_err(|_| OpenError::unavailable("the Windows audio service did not answer in time"))?
 }
+
+/// The microphone alone, for `akou-capture dictate` (DC-N4): the same worker and stream `run`
+/// records with, opened on the device `dictate` chose and closed when its warm hold ends.
+pub struct DictateMic(Worker<(MicInfo, Option<DeviceId>)>);
+
+impl DictateMic {
+    /// Opens `device` (an endpoint id, or `default` for the communications default).
+    pub fn open(device: &str, events: SyncSender<Event>) -> Result<DictateMic, OpenError> {
+        let requested = device.to_string();
+        let m = Worker::spawn(
+            Ch::Mic,
+            events,
+            Arc::new(AtomicU64::new(0)),
+            Box::new(move |events| open_mic(&requested, events)),
+        );
+        match m.open(REBUILD_BUDGET, "microphone") {
+            Ok(_) => Ok(DictateMic(m)),
+            Err(e) => {
+                m.close(CLOSE_BUDGET);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn close(self) {
+        self.0.close(CLOSE_BUDGET);
+    }
+}
