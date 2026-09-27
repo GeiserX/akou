@@ -402,9 +402,9 @@ describe("the helper's stdout and stderr are two pipes", () => {
     expect(s.state).toBe("listening");
     // Packets still in the stdout pipe, read after the end but within the quiet window.
     await wait(AUDIO_DRAIN_MS / 2);
-    s.onPacket(packet(320));
+    s.onPacket(packet(320, 0.02));
     await wait(AUDIO_DRAIN_MS / 2);
-    s.onPacket(packet(320));
+    s.onPacket(packet(320, 0.04));
     await until(() => got.length === 1, 2000, "the decode");
     expect(got).toEqual([960]);
   });
@@ -429,6 +429,76 @@ describe("the helper's stdout and stderr are two pipes", () => {
     s.onMessage({ type: "session.ended", id: "1", reason: "release" });
     await until(() => got.length === 1, 2000, "the decode");
     expect(got).toEqual([160]);
+  });
+
+  test("a session that starts while the last one drains transcribes both", async () => {
+    const { s, got } = session();
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    // Within the quiet window: the next session's line, then its first packet.
+    s.onMessage({ type: "session.started", id: "2", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(160, 0));
+    s.onMessage({ type: "session.ended", id: "2", reason: "release" });
+    await until(() => got.length === 2, 2000, "both decodes");
+    expect(got).toEqual([320, 160]);
+  });
+
+  test("the next session's first packet, read while the last one drains, starts the next", async () => {
+    const { s, got } = session();
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    // stdout ran ahead: the next session's audio from 0, before its line.
+    s.onPacket(packet(160, 0));
+    s.onMessage({ type: "session.started", id: "2", target: TARGET, capture_ns: "0" });
+    s.onMessage({ type: "session.ended", id: "2", reason: "release" });
+    await until(() => got.length === 2, 2000, "both decodes");
+    expect(got).toEqual([320, 160]);
+  });
+
+  test("a session's whole audio read after its end is still its own", async () => {
+    const { s, got } = session();
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    s.onPacket(packet(320, 0));
+    s.onPacket(packet(320, 0.02));
+    await until(() => got.length === 1, 2000, "the decode");
+    expect(got).toEqual([640]);
+  });
+
+  test("an engine's notice reaches the pill's hook for that dictation, before its insert", async () => {
+    const t = tempDir("akou-dict-notice-");
+    cleanups.push(t.cleanup);
+    const log = new DictationLog(t.dir);
+    cleanups.push(() => log.close());
+    const seen: string[] = [];
+    const s = new DictationSession({
+      log,
+      engine: () => ({
+        name: "best",
+        decode: async () => ({
+          text: "ok",
+          words: [],
+          language: null,
+          model: "m",
+          ms: 1,
+          spans: 1,
+          engine: "fast",
+          fallback_from: "best",
+          notice: "best failed, used fast",
+        }),
+      }),
+      send: (c) => seen.push(`send ${c.type}`),
+      bindings: () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold" }),
+      now: () => Date.now(),
+      onNotice: (id, notice) => seen.push(`notice ${id === log.items()[0]?.id} ${notice}`),
+    });
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => seen.includes("send insert"), 2000, "the insert");
+    expect(seen).toEqual(["notice true best failed, used fast", "send insert"]);
   });
 
   test("an empty dictation is settled back to the helper at once (DC-A4)", async () => {

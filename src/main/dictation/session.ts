@@ -101,6 +101,8 @@ export interface SessionOptions extends TextRules {
   onState?(state: SessionState): void;
   /** The helper's mic level during a session, 20 a second, for the pill and the stream (DC-G2). */
   onLevel?(rms: number): void;
+  /** The engine's line for the pill about a dictation (`best failed, used fast`), never logged. */
+  onNotice?(id: string, notice: string): void;
   /**
    * Keeps a dictation's audio for Retry and the learning check (DC-H2), called once its
    * `dictation.started` is written. Never called for a password field (DC-N8).
@@ -216,6 +218,9 @@ export class DictationSession {
         this.o.onLevel?.(m.rms);
         return;
       case "session.started":
+        // The last session is still draining its pipe: it ends now, with the audio it has, since
+        // everything it sent was written before this line.
+        if (this.cur?.end) this.ended(this.cur);
         this.cur = {
           helperId: m.id,
           target: m.target,
@@ -264,7 +269,13 @@ export class DictationSession {
   /** An `AKP1` packet from the helper's stdout: a session's audio, mic channel. */
   onPacket(p: Packet): void {
     if (p.ch !== "mic") return;
-    const c = this.cur;
+    let c = this.cur;
+    // A packet at 0 while the last session drains, once that one has audio, is the next session's
+    // first: the last one got every packet of its own before it.
+    if (c?.end && c.samples > 0 && p.fileSeconds === 0) {
+      this.ended(c);
+      c = null;
+    }
     if (!c) {
       // A session's first packet starts it again; a later one with none before it is the tail
       // of a session already transcribed.
@@ -370,6 +381,7 @@ export class DictationSession {
       this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
       return;
     }
+    if (r.kind === "text" && r.d.notice) this.o.onNotice?.(id, r.d.notice);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
     if (r.kind === "empty" || r.text === "") {

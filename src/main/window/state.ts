@@ -1,8 +1,8 @@
 /**
  * What the desktop shell remembers between runs (docs/ux/DESKTOP.md DK-M4, DK-F1): the main
- * window's frame and the floating indicator's place, in `shell.json` in the config folder. It is
- * not a setting: nobody types it, and a file that is missing, torn or hand-edited into nonsense
- * only means the window opens at its default place.
+ * window's frame, the floating indicator's place and the dictation pill's (DICTATION.md DC-O1), in
+ * `shell.json` in the config folder. It is not a setting: nobody types it, and a file that is
+ * missing, torn or hand-edited into nonsense only means the window opens at its default place.
  */
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
@@ -42,6 +42,11 @@ export function fileState(dir: string): { load(): ShellState; save(s: ShellState
       if (w) out.window = w;
       const i = rect(o.indicator);
       if (i) out.indicator = i;
+      const p = rect(o.pill);
+      if (p && typeof o.pillEdge === "string") {
+        out.pill = p;
+        out.pillEdge = o.pillEdge;
+      }
       return out;
     },
     save(s) {

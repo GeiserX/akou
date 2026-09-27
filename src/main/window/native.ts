@@ -4,6 +4,7 @@
  * never by the headless app, because the SDK exists only inside a Hutch build.
  */
 
+import { dlopen, FFIType, type Pointer } from "bun:ffi";
 import Electrobun, {
   ApplicationMenu,
   BrowserView,
@@ -14,11 +15,34 @@ import Electrobun, {
   Utils,
 } from "electrobun/main";
 import type { IndicatorRpc } from "../../ui/indicator-protocol.ts";
+import type { PillRpc } from "../../ui/pill-protocol.ts";
 import type { AkouRpc } from "../../ui/protocol.ts";
 import type { NativeTray, NativeUi, NativeWindow, TrayMenuItem } from "./shell.ts";
 
 /** A streamed answer or a long follow can outlive the SDK's default request timeout. */
 const MAX_REQUEST_MS = 600_000;
+
+/** `GetWindowLongPtrW`'s index of the extended style, and the style that refuses activation. */
+const GWL_EXSTYLE = -20;
+const WS_EX_NOACTIVATE = 0x08000000n;
+
+/**
+ * Sets `WS_EX_NOACTIVATE` on a window (DC-O1, Windows): a click on it then never takes the
+ * keyboard from the app in front. The SDK has no option for it, so through user32 directly.
+ */
+function noActivate(hwnd: Pointer | null): void {
+  if (!hwnd) throw new Error("the pill's window has no handle");
+  const user32 = dlopen("user32.dll", {
+    GetWindowLongPtrW: { args: [FFIType.ptr, FFIType.i32], returns: FFIType.i64 },
+    SetWindowLongPtrW: { args: [FFIType.ptr, FFIType.i32, FFIType.i64], returns: FFIType.i64 },
+  });
+  try {
+    const style = BigInt(user32.symbols.GetWindowLongPtrW(hwnd, GWL_EXSTYLE));
+    user32.symbols.SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE);
+  } finally {
+    user32.close();
+  }
+}
 
 export function electrobunUi(): NativeUi {
   return {
@@ -91,6 +115,51 @@ export function electrobunUi(): NativeUi {
         send: {
           followed: (m) => defined.send.followed(m),
           status: (s) => defined.send.status(s),
+        },
+      };
+    },
+
+    openPill({ url, rpc, frame, style }) {
+      const defined = BrowserView.defineRPC<PillRpc>({
+        maxRequestTime: MAX_REQUEST_MS,
+        handlers: { requests: rpc.handlers, messages: {} },
+      });
+      // Hidden until a session, never activated, and on macOS a non-activating panel, so neither
+      // showing it nor clicking Stop takes the keyboard from the app the text goes to.
+      const win = new BrowserWindow({
+        title: "akou dictation",
+        url,
+        rpc: defined,
+        frame,
+        titleBarStyle: "hidden",
+        hidden: true,
+        activate: false,
+        ...(style.styleMask ? { styleMask: { ...style.styleMask, Resizable: false } } : {}),
+      });
+      if (style.noActivate) {
+        try {
+          noActivate(win.ptr);
+        } catch (err) {
+          // A pill that a click activates would take the keyboard from the target: none at all.
+          win.close();
+          throw err;
+        }
+      }
+      win.setAlwaysOnTop(true);
+      win.setVisibleOnAllWorkspaces(true);
+      return {
+        window: {
+          showInactive: () => win.showInactive(),
+          hide: () => win.hide(),
+          close: () => win.close(),
+          onClose: (fn) => win.on("close", fn),
+          onFrame: (fn) => win.on("move", () => fn(win.getFrame())),
+        },
+        send: {
+          state: (s) => defined.send.state(s),
+          level: (l) => defined.send.level(l),
+          preview: (p) => defined.send.preview(p),
+          chip: (c) => defined.send.chip(c),
         },
       };
     },

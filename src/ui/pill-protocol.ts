@@ -1,6 +1,6 @@
 /**
  * The dictation pill's RPC with the main process (docs/ux/DICTATION.md section 5.1, DC-O1, DC-D2,
- * DC-L4). Types only; the main side (the window and its RPC handlers) is lane B's, not yet written.
+ * DC-L4). Types only; the main side is `src/main/window/pill.ts`.
  *
  * The pill never receives dictated text: no state below has a field for it, and the main side
  * rebuilds every message field by field, as the indicator's does, so a stray `text` never reaches
@@ -86,6 +86,11 @@ export interface PillRpc {
       /** Stop and Cancel while listening; Retry, Copy and Open draft on an error. */
       control: { params: { action: "stop" | "cancel" | PillAction }; response: boolean };
       chip: { params: ChipAnswer; response: boolean };
+      /**
+       * The state now, pulled once the page has booted: a message sent while it was still loading
+       * is lost, and the window is created hidden before the first session.
+       */
+      state: { params: Record<string, never>; response: PillState };
     };
     messages: Record<string, never>;
   };

@@ -27,3 +27,11 @@ sink = mountPill({
   control: (action) => void rpc.request.control({ action }).catch(() => {}),
   chip: (a) => void rpc.request.chip(a).catch(() => {}),
 });
+
+// A state sent before the handlers above existed is lost: pull the one in force now.
+void rpc.request
+  .state({})
+  .then((s: unknown) => {
+    if (typeof (s as { state?: unknown } | null)?.state === "string") sink?.state(s as PillState);
+  })
+  .catch(() => {});
