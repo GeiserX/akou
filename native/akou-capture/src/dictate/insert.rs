@@ -93,6 +93,10 @@ pub trait Clipboard {
     /// When the promise was read since the last call: macOS `provideDataForType`, Windows
     /// `WM_RENDERFORMAT`, an X11 `SelectionRequest`, a Wayland `wl_data_source.send`.
     fn reads(&mut self) -> Vec<u64>;
+    /// Answers the reads waiting now, on every tick, paste or not: on Linux the owner serves the
+    /// clipboard itself, so after a restore akou must keep answering for the old contents. A
+    /// clipboard the OS serves (macOS, Windows) has nothing to do.
+    fn serve(&mut self) {}
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -487,6 +491,7 @@ impl Inserter {
 
     /// Time passes: a paste whose target read and went quiet, or whose time ran out, settles.
     pub fn tick(&mut self, t_ns: u64, done: &mut Vec<(String, Outcome)>) {
+        self.clip.serve();
         self.collect();
         let Some(tx) = self.tx.as_ref() else { return };
         let owned = self.clip.change_count() == tx.count;
