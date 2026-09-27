@@ -9,6 +9,8 @@
  * - `GET /dictations/{id}/audio`: a spoken dictation's kept audio, a 16 kHz WAV (DC-H2).
  * - `POST /dictations/{id}/retry {engine}`: that audio decoded again with another engine, answered
  *   beside the dictation, which is not changed.
+ * - `POST /dictations/{id}/insert {text?, fix?}`: the draft box opened on it in the desktop
+ *   window, where the user reads it and presses Enter; the API never pastes by itself (DC-N9).
  * - `DELETE /dictations/{id}`, `DELETE /dictations`: one dictation, or all, deleted with their
  *   audio; the log keeps a tombstone each and nothing else of them (DC-H2).
  * - `GET /dictation`: whether dictation is on, the session's state, the engine, the remote's
@@ -256,6 +258,31 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         transcription_failed: 500,
       };
       throw new HttpError(status[r.code], r.code, r.message, { id });
+    },
+  );
+  r.add(
+    "POST",
+    "/dictations/:id/insert",
+    {
+      id: "dictations.insert",
+      doc: "Open the draft box on a dictation in the desktop window, taking the keyboard: the user reads it, edits it, and Enter inserts it into the app and field captured when it began (Ctrl+Enter, Cmd+Enter on macOS, also presses `dictation.sendKey`). Nothing is pasted by this call. `text` shows another reading (a retry's) in place of the logged one; `fix: true` opens it for teaching only, where Enter offers to learn the words the user fixed and inserts nothing. `no_draft_box` with dictation off, `no_text` for a dictation with no text, `no_target` for a clip sent to dictations.create unless `fix` is set.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: "The dictation id, from dictations.list." },
+      body: { "text?": "string", "fix?": "boolean" },
+      ok: 200,
+    },
+    async (c) => {
+      const id = c.params.id as string;
+      const d = service(c);
+      const b = await c.body<{ text?: string; fix?: boolean }>();
+      const r = d.draft.open(id, {
+        focus: true,
+        ...(b.fix === true ? { fix: true } : {}),
+        ...(b.text !== undefined ? { text: b.text } : {}),
+      });
+      if (r.ok) return json(200, { id, opened: true, fix: b.fix === true });
+      throw new HttpError(r.code === "not_found" ? 404 : 409, r.code, r.message, { id });
     },
   );
   r.add(

@@ -3048,6 +3048,64 @@
         "x-akou-access": "admin"
       }
     },
+    "/v1/dictations/{id}/insert": {
+      "post": {
+        "operationId": "dictations.insert",
+        "tags": [
+          "dictations"
+        ],
+        "description": "Open the draft box on a dictation in the desktop window, taking the keyboard: the user reads it, edits it, and Enter inserts it into the app and field captured when it began (Ctrl+Enter, Cmd+Enter on macOS, also presses `dictation.sendKey`). Nothing is pasted by this call. `text` shows another reading (a retry's) in place of the logged one; `fix: true` opens it for teaching only, where Enter offers to learn the words the user fixed and inserts nothing. `no_draft_box` with dictation off, `no_text` for a dictation with no text, `no_target` for a clip sent to dictations.create unless `fix` is set.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dictation id, from dictations.list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string"
+                  },
+                  "fix": {
+                    "type": "boolean"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/dictation": {
       "get": {
         "operationId": "dictation.status",

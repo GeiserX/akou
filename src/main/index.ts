@@ -62,6 +62,7 @@ import {
 import { HttpError } from "./api/http.ts";
 import { KeyStore } from "./api/keys.ts";
 import { type Cidr, isLoopback, parseCidr } from "./api/net.ts";
+import { editFile, targetPath } from "./api/routes/vocab.ts";
 import { type ApiApp, type ApiServer, type Levels, startApiServer } from "./api/server.ts";
 import { APP_VERSION, RUNTIME_FILE } from "./app-info.ts";
 import {
@@ -117,12 +118,12 @@ import {
   type EngineVerdict,
   resolveDictationEngine,
 } from "./dictation/engines.ts";
-import type { Bindings } from "./dictation/protocol.ts";
+import type { Bindings, SendKey } from "./dictation/protocol.ts";
 import { loadPunctuation } from "./dictation/punctuation.ts";
 import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
 import type { DictationEngine } from "./dictation/session.ts";
-import { correctDictation } from "./dictation/vocab.ts";
+import { correctDictation, knowsPair, learnPair, unlearnPair } from "./dictation/vocab.ts";
 import { type ExportResult, exportCall } from "./handoff/export.ts";
 import {
   buildPayload,
@@ -181,6 +182,7 @@ import {
   mergeVocab,
   readVocabFile,
   toFoldEntries,
+  type VocabFile,
   vocabPaths,
 } from "./vocab/files.ts";
 import { Bridge } from "./window/bridge.ts";
@@ -2021,6 +2023,22 @@ export class AkouApp implements ApiApp {
       retainDays: () => this.cfg.settings["dictation.retainDays"],
       keepAudio: () => this.cfg.settings["dictation.keepAudio"],
       learns: () => this.cfg.settings["dictation.learn"] !== "off",
+      draft: {
+        platform: process.platform,
+        sendKey: () => this.cfg.settings["dictation.sendKey"] as SendKey,
+        learnMode: () => this.cfg.settings["dictation.learn"],
+        engines: () => this.retryEngines(),
+        knownPairs: async () => {
+          const entries = await this.dictationEntries();
+          return (heard, term) => knowsPair(entries, heard, term);
+        },
+        commonWords: (language) =>
+          this.dictionaries.predicate(
+            callLanguages(this.cfg.settings["vocab.languages"], language ? [language] : []),
+          ),
+        learnEntry: (p) => this.editDictationVocab((f) => learnPair(f, p, this.today())),
+        unlearnEntry: (p) => this.editDictationVocab((f) => unlearnPair(f, p)),
+      },
       remote: () => {
         const c = this.cfg.settings;
         if (c["dictation.engine"] !== "remote") return null;
@@ -2044,16 +2062,7 @@ export class AkouApp implements ApiApp {
    * the word lists of `vocab.languages` plus the language the engine found.
    */
   private async correctDictation(raw: string, language: string | null): Promise<string> {
-    this.dictationVocab ??= this.readDictationVocab();
-    const read = this.dictationVocab;
-    let entries: MergedEntry[];
-    try {
-      entries = await read;
-    } catch (err) {
-      // Read again on the next dictation rather than never.
-      if (this.dictationVocab === read) this.dictationVocab = null;
-      throw err;
-    }
+    const entries = await this.dictationEntries();
     const langs = callLanguages(this.cfg.settings["vocab.languages"], language ? [language] : []);
     return correctDictation(raw, entries, this.dictionaries.predicate(langs));
   }
@@ -2068,6 +2077,40 @@ export class AkouApp implements ApiApp {
     if (!asr || this.asrState.state === "unavailable") return null;
     if (this.asrState.state === "loading" && this.dictationVerdict().engine !== "fast") return null;
     return asr.speech(samples);
+  }
+
+  /**
+   * A dictation's Learn or Undo (DC-L4): the global vocabulary file, edited under the same lock
+   * as `POST /vocab`, then read again by the next dictation.
+   */
+  private async editDictationVocab(edit: (f: VocabFile) => VocabFile): Promise<void> {
+    await editFile(targetPath(this, undefined), (file) => ({ file: edit(file), result: null }));
+    this.vocabChanged();
+  }
+
+  private today(): string {
+    return new Date(this.clock.now()).toISOString().slice(0, 10);
+  }
+
+  /** The engines the draft box can retry a dictation on: those this machine can run now. */
+  private retryEngines(): string[] {
+    const out: string[] = [];
+    if (this.fastEngine()) out.push("fast");
+    if (this.bestRuns(this.llamaPlan())) out.push("best");
+    if (this.cfg.settings["dictation.remote.url"].trim() !== "") out.push("remote");
+    return out;
+  }
+
+  /** Dictation's vocabulary, read once per change; a failed read is tried again next time. */
+  private async dictationEntries(): Promise<MergedEntry[]> {
+    this.dictationVocab ??= this.readDictationVocab();
+    const read = this.dictationVocab;
+    try {
+      return await read;
+    } catch (err) {
+      if (this.dictationVocab === read) this.dictationVocab = null;
+      throw err;
+    }
   }
 
   private async readDictationVocab(): Promise<MergedEntry[]> {

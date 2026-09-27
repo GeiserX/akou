@@ -71,12 +71,38 @@ export type DictationDraft =
   | { type: "dictation.cancelled"; id: string }
   | { type: "dictation.failed"; id: string; error: string }
   /**
+   * The text went to the draft box instead of the app (DC-S1): `reason` is the helper's refusal
+   * when the focus guard sent it there (`focus-changed`, `not-editable`, `field-unknown`, DC-N9),
+   * `insert` for a draft reopened after its own insert failed, `fix` or `api` for a deliberate open.
+   */
+  | { type: "dictation.drafted"; id: string; reason: string }
+  /** Escape or the close in the draft box: nothing was inserted, the text stays in history. */
+  | { type: "dictation.discarded"; id: string }
+  /**
+   * A word the user fixed in the draft box (DC-L1, DC-L3), and what became of the offer to learn
+   * it (DC-L4): `proposed` when the edit was read, then `accepted`, `rejected` or `ignored`. Only
+   * the pair is kept, never the rest of the field.
+   */
+  | {
+      type: "dictation.learn";
+      id: string;
+      term: string;
+      heard: string;
+      status: LearnStatus;
+      /** `audio` when a second decode with the term confirmed it, `none` when none ran. */
+      evidence: "audio" | "none";
+    }
+  /**
    * The tombstone (DC-H2): the dictation was deleted, by the user or by `dictation.retainDays`.
    * Every other event of the dictation is gone from the log; this line is all that is left.
    */
   | { type: "dictation.deleted"; id: string };
 
 export type DictationEvent = DictationDraft & { v: 1; seq: number; t: number };
+
+/** What became of an offer to learn a word (DC-L4); `ignored` exists only here, never in a call. */
+export const LEARN_STATUSES = ["proposed", "ignored", "accepted", "rejected"] as const;
+export type LearnStatus = (typeof LEARN_STATUSES)[number];
 
 export const DICTATION_TYPES: readonly DictationDraft["type"][] = [
   "dictation.started",
@@ -86,6 +112,9 @@ export const DICTATION_TYPES: readonly DictationDraft["type"][] = [
   "dictation.inserted",
   "dictation.cancelled",
   "dictation.failed",
+  "dictation.drafted",
+  "dictation.discarded",
+  "dictation.learn",
   "dictation.deleted",
 ];
 
@@ -137,7 +166,17 @@ export function checkDictationDraft(o: Record<string, unknown>): string | null {
       return isStr(o.method) && isNum(o.receipt_ms) ? null : "dictation.inserted";
     case "dictation.failed":
       return isStr(o.error) ? null : "dictation.failed";
+    case "dictation.drafted":
+      return isStr(o.reason) ? null : "dictation.drafted";
+    case "dictation.learn":
+      return isStr(o.term) &&
+        isStr(o.heard) &&
+        (LEARN_STATUSES as readonly unknown[]).includes(o.status) &&
+        (o.evidence === "audio" || o.evidence === "none")
+        ? null
+        : "dictation.learn";
     case "dictation.empty":
+    case "dictation.discarded":
     case "dictation.cancelled":
     case "dictation.deleted":
       return null;
@@ -169,6 +208,8 @@ export interface DictationItem {
     | "inserting"
     | "done"
     | "inserted"
+    | "drafted"
+    | "discarded"
     | "cancelled"
     | "empty"
     | "failed";
@@ -247,6 +288,12 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
         break;
       case "dictation.cancelled":
         it.state = "cancelled";
+        break;
+      case "dictation.drafted":
+        it.state = "drafted";
+        break;
+      case "dictation.discarded":
+        it.state = "discarded";
         break;
       case "dictation.failed":
         it.state = "failed";

@@ -27,6 +27,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "GET /v1/dictations/{id}": "admin",
   "GET /v1/dictations/{id}/audio": "admin",
   "POST /v1/dictations/{id}/retry": "admin",
+  "POST /v1/dictations/{id}/insert": "admin",
   "DELETE /v1/dictations": "admin",
   "DELETE /v1/dictations/{id}": "admin",
   "GET /v1/dictation": "admin",

@@ -72,7 +72,9 @@
  *
  *   --slow-mic MS           the mic opens MS after the key-down: `session.started` waits for it
  *                           (the readiness gate, DC-N4)
- *   --focus-change          the target lost focus before the insert: `insert.failed` (DC-N9)
+ *   --focus-change          the target lost focus before the insert: `insert.failed` (DC-N9).
+ *                           A `focus {target}` (the draft box's Enter) brings the target back:
+ *                           from then until the next session, inserts land there
  *   --dormant-tree          the field cannot be read back: `edit.unreadable` after the insert
  *                           (DC-L2)
  *   --tap-disabled-at MS    the first key event at or after MS finds the tap disabled and is lost;
@@ -388,6 +390,8 @@ async function runDictate(): Promise<void> {
     ax ? (ax.findLast((l) => l.at <= ms)?.target ?? UNKNOWN_TARGET) : target;
   /** The sessions' targets captured at key-down, by session id, for the insert's guards. */
   const captured = new Map<string, Target>();
+  /** What a `focus` brought forward: it has the keyboard until the next session. */
+  let focused: Target | null = null;
   const t0 = performance.now();
   const now = () => Math.round(performance.now() - t0);
   const receiptMs = num("--receipt-ms") ?? 5;
@@ -441,6 +445,7 @@ async function runDictate(): Promise<void> {
         if (slowMic > 0) await sleep(slowMic);
         open = { id: String(++sessions), at: o.at };
         captured.set(open.id, targetAt(o.at));
+        focused = null;
         say({
           type: "session.started",
           id: open.id,
@@ -508,14 +513,19 @@ async function runDictate(): Promise<void> {
       case "settled":
         machine?.settled();
         return;
+      case "focus":
+        focused = c.target;
+        return;
       case "insert": {
         log(opt("--inserter-log"), { ...c, at: now() });
         if (flag("--no-receipt")) return;
         // The guards look at the tree now, when the insert arrives, not after the receipt.
-        const refused = ax ? axRefusal(captured.get(c.id) ?? target, targetAt(clock)) : null;
+        // The app's target is the one to compare (the draft box names the session's).
+        const cap = c.target ?? captured.get(c.id) ?? target;
+        const refused = ax ? axRefusal(cap, focused ?? targetAt(clock)) : null;
         setTimeout(() => {
           machine?.settled();
-          const failed = flag("--focus-change") ? "focus-changed" : refused;
+          const failed = flag("--focus-change") && !focused ? "focus-changed" : refused;
           if (failed && c.method !== "clipboard" && failed !== "secure") {
             say({ type: "insert.failed", id: c.id, reason: failed });
             return;
