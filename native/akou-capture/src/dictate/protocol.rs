@@ -679,7 +679,7 @@ mod tests {
             written.push(session_ended("1", reason));
         }
         written.extend([
-            inserted("1", "paste", 12),
+            inserted("1", "paste", 12, None),
             insert_failed("1", "focus-changed"),
             rebound("RightShift"),
             rebind_failed("LeftOption+RightOption", "x"),
@@ -715,6 +715,7 @@ mod tests {
                     method: "paste".into(),
                     send_key: "none".into(),
                     target: Some(t),
+                    restore: true,
                 },
                 Command::Settled { id: "1".into() },
                 Command::Focus { target: secure },
