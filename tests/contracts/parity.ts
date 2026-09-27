@@ -431,6 +431,24 @@ export const PARITY: readonly Row[] = [
     window: [ui("dictation-history.ts", '"GET", `/dictations?#{params}`')],
   },
   {
+    action: "Retry a dictation with another engine",
+    cli: ["dictations"],
+    api: ["POST /dictations/:id/retry"],
+    mcp: {
+      none: "MCP reads dictation history only; a retry runs an engine on the user's audio (DICTATION.md DC-G5)",
+    },
+    window: [ui("dictation-history.ts", "`/dictations/#{encodeURIComponent(id)}/retry`")],
+  },
+  {
+    action: "A dictation's audio",
+    cli: {
+      none: "the audio is for Retry and the page; a script reads GET /v1/dictations/{id}/audio",
+    },
+    api: ["GET /dictations/:id/audio"],
+    mcp: { none: "MCP reads dictation history only, as text (DICTATION.md DC-G5)" },
+    window: { none: "the History page has no player; Retry decodes the audio in the app" },
+  },
+  {
     action: "Delete dictations",
     cli: ["dictations"],
     api: ["DELETE /dictations/:id", "DELETE /dictations"],

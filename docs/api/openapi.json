@@ -2852,7 +2852,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "Delete every dictation, as the page's \"Delete all dictations now\": the dictation log keeps a tombstone for each and nothing else. Answers how many were deleted.",
+        "description": "Delete every dictation, as the page's \"Delete all dictations now\": the dictation log keeps a tombstone for each and nothing else, and no audio is left. Answers how many were deleted.",
         "responses": {
           "200": {
             "description": "OK",
@@ -2917,7 +2917,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "Delete one dictation: its text, words and events are gone from the dictation log, which keeps only a tombstone with its id.",
+        "description": "Delete one dictation: its text, words and events are gone from the dictation log, which keeps only a tombstone with its id, and its audio is deleted.",
         "parameters": [
           {
             "name": "id",
@@ -2929,6 +2929,104 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictations/{id}/audio": {
+      "get": {
+        "operationId": "dictations.audio",
+        "tags": [
+          "dictations"
+        ],
+        "description": "A spoken dictation's audio as a 16 kHz mono WAV, kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dictation id, from dictations.list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "audio/wav": {
+                "schema": {
+                  "type": "string",
+                  "format": "binary"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictations/{id}/retry": {
+      "post": {
+        "operationId": "dictations.retry",
+        "tags": [
+          "dictations"
+        ],
+        "description": "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dictation id, from dictations.list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "engine": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "engine"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",

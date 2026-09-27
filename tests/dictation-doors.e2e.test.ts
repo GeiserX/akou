@@ -7,7 +7,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -245,6 +245,114 @@ describe("DC-H2: deleting dictations", () => {
     expect((await run(["dictations", "show", id])).code).toBe(64);
     expect((await run(["dictations", "delete"])).code).toBe(64);
   });
+});
+
+describe("DC-G1, DC-G3: a dictation's audio and Retry over the API and the CLI", () => {
+  const audioDir = (r: AppRig) => join(r.home, ".config", "akou", "dictation", "audio");
+  const audioFiles = (r: AppRig) =>
+    existsSync(audioDir(r)) ? readdirSync(audioDir(r)).sort() : [];
+
+  // A spoken dictation runs the fake helper in real time: past bun's 5 s default on a slow runner.
+  const SPOKEN_MS = 30_000;
+
+  /** A spoken dictation through the API's start and stop, inserted by the fake. */
+  async function spoken(r: Rig): Promise<string> {
+    expect((await r.api("POST", "/dictation/start")).status).toBe(200);
+    // The fake's mic runs in real time from the start: let "hello" be spoken before the stop.
+    await Bun.sleep(1000);
+    expect((await r.api("POST", "/dictation/stop")).status).toBe(200);
+    await until(async () => (await items(r))[0]?.state === "inserted", 10_000, "the insert");
+    return (await items(r))[0].id;
+  }
+
+  test(
+    "GET audio gives the kept WAV; retry decodes it again; the CLI prints the retry",
+    async () => {
+      const r = await rig();
+      const id = await spoken(r);
+      const res = await fetch(`http://127.0.0.1:${r.port}/v1/dictations/${id}/audio`, {
+        headers: { authorization: `Bearer ${r.token}` },
+      });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("content-type")).toBe("audio/wav");
+      const wav = new Uint8Array(await res.arrayBuffer());
+      expect(new TextDecoder().decode(wav.subarray(0, 4))).toBe("RIFF");
+      expect(wav.length).toBe(statSync(join(audioDir(r), `${id}.wav`)).size);
+      const retry = await r.api("POST", `/dictations/${id}/retry`, { engine: "fast" });
+      expect(retry.status).toBe(200);
+      expect(retry.body).toMatchObject({ id, text: "hello", engine: "fast" });
+      const run = await rigCli(r)(["dictations", "retry", id, "--engine", "fast"]);
+      expect([run.code, run.out]).toEqual([0, "hello"]);
+      // Neither retry changed the dictation.
+      expect((await r.api("GET", `/dictations/${id}`)).body).toMatchObject({
+        state: "inserted",
+        text: "hello",
+      });
+    },
+    SPOKEN_MS,
+  );
+
+  test(
+    "refusals: no such dictation, a clip with no audio kept, a bad engine",
+    async () => {
+      const r = await rig();
+      const path = join(scratch(), "clip.wav");
+      writeFileSync(path, monoWav(concat(silence(0.6), speak(["thanks"]), silence(1))));
+      const clip = (await rigCli(r)(["dictate", path, "--json"])).json.id;
+      const none = await r.api("POST", "/dictations/dnone/retry", { engine: "fast" });
+      expect([none.status, none.body.error]).toEqual([404, "not_found"]);
+      const noAudio = await r.api("POST", `/dictations/${clip}/retry`, { engine: "fast" });
+      expect([noAudio.status, noAudio.body.error]).toEqual([404, "no_audio"]);
+      const get = await r.api("GET", `/dictations/${clip}/audio`);
+      expect([get.status, get.body.error]).toEqual([404, "no_audio"]);
+      const bad = await r.api("POST", `/dictations/${clip}/retry`, { engine: "nope" });
+      expect([bad.status, bad.body.error]).toEqual([422, "bad_field"]);
+      const remote = await r.api("POST", `/dictations/${clip}/retry`, { engine: "remote" });
+      expect([remote.status, remote.body.error]).toEqual([422, "bad_field"]);
+      const cli = await rigCli(r)(["dictations", "retry", clip]);
+      expect(cli.code).toBe(64);
+      expect(cli.err).toContain("--engine");
+    },
+    SPOKEN_MS,
+  );
+
+  test(
+    "DELETE one leaves no audio file",
+    async () => {
+      const r = await rig();
+      const id = await spoken(r);
+      expect(audioFiles(r)).toEqual([`${id}.wav`]);
+      expect((await r.api("DELETE", `/dictations/${id}`)).status).toBe(200);
+      expect(audioFiles(r)).toEqual([]);
+    },
+    SPOKEN_MS,
+  );
+
+  test(
+    "DELETE all leaves no audio files",
+    async () => {
+      const r = await rig();
+      await spoken(r);
+      expect(audioFiles(r)).toHaveLength(1);
+      expect((await r.api("DELETE", "/dictations")).body).toEqual({ deleted: 1 });
+      expect(audioFiles(r)).toEqual([]);
+    },
+    SPOKEN_MS,
+  );
+
+  test(
+    "turning dictation.keepAudio off deletes the audio of finished dictations at once",
+    async () => {
+      const r = await rig();
+      const id = await spoken(r);
+      expect(audioFiles(r)).toEqual([`${id}.wav`]);
+      const patch = await r.api("PATCH", "/config", { "dictation.keepAudio": false });
+      expect(patch.status).toBe(200);
+      expect(audioFiles(r)).toEqual([]);
+      expect((await r.api("GET", `/dictations/${id}`)).body.text).toBe("hello");
+    },
+    SPOKEN_MS,
+  );
 });
 
 describe("DC-R4: GET /v1/dictation/remote-test and akou dictate --remote-test", () => {

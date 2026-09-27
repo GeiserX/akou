@@ -77,6 +77,7 @@ const MEDIA: Record<NonNullable<RouteDoc["type"]>, [string, Json]> = {
   text: ["text/plain", { type: "string" }],
   markdown: ["text/markdown", { type: "string" }],
   audio: ["audio/ogg", { type: "string", format: "binary" }],
+  wav: ["audio/wav", { type: "string", format: "binary" }],
 };
 
 /** `/calls/:id` under `/v1` as OpenAPI writes it: `/v1/calls/{id}`. */

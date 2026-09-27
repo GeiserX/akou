@@ -8,7 +8,9 @@
  *   binding or a script: a latched session, as if the dictation key were tapped. They never launch
  *   the app (exit 69 when it is not running), and exit 78 while `dictation.enabled` is off.
  * - `akou dictate --remote-test`: DC-R4's Test of `dictation.remote.url`.
- * - `akou dictations list|show|delete`: the dictation history.
+ * - `akou dictations list|show|delete`: the dictation history; `akou dictations retry ID --engine E`
+ *   decodes a spoken dictation's kept audio again and prints the new text, leaving the dictation
+ *   as it was.
  */
 
 import { readFileSync, statSync } from "node:fs";
@@ -18,7 +20,7 @@ import { EXIT, Unreachable } from "../client.ts";
 import { api, type Body, type Command, type Ctx, finish, wall } from "../context.ts";
 import { usage } from "./calls.ts";
 
-const ENGINES = ["auto", "fast"];
+const ENGINES = ["auto", "fast", "best", "remote"];
 const SESSION = ["start", "stop", "toggle", "cancel"];
 
 /** A session command, which never launches the app: a key binding must not open akou by itself. */
@@ -127,9 +129,10 @@ function row(d: Body): string {
 
 export const dictationsCommand: Command = {
   name: "dictations",
-  summary: "The dictation history: list, show or delete dictations",
+  summary: "The dictation history: list, show, retry or delete dictations",
   usage: `akou dictations list [--since 24h] [-q TEXT] [--limit N]   [--json]
        akou dictations show ID   [--json]
+       akou dictations retry ID --engine ${ENGINES.join("|")}   [--json]
        akou dictations delete ID | --all   [--json]`,
   flags: {
     since: { type: "string", value: "24h", desc: "only dictations from the last 90s, 5m or 1h" },
@@ -141,11 +144,13 @@ export const dictationsCommand: Command = {
     },
     limit: { type: "string", value: "N", desc: "at most N dictations (default 100)" },
     all: { type: "boolean", desc: "with delete: every dictation" },
+    engine: { type: "string", value: "E", desc: `with retry: ${ENGINES.join(", ")}` },
   },
   examples: [
     "akou dictations list",
     "akou dictations list --since 24h --json",
     "akou dictations show d1",
+    "akou dictations retry d1 --engine best",
     "akou dictations delete d1",
   ],
   run: async (ctx, p) => {
@@ -184,6 +189,23 @@ export const dictationsCommand: Command = {
         all ? `${b.deleted} dictations deleted` : `dictation ${b.id} deleted`,
       );
     }
-    return usage(ctx, "dictations needs list, show or delete");
+    if (sub === "retry") {
+      const [id, ...more] = rest;
+      if (!id || more.length > 0) return usage(ctx, "dictations retry needs one ID");
+      const engine = str(p, "engine");
+      if (engine === undefined || !ENGINES.includes(engine)) {
+        return usage(ctx, `dictations retry needs --engine ${ENGINES.join(", ")}`);
+      }
+      const r = await api(ctx, "POST", `/dictations/${encodeURIComponent(id)}/retry`, {
+        body: { engine },
+        timeoutMs: 600_000,
+      });
+      if (!ctx.json && r.status === 200 && !r.body?.text) {
+        ctx.io.err("akou: no speech heard on the retry");
+        return EXIT.ok;
+      }
+      return finish(ctx, r, (b: Body) => b.text as string);
+    }
+    return usage(ctx, "dictations needs list, show, retry or delete");
   },
 };

@@ -6,8 +6,11 @@
  *   the dictation path with no key and no insert, so a program can transcribe a clip the way a
  *   spoken dictation is: `{id, text, raw, language, words, engine, model, ms, state}`.
  * - `GET /dictations`, `GET /dictations/{id}`: the dictation log, newest first.
- * - `DELETE /dictations/{id}`, `DELETE /dictations`: one dictation, or all, deleted; the log keeps
- *   a tombstone each and nothing else of them (DC-H2).
+ * - `GET /dictations/{id}/audio`: a spoken dictation's kept audio, a 16 kHz WAV (DC-H2).
+ * - `POST /dictations/{id}/retry {engine}`: that audio decoded again with another engine, answered
+ *   beside the dictation, which is not changed.
+ * - `DELETE /dictations/{id}`, `DELETE /dictations`: one dictation, or all, deleted with their
+ *   audio; the log keeps a tombstone each and nothing else of them (DC-H2).
  * - `GET /dictation`: whether dictation is on, the session's state, the engine, the remote's
  *   standing and the grants the helper reports.
  * - `POST /dictation/start|stop|cancel`: the live session, as the tray and `akou dictate start`
@@ -189,11 +192,78 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     },
   );
   r.add(
+    "GET",
+    "/dictations/:id/audio",
+    {
+      id: "dictations.audio",
+      doc: "A spoken dictation's audio as a 16 kHz mono WAV, kept for Retry and the learning check while `dictation.retainDays` keeps the dictation. None for a clip sent to dictations.create (akou keeps no copy of an upload), a password field, or with `dictation.keepAudio` off once its offer to learn is closed: then `no_audio`.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: "The dictation id, from dictations.list." },
+      ok: 200,
+      type: "wav",
+    },
+    (c) => {
+      const id = c.params.id as string;
+      const d = service(c);
+      if (!d.log.item(id)) throw new HttpError(404, "not_found", `no dictation ${id}`);
+      if (!d.audio.has(id))
+        throw new HttpError(404, "no_audio", `dictation ${id} has no audio kept`, { id });
+      const file = Bun.file(d.audio.path(id));
+      return new Response(file, {
+        headers: {
+          "content-type": "audio/wav",
+          "content-length": String(file.size),
+          "cache-control": "no-store",
+        },
+      });
+    },
+  );
+  r.add(
+    "POST",
+    "/dictations/:id/retry",
+    {
+      id: "dictations.retry",
+      doc: "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: "The dictation id, from dictations.list." },
+      body: { engine: "string" },
+      ok: 200,
+    },
+    async (c) => {
+      const id = c.params.id as string;
+      const d = service(c);
+      const b = await c.body<{ engine: string }>();
+      const engine = b.engine.trim();
+      if (!ENGINES.includes(engine)) {
+        throw new HttpError(422, "bad_field", `engine is one of ${ENGINES.join(", ")}`, {
+          field: "engine",
+        });
+      }
+      if (engine === "remote" && c.app.config().settings["dictation.remote.url"].trim() === "") {
+        throw new HttpError(422, "bad_field", "engine remote needs dictation.remote.url", {
+          field: "engine",
+        });
+      }
+      c.timeout?.(0);
+      const r = await d.retry(id, engine === "auto" ? {} : { engine });
+      if (r.ok) return json(200, r.answer);
+      const status = {
+        not_found: 404,
+        no_audio: 404,
+        models_missing: 503,
+        transcription_failed: 500,
+      };
+      throw new HttpError(status[r.code], r.code, r.message, { id });
+    },
+  );
+  r.add(
     "DELETE",
     "/dictations/:id",
     {
       id: "dictations.delete",
-      doc: "Delete one dictation: its text, words and events are gone from the dictation log, which keeps only a tombstone with its id.",
+      doc: "Delete one dictation: its text, words and events are gone from the dictation log, which keeps only a tombstone with its id, and its audio is deleted.",
       access: "admin",
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
@@ -203,7 +273,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
       const id = c.params.id as string;
       const d = service(c);
       if (!d.log.item(id)) throw new HttpError(404, "not_found", `no dictation ${id}`);
-      d.log.forget([id]);
+      d.forget([id]);
       return json(200, { id, deleted: true });
     },
   );
@@ -212,14 +282,16 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations",
     {
       id: "dictations.clear",
-      doc: 'Delete every dictation, as the page\'s "Delete all dictations now": the dictation log keeps a tombstone for each and nothing else. Answers how many were deleted.',
+      doc: 'Delete every dictation, as the page\'s "Delete all dictations now": the dictation log keeps a tombstone for each and nothing else, and no audio is left. Answers how many were deleted.',
       access: "admin",
       modes: ["app"],
       ok: 200,
     },
     (c) => {
       const d = service(c);
-      const gone = d.log.forget(d.log.items().map((it) => it.id));
+      const gone = d.forget(d.log.items().map((it) => it.id));
+      // Audio a crash left with no dictation goes too.
+      d.sweep();
       return json(200, { deleted: gone.length });
     },
   );
