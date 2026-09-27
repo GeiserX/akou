@@ -38,6 +38,7 @@ pub mod mac_keys;
 pub mod mic;
 pub mod protocol;
 pub mod readback;
+pub mod selection;
 pub mod session;
 #[cfg(feature = "simulate")]
 pub mod sim;
