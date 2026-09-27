@@ -3,8 +3,9 @@
  * the keys and see them as keycaps. A chord is taken at its first key that is not a modifier. A
  * modifier alone counts once it is held for 400 ms and released with nothing else pressed, and
  * shows as `Right ⌘`; the page tells Right from Left by `KeyboardEvent.code`. The webview never
- * sees Fn or Globe on macOS, so while the recorder is open the helper's own key names are taken
- * too (`Transport.dictationKeys`, the window only).
+ * sees Fn or Globe on macOS, so while the recorder is open those two are taken from the helper's
+ * own key names (`Transport.dictationKeys`, the window only). The helper streams every key, but
+ * any other name is left to the page, which alone applies the 400 ms rule and sees each chord once.
  *
  * Refused inline, with nothing saved: a binding the recording hotkey (`app.hotkey`) or another
  * dictation key already has, and, in the clipboard-only fallback of DC-N3 (no Accessibility grant,
@@ -26,6 +27,9 @@ export const KEY_SETTINGS: Record<string, string> = {
 
 /** How long a modifier is held alone before it counts as the key (DC-U3). */
 export const HOLD_ALONE_MS = 400;
+
+/** The helper's key names the page takes: the keys the webview never sees (DC-U3). */
+const HELPER_ONLY = /^(fn|globe)$/i;
 
 const MODS: Record<string, string> = {
   Control: "Control",
@@ -73,6 +77,8 @@ export function chordName(
     return {
       refused: "A key with no modifier types a character; hold Control, Alt, Shift or ⌘ with it.",
     };
+  if (mods.length === 1 && mods[0] === "Shift" && /^[A-Z0-9]$/.test(key))
+    return { refused: "Shift with a letter or digit types a character; add Control, Alt or ⌘." };
   return { value: [...mods, key].join("+") };
 }
 
@@ -182,7 +188,9 @@ export class KeyRecorder {
     this.say(only ?? "");
     window.addEventListener("keydown", this.down, true);
     window.addEventListener("keyup", this.up, true);
-    const helper = this.t.dictationKeys?.((name) => this.take(name));
+    const helper = this.t.dictationKeys?.((name) => {
+      if (HELPER_ONLY.test(name.trim())) this.take(name.trim());
+    });
     this.live = {
       close: () => {
         window.removeEventListener("keydown", this.down, true);
@@ -228,6 +236,12 @@ export class KeyRecorder {
     this.alone = null;
     if (e.timeStamp - a.at < HOLD_ALONE_MS) {
       this.say("Hold a key alone a moment longer to use it by itself.");
+      return;
+    }
+    // Pressed after another modifier that is still down: not alone. The released key's own flag
+    // is already off.
+    if (e.ctrlKey || e.altKey || e.metaKey || e.shiftKey) {
+      this.say("Release the other keys to bind one alone.");
       return;
     }
     const r = aloneName(e.code, this.ctx.platform);

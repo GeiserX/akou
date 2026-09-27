@@ -482,7 +482,7 @@ export async function dictationFixture(
     history: o.history ?? [],
     calls: [],
     retry: (d, engine) => ({ ...d, engine, text: `${d.text} (${engine})`, ms: 640 }),
-    grants: o.grants === undefined ? { mic: true, accessibility: true } : o.grants,
+    grants: o.grants === undefined ? { mic: "granted", accessibility: "granted" } : o.grants,
   };
   if (o.platform) {
     await page.route(
@@ -714,7 +714,7 @@ export async function windowPage(
         body: {
           enabled: false,
           state: "idle",
-          grants: o.grants ?? { mic: true, accessibility: true },
+          grants: o.grants ?? { mic: "granted", accessibility: "granted" },
         },
       };
     if (p.path === "/config" && p.method === "PATCH") {

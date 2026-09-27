@@ -98,9 +98,10 @@ export interface Transport {
   /** Opens the system's privacy pane for a grant; false when this surface cannot. */
   openSettingsPane(pane: "microphone" | "system-audio"): Promise<boolean>;
   /**
-   * The dictation helper's own key names (`Fn`) while the page records a dictation key
+   * The dictation helper's own key names while the page records a dictation key
    * (docs/ux/DICTATION.md DC-U3): the webview never sees Fn or Globe on macOS, the helper does.
-   * Absent where the page cannot hear the helper (a browser).
+   * The helper streams every key; the recorder takes only `Fn` and `Globe` from here. Absent where
+   * the page cannot hear the helper (a browser).
    */
   dictationKeys?(fn: (name: string) => void): { close(): void };
 }

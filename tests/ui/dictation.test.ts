@@ -12,7 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
-import { onDictationPage } from "../../src/ui/dictation-page.ts";
+import { type DictationGrants, onDictationPage } from "../../src/ui/dictation-page.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
@@ -769,6 +769,18 @@ describe("DC-H1: the History page", () => {
   );
 
   test(
+    "deleting the last dictation shown says there are none",
+    async () => {
+      const { page } = await openHistory([dictationRow(1)]);
+      await page.click(`${row("d001")} button.delete`);
+      await page.click(`${row("d001")} button.delete`);
+      await page.waitForSelector("#dictation-history-list li[data-empty]");
+      expect(await text(page, "#dictation-history-list li")).toBe("No dictations yet.");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "search asks the route for the typed text, and Older pages on from the last shown",
     async () => {
       const many = Array.from({ length: HISTORY_PAGE + 5 }, (_, i) => dictationRow(i + 1));
@@ -817,7 +829,7 @@ describe("DC-U3: the dictation key recorder", () => {
     );
   const note = (page: Page, key: string) =>
     text(page, `#dictation div.setting[data-key='${key}'] .recorder-note`);
-  const openPage = async (o: { grants?: { mic: boolean; accessibility: boolean } } = {}) => {
+  const openPage = async (o: { grants?: DictationGrants } = {}) => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
       before: async (p) => {
@@ -906,7 +918,7 @@ describe("DC-U3: the dictation key recorder", () => {
   test(
     "without the Accessibility grant a modifier alone is refused with the reason; a chord is taken",
     async () => {
-      const { page, fx } = await openPage({ grants: { mic: true, accessibility: false } });
+      const { page, fx } = await openPage({ grants: { mic: "granted", accessibility: "denied" } });
       await page.click(record("dictation.hotkey"));
       expect(await note(page, "dictation.hotkey")).toContain("takes chords only");
       await page.keyboard.down("MetaRight");
@@ -919,6 +931,49 @@ describe("DC-U3: the dictation key recorder", () => {
       await page.keyboard.press("Control+Shift+Space");
       await until(() => fx.patches.length === 1, 5000, "the chord saved");
       expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+Space" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a modifier held while another is down is not a key alone, and Shift with a letter is refused",
+    async () => {
+      const { page, fx } = await openPage();
+      await page.click(record("dictation.hotkey"));
+      await page.keyboard.down("MetaLeft");
+      await page.keyboard.down("ShiftLeft");
+      await page.keyboard.up("ShiftLeft");
+      await page.keyboard.down("ShiftLeft");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("ShiftLeft");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Release the other keys to bind one alone.",
+      );
+      await page.keyboard.up("MetaLeft");
+      await page.keyboard.press("Shift+KeyD");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Shift with a letter or digit types a character; add Control, Alt or ⌘.",
+      );
+      expect(fx.patches).toEqual([]);
+      await page.keyboard.press("Control+Shift+KeyD");
+      await until(() => fx.patches.length === 1, 5000, "the chord saved");
+      expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+D" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "opening History stops a live recorder, so the search box gets the keys",
+    async () => {
+      const { page, fx } = await openPage();
+      await page.click(record("dictation.hotkey"));
+      await page.click("#dictation-history-open");
+      await page.waitForSelector("#dictation-history[open]");
+      expect(await page.getAttribute(record("dictation.hotkey"), "aria-pressed")).toBe("false");
+      await page.click("#dictation-history-q");
+      await page.keyboard.type("ab");
+      expect(await page.inputValue("#dictation-history-q")).toBe("ab");
+      expect(fx.patches).toEqual([]);
     },
     UI_TIMEOUT,
   );
@@ -939,6 +994,8 @@ describe("DC-U3: the dictation key recorder", () => {
         expect(
           w.requests.filter((r) => r.name === "recordDictationKeys").map((r) => r.params),
         ).toEqual([{ on: true }]);
+        // The helper streams every key; one the page sees itself is the page's to take.
+        await w.send("dictationKey", { name: "RightCommand" });
         await w.send("dictationKey", { name: "Fn" });
         await until(() => w.patches.length === 1, 5000, "Fn saved");
         expect(w.patches).toEqual([{ "dictation.hotkey": "Fn" }]);

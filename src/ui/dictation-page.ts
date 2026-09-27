@@ -18,6 +18,7 @@
  * microphone at all (no `getUserMedia` outside a secure context), and says so rather than failing.
  */
 
+import type { Grant } from "../main/dictation/protocol.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
@@ -39,10 +40,10 @@ export interface DictationGroup {
   hint?: string;
 }
 
-/** The grants the dictation helper reports (`GET /dictation`, DC-G1). */
+/** The grants the dictation helper reports (`GET /dictation`, DC-G1), as its `ready` names them. */
 export interface DictationGrants {
-  mic: boolean;
-  accessibility: boolean;
+  mic: Grant;
+  accessibility: Grant;
 }
 
 /** The master switch, drawn above the groups. */
@@ -249,7 +250,7 @@ export class DictationSettings {
    * in the clipboard-only fallback with a Carbon hotkey, which binds chords only (DC-N3).
    */
   private chordsOnly(): string | null {
-    if (this.platform !== "darwin" || this.grants?.accessibility !== false) return null;
+    if (this.platform !== "darwin" || this.grants?.accessibility !== "denied") return null;
     return "without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.";
   }
 
@@ -363,9 +364,11 @@ export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
   document.getElementById("dictation-open")?.addEventListener("click", () => void open());
   document.getElementById("dictation-close")?.addEventListener("click", () => dialog.close());
   const history = mountHistoryDialog(t);
-  document
-    .getElementById("dictation-history-open")
-    ?.addEventListener("click", () => void history.open());
+  document.getElementById("dictation-history-open")?.addEventListener("click", () => {
+    // A live recorder would take every key typed into the history's search.
+    page.stopRecording();
+    void history.open();
+  });
   const fromHash = () => {
     if (location.hash === "#dictation") void open();
   };

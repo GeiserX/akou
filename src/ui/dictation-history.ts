@@ -104,15 +104,7 @@ export class DictationHistory {
     const rows = r.body.items.map((d) => this.row(d));
     if (older) this.list.append(...rows);
     else if (rows.length > 0) replace(this.list, ...rows);
-    else
-      replace(
-        this.list,
-        h(
-          "li",
-          { class: "hint", attrs: { "data-empty": "" } },
-          q ? "No dictation holds that." : "No dictations yet.",
-        ),
-      );
+    else this.empty();
     this.cursor = r.body.next_cursor;
     this.more.hidden = this.cursor === null;
   }
@@ -238,7 +230,20 @@ export class DictationHistory {
       return;
     }
     li.remove();
+    // The last one shown: read again, for the next page or the empty hint.
+    if (this.list.children.length === 0) void this.load();
     toast("Deleted, with its audio.", "info");
+  }
+
+  private empty(): void {
+    replace(
+      this.list,
+      h(
+        "li",
+        { class: "hint", attrs: { "data-empty": "" } },
+        this.search.value.trim() ? "No dictation holds that." : "No dictations yet.",
+      ),
+    );
   }
 }
 
