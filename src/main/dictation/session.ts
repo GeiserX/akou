@@ -18,12 +18,14 @@
  * Two guards stand before an insert (DC-E6): a buffer in which the VAD finds no speech is never
  * decoded, so no engine can invent a sentence from room noise; and an answer that is the engine's
  * context echoed back is decoded again with no context. After the vocabulary, filler words leave
- * the inserted text (DC-S7); the log keeps what the engine heard.
+ * the inserted text (DC-S7), and spoken marks that stand alone become punctuation when
+ * `dictation.spokenPunctuation` is on (DC-S6); the log keeps what the engine heard.
  */
 
 import { isEcho } from "../../core/dictation/echo.ts";
 import type { DictationDraft, Target } from "../../core/dictation/events.ts";
 import { removeFillers } from "../../core/dictation/fillers.ts";
+import { type PunctuationLists, spokenPunctuation } from "../../core/dictation/punctuation.ts";
 import type { Decoded } from "../asr/live-worker.ts";
 import type { Packet } from "../capture/protocol.ts";
 import { forcesLanguage } from "./engines.ts";
@@ -74,6 +76,11 @@ export interface TextRules {
   fillers?(): boolean;
   /** The languages a dictation may be in when the engine names none: the fillers' gate. */
   languages?(): readonly string[];
+  /**
+   * `dictation.spokenPunctuation`: the lists to replace spoken marks from (DC-S6), or null while
+   * it is off. Throws when the user's file cannot be read; the text then goes in as it was.
+   */
+  punctuation?(): PunctuationLists | null;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -347,9 +354,9 @@ export type DictationResult =
   | { kind: "text"; d: EngineDecoded; text: string; echoRetry: boolean };
 
 /**
- * A dictation's buffer through the guards and the text rules (DC-E6, DC-L6, DC-S7): no speech is
- * no decode; an echoed context is decoded again without it; the text is the vocabulary's, less its
- * fillers. A password field (`secure`) gets exactly what was heard. Throws when the engine fails.
+ * A dictation's buffer through the guards and the text rules (DC-E6, DC-L6, DC-S7, DC-S6): no
+ * speech is no decode; an echoed context is decoded again without it; the text is the
+ * vocabulary's, less its fillers, with its spoken marks replaced. A password field (`secure`) gets exactly what was heard. Throws when the engine fails.
  */
 export async function decodeDictation(
   o: TextRules,
@@ -372,11 +379,22 @@ export async function decodeDictation(
   if (d.text === "") return { kind: "empty" };
   if (secure) return { kind: "text", d, text: d.text, echoRetry };
   let text = await correctOrRaw(o, d);
-  if (o.fillers?.()) {
-    const known = d.language ?? language;
-    text = removeFillers(text, known ? [known] : (o.languages?.() ?? []));
-  }
+  const known = d.language ?? language;
+  const langs = known ? [known] : (o.languages?.() ?? []);
+  if (o.fillers?.()) text = removeFillers(text, langs);
+  const lists = punctuationLists(o);
+  if (lists) text = spokenPunctuation(text, d.words, langs, lists);
   return { kind: "text", d, text, echoRetry };
+}
+
+/** The spoken punctuation lists, or null when it is off or its file is broken (which is said). */
+function punctuationLists(o: TextRules): PunctuationLists | null {
+  try {
+    return o.punctuation?.() ?? null;
+  } catch (err) {
+    o.onLog?.("warn", `dictation: spoken punctuation not applied: ${(err as Error).message}`);
+    return null;
+  }
 }
 
 /** The VAD's verdict, or null when it has none or fails: a guard that breaks never loses audio. */
