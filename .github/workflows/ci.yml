@@ -216,6 +216,7 @@ jobs:
         run: |
           case "$RUNNER_OS" in
             macOS) want='"backend":"cgeventtap","swallow_keys":true' ;;
+            Windows) want='"backend":"llhook","swallow_keys":true' ;;
             *) want='"backend":"none","swallow_keys":false' ;;
           esac
           "target/shipping/akou-capture$EXE" dictate --probe 2> probe.err
@@ -409,6 +410,213 @@ jobs:
           if defaults read io.github.geiserx.akou.dictate globeSavedFnUsageType 2>/dev/null; then
             echo "akou's saved copy was left behind"; exit 1
           fi
+      # DC-N1, DC-A4 and DC-N6 to DC-N9 on a real Windows desktop, on this runner only (it hooks
+      # the keyboard, posts keys and changes the clipboard). A small program installs its own
+      # low-level keyboard hook first, so the helper's hook, installed after it, runs before it:
+      # what the program records is what got past the helper. It posts Control+Shift+Space, the
+      # dictation key here, then A: Space must not get past, A and the modifiers must, and the
+      # same posts with no helper running must show Space, or the check proves nothing. Then a
+      # throwaway window with a text box: the helper brings it to the front (`focus`), pastes
+      # with Enter as the send key, then types; the box must hold both and the clipboard must hold
+      # what it held before. Last, a lone Right Win bound to dictation must reach the program as
+      # Right Win down, the mask key 0xE8 down and up, then Right Win up, so no Start menu opens;
+      # with no helper there is no mask key. Windows PowerShell reads this script as ANSI, so
+      # non-ASCII text is built from code points and sent as JSON escapes.
+      - name: the real hook, paste and mask key on a Windows desktop (Windows)
+        if: runner.os == 'Windows'
+        working-directory: native/akou-capture
+        shell: powershell
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Add-Type -AssemblyName System.Windows.Forms
+          Add-Type -ReferencedAssemblies System.Windows.Forms, System.Drawing -TypeDefinition @'
+          using System;
+          using System.Collections.Generic;
+          using System.Diagnostics;
+          using System.Runtime.InteropServices;
+          using System.Threading;
+          using System.Windows.Forms;
+
+          public static class Probe {
+              delegate IntPtr HookProc(int code, IntPtr wp, IntPtr lp);
+              [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, HookProc fn, IntPtr mod, uint tid);
+              [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr wp, IntPtr lp);
+              [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
+              [DllImport("user32.dll")] static extern uint SendInput(uint n, INPUT[] inputs, int size);
+              [StructLayout(LayoutKind.Sequential)]
+              struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+              [StructLayout(LayoutKind.Explicit, Size = 40)]
+              struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
+
+              static HookProc keep;
+              static List<string> seen = new List<string>();
+
+              static IntPtr Record(int code, IntPtr wp, IntPtr lp) {
+                  if (code >= 0) {
+                      int vk = Marshal.ReadInt32(lp);
+                      int msg = wp.ToInt32();
+                      lock (seen) seen.Add(((msg == 0x100 || msg == 0x104) ? "down:" : "up:") + vk.ToString("X2"));
+                  }
+                  return CallNextHookEx(IntPtr.Zero, code, wp, lp);
+              }
+
+              public static void Hook() {
+                  keep = Record;
+                  if (SetWindowsHookEx(13, keep, GetModuleHandle(null), 0) == IntPtr.Zero) throw new Exception("no recorder hook");
+              }
+
+              public static void Pump(int ms) {
+                  DateTime until = DateTime.UtcNow.AddMilliseconds(ms);
+                  while (DateTime.UtcNow < until) { Application.DoEvents(); Thread.Sleep(5); }
+              }
+
+              // "d:A2 u:A2": virtual keys down and up, posted 40 ms apart from another thread
+              // while this one pumps the recorder hook.
+              public static string Play(string keys) {
+                  lock (seen) seen.Clear();
+                  string failed = null;
+                  Thread t = new Thread(() => {
+                      foreach (string k in keys.Split(' ')) {
+                          ushort vk = Convert.ToUInt16(k.Substring(2), 16);
+                          INPUT[] input = new INPUT[1];
+                          input[0].type = 1;
+                          input[0].ki.wVk = vk;
+                          input[0].ki.dwFlags = (uint)((k[0] == 'u' ? 2 : 0) | (vk == 0x5B || vk == 0x5C ? 1 : 0));
+                          if (SendInput(1, input, Marshal.SizeOf(typeof(INPUT))) != 1) failed = k;
+                          Thread.Sleep(40);
+                      }
+                  });
+                  t.Start();
+                  while (t.IsAlive) Pump(20);
+                  Pump(300);
+                  if (failed != null) throw new Exception("SendInput refused " + failed);
+                  lock (seen) return string.Join(" ", seen.ToArray());
+              }
+
+              public class Helper {
+                  Process p;
+                  List<string> lines = new List<string>();
+                  public Helper(string exe, string args) {
+                      ProcessStartInfo psi = new ProcessStartInfo(exe, args);
+                      psi.UseShellExecute = false;
+                      psi.CreateNoWindow = true;
+                      psi.RedirectStandardInput = true;
+                      psi.RedirectStandardError = true;
+                      psi.RedirectStandardOutput = true;
+                      p = Process.Start(psi);
+                      p.ErrorDataReceived += (s, e) => { if (e.Data != null) lock (lines) lines.Add(e.Data); };
+                      p.OutputDataReceived += (s, e) => { };
+                      p.BeginErrorReadLine();
+                      p.BeginOutputReadLine();
+                  }
+                  public bool Wait(string needle, int ms) {
+                      DateTime until = DateTime.UtcNow.AddMilliseconds(ms);
+                      while (DateTime.UtcNow < until) {
+                          lock (lines) foreach (string l in lines) if (l.Contains(needle)) return true;
+                          Pump(50);
+                      }
+                      return false;
+                  }
+                  public void Send(string line) { p.StandardInput.WriteLine(line); p.StandardInput.Flush(); }
+                  public string Stop() {
+                      Send("{\"type\":\"stop\"}");
+                      p.StandardInput.Close();
+                      if (!p.WaitForExit(10000)) p.Kill();
+                      p.WaitForExit();
+                      lock (lines) return string.Join("\n", lines.ToArray());
+                  }
+              }
+
+              public class Target {
+                  public IntPtr Hwnd;
+                  Form f;
+                  TextBox box;
+                  public Target() {
+                      ManualResetEvent ready = new ManualResetEvent(false);
+                      Thread t = new Thread(() => {
+                          f = new Form();
+                          f.Text = "akou target";
+                          f.Width = 480;
+                          f.Height = 240;
+                          box = new TextBox();
+                          box.Multiline = true;
+                          box.AcceptsReturn = true;
+                          box.Dock = DockStyle.Fill;
+                          f.Controls.Add(box);
+                          f.Shown += (s, e) => { f.Activate(); box.Focus(); Hwnd = f.Handle; ready.Set(); };
+                          Application.Run(f);
+                      });
+                      t.SetApartmentState(ApartmentState.STA);
+                      t.IsBackground = true;
+                      t.Start();
+                      if (!ready.WaitOne(10000)) throw new Exception("the target window never showed");
+                  }
+                  public string Text() { return (string)box.Invoke(new Func<string>(() => box.Text)); }
+              }
+          }
+          '@
+          $exe = (Resolve-Path 'target\shipping\akou-capture.exe').Path
+          function Check($ok, $why) { if (-not $ok) { throw $why } }
+
+          # The hook swallows the dictation key and passes the rest.
+          $chord = 'd:A2 d:A0 d:20 u:20 u:A0 u:A2 d:41 u:41'
+          [Probe]::Hook()
+          $control = [Probe]::Play($chord)
+          "control: $control"
+          Check ($control -match 'down:20') 'with no helper Space must get through'
+          $h = New-Object 'Probe+Helper' $exe, 'dictate --hotkey Control+Shift+Space --warm off'
+          Check ($h.Wait('"type":"ready"', 10000)) ('the helper never got ready: ' + $h.Stop())
+          $tapped = [Probe]::Play($chord)
+          "hooked: $tapped"
+          $log = $h.Stop()
+          $log
+          Check ($log -match '"backend":"llhook","swallow_keys":true') 'the helper installed no hook'
+          Check ($log -notmatch 'no-tap') 'the helper reported no hook'
+          # No microphone on this runner: the press reaching the session shows as the open it tried.
+          Check ($log -match '"code":"mic-open"|"type":"mic","open":true') 'the press never reached the session'
+          foreach ($k in 'down:A2', 'down:A0', 'up:A0', 'up:A2', 'down:41', 'up:41') {
+            Check ($tapped -match $k) "$k was swallowed"
+          }
+          Check ($tapped -notmatch 'down:20|up:20') 'the dictation key reached the app'
+
+          # The paste, the send key, the typing and the clipboard restore into a real text box.
+          Set-Clipboard -Value 'copied before akou'
+          Check ((Get-Clipboard) -eq 'copied before akou') 'Set-Clipboard did not take'
+          $target = New-Object 'Probe+Target'
+          $app = [Diagnostics.Process]::GetCurrentProcess().MainModule.ModuleName
+          $tj = '{"app":"' + $app + '","pid":' + $PID + ',"window":"' + $target.Hwnd.ToInt64() + '","field":"editable"}'
+          Check ($target.Text() -eq '') 'the box was not empty'
+          $h = New-Object 'Probe+Helper' $exe, 'dictate --warm off'
+          Check ($h.Wait('"type":"ready"', 10000)) ('the helper never got ready: ' + $h.Stop())
+          $h.Send('{"type":"focus","target":' + $tj + '}')
+          $h.Send('{"type":"insert","id":"p1","text":"pasted by akou","method":"paste","send_key":"Enter","target":' + $tj + '}')
+          Check ($h.Wait('"id":"p1"', 15000)) ('no answer to the paste: ' + $h.Stop())
+          $h.Send('{"type":"insert","id":"t1","text":"typed é 😀","method":"type","send_key":"none","target":' + $tj + '}')
+          Check ($h.Wait('"id":"t1"', 15000)) ('no answer to the typing: ' + $h.Stop())
+          [Probe]::Pump(500)
+          $log = $h.Stop()
+          $log
+          $field = $target.Text()
+          $clip = Get-Clipboard -Raw
+          "field: $field"
+          "clipboard: $clip"
+          Check ($log -match '"type":"inserted","id":"p1","method":"paste"') 'the paste was not read'
+          Check ($log -match '"type":"inserted","id":"t1","method":"type"') 'the typing failed'
+          $want = "pasted by akou`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600)
+          Check ($field -ceq $want) 'the box holds the wrong text'
+          Check ($clip.TrimEnd() -eq 'copied before akou') "the clipboard was not restored: $clip"
+
+          # A lone Right Win bound to dictation is masked.
+          $lone = 'd:5C u:5C'
+          $h = New-Object 'Probe+Helper' $exe, 'dictate --hotkey RightWin --warm off'
+          Check ($h.Wait('"type":"ready"', 10000)) ('the helper never got ready: ' + $h.Stop())
+          $masked = [Probe]::Play($lone)
+          "hooked: $masked"
+          $null = $h.Stop()
+          Check ($masked -match 'down:5C down:E8 up:E8 up:5C') 'the release was not masked'
+          $control = [Probe]::Play($lone)
+          "control: $control"
+          Check ($control -match 'down:5C up:5C' -and $control -notmatch 'E8') 'with no helper the release is not masked'
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
