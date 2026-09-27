@@ -517,16 +517,13 @@ jobs:
                       }
                       return false;
                   }
-                  // Bytes straight to the pipe: Windows PowerShell's StandardInput writer puts a
-                  // UTF-8 byte order mark before the first line, which turns that line into
-                  // bad-command. A helper that already exited has closed its stdin: its log says why.
+                  // A helper that already exited has closed its stdin: its log says why.
                   public void Send(string line) {
-                      byte[] b = new System.Text.UTF8Encoding(false).GetBytes(line + "\n");
-                      try { p.StandardInput.BaseStream.Write(b, 0, b.Length); p.StandardInput.BaseStream.Flush(); } catch (Exception) { }
+                      try { p.StandardInput.WriteLine(line); p.StandardInput.Flush(); } catch (Exception) { }
                   }
                   public string Stop() {
                       Send("{\"type\":\"stop\"}");
-                      try { p.StandardInput.BaseStream.Close(); } catch (Exception) { }
+                      try { p.StandardInput.Close(); } catch (Exception) { }
                       if (!p.WaitForExit(10000)) p.Kill();
                       p.WaitForExit();
                       lock (lines) return string.Join("\n", lines.ToArray()) + "\nexit " + p.ExitCode;
@@ -562,6 +559,9 @@ jobs:
           }
           '@
           $exe = (Resolve-Path 'target\shipping\akou-capture.exe').Path
+          # A child's stdin writer takes this encoding, and the runner's UTF-8 default writes a
+          # byte order mark the moment the child starts, which spoils the first line sent.
+          [Console]::InputEncoding = New-Object System.Text.UTF8Encoding $false
           # Both arguments are evaluated first: never put a call with an effect in `$why`.
           function Check($ok, $why) { if (-not $ok) { throw $why } }
 
