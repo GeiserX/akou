@@ -188,9 +188,13 @@ describe("SV-U6: the Models page in the desktop window", () => {
             `#models .model[data-id="${RECOGNIZER}"] .mbar.accuracy .track`,
             (els) => els[0]?.getBoundingClientRect().width ?? 0,
           );
-        // The settings save above re-renders the rows; measure once the new row is laid out.
-        await until(async () => (await width()) > 0, 3000, "the rebuilt row's layout");
-        expect(await width()).toBeGreaterThan(40);
+        // The settings save above re-renders the rows, and a read between two renders measures
+        // 0 even after an earlier read saw the track: wait for the width itself.
+        await until(
+          async () => (await width()) > 40,
+          3000,
+          "the accuracy bar's track at its width",
+        );
         const colors = await page.$eval(
           `#models .model[data-id="${RECOGNIZER}"] .mbar.accuracy .fill`,
           (el) => [getComputedStyle(el).backgroundColor, getComputedStyle(document.body).color],
