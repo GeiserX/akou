@@ -170,8 +170,8 @@ class App {
     const dictation = mountDictationDialog(t);
     const settings = new SettingsPane(
       t,
-      () => this.view()?.call?.workspace ?? this.workspaceInput().value,
       () => void dictation.open(),
+      () => void dictation.dictionary.open(),
     );
     this.modelsCard = new ModelsCard(t);
     wireModelsDialog(t);

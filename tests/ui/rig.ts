@@ -23,6 +23,7 @@ import {
   webkit,
 } from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
+import { tokenize } from "../../src/core/vocab/correct.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import type { DictationRow } from "../../src/ui/dictation-history.ts";
@@ -650,6 +651,8 @@ export interface VocabFixture {
   calls: { method: string; path: string; body?: unknown }[];
   /** Refuses the next `POST /vocab` with this message, as the route refuses a bad term. */
   refuse: string | null;
+  /** Refuses `scope` in `POST /vocab` as an unknown field, as today's route does (DC-L6). */
+  noScope: boolean;
 }
 
 /** The global vocabulary file of the fixture. */
@@ -657,15 +660,17 @@ export const VOCAB_FILE = "/config/vocabulary.yaml";
 
 /**
  * Answers the Dictionary's requests from `entries`, as the vocabulary routes will once
- * `POST /vocab` takes the entry's `scope` (DC-L6): today the route refuses that field. An upsert
- * replaces the entry of the same term, as `upsertEntry` does. `POST /vocab/import` goes to the app.
+ * `POST /vocab` takes the entry's `scope` (DC-L6): today the route refuses that field (`noScope`).
+ * As the route does, a post builds a fresh entry from the body alone (`confirmed` true unless sent,
+ * `note` and `decode: false` only when sent) and replaces the entry of the same term under the
+ * server's key (`termKey`), as `upsertEntry` does. `POST /vocab/import` goes to the app.
  */
 export async function vocabFixture(
   page: Page,
   entries: DictionaryEntry[] = [],
   prefix = "/api/v1",
 ): Promise<VocabFixture> {
-  const fx: VocabFixture = { entries, calls: [], refuse: null };
+  const fx: VocabFixture = { entries, calls: [], refuse: null, noScope: false };
   await page.route(
     (u) =>
       (u.pathname === `${prefix}/vocab` || u.pathname.startsWith(`${prefix}/vocab/`)) &&
@@ -685,20 +690,37 @@ export async function vocabFixture(
       const sent = req.postData() ? (req.postDataJSON() as Record<string, unknown>) : {};
       const body = Object.keys(sent).length > 0 ? sent : undefined;
       fx.calls.push({ method: req.method(), path, ...(body === undefined ? {} : { body }) });
-      const key = (t: string) => t.toLowerCase();
+      const key = (t: string) =>
+        tokenize(t)
+          .map((x) => x.folded)
+          .join(" ");
       if (req.method() === "POST" && path === "/vocab") {
         if (fx.refuse) {
           const message = fx.refuse;
           fx.refuse = null;
           return route.fulfill({ status: 400, json: { error: "bad_term", message } });
         }
-        const b = sent as { term: string; heard?: string[]; scope?: "dictation" };
+        if (fx.noScope && "scope" in sent)
+          return route.fulfill({
+            status: 400,
+            json: { error: "unknown_field", message: 'unknown field "scope"', field: "scope" },
+          });
+        const b = sent as {
+          term: string;
+          heard?: string[];
+          scope?: "dictation";
+          confirmed?: boolean;
+          note?: string;
+          decode?: boolean;
+        };
         const entry: DictionaryEntry = {
           term: b.term,
           heard: b.heard ?? [],
-          confirmed: true,
+          confirmed: b.confirmed ?? true,
           scope: "global",
           file: VOCAB_FILE,
+          ...(b.decode === false ? { decode: false } : {}),
+          ...(b.note ? { note: b.note } : {}),
           ...(b.scope ? { entryScope: b.scope } : {}),
         };
         const at = fx.entries.findIndex((e) => e.scope === "global" && key(e.term) === key(b.term));

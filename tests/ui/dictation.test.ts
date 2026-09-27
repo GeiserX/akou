@@ -214,6 +214,12 @@ describe("DC-O1: the pill", () => {
       expect(tail.startsWith("…word")).toBe(true);
       expect(tail.endsWith("word39")).toBe(true);
       expect(tail.length).toBeLessThanOrEqual(PREVIEW_CHARS + 1);
+      // The tail fits two lines of the pill.
+      const lines = await p.$eval(
+        "#preview",
+        (e) => e.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(e).lineHeight),
+      );
+      expect(Math.round(lines)).toBeLessThanOrEqual(2);
 
       // Listening ends: the words go, and a partial arriving late is dropped.
       await state({ state: "transcribing", since });
@@ -854,11 +860,19 @@ describe("DC-U5: the dictionary and replacements", () => {
       await page.fill("#dictionary-term", "vercel");
       await page.click("#dictionary-add");
       await until(() => fx.calls.length === 1, 5000, "the save");
-      expect(fx.calls[0]?.body).toEqual({ term: "Vercel", heard: ["versal", "for sell"] });
+      expect(fx.calls[0]?.body).toEqual({
+        term: "Vercel",
+        heard: ["versal", "for sell"],
+        confirmed: true,
+      });
 
       await page.click(`${row("Kubernetes")} button.calls-too`);
       await until(() => fx.calls.length === 2, 5000, "calls too");
-      expect(fx.calls[1]?.body).toEqual({ term: "Kubernetes", heard: ["cooper netties"] });
+      expect(fx.calls[1]?.body).toEqual({
+        term: "Kubernetes",
+        heard: ["cooper netties"],
+        confirmed: true,
+      });
       await page.waitForFunction(
         (sel) => document.querySelector(sel)?.textContent === "calls and dictation",
         `${row("Kubernetes")} .where`,
@@ -882,9 +896,148 @@ describe("DC-U5: the dictionary and replacements", () => {
   );
 
   test(
+    "more forms and Use in calls too keep the entry's note, decode: false and unconfirmed state",
+    async () => {
+      const { page, fx } = await openDictionary([
+        global({
+          term: "Vercel",
+          heard: ["versal"],
+          confirmed: false,
+          note: "the hosting company",
+          decode: false,
+          entryScope: "dictation",
+        }),
+      ]);
+      await page.fill("#dictionary-heard", "for sell");
+      await page.fill("#dictionary-term", "vercel");
+      await page.click("#dictionary-add");
+      await until(() => fx.calls.length === 1, 5000, "the save");
+      expect(fx.calls[0]?.body).toEqual({
+        term: "Vercel",
+        heard: ["versal", "for sell"],
+        confirmed: false,
+        note: "the hosting company",
+        decode: false,
+        scope: "dictation",
+      });
+      await page.waitForSelector(`${row("Vercel")} button.calls-too`);
+      await page.click(`${row("Vercel")} button.calls-too`);
+      await until(() => fx.calls.length === 2, 5000, "calls too");
+      await page.waitForFunction(
+        (sel) =>
+          document.querySelector(sel)?.textContent === "calls and dictation, waiting for your yes",
+        `${row("Vercel")} .where`,
+      );
+      const kept: DictionaryEntry = {
+        term: "Vercel",
+        heard: ["versal", "for sell"],
+        confirmed: false,
+        scope: "global",
+        file: VOCAB_FILE,
+        decode: false,
+        note: "the hosting company",
+      };
+      expect(fx.entries).toEqual([kept]);
+
+      // Positive control: the fixture, like the route, wipes what a post leaves out.
+      await page.evaluate(() =>
+        fetch("/api/v1/vocab", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ term: "Vercel", heard: ["versal"] }),
+        }),
+      );
+      expect(fx.entries).toEqual([
+        { term: "Vercel", heard: ["versal"], confirmed: true, scope: "global", file: VOCAB_FILE },
+      ]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the same term is the server's: Wi Fi is Wi-Fi and cafe is café, forms and all",
+    async () => {
+      const { page, fx } = await openDictionary([
+        global({ term: "Wi-Fi", heard: ["why fi"], entryScope: "dictation" }),
+        global({ term: "café", entryScope: "dictation" }),
+      ]);
+      await page.fill("#dictionary-heard", "Why-Fi, wee fee");
+      await page.fill("#dictionary-term", "Wi Fi");
+      await page.click("#dictionary-add");
+      await until(() => fx.calls.length === 1, 5000, "the save");
+      expect(fx.calls[0]?.body).toEqual({
+        term: "Wi-Fi",
+        heard: ["why fi", "wee fee"],
+        confirmed: true,
+        scope: "dictation",
+      });
+      await page.waitForFunction(
+        () => (document.getElementById("dictionary-term") as HTMLInputElement).value === "",
+      );
+      await page.fill("#dictionary-heard", "caff ay");
+      await page.fill("#dictionary-term", "cafe");
+      await page.click("#dictionary-add");
+      await until(() => fx.calls.length === 2, 5000, "the second save");
+      expect(fx.calls[1]?.body).toEqual({
+        term: "café",
+        heard: ["caff ay"],
+        confirmed: true,
+        scope: "dictation",
+      });
+      expect(fx.entries.map((e) => e.term)).toEqual(["Wi-Fi", "café"]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "an akou whose route refuses scope says to update it, and never saves the word for calls instead",
+    async () => {
+      const { page, fx } = await openDictionary([]);
+      fx.noScope = true;
+      await page.fill("#dictionary-heard", "versal");
+      await page.fill("#dictionary-term", "Vercel");
+      await page.click("#dictionary-add");
+      await page.waitForSelector("#dictionary-issue", { state: "visible" });
+      expect(await text(page, "#dictionary-issue")).toBe(
+        "This akou cannot save dictation-only words yet; update it.",
+      );
+      expect(fx.calls).toEqual([
+        {
+          method: "POST",
+          path: "/vocab",
+          body: { term: "Vercel", heard: ["versal"], scope: "dictation" },
+        },
+      ]);
+      expect(fx.entries).toEqual([]);
+      expect(await page.isEnabled("#dictionary-add")).toBe(true);
+      expect(await page.inputValue("#dictionary-term")).toBe("Vercel");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Settings opens the same dictionary rather than a second list of words",
+    async () => {
+      const page = await rig.open();
+      await page.click("#settings-open");
+      await page.waitForSelector("#settings[open] #settings-fields .setting");
+      expect(await page.$$("#settings-vocab li, #settings-vocab table")).toHaveLength(0);
+      await page.click("#settings-dictionary");
+      await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li");
+      expect(await page.$("#settings[open]")).toBeNull();
+      expect(await page.$$("#dictionary-form")).toHaveLength(1);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "a file of 200 lines imports 200 words through the app's own route",
     async () => {
       const { page } = await openDictionary();
+      // The route takes no scope yet: the page says imported words reach calls too.
+      expect(await text(page, "label:has(#dictionary-import)")).toContain(
+        "Imported words apply to calls too",
+      );
       const lines = Array.from({ length: 200 }, (_, i) => `Term${String(i).padStart(3, "0")}`);
       await page.setInputFiles("#dictionary-import", {
         name: "words.txt",

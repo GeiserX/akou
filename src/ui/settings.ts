@@ -13,8 +13,8 @@
  * link to it, so a setting is never shown twice. A list of per-app rules (the `apps` type, DC-U9)
  * is drawn as a table of rules (`dictation-apps.ts`).
  *
- * Below the settings, the vocabulary panel: the entries in force for the workspace, where each
- * came from, and the files they live in.
+ * Below the settings, the vocabulary panel opens the one dictionary editor (DC-U5, WINDOW W9.2),
+ * so the words are never edited, or shown stale, in two places.
  */
 
 import { hotkeyWarning } from "../main/window/hotkey.ts";
@@ -57,9 +57,10 @@ export class SettingsPane {
 
   constructor(
     private readonly t: Transport,
-    private readonly workspace: () => string,
     /** Opens the Dictation page, where the `dictation.*` keys are. */
     private readonly openDictation: () => void = () => {},
+    /** Opens the dictionary editor (DC-U5). */
+    private readonly openDictionary: () => void = () => {},
   ) {
     byId("settings-open").addEventListener("click", () => void this.open());
     byId("settings-close").addEventListener("click", () => this.dialog.close());
@@ -67,6 +68,7 @@ export class SettingsPane {
       e.preventDefault();
       void this.save();
     });
+    this.vocabPanel();
   }
 
   /** Opens the pane, on one key when named (the Enhanced tab's "Choose a provider"). */
@@ -119,7 +121,6 @@ export class SettingsPane {
         : null,
       ...here.map(([key, spec]) => this.field(key, spec, r.body.settings[key], issues.get(key))),
     );
-    void this.loadVocab();
   }
 
   private field(key: string, spec: SchemaEntry, value: unknown, issue?: string): HTMLElement {
@@ -144,60 +145,29 @@ export class SettingsPane {
     await this.load();
   }
 
-  private async loadVocab(): Promise<void> {
-    const ws = this.workspace();
-    const r = await this.t.request<{
-      files?: { scope: string; path: string; exists?: boolean }[];
-      entries?: {
-        term: string;
-        heard: string[];
-        scope?: string;
-        source?: string;
-        confirmed?: boolean;
-      }[];
-    }>("GET", `/vocab${ws ? `?workspace=${encodeURIComponent(ws)}` : ""}`);
-    if (r.status >= 400) {
-      replace(
-        this.vocab,
-        h("p", { class: "hint" }, message(r.body, "the vocabulary could not be read")),
-      );
-      return;
-    }
-    const entries = r.body.entries ?? [];
+  private vocabPanel(): void {
     replace(
       this.vocab,
-      h("h3", {}, `Vocabulary${ws ? ` (${ws})` : ""}`),
+      h("h3", {}, "Vocabulary"),
       h(
-        "ul",
-        { class: "vocab-files" },
-        ...(r.body.files ?? []).map((f) =>
-          h("li", {}, `${f.scope}: ${f.path}${f.exists === false ? " (not created yet)" : ""}`),
+        "p",
+        { class: "hint" },
+        "Words akou should spell your way, and text to write for what you say. ",
+        h(
+          "button",
+          {
+            id: "settings-dictionary",
+            type: "button",
+            on: {
+              click: () => {
+                this.dialog.close();
+                this.openDictionary();
+              },
+            },
+          },
+          "Open Dictionary",
         ),
       ),
-      entries.length === 0
-        ? h("p", { class: "hint" }, "No words yet. Use Fix on a transcript line to add one.")
-        : h(
-            "table",
-            { class: "vocab-entries" },
-            h(
-              "tr",
-              {},
-              h("th", {}, "Word"),
-              h("th", {}, "Heard as"),
-              h("th", {}, "From"),
-              h("th", {}, "State"),
-            ),
-            ...entries.map((e) =>
-              h(
-                "tr",
-                {},
-                h("td", {}, e.term),
-                h("td", {}, e.heard.join(", ")),
-                h("td", {}, e.source ?? e.scope ?? ""),
-                h("td", {}, e.confirmed === false ? "to review" : "in force"),
-              ),
-            ),
-          ),
     );
   }
 }
