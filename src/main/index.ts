@@ -118,7 +118,7 @@ import {
   type EngineVerdict,
   resolveDictationEngine,
 } from "./dictation/engines.ts";
-import type { Bindings, SendKey } from "./dictation/protocol.ts";
+import type { Bindings, InsertMethod, SendKey } from "./dictation/protocol.ts";
 import { loadPunctuation } from "./dictation/punctuation.ts";
 import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
@@ -2023,6 +2023,15 @@ export class AkouApp implements ApiApp {
       retainDays: () => this.cfg.settings["dictation.retainDays"],
       keepAudio: () => this.cfg.settings["dictation.keepAudio"],
       learns: () => this.cfg.settings["dictation.learn"] !== "off",
+      insert: () => {
+        const c = this.cfg.settings;
+        return {
+          method: c["dictation.insert"] as InsertMethod,
+          sendKey: c["dictation.sendKey"] as SendKey,
+          sendAlways: c["dictation.sendAlways"],
+          restore: c["dictation.restoreClipboard"],
+        };
+      },
       draft: {
         platform: process.platform,
         sendKey: () => this.cfg.settings["dictation.sendKey"] as SendKey,
