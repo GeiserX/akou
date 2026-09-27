@@ -13,7 +13,12 @@ import type { DictationItem } from "../../core/dictation/events.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
-import { type DictationEngine, DictationSession, type SessionState } from "./session.ts";
+import {
+  type DictationEngine,
+  DictationSession,
+  type RebindAnswer,
+  type SessionState,
+} from "./session.ts";
 import { DICTATION_DIR, DictationLog, newDictationId } from "./store.ts";
 
 /** How long `stop` waits for the helper to exit before it is killed. */
@@ -22,7 +27,8 @@ const STOP_MS = 2000;
 export interface DictationServiceOptions {
   /** The config folder: the log is `dictation/events.jsonl` in it. */
   configDir: string;
-  engine(): DictationEngine | null;
+  /** The engine `dictation.engine` picks, or the one named (`fast`, `remote`); null with none. */
+  engine(name?: string): DictationEngine | null;
   now(): number;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
@@ -157,9 +163,12 @@ export class DictationService {
     this.helper = h;
   }
 
-  /** Sends the running helper the keys again (a setting changed, DC-A7). */
-  rebind(): void {
-    this.helper?.session.rebind();
+  /**
+   * Sends the running helper the keys (a setting changed, DC-A7) and resolves with its answer; with
+   * no helper up there is nothing to refuse.
+   */
+  rebind(b?: Bindings): Promise<RebindAnswer> {
+    return this.helper?.session.rebind(b) ?? Promise.resolve({ ok: true });
   }
 
   /** Stops the helper: `stop`, then a kill if it has not exited within 2 s. */
@@ -192,9 +201,9 @@ export class DictationService {
    */
   async transcribeClip(
     samples: Float32Array,
-    o: { by: string; language?: string },
+    o: { by: string; language?: string; engine?: string },
   ): Promise<DictationItem> {
-    const engine = this.o.engine();
+    const engine = this.o.engine(o.engine);
     const id = newDictationId(this.o.now());
     const seconds = Math.round((samples.length / 16000) * 1000) / 1000;
     this.log.append({
@@ -219,9 +228,10 @@ export class DictationService {
             text: d.text,
             language: d.language,
             words: d.words,
-            engine: engine.name,
+            engine: d.engine ?? engine.name,
             model: d.model,
             ms: d.ms,
+            ...(d.fallback_from ? { fallback_from: d.fallback_from } : {}),
           });
       } catch (err) {
         this.log.append({ type: "dictation.failed", id, error: (err as Error).message });

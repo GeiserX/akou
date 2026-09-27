@@ -17,8 +17,8 @@ import { fileField, formOf, languageOf, textField } from "./jobs.ts";
 
 /** The longest clip taken, seconds: `dictation.maxMinutes` at its top. */
 export const MAX_CLIP_SECONDS = 60 * 60;
-/** The engines a clip can name. `best` and `remote` arrive with DC-E2 and DC-R1. */
-const ENGINES = ["auto", "fast"];
+/** The engines a clip can name; `auto` is `dictation.engine`. `best` arrives with DC-E2. */
+const ENGINES = ["auto", "fast", "remote"];
 const FIELDS = new Set(["file", "engine", "language"]);
 
 function service(c: RouteContext<ApiApp>): DictationService {
@@ -54,7 +54,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations",
     {
       id: "dictations.create",
-      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto or fast; `language` a BCP-47 tag or auto, checked and not yet used: the fast engine (Parakeet) detects the language itself, and a hint reaches the engines that take one later. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
+      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto (`dictation.engine`), fast, or remote (the akou at `dictation.remote.url`); `language` a BCP-47 tag or auto: a remote akou gets it, and the fast engine (Parakeet) ignores it, since it detects the language itself. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
       access: "admin",
       modes: ["app"],
       body: { multipart: { file: "file", "engine?": "string", "language?": "string" } },
@@ -76,6 +76,11 @@ export function dictationRoutes(r: Router<ApiApp>): void {
             field: "engine",
           });
         }
+        if (engine === "remote" && c.app.config().settings["dictation.remote.url"].trim() === "") {
+          throw new HttpError(422, "bad_field", "engine remote needs dictation.remote.url", {
+            field: "engine",
+          });
+        }
         const lang = languageOf(form);
         let samples: Float32Array;
         try {
@@ -90,6 +95,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         c.timeout?.(0);
         const it = await d.transcribeClip(samples, {
           by: c.by,
+          ...(engine === "auto" ? {} : { engine }),
           ...(lang === "auto" ? {} : { language: lang }),
         });
         if (it.state === "failed") {

@@ -120,7 +120,14 @@ export interface ApiApp {
   levels(id: string): Levels | null;
   config(): LoadedConfig;
   /** Writes `config.json` and applies it; the running parts pick up what they can. */
-  saveConfig(file: Partial<Record<SettingKey, SettingValue>>): Promise<LoadedConfig>;
+  /**
+   * Writes the config file. A key the API cannot write keeps its value on disk, except those in
+   * `keep`: window-only keys the desktop window set in this request.
+   */
+  saveConfig(
+    file: Partial<Record<SettingKey, SettingValue>>,
+    o?: { keep?: readonly SettingKey[] },
+  ): Promise<LoadedConfig>;
   /** Vocabulary files changed on disk: forget what was read. */
   vocabChanged(): void;
   /** Runs the final pass for an ended call. */
