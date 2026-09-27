@@ -824,8 +824,10 @@ dialog {
   align-items: baseline;
   flex-wrap: wrap;
 }
+/* The refusal sits under the form as a line of its own, not wrapped beside the Add button. */
 #dictionary-issue {
-  margin-left: 6px;
+  display: block;
+  margin-top: 6px;
 }
 #share-notes {
   border-left: 1px solid var(--line);

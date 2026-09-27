@@ -9,8 +9,13 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type { Page } from "playwright-core";
+import { QWEN_ASR } from "../../src/main/asr/llama-catalog.ts";
+import { MODELS, modelFile } from "../../src/main/asr/models.ts";
 import { SETTINGS } from "../../src/main/config/schema.ts";
+import { parseVocab } from "../../src/main/vocab/files.ts";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
@@ -27,6 +32,8 @@ import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
 import { PREVIEW_CHARS } from "../../src/ui/pill.ts";
 import { type PillState, pillPreview } from "../../src/ui/pill-protocol.ts";
 import type { Transport } from "../../src/ui/protocol.ts";
+import { concat, silence, speak } from "../fixtures/asr-fake.ts";
+import { monoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
 import {
   CLIPBOARD_PERMISSIONS,
@@ -35,6 +42,8 @@ import {
   type DictationFixture,
   dictationFixture,
   dictationRow,
+  seedCall,
+  standardCall,
   UI_TIMEOUT,
   type UiRig,
   uiRig,
@@ -990,32 +999,6 @@ describe("DC-U5: the dictionary and replacements", () => {
   );
 
   test(
-    "an akou whose route refuses scope says to update it, and never saves the word for calls instead",
-    async () => {
-      const { page, fx } = await openDictionary([]);
-      fx.noScope = true;
-      await page.fill("#dictionary-heard", "versal");
-      await page.fill("#dictionary-term", "Vercel");
-      await page.click("#dictionary-add");
-      await page.waitForSelector("#dictionary-issue", { state: "visible" });
-      expect(await text(page, "#dictionary-issue")).toBe(
-        "This akou cannot save dictation-only words yet; update it.",
-      );
-      expect(fx.calls).toEqual([
-        {
-          method: "POST",
-          path: "/vocab",
-          body: { term: "Vercel", heard: ["versal"], scope: "dictation" },
-        },
-      ]);
-      expect(fx.entries).toEqual([]);
-      expect(await page.isEnabled("#dictionary-add")).toBe(true);
-      expect(await page.inputValue("#dictionary-term")).toBe("Vercel");
-    },
-    UI_TIMEOUT,
-  );
-
-  test(
     "Settings opens the same dictionary rather than a second list of words",
     async () => {
       const page = await rig.open();
@@ -1031,14 +1014,12 @@ describe("DC-U5: the dictionary and replacements", () => {
   );
 
   test(
-    "a file of 200 lines imports 200 words through the app's own route",
+    "a file of 200 lines imports 200 dictation words through the app's own route; a calls word stays one",
     async () => {
-      const { page } = await openDictionary();
-      // The route takes no scope yet: the page says imported words reach calls too.
-      expect(await text(page, "label:has(#dictionary-import)")).toContain(
-        "Imported words apply to calls too",
-      );
       const lines = Array.from({ length: 200 }, (_, i) => `Term${String(i).padStart(3, "0")}`);
+      // A word the file already holds for calls: importing it again must not take it from calls.
+      expect((await rig.api("POST", "/vocab", { term: "Term000" })).status).toBe(201);
+      const { page } = await openDictionary();
       await page.setInputFiles("#dictionary-import", {
         name: "words.txt",
         mimeType: "text/plain",
@@ -1051,7 +1032,13 @@ describe("DC-U5: the dictionary and replacements", () => {
         () => document.querySelectorAll("#dictionary-list li[data-term]").length === 200,
       );
       const r = await rig.api("GET", "/vocab");
-      expect((r.body.entries as { term: string }[]).map((e) => e.term)).toEqual(lines);
+      const got = r.body.entries as DictionaryEntry[];
+      expect(got.map((e) => e.term)).toEqual(lines);
+      expect(got.filter((e) => e.entryScope !== "dictation").map((e) => e.term)).toEqual([
+        "Term000",
+      ]);
+      expect(await text(page, `${row("Term001")} .where`)).toBe("dictation only");
+      expect(await text(page, `${row("Term000")} .where`)).toBe("calls and dictation");
     },
     UI_TIMEOUT,
   );
@@ -1487,6 +1474,15 @@ describe("DC-H1: the History page", () => {
       await page.waitForFunction(() => document.getElementById("toast")?.textContent !== "");
       expect(await text(page, "#toast")).toBe("no remote akou is set");
       expect(await page.$$(`${row("d001")} .result`)).toHaveLength(2);
+
+      // A best that could not run is decoded by fast, and the reading says so.
+      fx.retry = (d, engine) => ({ ...d, engine: "fast", fallback_from: engine, ms: 120 });
+      await page.selectOption(`${row("d001")} select.retry-engine`, "best");
+      await page.click(`${row("d001")} button.retry`);
+      await page.waitForFunction(
+        (sel) => document.querySelector(sel)?.textContent === "fast 0.1 s (instead of best)",
+        `${row("d001")} .result.retry small`,
+      );
     },
     UI_TIMEOUT,
   );
@@ -1527,6 +1523,232 @@ describe("DC-H1: the History page", () => {
       await page.fill("#dictation-history-q", "nothing like this");
       await page.waitForSelector("#dictation-history-list li[data-empty]");
       expect(await text(page, "#dictation-history-list li")).toBe("No dictation holds that.");
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou's own routes", () => {
+  // One app for the whole block: its fake helper says "example dot com" once, at the second
+  // rebind, and the fake engines (Parakeet, and Qwen over the fake llama-server) hear it. The
+  // tests run in order: the first teaches `.com` and dictates, the second reads that dictation.
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  const draftOpens: DraftOpen[] = [];
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-real-");
+    const keys = join(t.dir, "keys.jsonl");
+    writeFileSync(
+      keys,
+      [
+        { at: 0, key: "RightCommand", down: true },
+        { at: 2500, key: "RightCommand", down: false },
+      ]
+        .map((k) => JSON.stringify(k))
+        .join("\n"),
+    );
+    const wav = join(t.dir, "mic.wav");
+    writeFileSync(wav, monoWav(concat(silence(0.5), speak(["example", "dot", "com"]), silence(3))));
+    const models = join(t.dir, "models");
+    for (const f of MODELS.find((m) => m.id === QWEN_ASR)?.files ?? []) {
+      const path = modelFile(models, QWEN_ASR, f.name);
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, "");
+    }
+    // A call in the workspace "work", whose own vocabulary file the Dictionary lists read only.
+    seedCall(t.dir, (b) => standardCall(b));
+    rig = await uiRig({
+      home: t.dir,
+      helperArgs: [
+        "--wav",
+        wav,
+        "--keys",
+        keys,
+        "--play-after-rebinds",
+        "2",
+        "--inserter-log",
+        join(t.dir, "inserted.jsonl"),
+      ],
+      settings: {
+        "dictation.enabled": true,
+        "dictation.hotkey": "RightCommand",
+        "dictation.pill": "off",
+        "asr.modelsDir": models,
+        "asr.llamaServer": [
+          process.execPath,
+          join(import.meta.dir, "..", "fixtures", "fake-llama-server.ts"),
+        ],
+      },
+    });
+    await until(() => rig.app.dictation()?.status().state === "idle", 10_000, "the helper ready");
+    rig.app.dictation()?.draft.attach({
+      open: (d) => draftOpens.push(d),
+      chip: () => {},
+      showInactive: () => {},
+      hide: () => {},
+    });
+    writeFileSync(
+      join(rig.app.configDir, "vocabulary.yaml"),
+      [
+        "version: 1",
+        "entries:",
+        '  - term: "Vercel"',
+        '    heard: ["versal"]',
+        '    source: "import:api"',
+        "    confirmed: true",
+        '    added_at: "2026-01-02"',
+        '    scope: "dictation"',
+        "",
+      ].join("\n"),
+    );
+    mkdirSync(join(rig.app.configDir, "vocabulary"), { recursive: true });
+    writeFileSync(
+      join(rig.app.configDir, "vocabulary", "work.yaml"),
+      [
+        "version: 1",
+        "entries:",
+        '  - term: "Hetzner"',
+        '    heard: ["hetzna"]',
+        '    source: "user"',
+        "    confirmed: true",
+        '    added_at: "2026-01-02"',
+        "",
+      ].join("\n"),
+    );
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const vocabFile = () =>
+    parseVocab(readFileSync(join(rig.app.configDir, "vocabulary.yaml"), "utf8")).file.entries;
+  const inserted = (): { text: string }[] => {
+    const path = join(t.dir, "inserted.jsonl");
+    return existsSync(path)
+      ? readFileSync(path, "utf8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l))
+      : [];
+  };
+  const openDictionary = async (call?: string) => {
+    const page = await rig.open(call);
+    // The Dictionary reads the workspace of the call the window shows: wait until it shows one.
+    if (call) await page.waitForFunction(() => document.getElementById("pill-ws")?.textContent);
+    await page.click("#dictation-open");
+    await page.click("#dictation-dictionary-open");
+    await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li[data-term]");
+    return page;
+  };
+  const term = (x: string) => `#dictionary-list li[data-term='${x}']`;
+
+  test(
+    "dot com to .com is written for dictation only, and the next dictation of example dot com inserts example.com",
+    async () => {
+      const page = await openDictionary();
+      await page.fill("#dictionary-heard", "dot com");
+      await page.fill("#dictionary-term", ".com");
+      await page.click("#dictionary-add");
+      await page.waitForSelector(term(".com"));
+      expect(await text(page, `${term(".com")} .where`)).toBe("dictation only");
+      expect(vocabFile().find((e) => e.term === ".com")).toMatchObject({
+        heard: ["dot com"],
+        source: "user",
+        confirmed: true,
+        entryScope: "dictation",
+      });
+
+      // Another form on a known word keeps who added it and when (the route replaces the rest).
+      await page.fill("#dictionary-heard", "ver sell");
+      await page.fill("#dictionary-term", "Vercel");
+      await page.click("#dictionary-add");
+      await page.waitForFunction(
+        (sel) => document.querySelector(sel)?.textContent === "versal, ver sell",
+        `${term("Vercel")} .heard`,
+      );
+      expect(vocabFile().find((e) => e.term === "Vercel")).toMatchObject({
+        heard: ["versal", "ver sell"],
+        source: "import:api",
+        added_at: "2026-01-02",
+        entryScope: "dictation",
+      });
+
+      // The route takes only the one scope there is.
+      const bad = await rig.api("POST", "/vocab", { term: "Kubernetes", scope: "calls" });
+      expect([bad.status, bad.body.error, bad.body.field]).toEqual([400, "bad_field", "scope"]);
+
+      // The next dictation: the press plays at the second rebind.
+      const d = rig.app.dictation();
+      if (!d) throw new Error("no dictation");
+      await d.rebind();
+      // The fake inserter writes its line before the app has the receipt: wait for the log's state.
+      await until(() => d.log.items()[0]?.state === "inserted", 15_000, "the dictation inserted");
+      expect(inserted().map((x) => x.text)).toEqual(["example.com"]);
+      expect(d.log.items()[0]).toMatchObject({
+        state: "inserted",
+        raw: "example dot com",
+        text: "example.com",
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "History on the real routes: Retry with best beside the first, Insert either opens the draft box, Delete removes it and its audio",
+    async () => {
+      const d = rig.app.dictation();
+      const id = d?.log.items()[0]?.id;
+      if (!d || !id) throw new Error("the first test left no dictation");
+      const page = await rig.open();
+      await page.click("#dictation-open");
+      await page.click("#dictation-history-open");
+      const row = `#dictation-history-list li[data-id='${id}']`;
+      await page.waitForSelector(row);
+      expect(await text(page, `${row} .result.first .text`)).toBe("example.com");
+      expect(await text(page, `${row} .state`)).toBe("inserted");
+      expect(await page.inputValue(`${row} select.retry-engine`)).toBe("best");
+
+      await page.click(`${row} button.retry`);
+      await page.waitForSelector(`${row} .result.retry`);
+      const readings = await page.$$eval(`${row} .result`, (r) =>
+        r.map((x) => [x.getAttribute("data-engine"), x.querySelector(".text")?.textContent]),
+      );
+      expect(readings).toEqual([
+        ["fast", "example.com"],
+        ["best", "example.com"],
+      ]);
+
+      await page.click(`${row} .result.retry button.insert`);
+      await page.click(`${row} .result.first button.insert`);
+      await until(() => draftOpens.length === 2, 5000, "both inserts open the draft box");
+      expect(draftOpens.map((o) => [o.id, o.text, o.focus])).toEqual([
+        [id, "example.com", true],
+        [id, "example.com", true],
+      ]);
+
+      const audio = d.audio.path(id);
+      expect(existsSync(audio)).toBe(true);
+      await page.click(`${row} button.delete`);
+      await page.click(`${row} button.delete`);
+      await page.waitForSelector(row, { state: "detached" });
+      expect(existsSync(audio)).toBe(false);
+      expect((await rig.api("GET", `/dictations/${id}`)).status).toBe(404);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "on a call, the Dictionary lists that workspace's words read only, with their file, as words for its calls",
+    async () => {
+      const page = await openDictionary("01J8Z6Q4M2VX0K7B3D4E5F6G7H");
+      await page.waitForSelector(term("Hetzner"));
+      expect(await text(page, `${term("Hetzner")} .where`)).toBe(
+        `calls in work only, from ${join(rig.app.configDir, "vocabulary", "work.yaml")}`,
+      );
+      expect(await page.isVisible(`${term("Hetzner")} button.remove`)).toBe(false);
+      // The global file's words keep their buttons (positive control).
+      expect(await page.isVisible(`${term("Vercel")} button.remove`)).toBe(true);
     },
     UI_TIMEOUT,
   );
