@@ -31,6 +31,7 @@ import {
   type DictationEngine,
   DictationSession,
   decodeDictation,
+  type InsertPolicy,
   type RebindAnswer,
   type SessionState,
   type TextRules,
@@ -121,6 +122,11 @@ export interface DictationServiceOptions extends TextRules {
   /** How long a learn window stays open after an insert; `LEARN_WINDOW_MS` by default. */
   learnWindowMs?: number;
   /**
+   * How a spoken dictation's text goes in (DC-S2): `dictation.insert`, `dictation.sendKey`,
+   * `dictation.sendAlways`, `dictation.restoreClipboard`. Absent: paste, and never a send key.
+   */
+  insert?(): InsertPolicy;
+  /**
    * What the draft box needs beside the log and the session (DC-S1, DC-L1, DC-L4); absent, the
    * box sends nothing, learns nothing and inserts with no send key.
    */
@@ -173,7 +179,9 @@ export type DictationFollow =
   | { kind: "event"; e: DictationEvent }
   | { kind: "level"; rms: number }
   /** The engine's line for the pill about dictation `id` (DC-E2, DC-R3), never written anywhere. */
-  | { kind: "notice"; id: string; notice: string };
+  | { kind: "notice"; id: string; notice: string }
+  /** The dictation key was pressed while a dictation transcribes: refused, never queued (DC-A4). */
+  | { kind: "busy" };
 
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -501,7 +509,9 @@ export class DictationService {
       onLevel: (rms) => this.tell({ kind: "level", rms }),
       onNotice: (id, notice) => this.tell({ kind: "notice", id, notice }),
       saveAudio: (id, samples) => this.audio.write(id, samples),
-      onDraft: (id) => this.draft.open(id, { focus: false }).ok,
+      onDraft: (id, _reason, focus) => this.draft.open(id, { focus }).ok,
+      ...(this.o.insert ? { insertPolicy: this.o.insert } : {}),
+      onBusy: () => this.tell({ kind: "busy" }),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -628,13 +638,14 @@ export class DictationService {
   }
 }
 
-/** The text rules the service hands each session (DC-E6, DC-L6, DC-S7). */
+/** The text rules the service hands each session (DC-E6, DC-L6, DC-S7, DC-S6). */
 function textRules(o: TextRules): TextRules {
   const r: TextRules = {};
   if (o.correct) r.correct = o.correct;
   if (o.speech) r.speech = o.speech;
   if (o.fillers) r.fillers = o.fillers;
   if (o.languages) r.languages = o.languages;
+  if (o.punctuation) r.punctuation = o.punctuation;
   if (o.format) r.format = o.format;
   return r;
 }
