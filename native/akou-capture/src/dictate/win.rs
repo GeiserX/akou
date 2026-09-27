@@ -566,9 +566,13 @@ impl Screen {
         Screen { uia }
     }
 
+    /// The focused element, asked twice: the first call into a process UI Automation has not
+    /// reached yet can outlast the connection timeout, and the next call finds the connection made.
+    /// Without the second ask the first insert into a newly opened window fails `field-unknown`.
     fn focused(&self) -> Option<IUIAutomationElement> {
-        // SAFETY: a COM call on this thread's object.
-        unsafe { self.uia.as_ref()?.GetFocusedElement() }.ok()
+        let uia = self.uia.as_ref()?;
+        // SAFETY: COM calls on this thread's object.
+        (0..2).find_map(|_| unsafe { uia.GetFocusedElement() }.ok())
     }
 }
 
