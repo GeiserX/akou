@@ -9,10 +9,12 @@
  * through `pillPreview`, which lets them through only with `dictation.pillPreview` on and the
  * window hidden from screen capture; neither is possible before DK-P3.
  *
- * - `listening` from the session's state, with the hints the key source can honour: Escape where
- *   it swallows keys (the helper cancels on it); Enter and Shift+Enter wait for DC-A4 and DC-S1.
+ * - `listening` from the session's state, with the hints the key source can honour (DC-A4):
+ *   Escape, Enter and Shift+Enter where it swallows keys; only the dictation key's on the portal
+ *   and the CLI, where no other key does anything in a session.
  * - `transcribing` while the engine decodes and the helper inserts, `loading model` under it when
- *   the engine was still loading at the release.
+ *   the engine was still loading at the release, and `still transcribing` for `BUSY_MS` when the
+ *   dictation key is pressed then (the helper refuses the press, DC-A4).
  * - `inserted` or `copied` for `DONE_MS` after the helper's receipt, with the engine's notice
  *   (`best failed, used fast`) or, after a clipboard-only insert, the paste hint.
  * - `error` with the log's message for `ERROR_MS`. Its buttons (Retry, Copy, Open draft) wait for
@@ -82,6 +84,13 @@ export const DONE_MS = 1500;
 export const ERROR_MS = 5000;
 /** The line under `transcribing` while the engine was loading its model at the release. */
 export const LOADING_NOTE = "loading model";
+/** The flash under `transcribing` when the dictation key is pressed then (DC-A4). */
+export const BUSY_NOTE = "still transcribing";
+/** How long that flash stays. */
+export const BUSY_MS = 1200;
+
+/** The key hints of a key source that swallows keys during a session (DC-A4). */
+const SWALLOWED: readonly PillKey[] = ["escape", "enter", "shift-enter"];
 
 /** The mic level in dBFS for the meter, -60 (silence) to 0 (full scale). */
 export function levelDb(rms: number): number {
@@ -107,6 +116,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   /** The engine's notice for it (`best failed, used fast`). */
   let notice: string | null = null;
   let cancelHide: () => void = () => {};
+  let cancelBusy: () => void = () => {};
 
   const put = (s: PillState) => {
     shown = s;
@@ -127,7 +137,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         cancelHide();
         current = null;
         notice = null;
-        const keys: PillKey[] = st.swallow_keys === true ? ["escape"] : [];
+        const keys: PillKey[] = st.swallow_keys === true ? [...SWALLOWED] : [];
         put({ state: "listening", since: o.now(), keys, hotkey: o.label(o.hotkey(), o.platform) });
         return;
       }
@@ -159,6 +169,17 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     }
     if (m.kind === "notice") {
       if (m.id === current) notice = m.notice;
+      return;
+    }
+    if (m.kind === "busy") {
+      const s = shown;
+      if (s.state !== "transcribing") return;
+      cancelBusy();
+      put({ ...s, note: BUSY_NOTE });
+      cancelBusy = later(BUSY_MS, () => {
+        // Back to the line it had, unless the pill moved on meanwhile.
+        if (shown.state === "transcribing" && shown.note === BUSY_NOTE) put(s);
+      });
       return;
     }
     const e = m.e;
@@ -204,6 +225,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     shown: () => shown,
     close: () => {
       cancelHide();
+      cancelBusy();
       unfollow();
     },
   };
