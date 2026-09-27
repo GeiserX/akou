@@ -19,7 +19,7 @@ import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { LiveAsr } from "../src/main/asr/live-worker.ts";
 import { DictationService } from "../src/main/dictation/service.ts";
-import type { DictationEngine } from "../src/main/dictation/session.ts";
+import { DEFAULT_INSERT, type DictationEngine } from "../src/main/dictation/session.ts";
 import { FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -91,6 +91,16 @@ function rig(
   keys: [number, string, boolean][],
   tree: [number, Record<string, unknown>][] = [[0, NOTES]],
 ): Rig {
+  return rigWith(bin, keys, tree);
+}
+
+/** `rig` with Enter as `dictation.sendKey`, as the settings' default (DC-S2). */
+function rigWith(
+  bin: string,
+  keys: [number, string, boolean][],
+  tree: [number, Record<string, unknown>][] = [[0, NOTES]],
+  sendKey: "Enter" | "none" = "none",
+): Rig {
   const t = tempDir("akou-dict-helper-");
   cleanups.push(t.cleanup);
   const wav = join(t.dir, "mic.wav");
@@ -113,6 +123,7 @@ function rig(
     engine: fastEngine,
     now: () => Date.now(),
     onLog: (level, msg) => said.push(`${level}: ${msg}`),
+    insert: () => ({ ...DEFAULT_INSERT, sendKey }),
   });
   cleanups.push(() => svc.close());
   svc.start(
@@ -228,6 +239,73 @@ if (!BIN) {
           error: "insert: focus-changed",
         });
         expect(jsonLines(r.inserter).some((e) => e.text === "hello")).toBe(false);
+      },
+      SLOW,
+    );
+
+    /** A tap latches at 0 and Enter at 3 s ends the session, over "hello world". */
+    const latchThenEnter: [number, string, boolean][] = [
+      [0, RC, true],
+      [120, RC, false],
+      [3000, "Enter", true],
+      [3050, "Enter", false],
+    ];
+    const RETURN = 'Named("Return")';
+
+    test(
+      "Enter ends a latched session: the paste, then Return once the target read it (DC-A4, DC-S2)",
+      async () => {
+        const r = rigWith(bin, latchThenEnter, [[0, NOTES]], "Enter");
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "inserted", "the dictation");
+        expect(r.svc.log.items()[0]).toMatchObject({ text: "hello world" });
+        const log = jsonLines(r.inserter);
+        const published = log.findIndex((e) => e.type === "publish" && e.text === "hello world");
+        const sent = log.findIndex((e) => e.type === "key" && e.event === RETURN);
+        expect(published).toBeGreaterThanOrEqual(0);
+        expect(sent).toBeGreaterThan(published);
+        expect(log.filter((e) => e.type === "key" && e.event === RETURN)).toHaveLength(1);
+      },
+      SLOW,
+    );
+
+    test(
+      "positive control: the same session with sendKey none presses no Return",
+      async () => {
+        const r = rigWith(bin, latchThenEnter, [[0, NOTES]], "none");
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "inserted", "the dictation");
+        const log = jsonLines(r.inserter);
+        expect(log.some((e) => e.type === "publish" && e.text === "hello world")).toBe(true);
+        expect(log.some((e) => e.type === "key" && e.event === RETURN)).toBe(false);
+      },
+      SLOW,
+    );
+
+    test(
+      "Shift+Enter ends a latched session in the draft box: nothing is pasted (DC-A4)",
+      async () => {
+        const r = rigWith(
+          bin,
+          [
+            [0, RC, true],
+            [120, RC, false],
+            [3000, "LeftShift", true],
+            [3010, "Enter", true],
+            [3020, "Enter", false],
+            [3030, "LeftShift", false],
+          ],
+          [[0, NOTES]],
+          "Enter",
+        );
+        const opened: { focus: boolean }[] = [];
+        r.svc.draft.attach({
+          open: (d) => opened.push(d),
+          chip: () => {},
+          showInactive: () => {},
+          hide: () => {},
+        });
+        await waitFor(r, () => r.svc.log.items()[0]?.state === "drafted", "the draft");
+        expect(opened).toMatchObject([{ focus: true }]);
+        expect(jsonLines(r.inserter).some((e) => e.type === "publish")).toBe(false);
       },
       SLOW,
     );

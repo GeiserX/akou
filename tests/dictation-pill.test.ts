@@ -13,6 +13,8 @@ import type { DictationFollow } from "../src/main/dictation/service.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
 import { hotkeyLabel } from "../src/main/window/hotkey.ts";
 import {
+  BUSY_MS,
+  BUSY_NOTE,
   DONE_MS,
   ERROR_MS,
   LOADING_NOTE,
@@ -140,7 +142,7 @@ describe("DC-O1: the pill's states from the session", () => {
     expect(f.states().at(-1)).toEqual({
       state: "listening",
       since: 1000,
-      keys: ["escape"],
+      keys: ["escape", "enter", "shift-enter"],
       hotkey: "Right ⌘",
     });
     expect(f.visible.at(-1)).toBe(true);
@@ -166,6 +168,26 @@ describe("DC-O1: the pill's states from the session", () => {
     f.st.swallow_keys = false;
     f.to("listening");
     expect(f.states().at(-1)).toMatchObject({ keys: [], hotkey: "Right Win" });
+  });
+
+  test("the dictation key pressed while transcribing flashes still transcribing (DC-A4)", () => {
+    const f = pill();
+    f.to("listening");
+    f.st.loading = true;
+    f.to("transcribing");
+    f.tell({ kind: "busy" });
+    expect(f.states().at(-1)).toEqual({ state: "transcribing", since: 1000, note: BUSY_NOTE });
+    f.t.run(BUSY_MS);
+    // Back to the line it had, with the clock it had.
+    expect(f.states().at(-1)).toEqual({ state: "transcribing", since: 1000, note: LOADING_NOTE });
+  });
+
+  test("a busy press with nothing transcribing shows nothing", () => {
+    const f = pill();
+    f.to("listening");
+    const before = f.states().length;
+    f.tell({ kind: "busy" });
+    expect(f.states()).toHaveLength(before);
   });
 
   test("the engine still loading at the release says so under transcribing", () => {

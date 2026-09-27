@@ -15,6 +15,10 @@
  *   confirmed hold ends the session as `cancel` and passes. The modifier is never swallowed.
  * - **Keys during a session**: from the press until the insert settles, Escape (cancel), Enter and
  *   Shift+Enter (end as `key`) are swallowed and reported. Outside a session nothing is swallowed.
+ * - **Which rule wins**: before a press is a session every other key, Enter included, is the
+ *   interrupt rule. Once it is a session, Escape, Enter and Shift+Enter are DC-A4's even while the
+ *   modifier is still held, so Enter during a push-to-talk hold ends it and sends instead of
+ *   reaching the app as Command+Enter; any other key is still the interrupt rule.
  */
 
 export const ACTIVATIONS = ["hold-or-toggle", "hold", "toggle"] as const;
@@ -163,7 +167,9 @@ export class ActivationMachine {
   private enterName(name: string): string | null {
     if (name === "Escape") return "Escape";
     if (name === "Enter" || name === "Return" || name === "KeypadEnter") {
-      return this.held.some((k) => modifier(k)?.[0] === "Shift") ? "Shift+Enter" : "Enter";
+      // A Shift other than the hotkey itself: a held `RightShift` hotkey is not Shift+Enter.
+      const shift = this.held.some((k) => modifier(k)?.[0] === "Shift" && k !== this.hotkey.key);
+      return shift ? "Shift+Enter" : "Enter";
     }
     return null;
   }
@@ -198,7 +204,8 @@ export class ActivationMachine {
           this.state = { s: "idle" };
           return true;
         }
-        if (k !== null && !(st.held && !chord)) {
+        // DC-A4 wins over the interrupt rule once the press is a session.
+        if (k !== null) {
           out.push({ type: "key", name: k }, { type: "end", reason: "key" });
           this.state = this.awaiting(at);
           return true;
