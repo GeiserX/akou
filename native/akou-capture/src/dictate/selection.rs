@@ -24,7 +24,9 @@
 //!   takes the clipboard back and serves those bytes.
 //!
 //! Nothing here waits: every call first handles the events that arrived (`pump`), answering each
-//! request from what is served now.
+//! request from what is served now. The insert calls `serve` on every tick, with or without a
+//! paste waiting, because after a restore akou is the owner of the old contents and must keep
+//! answering for them.
 
 use super::insert::{Clipboard, Snapshot};
 
@@ -185,6 +187,10 @@ impl<C: Conn> Clipboard for Selection<C> {
     fn reads(&mut self) -> Vec<u64> {
         self.pump();
         std::mem::take(&mut self.reads)
+    }
+
+    fn serve(&mut self) {
+        self.pump();
     }
 }
 
