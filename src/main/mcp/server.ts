@@ -247,6 +247,16 @@ const OUT = {
       }),
     ),
   }),
+  dictations: z.object({
+    count: INT.min(0).describe("Dictations in this answer."),
+    omitted: INT.min(0).describe("Dictations of the page left out to keep the answer small."),
+    nextCursor: z
+      .string()
+      .nullable()
+      .describe("Pass it as `cursor` for the next page; null on the last page."),
+    callText: CALL_TEXT,
+  }),
+  dictation: z.object({ id: z.string(), state: z.string(), callText: CALL_TEXT }),
   getCall: z.object({
     call: z.string(),
     state: PACK_STATE,
@@ -330,6 +340,8 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   akou_list_calls: { title: "List past calls", hints: READ },
   akou_get_call: { title: "Read a named call", hints: READ },
   akou_export: { title: "Export a call", hints: WRITE },
+  akou_dictation_list: { title: "List past dictations", hints: READ, less: "a smaller `limit`" },
+  akou_dictation_get: { title: "Read a dictation", hints: READ },
 };
 
 export interface McpOptions {
@@ -1118,6 +1130,75 @@ export function createMcpServer(o: McpOptions): McpServer {
     async (a) => {
       const r = await req("POST", `/calls/${id(a.call)}/export`);
       return asResult(r, compact);
+    },
+  );
+
+  // --- dictation history, read-only (DICTATION.md DC-G5) ------------------------------------------
+  // No tool starts a dictation, inserts text or changes a dictation setting: a dictation is typed
+  // into whatever app the user is looking at, which an auto-approved tool must never do. The text
+  // is the user's own words, quoted as data like call text (PG-Z1).
+
+  tool(
+    "akou_dictation_list",
+    {
+      description:
+        "The user's past dictations (text they spoke into other apps with akou's dictation key), newest first: id, time, state, the app it went to, and the text. Read-only. `q` keeps those whose text holds it; page with `cursor`.",
+      inputSchema: z.object({
+        q: z.string().optional(),
+        limit: z.number().int().min(1).max(100).default(20),
+        cursor: z.string().optional().describe("The nextCursor of the previous page."),
+      }),
+      outputSchema: OUT.dictations,
+    },
+    async (a) => {
+      const r = await req("GET", "/dictations", {
+        query: { q: a.q, limit: a.limit, cursor: a.cursor },
+      });
+      return asResult(r, (b) => {
+        const all = (b.items ?? []) as Body[];
+        const rows: string[] = [];
+        let used = 0;
+        for (const d of all) {
+          const at = `${new Date(d.at).toLocaleDateString("en-CA")} ${wall(d.at)}`;
+          const row = `${d.id}  ${at}  ${d.state}  ${d.app ?? "-"}  ${d.text ?? ""}`;
+          const t = estimateTokens(row) + 4;
+          if (rows.length > 0 && used + t > PAGE_TOKENS) break;
+          used += t;
+          rows.push(row);
+        }
+        const omitted = all.length - rows.length;
+        const last = all[rows.length - 1];
+        const next: string | null = omitted > 0 && last ? String(last.id) : (b.next_cursor ?? null);
+        const block = quoteCallText(rows.join("\n"));
+        return {
+          text: [
+            rows.length === 0 ? "No dictations." : `${rows.length} dictations, newest first.`,
+            block,
+            next === null ? "No more dictations." : `nextCursor: ${next}`,
+          ].join("\n"),
+          data: { count: rows.length, omitted, nextCursor: next, callText: block },
+        };
+      });
+    },
+  );
+
+  tool(
+    "akou_dictation_get",
+    {
+      description:
+        "One past dictation by id: its state, the app it went to, the text inserted and the raw text heard, the language, the engine and its timing. Read-only.",
+      inputSchema: z.object({ id: z.string() }),
+      outputSchema: OUT.dictation,
+    },
+    async (a) => {
+      const r = await req("GET", `/dictations/${id(a.id)}`);
+      // Per-word times and confidences are the draft box's; an agent reads the text.
+      return asResult(r, (b) =>
+        quotedWith((d) => ({ id: String(d.id), state: String(d.state) }))({
+          ...b,
+          words: undefined,
+        }),
+      );
     },
   );
 

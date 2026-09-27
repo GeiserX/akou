@@ -69,6 +69,10 @@
  *   --tap-disabled-at MS    the first key event at or after MS finds the tap disabled and is lost;
  *                           the tap is re-enabled from that callback (DC-N1)
  *
+ * `session.start`, `session.stop` and `session.cancel` (the tray's and the CLI's door) run through
+ * the same rule: a latched session from the key time reached so far, whose audio lasts as long as
+ * the session did in real time.
+ *
  * A remote that times out is the remote's trap, not the helper's: lane D's server rig has it.
  */
 
@@ -406,6 +410,8 @@ async function runDictate(): Promise<void> {
 
   let machine: ActivationMachine | null = null;
   let open: { id: string; at: number } | null = null;
+  /** A session started by `session.start`: its key time, and the real time it began. */
+  let started: { at: number; real: number } | null = null;
   /** The key time the script has reached, ms. */
   let clock = 0;
   const act = async (outs: ActivationOut[]) => {
@@ -487,12 +493,30 @@ async function runDictate(): Promise<void> {
         setTimeout(() => {
           machine?.settled();
           if (flag("--focus-change")) {
-            say({ type: "insert.failed", id: c.id, reason: "focus_changed" });
+            say({ type: "insert.failed", id: c.id, reason: "focus-changed" });
             return;
           }
           say({ type: "inserted", id: c.id, method: c.method, receipt_ms: receiptMs });
           if (flag("--dormant-tree")) say({ type: "edit.unreadable", id: c.id, reason: "dormant" });
         }, receiptMs);
+        return;
+      }
+      case "session.start": {
+        // The tray's and the CLI's door: a latched session, as if the key were tapped. Its audio
+        // runs on the key clock from here, as long as the session lasts in real time.
+        const outs: ActivationOut[] = [];
+        machine?.start(clock, outs);
+        if (outs.length > 0) started = { at: clock, real: now() };
+        void act(outs);
+        return;
+      }
+      case "session.stop":
+      case "session.cancel": {
+        if (started && open) clock = Math.max(clock, started.at + (now() - started.real));
+        started = null;
+        const outs: ActivationOut[] = [];
+        machine?.end(c.type === "session.stop" ? "tap" : "cancel", clock, outs);
+        void act(outs);
         return;
       }
       case "stop": {
