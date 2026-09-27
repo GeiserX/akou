@@ -315,12 +315,23 @@ impl Dictate {
                 restore,
                 read_field,
             } => {
+                // A paste still waiting settles first, so its answer (and its read-back) is not
+                // lost when this insert takes the slot.
+                let mut done = Vec::new();
+                if let Some(ins) = self.inserter.as_mut() {
+                    ins.finish(t_ns, &mut done);
+                }
+                self.report(done, t_ns, out);
                 // A field still watched is read now: the new text is about to land.
                 if let Some((r, _)) = self.snapshot_at.take() {
                     self.start_watch(r, t_ns, out);
                 }
                 self.finish_watch(out);
-                self.act(t_ns, out, |a, _| a.insert_started(t_ns));
+                // Only the session's own insert holds the keys; a stale id must not restart the
+                // swallow window, as only the session's own answer settles it.
+                if self.last.as_ref().is_some_and(|(l, _)| *l == id) {
+                    self.act(t_ns, out, |a, _| a.insert_started(t_ns));
+                }
                 // The session's own record, with the app's target when it names one (the draft
                 // box inserts where the session began).
                 let mut cap = self.last.as_ref().filter(|(l, _)| *l == id).map_or_else(
@@ -869,6 +880,91 @@ mod tests {
                 r#"{"type":"secure_input","on":false}"#
             ]
         );
+    }
+
+    /// A session that captured the fake Slack and ended at 100 ms; the app's commands follow.
+    fn ended_session(w: &Shared) -> (Dictate, Rec) {
+        let mut d = dictate(w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        d.command(Command::SessionStart, 0, &mut out);
+        run(&mut d, &mut out, 0, 100);
+        d.command(Command::SessionStop, 100 * MS, &mut out);
+        run(&mut d, &mut out, 100, 400);
+        (d, out)
+    }
+
+    /// DC-N9: the draft box inserts where the app says (the `target` of its `insert`), not where
+    /// the session began. Positive control: the same insert without `target` is refused.
+    #[test]
+    fn dc_n9_an_insert_that_names_its_target_goes_there() {
+        let mail = r#"{"app":"Mail","pid":4,"window":"m","field":"editable"}"#;
+        for (named, want) in [(true, "inserted"), (false, "focus-changed")] {
+            let w = World::new();
+            let (mut d, mut out) = ended_session(&w);
+            w.borrow_mut().target = Target::from_value(&p::Value::parse(mail).unwrap()).unwrap();
+            let insert = if named {
+                format!(r#"{{"type":"insert","id":"1","text":"hi","target":{mail}}}"#)
+            } else {
+                r#"{"type":"insert","id":"1","text":"hi"}"#.to_string()
+            };
+            d.command(Command::parse(&insert).unwrap(), 400 * MS, &mut out);
+            w.borrow_mut().pending_reads.push(410 * MS);
+            run(&mut d, &mut out, 400, 700);
+            let answer = out
+                .lines
+                .iter()
+                .find(|l| l.contains(r#""id":"1""#) && l.contains("insert"))
+                .unwrap();
+            assert!(answer.contains(want), "named {named}: {answer}");
+            assert_eq!(w.borrow().posted.is_empty(), !named);
+        }
+    }
+
+    /// DC-A4: only the session's own insert holds Escape and Enter; an insert with another id (a
+    /// retry from history, a stale draft) must not restart the 8 s swallow window, since only
+    /// the session's own answer ends it. Positive control: the session's own insert does.
+    #[test]
+    fn dc_a4_an_insert_for_another_id_does_not_hold_the_keys() {
+        for (id, held) in [("old", false), ("1", true)] {
+            let w = World::new();
+            let (mut d, mut out) = ended_session(&w);
+            // The target never reads, so the session's own paste waits out its receipt; the
+            // stale id has no session record and is refused, which settles nothing.
+            run(&mut d, &mut out, 400, 7000);
+            let insert = format!(r#"{{"type":"insert","id":"{id}","text":"hi"}}"#);
+            d.command(Command::parse(&insert).unwrap(), 7000 * MS, &mut out);
+            run(&mut d, &mut out, 7000, 9000);
+            assert_eq!(
+                d.key(true, "Escape", 9000 * MS, &mut out),
+                held,
+                "insert id {id}"
+            );
+        }
+    }
+
+    /// DC-L2: a second insert while the first paste still waits for its quiet period settles
+    /// the first, and the first still gets its read-back answer.
+    #[test]
+    fn dc_l2_a_second_insert_does_not_lose_the_first_ones_answer() {
+        let w = World::new();
+        let (mut d, mut out) = ended_session(&w);
+        w.borrow_mut().field = Some(Field::Text {
+            value: PASTED.into(),
+            caret: PASTED.chars().count(),
+        });
+        let first = format!(r#"{{"type":"insert","id":"1","text":"{PASTED}","read_field":true}}"#);
+        d.command(Command::parse(&first).unwrap(), 400 * MS, &mut out);
+        w.borrow_mut().pending_reads.push(410 * MS);
+        run(&mut d, &mut out, 400, 450);
+        let second = r#"{"type":"insert","id":"2","text":"more","read_field":true}"#;
+        d.command(Command::parse(second).unwrap(), 450 * MS, &mut out);
+        let answers: Vec<&String> = out
+            .lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"edit"#) && l.contains(r#""id":"1""#))
+            .collect();
+        assert_eq!(answers.len(), 1, "{:?}", out.lines);
     }
 
     const BEFORE: &str = "Hi team, ";

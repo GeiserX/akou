@@ -132,6 +132,11 @@ pub mod flag {
     pub const RIGHT_OPTION: u64 = 0x0000_0040;
     pub const RIGHT_CONTROL: u64 = 0x0000_2000;
     pub const SECONDARY_FN: u64 = 0x0080_0000;
+    /// The side-independent masks (`kCGEventFlagMask*`) an app reads a shortcut from.
+    pub const SHIFT: u64 = 0x0002_0000;
+    pub const CONTROL: u64 = 0x0004_0000;
+    pub const OPTION: u64 = 0x0008_0000;
+    pub const COMMAND: u64 = 0x0010_0000;
 }
 
 /// The modifier keys: key code, name, and the device bit that says it is down.
@@ -169,6 +174,28 @@ pub fn held_modifiers(flags: u64) -> Vec<String> {
         .filter(|(_, _, bit)| flags & bit != 0)
         .map(|(_, name, _)| (*name).to_string())
         .collect()
+}
+
+/// A modifier the helper posts (DC-N6): its key code and every flag it sets while down, the
+/// family's mask and its side's bit. A family name (`Command`, `Control`, `Shift`, `Option`) is
+/// its left key; a side's name (`RightOption`, a hotkey still held) is that key.
+pub fn modifier_key(name: &str) -> Option<(u16, u64)> {
+    let side = match name {
+        "Command" => "LeftCommand",
+        "Control" => "LeftControl",
+        "Shift" => "LeftShift",
+        "Option" | "Alt" => "LeftOption",
+        other => other,
+    };
+    let (code, _, bit) = MODIFIERS.iter().find(|(_, n, _)| *n == side)?;
+    let family = match side.trim_start_matches("Left").trim_start_matches("Right") {
+        "Command" => flag::COMMAND,
+        "Control" => flag::CONTROL,
+        "Shift" => flag::SHIFT,
+        "Option" => flag::OPTION,
+        _ => 0,
+    };
+    Some((*code, family | bit))
 }
 
 /// The key code of a key name (not a modifier), for asking the OS whether it is still down.
@@ -260,6 +287,38 @@ mod tests {
             vec!["LeftShift".to_string(), "RightOption".to_string()]
         );
         assert!(held_modifiers(0).is_empty());
+    }
+
+    /// The chord's modifiers and a released hotkey are posted with the key and the flags an app
+    /// reads: Command+V carries the Command mask, and a Right Option pressed again is the right
+    /// key, not the left one.
+    #[test]
+    fn a_posted_modifier_has_its_key_and_its_flags() {
+        use flag::*;
+        assert_eq!(
+            modifier_key("Command"),
+            Some((0x37, COMMAND | LEFT_COMMAND))
+        );
+        assert_eq!(
+            modifier_key("Control"),
+            Some((0x3B, CONTROL | LEFT_CONTROL))
+        );
+        assert_eq!(modifier_key("Shift"), Some((0x38, SHIFT | LEFT_SHIFT)));
+        assert_eq!(
+            modifier_key("RightOption"),
+            Some((0x3D, OPTION | RIGHT_OPTION))
+        );
+        assert_eq!(
+            modifier_key("RightCommand"),
+            Some((0x36, COMMAND | RIGHT_COMMAND))
+        );
+        assert_eq!(modifier_key("Fn"), Some((0x3F, SECONDARY_FN)));
+        assert_eq!(modifier_key("Hyper"), None);
+        // Every modifier the tap can report held can be released and pressed again.
+        for (_, name, bit) in MODIFIERS {
+            let (_, flags) = modifier_key(name).unwrap();
+            assert_ne!(flags & bit, 0, "{name}");
+        }
     }
 
     #[test]

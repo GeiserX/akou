@@ -23,6 +23,7 @@
 
 use std::io::{BufRead, Write};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, SyncSender};
+use std::time::Duration;
 
 use super::protocol::{self as p, Command};
 use super::session::{Dictate, Out};
@@ -234,6 +235,9 @@ impl Mic<'_> {
     }
 }
 
+/// How the worker waits up to one step for its next message.
+pub type Wait<'a> = &'a mut dyn FnMut(&Receiver<Msg>, Duration) -> Result<Msg, RecvTimeoutError>;
+
 /// Runs the worker until `stop` or the end of stdin; returns the exit code.
 pub fn serve(
     d: &mut Dictate,
@@ -241,6 +245,28 @@ pub fn serve(
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     now: &mut dyn FnMut() -> Now,
+    out: &mut dyn Out,
+) -> i32 {
+    serve_with(
+        d,
+        dev,
+        tx,
+        rx,
+        now,
+        &mut |rx, step| rx.recv_timeout(step),
+        out,
+    )
+}
+
+/// `serve` with the backend's own wait: macOS turns the main run loop in it, where AppKit
+/// serves the paste's pasteboard promise (`mac_insert::wait`).
+pub fn serve_with(
+    d: &mut Dictate,
+    dev: &mut dyn Device,
+    tx: Sender<Msg>,
+    rx: Receiver<Msg>,
+    now: &mut dyn FnMut() -> Now,
+    wait: Wait,
     out: &mut dyn Out,
 ) -> i32 {
     let (mic_tx, mic_rx) = mpsc::sync_channel::<Event>(256);
@@ -262,7 +288,7 @@ pub fn serve(
     };
     let mut sleep = Sleep::default();
     loop {
-        let msg = rx.recv_timeout(std::time::Duration::from_millis(STEP_MS));
+        let msg = wait(&rx, Duration::from_millis(STEP_MS));
         let n = now();
         let t = n.awake_ns;
         if sleep.woke(n) {

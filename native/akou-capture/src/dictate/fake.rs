@@ -18,6 +18,8 @@ pub struct World {
     pub board: Snapshot,
     pub promise: Option<String>,
     pub transient: bool,
+    /// The last write was marked for clipboard managers to skip.
+    pub concealed: bool,
     pub count: u64,
     /// Reads of the promise not yet collected, with their time.
     pub pending_reads: Vec<u64>,
@@ -78,13 +80,14 @@ impl World {
         }
     }
 
-    fn set_board(&mut self, text: &str, transient: bool) -> Result<(), String> {
+    fn set_board(&mut self, text: &str, transient: bool, concealed: bool) -> Result<(), String> {
         if self.no_clipboard {
             return Err("no-clipboard".into());
         }
         self.board = vec![("text".into(), text.as_bytes().to_vec())];
         self.promise = transient.then(|| text.to_string());
         self.transient = transient;
+        self.concealed = concealed;
         self.count += 1;
         self.note(vec![
             (
@@ -114,11 +117,11 @@ impl Clipboard for Board {
     }
     fn publish(&mut self, text: &str) -> Result<u64, String> {
         let mut w = self.0.borrow_mut();
-        w.set_board(text, true)?;
+        w.set_board(text, true, true)?;
         Ok(w.count)
     }
-    fn write(&mut self, text: &str) -> Result<(), String> {
-        self.0.borrow_mut().set_board(text, false)
+    fn write(&mut self, text: &str, concealed: bool) -> Result<(), String> {
+        self.0.borrow_mut().set_board(text, false, concealed)
     }
     fn change_count(&mut self) -> u64 {
         self.0.borrow().count
@@ -128,6 +131,7 @@ impl Clipboard for Board {
         w.board = s.clone();
         w.promise = None;
         w.transient = false;
+        w.concealed = false;
         w.count += 1;
         w.restores += 1;
         w.note(vec![("type", Json::str("restore"))]);

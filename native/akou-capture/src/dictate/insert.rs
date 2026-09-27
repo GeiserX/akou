@@ -25,7 +25,12 @@
 //!    `QUIET_MS` after the last read, `RECEIPT_TIMEOUT_MS` after the chord at the latest, or
 //!    `FAILED_INJECTION_MS` after a chord that could not be posted, and only while the promise
 //!    still owns the clipboard (the change count is the one publishing left). `restore: false`
-//!    leaves the text there. The send key (DC-S2) is pressed only once the target read.
+//!    leaves the text there as a lasting copy, since a promise dies with the process that made
+//!    it. The send key (DC-S2) is pressed only once the target read.
+//!
+//! A clipboard-only write the helper chose for the user (`secure`, `elevated`) is marked
+//! concealed, so a clipboard manager does not keep what was meant for a password field; one the
+//! user chose (`method: clipboard`) is an ordinary copy.
 //!
 //! Nothing here waits: `insert` posts and returns, and `tick` decides from the reads the
 //! clipboard reported. The key tap never calls in here (DC-N1).
@@ -76,8 +81,10 @@ pub trait Clipboard {
     /// Publishes `text` as a promise (handed over when a reader asks), marked transient and
     /// concealed so clipboard managers skip it. Returns the change count it left.
     fn publish(&mut self, text: &str) -> Result<u64, String>;
-    /// Writes `text` for the user to paste by hand (clipboard-only mode).
-    fn write(&mut self, text: &str) -> Result<(), String>;
+    /// Writes `text` for the user to paste by hand (clipboard-only mode), a lasting copy.
+    /// `concealed` marks it for clipboard managers to skip (macOS
+    /// `org.nspasteboard.ConcealedType`, Windows `ExcludeClipboardContentFromMonitorProcessing`).
+    fn write(&mut self, text: &str, concealed: bool) -> Result<(), String>;
     /// macOS `changeCount`, the Windows sequence number, a count of ownership changes on Linux.
     fn change_count(&mut self) -> u64;
     fn restore(&mut self, snapshot: &Snapshot);
@@ -282,6 +289,8 @@ struct Tx {
     chord_ns: u64,
     count: u64,
     snapshot: Option<Snapshot>,
+    /// `restore: false`: the text, written as a lasting copy when the paste settles.
+    keep: Option<String>,
     first_read: Option<u64>,
     last_read: Option<u64>,
     failed: Option<String>,
@@ -327,7 +336,7 @@ impl Inserter {
     }
 
     fn clipboard_only(&mut self, text: &str, reason: Option<&'static str>) -> Outcome {
-        match self.clip.write(text) {
+        match self.clip.write(text, reason.is_some()) {
             Ok(()) => Outcome::Inserted {
                 method: "clipboard",
                 receipt_ms: 0,
@@ -440,6 +449,7 @@ impl Inserter {
             chord_ns: t_ns,
             count,
             snapshot,
+            keep: (!req.restore).then(|| req.text.clone()),
             first_read: None,
             last_read: None,
             failed,
@@ -498,8 +508,14 @@ impl Inserter {
             (None, None) if !owned => Outcome::Failed("clipboard-changed".into()),
             (None, None) => Outcome::Failed("no-receipt".into()),
         };
-        if owned && let Some(s) = &tx.snapshot {
-            self.clip.restore(s);
+        if owned {
+            match (&tx.snapshot, &tx.keep) {
+                (Some(s), _) => self.clip.restore(s),
+                (None, Some(text)) => {
+                    let _ = self.clip.write(text, false);
+                }
+                (None, None) => {}
+            }
         }
         done.push((tx.id, outcome));
     }
@@ -719,6 +735,12 @@ mod tests {
         assert_eq!(r.board_text(), "hello");
         assert_eq!(r.w.borrow().restores, 0);
         assert!(matches!(r.done[0].1, Outcome::Inserted { .. }));
+        let w = r.w.borrow();
+        assert!(
+            w.promise.is_none() && !w.transient,
+            "the promise became a lasting copy, or the text would vanish with the helper"
+        );
+        assert!(!w.concealed, "the user asked to keep it: an ordinary copy");
     }
 
     /// Terminals get the terminal's paste: Ctrl+Shift+V on Windows, Shift+Insert on Linux.
@@ -762,6 +784,10 @@ mod tests {
         r.insert(&req("paste", "Enter"), &cap());
         assert!(r.posted().is_empty());
         assert_eq!(r.board_text(), "hello");
+        assert!(
+            r.w.borrow().concealed,
+            "a copy the helper chose is concealed"
+        );
         assert_eq!(
             r.done,
             [(
@@ -786,6 +812,10 @@ mod tests {
         assert!(
             !r.w.borrow().transient,
             "a hand paste needs a lasting write"
+        );
+        assert!(
+            !r.w.borrow().concealed,
+            "the user chose the clipboard: an ordinary copy"
         );
     }
 
@@ -830,6 +860,10 @@ mod tests {
                 r.insert(&req(method, "Enter"), &c);
                 assert!(r.posted().is_empty(), "{method} {c:?}: {:?}", r.posted());
                 assert_eq!(r.board_text(), "hello");
+                assert!(
+                    r.w.borrow().concealed && !r.w.borrow().transient,
+                    "a lasting copy clipboard managers skip"
+                );
                 assert_eq!(
                     r.done[0].1,
                     Outcome::Inserted {
