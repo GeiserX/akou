@@ -10,6 +10,8 @@
 //! insert or a slow field read never delays the tap's answer.
 
 use super::activation::{Action, Activation, Mode};
+use super::globe::Globe;
+use super::inputs::{Choice, Transport};
 pub use super::insert::Targets;
 use super::insert::{Captured, Inserter, Os, Outcome, QUIET_MS, Request, is_terminal};
 use super::keys::Hotkey;
@@ -51,6 +53,11 @@ pub struct Dictate {
     os: Os,
     mic: Mic,
     warm: Warm,
+    /// The device the stream opened on, which `session.started` reports (DC-N5).
+    device: Option<Choice>,
+    /// The dictation key now, and the Globe action it may own (DC-N2, macOS only).
+    hotkey: Hotkey,
+    globe: Option<Globe>,
     targets: Box<dyn Targets>,
     /// None: this process has no inserter (a simulate run without `--inserter`), never a real one.
     inserter: Option<Inserter>,
@@ -73,10 +80,13 @@ pub struct Dictate {
 impl Dictate {
     pub fn new(cfg: Config, targets: Box<dyn Targets>, inserter: Option<Inserter>) -> Dictate {
         Dictate {
+            hotkey: cfg.hotkey.clone(),
+            globe: None,
             gate: Gate::new(Activation::new(cfg.hotkey, cfg.mode), cfg.os),
             os: cfg.os,
             mic: Mic::new(cfg.warm, cfg.bluetooth, cfg.ring_ms),
             warm: cfg.warm,
+            device: None,
             targets,
             inserter,
             next_id: 1,
@@ -96,6 +106,11 @@ impl Dictate {
         self.gate.clone()
     }
 
+    /// The backend owns the Fn key's own action while Fn is the dictation key (DC-N2).
+    pub fn set_globe(&mut self, globe: Globe) {
+        self.globe = Some(globe);
+    }
+
     /// Writes `ready` and applies the warm policy (an `always` stream opens now).
     pub fn begin(
         &mut self,
@@ -104,6 +119,10 @@ impl Dictate {
         grants: (&str, &str),
         out: &mut dyn Out,
     ) {
+        // Before `ready`, so a helper that says it is ready owns the Fn key's action (DC-N2).
+        if let Some(g) = self.globe.as_mut() {
+            g.follow(&self.hotkey);
+        }
         out.line(p::ready(backend, swallow_keys, grants.0, grants.1));
         self.accessibility = grants.1.to_string();
         let mut ev = Vec::new();
@@ -111,8 +130,11 @@ impl Dictate {
         self.mic_events(ev, out);
     }
 
-    /// The device just opened is (or is not) Bluetooth, which is never kept warm (DC-N4).
-    pub fn set_bluetooth(&mut self, bluetooth: bool, t_ns: u64, out: &mut dyn Out) {
+    /// The device the stream just opened on (DC-N5): a Bluetooth one is never kept warm (DC-N4),
+    /// and the next `session.started` names its transport and why it was chosen.
+    pub fn set_mic(&mut self, device: Choice, t_ns: u64, out: &mut dyn Out) {
+        let bluetooth = device.transport == Transport::Bluetooth;
+        self.device = Some(device);
         let mut ev = Vec::new();
         self.mic.set_bluetooth(bluetooth, t_ns, &mut ev);
         self.mic_events(ev, out);
@@ -277,6 +299,9 @@ impl Dictate {
     pub fn command(&mut self, cmd: Command, t_ns: u64, out: &mut dyn Out) -> bool {
         match cmd {
             Command::Stop => {
+                if let Some(g) = self.globe.as_mut() {
+                    g.release();
+                }
                 self.act(t_ns, out, |a, acts| a.end("stop", t_ns, acts));
                 // A session in its post-roll ends now too, and says so.
                 let mut ev = Vec::new();
@@ -300,6 +325,10 @@ impl Dictate {
                 });
                 match parsed {
                     Ok((h, mode)) => {
+                        if let Some(g) = self.globe.as_mut() {
+                            g.follow(&h);
+                        }
+                        self.hotkey = h.clone();
                         self.act(t_ns, out, |a, acts| a.rebind(h, mode, acts));
                         out.line(p::rebound(&hotkey));
                     }
@@ -417,7 +446,12 @@ impl Dictate {
                 MicEvent::Stream(open) => out.line(p::mic(open)),
                 MicEvent::Started { capture_ns } => {
                     if let Some((id, cap)) = &self.live {
-                        out.line(p::session_started(id, &cap.target, capture_ns));
+                        out.line(p::session_started(
+                            id,
+                            &cap.target,
+                            capture_ns,
+                            self.device.as_ref(),
+                        ));
                     }
                 }
                 MicEvent::Audio {
@@ -1150,5 +1184,39 @@ mod tests {
         assert!(w.borrow().field_reads.is_empty(), "not before the quiet");
         run(&mut d, &mut out, 590, 620);
         assert_eq!(w.borrow().field_reads.len(), 1);
+    }
+
+    /// DC-N2 through the protocol: a helper started on Fn silences the Globe action; `rebind`
+    /// away gives it back, `rebind` to Fn takes it again, and `stop` gives it back.
+    #[test]
+    fn dc_n2_the_globe_action_follows_the_dictation_key() {
+        use crate::dictate::globe::{DO_NOTHING, Globe, tests::Store};
+        let store = Store::default();
+        store.user_chose(2);
+        let w = World::new();
+        let mut d = Dictate::new(
+            Config {
+                hotkey: Hotkey::parse("Fn").unwrap(),
+                mode: Mode::HoldOrToggle,
+                warm: Warm::Off,
+                bluetooth: false,
+                ring_ms: 500,
+                os: Os::Mac,
+            },
+            Box::new(Screen(w.clone())),
+            None,
+        );
+        d.set_globe(Globe::new(Box::new(store.clone())));
+        let mut out = Rec::default();
+        d.begin("test", true, ("granted", "granted"), &mut out);
+        assert_eq!(store.fn_usage(), Some(DO_NOTHING));
+        let rebind =
+            |k: &str| Command::parse(&format!(r#"{{"type":"rebind","hotkey":"{k}"}}"#)).unwrap();
+        d.command(rebind("RightCommand"), 0, &mut out);
+        assert_eq!(store.fn_usage(), Some(2));
+        d.command(rebind("Fn"), 0, &mut out);
+        assert_eq!(store.fn_usage(), Some(DO_NOTHING));
+        assert!(!d.command(Command::Stop, 0, &mut out));
+        assert_eq!(store.fn_usage(), Some(2));
     }
 }

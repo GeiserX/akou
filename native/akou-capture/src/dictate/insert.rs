@@ -26,7 +26,9 @@
 //!    `FAILED_INJECTION_MS` after a chord that could not be posted, and only while the promise
 //!    still owns the clipboard (the change count is the one publishing left). `restore: false`
 //!    leaves the text there as a lasting copy, since a promise dies with the process that made
-//!    it. The send key (DC-S2) is pressed only once the target read.
+//!    it. So does an empty snapshot: the clipboard was empty, or this process may not read it
+//!    (macOS pasteboard privacy set to deny), and restoring nothing would clear the clipboard,
+//!    the dictation with it. The send key (DC-S2) is pressed only once the target read.
 //!
 //! A clipboard-only write the helper chose for the user (`secure`, `elevated`) is marked
 //! concealed, so a clipboard manager does not keep what was meant for a password field; one the
@@ -208,7 +210,9 @@ pub enum Piece {
 }
 
 /// The text as the typed path sends it: runs of at most `TYPE_CHUNK` UTF-16 units, a surrogate
-/// pair never split, and one `Return` per newline (`\r\n` is one).
+/// pair never split, and one `Return` per newline (`\r\n` is one). A tab becomes a space and every
+/// other control character is dropped: typed into an app, a tab moves the focus, and a backspace,
+/// an escape or a delete edits or dismisses instead of writing.
 pub fn pieces(text: &str) -> Vec<Piece> {
     let mut out = Vec::new();
     let mut cur = String::new();
@@ -226,6 +230,11 @@ pub fn pieces(text: &str) -> Vec<Piece> {
             out.push(Piece::Return);
             continue;
         }
+        let c = match c {
+            '\t' => ' ',
+            c if c.is_control() => continue,
+            c => c,
+        };
         if units + c.len_utf16() > TYPE_CHUNK {
             out.push(Piece::Text(std::mem::take(&mut cur)));
             units = 0;
@@ -289,7 +298,8 @@ struct Tx {
     chord_ns: u64,
     count: u64,
     snapshot: Option<Snapshot>,
-    /// `restore: false`: the text, written as a lasting copy when the paste settles.
+    /// `restore: false`, or nothing to restore: the text, written as a lasting copy when the
+    /// paste settles.
     keep: Option<String>,
     first_read: Option<u64>,
     last_read: Option<u64>,
@@ -432,7 +442,10 @@ impl Inserter {
     }
 
     fn paste(&mut self, req: &Request, app: &str, t_ns: u64) -> Option<Outcome> {
-        let snapshot = req.restore.then(|| self.clip.snapshot());
+        let snapshot = req
+            .restore
+            .then(|| self.clip.snapshot())
+            .filter(|s| !s.is_empty());
         let count = match self.clip.publish(&req.text) {
             Ok(c) => c,
             Err(e) => return Some(Outcome::Failed(e)),
@@ -448,8 +461,8 @@ impl Inserter {
             send_key: req.send_key.clone(),
             chord_ns: t_ns,
             count,
+            keep: snapshot.is_none().then(|| req.text.clone()),
             snapshot,
-            keep: (!req.restore).then(|| req.text.clone()),
             first_read: None,
             last_read: None,
             failed,
@@ -743,6 +756,23 @@ mod tests {
         assert!(!w.concealed, "the user asked to keep it: an ordinary copy");
     }
 
+    /// A clipboard this process read as empty (empty, or pasteboard privacy set to deny): the
+    /// paste settles by leaving the dictation as a lasting copy, never by clearing the clipboard.
+    #[test]
+    fn dc_n6_an_unreadable_clipboard_keeps_the_dictation_instead_of_clearing_it() {
+        let mut r = Rig::new(Os::Mac);
+        r.w.borrow_mut().board.clear();
+        r.insert(&req("paste", "none"), &cap());
+        r.read_at(10);
+        r.until(1_000);
+        assert!(matches!(r.done[0].1, Outcome::Inserted { .. }));
+        let w = r.w.borrow();
+        assert_eq!(w.restores, 0, "nothing to restore");
+        assert_eq!(w.board.len(), 1, "{:?}", w.board);
+        assert_eq!(w.board[0].1, b"hello");
+        assert!(w.promise.is_none(), "a lasting copy, not the dying promise");
+    }
+
     /// Terminals get the terminal's paste: Ctrl+Shift+V on Windows, Shift+Insert on Linux.
     #[test]
     fn dc_n6_terminals_get_their_own_chord() {
@@ -935,6 +965,11 @@ mod tests {
                 Piece::Return,
                 Piece::Text("ef".into()),
             ]
+        );
+        assert_eq!(
+            pieces("a\tb\u{8}c\u{1b}d\u{7f}e\u{85}f\u{0}"),
+            [Piece::Text("a bcdef".into())],
+            "a tab is a space; no other control character is typed"
         );
         let emoji = "😀".repeat(11);
         let p = pieces(&emoji);
