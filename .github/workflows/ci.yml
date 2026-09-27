@@ -294,6 +294,78 @@ jobs:
             grep -qw "$k" tapped.txt || { echo "$k was swallowed"; exit 1; }
           done
           if grep -qwE 'down:49|up:49' tapped.txt; then echo "the dictation key reached the app"; exit 1; fi
+      # DC-N6, DC-N7, DC-N9 on a real Mac: the shipping helper pastes into a real text view and
+      # types into it, on this runner only (it changes the clipboard and posts keys). A throwaway
+      # AppKit window holds the field, with an Edit menu so Command+V pastes, and writes its text
+      # to a file. The helper brings it to the
+      # front (`focus`), pastes with Enter as the send key, then types; the field must hold both
+      # and the clipboard must hold what it held before. The field starts empty and the clipboard
+      # starts with other text, so neither check can pass without the insert and the restore.
+      - name: the real inserter pastes, types and restores the clipboard (macOS)
+        if: runner.os == 'macOS'
+        working-directory: native/akou-capture
+        run: |
+          cat > target-app.swift <<'EOF'
+          import AppKit
+          let app = NSApplication.shared
+          app.setActivationPolicy(.regular)
+          // Command+V reaches a text view through the menu's key equivalent, as in any app.
+          let bar = NSMenu(), edit = NSMenu(title: "Edit"), item = NSMenuItem()
+          item.submenu = edit
+          bar.addItem(item)
+          edit.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+          app.mainMenu = bar
+          let win = NSWindow(contentRect: NSRect(x: 200, y: 200, width: 480, height: 240),
+            styleMask: [.titled], backing: .buffered, defer: false)
+          let view = NSTextView(frame: win.contentView!.bounds)
+          win.contentView!.addSubview(view)
+          win.makeKeyAndOrderFront(nil)
+          win.makeFirstResponder(view)
+          app.activate(ignoringOtherApps: true)
+          let me = NSRunningApplication.current.bundleIdentifier ?? ""
+          print("\(getpid()) \(win.windowNumber) \(me)")
+          fflush(stdout)
+          Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { _ in
+            try? view.string.write(toFile: "field.txt", atomically: true, encoding: .utf8)
+          }
+          app.run()
+          EOF
+          swiftc -O -o target-app target-app.swift
+          printf 'copied before akou' | pbcopy
+          [ "$(pbpaste)" = 'copied before akou' ] || { echo "pbcopy did not take"; exit 1; }
+          ./target-app > target.out 2> target.err &
+          app=$!
+          for _ in $(seq 1 100); do [ -s target.out ] && [ -f field.txt ] && break; sleep 0.1; done
+          read -r pid win bundle < target.out
+          [ -z "$(cat field.txt)" ] || { echo "the field was not empty"; exit 1; }
+          target="{\"app\":\"$bundle\",\"pid\":$pid,\"window\":\"$win\",\"field\":\"editable\"}"
+          mkfifo insert.in
+          "target/shipping/akou-capture" dictate --warm off < insert.in > insert.out 2> insert.err &
+          helper=$!
+          exec 4> insert.in
+          for _ in $(seq 1 100); do grep -q '"type":"ready"' insert.err && break; sleep 0.1; done
+          answer() {
+            for _ in $(seq 1 150); do grep -q "\"id\":\"$1\"" insert.err && return 0; sleep 0.1; done
+            echo "no answer to insert $1"; cat insert.err; exit 1
+          }
+          echo "{\"type\":\"focus\",\"target\":$target}" >&4
+          echo "{\"type\":\"insert\",\"id\":\"p1\",\"text\":\"pasted by akou\",\"method\":\"paste\",\"send_key\":\"Enter\",\"target\":$target}" >&4
+          answer p1
+          echo "{\"type\":\"insert\",\"id\":\"t1\",\"text\":\"typed é 😀\",\"method\":\"type\",\"send_key\":\"none\",\"target\":$target}" >&4
+          answer t1
+          sleep 0.5
+          echo '{"type":"stop"}' >&4
+          exec 4>&-
+          wait "$helper"
+          kill "$app" || true
+          cat insert.err
+          field=$(cat field.txt)
+          echo "field: $field"
+          echo "clipboard: $(pbpaste)"
+          grep -q '"type":"inserted","id":"p1","method":"paste"' insert.err || { echo "the paste was not read"; exit 1; }
+          grep -q '"type":"inserted","id":"t1","method":"type"' insert.err || { echo "the typing failed"; exit 1; }
+          [ "$field" = "$(printf 'pasted by akou\ntyped é 😀')" ] || { echo "the field holds the wrong text"; exit 1; }
+          [ "$(pbpaste)" = 'copied before akou' ] || { echo "the clipboard was not restored: $(pbpaste)"; exit 1; }
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version

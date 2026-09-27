@@ -17,8 +17,8 @@
 //! checks that on the release binary. The insert and its guards (`insert`) run against those fakes.
 //!
 //! On macOS the real process runs the key tap, the accessibility reads and the microphone (`mac`,
-//! through the worker loop in `live`); it has no inserter yet, so an `insert` answers
-//! `insert.failed no-inserter` and the app opens the draft box. On Windows and Linux there is no
+//! through the worker loop in `live`) and inserts through the general pasteboard and posted key
+//! events (`mac_insert`). On Windows and Linux there is no
 //! backend yet: the process says so and exits 69. `--probe` prints the `ready` line the process
 //! would send (backend, `swallow_keys`, grants read without asking) and exits, on every OS.
 
@@ -30,6 +30,8 @@ pub mod keys;
 pub mod live;
 #[cfg(target_os = "macos")]
 pub mod mac;
+#[cfg(target_os = "macos")]
+pub mod mac_insert;
 pub mod mac_keys;
 pub mod mic;
 pub mod protocol;
