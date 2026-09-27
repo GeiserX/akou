@@ -13,6 +13,7 @@ import type { Page, Route } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
 import { renderExport } from "../../src/main/handoff/export.ts";
+import { onDictationPage } from "../../src/ui/dictation-page.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
 import {
@@ -1134,7 +1135,8 @@ describe("settings (driven by the registry)", () => {
         const fileOnly = Object.keys(schema).filter((k) => schema[k]?.apiWritable === false);
         expect(fileOnly).toContain("provider.baseUrl");
         expect(fileOnly).toContain("provider.harnessPath");
-        for (const k of Object.keys(schema)) {
+        // The dictation keys are on the Dictation page, not in this list (DC-U1).
+        for (const k of Object.keys(schema).filter((k) => !onDictationPage(k))) {
           const disabled = await page.locator(`#settings [data-key="${k}"]:not(div)`).isDisabled();
           expect({ k, disabled }).toEqual({ k, disabled: fileOnly.includes(k) });
         }
@@ -1154,7 +1156,8 @@ describe("settings (driven by the registry)", () => {
           els.map((e) => (e as HTMLElement).dataset.key),
         );
         const schema = Object.keys((await rig.api("GET", "/config")).body.schema);
-        expect(keys).toEqual(schema);
+        // Every key but the Dictation page's (DC-U1).
+        expect(keys).toEqual(schema.filter((k) => !onDictationPage(k)));
         // Programs akou runs are file only.
         expect(
           await page.locator('#settings [data-key="capture.helper"]:not(div)').isDisabled(),
