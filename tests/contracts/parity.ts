@@ -202,7 +202,7 @@ export const PARITY: readonly Row[] = [
     window: [
       app("`/calls/#{call}/vocab`"),
       ui("review.ts", "`/vocab/#{action}`"),
-      ui("settings.ts", '"GET", `/vocab'),
+      ui("dictation-dictionary.ts", '"POST", "/vocab"'),
     ],
   },
   {

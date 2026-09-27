@@ -277,7 +277,7 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W9.1 | "Fix this word", "Words to review" pill and dialog, raw text on hover, decode list under the models pill | done | DESIGN 7 | Existing tests | has |
-| W9.2 | The vocabulary list is editable in the Words dialog: add a term (with heard forms), remove, confirm, change scope. Today it is a read-only panel in Settings | P1 | Audit: read-only panel; Wispr, VoiceInk, Descript | Adding "Vercel" heard "versal" writes the workspace file through the API; the dialog and `akou vocab list` agree | partial (read-only) |
+| W9.2 | The vocabulary list is editable in the Words dialog: add a term (with heard forms), remove, confirm, change scope | P1 | Audit: read-only panel; Wispr, VoiceInk, Descript | Adding "Vercel" heard "versal" writes the workspace file through the API; the dialog and `akou vocab list` agree | partial: the Dictionary dialog (DICTATION DC-U5) adds, removes and changes scope in the global file, and Settings opens it instead of its old read-only list; confirming and the workspace file are not there yet |
 | W9.3 | An inline edit that changes one word becomes a vocabulary proposal, not an automatic add | P2 | VoiceInk AutoLearn, Descript, Wispr | Editing "versal" to "Vercel" on a line adds a pending proposal to "Words to review"; nothing is written to the vocabulary until Approve | missing |
 | W9.4 | Rejected proposals are never proposed again, and the dialog says so | done | DESIGN, `vocab/pass.ts` | Existing tests | has |
 

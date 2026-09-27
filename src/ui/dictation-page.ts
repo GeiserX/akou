@@ -11,8 +11,9 @@
  * value saves that key alone through `PATCH /config`; a refusal shows beside it.
  *
  * `dictation.remote.url` decides where dictation audio goes, so it is written from the desktop
- * window or the config file only, never over HTTP: a browser page shows it and cannot change it,
- * and server mode does not show it at all.
+ * window (its RPC) or the config file only, never over the HTTP API, the same rule as `webhook.url`
+ * and `server.remotes`: a browser page shows it and cannot change it, and server mode does not show
+ * it at all.
  *
  * The page never records: a browser page served over plain http from another machine has no
  * microphone at all (no `getUserMedia` outside a secure context), and says so rather than failing.
@@ -556,7 +557,11 @@ export class DictationSettings {
  * Settings; its History button opens the history (DC-H1) over it, and Dictionary the dictionary
  * and replacements (DC-U5).
  */
-export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
+export function mountDictationDialog(t: Transport): {
+  open(): Promise<void>;
+  /** The dictionary editor (DC-U5), which Settings opens too. */
+  dictionary: { open(): Promise<void> };
+} {
   const dialog = document.getElementById("dictation") as HTMLDialogElement;
   const body = document.getElementById("dictation-fields") as HTMLElement;
   const page = new DictationSettings(t, "app");
@@ -586,7 +591,7 @@ export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
   };
   window.addEventListener("hashchange", fromHash);
   fromHash();
-  return { open };
+  return { open, dictionary };
 }
 
 /** Server mode's Dictation page. */
