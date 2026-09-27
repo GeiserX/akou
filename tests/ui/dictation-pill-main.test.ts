@@ -133,3 +133,28 @@ describe("DC-D2: the pill shows words only under its own rule", () => {
     UI_TIMEOUT,
   );
 });
+
+describe("the page's boot-time pull", () => {
+  test(
+    "an answer that arrives after a newer pushed state never overwrites it",
+    async () => {
+      let answer: (s: unknown) => void = () => {};
+      const late = new Promise((r) => {
+        answer = r;
+      });
+      const view = await viewPage("pill", { answer: (name) => (name === "state" ? late : true) });
+      open = view;
+      const page = view.page;
+      await page.waitForFunction(() => document.getElementById("pill")?.dataset.state === "hidden");
+      await view.send("state", { state: "transcribing", since: Date.now() });
+      await page.waitForFunction(
+        () => document.getElementById("pill")?.dataset.state === "transcribing",
+      );
+      // The pull's answer, older than the push, arrives now.
+      answer({ state: "listening", since: Date.now(), keys: [], hotkey: "Ctrl" });
+      await page.evaluate(() => new Promise((r) => setTimeout(r, 200)));
+      expect(await page.getAttribute("#pill", "data-state")).toBe("transcribing");
+    },
+    UI_TIMEOUT,
+  );
+});

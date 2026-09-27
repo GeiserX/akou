@@ -8,13 +8,18 @@ import { mountPill, type PillSink } from "./pill.ts";
 import type { Chip, PillRpc, PillState } from "./pill-protocol.ts";
 
 let sink: PillSink | null = null;
+/** A state was pushed: it is newer than any answer to the boot-time pull still on its way. */
+let pushed = false;
 
 const rpc = Electroview.defineRPC<PillRpc>({
   maxRequestTime: 30_000,
   handlers: {
     requests: {},
     messages: {
-      state: (s: PillState) => sink?.state(s),
+      state: (s: PillState) => {
+        pushed = true;
+        sink?.state(s);
+      },
       level: (l: { db: number }) => sink?.level(l),
       preview: (p: { text: string }) => sink?.preview(p),
       chip: (c: Chip) => sink?.chip(c),
@@ -28,10 +33,12 @@ sink = mountPill({
   chip: (a) => void rpc.request.chip(a).catch(() => {}),
 });
 
-// A state sent before the handlers above existed is lost: pull the one in force now.
+// A state sent before the handlers above existed is lost: pull the one in force now, unless a
+// newer one is pushed while the answer is on its way.
 void rpc.request
   .state({})
   .then((s: unknown) => {
+    if (pushed) return;
     if (typeof (s as { state?: unknown } | null)?.state === "string") sink?.state(s as PillState);
   })
   .catch(() => {});
