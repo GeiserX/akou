@@ -60,6 +60,9 @@
       "name": "vocab"
     },
     {
+      "name": "dictations"
+    },
+    {
       "name": "enhanced"
     },
     {
@@ -2697,6 +2700,158 @@
             }
           }
         },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictations": {
+      "post": {
+        "operationId": "dictations.create",
+        "tags": [
+          "dictations"
+        ],
+        "description": "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto or fast; `language` a BCP-47 tag or auto, checked and not yet used: the fast engine (Parakeet) detects the language itself, and a hint reaches the engines that take one later. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "file": {
+                    "type": "string",
+                    "format": "binary",
+                    "contentMediaType": "application/octet-stream"
+                  },
+                  "engine": {
+                    "type": "string"
+                  },
+                  "language": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "file"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "get": {
+        "operationId": "dictations.list",
+        "tags": [
+          "dictations"
+        ],
+        "description": "The dictation log, newest first: each dictation's state, the app it went to, its text, engine and timings. `q` keeps those whose text holds it (any case); `cursor` is the last id of the page before.",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Keep dictations whose text holds this, in any case.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "description": "The `next_cursor` of the page before.",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "description": "Dictations per page.",
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 500,
+              "default": 100
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictations/{id}": {
+      "get": {
+        "operationId": "dictations.get",
+        "tags": [
+          "dictations"
+        ],
+        "description": "One dictation: its state, the app it went to, the raw and inserted text, the language, per-word times and confidences where the engine gives them, the engine and the decode time.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dictation id, from dictations.list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "OK",
