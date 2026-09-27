@@ -22,6 +22,11 @@
  *   buffer on the local engine and says so (`fallback_from: remote`, `remote down, used fast`);
  *   `error`, or no local engine at all, throws for the error state. A remote down for three
  *   dictations in a row is probed every `REMOTE_PROBE_MS` until it answers again.
+ * - **DC-R6, the audio during the hold.** `RemoteEngine.open` starts the same request when the
+ *   session starts and sends each packet as it arrives, as a chunked multipart body whose WAV says
+ *   "to the end" in place of a length (as `audio.ts` reads a piped WAV), so at release only the
+ *   tail is left to send. The remote decodes when the body ends, as for one request. A stream that
+ *   fails is a remote that failed: the fallback is the same, and nothing is sent again.
  * - **DC-R4, the test.** `GET /v1/server` and `GET /v1/keys/me` on the remote: its mode, the engine
  *   a dictation runs, its accelerator, whether it will bias, the round trip, and a warning when it
  *   has no interactive lane.
@@ -173,7 +178,7 @@ export interface RemoteResult {
   text: string;
   /** The language the remote reports, or null. */
   language: string | null;
-  /** The round trip, request to answer, in ms. */
+  /** The round trip, request to answer, in ms; release to answer when the audio was streamed (DC-R6). */
   ms: number;
   /** The keywords sent (none while the glossary is off). */
   keywords: string[];
@@ -193,14 +198,24 @@ export function remoteKeywords(glossary: readonly string[] | null | undefined): 
   return out;
 }
 
+/** How much of a remote's own message an error keeps: it reaches the pill, the page and the log. */
+export const REMOTE_MESSAGE_CHARS = 200;
+
+/** A remote's text on one line with no control characters, at most `max` characters. */
+function oneLine(s: string, max: number): string {
+  // biome-ignore lint/suspicious/noControlCharactersInRegex: control characters are what it strips.
+  const t = s.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim();
+  return t.length > max ? `${t.slice(0, max - 1)}…` : t;
+}
+
 /** An answer other than 2xx, as an error naming the remote's code and message, never the key. */
 async function refusal(res: Response, what: string): Promise<RemoteDictationError> {
   let code: string | null = null;
   let message = "";
   try {
     const b = (await res.json()) as { error?: unknown; message?: unknown };
-    if (typeof b.error === "string") code = b.error;
-    if (typeof b.message === "string") message = b.message;
+    if (typeof b.error === "string") code = oneLine(b.error, 64) || null;
+    if (typeof b.message === "string") message = oneLine(b.message, REMOTE_MESSAGE_CHARS);
   } catch {}
   const why =
     res.status === 401 || res.status === 403
@@ -236,12 +251,7 @@ export async function transcribeRemote(o: RemoteDictation): Promise<RemoteResult
     new Blob([new Uint8Array(wavBytes(o.samples))], { type: "audio/wav" }),
     "dictation.wav",
   );
-  form.append("response_format", "verbose_json");
-  form.append("interactive", "true");
-  const language = o.language?.trim();
-  if (language && language !== "auto") form.append("language", language);
-  if (o.model?.trim()) form.append("model", o.model.trim());
-  for (const k of keywords) form.append("keywords[]", k);
+  for (const [k, v] of requestFields(o, keywords)) form.append(k, v);
   const timeout = remoteTimeoutMs(
     o.timeoutSeconds ?? REMOTE_TIMEOUT_SECONDS,
     o.samples.length / ASR_RATE,
@@ -260,6 +270,33 @@ export async function transcribeRemote(o: RemoteDictation): Promise<RemoteResult
   } catch (err) {
     throw failure(err, target.base, timeout);
   }
+  return answer(res, target, t0, keywords, timeout);
+}
+
+/** The text fields of a dictation request, the same whether the audio goes at once or streamed. */
+function requestFields(
+  o: Pick<RemoteDictation, "language" | "model">,
+  keywords: readonly string[],
+): [string, string][] {
+  const out: [string, string][] = [
+    ["response_format", "verbose_json"],
+    ["interactive", "true"],
+  ];
+  const language = o.language?.trim();
+  if (language && language !== "auto") out.push(["language", language]);
+  if (o.model?.trim()) out.push(["model", o.model.trim()]);
+  for (const k of keywords) out.push(["keywords[]", k]);
+  return out;
+}
+
+/** The remote's answer as the transcript, or the error for the caller's fallback. */
+async function answer(
+  res: Response,
+  target: RemoteTarget,
+  t0: number,
+  keywords: string[],
+  timeout: number,
+): Promise<RemoteResult> {
   if (res.status < 200 || res.status > 299) {
     throw await refusal(res, `${target.base} POST /v1/audio/transcriptions`);
   }
@@ -281,6 +318,168 @@ export async function transcribeRemote(o: RemoteDictation): Promise<RemoteResult
     keywords,
     words: [],
   };
+}
+
+// ---------------------------------------------------------------------------
+// DC-R6: the audio streamed during the hold
+
+/** A WAV header whose sizes say "to the end of the file", for audio whose length is not known yet. */
+function streamedWavHeader(): Uint8Array {
+  const h = wavBytes(new Float32Array(0));
+  const v = new DataView(h.buffer, h.byteOffset);
+  v.setUint32(4, 0xffffffff, true);
+  v.setUint32(40, 0xffffffff, true);
+  return h;
+}
+
+/** Samples as the WAV's 16-bit PCM, converted as `wavBytes` converts them. */
+function pcm16(samples: Float32Array): Uint8Array {
+  return wavBytes(samples).subarray(44);
+}
+
+export type RemoteUploadOptions = Omit<RemoteDictation, "samples">;
+
+/**
+ * One dictation's request, opened when the session starts (DC-R6): `push` sends each packet as it
+ * arrives, and `finish` sends the tail and waits for the transcript. The URL is checked when it
+ * opens, the request's timeout (DC-R3) runs from `finish`, and `ms` is release to answer.
+ */
+export class RemoteUpload {
+  private readonly enc = new TextEncoder();
+  private readonly boundary = `akou-${crypto.randomUUID()}`;
+  private readonly keywords: string[];
+  private readonly abort = new AbortController();
+  private body: ReadableStreamDefaultController<Uint8Array> | null = null;
+  /** Bytes pushed before the request was open. */
+  private early: Uint8Array[] = [];
+  private pushed = 0;
+  /** Set by `finish` (the body ends once the request is open) and by `cancel`. */
+  private done = false;
+  /** The request's timeout, known at `finish`. */
+  private timeoutMs = 0;
+  /** The request: the target it went to and the remote's answer, or why there is none. */
+  private readonly outcome: Promise<
+    { target: RemoteTarget; res: Response } | { error: RemoteDictationError }
+  >;
+
+  constructor(private readonly o: RemoteUploadOptions) {
+    this.keywords = remoteKeywords(o.glossary);
+    this.outcome = this.start().then(
+      (r) => r,
+      (err: unknown) => ({
+        error:
+          err instanceof RemoteDictationError
+            ? err
+            : new RemoteDictationError("unreachable", (err as Error).message),
+      }),
+    );
+  }
+
+  private async start(): Promise<{ target: RemoteTarget; res: Response }> {
+    const target = await vetRemote(this.o.url, this.o.resolve);
+    const head = [
+      ...requestFields(this.o, this.keywords).map(
+        ([k, v]) =>
+          `--${this.boundary}\r\nContent-Disposition: form-data; name="${k}"\r\n\r\n${v}\r\n`,
+      ),
+      `--${this.boundary}\r\nContent-Disposition: form-data; name="file"; filename="dictation.wav"\r\nContent-Type: audio/wav\r\n\r\n`,
+    ].join("");
+    const body = new ReadableStream<Uint8Array>({
+      start: (c) => {
+        c.enqueue(this.enc.encode(head));
+        c.enqueue(streamedWavHeader());
+        for (const b of this.early) c.enqueue(b);
+        this.early = [];
+        this.body = c;
+        // Released before the URL was checked: everything is queued, so the body ends here.
+        if (this.done) c.close();
+      },
+    });
+    const { url, host } = aimed(target, "/audio/transcriptions");
+    try {
+      const res = await (this.o.fetch ?? fetch)(url, {
+        method: "POST",
+        headers: {
+          authorization: `Bearer ${this.o.key}`,
+          "content-type": `multipart/form-data; boundary=${this.boundary}`,
+          ...host,
+        },
+        body,
+        duplex: "half",
+        redirect: "manual",
+        signal: this.abort.signal,
+      } as RequestInit);
+      return { target, res };
+    } catch (err) {
+      // Aborted by `finish`'s timer (or by `cancel`, which nobody waits on) is a timeout.
+      throw failure(err, target.base, this.timeoutMs);
+    }
+  }
+
+  private send(bytes: Uint8Array): void {
+    if (this.body === null) {
+      this.early.push(bytes);
+      return;
+    }
+    try {
+      this.body.enqueue(bytes);
+    } catch {
+      // The request already ended: its outcome says why.
+    }
+  }
+
+  /** Sends a packet of the session's audio, 16 kHz mono. */
+  push(samples: Float32Array): void {
+    if (this.done || samples.length === 0) return;
+    this.send(pcm16(samples));
+    this.pushed += samples.length;
+  }
+
+  /**
+   * Sends what `push` has not, given the whole buffer, and waits for the transcript; throws a
+   * `RemoteDictationError` for the caller's fallback, as `transcribeRemote` does.
+   */
+  async finish(samples: Float32Array): Promise<RemoteResult> {
+    if (this.done) throw new Error("this dictation's request has already finished");
+    if (samples.length < this.pushed) {
+      this.cancel();
+      throw new Error("the buffer is shorter than the audio already sent");
+    }
+    if (samples.length > this.pushed) this.send(pcm16(samples.subarray(this.pushed)));
+    this.pushed = samples.length;
+    this.send(this.enc.encode(`\r\n--${this.boundary}--\r\n`));
+    this.done = true;
+    if (this.body) {
+      try {
+        this.body.close();
+      } catch {
+        // The request already ended: its outcome says why.
+      }
+    }
+    const t0 = performance.now();
+    this.timeoutMs = remoteTimeoutMs(
+      this.o.timeoutSeconds ?? REMOTE_TIMEOUT_SECONDS,
+      samples.length / ASR_RATE,
+    );
+    const timer = setTimeout(() => this.abort.abort(), this.timeoutMs);
+    try {
+      const r = await this.outcome;
+      if ("error" in r) throw r.error;
+      return await answer(r.res, r.target, t0, this.keywords, this.timeoutMs);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+
+  /** Drops the request: a cancelled session sends nothing more, and the remote keeps nothing. */
+  cancel(): void {
+    this.done = true;
+    this.early = [];
+    this.abort.abort();
+    try {
+      this.body?.error(new Error("cancelled"));
+    } catch {}
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -470,6 +669,16 @@ export interface RemoteHealth {
   probing: boolean;
 }
 
+/** A dictation's request opened at the press (DC-R6), as the session drives it. */
+export interface RemoteHold {
+  /** Sends a packet of the session's audio as it arrives. */
+  push(samples: Float32Array): void;
+  /** At release, with the whole buffer: the transcript, or the fallback's. */
+  decode(samples: Float32Array): Promise<RemoteDecoded>;
+  /** A cancelled session: the request is dropped and nothing more is sent. */
+  cancel(): void;
+}
+
 /** Dictations in a row that fail before the remote counts as down and is probed. */
 export const REMOTE_DOWN_AFTER = 3;
 
@@ -499,18 +708,49 @@ export class RemoteEngine {
   async decode(samples: Float32Array, d: { language?: string } = {}): Promise<RemoteDecoded> {
     const s = this.o.settings();
     const language = d.language ?? s.language;
+    return this.settle(s, samples, language, () =>
+      transcribeRemote({ ...this.request(s, language), samples }),
+    );
+  }
+
+  /**
+   * DC-R6: opens the dictation's request when the session starts. The session `push`es each
+   * packet as it arrives, then calls `decode` with the whole buffer at release (the fallback, if
+   * any, decodes that buffer), or `cancel`. Settings are read here, at the press.
+   */
+  open(d: { language?: string } = {}): RemoteHold {
+    const s = this.o.settings();
+    const language = d.language ?? s.language;
+    const upload = new RemoteUpload(this.request(s, language));
+    return {
+      push: (samples) => upload.push(samples),
+      decode: (samples) => this.settle(s, samples, language, () => upload.finish(samples)),
+      cancel: () => upload.cancel(),
+    };
+  }
+
+  private request(s: RemoteSettings, language: string | undefined): RemoteUploadOptions {
+    return {
+      url: s.url,
+      key: s.key,
+      language,
+      model: s.model,
+      glossary: s.glossary,
+      timeoutSeconds: s.timeoutSeconds,
+      fetch: this.o.fetch,
+      resolve: this.o.resolve,
+    };
+  }
+
+  /** The remote's transcript, or the explicit fallback when it gives none (DC-R3). */
+  private async settle(
+    s: RemoteSettings,
+    samples: Float32Array,
+    language: string | undefined,
+    remote: () => Promise<RemoteResult>,
+  ): Promise<RemoteDecoded> {
     try {
-      const r = await transcribeRemote({
-        url: s.url,
-        key: s.key,
-        samples,
-        language,
-        model: s.model,
-        glossary: s.glossary,
-        timeoutSeconds: s.timeoutSeconds,
-        fetch: this.o.fetch,
-        resolve: this.o.resolve,
-      });
+      const r = await remote();
       this.answered();
       return {
         text: r.text,
