@@ -25,6 +25,8 @@
 pub mod activation;
 #[cfg(any(test, feature = "simulate"))]
 pub mod fake;
+pub mod globe;
+pub mod inputs;
 pub mod insert;
 pub mod keys;
 pub mod live;
