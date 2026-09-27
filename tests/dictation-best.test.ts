@@ -296,19 +296,104 @@ describe("one Metal engine at a time: dictation gives way", () => {
 describe("DC-L3: the audio check on best", () => {
   test("the fixed word goes to Qwen as its only context, and the text comes back", async () => {
     const r = rig();
+    await r.best.decode(HELLO);
     expect(await r.best.check(HELLO, ["Kubernetes"])).toBe("hello");
-    const [req] = r.requests();
-    expect(req?.messages.filter((m) => m.role === "system")).toEqual([
+    const [dictation, check] = r.requests();
+    expect(check?.messages.filter((m) => m.role === "system")).toEqual([
       { role: "system", content: "Kubernetes" },
     ]);
     // Positive control: a dictation's own decode sends no context.
-    await r.best.decode(HELLO);
-    expect(r.requests()[1]?.messages.some((m) => m.role === "system")).toBe(false);
+    expect(dictation?.messages.some((m) => m.role === "system")).toBe(false);
   });
 
   test("a failed check throws, and never answers with fast's text", async () => {
     const r = rig(["--fake-die-on", "1"]);
+    r.best.warm();
+    await until(() => r.best.pid() !== null && !r.best.loading(), 10_000, "the warm server");
     await expect(r.best.check(HELLO, ["Kubernetes"])).rejects.toThrow();
+    expect(r.requests().length).toBeGreaterThan(0);
+  });
+
+  test("a check never starts a server: with none warm it throws and starts nothing", async () => {
+    const r = rig();
+    await expect(r.best.check(HELLO, ["Kubernetes"])).rejects.toThrow(/no warm Qwen/);
+    await Bun.sleep(200);
+    expect(r.starts()).toBe(0);
+    expect(r.best.pid()).toBeNull();
+  });
+
+  test("a check on a changed spec throws instead of loading the new server", async () => {
+    const t = tempDir("akou-dict-check-respec-");
+    cleanups.push(t.cleanup);
+    const logFile = join(t.dir, "fake.log");
+    let spec: LlamaEngineSpec = {
+      kind: "llama-server",
+      engine: QWEN_ASR,
+      model: join(t.dir, QWEN_MODEL_FILE),
+      mmproj: join(t.dir, QWEN_MMPROJ_FILE),
+      accelerator: "cpu",
+      command: [process.execPath, FAKE, "--fake-log", logFile],
+    };
+    const best = new BestEngine({
+      spec: () => spec,
+      fast: () => FAST,
+      settings: () => ({ timeoutSeconds: 10, idleMinutes: 0, languages: [] }),
+      clock: new ManualClock(),
+    });
+    cleanups.push(() => best.stop());
+    await best.decode(HELLO);
+    const first = best.pid() as number;
+    spec = {
+      ...spec,
+      command: [process.execPath, FAKE, "--fake-log", logFile, "--fake-loading-ms", "10"],
+    };
+    await expect(best.check(HELLO, ["Kubernetes"])).rejects.toThrow(/no warm Qwen/);
+    await Bun.sleep(200);
+    const starts = readFileSync(logFile, "utf8")
+      .trim()
+      .split("\n")
+      .filter((l) => (JSON.parse(l) as { argv?: unknown }).argv).length;
+    expect(starts).toBe(1);
+    expect(best.pid()).toBe(first);
+  });
+
+  test("a check past its budget is abandoned, and the warm server stays up for the next dictation", async () => {
+    const r = rig(["--fake-hang-context"]);
+    await r.best.decode(HELLO);
+    const pid = r.best.pid() as number;
+    const p = r.best.check(HELLO, ["Kubernetes"]);
+    const failed = p.catch((err: Error) => err.message);
+    await until(() => r.requests().length === 2, 10_000, "the check to reach the server");
+    await r.clock.advance(11_000);
+    expect(await failed).toMatch(/no answer within/);
+    await Bun.sleep(300);
+    expect(r.best.pid()).toBe(pid);
+    expect(alive(pid)).toBe(true);
+    const next = await r.best.decode(HELLO);
+    expect(next).toMatchObject({ text: "hello", engine: "best" });
+    expect(r.starts()).toBe(1);
+  });
+
+  test("a dictation takes the one slot: its decode abandons a check in flight, and restarts nothing", async () => {
+    const r = rig(["--fake-hang-context"]);
+    await r.best.decode(HELLO);
+    let settled = false;
+    const failed = r.best.check(HELLO, ["Kubernetes"]).then(
+      () => "answered",
+      (err: Error) => err.message,
+    );
+    void failed.finally(() => {
+      settled = true;
+    });
+    await until(() => r.requests().length === 2, 10_000, "the check to reach the server");
+    const d = await r.best.decode(HELLO);
+    expect(d).toMatchObject({ text: "hello", engine: "best" });
+    expect(d.fallback_from).toBeUndefined();
+    // No clock moved: the check gave way to the dictation, it did not time out.
+    await until(() => settled, 3000, "the check to give way");
+    expect(await failed).toMatch(/given up/);
+    expect(r.starts()).toBe(1);
+    expect(r.logs.filter((l) => l.includes("restarting it"))).toEqual([]);
   });
 });
 

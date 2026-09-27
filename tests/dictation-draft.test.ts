@@ -348,6 +348,48 @@ describe("DC-L1: the draft box learns from the edit", () => {
     expect(f.chips).toHaveLength(1);
   });
 
+  test("a draft opened during the audio check keeps its learn window; the answered one's closes", async () => {
+    let answer: (text: string) => void = () => {};
+    const closed: string[] = [];
+    const f = box({
+      closeLearnWindow: (id) => closed.push(id),
+      recheck: () => () =>
+        new Promise<string>((res) => {
+          answer = res;
+        }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: true });
+    const done = f.b.handlers.insert({ id: a, text: FIXED, send: false });
+    await until(() => f.inserts.length === 1, 2000, "the insert");
+    const b = f.dictation();
+    f.b.open(b, { focus: true });
+    // The check still hears the heard form: no chip, so the answered draft's window closes now.
+    answer(HEARD);
+    expect(await done).toBe(true);
+    expect(closed).toEqual([a]);
+    expect(f.b.holding()).toBe(b);
+  });
+
+  test("a refused insert reopens the box without waiting for the audio check", async () => {
+    let answer: (text: string) => void = () => {};
+    const f = box({
+      outcome: { ok: false, reason: "focus-changed" },
+      recheck: () => () =>
+        new Promise<string>((res) => {
+          answer = res;
+        }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: true });
+    const done = f.b.handlers.insert({ id: a, text: FIXED, send: false });
+    await until(() => f.opens.length === 2, 2000, "the box to reopen");
+    expect(f.opens[1]).toMatchObject({ id: a, text: FIXED, focus: false });
+    answer(FIXED);
+    expect(await done).toBe(false);
+    expect(f.chips).toHaveLength(1);
+  });
+
   test("with dictation.learn off no candidate is computed", async () => {
     const f = box({ learnMode: () => "off" });
     const a = f.dictation();

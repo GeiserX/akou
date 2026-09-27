@@ -272,25 +272,27 @@ export class DraftBox {
     // The audio check can take a decode's time: the insert does not wait for it.
     const learning = this.learnFrom(c, text);
     if (c.fix) {
-      this.afterAnswer(await learning);
+      this.afterAnswer(c, await learning);
       return true;
     }
     const s = this.o.session();
     if (!s || !c.target) {
-      await learning;
       this.reopen(c, text, "dictation is off");
+      const chip = await learning;
+      if (chip) this.win?.chip(chip);
       return false;
     }
     // The keyboard goes back to the target, so the box steps aside first.
     this.hide();
     const r = await s.insertText(id, text, c.target, send ? this.o.sendKey() : "none");
+    // A refused insert reopens at once: another dictation's draft may take the box during the check.
+    if (!r.ok) this.reopen(c, text, r.reason);
     const chip = await learning;
     if (!r.ok) {
-      this.reopen(c, text, r.reason);
       if (chip) this.win?.chip(chip);
       return false;
     }
-    this.afterAnswer(chip);
+    this.afterAnswer(c, chip);
     return true;
   }
 
@@ -309,7 +311,7 @@ export class DraftBox {
     c.answered = true;
     // Only a dictation that never reached the app is discarded; an inserted one stays inserted.
     if (this.o.log.item(id)?.state === "drafted") this.write({ type: "dictation.discarded", id });
-    this.afterAnswer(null);
+    this.afterAnswer(c, null);
     return true;
   }
 
@@ -471,9 +473,11 @@ export class DraftBox {
     this.settle();
   }
 
-  /** The draft was answered: the box goes, or stays without the keyboard for the chip. */
-  private afterAnswer(chip: Chip | null): void {
-    const c = this.cur;
+  /**
+   * Draft `c` was answered: the box goes, or stays without the keyboard for the chip. The audio
+   * check may have let another dictation's draft into the box meanwhile; that one stays open.
+   */
+  private afterAnswer(c: Open, chip: Chip | null): void {
     if (chip && this.win) {
       if (!this.up) this.win.showInactive();
       this.up = true;
@@ -482,7 +486,7 @@ export class DraftBox {
       if (chip.mode === "learned") this.chipDone(chip.id, LEARNED_MS);
       return;
     }
-    if (c) this.o.closeLearnWindow?.(c.id);
+    this.o.closeLearnWindow?.(c.id);
     this.settle();
   }
 
