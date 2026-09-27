@@ -10,20 +10,22 @@
  * is never shown back; typing a new one replaces it.
  *
  * Dictation's keys are on the Dictation page (docs/ux/DICTATION.md DC-U1) and left out here, with a
- * link to it, so a setting is never shown twice.
+ * link to it, so a setting is never shown twice. A list of per-app rules (the `apps` type, DC-U9)
+ * is drawn as a table of rules (`dictation-apps.ts`).
  *
  * Below the settings, the vocabulary panel: the entries in force for the workspace, where each
  * came from, and the files they live in.
  */
 
 import { hotkeyWarning } from "../main/window/hotkey.ts";
+import { appsEditor } from "./dictation-apps.ts";
 import { onDictationPage } from "./dictation-page.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 
 export interface SchemaEntry {
-  type: "integer" | "number" | "boolean" | "string" | "string[]" | "hooks";
+  type: "integer" | "number" | "boolean" | "string" | "string[]" | "hooks" | "apps";
   min?: number;
   max?: number;
   /** One of these values, for a string: drawn as a list to pick from. */
@@ -239,7 +241,12 @@ export function settingField(
   const fileOnly = spec.apiWritable === false;
   let input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement;
   let shown: string;
-  if (spec.type === "boolean") {
+  let editor: HTMLElement | null = null;
+  if (spec.type === "apps") {
+    const e = appsEditor(id, value, fileOnly);
+    ({ input, shown } = e);
+    editor = e.root;
+  } else if (spec.type === "boolean") {
     input = h("input", { id, type: "checkbox" });
     input.checked = value === true;
     shown = String(value === true);
@@ -285,6 +292,7 @@ export function settingField(
     { class: `setting${issue ? " refused" : ""}`, attrs: { "data-key": key } },
     h("label", { attrs: { for: id } }, key),
     input,
+    editor,
     h(
       "small",
       {},
@@ -321,9 +329,16 @@ export function changedSettings(
         .split("\n")
         .map((s) => s.trim())
         .filter((s) => s !== "");
+    else if (spec.type === "apps") patch[key] = JSON.parse(now);
     else patch[key] = now;
   }
   return patch;
+}
+
+/** A saved value as its input holds it, the `shown` that `changedSettings` compares against. */
+export function shownValue(spec: SchemaEntry | undefined, v: unknown): string {
+  if (spec?.type === "apps") return JSON.stringify(v ?? []);
+  return Array.isArray(v) ? v.join("\n") : String(v ?? "");
 }
 
 /** A refused `PATCH /config`: each error beside the key it names, and all of them in a toast. */

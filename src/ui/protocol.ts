@@ -96,7 +96,7 @@ export interface Transport {
   /** The app's status now, and again after every call starts, ends, pauses or is shared. */
   watchStatus(fn: (status: AppStatus) => void): { close(): void };
   /** Opens the system's privacy pane for a grant; false when this surface cannot. */
-  openSettingsPane(pane: "microphone" | "system-audio"): Promise<boolean>;
+  openSettingsPane(pane: SettingsPane): Promise<boolean>;
   /**
    * The dictation helper's own key names while the page records a dictation key
    * (docs/ux/DICTATION.md DC-U3): the webview never sees Fn or Globe on macOS, the helper does.
@@ -104,7 +104,15 @@ export interface Transport {
    * the page cannot hear the helper (a browser).
    */
   dictationKeys?(fn: (name: string) => void): { close(): void };
+  /**
+   * The dictation mic's level in dBFS (-60 to 0) while dictation's setup shows its meter
+   * (DC-N3), proving audio arrives. Absent where the page cannot hear the helper (a browser).
+   */
+  dictationLevels?(fn: (db: number) => void): { close(): void };
 }
+
+/** The privacy panes the page may open: the call's two grants and dictation's Accessibility. */
+export type SettingsPane = "microphone" | "system-audio" | "accessibility";
 
 /** The question the shell asks in the window before a quit stops a recording (DK-M3). */
 export interface QuitQuestion {
@@ -173,7 +181,7 @@ export interface AkouRpc {
       cancelAsk: { params: { stream: string }; response: { ok: boolean } };
       audio: { params: { call: string; part: number }; response: { type: string; base64: string } };
       status: { params: Record<string, never>; response: AppStatus };
-      openSettingsPane: { params: { pane: "microphone" | "system-audio" }; response: boolean };
+      openSettingsPane: { params: { pane: SettingsPane }; response: boolean };
       /** The page's answer to `askQuit`: true for the confirm button, false for Cancel. */
       answerQuit: { params: { id: number; go: boolean }; response: boolean };
       /**
@@ -181,6 +189,11 @@ export interface AkouRpc {
        * `record_keys` and forwards its `key` messages as `dictationKey` (DC-U3).
        */
       recordDictationKeys: { params: { on: boolean }; response: boolean };
+      /**
+       * Dictation's setup shows its mic meter (`on: true`) or left it: the main side forwards the
+       * helper's `level` lines as `dictationLevel` (DC-N3).
+       */
+      watchDictationMic: { params: { on: boolean }; response: boolean };
     };
     messages: Record<string, never>;
   };
@@ -202,6 +215,8 @@ export interface AkouRpc {
       askQuit: QuitQuestion;
       /** A key the dictation helper saw while the recorder is open (`Fn`). */
       dictationKey: { name: string };
+      /** The dictation mic's level while the setup's meter shows, in dBFS. */
+      dictationLevel: { db: number };
     };
   };
 }
