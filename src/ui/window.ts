@@ -28,6 +28,7 @@ type Asked = AkouRpc["webview"]["messages"]["asked"];
 const followers = new Map<string, FollowSink>();
 const askers = new Map<string, AskSink>();
 const statusWatchers = new Set<(s: AppStatus) => void>();
+const keyWatchers = new Set<(name: string) => void>();
 
 const rpc = Electroview.defineRPC<AkouRpc>({
   maxRequestTime: 30_000,
@@ -68,6 +69,9 @@ const rpc = Electroview.defineRPC<AkouRpc>({
       showSettings: () => showSettings(),
       askQuit: ({ id, ...q }: QuitQuestion) =>
         void askQuit(q).then((go) => rpc.request.answerQuit({ id, go }).catch(() => {})),
+      dictationKey: ({ name }: { name: string }) => {
+        for (const fn of keyWatchers) fn(name);
+      },
     },
   },
 });
@@ -128,6 +132,18 @@ class RpcTransport implements Transport {
 
   async openSettingsPane(pane: "microphone" | "system-audio"): Promise<boolean> {
     return (await rpc.request.openSettingsPane({ pane })) as boolean;
+  }
+
+  dictationKeys(fn: (name: string) => void): { close(): void } {
+    keyWatchers.add(fn);
+    // An app without the recorder's main side answers nothing; the page still records chords.
+    void rpc.request.recordDictationKeys({ on: true }).catch(() => {});
+    return {
+      close: () => {
+        if (keyWatchers.delete(fn) && keyWatchers.size === 0)
+          void rpc.request.recordDictationKeys({ on: false }).catch(() => {});
+      },
+    };
   }
 }
 

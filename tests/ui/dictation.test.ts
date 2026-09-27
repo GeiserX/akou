@@ -13,6 +13,7 @@ import type { Page } from "playwright-core";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
+import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
 import type { PillState } from "../../src/ui/pill-protocol.ts";
 import { tempDir } from "../helpers.ts";
@@ -28,6 +29,7 @@ import {
   until,
   type ViewPage,
   viewPage,
+  windowPage,
 } from "./rig.ts";
 
 const text = (page: Page, sel: string) => page.textContent(sel).then((t) => t?.trim() ?? "");
@@ -772,6 +774,175 @@ describe("DC-H1: the History page", () => {
       await page.fill("#dictation-history-q", "nothing like this");
       await page.waitForSelector("#dictation-history-list li[data-empty]");
       expect(await text(page, "#dictation-history-list li")).toBe("No dictation holds that.");
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U3: the dictation key recorder", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-keys-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const input = (key: string) => `#dictation input[data-key='${key}']`;
+  const record = (key: string) => `#dictation button.record-key[data-for='${key}']`;
+  const caps = (page: Page, key: string) =>
+    page.$$eval(`#dictation div.setting[data-key='${key}'] .keycaps kbd`, (k) =>
+      k.map((x) => x.textContent),
+    );
+  const note = (page: Page, key: string) =>
+    text(page, `#dictation div.setting[data-key='${key}'] .recorder-note`);
+  const openPage = async (o: { grants?: { mic: boolean; accessibility: boolean } } = {}) => {
+    let fx: DictationFixture | null = null;
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        fx = await dictationFixture(p, { platform: "darwin", ...o });
+      },
+    });
+    await page.click("#dictation-open");
+    await page.waitForSelector(record("dictation.hotkey"));
+    return { page, fx: fx as unknown as DictationFixture };
+  };
+
+  test(
+    "a chord is saved at its first key, and a modifier held alone saves its side",
+    async () => {
+      const { page, fx } = await openPage();
+      await page.click(record("dictation.hotkeyDraft"));
+      expect(await page.getAttribute(record("dictation.hotkeyDraft"), "aria-pressed")).toBe("true");
+      await page.keyboard.press("Control+Shift+KeyD");
+      await until(() => fx.patches.length === 1, 5000, "the chord saved");
+      expect(fx.patches).toEqual([{ "dictation.hotkeyDraft": "Control+Shift+D" }]);
+      expect(await page.inputValue(input("dictation.hotkeyDraft"))).toBe("Control+Shift+D");
+      expect(await caps(page, "dictation.hotkeyDraft")).toEqual(["⌃", "⇧", "D"]);
+      expect(await page.getAttribute(record("dictation.hotkeyDraft"), "aria-pressed")).toBe(
+        "false",
+      );
+
+      // Right Command tapped is not yet a key alone; held 400 ms and released alone, it is.
+      await page.click(record("dictation.hotkey"));
+      await page.keyboard.down("MetaRight");
+      await page.keyboard.up("MetaRight");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Hold a key alone a moment longer to use it by itself.",
+      );
+      await page.keyboard.down("MetaRight");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("MetaRight");
+      await until(() => fx.patches.length === 2, 5000, "the key alone saved");
+      expect(fx.patches.at(-1)).toEqual({ "dictation.hotkey": "RightCommand" });
+      expect(await caps(page, "dictation.hotkey")).toEqual(["Right ⌘"]);
+
+      // The left one is another key.
+      await page.click(record("dictation.hotkeyPasteLast"));
+      await page.keyboard.down("ShiftLeft");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("ShiftLeft");
+      await until(() => fx.patches.length === 3, 5000, "the left shift saved");
+      expect(fx.patches.at(-1)).toEqual({ "dictation.hotkeyPasteLast": "LeftShift" });
+
+      // Escape stops the recorder and saves nothing.
+      await page.click(record("dictation.hotkeyFixLast"));
+      await page.keyboard.press("Escape");
+      expect(await page.getAttribute(record("dictation.hotkeyFixLast"), "aria-pressed")).toBe(
+        "false",
+      );
+      expect(await page.isVisible("#dictation")).toBe(true);
+      expect(fx.patches).toHaveLength(3);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a binding another key has is refused with the conflict, and nothing is saved",
+    async () => {
+      const { page, fx } = await openPage();
+      // The recording hotkey's macOS default.
+      await page.click(record("dictation.hotkey"));
+      await page.keyboard.press("Alt+Meta+KeyR");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "⌥ ⌘ R is already the recording hotkey (app.hotkey).",
+      );
+      expect(fx.patches).toEqual([]);
+      expect(await page.getAttribute(record("dictation.hotkey"), "aria-pressed")).toBe("true");
+      // Another dictation key's binding, however it was written.
+      await page.keyboard.press("Control+Shift+KeyD");
+      await until(() => fx.patches.length === 1, 5000, "the free chord saved");
+      await page.click(record("dictation.hotkeyDraft"));
+      await page.keyboard.press("Shift+Control+KeyD");
+      expect(await note(page, "dictation.hotkeyDraft")).toBe(
+        "⌃ ⇧ D is already the dictation key (dictation.hotkey).",
+      );
+      expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+D" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "without the Accessibility grant a modifier alone is refused with the reason; a chord is taken",
+    async () => {
+      const { page, fx } = await openPage({ grants: { mic: true, accessibility: false } });
+      await page.click(record("dictation.hotkey"));
+      expect(await note(page, "dictation.hotkey")).toContain("takes chords only");
+      await page.keyboard.down("MetaRight");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("MetaRight");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Right ⌘ alone cannot be bound: without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.",
+      );
+      expect(fx.patches).toEqual([]);
+      await page.keyboard.press("Control+Shift+Space");
+      await until(() => fx.patches.length === 1, 5000, "the chord saved");
+      expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+Space" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "in the window, a key the helper reports while recording (Fn) is saved; closing stops it",
+    async () => {
+      const w = await windowPage(rig, { platform: "darwin" });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.click(record("dictation.hotkey"));
+        await until(
+          () => w.requests.some((r) => r.name === "recordDictationKeys"),
+          5000,
+          "the recorder asked for the helper's keys",
+        );
+        expect(
+          w.requests.filter((r) => r.name === "recordDictationKeys").map((r) => r.params),
+        ).toEqual([{ on: true }]);
+        await w.send("dictationKey", { name: "Fn" });
+        await until(() => w.patches.length === 1, 5000, "Fn saved");
+        expect(w.patches).toEqual([{ "dictation.hotkey": "Fn" }]);
+        expect(await caps(p, "dictation.hotkey")).toEqual(["fn"]);
+        expect(
+          w.requests.filter((r) => r.name === "recordDictationKeys").map((r) => r.params),
+        ).toEqual([{ on: true }, { on: false }]);
+
+        // A recorder left open when the page closes lets go of the helper's keys too.
+        await p.click(record("dictation.hotkeyDraft"));
+        await p.click("#dictation-close");
+        await until(
+          () => w.requests.filter((r) => r.name === "recordDictationKeys").length === 4,
+          5000,
+          "the close stopped the recorder",
+        );
+        expect(w.requests.at(-1)?.params).toEqual({ on: false });
+        await w.send("dictationKey", { name: "Fn" });
+        expect(w.patches).toHaveLength(1);
+      } finally {
+        await w.close();
+      }
     },
     UI_TIMEOUT,
   );

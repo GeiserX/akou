@@ -18,7 +18,9 @@
  * microphone at all (no `getUserMedia` outside a secure context), and says so rather than failing.
  */
 
+import { hotkeyFor } from "../main/window/hotkey.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
+import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
@@ -35,6 +37,12 @@ export interface DictationGroup {
   title: string;
   keys: readonly string[];
   hint?: string;
+}
+
+/** The grants the dictation helper reports (`GET /dictation`, DC-G1). */
+export interface DictationGrants {
+  mic: boolean;
+  accessibility: boolean;
 }
 
 /** The master switch, drawn above the groups. */
@@ -136,6 +144,11 @@ export class DictationSettings {
   private shown: Record<string, string> = {};
   private reads = 0;
   private readonly armed = new Map<string, number>();
+  /** The OS akou runs on, from its status: the recorder's keycaps and warnings follow it. */
+  private platform = "";
+  /** What `GET /dictation` says about the grants; null where it says nothing. */
+  private grants: DictationGrants | null = null;
+  private recorders: KeyRecorder[] = [];
 
   constructor(
     private readonly t: Transport,
@@ -144,13 +157,20 @@ export class DictationSettings {
 
   async load(): Promise<void> {
     const read = ++this.reads;
-    const [cfg, server] = await Promise.all([
+    const app = this.mode === "app";
+    const [cfg, server, status, state] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config"),
-      this.mode === "server"
-        ? this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server")
-        : Promise.resolve(null),
+      app
+        ? Promise.resolve(null)
+        : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
+      app ? this.t.request<{ app?: { platform?: string } }>("GET", "/status") : null,
+      app ? this.t.request<{ grants?: DictationGrants }>("GET", "/dictation") : null,
     ]);
     if (read !== this.reads) return;
+    this.stopRecording();
+    this.recorders = [];
+    this.platform = String(status?.body?.app?.platform ?? "");
+    this.grants = state && state.status < 400 ? (state.body?.grants ?? null) : null;
     if (cfg.status !== 200) {
       replace(
         this.root,
@@ -170,6 +190,18 @@ export class DictationSettings {
       );
       this.shown[key] = f.shown;
       if (key === REMOTE_URL_KEY) this.remoteUrl(f.input, f.row);
+      if (key in KEY_SETTINGS && f.input instanceof HTMLInputElement) {
+        const r = new KeyRecorder(key, f.input, this.t, {
+          platform: this.platform,
+          chordsOnly: () => this.chordsOnly(),
+          others: (k) => this.otherKeys(k, cfg.body.settings["app.hotkey"]),
+          started: (me) => {
+            for (const o of this.recorders) if (o !== me) o.stop();
+          },
+        });
+        this.recorders.push(r);
+        f.input.after(r.root);
+      }
       const save = () => void this.save(f.row);
       f.input.addEventListener("change", save);
       return f.row;
@@ -205,6 +237,36 @@ export class DictationSettings {
           )
         : null,
     );
+  }
+
+  /** Stops any key recording: the dialog closed or the page redrew. */
+  stopRecording(): void {
+    for (const r of this.recorders) r.stop();
+  }
+
+  /**
+   * Why the recorder takes chords only: on macOS without the Accessibility grant, dictation runs
+   * in the clipboard-only fallback with a Carbon hotkey, which binds chords only (DC-N3).
+   */
+  private chordsOnly(): string | null {
+    if (this.platform !== "darwin" || this.grants?.accessibility !== false) return null;
+    return "without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.";
+  }
+
+  /** The bindings a dictation key must not take: the recording hotkey and the other dictation keys. */
+  private otherKeys(key: string, appHotkey: unknown): [string, string][] {
+    const out: [string, string][] = [
+      [
+        "the recording hotkey (app.hotkey)",
+        hotkeyFor(typeof appHotkey === "string" ? appHotkey : "", this.platform),
+      ],
+    ];
+    for (const [k, words] of Object.entries(KEY_SETTINGS)) {
+      if (k === key) continue;
+      const el = this.root.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(k)}"]`);
+      if (el) out.push([`${words} (${k})`, el.value]);
+    }
+    return out;
   }
 
   /** In a browser the remote's address is shown, never changed (the owner's rule). */
@@ -296,6 +358,8 @@ export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
     await page.load();
     if (!dialog.open) dialog.showModal();
   };
+  // A recorder left open would keep every key press of the window.
+  dialog.addEventListener("close", () => page.stopRecording());
   document.getElementById("dictation-open")?.addEventListener("click", () => void open());
   document.getElementById("dictation-close")?.addEventListener("click", () => dialog.close());
   const history = mountHistoryDialog(t);

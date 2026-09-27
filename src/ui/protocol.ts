@@ -97,6 +97,12 @@ export interface Transport {
   watchStatus(fn: (status: AppStatus) => void): { close(): void };
   /** Opens the system's privacy pane for a grant; false when this surface cannot. */
   openSettingsPane(pane: "microphone" | "system-audio"): Promise<boolean>;
+  /**
+   * The dictation helper's own key names (`Fn`) while the page records a dictation key
+   * (docs/ux/DICTATION.md DC-U3): the webview never sees Fn or Globe on macOS, the helper does.
+   * Absent where the page cannot hear the helper (a browser).
+   */
+  dictationKeys?(fn: (name: string) => void): { close(): void };
 }
 
 /** The question the shell asks in the window before a quit stops a recording (DK-M3). */
@@ -169,6 +175,11 @@ export interface AkouRpc {
       openSettingsPane: { params: { pane: "microphone" | "system-audio" }; response: boolean };
       /** The page's answer to `askQuit`: true for the confirm button, false for Cancel. */
       answerQuit: { params: { id: number; go: boolean }; response: boolean };
+      /**
+       * The dictation key recorder opened (`on: true`) or closed: the main side sends the helper
+       * `record_keys` and forwards its `key` messages as `dictationKey` (DC-U3).
+       */
+      recordDictationKeys: { params: { on: boolean }; response: boolean };
     };
     messages: Record<string, never>;
   };
@@ -188,6 +199,8 @@ export interface AkouRpc {
       showSettings: Record<string, never>;
       /** Quit during a recording (DK-M3): a question with Cancel the default; answered by `answerQuit`. */
       askQuit: QuitQuestion;
+      /** A key the dictation helper saw while the recorder is open (`Fn`). */
+      dictationKey: { name: string };
     };
   };
 }
