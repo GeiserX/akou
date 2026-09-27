@@ -372,6 +372,40 @@ describe("DC-L4: the chip asks once", () => {
     expect(g.calls.at(-1)).toBe("hide");
   });
 
+  test("a refused Learn, a failed Undo or a failed learn step logs no dictated word", async () => {
+    const quoting = () =>
+      new Error('"Kubernetes" is a word for calls too: add "cooper netties" to it');
+    const logs: string[] = [];
+    const onLog = (_level: string, msg: string) => logs.push(msg);
+
+    const f = box({ onLog, learnEntry: async () => Promise.reject(quoting()) });
+    const c = await fix(f);
+    if (!c) throw new Error("no chip");
+    await f.b.handlers.chip({ id: c.id, action: "learn", terms: ["Kubernetes"] });
+
+    const g = box({ onLog, unlearnEntry: async () => Promise.reject(quoting()) });
+    const d = await fix(g);
+    if (!d) throw new Error("no chip");
+    await g.b.handlers.chip({ id: d.id, action: "learn", terms: ["Kubernetes"] });
+    await g.b.handlers.chip({ id: d.id, action: "undo" });
+
+    const h = box({
+      onLog,
+      commonWords: () => {
+        throw quoting();
+      },
+    });
+    expect(await fix(h)).toBeUndefined();
+
+    // Each path logged once, so the check below looked at real lines.
+    expect(logs.map((m) => m.replace(/^dictation d\d+: /, ""))).toEqual([
+      "a word was not learned (Error)",
+      "undo failed (Error)",
+      "no learning (Error)",
+    ]);
+    for (const m of logs) expect(m).not.toMatch(/kubernetes|cooper|netties/i);
+  });
+
   test("with dictation.learn auto the entry is written before the chip, which offers only Undo", async () => {
     const f = box({ learnMode: () => "auto" });
     const c = await fix(f);
