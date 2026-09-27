@@ -217,7 +217,7 @@ jobs:
           case "$RUNNER_OS" in
             macOS) want='"backend":"cgeventtap","swallow_keys":true' ;;
             Windows) want='"backend":"llhook","swallow_keys":true' ;;
-            *) want='"backend":"none","swallow_keys":false' ;;
+            *) want='"backend":"evdev","swallow_keys":false' ;;
           esac
           "target/shipping/akou-capture$EXE" dictate --probe 2> probe.err
           cat probe.err
@@ -716,10 +716,12 @@ jobs:
             packages: pipewire pipewire-pulse wireplumber pulseaudio-utils dbus
             play: paplay --device=akou_stim "$STIM"
             max_skew_ms: "20"
+            mic_sink: akou_stim
           - server: pulseaudio
             packages: pulseaudio pulseaudio-utils dbus
             play: paplay -d akou_micbus "$STIM_MIC" & paplay -d akou_call "$STIM_CALL"; wait
             max_skew_ms: ""
+            mic_sink: akou_micbus
     runs-on: ubuntu-latest
     timeout-minutes: ${{ inputs.repeat > 1 && 60 || 30 }}
     env:
@@ -751,6 +753,119 @@ jobs:
             echo '```json'
             cat devices.json
             echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # DC-N1 and DC-A6 on real evdev devices. A virtual keyboard and a virtual mouse are made
+      # through uinput, and their nodes are made readable to this user the way the uaccess udev
+      # rule does for the user at the seat (an ACL). The shipping helper, on this job's sound
+      # server, must start a session from a held Right Control and end it on the release with
+      # audio packets on stdout, report A while the recorder is open, and start a session from the
+      # mouse's back button when that is the binding. The same Right Control before the ACL, when
+      # the helper cannot read the keyboard, must start nothing, or the check proves nothing.
+      - name: dictate hears a real evdev keyboard and mouse
+        env:
+          MIC_SINK: ${{ matrix.mic_sink }}
+        run: |
+          set -euo pipefail
+          bin="$PWD/native/akou-capture/target/release/akou-capture"
+          work=$(mktemp -d)
+          cd "$work"
+          cat > uinput.py <<'EOF'
+          import fcntl, os, struct, sys, time
+          kind = sys.argv[1]
+          fd = os.open("/dev/uinput", os.O_WRONLY | os.O_NONBLOCK)
+          UI_SET_EVBIT, UI_SET_KEYBIT, UI_SET_RELBIT = 0x40045564, 0x40045565, 0x40045566
+          EV_SYN, EV_KEY, EV_REL = 0, 1, 2
+          fcntl.ioctl(fd, UI_SET_EVBIT, EV_KEY)
+          if kind == "keyboard":
+              for code in range(1, 128):
+                  fcntl.ioctl(fd, UI_SET_KEYBIT, code)
+          else:
+              fcntl.ioctl(fd, UI_SET_EVBIT, EV_REL)
+              for code in (0, 1):
+                  fcntl.ioctl(fd, UI_SET_RELBIT, code)
+              for code in range(0x110, 0x118):
+                  fcntl.ioctl(fd, UI_SET_KEYBIT, code)
+          os.write(fd, struct.pack("80sHHHHi256i", ("akou-ci-" + kind).encode(), 3, 1, 1, 1, 0, *([0] * 256)))
+          fcntl.ioctl(fd, 0x5501)
+          print("ready", flush=True)
+          for line in sys.stdin:
+              parts = line.split()
+              if not parts:
+                  continue
+              if parts[0] == "wait":
+                  time.sleep(int(parts[1]) / 1000)
+                  continue
+              os.write(fd, struct.pack("llHHi", 0, 0, EV_KEY, int(parts[0]), int(parts[1])))
+              os.write(fd, struct.pack("llHHi", 0, 0, EV_SYN, 0, 0))
+          fcntl.ioctl(fd, 0x5502)
+          EOF
+          python3 -c 'import math, struct, wave
+          w = wave.open("tone.wav", "wb"); w.setnchannels(1); w.setsampwidth(2); w.setframerate(48000)
+          w.writeframes(b"".join(struct.pack("<h", int(8000 * math.sin(2 * math.pi * 440 * i / 48000))) for i in range(48000 * 90)))'
+          paplay -d "$MIC_SINK" tone.wav &
+          player=$!
+          sudo modprobe uinput || true
+          command -v setfacl >/dev/null || sudo apt-get install -y -qq acl
+          mkfifo kb.fifo mouse.fifo
+          exec 4<>kb.fifo 5<>mouse.fifo
+          sudo python3 uinput.py keyboard <kb.fifo >kb.out &
+          sudo python3 uinput.py mouse <mouse.fifo >mouse.out &
+          node() {
+            for d in /sys/class/input/event*; do
+              if [ "$(cat "$d/device/name" 2>/dev/null)" = "$1" ]; then echo "/dev/input/${d##*/}"; fi
+            done
+          }
+          for _ in $(seq 1 50); do
+            kb=$(node akou-ci-keyboard); mouse=$(node akou-ci-mouse)
+            if [ -n "$kb" ] && [ -n "$mouse" ] && [ -e "$kb" ] && [ -e "$mouse" ]; then break; fi
+            sleep 0.1
+          done
+          echo "keyboard $kb, mouse $mouse"
+          test -n "$kb" && test -n "$mouse"
+          # hold TAG HOTKEY FD CODE: starts the helper, holds CODE for 800 ms, then (for the
+          # keyboard) opens the recorder and taps A, and stops the helper.
+          hold() {
+            mkfifo "$1.in"
+            exec 3<>"$1.in"
+            "$bin" dictate --hotkey "$2" <"$1.in" >"$1.akp" 2>"$1.err" &
+            local pid=$!
+            sleep 1.5
+            printf '%s 1\nwait 800\n%s 0\nwait 1500\n' "$4" "$4" >&"$3"
+            sleep 3
+            if [ "$1" = keys ]; then
+              echo '{"type":"record_keys","on":true}' >&3
+              sleep 0.3
+              printf '30 1\nwait 50\n30 0\n' >&4
+              sleep 1
+            fi
+            echo '{"type":"stop"}' >&3
+            for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+            kill "$pid" 2>/dev/null || true
+            exec 3>&-
+            echo "--- $1"
+            cat "$1.err"
+          }
+          check() { if ! eval "$1"; then echo "FAILED: $2"; exit 1; fi; }
+          check '! test -r "$kb"' "the virtual keyboard is readable before the ACL; the control proves nothing"
+          hold control RightControl 4 97
+          check '! grep -q "\"type\":\"session.started\"" control.err' "a session started with the keyboard unreadable"
+          sudo setfacl -m "u:$(id -un):r" "$kb" "$mouse"
+          "$bin" dictate --probe 2> probe.err
+          cat probe.err
+          check 'grep -q "\"accessibility\":\"granted\"" probe.err' "the probe does not see the readable keyboard"
+          hold keys RightControl 4 97
+          check 'grep -q "\"type\":\"session.started\"" keys.err' "a held Right Control started no session"
+          check 'grep -q "\"type\":\"session.ended\",\"id\":\"[^\"]*\",\"reason\":\"release\"" keys.err' "the release did not end the session"
+          check '[ "$(head -c 4 keys.akp)" = AKP1 ]' "no audio packets on stdout"
+          check 'grep -q "\"type\":\"key\",\"name\":\"A\"" keys.err' "the recorder did not report A"
+          hold mouse Mouse4 5 275
+          check 'grep -q "\"type\":\"session.started\"" mouse.err' "the back button bound as Mouse4 started no session"
+          exec 4>&- 5>&-
+          kill "$player" 2>/dev/null || true
+          {
+            echo "### dictate on evdev (${{ matrix.server }})"
+            echo
+            grep -hE '"type":"(ready|session\.(started|ended)|key)"' keys.err mouse.err | sed 's/^/    /'
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
