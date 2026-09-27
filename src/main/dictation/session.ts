@@ -26,7 +26,7 @@ import { type DictationLog, newDictationId } from "./store.ts";
  * What an engine answers: the decode, and when an engine fell back to another (the remote to the
  * local engine, DC-R3), the engine that decoded it and the one it fell back from.
  */
-export type EngineDecoded = Omit<Decoded, "spans"> & { engine?: string; fallback_from?: string };
+export type EngineDecoded = Decoded & { engine?: string; fallback_from?: string };
 
 /** Decodes a dictation's buffer: the live Worker (`fast`), a remote akou (`remote`). */
 export interface DictationEngine {
