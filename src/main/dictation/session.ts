@@ -101,6 +101,11 @@ export interface SessionOptions extends TextRules {
   onState?(state: SessionState): void;
   /** The helper's mic level during a session, 20 a second, for the pill and the stream (DC-G2). */
   onLevel?(rms: number): void;
+  /**
+   * Keeps a dictation's audio for Retry and the learning check (DC-H2), called once its
+   * `dictation.started` is written. Never called for a password field (DC-N8).
+   */
+  saveAudio?(id: string, samples: Float32Array): void;
 }
 
 interface Listening {
@@ -284,6 +289,8 @@ export class DictationSession {
     if (c) {
       const id = newDictationId(this.o.now());
       this.write({ type: "dictation.started", id, target: c.target, engine: "auto", by: "user" });
+      // What was heard before the helper died can still be retried.
+      this.keep(id, c, concat(c.chunks, c.samples));
       this.write({ type: "dictation.failed", id, error: "the dictation helper stopped" });
     }
     for (const id of this.inserts.values()) {
@@ -311,6 +318,9 @@ export class DictationSession {
       engine: engine?.name ?? "fast",
       by: "user",
     });
+    const samples = concat(c.chunks, c.samples);
+    // A cancelled dictation keeps its audio too, so it can still be retried from history.
+    this.keep(id, c, samples);
     this.write({ type: "dictation.ended", id, reason, seconds });
     if (reason === "cancel" || reason === "stop") {
       this.write({ type: "dictation.cancelled", id });
@@ -318,8 +328,17 @@ export class DictationSession {
       return;
     }
     this.set("transcribing");
-    const samples = concat(c.chunks, c.samples);
     this.work = this.work.then(() => this.transcribe(id, c, samples, engine));
+  }
+
+  /** Hands the audio to be kept, never a password field's (DC-N8); a failure costs only Retry. */
+  private keep(id: string, c: Listening, samples: Float32Array): void {
+    if (c.secure || !this.o.saveAudio) return;
+    try {
+      this.o.saveAudio(id, samples);
+    } catch (err) {
+      this.o.onLog?.("warn", `dictation audio not kept: ${(err as Error).message}`);
+    }
   }
 
   /** The session will not be inserted: the helper stops holding Escape and Enter now. */

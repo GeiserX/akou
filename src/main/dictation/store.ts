@@ -45,7 +45,7 @@ export const DICTATION_EVENTS = "events.jsonl";
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** The states a dictation ends in; one in another state is still being decoded or inserted. */
-const FINAL: ReadonlySet<DictationItem["state"]> = new Set([
+export const FINAL: ReadonlySet<DictationItem["state"]> = new Set([
   "done",
   "inserted",
   "cancelled",
