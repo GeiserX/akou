@@ -31,10 +31,10 @@
  *
  * Times are seconds of audio (the file timeline), so a test at `--speed 20` is deterministic.
  *
- * `dictate` speaks `akou-dictate/1` instead (docs/ux/DICTATION.md section 9, DC-T1): scripted keys
- * through the same activation rule the real helper runs (`src/core/dictation/activation.ts`), a
- * WAV as the mic, and a fake inserter. It opens no device, reads no key, types nothing and never
- * touches the clipboard.
+ * `dictate` speaks `akou-dictate/1` instead (docs/ux/DICTATION.md section 9, DC-T1), the same
+ * lines as `akou-capture dictate` (tests/fixtures/akou-dictate/): scripted keys through the port
+ * of the real helper's activation rule (`src/core/dictation/activation.ts`), a WAV as the mic, and
+ * a fake inserter. It opens no device, reads no key, types nothing and never touches the clipboard.
  *
  *   bun scripts/fake-helper.ts dictate [switches]
  *
@@ -43,7 +43,8 @@
  *   --keys FILE             scripted keys, JSON lines `{"at": MS, "key": "RightCommand",
  *                           "down": true}`, played once after the first `rebind`
  *   --speed X               0 = as fast as possible (default); 1 = key times in real time
- *   --grants LIST           the grants `ready` reports: `mic,accessibility` (default), or fewer
+ *   --grants LIST           the grants `ready` reports as `granted`: `mic,accessibility`
+ *                           (default), or fewer; the others are `denied`
  *   --backend NAME          the key source `ready` reports (default `fake`)
  *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4)
  *   --field KIND            the target field: editable (default), not-editable, unknown, secure
@@ -53,7 +54,7 @@
  *   --commands-log FILE     every command the app sent, one JSON line each
  *   --receipt-ms N          the fake target reads the clipboard N ms after the insert (default 5)
  *   --no-receipt            the target never reads it: no `inserted` ever comes
- *   --bind-fail             every `rebind` is refused with `bind.failed`
+ *   --bind-fail             every `rebind` is refused with `rebind.failed`
  *
  * The traps (DC-T1), one switch each:
  *
@@ -69,7 +70,13 @@
  */
 
 import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
-import { ActivationMachine, type KeyInput } from "../src/core/dictation/activation.ts";
+import {
+  type Activation,
+  ActivationMachine,
+  type ActivationOut,
+  type KeyInput,
+  parseBinding,
+} from "../src/core/dictation/activation.ts";
 import { DeadCallMonitor } from "../src/main/capture/health.ts";
 import { CAPTURE_RATE, EXIT, encodePacket, type Packet } from "../src/main/capture/protocol.ts";
 import {
@@ -392,59 +399,81 @@ async function runDictate(): Promise<void> {
     return sent;
   };
 
-  const play = async (bindings: { hotkey: string; activation: string }) => {
-    const machine = new ActivationMachine({
-      keys: bindings.hotkey.split("+").filter(Boolean),
-      activation: bindings.activation as "hold-or-toggle",
-    });
-    let open: { id: string; at: number } | null = null;
+  let machine: ActivationMachine | null = null;
+  let open: { id: string; at: number } | null = null;
+  /** The key time the script has reached, ms. */
+  let clock = 0;
+  const act = async (outs: ActivationOut[]) => {
+    for (const o of outs) {
+      if (o.type === "key") say({ type: "key", name: o.name });
+      else if (o.type === "start") {
+        if (slowMic > 0) await sleep(slowMic);
+        open = { id: String(++sessions), at: o.at };
+        say({
+          type: "session.started",
+          id: open.id,
+          target,
+          capture_ns: String(BigInt(Math.round(o.at)) * 1_000_000n),
+        });
+      } else if (open) {
+        // A cancel or a stop ends at once; anything else runs the post-roll.
+        const cut = o.reason === "cancel" || o.reason === "stop";
+        sessionAudio(open.at, cut ? clock - POST_ROLL_MS : clock);
+        say({ type: "session.ended", id: open.id, reason: o.reason });
+        open = null;
+      }
+    }
+  };
+
+  /** Plays the scripted keys through the binding in force at each key. */
+  const play = async () => {
     const tStart = performance.now();
     for (const k of keys) {
       if (speed > 0) await sleep(tStart + k.at / speed - performance.now());
+      clock = k.at;
       if (tapDisabled && tapDisabledAt !== undefined && k.at >= tapDisabledAt) {
         // The event that finds the tap disabled is lost; the callback re-enables the tap.
         tapDisabled = false;
         log(opt("--tap-log"), { key: k.key, down: k.down, lost: true });
         continue;
       }
-      for (const o of machine.feed(k)) {
-        if (o.type === "key") {
-          log(opt("--tap-log"), { key: o.key, down: o.down, swallowed: o.swallowed });
-        } else if (o.type === "start") {
-          if (slowMic > 0) await sleep(slowMic);
-          open = { id: `s${++sessions}`, at: o.at };
-          say({
-            type: "session.started",
-            id: open.id,
-            target,
-            capture_ns: String(BigInt(Math.round(o.at)) * 1_000_000n),
-          });
-        } else if (o.type === "end" && open) {
-          const samples = o.reason === "interrupt" ? 0 : sessionAudio(open.at, o.at);
-          say({ type: "session.ended", id: open.id, reason: o.reason, samples });
-          open = null;
-        }
-      }
+      // Time passes before the key, as the helper's tick does: a held modifier becomes a session.
+      const m = machine as ActivationMachine;
+      const outs: ActivationOut[] = [];
+      m.tick(k.at, outs);
+      const swallowed = m.key(k, outs);
+      log(opt("--tap-log"), { key: k.key, down: k.down, swallowed });
+      await act(outs);
     }
   };
 
   const handle = (c: AppToHelper) => {
     switch (c.type) {
-      case "rebind":
-        if (flag("--bind-fail")) {
-          say({ type: "bind.failed", hotkey: c.hotkey, reason: "fake refusal" });
+      case "rebind": {
+        let m: ActivationMachine;
+        try {
+          if (flag("--bind-fail")) throw new Error("fake refusal");
+          m = new ActivationMachine(parseBinding(c.hotkey), c.activation as Activation);
+        } catch (err) {
+          say({ type: "rebind.failed", hotkey: c.hotkey, reason: (err as Error).message });
           return;
         }
-        say({ type: "bound", hotkey: c.hotkey });
+        machine = m;
+        say({ type: "rebound", hotkey: c.hotkey });
         if (!played) {
           played = true;
-          void play(c);
+          void play();
         }
+        return;
+      }
+      case "settled":
+        machine?.settled();
         return;
       case "insert": {
         log(opt("--inserter-log"), { ...c, at: now() });
         if (flag("--no-receipt")) return;
         setTimeout(() => {
+          machine?.settled();
           if (flag("--focus-change")) {
             say({ type: "insert.failed", id: c.id, reason: "focus_changed" });
             return;
@@ -454,21 +483,26 @@ async function runDictate(): Promise<void> {
         }, receiptMs);
         return;
       }
-      case "stop":
+      case "stop": {
         stopping = true;
+        const outs: ActivationOut[] = [];
+        machine?.end("stop", clock, outs);
+        void act(outs);
         return;
+      }
       default:
         return;
     }
   };
 
+  const grant = (name: string) => (grants.includes(name) ? "granted" : "denied");
   say({
     type: "ready",
     protocol: DICTATE_PROTOCOL,
     version: "0.0.0-fake",
-    grants: { mic: grants.includes("mic"), accessibility: grants.includes("accessibility") },
     backend: opt("--backend") ?? "fake",
     swallow_keys: !flag("--no-swallow"),
+    grants: { mic: grant("mic"), accessibility: grant("accessibility") },
   });
   const dec = new TextDecoder();
   let rest = "";
@@ -485,6 +519,7 @@ async function runDictate(): Promise<void> {
   }
   // Closing stdin means stop. Inserts still waiting for their receipt are let go.
   stdout.flush();
+  say({ type: "stopped", reason: "stop" });
   process.exit(EXIT.ok);
 }
 

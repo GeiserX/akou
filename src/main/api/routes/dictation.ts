@@ -54,7 +54,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations",
     {
       id: "dictations.create",
-      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto or fast; `language` a BCP-47 tag or auto. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
+      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto or fast; `language` a BCP-47 tag or auto, checked and not yet used: the fast engine (Parakeet) detects the language itself, and a hint reaches the engines that take one later. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
       access: "admin",
       modes: ["app"],
       body: { multipart: { file: "file", "engine?": "string", "language?": "string" } },

@@ -2727,7 +2727,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto or fast; `language` a BCP-47 tag or auto. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
+        "description": "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto or fast; `language` a BCP-47 tag or auto, checked and not yet used: the fast engine (Parakeet) detects the language itself, and a hint reaches the engines that take one later. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, and the decode time.",
         "requestBody": {
           "required": true,
           "content": {

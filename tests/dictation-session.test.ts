@@ -11,8 +11,13 @@ import type { KeyInput } from "../src/core/dictation/activation.ts";
 import type { Decoded } from "../src/main/asr/live-worker.ts";
 import { LiveAsr } from "../src/main/asr/live-worker.ts";
 import type { Packet } from "../src/main/capture/protocol.ts";
+import type { AppToHelper } from "../src/main/dictation/protocol.ts";
 import { DictationService } from "../src/main/dictation/service.ts";
-import { type DictationEngine, DictationSession } from "../src/main/dictation/session.ts";
+import {
+  AUDIO_DRAIN_MS,
+  type DictationEngine,
+  DictationSession,
+} from "../src/main/dictation/session.ts";
 import { DictationLog } from "../src/main/dictation/store.ts";
 import { FAKE_HELPER, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
@@ -57,6 +62,7 @@ function micWav(dir: string): string {
 }
 
 interface Rig {
+  dir: string;
   svc: DictationService;
   tap: string;
   inserted: string;
@@ -98,6 +104,7 @@ function rig(keys: [number, string, boolean][], switches: string[] = []): Rig {
     () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold-or-toggle" }),
   );
   return {
+    dir: t.dir,
     svc,
     tap,
     inserted,
@@ -175,7 +182,7 @@ describe("DC-A1 over the fake helper", () => {
     expect(r.svc.status().state).toBe("listening");
   });
 
-  test("a 1 s hold with C at 800 ms ends at C with nothing kept, and C passes through", async () => {
+  test("a 1 s hold with C at 800 ms ends as cancelled with no text, and C passes through", async () => {
     const r = rig([
       [0, RC, true],
       [800, "C", true],
@@ -183,13 +190,14 @@ describe("DC-A1 over the fake helper", () => {
       [1000, RC, false],
     ]);
     await settle(r);
-    expect(r.svc.log.events()).toEqual([]);
+    expect(r.svc.log.items()).toMatchObject([{ state: "cancelled", text: null }]);
+    expect(lines(r.inserted)).toEqual([]);
     expect(lines(r.tap)).toContainEqual({ key: "C", down: true, swallowed: false });
   });
 });
 
 describe("the insert", () => {
-  test("into a password field, only the clipboard is written (DC-N8)", async () => {
+  test("into a password field only the clipboard is written, and the log keeps no text (DC-N8)", async () => {
     const r = rig(
       [
         [800, RC, true],
@@ -197,8 +205,12 @@ describe("the insert", () => {
       ],
       ["--field", "secure"],
     );
-    await until(() => lines(r.inserted).length === 1, 10_000, "the insert");
-    expect(lines(r.inserted)[0]).toMatchObject({ method: "clipboard" });
+    await until(() => r.svc.log.items()[0]?.state === "inserted", 10_000, "the receipt");
+    expect(lines(r.inserted)[0]).toMatchObject({ method: "clipboard", text: "hello" });
+    expect(r.svc.log.items()[0]).toMatchObject({ target: { field: "secure" }, text: null });
+    expect(r.svc.log.events().map((e) => e.type)).not.toContain("dictation.text");
+    const onDisk = readFileSync(join(r.dir, "dictation", "events.jsonl"), "utf8");
+    expect(onDisk).not.toContain("hello");
   });
 
   test("a target that lost focus fails the insert, and the log says so (--focus-change)", async () => {
@@ -225,38 +237,106 @@ describe("the helper's stdout and stderr are two pipes", () => {
     samples: new Float32Array(n),
   });
 
-  function session() {
+  function session(text = "ok") {
     const t = tempDir("akou-dict-pipes-");
     cleanups.push(t.cleanup);
     const log = new DictationLog(t.dir);
     cleanups.push(() => log.close());
     const got: number[] = [];
+    const sent: AppToHelper[] = [];
     const engine: DictationEngine = {
       name: "fast",
       decode: async (s): Promise<Decoded> => {
         got.push(s.length);
-        return { text: "ok", words: [], language: null, model: "m", ms: 1, spans: 1 };
+        return { text, words: [], language: null, model: "m", ms: 1, spans: 1 };
       },
     };
     const s = new DictationSession({
       log,
       engine: () => engine,
-      send: () => {},
+      send: (c) => sent.push(c),
       bindings: () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold" }),
       now: () => Date.now(),
     });
-    return { s, got };
+    return { s, got, sent, log };
   }
 
-  test("`session.ended` read before the last packets waits for them", async () => {
+  const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  test("`session.ended` read before the last packets waits for the pipe to drain", async () => {
     const { s, got } = session();
-    s.onMessage({ type: "session.started", id: "s1", target: TARGET, capture_ns: "0" });
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
     s.onPacket(packet(320));
-    s.onMessage({ type: "session.ended", id: "s1", reason: "release", samples: 960 });
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
     expect(s.state).toBe("listening");
+    // Packets still in the stdout pipe, read after the end but within the quiet window.
+    await wait(AUDIO_DRAIN_MS / 2);
     s.onPacket(packet(320));
+    await wait(AUDIO_DRAIN_MS / 2);
     s.onPacket(packet(320));
-    await s.settled();
+    await until(() => got.length === 1, 2000, "the decode");
     expect(got).toEqual([960]);
+  });
+
+  test("an empty dictation is settled back to the helper at once (DC-A4)", async () => {
+    const { s, sent, log } = session("");
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => log.items()[0]?.state === "empty", 2000, "the empty dictation");
+    expect(sent).toContainEqual({ type: "settled", id: "1" });
+    expect(sent.some((c) => c.type === "insert")).toBe(false);
+  });
+
+  test("Secure Input on at the start makes the session a password field's (DC-N8)", async () => {
+    const { s, sent, log } = session("secret");
+    s.onMessage({ type: "secure_input", on: true });
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    await until(() => sent.some((c) => c.type === "insert"), 2000, "the insert");
+    expect(sent.find((c) => c.type === "insert")).toMatchObject({ method: "clipboard" });
+    expect(log.events().map((e) => e.type)).not.toContain("dictation.text");
+  });
+});
+
+describe("the master switch", () => {
+  function service() {
+    const t = tempDir("akou-dict-switch-");
+    cleanups.push(t.cleanup);
+    const svc = new DictationService({
+      configDir: t.dir,
+      engine: () => null,
+      now: () => Date.now(),
+    });
+    cleanups.push(() => svc.close());
+    const argv = [process.execPath, FAKE_HELPER, "dictate"];
+    const bindings = () =>
+      ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold" }) as const;
+    return { svc, start: () => svc.start(argv, bindings) };
+  }
+
+  test("off then on at once: the new helper waits for the old one to exit", async () => {
+    const { svc, start } = service();
+    start();
+    await until(() => svc.status().state === "idle", 10_000, "the helper's ready");
+    const stopped = svc.stop();
+    start();
+    // Two helpers would hold the key at once; the second is started only after the first exits.
+    expect(svc.session()).toBeNull();
+    await stopped;
+    await until(() => svc.status().state === "idle", 10_000, "the new helper's ready");
+  });
+
+  test("off, on and off again at once leaves no helper running", async () => {
+    const { svc, start } = service();
+    start();
+    await until(() => svc.status().state === "idle", 10_000, "the helper's ready");
+    const first = svc.stop();
+    start();
+    await svc.stop();
+    await first;
+    await new Promise((r) => setTimeout(r, 200));
+    expect(svc.session()).toBeNull();
   });
 });

@@ -12,7 +12,7 @@ import { join } from "node:path";
 import type { DictationItem } from "../../core/dictation/events.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
-import { type Bindings, encodeCommand, parseHelperLine } from "./protocol.ts";
+import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
 import { type DictationEngine, DictationSession, type SessionState } from "./session.ts";
 import { DICTATION_DIR, DictationLog, newDictationId } from "./store.ts";
 
@@ -32,7 +32,7 @@ export interface DictationStatus {
   /** `off` with dictation disabled or the helper gone, else the session's state. */
   state: "off" | SessionState;
   engine: string | null;
-  grants: { mic: boolean; accessibility: boolean } | null;
+  grants: { mic: Grant; accessibility: Grant } | null;
   backend: string | null;
 }
 
@@ -45,6 +45,10 @@ interface Helper {
 export class DictationService {
   readonly log: DictationLog;
   private helper: Helper | null = null;
+  /** The helper being stopped: a new one waits for it, so two never hold the key at once. */
+  private stopping: Promise<void> | null = null;
+  /** A start asked for while the last helper was stopping; a `stop` drops it. */
+  private wanted: { argv: readonly string[]; bindings: () => Bindings } | null = null;
 
   /** Where `POST /v1/dictations` spools a clip while it is decoded; emptied at every start. */
   readonly uploadDir: string;
@@ -79,10 +83,22 @@ export class DictationService {
 
   /**
    * Starts `argv` (the helper's program and its `dictate` subcommand) and binds the keys once it
-   * is ready. A second start while one runs does nothing.
+   * is ready. A second start while one runs does nothing; a start while the last helper is still
+   * stopping runs once it has exited.
    */
   start(argv: readonly string[], bindings: () => Bindings): void {
     if (this.helper) return;
+    if (this.stopping) {
+      const first = this.wanted === null;
+      this.wanted = { argv, bindings };
+      if (first)
+        void this.stopping.then(() => {
+          const w = this.wanted;
+          this.wanted = null;
+          if (w) this.start(w.argv, w.bindings);
+        });
+      return;
+    }
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
     try {
       proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -148,20 +164,26 @@ export class DictationService {
 
   /** Stops the helper: `stop`, then a kill if it has not exited within 2 s. */
   async stop(): Promise<void> {
+    this.wanted = null;
     const h = this.helper;
-    if (!h) return;
+    if (!h) return this.stopping ?? undefined;
     this.helper = null;
-    try {
-      h.proc.stdin.write(encodeCommand({ type: "stop" }));
-      h.proc.stdin.end();
-    } catch {
-      // Already gone.
-    }
-    const r = await withDeadline(realClock, h.exited, STOP_MS);
-    if (!r.ok) {
-      h.proc.kill("SIGKILL");
-      await h.exited;
-    }
+    const done = (async () => {
+      try {
+        h.proc.stdin.write(encodeCommand({ type: "stop" }));
+        h.proc.stdin.end();
+      } catch {
+        // Already gone.
+      }
+      const r = await withDeadline(realClock, h.exited, STOP_MS);
+      if (!r.ok) {
+        h.proc.kill("SIGKILL");
+        await h.exited;
+      }
+    })();
+    this.stopping = done;
+    await done;
+    if (this.stopping === done) this.stopping = null;
   }
 
   /**

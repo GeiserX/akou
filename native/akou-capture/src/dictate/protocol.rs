@@ -616,4 +616,81 @@ mod tests {
             assert_eq!(v.get("type").unwrap().as_str(), Some(kind), "{l}");
         }
     }
+
+    /// The lines both sides are held to, in `tests/fixtures/akou-dictate/`: every line this file
+    /// writes is exactly the fixture's, and every command the app writes parses here. The Bun test
+    /// `tests/dictation-protocol.test.ts` checks the same two files from the app's side, so a name
+    /// changed on one side only fails one of the two.
+    #[test]
+    fn the_shared_fixture_lines_match_the_app() {
+        let t = Target {
+            app: "Slack".into(),
+            pid: 7,
+            window: "w1".into(),
+            field: "editable".into(),
+        };
+        let mut written = vec![
+            ready("simulate", true, "granted", "not-needed"),
+            session_started("1", &t, 123_456_789_012_345_678),
+            level(0.25),
+            key("Shift+Enter"),
+            mic(true),
+        ];
+        for reason in ["release", "tap", "key", "cancel", "silence", "max", "stop"] {
+            written.push(session_ended("1", reason));
+        }
+        written.extend([
+            inserted("1", "paste", 12),
+            insert_failed("1", "focus-changed"),
+            rebound("RightShift"),
+            rebind_failed("LeftOption+RightOption", "x"),
+            warn("usage", "m"),
+            stopped("stop"),
+        ]);
+        let want: Vec<String> =
+            include_str!("../../../../tests/fixtures/akou-dictate/helper-lines.jsonl")
+                .lines()
+                .map(|l| l.replace("@VERSION@", crate::protocol::VERSION))
+                .collect();
+        assert_eq!(written, want);
+
+        let secure = Target {
+            field: "secure".into(),
+            ..t.clone()
+        };
+        let parsed: Vec<Command> =
+            include_str!("../../../../tests/fixtures/akou-dictate/app-lines.jsonl")
+                .lines()
+                .map(|l| Command::parse(l).unwrap_or_else(|e| panic!("{l}: {e}")))
+                .collect();
+        assert_eq!(
+            parsed,
+            vec![
+                Command::Rebind {
+                    hotkey: "RightCommand".into(),
+                    activation: Some("hold-or-toggle".into()),
+                },
+                Command::Insert {
+                    id: "1".into(),
+                    text: "hello".into(),
+                    method: "paste".into(),
+                    send_key: "none".into(),
+                    target: Some(t),
+                },
+                Command::Settled { id: "1".into() },
+                Command::Focus { target: secure },
+                Command::SessionStart,
+                Command::SessionStop,
+                Command::SessionCancel,
+                Command::RebuildMic {
+                    device: "default".into(),
+                },
+                Command::Warm {
+                    mode: "auto".into(),
+                },
+                Command::RecordKeys { on: true },
+                Command::Stop,
+            ]
+        );
+    }
 }

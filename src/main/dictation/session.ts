@@ -5,11 +5,15 @@
  *
  * One session at a time: `ready` → `idle`; `session.started` → `listening` (the audio packets are
  * kept); `session.ended` → `transcribing` (the buffer goes to the engine) → `inserting` (the text
- * goes back as `insert`) → `idle` on `inserted` or `insert.failed`. An `interrupt` (the dictation
- * key was a shortcut, DC-A1) keeps nothing: no event, no audio. A `cancel` keeps the dictation as
- * `cancelled` with no text.
+ * goes back as `insert`) → `idle` on `inserted` or `insert.failed`. A `cancel` (Escape, or
+ * another key during a confirmed hold, DC-A1) or a `stop` keeps the dictation as `cancelled` with
+ * no text. A press interrupted before it became a session never reaches the app at all.
  *
- * Nothing is written for a session until it ends, so an interrupted press leaves no trace.
+ * A session that will not be inserted (empty, failed, no model) is `settled` back to the helper at
+ * once, so it stops holding Escape and Enter then rather than 8 s later (DC-A4).
+ *
+ * A password field gets nothing logged but that the dictation happened (DC-N8): no text, no words,
+ * and the text goes to the helper for the clipboard only.
  */
 
 import type { DictationDraft, Target } from "../../core/dictation/events.ts";
@@ -43,20 +47,26 @@ interface Listening {
   target: Target;
   chunks: Float32Array[];
   samples: number;
-  /** Set by `session.ended`: the reason, and the samples the helper says it sent. */
-  end: { reason: EndReason; samples: number; timer: ReturnType<typeof setTimeout> } | null;
+  /** Secure Input was on at the start, or the field is a password field (DC-N8). */
+  secure: boolean;
+  /** Set by `session.ended`: the reason, and the timer that waits for the pipe to drain. */
+  end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
 }
 
 /**
- * How long a session that ended waits for audio still in the stdout pipe, past which it is
- * transcribed with what arrived and the log says so.
+ * How long a session that ended waits after its last packet before it is transcribed. The helper
+ * writes every packet of a session to stdout before `session.ended` goes to stderr, but those are
+ * two pipes with no order between them, so the end can be read before the last packets. They are
+ * already in the pipe by then, so a short quiet window collects them.
  */
-export const LATE_AUDIO_MS = 2000;
+export const AUDIO_DRAIN_MS = 100;
 
 export class DictationSession {
   state: SessionState = "starting";
   ready: Extract<HelperToApp, { type: "ready" }> | null = null;
   private cur: Listening | null = null;
+  /** macOS Secure Input, as the helper last reported it. */
+  private secureInput = false;
   /** Dictations waiting for their insert's result, by the helper's session id. */
   private readonly inserts = new Map<string, string>();
   /** Every decode and insert in flight, for tests and a clean stop. */
@@ -95,25 +105,30 @@ export class DictationSession {
         this.set("idle");
         this.o.send({ type: "rebind", ...this.o.bindings() });
         return;
-      case "bind.failed":
+      case "rebind.failed":
         this.o.onLog?.("warn", `dictation key ${m.hotkey} not bound: ${m.reason}`);
         return;
+      case "secure_input":
+        this.secureInput = m.on;
+        return;
+      case "warn":
+        this.o.onLog?.("warn", `dictation helper: ${m.code}: ${m.msg}`);
+        return;
       case "session.started":
-        this.cur = { helperId: m.id, target: m.target, chunks: [], samples: 0, end: null };
+        this.cur = {
+          helperId: m.id,
+          target: m.target,
+          chunks: [],
+          samples: 0,
+          secure: this.secureInput || m.target.field === "secure",
+          end: null,
+        };
         this.set("listening");
         return;
       case "session.ended": {
         const c = this.cur;
         if (!c || c.helperId !== m.id || c.end) return;
-        const timer = setTimeout(() => {
-          this.o.onLog?.(
-            "warn",
-            `dictation: ${c.samples} of ${m.samples} samples arrived; transcribing what did`,
-          );
-          this.ended(c);
-        }, LATE_AUDIO_MS);
-        c.end = { reason: m.reason, samples: m.samples, timer };
-        if (c.samples >= m.samples) this.ended(c);
+        c.end = { reason: m.reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
         return;
       }
       case "inserted": {
@@ -138,7 +153,7 @@ export class DictationSession {
         return;
       }
       default:
-        // level, key, grant.lost, edit, edit.unreadable, secure_input, bound: the pill's and
+        // level, key, grant.lost, edit, edit.unreadable, mic, rebound, stopped: the pill's and
         // learning's, in later items.
         return;
     }
@@ -150,7 +165,8 @@ export class DictationSession {
     if (!c || p.ch !== "mic") return;
     c.chunks.push(p.samples);
     c.samples += p.samples.length;
-    if (c.end && c.samples >= c.end.samples) this.ended(c);
+    // Audio read after the end: the pipe is still draining, so the quiet window starts again.
+    if (c.end) c.end.timer.refresh();
   }
 
   /** The helper exited: a session in progress is lost with it, and says so. */
@@ -176,10 +192,6 @@ export class DictationSession {
     this.cur = null;
     clearTimeout(c.end.timer);
     const reason = c.end.reason;
-    if (reason === "interrupt") {
-      this.set("idle");
-      return;
-    }
     const id = newDictationId(this.o.now());
     const engine = this.o.engine();
     const seconds = Math.round((c.samples / 16000) * 1000) / 1000;
@@ -191,62 +203,71 @@ export class DictationSession {
       by: "user",
     });
     this.write({ type: "dictation.ended", id, reason, seconds });
-    if (reason === "cancel") {
+    if (reason === "cancel" || reason === "stop") {
       this.write({ type: "dictation.cancelled", id });
       this.set("idle");
       return;
     }
     this.set("transcribing");
     const samples = concat(c.chunks, c.samples);
-    this.work = this.work.then(() => this.transcribe(id, c.helperId, c.target, samples, engine));
+    this.work = this.work.then(() => this.transcribe(id, c, samples, engine));
+  }
+
+  /** The session will not be inserted: the helper stops holding Escape and Enter now. */
+  private notInserted(helperId: string, d: DictationDraft): void {
+    this.write(d);
+    this.o.send({ type: "settled", id: helperId });
+    this.set("idle");
   }
 
   private async transcribe(
     id: string,
-    helperId: string,
-    target: Target,
+    c: Listening,
     samples: Float32Array,
     engine: DictationEngine | null,
   ): Promise<void> {
     if (!engine) {
-      this.write({ type: "dictation.failed", id, error: "no speech model is loaded" });
-      this.set("idle");
+      this.notInserted(c.helperId, {
+        type: "dictation.failed",
+        id,
+        error: "no speech model is loaded",
+      });
       return;
     }
     let d: Decoded;
     try {
       d = await engine.decode(samples, {});
     } catch (err) {
-      this.write({ type: "dictation.failed", id, error: (err as Error).message });
-      this.set("idle");
+      this.notInserted(c.helperId, { type: "dictation.failed", id, error: (err as Error).message });
       return;
     }
     if (d.text === "") {
-      this.write({ type: "dictation.empty", id });
-      this.set("idle");
+      this.notInserted(c.helperId, { type: "dictation.empty", id });
       return;
     }
-    this.write({
-      type: "dictation.text",
-      id,
-      raw: d.text,
-      text: d.text,
-      language: d.language,
-      words: d.words,
-      engine: engine.name,
-      model: d.model,
-      ms: d.ms,
-    });
-    this.inserts.set(helperId, id);
+    // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
+    if (!c.secure)
+      this.write({
+        type: "dictation.text",
+        id,
+        raw: d.text,
+        text: d.text,
+        language: d.language,
+        words: d.words,
+        engine: engine.name,
+        model: d.model,
+        ms: d.ms,
+      });
+    this.inserts.set(c.helperId, id);
     this.set("inserting");
     this.o.send({
       type: "insert",
-      id: helperId,
+      id: c.helperId,
       text: d.text,
       // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.
-      method: target.field === "secure" ? "clipboard" : "paste",
+      method: c.secure ? "clipboard" : "paste",
       send_key: "none",
-      target,
+      target: c.target,
     });
   }
 }

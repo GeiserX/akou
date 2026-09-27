@@ -933,9 +933,11 @@ export class WorkerSide {
   }
 
   /**
-   * A dictation decode: one span per turn of the message queue, each queued behind whatever
-   * arrived while the last one ran, so a live call's audio is transcribed between two spans and its
-   * next segment waits at most one span.
+   * A dictation decode: one span per turn of the event loop, each queued behind whatever arrived
+   * while the last one ran, so a live call's audio is transcribed between two spans and its next
+   * segment waits at most one span. The next span is queued from a timer, never a microtask: a
+   * Worker's messages are tasks, and microtasks all run before the next task, so a promise chain
+   * alone would run every span before any call audio.
    */
   private decode(p: LivePipeline, m: Extract<ToWorker, { type: "decode" }>): void {
     const spans = p.dictationSpans(m.samples);
@@ -954,7 +956,9 @@ export class WorkerSide {
           if (r.lang) heard.set(r.lang, (heard.get(r.lang) ?? 0) + Math.max(1, r.text.length));
           if (r.text !== "") texts.push(r.text);
           words.push(...r.words);
-          this.queue = this.queue.then(step(i + 1));
+          setTimeout(() => {
+            this.queue = this.queue.then(step(i + 1));
+          }, 0);
           return;
         }
         let language: string | null = null;

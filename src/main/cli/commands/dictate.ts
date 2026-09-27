@@ -19,7 +19,11 @@ export const dictateCommand: Command = {
   usage: `akou dictate FILE [--engine ${ENGINES.join("|")}] [--language L]   [--json]`,
   flags: {
     engine: { type: "string", value: "E", desc: `${ENGINES.join(", ")} (default auto)` },
-    language: { type: "string", value: "L", desc: "a BCP-47 tag such as en or es-ES, or auto" },
+    language: {
+      type: "string",
+      value: "L",
+      desc: "a BCP-47 tag such as en or es-ES, or auto; the fast engine detects it itself",
+    },
   },
   examples: ["akou dictate note.wav", "akou dictate note.wav --json"],
   run: async (ctx, p) => {

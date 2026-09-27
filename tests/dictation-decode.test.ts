@@ -103,6 +103,7 @@ describe("DC-E1: decode on the live Worker", () => {
     side.handle({ type: "init", models: SPEC, live: {} });
     side.handle({ type: "call", id: "c1", centroids: [], merges: [], unmerged: [], ids: [] });
     side.handle({ type: "decode-list", list: null, version: 1 });
+    await until(() => replies.some((r) => r.type === "ready"), 10_000, "the model");
     side.handle({
       type: "decode",
       token: 7,
@@ -112,10 +113,14 @@ describe("DC-E1: decode on the live Worker", () => {
         ["thanks", 66],
       ]),
     });
-    // The call's audio arrives while the dictation is decoding: a segment that closes on a pause.
+    // The call's audio arrives while the dictation is decoding, as a Worker's message does: a task
+    // of its own, after the decode began. It holds a segment that closes on a pause.
     const mic = concat(silence(0.4), speak(["hello", "world"]), silence(1.2));
     // Not live: no provisional re-decodes, so every recognizer call is a span or the segment.
-    side.handle({ type: "audio", part: 1, ch: "mic", start: 0, samples: mic, live: false });
+    setTimeout(
+      () => side.handle({ type: "audio", part: 1, ch: "mic", start: 0, samples: mic, live: false }),
+      0,
+    );
     await until(() => replies.some((r) => r.type === "decoded"), 10_000, "the decode");
     const decoded = replies.find((r) => r.type === "decoded");
     expect(decoded).toMatchObject({ token: 7, text: "deploy kubernetis thanks", spans: 3 });
