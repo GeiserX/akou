@@ -21,6 +21,7 @@
 
 import type { Grant } from "../main/dictation/protocol.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
+import { nextDictatedApp } from "./dictation-apps.ts";
 import { cueStyle } from "./dictation-cues.ts";
 import { mountDictionaryDialog } from "./dictation-dictionary.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
@@ -173,6 +174,8 @@ export class DictationSettings {
   private mics: MicList | null = null;
   /** The microphone's live level while the page shows it. */
   private meter: { close(): void } | null = null;
+  /** The wait for the next dictation's app, for a per-app rule (DC-U9). */
+  private waitApp: { stop(): void } | null = null;
 
   constructor(
     private readonly t: Transport,
@@ -218,6 +221,7 @@ export class DictationSettings {
   private draw(served?: number): void {
     this.stopRecording();
     this.stopMeter();
+    this.stopNextApp();
     this.recorders = [];
     this.shown = {};
     const top =
@@ -272,6 +276,9 @@ export class DictationSettings {
       this.schema[key] as SchemaEntry,
       this.settings[key],
       this.issues.get(key),
+      this.schema[key]?.type === "apps"
+        ? { nextApp: (found, failed) => this.nextApp(found, failed) }
+        : {},
     );
     this.shown[key] = f.shown;
     if (key === REMOTE_URL_KEY) this.remoteUrl(f.input, f.row);
@@ -323,6 +330,29 @@ export class DictationSettings {
     this.meter = meter;
     field.after(...[meter?.root, note].filter((x): x is HTMLElement => !!x));
     return field;
+  }
+
+  /**
+   * Waits for the next dictation's app for the per-app rules (DC-U9). With dictation off no
+   * dictation comes, so the page says so rather than wait for nothing.
+   */
+  private nextApp(found: (app: string) => void, failed: (why: string) => void): { stop(): void } {
+    this.stopNextApp();
+    const on =
+      this.root.querySelector<HTMLInputElement>(`input[data-key="${ENABLE_KEY}"]`)?.checked ??
+      this.settings[ENABLE_KEY] === true;
+    if (!on) {
+      failed("Turn dictation on first: the app comes from your next dictation.");
+      return { stop: () => {} };
+    }
+    const w = nextDictatedApp(this.t, found, failed);
+    this.waitApp = w;
+    return w;
+  }
+
+  private stopNextApp(): void {
+    this.waitApp?.stop();
+    this.waitApp = null;
   }
 
   private stopMeter(): void {
@@ -429,6 +459,7 @@ export class DictationSettings {
   close(): void {
     this.stopRecording();
     this.stopMeter();
+    this.stopNextApp();
     this.setup?.stop();
     this.setup = null;
   }
