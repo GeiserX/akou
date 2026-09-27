@@ -206,6 +206,14 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
+    action: "Words fixed while dictating: review, accept, reject (DC-L5)",
+    cli: ["vocab"],
+    api: ["GET /vocab", "POST /vocab/approve", "POST /vocab/reject"],
+    mcp: ["akou_vocab_list"],
+    window: { none: "the Dictation heading of Words to review is not built yet (DC-L5)" },
+    note: "`dictation` on each: the list's second source is the dictation log. MCP lists them and answers none, since it reads dictation history only (DICTATION.md DC-G5).",
+  },
+  {
     action: "Vocabulary: remove a word",
     cli: ["vocab"],
     api: ["DELETE /vocab/:term", "DELETE /calls/:id/vocab/:vid"],

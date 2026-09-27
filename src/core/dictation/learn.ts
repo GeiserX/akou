@@ -24,6 +24,7 @@
 
 import { doubleMetaphone } from "double-metaphone";
 import { foldText } from "../vocab/correct.ts";
+import type { LearnStatus } from "./events.ts";
 
 /** The sound-alike score a pair needs. */
 export const PROPOSE_AT = 0.45;
@@ -391,4 +392,52 @@ export function pairHistory(
 export function shouldAsk(h: PairHistory | undefined): boolean {
   if (!h) return true;
   return !h.rejected && (h.proposed === 0 || h.proposed === 2);
+}
+
+/**
+ * One fix taught while dictating, as the words to review list it (DC-L5): the pair, its latest
+ * status, the evidence it was offered with, and the dictation that last had it.
+ */
+export interface ReviewPair {
+  term: string;
+  heard: string;
+  status: LearnStatus;
+  evidence: "audio" | "none";
+  /** The dictation whose `dictation.learn` last spoke of the pair. */
+  id: string;
+  /** Epoch ms of that event. */
+  at: number;
+}
+
+/**
+ * Every pair the dictation log's `dictation.learn` events name, at its latest status, newest
+ * first: `proposed` and `ignored` still wait for an answer, `accepted` and `rejected` were given
+ * one. A deleted dictation's events are gone from the log, and so are its pairs.
+ */
+export function reviewPairs(
+  events: readonly {
+    type: string;
+    id: string;
+    t: number;
+    term?: string;
+    heard?: string;
+    status?: string;
+    evidence?: string;
+  }[],
+): ReviewPair[] {
+  const out = new Map<string, ReviewPair>();
+  for (const e of events) {
+    if (e.type !== "dictation.learn" || e.term === undefined || e.heard === undefined) continue;
+    const k = pairKey(e.heard, e.term);
+    out.delete(k);
+    out.set(k, {
+      term: e.term,
+      heard: e.heard,
+      status: e.status as LearnStatus,
+      evidence: e.evidence === "audio" ? "audio" : "none",
+      id: e.id,
+      at: e.t,
+    });
+  }
+  return [...out.values()].reverse();
 }

@@ -14,13 +14,20 @@
  * - The words to review: `GET /calls/{id}/vocab` carries `review`, the call's open proposals with
  *   the lines they rest on, and the workspace's unconfirmed entries.
  * - `POST /vocab/suggest`: ranked candidate words from a call or a text (`vocab/suggest.ts`).
+ * - The words fixed while dictating (DC-L5): `GET /vocab?dictation=true` lists each pair of the
+ *   dictation log's `dictation.learn` events at its latest status, and `POST /vocab/approve` and
+ *   `/reject` with `dictation: true` answer them as the chip does: approve writes the pair's
+ *   `scope: dictation` entry and `accepted`, reject writes `rejected` (and takes a learned pair
+ *   back out), so the pair is never proposed again. `ignored` is a status of dictation only.
  *
  * Not built yet, answered `501`: `check` (it needs the model's tokenizer on disk).
  */
 
+import { type ReviewPair, reviewPairs } from "../../../core/dictation/learn.ts";
 import { formatWall } from "../../../core/log/clock.ts";
 import { isAgentAuthor } from "../../../core/log/events.ts";
 import type { CallView } from "../../../core/log/fold.ts";
+import { learnPair, unlearnPair } from "../../dictation/vocab.ts";
 import { ProviderError } from "../../llm/provider.ts";
 import { reasonText } from "../../query/ask.ts";
 import { STOPWORDS } from "../../query/bm25.ts";
@@ -193,6 +200,59 @@ const WORKSPACE = {
   type: "string",
   doc: "The workspace whose file this is; default: the global file.",
 } as const;
+
+/** The pairs fixed while dictating (DC-L5); none where dictation does not run (server mode). */
+function dictationPairs(app: ApiApp): ReviewPair[] {
+  return reviewPairs(app.dictation?.()?.log.events() ?? []);
+}
+
+/**
+ * Approve or reject the pairs fixed while dictating whose term is one of `keys` (DC-L5), as the
+ * chip's Learn and Not a word do. Approve takes the pairs still waiting (`proposed`, `ignored`);
+ * reject those and a learned one, which leaves the vocabulary.
+ */
+async function answerDictation(
+  app: ApiApp,
+  keys: ReadonlySet<string>,
+  action: "approve" | "reject",
+): Promise<{ path: string; done: string[] }> {
+  const d = app.dictation?.();
+  if (!d) throw new HttpError(404, "not_found", "dictation runs in the desktop app only");
+  const open = action === "approve" ? ["proposed", "ignored"] : ["proposed", "ignored", "accepted"];
+  const pairs = reviewPairs(d.log.events()).filter(
+    (p) => keys.has(termKey(p.term)) && open.includes(p.status),
+  );
+  const path = targetPath(app, undefined);
+  const date = today(app.now());
+  const touched = pairs.filter((p) => action === "approve" || p.status === "accepted");
+  if (touched.length > 0) {
+    await editFile(path, (file) => {
+      let next = file;
+      for (const p of touched) {
+        const pair = { id: p.id, term: p.term, heard: p.heard };
+        try {
+          next = action === "approve" ? learnPair(next, pair, date) : unlearnPair(next, pair);
+        } catch (err) {
+          throw new HttpError(409, "call_word", (err as Error).message, { term: p.term });
+        }
+      }
+      return next === file ? null : { file: next, result: null };
+    });
+    app.vocabChanged();
+  }
+  const status = action === "approve" ? "accepted" : "rejected";
+  for (const p of pairs) {
+    d.log.append({
+      type: "dictation.learn",
+      id: p.id,
+      term: p.term,
+      heard: p.heard,
+      status,
+      evidence: p.evidence,
+    });
+  }
+  return { path, done: [...new Set(pairs.map((p) => p.term))] };
+}
 
 export function vocabRoutes(r: Router<ApiApp>): void {
   // --- per call ---------------------------------------------------------------------------------
@@ -384,22 +444,31 @@ export function vocabRoutes(r: Router<ApiApp>): void {
     "/vocab",
     doc({
       id: "vocab.list",
-      doc: "The user's vocabulary: the files read and their entries, global and for a workspace.",
+      doc: "The user's vocabulary: the files read and their entries, global and for a workspace. With `dictation`, also the words fixed while dictating, each pair at its latest status: `proposed` and `ignored` wait for an answer (`POST /vocab/approve` or `/reject` with `dictation: true`), `accepted` and `rejected` have one.",
       query: {
         workspace: WORKSPACE,
         unconfirmed: { type: "boolean", doc: "Only the entries waiting for the user's yes." },
+        dictation: {
+          type: "boolean",
+          doc: "Add `dictation`: the words fixed while dictating, newest first (DC-L5).",
+        },
       },
       ok: 200,
     }),
     async (c) => {
       const workspace = checkWorkspace(c.query.raw("workspace"));
       const out = await mergedFor(c.app, workspace);
-      const unconfirmed = c.query.raw("unconfirmed");
-      const entries =
-        unconfirmed === "true" || unconfirmed === ""
-          ? out.entries.filter((e) => !e.confirmed)
-          : out.entries;
-      return json(200, { workspace: workspace ?? null, files: out.files, entries });
+      const flag = (name: string) => {
+        const v = c.query.raw(name);
+        return v === "true" || v === "";
+      };
+      const entries = flag("unconfirmed") ? out.entries.filter((e) => !e.confirmed) : out.entries;
+      return json(200, {
+        workspace: workspace ?? null,
+        files: out.files,
+        entries,
+        ...(flag("dictation") ? { dictation: dictationPairs(c.app) } : {}),
+      });
     },
   );
 
@@ -500,15 +569,38 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         id: `vocab.${action}`,
         doc:
           action === "approve"
-            ? "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed."
-            : "Reject words: unconfirmed entries of the file, or a call's proposals when `call` is named. A rejected word is not proposed again.",
-        body: { terms: "string[]", "call?": "string", "workspace?": "string" },
+            ? "Approve words: unconfirmed entries of the file, or a call's proposals when `call` is named, which are then written into the file, confirmed. With `dictation: true`, the words fixed while dictating: each waiting pair of the term becomes its `scope: dictation` entry, as the chip's Learn does."
+            : "Reject words: unconfirmed entries of the file, or a call's proposals when `call` is named. A rejected word is not proposed again. With `dictation: true`, the words fixed while dictating, as the chip's Not a word: a learned pair also leaves the file.",
+        body: {
+          terms: "string[]",
+          "call?": "string",
+          "workspace?": "string",
+          "dictation?": "boolean",
+        },
         ok: 200,
       }),
       async (c) => {
-        const b = await c.body<{ terms: string[]; call?: string; workspace?: string }>();
+        const b = await c.body<{
+          terms: string[];
+          call?: string;
+          workspace?: string;
+          dictation?: boolean;
+        }>();
         if (b.terms.length === 0) throw new HttpError(400, "bad_field", "terms is empty");
         const keys = new Set(b.terms.map(termKey));
+        if (b.dictation === true) {
+          // Dictation words live in the global file and belong to no call or workspace.
+          if (b.call || b.workspace)
+            throw new HttpError(400, "bad_field", "dictation takes no call or workspace", {
+              field: "dictation",
+            });
+          const { path, done } = await answerDictation(c.app, keys, action);
+          return json(200, {
+            ok: true,
+            path,
+            [action === "approve" ? "approved" : "rejected"]: done,
+          });
+        }
         const status = action === "approve" ? "accepted" : "rejected";
         let workspace = checkWorkspace(b.workspace);
         const done: string[] = [];

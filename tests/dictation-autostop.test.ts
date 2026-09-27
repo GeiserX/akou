@@ -105,7 +105,7 @@ function rig(
 }
 
 const stops = (r: Rig) => r.sent.filter((x) => x.c.type === "session.stop");
-const events = (r: Rig): DictationEvent[] => r.log.events();
+const events = (r: Rig): readonly DictationEvent[] => r.log.events();
 
 /** The helper's answer to `session.stop`: it ends the session as a tap. */
 function endAsTap(r: Rig, id = "1"): void {
