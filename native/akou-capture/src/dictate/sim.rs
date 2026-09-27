@@ -242,7 +242,7 @@ pub fn run(
         Some(l) => match Command::parse(&l) {
             Ok(c) => d.command(c, t_ns, out),
             Err(e) => {
-                out.line(p::warn("bad-command", &format!("{e}: {l}")));
+                out.line(p::warn("bad-command", &e));
                 true
             }
         },
