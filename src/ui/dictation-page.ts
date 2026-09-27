@@ -20,7 +20,9 @@
 
 import type { Grant } from "../main/dictation/protocol.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
+import { cueStyle } from "./dictation-cues.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
+import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
@@ -47,6 +49,10 @@ export interface DictationGrants {
   mic: Grant;
   accessibility: Grant;
 }
+
+/** The sounds and the pill: together they decide what `auto` plays now (DC-O3). */
+const SOUNDS_KEY = "dictation.sounds";
+const PILL_KEY = "dictation.pill";
 
 /** The master switch, drawn above the groups. */
 export const ENABLE_KEY = "dictation.enabled";
@@ -161,6 +167,10 @@ export class DictationSettings {
   private recorders: KeyRecorder[] = [];
   /** Dictation's setup (DC-N3), drawn instead of the groups while it runs. */
   private setup: DictationSetup | null = null;
+  /** The inputs `GET /devices` lists for the microphone picker (DC-U4); null in server mode. */
+  private mics: MicList | null = null;
+  /** The microphone's live level while the page shows it. */
+  private meter: { close(): void } | null = null;
 
   constructor(
     private readonly t: Transport,
@@ -170,17 +180,19 @@ export class DictationSettings {
   async load(): Promise<void> {
     const read = ++this.reads;
     const app = this.mode === "app";
-    const [cfg, server, status, grants] = await Promise.all([
+    const [cfg, server, status, grants, mics] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config"),
       app
         ? Promise.resolve(null)
         : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
       app ? this.t.request<{ app?: { platform?: string } }>("GET", "/status") : null,
       app ? this.readGrants() : null,
+      app ? readMics(this.t) : null,
     ]);
     if (read !== this.reads) return;
     this.platform = String(status?.body?.app?.platform ?? "");
     this.grants = grants;
+    this.mics = mics;
     if (cfg.status !== 200) {
       this.close();
       replace(
@@ -203,6 +215,7 @@ export class DictationSettings {
 
   private draw(served?: number): void {
     this.stopRecording();
+    this.stopMeter();
     this.recorders = [];
     this.shown = {};
     const top =
@@ -247,6 +260,7 @@ export class DictationSettings {
         : null,
       top ? this.permissions() : null,
     );
+    this.soundsNow();
   }
 
   /** One key's row, saving that key alone on change; the dictation keys get their recorder. */
@@ -271,8 +285,11 @@ export class DictationSettings {
       this.recorders.push(r);
       f.input.after(r.root);
     }
-    const input = f.input;
+    let input = f.input;
+    if (key === MIC_KEY && input instanceof HTMLInputElement) input = this.micField(input);
+    if (key === SOUNDS_KEY) input.after(h("small", { id: "dictation-sounds-now", class: "hint" }));
     input.addEventListener("change", () => {
+      if (key === SOUNDS_KEY || key === PILL_KEY) this.soundsNow();
       // The switch turned on with a grant missing runs the setup instead (DC-U2, DC-N3).
       if (key === ENABLE_KEY && input instanceof HTMLInputElement && input.checked) {
         if (this.missingGrant()) {
@@ -284,6 +301,51 @@ export class DictationSettings {
       void this.save(f.row);
     });
     return f.row;
+  }
+
+  /**
+   * The microphone's picker from `GET /devices` in place of the text box, or the reason akou gave
+   * no list beside it, and the live level while the page is open (DC-U4).
+   */
+  private micField(input: HTMLInputElement): HTMLInputElement | HTMLSelectElement {
+    let field: HTMLInputElement | HTMLSelectElement = input;
+    let note: HTMLElement | null = null;
+    if (this.mics && "inputs" in this.mics && !input.disabled) {
+      field = micPicker(input, input.value, this.mics.inputs);
+      input.replaceWith(field);
+    } else if (this.mics && "error" in this.mics) {
+      note = micNote(this.mics.error);
+    }
+    // A refused microphone has no level to show; the setup's own step says so.
+    const meter = this.grants && !grantOk(this.grants.mic) ? null : micMeter(this.t);
+    this.meter = meter;
+    field.after(...[meter?.root, note].filter((x): x is HTMLElement => !!x));
+    return field;
+  }
+
+  private stopMeter(): void {
+    this.meter?.close();
+    this.meter = null;
+  }
+
+  /** What the sounds do now, since `auto` follows the pill (DC-O3). */
+  private soundsNow(): void {
+    const out = this.root.querySelector<HTMLElement>("#dictation-sounds-now");
+    if (!out) return;
+    const now = (k: string) =>
+      this.root.querySelector<HTMLSelectElement>(`select[data-key="${k}"]`)?.value ??
+      this.settings[k];
+    const sounds = now(SOUNDS_KEY);
+    const pill = now(PILL_KEY);
+    const style = cueStyle(sounds, pill);
+    out.textContent =
+      sounds === "off" && pill === "off"
+        ? " Now: a dictation neither shows nor sounds."
+        : sounds === "off" || sounds === "soft" || sounds === "click"
+          ? ""
+          : style
+            ? " Now: soft sounds, since the pill is off."
+            : " Now: silent, since the pill shows.";
   }
 
   /**
@@ -364,6 +426,7 @@ export class DictationSettings {
   /** The page closed: no recorder holds the keys, and a setup left half way is dropped. */
   close(): void {
     this.stopRecording();
+    this.stopMeter();
     this.setup?.stop();
     this.setup = null;
   }

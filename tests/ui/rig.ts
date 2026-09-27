@@ -25,6 +25,7 @@ import {
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
 import type { DictationRow } from "../../src/ui/dictation-history.ts";
+import type { CaptureInput } from "../../src/ui/dictation-mic.ts";
 import type { DictationGrants } from "../../src/ui/dictation-page.ts";
 import type { ConfigReply, SchemaEntry } from "../../src/ui/settings.ts";
 import { type AppRig, appRig, type RigOptions } from "../api-helpers.ts";
@@ -431,6 +432,15 @@ export async function proxyRoute(context: BrowserContext, from: string, to: stri
   );
 }
 
+/** What `GET /devices` answers: the inputs, or a refusal with its status and message. */
+export type DevicesFixture = CaptureInput[] | { status: number; message: string };
+
+function devicesReply(d: DevicesFixture): { status: number; json: unknown } {
+  return Array.isArray(d)
+    ? { status: 200, json: { backend: "fake", inputs: d, outputs: [] } }
+    : { status: d.status, json: { error: "unavailable", message: d.message } };
+}
+
 export interface DictationFixture {
   /** Every `PATCH /config` body the page sent that named a fixture key. */
   patches: Record<string, unknown>[];
@@ -470,6 +480,8 @@ export async function dictationFixture(
     grants?: DictationGrants | null;
     /** The OS `GET /status` reports, so a test runs as macOS on any machine. */
     platform?: string;
+    /** `GET /devices`: its inputs, or a refusal; left out, the app answers (404 until PG-A8). */
+    devices?: DevicesFixture;
   } = {},
 ): Promise<DictationFixture> {
   const schema = o.schema ?? DICTATION_SCHEMA;
@@ -496,6 +508,13 @@ export async function dictationFixture(
           json: { ...real, app: { ...real.app, platform: o.platform } },
         });
       },
+    );
+  }
+  const devices = o.devices;
+  if (devices) {
+    await page.route(
+      (u) => u.pathname === `${prefix}/devices`,
+      (route) => route.fulfill(devicesReply(devices)),
     );
   }
   await page.route(
@@ -705,6 +724,7 @@ export async function windowPage(
     grants?: DictationGrants;
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
+    devices?: DevicesFixture;
   } = {},
 ): Promise<ViewPage & { patches: Record<string, unknown>[] }> {
   const settings = { ...defaults(DICTATION_SCHEMA), ...o.settings };
@@ -715,6 +735,10 @@ export async function windowPage(
   };
   const api = async (p: { method: string; path: string; body?: unknown }) => {
     if (p.path === "/status") return { status: 200, body: await status() };
+    if (p.path === "/devices" && o.devices) {
+      const r = devicesReply(o.devices);
+      return { status: r.status, body: r.json };
+    }
     if (p.path === "/dictation")
       return {
         status: 200,

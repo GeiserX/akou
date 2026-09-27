@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
+import type { CaptureInput } from "../../src/ui/dictation-mic.ts";
 import { type DictationGrants, onDictationPage } from "../../src/ui/dictation-page.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
@@ -20,6 +21,7 @@ import type { PillState } from "../../src/ui/pill-protocol.ts";
 import { tempDir } from "../helpers.ts";
 import {
   CLIPBOARD_PERMISSIONS,
+  type DevicesFixture,
   DICTATION_SCHEMA,
   type DictationFixture,
   dictationFixture,
@@ -1335,6 +1337,173 @@ describe("DC-U3: the dictation key recorder", () => {
       } finally {
         await w.close();
       }
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation page", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-mic-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const MICS: CaptureInput[] = [
+    { id: "mic-builtin", name: "Built-in Microphone", default: true, transport: "built-in" },
+    { id: "mic-usb", name: "Desk Mic", transport: "usb" },
+    { id: "mic-bt", name: "Headset", transport: "bluetooth" },
+  ];
+  const mic = "#dictation [data-key='dictation.mic']:not(div)";
+  const options = (page: Page) =>
+    page.$$eval(`${mic} option`, (o) =>
+      o.map((x) => [(x as HTMLOptionElement).value, x.textContent]),
+    );
+  const openPage = async (o: { devices?: DevicesFixture; settings?: Record<string, unknown> }) => {
+    let fx: DictationFixture | null = null;
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        fx = await dictationFixture(p, { devices: o.devices });
+        Object.assign(fx.settings, o.settings);
+      },
+    });
+    await page.click("#dictation-open");
+    await page.waitForSelector(mic);
+    return { page, fx: fx as unknown as DictationFixture };
+  };
+
+  test(
+    "lists the inputs with System default first and the transport beside each; a choice saves dictation.mic alone",
+    async () => {
+      const { page, fx } = await openPage({ devices: MICS });
+      expect(await page.$eval(mic, (e) => e.tagName)).toBe("SELECT");
+      expect(await options(page)).toEqual([
+        ["", "System default (Built-in Microphone (built-in))"],
+        ["mic-builtin", "Built-in Microphone (built-in)"],
+        ["mic-usb", "Desk Mic (USB)"],
+        ["mic-bt", "Headset (Bluetooth)"],
+      ]);
+      expect(await page.inputValue(mic)).toBe("");
+      expect(fx.patches).toEqual([]);
+
+      await page.selectOption(mic, "mic-usb");
+      await until(() => fx.patches.length === 1, 5000, "the mic saved");
+      await page.selectOption(mic, "");
+      await until(() => fx.patches.length === 2, 5000, "the default saved");
+      expect(fx.patches).toEqual([{ "dictation.mic": "mic-usb" }, { "dictation.mic": "" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a saved mic that is not plugged in stays chosen, marked, and is never replaced by opening the page",
+    async () => {
+      const { page, fx } = await openPage({
+        devices: MICS,
+        settings: { "dictation.mic": "mic-gone" },
+      });
+      expect(await page.inputValue(mic)).toBe("mic-gone");
+      expect((await options(page)).at(-1)).toEqual(["mic-gone", "mic-gone (not connected)"]);
+      await page.click("#dictation-close");
+      await page.click("#dictation-open");
+      await page.waitForSelector(mic);
+      expect(await page.inputValue(mic)).toBe("mic-gone");
+      expect(fx.patches).toEqual([]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with no list the field stays a text box with the reason: an app without the route, a refusal",
+    async () => {
+      // Positive control for the picker: this app has no `GET /devices` yet, and answers 404.
+      const bare = await openPage({ settings: { "dictation.mic": "mic-usb" } });
+      expect(await bare.page.$eval(mic, (e) => e.tagName)).toBe("INPUT");
+      expect(await bare.page.inputValue(mic)).toBe("mic-usb");
+      expect(await text(bare.page, "#dictation-mic-note")).toBe(
+        "Type a device id: this akou does not list its microphones yet.",
+      );
+      await bare.page.fill(mic, "mic-bt");
+      await bare.page.press(mic, "Tab");
+      await until(() => bare.fx.patches.length === 1, 5000, "the typed id saved");
+      expect(bare.fx.patches).toEqual([{ "dictation.mic": "mic-bt" }]);
+
+      const refused = await openPage({
+        devices: { status: 503, message: "the capture helper is in file-only mode" },
+      });
+      expect(await refused.page.$eval(mic, (e) => e.tagName)).toBe("INPUT");
+      expect(await text(refused.page, "#dictation-mic-note")).toBe(
+        "Type a device id: the capture helper is in file-only mode.",
+      );
+      // A browser cannot hear the helper, so it shows no meter.
+      expect(await refused.page.$("#dictation-mic-level")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "in the window the meter beside the picker moves on the helper's level while the page is open",
+    async () => {
+      const w = await windowPage(rig, { devices: MICS });
+      try {
+        const p = w.page;
+        const asked = () =>
+          w.requests.filter((r) => r.name === "watchDictationMic").map((r) => r.params);
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-mic-level");
+        expect(
+          await p.$eval(
+            "#dictation-mic-level",
+            (m) => (m.previousElementSibling as HTMLElement).dataset.key,
+          ),
+        ).toBe("dictation.mic");
+        await until(() => asked().length === 1, 5000, "the meter asked");
+        expect(asked()).toEqual([{ on: true }]);
+        const meter = () => p.$eval("#dictation-mic-level", (m) => (m as HTMLMeterElement).value);
+        expect(await meter()).toBe(-60);
+        await w.send("dictationLevel", { db: -24 });
+        expect(await meter()).toBe(-24);
+        await w.send("dictationLevel", { db: -38 });
+        expect(await meter()).toBe(-38);
+
+        // Closing the page lets go of the mic.
+        await p.click("#dictation-close");
+        await until(() => asked().length === 2, 5000, "the meter stopped");
+        expect(asked()).toEqual([{ on: true }, { on: false }]);
+      } finally {
+        await w.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the sounds row says what auto does now, following the pill, and warns when nothing shows",
+    async () => {
+      const { page, fx } = await openPage({});
+      const now = () => text(page, "#dictation-sounds-now");
+      const pick = (key: string, v: string) =>
+        page.selectOption(`#dictation [data-key='${key}']:not(div)`, v);
+      expect(fx.settings["dictation.sounds"]).toBe("auto");
+      expect(fx.settings["dictation.pill"]).toBe("bottom");
+      expect(await now()).toBe("Now: silent, since the pill shows.");
+      await pick("dictation.pill", "off");
+      expect(await now()).toBe("Now: soft sounds, since the pill is off.");
+      await pick("dictation.sounds", "off");
+      expect(await now()).toBe("Now: a dictation neither shows nor sounds.");
+      await pick("dictation.sounds", "click");
+      expect(await now()).toBe("");
+      await until(() => fx.patches.length === 3, 5000, "each change saved");
+      expect(fx.patches).toEqual([
+        { "dictation.pill": "off" },
+        { "dictation.sounds": "off" },
+        { "dictation.sounds": "click" },
+      ]);
     },
     UI_TIMEOUT,
   );
