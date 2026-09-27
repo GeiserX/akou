@@ -31,8 +31,11 @@ export interface PillSink {
   chip(c: Chip): void;
 }
 
-/** The preview keeps the last words that fit two lines of the pill. */
-export const PREVIEW_CHARS = 120;
+/**
+ * The preview keeps the last words that fit two lines of the pill: ordinary words at 13 px in its
+ * 420 px measure about 105 characters on macOS's font, fewer on a wider one, so 90 leaves room.
+ */
+export const PREVIEW_CHARS = 90;
 
 /** The end of a long preview, from a word start, after an ellipsis. */
 export function previewTail(text: string): string {

@@ -9,16 +9,21 @@
  *
  * - Add: `POST /vocab {term, heard, scope: "dictation"}`. Dictation always applies such an entry
  *   and calls never read it, since a heard form such as "versal" would otherwise rewrite call
- *   transcripts. Adding forms to a term the file has keeps its forms and its scope.
+ *   transcripts. Adding forms to a term the file has keeps its forms, its scope, its note, its
+ *   `decode: false` and whether it is confirmed: the route replaces the whole entry, so the page
+ *   sends them back. An akou whose route refuses `scope` gets no unscoped write instead: that
+ *   would put a dictation fix into calls.
  * - Use in calls too: the same route without `scope`, which makes it an ordinary entry.
  * - Remove: `DELETE /vocab/{term}`, one click.
  * - Import: a text file, one term per line, through `POST /vocab/import`, into the same file.
+ *   That route takes no `scope` yet, so imported words apply to calls too, and the page says so.
  *
  * Dictation belongs to no workspace, so the page reads `GET /vocab` with none: the global file and
  * `vocab.extraFiles`. Only the global file is changed here; an entry of another file is shown with
  * its file's path.
  */
 
+import { tokenize } from "../core/vocab/correct.ts";
 import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
@@ -33,6 +38,33 @@ export interface DictionaryEntry {
   file: string;
   /** The entry's own `scope` key: `dictation` is read by dictation only (DC-L6). */
   entryScope?: "dictation";
+  note?: string;
+  /** `false` keeps the entry out of decoding. */
+  decode?: boolean | number;
+}
+
+/** What `POST /vocab` takes from this page. */
+interface WriteBody {
+  term: string;
+  heard: string[];
+  confirmed?: boolean;
+  note?: string;
+  decode?: false;
+  scope?: "dictation";
+}
+
+/**
+ * An entry of the file as `POST /vocab` writes it back unchanged: the route replaces the whole
+ * entry, so a field left out is lost. A numeric `decode` has no form the route takes.
+ */
+function kept(e: DictionaryEntry): WriteBody {
+  return {
+    term: e.term,
+    heard: e.heard,
+    confirmed: e.confirmed,
+    ...(e.note ? { note: e.note } : {}),
+    ...(e.decode === false ? { decode: false as const } : {}),
+  };
 }
 
 /** The heard forms typed in one box, comma-separated. */
@@ -43,7 +75,15 @@ export function heardForms(typed: string): string[] {
     .filter((x) => x !== "");
 }
 
-const same = (a: string, b: string) => a.toLowerCase() === b.toLowerCase();
+/** Two terms are the same entry under the server's key (`termKey`): words folded, accents off. */
+const key = (s: string) =>
+  tokenize(s)
+    .map((t) => t.folded)
+    .join(" ");
+const same = (a: string, b: string) => key(a) === key(b);
+
+/** The one refusal of an akou whose `POST /vocab` does not take `scope` yet. */
+const NO_SCOPE = "This akou cannot save dictation-only words yet; update it.";
 
 export class DictationDictionary {
   readonly root = h("div", { class: "dictation-dictionary" });
@@ -95,7 +135,12 @@ export class DictationDictionary {
       h(
         "p",
         { class: "hint" },
-        h("label", {}, "Import a text file, one word per line: ", this.file),
+        h(
+          "label",
+          {},
+          "Import a text file, one word per line. Imported words apply to calls too: ",
+          this.file,
+        ),
       ),
       this.list,
     );
@@ -152,7 +197,7 @@ export class DictationDictionary {
                     class: "calls-too",
                     type: "button",
                     title: "Calls read it too, under their own rules",
-                    on: { click: () => void this.write({ term: e.term, heard: e.heard }) },
+                    on: { click: () => void this.write(kept(e)) },
                   },
                   "Use in calls too",
                 )
@@ -175,12 +220,12 @@ export class DictationDictionary {
     }
     const heard = heardForms(this.heard.value);
     const had = this.entries.find((e) => e.scope === "global" && same(e.term, term));
-    // Adding forms to a term the file has keeps its spelling, its forms and its scope: the route
-    // replaces the whole entry.
+    // Adding forms to a term the file has keeps its spelling, its forms, its scope and the rest of
+    // the entry: the route replaces the whole entry.
     const all = [...(had?.heard ?? [])];
     for (const x of heard) if (!all.some((y) => same(x, y))) all.push(x);
     const scoped = !had || had.entryScope === "dictation";
-    const entry = { term: had?.term ?? term, heard: all };
+    const entry = had ? { ...kept(had), heard: all } : { term, heard: all };
     if (await this.write(scoped ? { ...entry, scope: "dictation" } : entry)) {
       this.term.value = "";
       this.heard.value = "";
@@ -188,10 +233,13 @@ export class DictationDictionary {
   }
 
   /** Writes one entry; the refusal, if any, is shown beside the form. */
-  private async write(body: { term: string; heard: string[]; scope?: string }): Promise<boolean> {
-    const r = await this.t.request("POST", "/vocab", body);
+  private async write(body: WriteBody): Promise<boolean> {
+    const r = await this.t.request<{ error?: string; field?: string }>("POST", "/vocab", body);
     if (r.status >= 400) {
-      this.refused(message(r.body, `the word was not saved (HTTP ${r.status})`));
+      const noScope = r.body?.error === "unknown_field" && r.body.field === "scope";
+      this.refused(
+        noScope ? NO_SCOPE : message(r.body, `the word was not saved (HTTP ${r.status})`),
+      );
       return false;
     }
     this.issue.hidden = true;

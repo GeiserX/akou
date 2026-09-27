@@ -49,7 +49,7 @@ afterAll(async () => {
 async function dictationPage(
   origin?: string,
   o: { fixture?: boolean } = {},
-): Promise<{ page: Page; fx: DictationFixture }> {
+): Promise<{ page: Page; fx: DictationFixture | null }> {
   const context = await (await launch()).newContext();
   contexts.push(context);
   const local = `http://127.0.0.1:${rig.port}`;
@@ -59,7 +59,7 @@ async function dictationPage(
   // Without the fixture the keys, the count and the save are the server's own.
   const fx =
     o.fixture === false
-      ? (null as unknown as DictationFixture)
+      ? null
       : await dictationFixture(page, {
           schema: { ...DICTATION_SCHEMA, ...DICTATION_SERVER_SCHEMA },
           server: { slots: 1, engine: "auto", served_last_hour: 3 },
@@ -80,6 +80,7 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
     "shows the Server group and the count only, saves one key, and needs no microphone",
     async () => {
       const { page, fx } = await dictationPage();
+      if (!fx) throw new Error("the fixture is on unless turned off");
       expect(await page.getAttribute("#server-nav [aria-current='page']", "data-page")).toBe(
         "dictation",
       );

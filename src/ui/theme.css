@@ -784,7 +784,8 @@ dialog {
   border-color: var(--rec);
 }
 .setting .issue,
-.dictation-enable .issue {
+.dictation-enable .issue,
+.dictation-dictionary .issue {
   color: var(--rec);
 }
 .apps-rules {
@@ -813,15 +814,18 @@ dialog {
 .apps-rules button {
   padding: 6px 8px;
 }
-.vocab-entries {
-  border-collapse: collapse;
-  width: 100%;
+.dictation-dictionary ul {
+  list-style: none;
+  padding: 0;
 }
-.vocab-entries td,
-.vocab-entries th {
-  border-bottom: 1px solid var(--line);
-  padding: 2px 6px;
-  text-align: left;
+.dictation-dictionary li {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+#dictionary-issue {
+  margin-left: 6px;
 }
 #share-notes {
   border-left: 1px solid var(--line);
