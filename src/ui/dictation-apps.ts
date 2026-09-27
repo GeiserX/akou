@@ -15,7 +15,7 @@
 
 import { h } from "./dom.ts";
 import { message } from "./notepad.ts";
-import type { Transport } from "./protocol.ts";
+import type { Reply, Transport } from "./protocol.ts";
 
 /**
  * A rule's fields and their choices, as the registry's `apps` validator takes them
@@ -71,7 +71,16 @@ export function nextDictatedApp(
   let timer: ReturnType<typeof setTimeout> | null = null;
   type Page = { items?: { at?: unknown; app?: unknown }[] };
   const read = async (query: string): Promise<Page["items"] | null> => {
-    const r = await t.request<Page>("GET", `/dictations?${query}`);
+    let r: Reply<Page>;
+    try {
+      r = await t.request<Page>("GET", `/dictations?${query}`);
+    } catch (err) {
+      // A request that never answered (the app went away) ends the wait like a refusal does.
+      if (stopped) return null;
+      stopped = true;
+      failed(`the dictations could not be read: ${(err as Error).message}`);
+      return null;
+    }
     if (stopped) return null;
     if (r.status >= 400 || !Array.isArray(r.body?.items)) {
       stopped = true;
