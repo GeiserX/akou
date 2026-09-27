@@ -47,6 +47,16 @@ function fakeRemote() {
 }
 
 const text = (page: Page, sel: string) => page.textContent(sel).then((t) => t?.trim() ?? "");
+/** The computed colour of `sel`, or of the refusal colour (`--rec`) when `sel` is null. */
+const colour = (page: Page, sel: string | null) =>
+  page.evaluate((sel) => {
+    if (sel) return getComputedStyle(document.querySelector(sel) as Element).color;
+    const probe = document.body.appendChild(document.createElement("span"));
+    probe.style.color = "var(--rec)";
+    const c = getComputedStyle(probe).color;
+    probe.remove();
+    return c;
+  }, sel);
 
 /** Opens the Dictation page; `answered` counts the `GET /v1/dictation` answers it read. */
 async function openPage(
@@ -123,6 +133,8 @@ describe("DC-R4: the Test button on the real app", () => {
       const refused = await runTest(page);
       expect(refused.line).toStartWith("401: ");
       expect(refused.cls).toBe("issue");
+      // Marked like every other refusal on the page, not body text.
+      expect(await colour(page, "#dictation-remote-result")).toBe(await colour(page, null));
       expect(await page.content()).not.toContain(WRONG);
       expect(await page.content()).not.toContain(RIGHT);
 
@@ -239,6 +251,7 @@ describe("DC-R3: the remote's standing on the page", () => {
       expect(await text(page, "#dictation-remote-standing")).toStartWith(
         "The remote akou is down: 3 dictations in a row failed: http://127.0.0.1:9 is unreachable.",
       );
+      expect(await colour(page, "#dictation-remote-standing")).toBe(await colour(page, null));
       // No address set: the app's refusal, not a test result.
       const r = await runTest(page);
       expect(r.line).toBe("dictation.remote.url is empty: set the akou to test");
