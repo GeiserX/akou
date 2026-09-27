@@ -344,6 +344,7 @@ mod tests {
             warm,
             bluetooth: false,
             ring_ms: super::super::mic::RING_MS,
+            os: Os::current(),
         }
     }
 
