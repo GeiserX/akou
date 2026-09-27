@@ -150,6 +150,8 @@ export class DictationSession {
   private secureInput = false;
   /** Dictations waiting for their insert's result, by the helper's session id. */
   private readonly inserts = new Map<string, string>();
+  /** Dictations ended and not yet decoded: a decode runs one at a time, after the last. */
+  private decoding = 0;
   /** Every decode and insert in flight, for tests and a clean stop. */
   private work: Promise<void> = Promise.resolve();
   /** The `rebind`s sent and not answered yet, in order: the helper answers each in turn. */
@@ -161,6 +163,15 @@ export class DictationSession {
     if (state === this.state) return;
     this.state = state;
     this.o.onState?.(state);
+  }
+
+  /**
+   * The state once a dictation's decode or insert settles: what is still in flight, else `idle`.
+   * A newer session listening owns the state, and so does a helper starting again.
+   */
+  private settle(): void {
+    if (this.cur || this.state === "starting") return;
+    this.set(this.decoding > 0 ? "transcribing" : this.inserts.size > 0 ? "inserting" : "idle");
   }
 
   private write(d: DictationDraft): void {
@@ -248,7 +259,7 @@ export class DictationSession {
           method: m.method,
           receipt_ms: m.receipt_ms,
         });
-        if (this.inserts.size === 0 && this.state === "inserting") this.set("idle");
+        this.settle();
         return;
       }
       case "insert.failed": {
@@ -256,7 +267,7 @@ export class DictationSession {
         if (!id) return;
         this.inserts.delete(m.id);
         this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
-        if (this.inserts.size === 0 && this.state === "inserting") this.set("idle");
+        this.settle();
         return;
       }
       default:
@@ -335,9 +346,10 @@ export class DictationSession {
     this.write({ type: "dictation.ended", id, reason, seconds });
     if (reason === "cancel" || reason === "stop") {
       this.write({ type: "dictation.cancelled", id });
-      this.set("idle");
+      this.settle();
       return;
     }
+    this.decoding++;
     this.set("transcribing");
     this.work = this.work.then(() => this.transcribe(id, c, samples, engine));
   }
@@ -354,9 +366,10 @@ export class DictationSession {
 
   /** The session will not be inserted: the helper stops holding Escape and Enter now. */
   private notInserted(helperId: string, d: DictationDraft): void {
+    this.decoding--;
     this.write(d);
     this.o.send({ type: "settled", id: helperId });
-    this.set("idle");
+    this.settle();
   }
 
   private async transcribe(
@@ -389,8 +402,9 @@ export class DictationSession {
       return;
     }
     const text = r.text;
+    this.decoding--;
     this.inserts.set(c.helperId, id);
-    this.set("inserting");
+    this.settle();
     this.o.send({
       type: "insert",
       id: c.helperId,

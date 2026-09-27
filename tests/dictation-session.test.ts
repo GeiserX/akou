@@ -444,6 +444,59 @@ describe("the helper's stdout and stderr are two pipes", () => {
     expect(got).toEqual([320, 160]);
   });
 
+  test("the last session's decode settling never takes the state from the session listening", async () => {
+    const t = tempDir("akou-dict-overlap-");
+    cleanups.push(t.cleanup);
+    const log = new DictationLog(t.dir);
+    cleanups.push(() => log.close());
+    const states: string[] = [];
+    const sent: AppToHelper[] = [];
+    let release: () => void = () => {};
+    const held = new Promise<void>((r) => {
+      release = r;
+    });
+    let decodes = 0;
+    const s = new DictationSession({
+      log,
+      engine: () => ({
+        name: "fast",
+        decode: async (): Promise<Decoded> => {
+          // The first decode waits until the test lets it go; the next ones answer at once.
+          if (decodes++ === 0) await held;
+          return { text: "ok", words: [], language: null, model: "m", ms: 1, spans: 1 };
+        },
+      }),
+      send: (c) => sent.push(c),
+      bindings: () => ({ hotkey: RC, draft: "", fixLast: "", pasteLast: "", activation: "hold" }),
+      now: () => Date.now(),
+      onState: (st) => states.push(st),
+    });
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(320));
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    // The next session starts while the first drains, and is still listening when its decode ends.
+    s.onMessage({ type: "session.started", id: "2", target: TARGET, capture_ns: "0" });
+    s.onPacket(packet(160, 0));
+    await until(() => decodes === 1, 2000, "the first decode to start");
+    release();
+    await until(() => sent.some((c) => c.type === "insert"), 2000, "the first insert");
+    s.onMessage({ type: "inserted", id: "1", method: "paste", receipt_ms: 1 });
+    expect(s.state).toBe("listening");
+    // The second one ends: its decode and insert own the state now, then idle.
+    s.onMessage({ type: "session.ended", id: "2", reason: "release" });
+    await until(() => sent.filter((c) => c.type === "insert").length === 2, 2000, "the 2nd insert");
+    expect(s.state).toBe("inserting");
+    s.onMessage({ type: "inserted", id: "2", method: "paste", receipt_ms: 1 });
+    expect(states).toEqual([
+      "listening",
+      "transcribing",
+      "listening",
+      "transcribing",
+      "inserting",
+      "idle",
+    ]);
+  });
+
   test("the next session's first packet, read while the last one drains, starts the next", async () => {
     const { s, got } = session();
     s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
