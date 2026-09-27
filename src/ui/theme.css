@@ -137,7 +137,8 @@ button.pill {
   background: transparent;
   cursor: pointer;
 }
-#review-list {
+#review-list,
+.review-dictation ul {
   list-style: none;
   padding: 0;
 }

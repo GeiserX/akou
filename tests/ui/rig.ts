@@ -29,6 +29,7 @@ import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import type { DictationRow } from "../../src/ui/dictation-history.ts";
 import type { CaptureInput } from "../../src/ui/dictation-mic.ts";
 import type { DictationGrants } from "../../src/ui/dictation-page.ts";
+import type { DictationPair } from "../../src/ui/dictation-review.ts";
 import type { ConfigReply, SchemaEntry } from "../../src/ui/settings.ts";
 import { type AppRig, appRig, type RigOptions } from "../api-helpers.ts";
 import { until } from "../capture-helpers.ts";
@@ -653,6 +654,11 @@ export interface VocabFixture {
   calls: { method: string; path: string; body?: unknown }[];
   /** Refuses the next `POST /vocab` with this message, as the route refuses a bad term. */
   refuse: string | null;
+  /**
+   * The words fixed while dictating that `GET /vocab?dictation=true` lists (DC-L5), newest first;
+   * unset, the answer has no `dictation`, as an akou without the list answers.
+   */
+  dictation?: DictationPair[];
 }
 
 /** The global vocabulary file of the fixture. */
@@ -676,15 +682,19 @@ export async function vocabFixture(
     (route) => {
       const req = route.request();
       const path = new URL(req.url()).pathname.slice(prefix.length);
-      if (req.method() === "GET" && path === "/vocab")
+      if (req.method() === "GET" && path === "/vocab") {
+        const withDictation =
+          new URL(req.url()).searchParams.get("dictation") === "true" && fx.dictation;
         return route.fulfill({
           status: 200,
           json: {
             workspace: null,
             files: [{ scope: "global", path: VOCAB_FILE }],
             entries: fx.entries,
+            ...(withDictation ? { dictation: fx.dictation } : {}),
           },
         });
+      }
       const sent = req.postData() ? (req.postDataJSON() as Record<string, unknown>) : {};
       const body = Object.keys(sent).length > 0 ? sent : undefined;
       fx.calls.push({ method: req.method(), path, ...(body === undefined ? {} : { body }) });
@@ -692,6 +702,49 @@ export async function vocabFixture(
         tokenize(t)
           .map((x) => x.folded)
           .join(" ");
+      const answer = /^\/vocab\/(approve|reject)$/.exec(path)?.[1];
+      if (req.method() === "POST" && answer && (sent as { dictation?: boolean }).dictation) {
+        // As the route answers dictation's words: by term, approve the waiting pairs, reject
+        // those and a learned one, which leaves the file; a call word is refused whole.
+        if (fx.refuse) {
+          const message = fx.refuse;
+          fx.refuse = null;
+          return route.fulfill({ status: 409, json: { error: "call_word", message } });
+        }
+        const terms = new Set((sent as { terms: string[] }).terms.map(key));
+        const open =
+          answer === "approve" ? ["proposed", "ignored"] : ["proposed", "ignored", "accepted"];
+        const done = new Set<string>();
+        for (const p of fx.dictation ?? []) {
+          if (!terms.has(key(p.term)) || !open.includes(p.status)) continue;
+          done.add(p.term);
+          if (answer === "approve") {
+            // One entry per term, a heard form added to it, as `learnPair` writes.
+            const had = fx.entries.find((e) => e.scope === "global" && key(e.term) === key(p.term));
+            if (had) had.heard = [...new Set([...had.heard, p.heard])];
+            else
+              fx.entries.push({
+                term: p.term,
+                heard: [p.heard],
+                confirmed: true,
+                scope: "global",
+                file: VOCAB_FILE,
+                entryScope: "dictation",
+              });
+          } else if (p.status === "accepted") {
+            fx.entries = fx.entries.filter((e) => key(e.term) !== key(p.term));
+          }
+          p.status = answer === "approve" ? "accepted" : "rejected";
+        }
+        return route.fulfill({
+          status: 200,
+          json: {
+            ok: true,
+            path: VOCAB_FILE,
+            [answer === "approve" ? "approved" : "rejected"]: [...done],
+          },
+        });
+      }
       if (req.method() === "POST" && path === "/vocab") {
         if (fx.refuse) {
           const message = fx.refuse;
