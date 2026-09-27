@@ -195,6 +195,23 @@ describe("DC-H2: dictation.keepAudio off", () => {
   });
 });
 
+describe("DC-H2: dictation.keepAudio off, a drafted dictation", () => {
+  test("keeps its audio while the draft waits in the box, past the window's time and a sweep, and loses it when the box answers", async () => {
+    const r = rig(HOLD, { keepAudio: () => false, learnWindowMs: 50, learns: () => false }, [
+      "--focus-change",
+    ]);
+    r.svc.draft.attach({ open: () => {}, chip: () => {}, showInactive: () => {}, hide: () => {} });
+    await settledAs(r, "drafted");
+    const id = first(r);
+    await Bun.sleep(200);
+    r.svc.sweep();
+    // The box's Retry still has the audio to decode.
+    expect(r.audioFiles()).toEqual([`${id}.wav`]);
+    expect(await r.svc.draft.handlers.discard({ id })).toBe(true);
+    expect(r.audioFiles()).toEqual([]);
+  });
+});
+
 describe("DC-H2: the audio at the next start", () => {
   test("a file with no dictation goes; a finished dictation's goes only with keepAudio off", async () => {
     const r = rig(HOLD);

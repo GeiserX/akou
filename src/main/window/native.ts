@@ -14,6 +14,7 @@ import Electrobun, {
   Tray,
   Utils,
 } from "electrobun/main";
+import type { DraftRpc } from "../../ui/dictation-protocol.ts";
 import type { IndicatorRpc } from "../../ui/indicator-protocol.ts";
 import type { PillRpc } from "../../ui/pill-protocol.ts";
 import type { AkouRpc } from "../../ui/protocol.ts";
@@ -162,6 +163,42 @@ export function electrobunUi(): NativeUi {
           state: (s) => defined.send.state(s),
           level: (l) => defined.send.level(l),
           preview: (p) => defined.send.preview(p),
+          chip: (c) => defined.send.chip(c),
+        },
+      };
+    },
+
+    openDraft({ url, handlers, frame }) {
+      const defined = BrowserView.defineRPC<DraftRpc>({
+        maxRequestTime: MAX_REQUEST_MS,
+        handlers: { requests: handlers, messages: {} },
+      });
+      // Hidden until a draft opens, and never activated by being shown: an automatic open must
+      // not take the keyboard from the app the user is typing in. The page draws its own title
+      // row (a drag region) and close.
+      const win = new BrowserWindow({
+        title: "akou draft",
+        url,
+        rpc: defined,
+        frame,
+        titleBarStyle: "hidden",
+        hidden: true,
+        activate: false,
+      });
+      win.setAlwaysOnTop(true);
+      return {
+        window: {
+          show: () => {
+            win.show();
+            win.focus();
+          },
+          showInactive: () => win.showInactive(),
+          hide: () => win.hide(),
+          close: () => win.close(),
+          onClose: (fn) => win.on("close", fn),
+        },
+        send: {
+          open: (d) => defined.send.open(d),
           chip: (c) => defined.send.chip(c),
         },
       };

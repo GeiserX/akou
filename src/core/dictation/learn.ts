@@ -353,3 +353,42 @@ export async function learn(input: LearnInput, redecode: Redecode | null): Promi
   }
   return out;
 }
+
+/** One pair's offers so far, from the dictation log (DC-L4). */
+export interface PairHistory {
+  /** How many times the same fix was proposed. */
+  proposed: number;
+  /** Not a word: never proposed again. */
+  rejected: boolean;
+}
+
+/** The key of a pair: the same fix whatever its case. */
+export function pairKey(heard: string, term: string): string {
+  return `${heard.normalize("NFC").toLowerCase()}\u0000${term.normalize("NFC").toLowerCase()}`;
+}
+
+/** Every pair's history from the log's `dictation.learn` events, by `pairKey`. */
+export function pairHistory(
+  events: readonly { type: string; heard?: string; term?: string; status?: string }[],
+): Map<string, PairHistory> {
+  const out = new Map<string, PairHistory>();
+  for (const e of events) {
+    if (e.type !== "dictation.learn" || e.heard === undefined || e.term === undefined) continue;
+    const k = pairKey(e.heard, e.term);
+    const h = out.get(k) ?? { proposed: 0, rejected: false };
+    if (e.status === "proposed") h.proposed++;
+    if (e.status === "rejected") h.rejected = true;
+    out.set(k, h);
+  }
+  return out;
+}
+
+/**
+ * Whether a proposal is put to the user (DC-L4): the first time a fix is seen, and once more at
+ * the third identical fix after the first was let go; never after Not a word. A learned pair never
+ * gets here, since it is in the vocabulary.
+ */
+export function shouldAsk(h: PairHistory | undefined): boolean {
+  if (!h) return true;
+  return !h.rejected && (h.proposed === 0 || h.proposed === 2);
+}

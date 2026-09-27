@@ -70,9 +70,12 @@ function today(now: number): string {
 /** Calls with a vocabulary pass running: one at a time per call. */
 const passing = new Set<string>();
 
-/** Edits of one file run one at a time, so two requests never lose each other's change. */
+/**
+ * Edits of one file run one at a time, so two requests never lose each other's change. Exported
+ * for dictation's Learn (DC-L4), which writes the same file.
+ */
 const fileLocks = new Map<string, Promise<unknown>>();
-async function editFile<T>(
+export async function editFile<T>(
   path: string,
   edit: (file: VocabFile, loaded: LoadedVocab) => { file: VocabFile; result: T } | null,
 ): Promise<T | null> {
@@ -96,7 +99,7 @@ async function editFile<T>(
   return run;
 }
 
-function targetPath(app: ApiApp, workspace: string | undefined): string {
+export function targetPath(app: Pick<ApiApp, "configDir">, workspace: string | undefined): string {
   const paths = vocabPaths({ configDir: app.configDir, workspace });
   return (paths.find((p) => p.scope === (workspace ? "workspace" : "global")) as { path: string })
     .path;

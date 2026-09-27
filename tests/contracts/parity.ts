@@ -440,6 +440,17 @@ export const PARITY: readonly Row[] = [
     window: [ui("dictation-history.ts", "`/dictations/#{encodeURIComponent(id)}/retry`")],
   },
   {
+    action: "Open a dictation in the draft box",
+    cli: {
+      none: "the draft box is a window the user reads and presses Enter in; a script reads the text with akou dictations show",
+    },
+    api: ["POST /dictations/:id/insert"],
+    mcp: {
+      none: "an agent never inserts text: it would land in whatever app the user is looking at (DICTATION.md DC-G5)",
+    },
+    window: [ui("dictation-history.ts", "`/dictations/#{encodeURIComponent(id)}/insert`")],
+  },
+  {
     action: "A dictation's audio",
     cli: {
       none: "the audio is for Retry and the page; a script reads GET /v1/dictations/{id}/audio",

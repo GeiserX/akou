@@ -12,6 +12,11 @@
  * A session that will not be inserted (empty, failed, no model) is `settled` back to the helper at
  * once, so it stops holding Escape and Enter then rather than 8 s later (DC-A4).
  *
+ * The focus guard (DC-N9): when the helper refuses an insert because the keyboard moved
+ * (`focus-changed`) or the field cannot take it (`not-editable`, `field-unknown`), the text goes to
+ * the draft box (`onDraft`) and the dictation is `drafted`, never lost. The draft box's own insert
+ * (`insertText`) first asks the helper to bring the captured target forward, then inserts there.
+ *
  * A password field gets nothing logged but that the dictation happened (DC-N8): no text, no words,
  * and the text goes to the helper for the clipboard only.
  *
@@ -29,7 +34,7 @@ import { type PunctuationLists, spokenPunctuation } from "../../core/dictation/p
 import type { Decoded } from "../asr/live-worker.ts";
 import type { Packet } from "../capture/protocol.ts";
 import { forcesLanguage } from "./engines.ts";
-import type { AppToHelper, Bindings, EndReason, HelperToApp } from "./protocol.ts";
+import type { AppToHelper, Bindings, EndReason, HelperToApp, SendKey } from "./protocol.ts";
 import { type DictationLog, newDictationId } from "./store.ts";
 
 /**
@@ -108,6 +113,28 @@ export interface SessionOptions extends TextRules {
    * `dictation.started` is written. Never called for a password field (DC-N8).
    */
   saveAudio?(id: string, samples: Float32Array): void;
+  /**
+   * The helper refused a dictation's insert for the focus guard (DC-N9): opens the draft box on it
+   * without taking the keyboard, and answers whether it did. False: the dictation fails as before.
+   */
+  onDraft?(id: string, reason: string): boolean;
+}
+
+/** The helper's refusals that send the text to the draft box rather than failing it (DC-N9). */
+export const DRAFT_REASONS: ReadonlySet<string> = new Set([
+  "focus-changed",
+  "not-editable",
+  "field-unknown",
+]);
+
+/** How an insert the app asked for outside a session ended (the draft box's, DC-S1). */
+export type InsertOutcome = { ok: true; method: string } | { ok: false; reason: string };
+
+/** An insert the app asked for outside a session: the dictation it logs to, if any. */
+interface Explicit {
+  /** The dictation whose `dictation.inserted` it writes; none for a copy. */
+  id: string | null;
+  resolve(o: InsertOutcome): void;
 }
 
 interface Listening {
@@ -150,6 +177,9 @@ export class DictationSession {
   private secureInput = false;
   /** Dictations waiting for their insert's result, by the helper's session id. */
   private readonly inserts = new Map<string, string>();
+  /** The draft box's inserts and copies waiting for the helper's answer, by the id sent. */
+  private readonly explicit = new Map<string, Explicit>();
+  private explicitSeq = 0;
   /** Dictations ended and not yet decoded: a decode runs one at a time, after the last. */
   private decoding = 0;
   /** Every decode and insert in flight, for tests and a clean stop. */
@@ -198,6 +228,37 @@ export class DictationSession {
    */
   command(action: "start" | "stop" | "cancel"): void {
     this.o.send({ type: `session.${action}` });
+  }
+
+  /**
+   * Inserts `text` where dictation `id` was going (the draft box's Enter, DC-S1): the helper first
+   * brings `target` forward (DC-N9), then pastes there and presses `sendKey` after the receipt.
+   * Writes `dictation.inserted` when it lands; a refusal writes nothing and is answered, so the
+   * caller can open the box again with the user's text.
+   */
+  insertText(id: string, text: string, target: Target, sendKey: SendKey): Promise<InsertOutcome> {
+    if (!this.ready)
+      return Promise.resolve({ ok: false, reason: "the dictation helper is not up" });
+    const hid = `draft-${++this.explicitSeq}`;
+    const done = new Promise<InsertOutcome>((resolve) => this.explicit.set(hid, { id, resolve }));
+    this.o.send({ type: "focus", target });
+    this.o.send({ type: "insert", id: hid, text, method: "paste", send_key: sendKey, target });
+    return done;
+  }
+
+  /**
+   * Puts `text` on the clipboard for the user to paste (the draft box's Copy), through the helper's
+   * clipboard-only insert, which pastes nothing and restores nothing. Nothing is logged.
+   */
+  copyText(text: string, target: Target): Promise<InsertOutcome> {
+    if (!this.ready)
+      return Promise.resolve({ ok: false, reason: "the dictation helper is not up" });
+    const hid = `copy-${++this.explicitSeq}`;
+    const done = new Promise<InsertOutcome>((resolve) =>
+      this.explicit.set(hid, { id: null, resolve }),
+    );
+    this.o.send({ type: "insert", id: hid, text, method: "clipboard", send_key: "none", target });
+    return done;
   }
 
   /** Resolves once every decode and insert started so far has settled. */
@@ -250,6 +311,19 @@ export class DictationSession {
         return;
       }
       case "inserted": {
+        const x = this.explicit.get(m.id);
+        if (x) {
+          this.explicit.delete(m.id);
+          if (x.id !== null)
+            this.write({
+              type: "dictation.inserted",
+              id: x.id,
+              method: m.method,
+              receipt_ms: m.receipt_ms,
+            });
+          x.resolve({ ok: true, method: m.method });
+          return;
+        }
         const id = this.inserts.get(m.id);
         if (!id) return;
         this.inserts.delete(m.id);
@@ -263,10 +337,21 @@ export class DictationSession {
         return;
       }
       case "insert.failed": {
+        const x = this.explicit.get(m.id);
+        if (x) {
+          this.explicit.delete(m.id);
+          x.resolve({ ok: false, reason: m.reason });
+          return;
+        }
         const id = this.inserts.get(m.id);
         if (!id) return;
         this.inserts.delete(m.id);
-        this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
+        // The keyboard moved or the field cannot take it: the text waits in the draft box.
+        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason)) {
+          this.write({ type: "dictation.drafted", id, reason: m.reason });
+        } else {
+          this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
+        }
         this.settle();
         return;
       }
@@ -319,6 +404,9 @@ export class DictationSession {
       this.write({ type: "dictation.failed", id, error: "the dictation helper stopped" });
     }
     this.inserts.clear();
+    for (const x of this.explicit.values())
+      x.resolve({ ok: false, reason: "the dictation helper stopped" });
+    this.explicit.clear();
     // Nothing refused them: the next helper is bound from the settings when it is ready.
     for (const answer of this.rebinds.splice(0)) answer({ ok: true });
     this.ready = null;
