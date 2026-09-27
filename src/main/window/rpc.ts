@@ -40,6 +40,7 @@ export interface WindowRpc {
     status(p: Record<string, never>): Promise<AppStatus>;
     openSettingsPane(p: { pane: SettingsPane }): Promise<boolean>;
     answerQuit(p: { id: number; go: boolean }): Promise<boolean>;
+    recordDictationKeys(p: { on: boolean }): Promise<boolean>;
   };
   /** Stops every stream (the window closed). */
   close(): void;
@@ -148,6 +149,10 @@ export function windowRpc(
         answerQuit(id, go === true);
         return true;
       },
+
+      // The dictation helper is not wired yet (docs/ux/DICTATION.md DC-U3): no helper keys, so the
+      // recorder takes what the page itself sees.
+      recordDictationKeys: async () => false,
     },
     close: () => {
       unwatch();

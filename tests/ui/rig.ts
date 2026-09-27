@@ -24,6 +24,8 @@ import {
 } from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
+import type { DictationRow } from "../../src/ui/dictation-history.ts";
+import type { DictationGrants } from "../../src/ui/dictation-page.ts";
 import type { ConfigReply, SchemaEntry } from "../../src/ui/settings.ts";
 import { type AppRig, appRig, type RigOptions } from "../api-helpers.ts";
 import { until } from "../capture-helpers.ts";
@@ -438,12 +440,21 @@ export interface DictationFixture {
   server: { slots: number; engine: string; served_last_hour: number } | null;
   /** The `DELETE /dictations` the page sent. */
   deletes: number;
+  /** What `GET /dictations` lists, newest first. */
+  history: DictationRow[];
+  /** Every request under `/dictations`, in order: its path with the query, and its body. */
+  calls: { method: string; path: string; body?: unknown }[];
+  /** The answer to `POST /dictations/{id}/retry`; refuse it with `refuse.set("retry:ENGINE")`. */
+  retry: (d: DictationRow, engine: string) => DictationRow;
+  /** The helper's grants on `GET /dictation`; null answers 404, as an app without the route. */
+  grants: DictationGrants | null;
 }
 
 /**
  * Answers the page's dictation requests from fixtures: `GET /config` gains `schema`'s keys (the
  * real reply is fetched and extended), a `PATCH /config` of fixture keys is recorded and answered
- * here, `GET /server` gains the `dictation` block, and `DELETE /dictations` is counted.
+ * here, `GET /server` gains the `dictation` block, `GET /dictation` carries `grants`, and the
+ * dictation routes (DC-G1) answer from `history`, each request recorded in `calls`.
  * `prefix`: the API's path on this page (`/api/v1`). `proxy`: the page is on another origin
  * (`proxyRoute`), whose requests reach the app at `to`.
  */
@@ -454,6 +465,10 @@ export async function dictationFixture(
     prefix?: string;
     server?: DictationFixture["server"];
     proxy?: { from: string; to: string };
+    history?: DictationRow[];
+    grants?: DictationGrants | null;
+    /** The OS `GET /status` reports, so a test runs as macOS on any machine. */
+    platform?: string;
   } = {},
 ): Promise<DictationFixture> {
   const schema = o.schema ?? DICTATION_SCHEMA;
@@ -464,7 +479,34 @@ export async function dictationFixture(
     refuse: new Map(),
     server: o.server ?? null,
     deletes: 0,
+    history: o.history ?? [],
+    calls: [],
+    retry: (d, engine) => ({ ...d, engine, text: `${d.text} (${engine})`, ms: 640 }),
+    grants: o.grants === undefined ? { mic: "granted", accessibility: "granted" } : o.grants,
   };
+  if (o.platform) {
+    await page.route(
+      (u) => u.pathname === `${prefix}/status`,
+      async (route) => {
+        const res = await upstream(route, o.proxy);
+        const real = (await res.json()) as { app: Record<string, unknown> };
+        return route.fulfill({
+          response: res,
+          json: { ...real, app: { ...real.app, platform: o.platform } },
+        });
+      },
+    );
+  }
+  await page.route(
+    (u) => u.pathname === `${prefix}/dictation`,
+    (route) =>
+      fx.grants
+        ? route.fulfill({
+            status: 200,
+            json: { enabled: fx.settings["dictation.enabled"], state: "idle", grants: fx.grants },
+          })
+        : route.fulfill({ status: 404, json: { error: "not_found", message: "no such route" } }),
+  );
   await page.route(
     (u) => u.pathname === `${prefix}/config`,
     async (route) => {
@@ -509,13 +551,75 @@ export async function dictationFixture(
     },
   );
   await page.route(
-    (u) => u.pathname === `${prefix}/dictations`,
+    (u) => u.pathname === `${prefix}/dictations` || u.pathname.startsWith(`${prefix}/dictations/`),
     (route) => {
-      fx.deletes++;
-      return route.fulfill({ status: 200, json: { deleted: 0 } });
+      const req = route.request();
+      const url = new URL(req.url());
+      const path = url.pathname.slice(prefix.length);
+      // The browser transport sends `{}` with a bodiless request; that is no body.
+      const sent = req.postData() ? (req.postDataJSON() as Record<string, unknown>) : {};
+      const body = Object.keys(sent).length > 0 ? sent : undefined;
+      fx.calls.push({
+        method: req.method(),
+        path: path + url.search,
+        ...(body === undefined ? {} : { body }),
+      });
+      if (path === "/dictations" && req.method() === "DELETE") {
+        fx.deletes++;
+        fx.history = [];
+        return route.fulfill({ status: 200, json: { deleted: 0 } });
+      }
+      if (path === "/dictations" && req.method() === "GET") {
+        const q = url.searchParams.get("q")?.toLowerCase() ?? "";
+        const limit = Number(url.searchParams.get("limit") ?? 100);
+        const cursor = url.searchParams.get("cursor");
+        let items = fx.history;
+        if (cursor) items = items.slice(items.findIndex((d) => d.id === cursor) + 1);
+        if (q) items = items.filter((d) => (d.text ?? "").toLowerCase().includes(q));
+        const page = items.slice(0, limit);
+        return route.fulfill({
+          status: 200,
+          json: {
+            items: page,
+            next_cursor: items.length > limit ? (page.at(-1)?.id ?? null) : null,
+          },
+        });
+      }
+      const m = /^\/dictations\/([^/]+)(?:\/(insert|retry))?$/.exec(path);
+      const id = decodeURIComponent(m?.[1] ?? "");
+      const d = fx.history.find((x) => x.id === id);
+      if (!m || !d) return route.fulfill({ status: 404, json: { error: "not_found" } });
+      if (m[2] === "retry") {
+        const engine = (body as { engine: string }).engine;
+        const err = fx.refuse.get(`retry:${engine}`);
+        if (err)
+          return route.fulfill({ status: 409, json: { error: "unavailable", message: err } });
+        return route.fulfill({ status: 200, json: fx.retry(d, engine) });
+      }
+      if (m[2] === "insert") return route.fulfill({ status: 200, json: { opened: true } });
+      if (req.method() === "DELETE") {
+        fx.history = fx.history.filter((x) => x !== d);
+        return route.fulfill({ status: 200, json: { deleted: 1 } });
+      }
+      return route.fulfill({ status: 200, json: d });
     },
   );
   return fx;
+}
+
+/** A dictation for the history fixture: `n` sets the id, the text and the time, newest first. */
+export function dictationRow(n: number, o: Partial<DictationRow> = {}): DictationRow {
+  return {
+    id: `d${String(n).padStart(3, "0")}`,
+    at: Date.parse("2026-09-26T10:00:00Z") - n * 60_000,
+    state: "inserted",
+    app: "com.example.chat",
+    text: `dictation number ${n}`,
+    engine: "fast",
+    model: "parakeet",
+    ms: 120,
+    ...o,
+  };
 }
 
 /** A small ElectroBun view (the pill, the draft box) on its own page, with a fake main side. */
@@ -528,19 +632,21 @@ export interface ViewPage {
   close(): Promise<void>;
 }
 
-const VIEW_FILES: Record<"pill" | "draft", { html: string; css: string; entry: string }> = {
-  pill: { html: "pill.html", css: "pill.css", entry: "dictation-pill-window.ts" },
-  draft: { html: "draft.html", css: "draft.css", entry: "dictation-draft-window.ts" },
-};
+const VIEW_FILES: Record<"pill" | "draft" | "main", { html: string; css: string; entry: string }> =
+  {
+    pill: { html: "pill.html", css: "pill.css", entry: "dictation-pill-window.ts" },
+    draft: { html: "draft.html", css: "draft.css", entry: "dictation-draft-window.ts" },
+    main: { html: "index.html", css: "theme.css", entry: "window.ts" },
+  };
 
 /**
  * Opens a dictation view's real page, built from its ElectroBun entry over the shim, on its own
- * origin; the requests it makes are recorded and answered `true`. With `clock`, the page runs on
- * Playwright's clock from its first script.
+ * origin; the requests it makes are recorded and answered by `answer`, or `true`. With `clock`,
+ * the page runs on Playwright's clock from its first script.
  */
 export async function viewPage(
-  view: "pill" | "draft",
-  o: { clock?: Date } = {},
+  view: "pill" | "draft" | "main",
+  o: { clock?: Date; answer?: (name: string, params: unknown) => unknown } = {},
 ): Promise<ViewPage> {
   const f = VIEW_FILES[view];
   const ui = join(import.meta.dir, "..", "..", "src", "ui");
@@ -565,9 +671,9 @@ export async function viewPage(
     if (!file) return route.fulfill({ status: 404, body: "" });
     return route.fulfill({ status: 200, contentType: file.type, body: file.body });
   });
-  await page.exposeFunction("__akouRequest", (name: string, params: unknown) => {
+  await page.exposeFunction("__akouRequest", async (name: string, params: unknown) => {
     requests.push({ name, params });
-    return true;
+    return (await o.answer?.(name, params)) ?? true;
   });
   await page.goto("http://akou.test/index.html");
   return {
@@ -583,4 +689,66 @@ export async function viewPage(
       if (hidden.length > 0) throw new Error(`[TS-15] hidden but shown: ${hidden.join("; ")}`);
     },
   };
+}
+
+/**
+ * The desktop window's own page (`window.ts` over the shim) with a fake main side: its API
+ * requests reach the real app, except the dictation keys, the grants and the OS, answered as the
+ * dictation fixture does. For what only the window has, such as the helper's keys (DC-U3).
+ */
+export async function windowPage(
+  rig: AppRig,
+  o: { platform?: string; grants?: DictationGrants } = {},
+): Promise<ViewPage & { patches: Record<string, unknown>[] }> {
+  const settings = defaults(DICTATION_SCHEMA);
+  const patches: Record<string, unknown>[] = [];
+  const status = async () => {
+    const r = await rig.api("GET", "/status");
+    return o.platform ? { ...r.body, app: { ...r.body.app, platform: o.platform } } : r.body;
+  };
+  const api = async (p: { method: string; path: string; body?: unknown }) => {
+    if (p.path === "/status") return { status: 200, body: await status() };
+    if (p.path === "/dictation")
+      return {
+        status: 200,
+        body: {
+          enabled: false,
+          state: "idle",
+          grants: o.grants ?? { mic: "granted", accessibility: "granted" },
+        },
+      };
+    if (p.path === "/config" && p.method === "PATCH") {
+      const body = p.body as Record<string, unknown>;
+      if (Object.keys(body).every((k) => k in DICTATION_SCHEMA)) {
+        patches.push(body);
+        Object.assign(settings, body);
+        return { status: 200, body: { ok: true } };
+      }
+    }
+    const r = await rig.api(p.method, p.path, p.body);
+    if (p.path === "/config" && p.method === "GET" && r.status === 200) {
+      const real = r.body as ConfigReply;
+      return {
+        status: 200,
+        body: {
+          ...real,
+          settings: { ...real.settings, ...settings },
+          schema: { ...real.schema, ...DICTATION_SCHEMA },
+        },
+      };
+    }
+    return { status: r.status, body: r.body };
+  };
+  const v = await viewPage("main", {
+    answer: (name, params) =>
+      name === "api"
+        ? api(params as Parameters<typeof api>[0])
+        : name === "status"
+          ? status()
+          : name === "follow"
+            ? { ok: false }
+            : undefined,
+  });
+  await v.page.waitForFunction(() => document.body.dataset.transport === "window");
+  return { ...v, patches };
 }
