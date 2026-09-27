@@ -42,10 +42,12 @@ function label(d: CaptureInput): string {
 
 /** Reads the inputs; never throws. */
 export async function readMics(t: Transport): Promise<MicList> {
-  const r = await t.request<{ inputs?: CaptureInput[] }>("GET", "/devices");
+  const r = await t.request<{ inputs?: unknown }>("GET", "/devices");
   if (r.status === 404) return { error: "this akou does not list its microphones yet" };
   if (r.status >= 400) return { error: message(r.body, `HTTP ${r.status}`) };
-  const inputs = (r.body?.inputs ?? []).filter(
+  // A body without a list would throw below and take the whole Dictation page down with it.
+  if (!Array.isArray(r.body?.inputs)) return { error: "akou's answer lists no microphones" };
+  const inputs = (r.body.inputs as CaptureInput[]).filter(
     (d) => typeof d?.id === "string" && d.id !== "" && typeof d.name === "string",
   );
   return { inputs };

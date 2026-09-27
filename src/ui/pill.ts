@@ -7,7 +7,9 @@
  *
  * The page only draws what the main process sends (`pill-protocol.ts`): the main side decides when
  * a state ends, and the window's no-focus style is the shell's. No state carries dictated text, and
- * the page reads each field it draws by name, so an extra field is never shown (DC-D2).
+ * the page reads each field it draws by name, so an extra field is never shown (DC-D2). The one
+ * exception is the words-as-I-speak preview (DC-O2), its own message, which the main side sends
+ * only with `dictation.pillPreview` on; the page shows it while listening and drops it after.
  */
 
 import { mountChip } from "./dictation-chip.ts";
@@ -25,7 +27,18 @@ export interface PillTransport {
 export interface PillSink {
   state(s: PillState): void;
   level(l: { db: number }): void;
+  preview(p: { text: string }): void;
   chip(c: Chip): void;
+}
+
+/** The preview keeps the last words that fit two lines of the pill. */
+export const PREVIEW_CHARS = 120;
+
+/** The end of a long preview, from a word start, after an ellipsis. */
+export function previewTail(text: string): string {
+  if (text.length <= PREVIEW_CHARS) return text;
+  const cut = text.slice(-PREVIEW_CHARS);
+  return `…${cut.slice(cut.indexOf(" ") + 1)}`;
 }
 
 /** Transcribing shows its time only once a wait is worth counting. */
@@ -51,6 +64,8 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
 
 export function mountPill(t: PillTransport, now: () => number = () => Date.now()): PillSink {
   let s: PillState = { state: "hidden" };
+  /** The preview's words, for this listening session only. */
+  let words = "";
   const chip = mountChip(el("chip"), (a) => t.chip(a));
 
   const tick = () => {
@@ -63,6 +78,12 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
 
   const button = (id: string, label: string, action: Control) =>
     h("button", { id, type: "button", on: { click: () => t.control(action) } }, label);
+
+  const showPreview = () => {
+    const shown = s.state === "listening" ? words : "";
+    el("preview").textContent = shown;
+    el("preview").hidden = shown === "";
+  };
 
   const draw = () => {
     const pill = el("pill");
@@ -115,6 +136,7 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
           : [];
     replace(el("buttons"), ...buttons);
     el("buttons").hidden = buttons.length === 0;
+    showPreview();
     tick();
   };
 
@@ -123,8 +145,17 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
 
   return {
     state: (next) => {
+      // A new session, or the end of listening, drops the words of the one before.
+      const same = s.state === "listening" && next.state === "listening" && s.since === next.since;
+      if (!same) words = "";
       s = next;
       draw();
+    },
+    preview: ({ text }) => {
+      if (typeof text !== "string") return;
+      // Shown only while listening; the next state change drops it, so a late partial never shows.
+      words = previewTail(text.trim());
+      showPreview();
     },
     level: ({ db }) => {
       if (s.state !== "listening") return;
