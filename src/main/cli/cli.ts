@@ -21,6 +21,7 @@ import type { ModelSpecEntry } from "../asr/models.ts";
 import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
 import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
+import { dictateCommand } from "./commands/dictate.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { handoffCommands } from "./commands/handoff.ts";
@@ -64,6 +65,7 @@ export const COMMANDS: readonly Command[] = [
   ...setupCommands,
   ...serverCommands,
   transcribeCommand,
+  dictateCommand,
   skillCommand,
   mcp,
   serveCommand,

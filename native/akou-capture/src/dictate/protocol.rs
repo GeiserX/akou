@@ -17,8 +17,8 @@
 //! | `key` | `name`: `Escape`, `Enter` or `Shift+Enter` during a session and until its insert settles; the hotkey's name when it is pressed while a session is still transcribing; any key while `record_keys` is on |
 //! | `grant.lost` | `name` |
 //! | `session.ended` | `id`, `reason`: `release`, `tap`, `key` (Enter or Shift+Enter ended it), `cancel`, `silence`, `max`, `stop` |
-//! | `inserted` | `id`, `method`, `receipt_ms` |
-//! | `insert.failed` | `id`, `reason` |
+//! | `inserted` | `id`, `method` (`paste`, `type`, `clipboard`), `receipt_ms` (chord to the target's first read; 0 when nothing was pasted), and `reason` only when the helper chose clipboard-only for the user: `secure` (DC-N8) or `elevated` (a Windows admin window) |
+//! | `insert.failed` | `id`, `reason`: `focus-changed`, `not-editable`, `field-unknown` (DC-N9: the app opens the draft box), `no-receipt` (the target never read in 8 s), `clipboard-changed` (another writer took the clipboard before the target read), `no-v-key`, `no-inserter`, or the backend's error |
 //! | `edit` / `edit.unreadable` | `id`, `hunks` / `reason` |
 //! | `secure_input` | `on` |
 //! | `mic` | `open`: the stream opened or closed (the warm mic of DC-N4) |
@@ -27,7 +27,9 @@
 //! | `stopped` | `reason` |
 //!
 //! App to helper: `rebind {hotkey, activation, draft, fixLast, pasteLast}`, `insert {id, text,
-//! method, send_key, target}`, `settled {id}` (the session will not be inserted: empty, drafted or
+//! method, send_key, target, restore}` (`method` `paste`, `type` or `clipboard`, default `paste`;
+//! `send_key` `Enter`, `Ctrl+Enter`, `Cmd+Enter`, `Shift+Enter` or `none`, the default; `restore`
+//! is `dictation.restoreClipboard`, default true; any other value is refused), `settled {id}` (the session will not be inserted: empty, drafted or
 //! cancelled while transcribing), `focus {target}`, `session.start`, `session.stop`,
 //! `session.cancel` (the tray's and the CLI's door), `rebuild_mic {device}`, `warm {mode}`,
 //! `record_keys {on}`, `stop`.
@@ -134,16 +136,21 @@ pub fn mic(open: bool) -> String {
     line("mic", vec![("open", Json::Bool(open))])
 }
 
-pub fn inserted(id: &str, method: &str, receipt_ms: u64) -> String {
-    line(
-        "inserted",
-        vec![
-            ("id", Json::str(id)),
-            ("method", Json::str(method)),
-            ("receipt_ms", Json::Int(receipt_ms as i64)),
-        ],
-    )
+pub fn inserted(id: &str, method: &str, receipt_ms: u64, reason: Option<&str>) -> String {
+    let mut f = vec![
+        ("id", Json::str(id)),
+        ("method", Json::str(method)),
+        ("receipt_ms", Json::Int(receipt_ms as i64)),
+    ];
+    if let Some(r) = reason {
+        f.push(("reason", Json::str(r)));
+    }
+    line("inserted", f)
 }
+
+/// The insert methods and send keys `insert` takes (DC-N6, DC-N7, DC-S2).
+pub const METHODS: [&str; 3] = ["paste", "type", "clipboard"];
+pub const SEND_KEYS: [&str; 5] = ["Enter", "Ctrl+Enter", "Cmd+Enter", "Shift+Enter", "none"];
 
 pub fn insert_failed(id: &str, reason: &str) -> String {
     line(
@@ -184,6 +191,7 @@ pub enum Command {
         method: String,
         send_key: String,
         target: Option<Target>,
+        restore: bool,
     },
     Settled {
         id: String,
@@ -224,13 +232,28 @@ impl Command {
                     .and_then(Value::as_str)
                     .map(String::from),
             },
-            "insert" => Command::Insert {
-                id: need("id")?,
-                text: need("text")?,
-                method: v.str_or("method", "paste"),
-                send_key: v.str_or("send_key", "none"),
-                target: v.get("target").map(Target::from_value).transpose()?,
-            },
+            "insert" => {
+                let method = v.str_or("method", "paste");
+                if !METHODS.contains(&method.as_str()) {
+                    return Err(format!("insert method {method} is not one of {METHODS:?}"));
+                }
+                // The key pressed after the insert; anything else (Command+Q) never reaches a sink.
+                let send_key = v.str_or("send_key", "none");
+                if !SEND_KEYS.contains(&send_key.as_str()) {
+                    return Err(format!("send_key {send_key} is not one of {SEND_KEYS:?}"));
+                }
+                Command::Insert {
+                    id: need("id")?,
+                    text: need("text")?,
+                    method,
+                    send_key,
+                    target: v.get("target").map(Target::from_value).transpose()?,
+                    restore: match v.get("restore") {
+                        None => true,
+                        Some(r) => r.as_bool().ok_or("restore must be true or false")?,
+                    },
+                }
+            }
             "settled" => Command::Settled { id: need("id")? },
             "focus" => Command::Focus {
                 target: Target::from_value(v.get("target").ok_or("focus needs target")?)?,
@@ -508,6 +531,18 @@ mod tests {
                         window: "w".into(),
                         field: "editable".into(),
                     }),
+                    restore: true,
+                },
+            ),
+            (
+                r#"{"type":"insert","id":"4","text":"x","restore":false}"#,
+                Command::Insert {
+                    id: "4".into(),
+                    text: "x".into(),
+                    method: "paste".into(),
+                    send_key: "none".into(),
+                    target: None,
+                    restore: false,
                 },
             ),
             (
@@ -557,6 +592,9 @@ mod tests {
             r#"{"type":"stop""#,
             r#"{"type":"focus","target":{"field":"password"}}"#,
             r#"{"type":"rebind","hotkey":"x\u00"}"#,
+            r#"{"type":"insert","id":"1","text":"x","send_key":"Command+Q"}"#,
+            r#"{"type":"insert","id":"1","text":"x","method":"drop"}"#,
+            r#"{"type":"insert","id":"1","text":"x","restore":"no"}"#,
             "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
         ] {
             assert!(Command::parse(bad).is_err(), "{bad}");
@@ -602,7 +640,8 @@ mod tests {
             (level(0.25), "level"),
             (key("Shift+Enter"), "key"),
             (mic(true), "mic"),
-            (inserted("1", "paste", 12), "inserted"),
+            (inserted("1", "paste", 12, None), "inserted"),
+            (inserted("1", "clipboard", 0, Some("secure")), "inserted"),
             (insert_failed("1", "focus-changed"), "insert.failed"),
             (rebound("RightShift"), "rebound"),
             (
@@ -615,5 +654,82 @@ mod tests {
             let v = Value::parse(&l).unwrap();
             assert_eq!(v.get("type").unwrap().as_str(), Some(kind), "{l}");
         }
+    }
+
+    /// The lines both sides are held to, in `tests/fixtures/akou-dictate/`: every line this file
+    /// writes is exactly the fixture's, and every command the app writes parses here. The Bun test
+    /// `tests/dictation-protocol.test.ts` checks the same two files from the app's side, so a name
+    /// changed on one side only fails one of the two.
+    #[test]
+    fn the_shared_fixture_lines_match_the_app() {
+        let t = Target {
+            app: "Slack".into(),
+            pid: 7,
+            window: "w1".into(),
+            field: "editable".into(),
+        };
+        let mut written = vec![
+            ready("simulate", true, "granted", "not-needed"),
+            session_started("1", &t, 123_456_789_012_345_678),
+            level(0.25),
+            key("Shift+Enter"),
+            mic(true),
+        ];
+        for reason in ["release", "tap", "key", "cancel", "silence", "max", "stop"] {
+            written.push(session_ended("1", reason));
+        }
+        written.extend([
+            inserted("1", "paste", 12),
+            insert_failed("1", "focus-changed"),
+            rebound("RightShift"),
+            rebind_failed("LeftOption+RightOption", "x"),
+            warn("usage", "m"),
+            stopped("stop"),
+        ]);
+        let want: Vec<String> =
+            include_str!("../../../../tests/fixtures/akou-dictate/helper-lines.jsonl")
+                .lines()
+                .map(|l| l.replace("@VERSION@", crate::protocol::VERSION))
+                .collect();
+        assert_eq!(written, want);
+
+        let secure = Target {
+            field: "secure".into(),
+            ..t.clone()
+        };
+        let parsed: Vec<Command> =
+            include_str!("../../../../tests/fixtures/akou-dictate/app-lines.jsonl")
+                .lines()
+                .map(|l| Command::parse(l).unwrap_or_else(|e| panic!("{l}: {e}")))
+                .collect();
+        assert_eq!(
+            parsed,
+            vec![
+                Command::Rebind {
+                    hotkey: "RightCommand".into(),
+                    activation: Some("hold-or-toggle".into()),
+                },
+                Command::Insert {
+                    id: "1".into(),
+                    text: "hello".into(),
+                    method: "paste".into(),
+                    send_key: "none".into(),
+                    target: Some(t),
+                },
+                Command::Settled { id: "1".into() },
+                Command::Focus { target: secure },
+                Command::SessionStart,
+                Command::SessionStop,
+                Command::SessionCancel,
+                Command::RebuildMic {
+                    device: "default".into(),
+                },
+                Command::Warm {
+                    mode: "auto".into(),
+                },
+                Command::RecordKeys { on: true },
+                Command::Stop,
+            ]
+        );
     }
 }

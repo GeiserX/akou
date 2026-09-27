@@ -23,6 +23,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
 import { defaultModelsDir } from "../asr/models.ts";
@@ -516,6 +517,17 @@ export const SETTINGS = {
     values: DICTIONARY_LANGUAGES,
     default: [],
     doc: `Languages whose word lists tell a real word from a mishearing, so a vocabulary file never "corrects" a real word. Empty: every list akou ships (${DICTIONARY_LANGUAGES.join(", ")}). A language the recognizer detects in a call is added.`,
+  },
+  "dictation.enabled": {
+    type: "boolean",
+    default: false,
+    doc: "Dictation: hold the dictation key, speak, and the text is inserted where the cursor is (docs/ux/DICTATION.md). Off: the helper's dictate process is not started and no key is taken.",
+  },
+  "dictation.activation": {
+    type: "string",
+    values: ACTIVATIONS,
+    default: "hold-or-toggle",
+    doc: "How the dictation key works: `hold-or-toggle` (a press of 300 ms or more is push-to-talk, a shorter tap latches listening on until the next tap), `hold` (push-to-talk only) or `toggle` (a tap starts, the next tap stops).",
   },
 } as const satisfies Record<string, SettingSpec>;
 

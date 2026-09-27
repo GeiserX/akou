@@ -12,6 +12,7 @@ import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
+import { onDictationPage } from "../../src/ui/dictation-page.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
@@ -619,7 +620,24 @@ describe("DC-U1: the Dictation page in the window", () => {
   test(
     "with no dictation keys in the registry the page says so and Settings has no link",
     async () => {
-      const page = await rig.open();
+      // An app whose registry has no dictation keys: the real one's, with them taken out.
+      const page = await rig.open(undefined, {
+        before: (p) =>
+          p.route(
+            (u) => u.pathname === "/api/v1/config",
+            async (route) => {
+              if (route.request().method() !== "GET") return route.continue();
+              const res = await route.fetch();
+              const real = (await res.json()) as Record<string, Record<string, unknown>>;
+              const keep = (o: Record<string, unknown> = {}) =>
+                Object.fromEntries(Object.entries(o).filter(([k]) => !onDictationPage(k)));
+              return route.fulfill({
+                response: res,
+                json: { ...real, schema: keep(real.schema), settings: keep(real.settings) },
+              });
+            },
+          ),
+      });
       await page.click("#dictation-open");
       await page.waitForSelector("#dictation [data-empty]");
       expect(await page.$$("#dictation fieldset")).toEqual([]);

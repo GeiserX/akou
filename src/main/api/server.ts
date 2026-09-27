@@ -38,6 +38,7 @@ import {
 import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
+import { dictationRoutes } from "./routes/dictation.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
 import { jobRoutes } from "./routes/jobs.ts";
@@ -161,6 +162,8 @@ export interface ApiApp {
   queueDepth?(): number;
   /** The file jobs of server mode (docs/ux/SERVER.md section 5); none in app mode. */
   jobs?(): import("../server/jobs.ts").JobService | null;
+  /** Dictation (docs/ux/DICTATION.md); app mode only. */
+  dictation?(): import("../dictation/service.ts").DictationService | null;
 }
 
 export interface ServerOptions {
@@ -217,6 +220,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   queryRoutes(r);
   notesRoutes(r);
   vocabRoutes(r);
+  dictationRoutes(r);
   postCallRoutes(r);
   handoffRoutes(r);
   serverRoutes(r);
