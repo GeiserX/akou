@@ -6,10 +6,12 @@
  * term's `scope: dictation` entry for its waiting pairs; reject keeps the term's pairs from being
  * proposed again and takes a learned one back out of the vocabulary.
  *
- * The rows are one per term and state, since the routes answer a term and not one heard form:
- * waiting (`proposed`, or `ignored` when the chip closed unanswered) with Accept and Reject,
- * learned with Forget, and not a word with nothing left to do. An akou without the list (server
- * mode, or an app older than the route) answers without `dictation`, and the heading is left out.
+ * The rows are one per term, since the routes answer a term and not one heard form: waiting
+ * (`proposed`, or `ignored` when the chip closed unanswered) with Accept and Reject, learned with
+ * Forget, and not a word with nothing left to do. A term both learned and waiting again under a
+ * new heard form is one waiting row whose Reject says it forgets the learned form too, as the
+ * route does. An app older than the route answers without `dictation`, and the heading is left
+ * out; server mode answers an empty list, and its page never draws the words to review.
  */
 
 import { h } from "./dom.ts";
@@ -67,30 +69,49 @@ type Bucket = "waiting" | "accepted" | "rejected";
 interface Row {
   term: string;
   bucket: Bucket;
+  /** The heard forms of the row's state. */
   heard: string[];
+  /** Every waiting pair closed unanswered (none still an open chip). */
   ignored: boolean;
+  /** The heard forms already learned; on a waiting row, Reject forgets them too. */
+  learned: string[];
 }
 
-/** One row per term and state, waiting first, then learned, then not a word, newest first. */
+/**
+ * One row per term, as the routes answer: waiting if any pair waits, else learned if any pair is,
+ * else not a word. Waiting rows first, then learned, then not a word, each newest first.
+ */
 export function reviewRows(pairs: readonly DictationPair[]): Row[] {
-  const rows = new Map<string, Row>();
-  for (const p of pairs) {
-    const bucket: Bucket = WAITING.has(p.status) ? "waiting" : (p.status as Bucket);
-    const k = `${bucket}\u0000${p.term}`;
-    let row = rows.get(k);
-    if (!row) {
-      row = { term: p.term, bucket, heard: [], ignored: false };
-      rows.set(k, row);
-    }
-    if (!row.heard.includes(p.heard)) row.heard.push(p.heard);
-    if (p.status === "ignored") row.ignored = true;
+  const byTerm = new Map<string, DictationPair[]>();
+  for (const p of pairs) byTerm.set(p.term, [...(byTerm.get(p.term) ?? []), p]);
+  const forms = (ps: DictationPair[]) => [...new Set(ps.map((p) => p.heard))];
+  const rows: Row[] = [];
+  for (const [term, ps] of byTerm) {
+    const waiting = ps.filter((p) => WAITING.has(p.status));
+    const accepted = ps.filter((p) => p.status === "accepted");
+    const bucket: Bucket =
+      waiting.length > 0 ? "waiting" : accepted.length > 0 ? "accepted" : "rejected";
+    const own = bucket === "waiting" ? waiting : bucket === "accepted" ? accepted : ps;
+    rows.push({
+      term,
+      bucket,
+      heard: forms(own),
+      ignored: waiting.length > 0 && waiting.every((p) => p.status === "ignored"),
+      learned: forms(accepted),
+    });
   }
   const order: Bucket[] = ["waiting", "accepted", "rejected"];
-  return [...rows.values()].sort((a, b) => order.indexOf(a.bucket) - order.indexOf(b.bucket));
+  return rows.sort((a, b) => order.indexOf(a.bucket) - order.indexOf(b.bucket));
 }
 
 const NOTE: Record<Bucket, (r: Row) => string> = {
-  waiting: (r) => (r.ignored ? "the chip closed unanswered" : "waiting for your answer"),
+  waiting: (r) =>
+    [
+      r.ignored ? "the chip closed unanswered" : "waiting for your answer",
+      ...(r.learned.length > 0
+        ? [`learned for ${r.learned.join(", ")}: Reject forgets that too`]
+        : []),
+    ].join(" · "),
   accepted: () => "learned: dictation writes it for what you said",
   rejected: () => "not a word: never proposed again",
 };
@@ -150,8 +171,13 @@ export function dictationReviewSection(
     }
     await answered(said);
   };
-  const button = (label: string, term: string, action: "approve" | "reject", go = false) => {
-    const forget = label === "Forget";
+  const button = (
+    label: string,
+    term: string,
+    action: "approve" | "reject",
+    o: { go?: boolean; forget?: boolean } = {},
+  ) => {
+    const { go = false, forget = false } = o;
     const b: HTMLButtonElement = h(
       "button",
       {
@@ -177,8 +203,13 @@ export function dictationReviewSection(
             "span",
             { class: "bar" },
             ...(r.bucket === "waiting"
-              ? [button("Accept", r.term, "approve", true), button("Reject", r.term, "reject")]
-              : [button("Forget", r.term, "reject")]),
+              ? [
+                  button("Accept", r.term, "approve", { go: true }),
+                  r.learned.length > 0
+                    ? button("Reject and forget", r.term, "reject", { forget: true })
+                    : button("Reject", r.term, "reject"),
+                ]
+              : [button("Forget", r.term, "reject", { forget: true })]),
           ),
     ),
   );
