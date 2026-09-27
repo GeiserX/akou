@@ -528,7 +528,8 @@ describe("DC-O1: the pill over a whole app", () => {
     writeFileSync(wav, monoWav(concat(speak(["hello"]), silence(3))));
     const r = await appRig({
       helperArgs: ["--wav", wav],
-      settings: { "dictation.enabled": true },
+      // Named, since the default is off on Linux.
+      settings: { "dictation.enabled": true, "dictation.pill": "bottom" },
     });
     cleanups.push(() => r.close());
     await until(() => r.app.dictation()?.status().state === "idle", 10_000, "the helper ready");
@@ -568,6 +569,7 @@ describe("DC-O1: the pill over a whole app", () => {
     f.tray("dictate");
     await until(() => visible, 5000, "the pill to show");
     // The key is the host's default (`RightCommand` here, a chord on Linux), labelled for macOS.
+    // Labelled by `hotkeyLabel` itself, so this checks the wiring only; `Right ⌘` is pinned above.
     expect(rec.states().at(-1)).toMatchObject({
       state: "listening",
       hotkey: hotkeyLabel(r.app.dictation()?.hotkey() ?? "", "darwin"),
