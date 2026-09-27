@@ -111,6 +111,12 @@ import {
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
+import { BestEngine } from "./dictation/best.ts";
+import {
+  dictationLanguages,
+  type EngineVerdict,
+  resolveDictationEngine,
+} from "./dictation/engines.ts";
 import type { Bindings } from "./dictation/protocol.ts";
 import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
@@ -187,6 +193,14 @@ export const APP_LOCK = "akou.lock";
 export const QUIT_FINAL_GRACE_MS = 5_000;
 /** How long a settings change waits for the dictation helper to take or refuse new keys. */
 const REBIND_ANSWER_MS = 3_000;
+/** The settings that decide which engine a dictation runs and how `best`'s server starts (DC-E3). */
+const WARM_KEYS = [
+  "dictation.engine",
+  "asr.accelerator",
+  "asr.llamaServer",
+  "asr.modelsDir",
+] as const satisfies readonly SettingKey[];
+const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 /** Names, merges and vocabulary change in bursts; a re-export waits this long for the last one. */
 export const REEXPORT_DEBOUNCE_MS = 1_500;
 
@@ -487,6 +501,8 @@ export class AkouApp implements ApiApp {
   private dictationVocab: Promise<MergedEntry[]> | null = null;
   /** The `remote` dictation engine, made at the first remote dictation; it reads its settings live. */
   private remoteDictation: RemoteEngine | null = null;
+  /** The `best` dictation engine: Qwen's llama-server kept warm while dictation is on (DC-E2). */
+  private bestDictation: BestEngine | null = null;
   /** The machine that detection read: its env names the image's llama-server. */
   private accelProbe: Probe | null = null;
 
@@ -1442,6 +1458,8 @@ export class AkouApp implements ApiApp {
     // Keys changed while the helper is still starting need nothing: it is bound from the
     // settings once it reports `ready`.
     if (before["dictation.enabled"] !== after["dictation.enabled"]) this.applyDictation();
+    else if (after["dictation.enabled"] && WARM_KEYS.some((k) => !sameValue(before[k], after[k])))
+      this.warmDictation();
     return this.cfg;
   }
 
@@ -1977,6 +1995,12 @@ export class AkouApp implements ApiApp {
       configDir: this.configDir,
       now: () => this.clock.now(),
       engine: (name) => this.dictationEngine(name),
+      verdict: () => this.dictationVerdict().verdict,
+      loading: () => this.dictationLoading(),
+      language: () => {
+        const l = this.cfg.settings["dictation.language"];
+        return l === "auto" ? undefined : l;
+      },
       correct: (raw, language) => this.correctDictation(raw, language),
       retainDays: () => this.cfg.settings["dictation.retainDays"],
       remote: () => {
@@ -1989,6 +2013,10 @@ export class AkouApp implements ApiApp {
         };
       },
       onLog: (level, msg) => this.log(level, msg),
+    });
+    // Qwen landing while `best` waits for it: it is warmed at once (DC-E3).
+    this.shelf?.onEnd((e) => {
+      if (e.ok && this.cfg.settings["dictation.enabled"]) this.warmDictation();
     });
     this.applyDictation();
   }
@@ -2023,19 +2051,130 @@ export class AkouApp implements ApiApp {
     return mergeVocab(layers);
   }
 
-  /** The live Worker's Parakeet, already loaded at start, or null while no model is there. */
+  /**
+   * The live Worker's Parakeet, already loaded at start, or null while no model is there. It picks
+   * the language itself, so a forced one is not sent (DC-E4).
+   */
   private fastEngine(): DictationEngine | null {
     const asr = this.asr;
-    return asr ? { name: "fast", decode: (samples, o) => asr.decode(samples, o) } : null;
+    return asr ? { name: "fast", decode: (samples) => asr.decode(samples) } : null;
+  }
+
+  /**
+   * Which engine `dictation.engine` (or the one named) is on this machine now, and why (DC-E3):
+   * `auto` is `best` where Qwen runs on a GPU and is on disk.
+   */
+  private dictationVerdict(name?: string): EngineVerdict {
+    const setting = name ?? this.cfg.settings["dictation.engine"];
+    if (setting === "fast" || setting === "remote")
+      return resolveDictationEngine({ setting, accelerator: "cpu", bestReady: false });
+    const plan = this.llamaPlan();
+    return resolveDictationEngine({
+      setting,
+      accelerator: plan.accelerator,
+      bestReady: this.bestRuns(plan),
+    });
+  }
+
+  /** Qwen is on disk and a llama-server is there to run it. */
+  private bestRuns(plan: LlamaPlan): boolean {
+    return (
+      (plan.command !== undefined || plan.build !== undefined) &&
+      this.qwenMissing(plan).length === 0
+    );
+  }
+
+  /** Qwen's files and its llama-server build that are not on disk; an own or image build needs none. */
+  private qwenMissing(plan: LlamaPlan): string[] {
+    const dir = this.cfg.settings["asr.modelsDir"];
+    const ids = [QWEN_ASR, ...(plan.command || !plan.build ? [] : [plan.build.id])];
+    const entries = [...MODELS, ...(plan.build ? [plan.build] : [])];
+    return ids.filter((id) => {
+      const m = entries.find((e) => e.id === id);
+      return !m || m.files.some((f) => !existsSync(modelFile(dir, id, f.name)));
+    });
+  }
+
+  /** Whether the engine a press decodes on is loading its model now. */
+  private dictationLoading(): boolean {
+    const v = this.dictationVerdict();
+    if (v.engine === "best") return this.bestDictation?.loading() ?? false;
+    return v.engine === "fast" && this.asrState.state === "loading";
+  }
+
+  /** The `best` engine, made once; it reads its settings and spec at each dictation. */
+  private best(): BestEngine {
+    this.bestDictation ??= new BestEngine({
+      spec: () => {
+        if (!this.bestRuns(this.llamaPlan())) return null;
+        // The languages are the dictation's, per request: a changed list needs no new server.
+        return { ...this.llamaSpec(QWEN_ASR), languages: undefined };
+      },
+      fast: () => this.fastEngine(),
+      // Warm only while dictation is on: a clip sent over the API with it off stops it after.
+      keepWarm: () => this.cfg.settings["dictation.enabled"],
+      settings: () => {
+        const c = this.cfg.settings;
+        return {
+          timeoutSeconds: c["dictation.localTimeoutSeconds"],
+          idleMinutes: c["asr.qwenIdleMinutes"],
+          languages: dictationLanguages(c["dictation.languages"], c["asr.languages"]),
+        };
+      },
+      clock: this.clock,
+      onLog: (level, msg) => this.log(level, msg),
+    });
+    return this.bestDictation;
+  }
+
+  /**
+   * Keeps `best` warm while dictation is on and resolves to it, and stops it otherwise; `best`
+   * asked for with Qwen missing starts the download (DC-E2, DC-E3).
+   */
+  private warmDictation(): void {
+    if (this.quitting) return;
+    const v = this.dictationVerdict();
+    if (v.download) this.fetchQwen();
+    if (v.engine === "best") this.best().warm();
+    else void this.bestDictation?.stop();
+  }
+
+  /** Starts Qwen's download and its llama-server build's, each refused one logged (DK-E3). */
+  private fetchQwen(): void {
+    const shelf = this.shelf;
+    if (!shelf) return;
+    for (const id of this.qwenMissing(this.llamaPlan())) {
+      if (shelf.state(id) === "downloading") continue;
+      try {
+        shelf.pull(id);
+      } catch (err) {
+        this.log("warn", `dictation best: ${id} not downloaded: ${(err as Error).message}`);
+      }
+    }
   }
 
   /**
    * The engine a dictation decodes on, read at each press: `remote` sends the audio to
    * `dictation.remote.url` with the key as it is now, so a changed key or URL needs no restart;
-   * `auto` and `fast` decode on the loaded Parakeet (`best` is refused at save until DC-E2).
+   * `best` decodes on the warm Qwen with `fast` as its exit; `fast` on the loaded Parakeet, and in
+   * place of a `best` still downloading, saying so.
    */
   private dictationEngine(name?: string): DictationEngine | null {
-    if ((name ?? this.cfg.settings["dictation.engine"]) !== "remote") return this.fastEngine();
+    const v = this.dictationVerdict(name);
+    if (v.engine === "best") return this.best();
+    if (v.engine === "fast") {
+      const fast = this.fastEngine();
+      if (!fast || v.wanted === null) return fast;
+      return {
+        name: fast.name,
+        decode: async (samples, o) => ({
+          ...(await fast.decode(samples, o)),
+          engine: fast.name,
+          fallback_from: v.wanted as string,
+          notice: v.verdict,
+        }),
+      };
+    }
     this.remoteDictation ??= new RemoteEngine({
       settings: () => {
         const c = this.cfg.settings;
@@ -2080,8 +2219,10 @@ export class AkouApp implements ApiApp {
     const s = this.cfg.settings;
     if (!s["dictation.enabled"]) {
       void d.stop();
+      void this.bestDictation?.stop();
       return;
     }
+    this.warmDictation();
     if (d.session()) {
       void d.rebind();
       return;
@@ -2382,6 +2523,7 @@ export class AkouApp implements ApiApp {
       }
       await this.dictationSvc?.close();
       this.remoteDictation?.close();
+      await this.bestDictation?.stop();
       await this.asr?.close();
       await this.page?.stop();
       await this.server?.stop();

@@ -69,6 +69,8 @@ describe("DC-G1: GET /v1/dictation", () => {
       enabled: true,
       state: "idle",
       engine: "fast",
+      verdict: "fast: best needs a GPU",
+      loading: false,
       fallback: null,
       remote: null,
       grants: { mic: "granted", accessibility: "granted" },

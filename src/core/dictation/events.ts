@@ -55,6 +55,11 @@ export type DictationDraft =
       /** Decode time, milliseconds. */
       ms: number;
       fallback_from?: string;
+      /**
+       * With a language set (`dictation.language` or the clip's), whether it reached the engine:
+       * `best` and a remote take one, `fast` (Parakeet) picks the language itself (DC-E4).
+       */
+      language_forced?: boolean;
     }
   | { type: "dictation.empty"; id: string }
   | { type: "dictation.inserted"; id: string; method: string; receipt_ms: number }
@@ -118,7 +123,8 @@ export function checkDictationDraft(o: Record<string, unknown>): string | null {
         isStr(o.engine) &&
         isStr(o.model) &&
         isNum(o.ms) &&
-        (o.fallback_from === undefined || isStr(o.fallback_from))
+        (o.fallback_from === undefined || isStr(o.fallback_from)) &&
+        (o.language_forced === undefined || typeof o.language_forced === "boolean")
         ? null
         : "dictation.text";
     case "dictation.inserted":
@@ -169,6 +175,8 @@ export interface DictationItem {
   model: string | null;
   ms: number | null;
   fallback_from: string | null;
+  /** Null when no language was set, so the engine chose (DC-E4). */
+  language_forced: boolean | null;
   error: string | null;
 }
 
@@ -195,6 +203,7 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
         model: null,
         ms: null,
         fallback_from: null,
+        language_forced: null,
         error: null,
       });
       continue;
@@ -217,6 +226,7 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
           model: e.model,
           ms: e.ms,
           fallback_from: e.fallback_from ?? null,
+          language_forced: e.language_forced ?? null,
         });
         break;
       case "dictation.empty":

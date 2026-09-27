@@ -74,10 +74,10 @@ describe("DC-G1: POST /v1/dictations", () => {
     expect((await r.api("GET", "/dictations/dnope")).status).toBe(404);
   });
 
-  test("an engine not built yet, an unknown field and a missing file are refused", async () => {
+  test("an unknown engine and an unknown field are refused", async () => {
     const r = await rig();
     const path = clip(scratch());
-    expect((await upload(r, path, { engine: "best" })).status).toBe(422);
+    expect((await upload(r, path, { engine: "slow" })).status).toBe(422);
     expect((await upload(r, path, { insert: "true" })).body.error).toBe("unknown_field");
   });
 

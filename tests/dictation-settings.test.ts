@@ -152,13 +152,10 @@ describe("the rules the type cannot say", () => {
     expect(validateSetting("dictation.pillPreview", false).ok).toBe(true);
   });
 
-  test("best is refused until it is built; the other engines pass", () => {
-    expect(validateSetting("dictation.engine", "best")).toMatchObject({
-      ok: false,
-      error: expect.stringContaining("DC-E2"),
-    });
-    for (const e of ["auto", "fast", "remote"])
+  test("DC-E2: every engine of the spec passes, best included; another name is refused", () => {
+    for (const e of ["auto", "fast", "best", "remote"])
       expect(validateSetting("dictation.engine", e).ok).toBe(true);
+    expect(validateSetting("dictation.engine", "slow").ok).toBe(false);
   });
 
   test("DC-E3: remote with no URL is refused at save; with one it passes", () => {
