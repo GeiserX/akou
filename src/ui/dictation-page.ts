@@ -21,6 +21,7 @@
 import type { Grant } from "../main/dictation/protocol.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
 import { cueStyle } from "./dictation-cues.ts";
+import { mountDictionaryDialog } from "./dictation-dictionary.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
 import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
@@ -552,7 +553,8 @@ export class DictationSettings {
 
 /**
  * The window's `#dictation` dialog, opened by its button, by `#dictation` in the address, or by
- * Settings; its History button opens the history (DC-H1) over it.
+ * Settings; its History button opens the history (DC-H1) over it, and Dictionary the dictionary
+ * and replacements (DC-U5).
  */
 export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
   const dialog = document.getElementById("dictation") as HTMLDialogElement;
@@ -572,6 +574,12 @@ export function mountDictationDialog(t: Transport): { open(): Promise<void> } {
     // A live recorder would take every key typed into the history's search.
     page.stopRecording();
     void history.open();
+  });
+  const dictionary = mountDictionaryDialog(t);
+  document.getElementById("dictation-dictionary-open")?.addEventListener("click", () => {
+    // A live recorder would take every key typed into the dictionary's fields.
+    page.stopRecording();
+    void dictionary.open();
   });
   const fromHash = () => {
     if (location.hash === "#dictation") void open();

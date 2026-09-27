@@ -4,8 +4,9 @@
  *
  * The pill never receives dictated text: no state below has a field for it, and the main side
  * rebuilds every message field by field, as the indicator's does, so a stray `text` never reaches
- * the page. The only words it shows are the learn chip's term and heard form, and an error's
- * message. The words-as-I-speak preview (DC-O2) is a later, separate field under DC-D2's rule.
+ * the page. The only words it shows are the learn chip's term and heard form, an error's message,
+ * and the words-as-I-speak preview (DC-O2), a message of its own that the main side sends only
+ * when `pillPreview` below lets it (DC-D2).
  */
 
 /** A key the backend swallows during a session (DC-A4), shown as a hint only when it does. */
@@ -64,6 +65,21 @@ export interface ChipAnswer {
   terms?: string[];
 }
 
+/**
+ * The preview the main side may send for a partial (DC-O2 under DC-D2's rule): its words when
+ * `dictation.pillPreview` is on and the pill's window is hidden from screen capture, otherwise
+ * null, and then nothing is sent. The main side passes every partial through this, as
+ * `indicatorStatus` cuts the indicator's status, so with the preview off no message to the pill
+ * carries dictated text.
+ */
+export function pillPreview(
+  partial: unknown,
+  rule: { pillPreview: unknown; hiddenFromCapture: boolean },
+): { text: string } | null {
+  if (rule.pillPreview !== true || !rule.hiddenFromCapture) return null;
+  return typeof partial === "string" && partial.trim() !== "" ? { text: partial } : null;
+}
+
 export interface PillRpc {
   bun: {
     requests: {
@@ -79,6 +95,8 @@ export interface PillRpc {
       state: PillState;
       /** The mic level in dBFS, -60 to 0, about 20 a second while listening. */
       level: { db: number };
+      /** The words recognised so far while listening, only as `pillPreview` allows (DC-O2). */
+      preview: { text: string };
       chip: Chip;
     };
   };

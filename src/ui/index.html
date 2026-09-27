@@ -138,8 +138,13 @@
   <form id="dictation-form" novalidate>
     <h2>Dictation</h2>
     <div id="dictation-fields"></div>
-    <div class="bar"><button type="button" id="dictation-history-open" title="Every dictation, to insert again, retry, fix or delete">History</button><button type="button" id="dictation-close">Close</button></div>
+    <div class="bar"><button type="button" id="dictation-history-open" title="Every dictation, to insert again, retry, fix or delete">History</button><button type="button" id="dictation-dictionary-open" title="Words akou should know, and text to write for what you say">Dictionary</button><button type="button" id="dictation-close">Close</button></div>
   </form>
+</dialog>
+<dialog id="dictation-dictionary" aria-label="Dictionary">
+  <h2>Dictionary</h2>
+  <div id="dictation-dictionary-body"></div>
+  <div class="bar"><button type="button" id="dictation-dictionary-close">Close</button></div>
 </dialog>
 <dialog id="dictation-history" aria-label="Dictation history">
   <h2>Dictation history</h2>
