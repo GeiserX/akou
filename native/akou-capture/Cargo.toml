@@ -39,16 +39,36 @@ pulseaudio = "0.3"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wasapi = "0.24"
-# The same `windows` release wasapi is built on, for the few calls it does not wrap.
+# The same `windows` release wasapi is built on, for the few calls it does not wrap. Dictation
+# (DC-N1, DC-N6 to DC-N9, DC-L2) adds the low-level key and mouse hooks and `SendInput`
+# (UI_WindowsAndMessaging, UI_Input_KeyboardAndMouse, and Graphics_Gdi for a window class), the clipboard's delayed rendering
+# (System_DataExchange, System_Memory), UI Automation for the focused field (UI_Accessibility,
+# System_Com, System_Ole, System_Variant), the target's integrity level (Security), the unlock
+# notice that reinstalls the hook (System_RemoteDesktop) and the microphone privacy switch
+# (System_Registry). These are the calls handy-keys and enigo make on Windows, taken directly so
+# the hook can decide per event what DC-A4 swallows and every posted event carries akou's mark.
 windows = { version = "0.62", features = [
   "Wdk_System_SystemServices",
   "Win32_Foundation",
+  "Win32_Graphics_Gdi",
+  "Win32_Security",
+  "Win32_System_Com",
+  "Win32_System_DataExchange",
   "Win32_System_Diagnostics_ToolHelp",
+  "Win32_System_LibraryLoader",
+  "Win32_System_Memory",
+  "Win32_System_Ole",
   "Win32_System_Performance",
   "Win32_System_Power",
+  "Win32_System_Registry",
+  "Win32_System_RemoteDesktop",
   "Win32_System_SystemInformation",
   "Win32_System_Threading",
+  "Win32_System_Variant",
   "Win32_System_WindowsProgramming",
+  "Win32_UI_Accessibility",
+  "Win32_UI_Input_KeyboardAndMouse",
+  "Win32_UI_WindowsAndMessaging",
 ] }
 
 # The macOS pasteboard and layout checks run on the main thread, where AppKit serves a pasteboard
