@@ -1107,3 +1107,31 @@ dialog {
     justify-content: flex-start;
   }
 }
+/* Dictation: the key recorder's keycaps and the history list (DC-U3, DC-H1). */
+.keycaps kbd {
+  font: inherit;
+  padding: 0 0.35em;
+  margin-right: 0.25em;
+  border: 1px solid var(--line);
+  border-bottom-width: 2px;
+  border-radius: 4px;
+  background: var(--panel);
+}
+#dictation-history-list {
+  list-style: none;
+  padding: 0;
+}
+#dictation-history-list > li + li {
+  border-top: 1px solid var(--line);
+}
+.dictation-history .results {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+}
+.dictation-history .result {
+  flex: 1 1 14em;
+}
+.dictation-history .issue {
+  color: var(--rec);
+}
