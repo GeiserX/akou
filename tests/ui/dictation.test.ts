@@ -11,20 +11,26 @@
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
-import { onDictationPage } from "../../src/ui/dictation-page.ts";
+import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
+import { type DictationGrants, onDictationPage } from "../../src/ui/dictation-page.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
+import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
 import type { PillState } from "../../src/ui/pill-protocol.ts";
 import { tempDir } from "../helpers.ts";
 import {
+  CLIPBOARD_PERMISSIONS,
   DICTATION_SCHEMA,
+  type DictationFixture,
   dictationFixture,
+  dictationRow,
   UI_TIMEOUT,
   type UiRig,
   uiRig,
   until,
   type ViewPage,
   viewPage,
+  windowPage,
 } from "./rig.ts";
 
 const text = (page: Page, sel: string) => page.textContent(sel).then((t) => t?.trim() ?? "");
@@ -639,6 +645,379 @@ describe("DC-U1: the Dictation page in the window", () => {
       await page.click("#settings-open");
       await page.waitForSelector("#settings-fields .setting");
       expect(await page.$("#settings-dictation")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-H1: the History page", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-hist-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const openHistory = async (history: DictationRow[]) => {
+    let fx: DictationFixture | null = null;
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        await p.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
+        fx = await dictationFixture(p, { history });
+      },
+    });
+    await page.click("#dictation-open");
+    await page.click("#dictation-history-open");
+    await page.waitForSelector("#dictation-history[open] #dictation-history-list li");
+    return { page, fx: fx as unknown as DictationFixture };
+  };
+  const row = (id: string) => `#dictation-history-list li[data-id='${id}']`;
+
+  test(
+    "lists every dictation with its app, engine, time and state; each action calls its route",
+    async () => {
+      const { page, fx } = await openHistory([
+        dictationRow(1),
+        dictationRow(2, { state: "cancelled", app: null, engine: "best", ms: 640 }),
+        dictationRow(3, { state: "failed", text: null, error: "remote akou not reachable" }),
+      ]);
+      expect(
+        await page.$$eval("#dictation-history-list li", (l) => l.map((x) => x.dataset.id)),
+      ).toEqual(["d001", "d002", "d003"]);
+      expect(await text(page, `${row("d001")} .text`)).toBe("dictation number 1");
+      const meta = await text(page, `${row("d002")} .meta`);
+      expect(meta).toContain("no app · best 0.6 s");
+      expect(await text(page, `${row("d002")} .state`)).toBe("cancelled");
+      expect(await text(page, `${row("d003")} .issue`)).toBe("remote akou not reachable");
+      // Nothing to insert, copy or fix in a dictation with no text; Retry still decodes its audio.
+      expect(await page.isDisabled(`${row("d003")} button.insert`)).toBe(true);
+      expect(await page.isDisabled(`${row("d003")} button.fix`)).toBe(true);
+      expect(await page.isDisabled(`${row("d003")} button.retry`)).toBe(false);
+
+      fx.calls.length = 0;
+      await page.click(`${row("d001")} button.insert`);
+      await page.click(`${row("d001")} button.fix`);
+      await until(() => fx.calls.length === 2, 5000, "insert and fix");
+      expect(fx.calls).toEqual([
+        { method: "POST", path: "/dictations/d001/insert", body: { text: "dictation number 1" } },
+        {
+          method: "POST",
+          path: "/dictations/d001/insert",
+          body: { text: "dictation number 1", fix: true },
+        },
+      ]);
+
+      await page.click(`${row("d001")} button.copy`);
+      await page.waitForFunction(async () => (await navigator.clipboard.readText()) !== "");
+      expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("dictation number 1");
+
+      // Delete asks once more, then removes the dictation from the page and the store.
+      fx.calls.length = 0;
+      await page.click(`${row("d002")} button.delete`);
+      expect(fx.calls).toEqual([]);
+      await page.click(`${row("d002")} button.delete`);
+      await page.waitForSelector(row("d002"), { state: "detached" });
+      expect(fx.calls).toEqual([{ method: "DELETE", path: "/dictations/d002" }]);
+      expect(fx.history.map((d) => d.id)).toEqual(["d001", "d003"]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Retry with best shows the second result beside the first, and either can be inserted",
+    async () => {
+      const { page, fx } = await openHistory([dictationRow(1)]);
+      // The picker starts on another engine than the one that ran.
+      expect(await page.inputValue(`${row("d001")} select.retry-engine`)).toBe("best");
+      fx.calls.length = 0;
+      await page.click(`${row("d001")} button.retry`);
+      await page.waitForSelector(`${row("d001")} .result.retry`);
+      expect(fx.calls).toEqual([
+        { method: "POST", path: "/dictations/d001/retry", body: { engine: "best" } },
+      ]);
+      const readings = await page.$$eval(`${row("d001")} .result`, (r) =>
+        r.map((x) => [x.getAttribute("data-engine"), x.querySelector(".text")?.textContent]),
+      );
+      expect(readings).toEqual([
+        ["fast", "dictation number 1"],
+        ["best", "dictation number 1 (best)"],
+      ]);
+      expect(await text(page, `${row("d001")} .result.retry small`)).toBe("best 0.6 s");
+
+      fx.calls.length = 0;
+      await page.click(`${row("d001")} .result.retry button.insert`);
+      await page.click(`${row("d001")} .result.first button.insert`);
+      await until(() => fx.calls.length === 2, 5000, "both inserts");
+      expect(fx.calls.map((c) => c.body)).toEqual([
+        { text: "dictation number 1 (best)" },
+        { text: "dictation number 1" },
+      ]);
+
+      // A refused retry says why and leaves the readings as they were.
+      fx.refuse.set("retry:remote", "no remote akou is set");
+      await page.selectOption(`${row("d001")} select.retry-engine`, "remote");
+      await page.click(`${row("d001")} button.retry`);
+      await page.waitForFunction(() => document.getElementById("toast")?.textContent !== "");
+      expect(await text(page, "#toast")).toBe("no remote akou is set");
+      expect(await page.$$(`${row("d001")} .result`)).toHaveLength(2);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "deleting the last dictation shown says there are none",
+    async () => {
+      const { page } = await openHistory([dictationRow(1)]);
+      await page.click(`${row("d001")} button.delete`);
+      await page.click(`${row("d001")} button.delete`);
+      await page.waitForSelector("#dictation-history-list li[data-empty]");
+      expect(await text(page, "#dictation-history-list li")).toBe("No dictations yet.");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "search asks the route for the typed text, and Older pages on from the last shown",
+    async () => {
+      const many = Array.from({ length: HISTORY_PAGE + 5 }, (_, i) => dictationRow(i + 1));
+      many[3] = dictationRow(4, { text: "ping the Kubernetes team" });
+      const { page, fx } = await openHistory(many);
+      expect(await page.$$(`#dictation-history-list li`)).toHaveLength(HISTORY_PAGE);
+      await page.click("#dictation-history-more");
+      await page.waitForFunction(
+        (n) => document.querySelectorAll("#dictation-history-list li").length === n,
+        HISTORY_PAGE + 5,
+      );
+      expect(await page.isHidden("#dictation-history-more")).toBe(true);
+
+      fx.calls.length = 0;
+      await page.fill("#dictation-history-q", "kubernetes");
+      await page.waitForFunction(
+        () => document.querySelectorAll("#dictation-history-list li").length === 1,
+      );
+      expect(fx.calls.map((c) => c.path)).toEqual(["/dictations?limit=50&q=kubernetes"]);
+      expect(await text(page, "#dictation-history-list li .text")).toBe("ping the Kubernetes team");
+      await page.fill("#dictation-history-q", "nothing like this");
+      await page.waitForSelector("#dictation-history-list li[data-empty]");
+      expect(await text(page, "#dictation-history-list li")).toBe("No dictation holds that.");
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U3: the dictation key recorder", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-keys-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const input = (key: string) => `#dictation input[data-key='${key}']`;
+  const record = (key: string) => `#dictation button.record-key[data-for='${key}']`;
+  const caps = (page: Page, key: string) =>
+    page.$$eval(`#dictation div.setting[data-key='${key}'] .keycaps kbd`, (k) =>
+      k.map((x) => x.textContent),
+    );
+  const note = (page: Page, key: string) =>
+    text(page, `#dictation div.setting[data-key='${key}'] .recorder-note`);
+  const openPage = async (o: { grants?: DictationGrants } = {}) => {
+    let fx: DictationFixture | null = null;
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        fx = await dictationFixture(p, { platform: "darwin", ...o });
+      },
+    });
+    await page.click("#dictation-open");
+    await page.waitForSelector(record("dictation.hotkey"));
+    return { page, fx: fx as unknown as DictationFixture };
+  };
+
+  test(
+    "a chord is saved at its first key, and a modifier held alone saves its side",
+    async () => {
+      const { page, fx } = await openPage();
+      await page.click(record("dictation.hotkeyDraft"));
+      expect(await page.getAttribute(record("dictation.hotkeyDraft"), "aria-pressed")).toBe("true");
+      await page.keyboard.press("Control+Shift+KeyD");
+      await until(() => fx.patches.length === 1, 5000, "the chord saved");
+      expect(fx.patches).toEqual([{ "dictation.hotkeyDraft": "Control+Shift+D" }]);
+      expect(await page.inputValue(input("dictation.hotkeyDraft"))).toBe("Control+Shift+D");
+      expect(await caps(page, "dictation.hotkeyDraft")).toEqual(["⌃", "⇧", "D"]);
+      expect(await page.getAttribute(record("dictation.hotkeyDraft"), "aria-pressed")).toBe(
+        "false",
+      );
+
+      // Right Command tapped is not yet a key alone; held 400 ms and released alone, it is.
+      await page.click(record("dictation.hotkey"));
+      await page.keyboard.down("MetaRight");
+      await page.keyboard.up("MetaRight");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Hold a key alone a moment longer to use it by itself.",
+      );
+      await page.keyboard.down("MetaRight");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("MetaRight");
+      await until(() => fx.patches.length === 2, 5000, "the key alone saved");
+      expect(fx.patches.at(-1)).toEqual({ "dictation.hotkey": "RightCommand" });
+      expect(await caps(page, "dictation.hotkey")).toEqual(["Right ⌘"]);
+
+      // The left one is another key.
+      await page.click(record("dictation.hotkeyPasteLast"));
+      await page.keyboard.down("ShiftLeft");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("ShiftLeft");
+      await until(() => fx.patches.length === 3, 5000, "the left shift saved");
+      expect(fx.patches.at(-1)).toEqual({ "dictation.hotkeyPasteLast": "LeftShift" });
+
+      // Escape stops the recorder and saves nothing.
+      await page.click(record("dictation.hotkeyFixLast"));
+      await page.keyboard.press("Escape");
+      expect(await page.getAttribute(record("dictation.hotkeyFixLast"), "aria-pressed")).toBe(
+        "false",
+      );
+      expect(await page.isVisible("#dictation")).toBe(true);
+      expect(fx.patches).toHaveLength(3);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a binding another key has is refused with the conflict, and nothing is saved",
+    async () => {
+      const { page, fx } = await openPage();
+      // The recording hotkey's macOS default.
+      await page.click(record("dictation.hotkey"));
+      await page.keyboard.press("Alt+Meta+KeyR");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "⌥ ⌘ R is already the recording hotkey (app.hotkey).",
+      );
+      expect(fx.patches).toEqual([]);
+      expect(await page.getAttribute(record("dictation.hotkey"), "aria-pressed")).toBe("true");
+      // Another dictation key's binding, however it was written.
+      await page.keyboard.press("Control+Shift+KeyD");
+      await until(() => fx.patches.length === 1, 5000, "the free chord saved");
+      await page.click(record("dictation.hotkeyDraft"));
+      await page.keyboard.press("Shift+Control+KeyD");
+      expect(await note(page, "dictation.hotkeyDraft")).toBe(
+        "⌃ ⇧ D is already the dictation key (dictation.hotkey).",
+      );
+      expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+D" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "without the Accessibility grant a modifier alone is refused with the reason; a chord is taken",
+    async () => {
+      const { page, fx } = await openPage({ grants: { mic: "granted", accessibility: "denied" } });
+      await page.click(record("dictation.hotkey"));
+      expect(await note(page, "dictation.hotkey")).toContain("takes chords only");
+      await page.keyboard.down("MetaRight");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("MetaRight");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Right ⌘ alone cannot be bound: without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.",
+      );
+      expect(fx.patches).toEqual([]);
+      await page.keyboard.press("Control+Shift+Space");
+      await until(() => fx.patches.length === 1, 5000, "the chord saved");
+      expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+Space" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a modifier held while another is down is not a key alone, and Shift with a letter is refused",
+    async () => {
+      const { page, fx } = await openPage();
+      await page.click(record("dictation.hotkey"));
+      await page.keyboard.down("MetaLeft");
+      await page.keyboard.down("ShiftLeft");
+      await page.keyboard.up("ShiftLeft");
+      await page.keyboard.down("ShiftLeft");
+      await page.waitForTimeout(HOLD_ALONE_MS + 100);
+      await page.keyboard.up("ShiftLeft");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Release the other keys to bind one alone.",
+      );
+      await page.keyboard.up("MetaLeft");
+      await page.keyboard.press("Shift+KeyD");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Shift with a letter or digit types a character; add Control, Alt or ⌘.",
+      );
+      expect(fx.patches).toEqual([]);
+      await page.keyboard.press("Control+Shift+KeyD");
+      await until(() => fx.patches.length === 1, 5000, "the chord saved");
+      expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+D" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "opening History stops a live recorder, so the search box gets the keys",
+    async () => {
+      const { page, fx } = await openPage();
+      await page.click(record("dictation.hotkey"));
+      await page.click("#dictation-history-open");
+      await page.waitForSelector("#dictation-history[open]");
+      expect(await page.getAttribute(record("dictation.hotkey"), "aria-pressed")).toBe("false");
+      await page.click("#dictation-history-q");
+      await page.keyboard.type("ab");
+      expect(await page.inputValue("#dictation-history-q")).toBe("ab");
+      expect(fx.patches).toEqual([]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "in the window, a key the helper reports while recording (Fn) is saved; closing stops it",
+    async () => {
+      const w = await windowPage(rig, { platform: "darwin" });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.click(record("dictation.hotkey"));
+        await until(
+          () => w.requests.some((r) => r.name === "recordDictationKeys"),
+          5000,
+          "the recorder asked for the helper's keys",
+        );
+        expect(
+          w.requests.filter((r) => r.name === "recordDictationKeys").map((r) => r.params),
+        ).toEqual([{ on: true }]);
+        // The helper streams every key; one the page sees itself is the page's to take.
+        await w.send("dictationKey", { name: "RightCommand" });
+        await w.send("dictationKey", { name: "Fn" });
+        await until(() => w.patches.length === 1, 5000, "Fn saved");
+        expect(w.patches).toEqual([{ "dictation.hotkey": "Fn" }]);
+        expect(await caps(p, "dictation.hotkey")).toEqual(["fn"]);
+        expect(
+          w.requests.filter((r) => r.name === "recordDictationKeys").map((r) => r.params),
+        ).toEqual([{ on: true }, { on: false }]);
+
+        // A recorder left open when the page closes lets go of the helper's keys too.
+        await p.click(record("dictation.hotkeyDraft"));
+        await p.click("#dictation-close");
+        await until(
+          () => w.requests.filter((r) => r.name === "recordDictationKeys").length === 4,
+          5000,
+          "the close stopped the recorder",
+        );
+        expect(w.requests.at(-1)?.params).toEqual({ on: false });
+        await w.send("dictationKey", { name: "Fn" });
+        expect(w.patches).toHaveLength(1);
+      } finally {
+        await w.close();
+      }
     },
     UI_TIMEOUT,
   );
