@@ -16,6 +16,7 @@ import { QWEN_ASR } from "../../src/main/asr/llama-catalog.ts";
 import { MODELS, modelFile } from "../../src/main/asr/models.ts";
 import { SETTINGS } from "../../src/main/config/schema.ts";
 import { parseVocab } from "../../src/main/vocab/files.ts";
+import { NEXT_APP_LABEL, NEXT_APP_WAITING } from "../../src/ui/dictation-apps.ts";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
@@ -1137,6 +1138,210 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       expect(f.patches[3]).toEqual({
         "dictation.apps": [{ app: "com.example.chat", language: "english" }],
       });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Use the app I dictate into next adds a rule for the next dictation's app, never an earlier one or a clip",
+    async () => {
+      let fx: DictationFixture | null = null;
+      const page = await rig.open(undefined, {
+        before: async (p) => {
+          fx = await dictationFixture(p);
+          fx.settings[ENABLE_KEY] = true;
+          fx.settings["dictation.apps"] = [{ app: "com.example.term" }];
+          // A dictation before the button is pressed: not the one it waits for.
+          fx.history = [dictationRow(1, { app: "com.example.old" })];
+        },
+      });
+      const f = fx as unknown as DictationFixture;
+      const base = dictationRow(0).at;
+      const polls = () => f.calls.filter((c) => c.path.includes("since=")).length;
+      const next = "#dictation .apps-next";
+      const note = "#dictation .apps-next-note";
+      await page.click("#dictation-open");
+      await page.waitForSelector(rows);
+
+      await page.click(next);
+      expect(await text(page, note)).toBe(NEXT_APP_WAITING);
+      expect(await text(page, next)).toBe("Cancel");
+      // It asks after the newest dictation there was.
+      await until(() => polls() >= 1, 5000, "the page asked for newer dictations");
+      expect(f.calls.find((c) => c.path.includes("since="))?.path).toBe(
+        `/dictations?since=${dictationRow(1).at + 1}&limit=500`,
+      );
+      expect(await page.$$(rows)).toHaveLength(1);
+
+      // A clip sent to the API goes to no app, and an app the helper could not tell is empty.
+      f.history.unshift(
+        dictationRow(0, { id: "clip", at: base + 1000, app: null }),
+        dictationRow(0, { id: "unknown", at: base + 2000, app: "" }),
+      );
+      const seen = polls();
+      await until(() => polls() >= seen + 2, 5000, "two more reads");
+      expect(await page.$$(rows)).toHaveLength(1);
+      expect(f.patches).toHaveLength(0);
+
+      f.history.unshift(dictationRow(0, { id: "chat", at: base + 3000, app: "com.example.chat" }));
+      await until(() => f.patches.length === 1, 5000, "the rule saved");
+      expect(f.patches[0]).toEqual({
+        "dictation.apps": [{ app: "com.example.term" }, { app: "com.example.chat" }],
+      });
+      expect(await page.inputValue(cell(2, "app"))).toBe("com.example.chat");
+      expect(await text(page, next)).toBe(NEXT_APP_LABEL);
+      expect(await text(page, note)).toBe("Added com.example.chat.");
+      // Its fields are next: the first one has the keyboard.
+      expect(await page.evaluate(() => document.activeElement?.getAttribute("data-field"))).toBe(
+        "mode",
+      );
+      // It stops asking once it has the app.
+      const done = f.calls.length;
+      await page.waitForTimeout(2500);
+      expect(f.calls).toHaveLength(done);
+
+      // An app with a rule already gets no second one.
+      await page.click(next);
+      f.history.unshift(dictationRow(0, { id: "term", at: base + 4000, app: "com.example.term" }));
+      await page.waitForFunction(
+        (sel) =>
+          document.querySelector(sel)?.textContent === "com.example.term has a rule already.",
+        note,
+      );
+      expect(await page.$$(rows)).toHaveLength(2);
+      expect(f.patches).toHaveLength(1);
+
+      // Cancel stops the wait: a dictation after it adds nothing.
+      await page.click(next);
+      await until(() => polls() >= 1, 5000, "waiting again");
+      await page.click(next);
+      expect(await text(page, next)).toBe(NEXT_APP_LABEL);
+      expect(await text(page, note)).toBe("");
+      const cancelled = f.calls.length;
+      f.history.unshift(dictationRow(0, { id: "late", at: base + 5000, app: "com.example.late" }));
+      await page.waitForTimeout(2500);
+      expect(f.calls).toHaveLength(cancelled);
+      expect(await page.$$(rows)).toHaveLength(2);
+
+      // With dictation off no dictation comes: the page says so and asks for nothing.
+      await page.click(`#dictation input[data-key='${ENABLE_KEY}']`);
+      await until(() => f.patches.length === 2, 5000, "dictation turned off");
+      const off = f.calls.length;
+      await page.click(next);
+      expect(await text(page, note)).toBe(
+        "Turn dictation on first: the app comes from your next dictation.",
+      );
+      expect(await text(page, next)).toBe(NEXT_APP_LABEL);
+      expect(f.calls).toHaveLength(off);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a dictation log the page cannot read says why and stops waiting",
+    async () => {
+      let fx: DictationFixture | null = null;
+      const page = await rig.open(undefined, {
+        before: async (p) => {
+          fx = await dictationFixture(p);
+          fx.settings[ENABLE_KEY] = true;
+          // An app older than the dictation routes answers 404 under /dictations.
+          await p.route(
+            (u) => u.pathname.endsWith("/dictations"),
+            (route) =>
+              route.fulfill({
+                status: 404,
+                json: { error: "not_found", message: "dictation runs in the desktop app only" },
+              }),
+          );
+        },
+      });
+      const f = fx as unknown as DictationFixture;
+      await page.click("#dictation-open");
+      await page.click("#dictation .apps-next");
+      await page.waitForFunction(
+        (sel) =>
+          document.querySelector(sel)?.textContent === "dictation runs in the desktop app only",
+        "#dictation .apps-next-note",
+      );
+      expect(await text(page, "#dictation .apps-next")).toBe(NEXT_APP_LABEL);
+      expect(f.patches).toHaveLength(0);
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U9 on the real app: the app of the next dictation", () => {
+  // The fake helper dictates into com.example.chat once, at the second rebind, which the test
+  // sends after pressing the button.
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-next-app-");
+    const keys = join(t.dir, "keys.jsonl");
+    writeFileSync(
+      keys,
+      [
+        { at: 0, key: "RightCommand", down: true },
+        { at: 2500, key: "RightCommand", down: false },
+      ]
+        .map((k) => JSON.stringify(k))
+        .join("\n"),
+    );
+    const wav = join(t.dir, "mic.wav");
+    writeFileSync(wav, monoWav(concat(silence(0.5), speak(["example", "dot", "com"]), silence(3))));
+    rig = await uiRig({
+      home: t.dir,
+      helperArgs: [
+        "--wav",
+        wav,
+        "--keys",
+        keys,
+        "--play-after-rebinds",
+        "2",
+        "--target-app",
+        "com.example.chat",
+        "--inserter-log",
+        join(t.dir, "inserted.jsonl"),
+      ],
+      settings: {
+        "dictation.enabled": true,
+        "dictation.hotkey": "RightCommand",
+        "dictation.pill": "off",
+      },
+    });
+    await until(() => rig.app.dictation()?.status().state === "idle", 10_000, "the helper ready");
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  test(
+    "pressing the button, then dictating, writes a rule for that app to the config file",
+    async () => {
+      const page = await rig.open();
+      await page.click("#dictation-open");
+      await page.click("#dictation .apps-next");
+      expect(await text(page, "#dictation .apps-next-note")).toBe(NEXT_APP_WAITING);
+      const d = rig.app.dictation();
+      if (!d) throw new Error("no dictation");
+      await d.rebind();
+      await page.waitForFunction(
+        () =>
+          [...document.querySelectorAll<HTMLInputElement>("#dictation [data-field='app']")].some(
+            (el) => el.value === "com.example.chat",
+          ),
+        undefined,
+        { timeout: 15_000 },
+      );
+      await until(
+        () =>
+          JSON.stringify(rig.app.config().settings["dictation.apps"]).includes("com.example.chat"),
+        5000,
+        "the rule in the config",
+      );
+      expect(rig.app.config().settings["dictation.apps"]).toEqual([{ app: "com.example.chat" }]);
     },
     UI_TIMEOUT,
   );
