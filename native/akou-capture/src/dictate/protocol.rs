@@ -12,7 +12,7 @@
 //! | `type` | fields |
 //! |---|---|
 //! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied` or `not-needed`) |
-//! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample) |
+//! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample), and `mic: {transport, why}` when a device backend chose the mic (DC-N5): `transport` `built-in`, `bluetooth` or `other`; `why` `pinned`, `built-in` (instead of a Bluetooth default), `default` or `fallback` |
 //! | `level` | `rms` (linear, 0 to 1), 20 per second while a session runs |
 //! | `key` | `name`: `Escape`, `Enter` or `Shift+Enter` during a session and until its insert settles; the hotkey's name when it is pressed while a session is still transcribing; any key while `record_keys` is on |
 //! | `grant.lost` | `name` |
@@ -34,7 +34,9 @@
 //! `dictation.readField` for this insert, default false, so an app that never sends it never
 //! causes a read; any other value is refused), `settled {id}` (the session will not be inserted: empty, drafted or
 //! cancelled while transcribing), `focus {target}`, `session.start`, `session.stop`,
-//! `session.cancel` (the tray's and the CLI's door), `rebuild_mic {device}`, `warm {mode}`,
+//! `session.cancel` (the tray's and the CLI's door), `rebuild_mic {device, prefer_built_in}`
+//! (`device` is `dictation.mic`, `default` when empty; `prefer_built_in` is
+//! `dictation.preferBuiltInOverBluetooth`, default true), `warm {mode}`,
 //! `record_keys {on}`, `stop`.
 
 use crate::json::Json;
@@ -109,15 +111,23 @@ pub fn ready(backend: &str, swallow_keys: bool, mic: &str, accessibility: &str) 
     )
 }
 
-pub fn session_started(id: &str, target: &Target, capture_ns: u64) -> String {
-    line(
-        "session.started",
-        vec![
-            ("id", Json::str(id)),
-            ("target", target.json()),
-            ("capture_ns", Json::Str(capture_ns.to_string())),
-        ],
-    )
+/// `mic` is the device the audio comes from, when a device backend chose one (DC-N5); a file mic
+/// has none and the field is left out.
+pub fn session_started(
+    id: &str,
+    target: &Target,
+    capture_ns: u64,
+    mic: Option<&super::inputs::Choice>,
+) -> String {
+    let mut f = vec![
+        ("id", Json::str(id)),
+        ("target", target.json()),
+        ("capture_ns", Json::Str(capture_ns.to_string())),
+    ];
+    if let Some(m) = mic {
+        f.push(("mic", m.json()));
+    }
+    line("session.started", f)
 }
 
 pub fn session_ended(id: &str, reason: &str) -> String {
@@ -240,6 +250,8 @@ pub enum Command {
     SessionCancel,
     RebuildMic {
         device: String,
+        /// `dictation.preferBuiltInOverBluetooth`, default true (DC-N5).
+        prefer_built_in: bool,
     },
     Warm {
         mode: String,
@@ -303,6 +315,10 @@ impl Command {
             "session.cancel" => Command::SessionCancel,
             "rebuild_mic" => Command::RebuildMic {
                 device: v.str_or("device", "default"),
+                prefer_built_in: match v.get("prefer_built_in") {
+                    None => true,
+                    Some(b) => b.as_bool().ok_or("prefer_built_in must be true or false")?,
+                },
             },
             "warm" => Command::Warm {
                 mode: need("mode")?,
@@ -598,6 +614,14 @@ mod tests {
                 r#"{"type":"rebuild_mic","device":"usb"}"#,
                 Command::RebuildMic {
                     device: "usb".into(),
+                    prefer_built_in: true,
+                },
+            ),
+            (
+                r#"{"type":"rebuild_mic","device":"","prefer_built_in":false}"#,
+                Command::RebuildMic {
+                    device: String::new(),
+                    prefer_built_in: false,
                 },
             ),
             (
@@ -630,6 +654,7 @@ mod tests {
             r#"{"type":"dance"}"#,
             r#"{"type":"insert","id":"1"}"#,
             r#"{"type":"record_keys"}"#,
+            r#"{"type":"rebuild_mic","prefer_built_in":"yes"}"#,
             r#"{"type":"stop"} x"#,
             r#"{"type":"stop""#,
             r#"{"type":"focus","target":{"field":"password"}}"#,
@@ -654,7 +679,8 @@ mod tests {
             window: "w1".into(),
             field: "editable".into(),
         };
-        let started = Value::parse(&session_started("1", &t, 123_456_789_012_345_678)).unwrap();
+        let started =
+            Value::parse(&session_started("1", &t, 123_456_789_012_345_678, None)).unwrap();
         assert_eq!(
             started.get("type").unwrap().as_str(),
             Some("session.started")
@@ -733,7 +759,7 @@ mod tests {
         };
         let mut written = vec![
             ready("simulate", true, "granted", "not-needed"),
-            session_started("1", &t, 123_456_789_012_345_678),
+            session_started("1", &t, 123_456_789_012_345_678, None),
             level(0.25),
             key("Shift+Enter"),
             mic(true),
@@ -799,6 +825,7 @@ mod tests {
                 Command::SessionCancel,
                 Command::RebuildMic {
                     device: "default".into(),
+                    prefer_built_in: true,
                 },
                 Command::Warm {
                     mode: "auto".into(),

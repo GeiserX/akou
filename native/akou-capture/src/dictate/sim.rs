@@ -436,7 +436,10 @@ mod tests {
             logged[2], r#"{"type":"key","event":"Named(\"Return\")"}"#,
             "the send key after the read"
         );
-        assert_eq!(logged[3], r#"{"type":"restore"}"#);
+        assert_eq!(
+            logged[3], r#"{"type":"write","text":"hello"}"#,
+            "the fake clipboard started empty: the dictation stays as a lasting copy"
+        );
     }
 
     /// DC-N9 through the switches: the scripted window moves to Mail after the key-up, so the
