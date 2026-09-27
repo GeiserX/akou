@@ -41,6 +41,7 @@ export interface WindowRpc {
     openSettingsPane(p: { pane: SettingsPane }): Promise<boolean>;
     answerQuit(p: { id: number; go: boolean }): Promise<boolean>;
     recordDictationKeys(p: { on: boolean }): Promise<boolean>;
+    watchDictationMic(p: { on: boolean }): Promise<boolean>;
   };
   /** Stops every stream (the window closed). */
   close(): void;
@@ -153,6 +154,8 @@ export function windowRpc(
       // The dictation helper is not wired yet (docs/ux/DICTATION.md DC-U3): no helper keys, so the
       // recorder takes what the page itself sees.
       recordDictationKeys: async () => false,
+      // Nor its mic level (DC-N3): the setup's meter stays still and the setup goes on.
+      watchDictationMic: async () => false,
     },
     close: () => {
       unwatch();
