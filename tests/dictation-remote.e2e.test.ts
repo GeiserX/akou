@@ -2,18 +2,24 @@
  * Dictation through a remote akou (docs/ux/DICTATION.md section 7.2): the client of DC-R1 against a
  * real server-mode rig with a dictation lane, and against a loopback fake remote that records what
  * it was sent; the URL rule with a fake resolver; the timeout that grows with the audio (DC-R3);
- * and the Test of DC-R4. Every request goes through a fake network that records its destination,
- * so a test sees that nothing left for any other host.
+ * the Test of DC-R4; and the audio streamed during the hold (DC-R6), over a link the test slows
+ * down. Every request goes through a fake network that records its destination, so a test sees that
+ * nothing left for any other host.
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
+import { rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   type LocalEngine,
   REMOTE_DOWN_AFTER,
+  REMOTE_MESSAGE_CHARS,
   REMOTE_TIMEOUT_SECONDS,
   RemoteDictationError,
   RemoteEngine,
   type RemoteSettings,
+  RemoteUpload,
   remoteBase,
   remoteFallback,
   remoteKeywords,
@@ -23,6 +29,7 @@ import {
   vetRemote,
 } from "../src/main/dictation/remote.ts";
 import type { AppOptions } from "../src/main/index.ts";
+import { readUploadAudio } from "../src/main/server/audio.ts";
 import type { Resolver } from "../src/main/server/webhooks.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -631,6 +638,319 @@ describe("DC-R3: a remote down three dictations in a row is probed", () => {
     } finally {
       e.close();
       f.stop();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// DC-R6: the audio streamed during the hold
+
+/** A remote that records each body as it arrives: bytes so far, whether it ended, its parts. */
+function streamRemote(o: { status?: number } = {}) {
+  const got = {
+    bytes: 0,
+    chunked: [] as (string | null)[],
+    length: [] as (string | null)[],
+    ended: 0,
+    broken: 0,
+    fields: [] as Record<string, string>[],
+    files: [] as Uint8Array[],
+  };
+  const server = Bun.serve({
+    port: 0,
+    hostname: "127.0.0.1",
+    fetch: async (req) => {
+      got.chunked.push(req.headers.get("transfer-encoding"));
+      got.length.push(req.headers.get("content-length"));
+      const parts: Uint8Array[] = [];
+      try {
+        const r = (req.body as ReadableStream<Uint8Array>).getReader();
+        for (;;) {
+          const { done, value } = await r.read();
+          if (done) break;
+          got.bytes += value.byteLength;
+          parts.push(value);
+        }
+      } catch {
+        got.broken++;
+        return new Response(null, { status: 499 });
+      }
+      got.ended++;
+      const form = await new Response(Buffer.concat(parts), {
+        headers: { "content-type": req.headers.get("content-type") ?? "" },
+      })
+        .formData()
+        .catch(() => new FormData());
+      const f: Record<string, string> = {};
+      for (const [k, v] of form.entries()) {
+        if (typeof v === "string") f[k] = v;
+        else got.files.push(new Uint8Array(await v.arrayBuffer()));
+      }
+      got.fields.push(f);
+      if (o.status) return Response.json({ error: "nope", message: "no" }, { status: o.status });
+      return Response.json({ language: "en", text: "hello from the stream", words: [] });
+    },
+  });
+  return { got, url: `http://127.0.0.1:${server.port}`, stop: () => server.stop(true) };
+}
+
+/** `samples` in packets of `ms` of audio, as the helper sends them. */
+function packets(samples: Float32Array, ms = 100): Float32Array[] {
+  const n = (16000 * ms) / 1000;
+  const out: Float32Array[] = [];
+  for (let i = 0; i < samples.length; i += n) out.push(samples.subarray(i, i + n));
+  return out;
+}
+
+/**
+ * The network with an uplink of `bytesPerSecond`: every request body, a form or a stream, leaves
+ * no faster than that. A link idle for a moment starts again from now, as a real one does.
+ */
+function slowLink(bytesPerSecond: number): typeof fetch {
+  return (async (input: string | URL | Request, init?: RequestInit) => {
+    const headers = new Headers(init?.headers);
+    let body = init?.body as ReadableStream<Uint8Array> | FormData;
+    if (body instanceof FormData) {
+      const r = new Response(body);
+      headers.set("content-type", r.headers.get("content-type") ?? "");
+      body = r.body as ReadableStream<Uint8Array>;
+    }
+    const src = body.getReader();
+    let free = performance.now();
+    const throttled = new ReadableStream<Uint8Array>({
+      async pull(c) {
+        const { done, value } = await src.read();
+        if (done) {
+          c.close();
+          return;
+        }
+        for (let o = 0; o < value.length; o += 8192) {
+          const part = value.subarray(o, o + 8192);
+          const now = performance.now();
+          // Idle for longer than a timer's slack: the link was free, so it starts again now.
+          if (now - free > 30) free = now;
+          free += (part.length / bytesPerSecond) * 1000;
+          if (free - now > 2) await Bun.sleep(free - now);
+          c.enqueue(part);
+        }
+      },
+      cancel: (why) => src.cancel(why),
+    });
+    return fetch(input, { ...init, headers, body: throttled, duplex: "half" } as RequestInit);
+  }) as typeof fetch;
+}
+
+describe("DC-R6: the audio goes to the remote during the hold", () => {
+  test("the file's bytes reach the remote before release, chunked, with the one-request fields, and the server reads the WAV to its end", async () => {
+    const r = streamRemote();
+    try {
+      const up = new RemoteUpload({ url: r.url, key: "k", glossary: ["akou"], language: "es" });
+      const ps = packets(HELLO);
+      for (const p of ps.slice(0, -1)) up.push(p);
+      for (let i = 0; i < 100 && r.got.bytes < 44 + (HELLO.length - 1600) * 2; i++) {
+        await Bun.sleep(10);
+      }
+      // Before release the remote holds the fields, the WAV header and all but the last packet.
+      const before = r.got.bytes;
+      expect(before).toBeGreaterThan((HELLO.length - 1600) * 2);
+      expect(r.got.ended).toBe(0);
+      const res = await up.finish(HELLO);
+      expect(res).toMatchObject({ text: "hello from the stream", keywords: ["akou"], words: [] });
+      expect(r.got.chunked).toEqual(["chunked"]);
+      expect(r.got.length).toEqual([null]);
+      expect(r.got.fields[0]).toEqual({
+        response_format: "verbose_json",
+        interactive: "true",
+        language: "es",
+        "keywords[]": "akou",
+      });
+      // The WAV has no length, so the server's reader takes the audio to the end of the file.
+      const wav = r.got.files[0] as Uint8Array;
+      expect(new DataView(wav.buffer, wav.byteOffset).getUint32(40, true)).toBe(0xffffffff);
+      const path = join(tmpdir(), `akou-streamed-${crypto.randomUUID()}.wav`);
+      writeFileSync(path, wav);
+      try {
+        const back = await readUploadAudio(path);
+        expect(back.length).toBe(HELLO.length);
+        expect(Math.max(...back.map((x, i) => Math.abs(x - (HELLO[i] as number))))).toBeLessThan(
+          1e-4,
+        );
+      } finally {
+        rmSync(path, { force: true });
+      }
+    } finally {
+      r.stop();
+    }
+  });
+
+  test("against the server rig, a streamed dictation returns the rig's transcript; the tail left at release is sent", async () => {
+    const rig = await appRig({
+      settings: { ...SERVER },
+      jobs: { dictationSlots: () => 1 } as AppOptions["jobs"],
+    });
+    try {
+      const key = (await newKey(rig, "dictation")).key;
+      const net = network();
+      const local = localEngine();
+      const e = engine({ url: `http://127.0.0.1:${rig.port}`, key }, { local, fetch: net.fetch });
+      const hold = e.open();
+      // Half the packets during the hold; the rest reach the session after the release.
+      const ps = packets(HELLO);
+      for (const p of ps.slice(0, ps.length / 2)) hold.push(p);
+      const r = await hold.decode(HELLO);
+      expect(r.text).toContain("hello world");
+      expect(r).toMatchObject({ engine: "remote", notice: null, words: [] });
+      expect(local.calls).toBe(0);
+      expect(net.sent.map((x) => new URL(x.url).host)).toEqual([`127.0.0.1:${rig.port}`]);
+    } finally {
+      await rig.close();
+    }
+  });
+
+  test("over a slow link, a 20 s session's release-to-text is within 200 ms of a 3 s session's; sent in one request at release it is not", async () => {
+    const rig = await appRig({
+      settings: { ...SERVER },
+      jobs: { dictationSlots: () => 1 } as AppOptions["jobs"],
+    });
+    try {
+      const key = (await newKey(rig, "dictation")).key;
+      // 800 KB/s up; a session's audio is 32 KB/s, held here at ten times real time (320 KB/s).
+      const link = slowLink(800_000);
+      const e = engine({ url: `http://127.0.0.1:${rig.port}`, key }, { fetch: link });
+      const session = (seconds: number) => concat(HELLO, silence(seconds - HELLO.length / 16000));
+      const streamed = async (seconds: number) => {
+        const samples = session(seconds);
+        const hold = e.open();
+        for (const p of packets(samples)) {
+          hold.push(p);
+          await Bun.sleep(10);
+        }
+        const t0 = performance.now();
+        const r = await hold.decode(samples);
+        expect(r).toMatchObject({ engine: "remote" });
+        expect(r.text).toContain("hello world");
+        return performance.now() - t0;
+      };
+      const atRelease = async (seconds: number) => {
+        const t0 = performance.now();
+        const r = await e.decode(session(seconds));
+        expect(r).toMatchObject({ engine: "remote" });
+        return performance.now() - t0;
+      };
+      const [s3, s20] = [await streamed(3), await streamed(20)];
+      expect(Math.abs(s20 - s3)).toBeLessThan(200);
+      // The positive control: the same link makes the one request at release 200 ms slower.
+      const [o3, o20] = [await atRelease(3), await atRelease(20)];
+      expect(o20 - o3).toBeGreaterThan(200);
+    } finally {
+      await rig.close();
+    }
+  });
+
+  test("a stopped remote falls back locally with the buffer; nothing goes to any other host", async () => {
+    const url = await stoppedRemote();
+    const net = network();
+    const hold = engine({ url }, { fetch: net.fetch }).open();
+    for (const p of packets(HELLO)) hold.push(p);
+    const r = await hold.decode(HELLO);
+    expect(r).toMatchObject({ engine: "fast", fallback_from: "remote", text: "hello world" });
+    expect(r.remote_error).toContain("could not be reached");
+    expect(net.sent.map((x) => new URL(x.url).host)).toEqual([new URL(url).host]);
+  });
+
+  test("a key refused during the hold is the remote's refusal: fallback error throws 401, and nothing is sent again", async () => {
+    const r = streamRemote({ status: 401 });
+    try {
+      const net = network();
+      const local = localEngine();
+      const hold = engine({ url: r.url, fallback: "error" }, { local, fetch: net.fetch }).open();
+      for (const p of packets(HELLO)) hold.push(p);
+      const e = await refused(hold.decode(HELLO));
+      expect(e).toMatchObject({ kind: "status", status: 401 });
+      expect(e.message).not.toContain("secret-key-3");
+      expect(local.calls).toBe(0);
+      expect(net.sent).toHaveLength(1);
+    } finally {
+      r.stop();
+    }
+  });
+
+  test("a public http URL is refused at the press, and no byte goes anywhere", async () => {
+    const net = network();
+    const hold = engine({ url: "http://203.0.113.5" }, { fetch: net.fetch }).open();
+    for (const p of packets(HELLO)) hold.push(p);
+    const r = await hold.decode(HELLO);
+    expect(r).toMatchObject({ engine: "fast", fallback_from: "remote" });
+    expect(r.remote_error).toContain("https only");
+    expect(net.sent).toEqual([]);
+  });
+
+  test("a cancelled session drops the request: the remote sees it broken, never ended", async () => {
+    const r = streamRemote();
+    try {
+      const up = new RemoteUpload({ url: r.url, key: "k" });
+      for (const p of packets(HELLO).slice(0, 5)) up.push(p);
+      for (let i = 0; i < 100 && r.got.bytes === 0; i++) await Bun.sleep(10);
+      expect(r.got.bytes).toBeGreaterThan(0);
+      up.cancel();
+      for (let i = 0; i < 100 && r.got.broken === 0; i++) await Bun.sleep(10);
+      expect(r.got).toMatchObject({ broken: 1, ended: 0 });
+      // Cancelled at the press, before the request was even open: nothing is ever sent.
+      const early = new RemoteUpload({ url: r.url, key: "k" });
+      early.push(HELLO);
+      early.cancel();
+      await Bun.sleep(100);
+      expect(r.got).toMatchObject({ broken: 1, ended: 0 });
+      expect(r.got.chunked).toHaveLength(1);
+    } finally {
+      r.stop();
+    }
+  });
+
+  test("the timeout runs from release and grows with the audio", async () => {
+    const slow = await fakeRemote({ delayMs: 400 });
+    try {
+      const url = `http://127.0.0.1:${slow.port}`;
+      // A hold longer than the whole budget: the timer has not started yet.
+      const long = new RemoteUpload({ url, key: "k", timeoutSeconds: 0.1 });
+      long.push(new Float32Array(4 * 16000));
+      await Bun.sleep(300);
+      expect((await long.finish(new Float32Array(4 * 16000))).text).toBe("hello from the fake");
+      // 0.1 s plus 0.25 s x 0.5 s = 0.225 s: the 0.4 s answer comes too late.
+      const short = new RemoteUpload({ url, key: "k", timeoutSeconds: 0.1 });
+      const e = await refused(short.finish(new Float32Array(8000)));
+      expect(e.kind).toBe("timeout");
+      expect(e.message).toContain("no answer within 225 ms");
+    } finally {
+      slow.stop();
+    }
+  });
+});
+
+describe("a remote's own message is bounded before it reaches the pill, the page or the log", () => {
+  test("control characters go and the message is cut at REMOTE_MESSAGE_CHARS", async () => {
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (req) => {
+        await req.formData();
+        return Response.json(
+          { error: "boom\nx", message: `line one\n\u001b[31mred\u0007${"z".repeat(5000)}` },
+          { status: 500 },
+        );
+      },
+    });
+    try {
+      const e = await refused(
+        transcribeRemote({ url: `http://127.0.0.1:${server.port}`, key: "k", samples: HELLO }),
+      );
+      expect(e.code).toBe("boom x");
+      // biome-ignore lint/suspicious/noControlCharactersInRegex: the test looks for them.
+      expect(e.message).not.toMatch(/[\u0000-\u001f\u007f]/);
+      expect(e.message).toContain("line one [31mred");
+      expect(e.message.length).toBeLessThan(REMOTE_MESSAGE_CHARS + 120);
+    } finally {
+      server.stop(true);
     }
   });
 });
