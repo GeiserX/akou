@@ -28,6 +28,7 @@ import { DraftBox, type DraftBoxOptions } from "./draft.ts";
 import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
 import type { RemoteFallback, RemoteHealth } from "./remote.ts";
 import {
+  type AutoStop,
   type DictationEngine,
   DictationSession,
   decodeDictation,
@@ -126,6 +127,10 @@ export interface DictationServiceOptions extends TextRules {
    * `dictation.sendAlways`, `dictation.restoreClipboard`. Absent: paste, and never a send key.
    */
   insert?(): InsertPolicy;
+  /** `dictation.silenceStopSeconds` and `dictation.maxMinutes` (DC-A3); absent, never. */
+  autoStop?(): AutoStop;
+  /** `dictation.spokenSend` (DC-S5); absent, off. */
+  spokenSend?(): boolean;
   /**
    * What the draft box needs beside the log and the session (DC-S1, DC-L1, DC-L4); absent, the
    * box sends nothing, learns nothing and inserts with no send key.
@@ -181,7 +186,9 @@ export type DictationFollow =
   /** The engine's line for the pill about dictation `id` (DC-E2, DC-R3), never written anywhere. */
   | { kind: "notice"; id: string; notice: string }
   /** The dictation key was pressed while a dictation transcribes: refused, never queued (DC-A4). */
-  | { kind: "busy" };
+  | { kind: "busy" }
+  /** A line for the pill while listening (`1 minute left`, DC-A3), never written anywhere. */
+  | { kind: "warning"; note: string };
 
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -512,6 +519,9 @@ export class DictationService {
       onDraft: (id, _reason, focus) => this.draft.open(id, { focus }).ok,
       ...(this.o.insert ? { insertPolicy: this.o.insert } : {}),
       onBusy: () => this.tell({ kind: "busy" }),
+      onWarning: (note) => this.tell({ kind: "warning", note }),
+      ...(this.o.autoStop ? { autoStop: this.o.autoStop } : {}),
+      ...(this.o.spokenSend ? { spokenSend: this.o.spokenSend } : {}),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));

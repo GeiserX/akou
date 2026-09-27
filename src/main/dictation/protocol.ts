@@ -75,6 +75,11 @@ export type HelperToApp =
   | { type: "rebound"; hotkey: string }
   | { type: "rebind.failed"; hotkey: string; reason: string }
   | { type: "session.started"; id: string; target: Target; capture_ns: string | number }
+  /**
+   * The session `id` is latched now (tapped on, or a chord released before `HOLD_MS`), so the app
+   * may end it after silence (DC-A3). A held session never gets one.
+   */
+  | { type: "latched"; id: string }
   | { type: "level"; rms: number }
   | { type: "key"; name: string }
   | { type: "grant.lost"; name: string }
@@ -172,6 +177,8 @@ export function checkHelperMessage(o: Record<string, unknown>): string | null {
       return isStr(o.hotkey) && isStr(o.reason) ? null : "rebind.failed";
     case "session.started":
       return isId(o.id) && isTarget(o.target) && isNs(o.capture_ns) ? null : "session.started";
+    case "latched":
+      return isId(o.id) ? null : "latched";
     case "level":
       return isNum(o.rms) && o.rms >= 0 ? null : "level";
     case "key":

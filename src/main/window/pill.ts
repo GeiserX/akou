@@ -11,7 +11,8 @@
  *
  * - `listening` from the session's state, with the hints the key source can honour (DC-A4):
  *   Escape, Enter and Shift+Enter where it swallows keys; only the dictation key's on the portal
- *   and the CLI, where no other key does anything in a session.
+ *   and the CLI, where no other key does anything in a session. `1 minute left` under them one
+ *   minute before `dictation.maxMinutes` (DC-A3).
  * - `transcribing` while the engine decodes and the helper inserts, `loading model` under it when
  *   the engine was still loading at the release, and `still transcribing` for `BUSY_MS` when the
  *   dictation key is pressed then (the helper refuses the press, DC-A4).
@@ -169,6 +170,11 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     }
     if (m.kind === "notice") {
       if (m.id === current) notice = m.notice;
+      return;
+    }
+    if (m.kind === "warning") {
+      // `1 minute left` before `dictation.maxMinutes` (DC-A3), under the hints until it ends.
+      if (shown.state === "listening") put({ ...shown, note: m.note });
       return;
     }
     if (m.kind === "busy") {

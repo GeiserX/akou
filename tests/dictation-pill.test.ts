@@ -10,6 +10,7 @@ import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DictationDraft, DictationEvent } from "../src/core/dictation/events.ts";
 import type { DictationFollow } from "../src/main/dictation/service.ts";
+import { MAX_WARNING } from "../src/main/dictation/session.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
 import { hotkeyLabel } from "../src/main/window/hotkey.ts";
 import {
@@ -187,6 +188,24 @@ describe("DC-O1: the pill's states from the session", () => {
     f.to("listening");
     const before = f.states().length;
     f.tell({ kind: "busy" });
+    expect(f.states()).toHaveLength(before);
+  });
+
+  test("one minute before dictation.maxMinutes, listening says so under the hints (DC-A3)", () => {
+    const f = pill();
+    f.to("listening");
+    f.tell({ kind: "warning", note: MAX_WARNING });
+    expect(f.states().at(-1)).toEqual({
+      state: "listening",
+      since: 1000,
+      keys: ["escape", "enter", "shift-enter"],
+      hotkey: "Right ⌘",
+      note: MAX_WARNING,
+    });
+    // Positive control: a warning with nothing listening shows nothing.
+    f.to("transcribing");
+    const before = f.states().length;
+    f.tell({ kind: "warning", note: MAX_WARNING });
     expect(f.states()).toHaveLength(before);
   });
 
