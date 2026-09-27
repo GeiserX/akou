@@ -2002,6 +2002,13 @@ export class AkouApp implements ApiApp {
         return l === "auto" ? undefined : l;
       },
       correct: (raw, language) => this.correctDictation(raw, language),
+      speech: (samples) => this.dictationSpeech(samples),
+      fillers: () => this.cfg.settings["dictation.fillers"],
+      languages: () =>
+        dictationLanguages(
+          this.cfg.settings["dictation.languages"],
+          this.cfg.settings["asr.languages"],
+        ),
       retainDays: () => this.cfg.settings["dictation.retainDays"],
       remote: () => {
         const c = this.cfg.settings;
@@ -2038,6 +2045,18 @@ export class AkouApp implements ApiApp {
     }
     const langs = callLanguages(this.cfg.settings["vocab.languages"], language ? [language] : []);
     return correctDictation(raw, entries, this.dictionaries.predicate(langs));
+  }
+
+  /**
+   * DC-E6's silence guard: the live Worker's VAD on a dictation's buffer, before any engine sees
+   * it. Null with no VAD to ask: no local model (the remote runs its own guard), or one still
+   * loading while another engine decodes, which must not wait for it.
+   */
+  private async dictationSpeech(samples: Float32Array): Promise<boolean | null> {
+    const asr = this.asr;
+    if (!asr || this.asrState.state === "unavailable") return null;
+    if (this.asrState.state === "loading" && this.dictationVerdict().engine !== "fast") return null;
+    return asr.speech(samples);
   }
 
   private async readDictationVocab(): Promise<MergedEntry[]> {

@@ -60,6 +60,11 @@ export type DictationDraft =
        * `best` and a remote take one, `fast` (Parakeet) picks the language itself (DC-E4).
        */
       language_forced?: boolean;
+      /**
+       * The first answer was the engine's context echoed back, so this is a second decode with no
+       * context (DC-E6).
+       */
+      echo_retry?: boolean;
     }
   | { type: "dictation.empty"; id: string }
   | { type: "dictation.inserted"; id: string; method: string; receipt_ms: number }
@@ -124,7 +129,8 @@ export function checkDictationDraft(o: Record<string, unknown>): string | null {
         isStr(o.model) &&
         isNum(o.ms) &&
         (o.fallback_from === undefined || isStr(o.fallback_from)) &&
-        (o.language_forced === undefined || typeof o.language_forced === "boolean")
+        (o.language_forced === undefined || typeof o.language_forced === "boolean") &&
+        (o.echo_retry === undefined || typeof o.echo_retry === "boolean")
         ? null
         : "dictation.text";
     case "dictation.inserted":
@@ -177,6 +183,8 @@ export interface DictationItem {
   fallback_from: string | null;
   /** Null when no language was set, so the engine chose (DC-E4). */
   language_forced: boolean | null;
+  /** The engine echoed its context and the dictation was decoded again without it (DC-E6). */
+  echo_retry: boolean;
   error: string | null;
 }
 
@@ -204,6 +212,7 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
         ms: null,
         fallback_from: null,
         language_forced: null,
+        echo_retry: false,
         error: null,
       });
       continue;
@@ -227,6 +236,7 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
           ms: e.ms,
           fallback_from: e.fallback_from ?? null,
           language_forced: e.language_forced ?? null,
+          echo_retry: e.echo_retry ?? false,
         });
         break;
       case "dictation.empty":

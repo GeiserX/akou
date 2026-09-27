@@ -462,6 +462,17 @@ export const PARITY: readonly Row[] = [
     window: [ui("dictation-page.ts", '"GET", "/dictation"')],
   },
   {
+    action: "Follow dictation events",
+    cli: {
+      none: "a script reads `akou dictations list --json`; a live stream is for the page and the pill",
+    },
+    api: ["GET /dictation/stream"],
+    mcp: { none: "MCP reads dictation history only (DICTATION.md DC-G5)" },
+    window: {
+      none: "the pill gets the session over the window's RPC; the stream serves the browser page",
+    },
+  },
+  {
     action: "Test the remote dictation engine",
     cli: ["dictate"],
     api: ["GET /dictation/remote-test"],

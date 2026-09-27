@@ -367,6 +367,18 @@ export class LivePipeline {
    * pass's rule (`timelinePieces`), judged by a VAD of its own so a call's channels keep theirs.
    */
   dictationSpans(samples: Float32Array): { from: number; to: number }[] {
+    const { speech, window } = this.dictationSpeech(samples);
+    return timelinePieces(samples, speech, window, {
+      ...DEFAULT_FINAL,
+      maxSpanSeconds: DICTATION_SPAN_SECONDS,
+    });
+  }
+
+  /**
+   * The dictation VAD's verdict on each window of a buffer, by a VAD of its own so a call's
+   * channels keep theirs. No window of speech is DC-E6's silence guard: nothing is decoded.
+   */
+  dictationSpeech(samples: Float32Array): { speech: boolean[]; window: number } {
     this.dictationVad ??= this.models.vad();
     const vad = this.dictationVad;
     const w = vad.windowSize;
@@ -382,10 +394,7 @@ export class LivePipeline {
       speech.push(vad.accept(win));
     }
     vad.reset();
-    return timelinePieces(samples, speech, w, {
-      ...DEFAULT_FINAL,
-      maxSpanSeconds: DICTATION_SPAN_SECONDS,
-    });
+    return { speech, window: w };
   }
 
   /**
@@ -851,7 +860,9 @@ export type ToWorker =
    * A dictation's buffer (DC-E1), decoded span by span on the loaded recognizer. `language` is
    * accepted and not sent: Parakeet picks the language itself.
    */
-  | { type: "decode"; token: number; samples: Float32Array; language?: string };
+  | { type: "decode"; token: number; samples: Float32Array; language?: string }
+  /** Whether the dictation VAD hears any speech in a buffer (DC-E6), before any engine decodes it. */
+  | { type: "speech"; token: number; samples: Float32Array };
 
 export type FromWorker =
   | { type: "ready"; loads: Record<string, number> }
@@ -860,6 +871,7 @@ export type FromWorker =
   | { type: "loads"; loads: Record<string, number> }
   | ({ type: "decoded"; token: number } & Decoded)
   | { type: "decode.failed"; token: number; error: string }
+  | { type: "speech"; token: number; speech: boolean }
   /** Tagged with the call it belongs to, so a late result never lands in the next call. */
   | (LiveOut & { call: string });
 
@@ -900,6 +912,13 @@ export class WorkerSide {
         case "decode":
           this.decode(p, m);
           break;
+        case "speech":
+          this.reply({
+            type: "speech",
+            token: m.token,
+            speech: p.dictationSpeech(m.samples).speech.includes(true),
+          });
+          break;
         case "call":
           // The previous call's closing lines are tagged with its own id.
           await p.beginCall(m);
@@ -927,7 +946,7 @@ export class WorkerSide {
       this.out({ type: "log", level: "error", msg: `live ASR: ${(err as Error).message}` });
       if (m.type === "init") this.reply({ type: "failed", error: (err as Error).message });
       if (m.type === "flush") this.reply({ type: "flushed", token: m.token });
-      if (m.type === "decode")
+      if (m.type === "decode" || m.type === "speech")
         this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
     }
   }
@@ -1083,6 +1102,11 @@ export class LiveAsr {
     { resolve: (d: Decoded) => void; reject: (e: Error) => void }
   >();
   private decodeToken = 0;
+  /** Speech checks waiting for their answer, by token; tokens are shared with the decodes. */
+  private readonly speeches = new Map<
+    number,
+    { resolve: (speech: boolean) => void; reject: (e: Error) => void }
+  >();
   private failed: string | null = null;
   private closed = false;
   private readonly respawns: number[] = [];
@@ -1193,6 +1217,8 @@ export class LiveAsr {
   private dropDecodes(why: string): void {
     for (const d of this.decodes.values()) d.reject(new Error(why));
     this.decodes.clear();
+    for (const d of this.speeches.values()) d.reject(new Error(why));
+    this.speeches.clear();
   }
 
   /**
@@ -1216,6 +1242,21 @@ export class LiveAsr {
         },
         [copy.buffer],
       );
+    });
+  }
+
+  /**
+   * Whether the dictation VAD hears speech anywhere in a buffer (DC-E6): a buffer with none is
+   * never handed to an engine, whichever it is, so none can invent a sentence from room noise.
+   */
+  speech(samples: Float32Array): Promise<boolean> {
+    if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
+    if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
+    const token = ++this.decodeToken;
+    const copy = samples.slice();
+    return new Promise<boolean>((resolve, reject) => {
+      this.speeches.set(token, { resolve, reject });
+      this.transport.post({ type: "speech", token, samples: copy }, [copy.buffer]);
     });
   }
 
@@ -1422,9 +1463,16 @@ export class LiveAsr {
         return;
       }
       case "decode.failed": {
-        const d = this.decodes.get(m.token);
+        const d = this.decodes.get(m.token) ?? this.speeches.get(m.token);
         this.decodes.delete(m.token);
+        this.speeches.delete(m.token);
         d?.reject(new Error(m.error));
+        return;
+      }
+      case "speech": {
+        const d = this.speeches.get(m.token);
+        this.speeches.delete(m.token);
+        d?.resolve(m.speech);
         return;
       }
       case "log":
