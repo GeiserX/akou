@@ -51,7 +51,8 @@ pub struct Hunk {
 }
 
 /// Why a watch ends with no hunks: `unreadable` (the field could not be read), `lost` (the
-/// pasted text or its anchors are gone, or the field was cleared), `too-long`.
+/// pasted text or its anchors are gone, or the field was cleared), `too-long`. The session adds
+/// `not-read` where the rules above forbid the read.
 pub type Reason = &'static str;
 
 pub struct Watch {
@@ -157,7 +158,10 @@ impl Watch {
 }
 
 /// Word-level diff (longest common subsequence) of what was inserted against what is there now;
-/// each run of changed words is one hunk.
+/// each run of changed words is one hunk. Words added before the first inserted word or after
+/// the last one are not a correction but the user typing on (at the end of a chat box there is
+/// no anchor after the paste, so that is everything typed until Enter): they never leave the
+/// helper. A word added between two inserted words is a correction.
 pub fn hunks(inserted: &str, edited: &str) -> Result<Vec<Hunk>, Reason> {
     let a: Vec<&str> = inserted.split_whitespace().collect();
     let b: Vec<&str> = edited.split_whitespace().collect();
@@ -202,6 +206,7 @@ pub fn hunks(inserted: &str, edited: &str) -> Result<Vec<Hunk>, Reason> {
         }
     }
     close(&mut open);
+    out.retain(|h| !(h.inserted.is_empty() && (h.at == 0 || h.at == a.len())));
     Ok(out)
 }
 
@@ -233,7 +238,18 @@ mod tests {
         assert_eq!(hunks("a b c", "a b c").unwrap(), vec![]);
         assert_eq!(
             hunks("ping me at noon", "ping me at noon today").unwrap(),
-            vec![hunk(4, "", "today")]
+            vec![],
+            "typed on after the dictation"
+        );
+        assert_eq!(
+            hunks("ping me at noon", "Dear all, ping me at noon").unwrap(),
+            vec![],
+            "typed before it"
+        );
+        assert_eq!(
+            hunks("ping me at noon", "ping me today at noon").unwrap(),
+            vec![hunk(2, "", "today")],
+            "a word added inside the dictation is a correction"
         );
         assert_eq!(
             hunks("one two three four", "one 2 three for").unwrap(),

@@ -20,7 +20,7 @@
 //! | `inserted` | `id`, `method` (`paste`, `type`, `clipboard`), `receipt_ms` (chord to the target's first read; 0 when nothing was pasted), and `reason` only when the helper chose clipboard-only for the user: `secure` (DC-N8) or `elevated` (a Windows admin window) |
 //! | `insert.failed` | `id`, `reason`: `focus-changed`, `not-editable`, `field-unknown` (DC-N9: the app opens the draft box), `no-receipt` (the target never read in 8 s), `clipboard-changed` (another writer took the clipboard before the target read), `no-v-key`, `no-inserter`, or the backend's error |
 //! | `edit` | `id`, `hunks: [{inserted, now, at}]`: each run of words the user changed in the field after the insert (`inserted` the words akou inserted there, `now` what the field holds there now, `at` the index of the hunk's first inserted word); empty when nothing changed (DC-L2) |
-//! | `edit.unreadable` | `id`, `reason`: `unreadable` (the field could not be read), `lost` (the pasted text is gone or the field was cleared), `too-long` |
+//! | `edit.unreadable` | `id`, `reason`: `unreadable` (the field could not be read), `lost` (the pasted text is gone or the field was cleared), `too-long`, `not-read` (a secure field, Secure Input, a terminal or no grant: nothing was read) |
 //! | `secure_input` | `on` |
 //! | `mic` | `open`: the stream opened or closed (the warm mic of DC-N4) |
 //! | `rebound` / `rebind.failed` | `hotkey` / `hotkey`, `reason` (the answer to `rebind`, DC-A7) |
@@ -744,6 +744,17 @@ mod tests {
         written.extend([
             inserted("1", "paste", 12, None),
             insert_failed("1", "focus-changed"),
+            edit(
+                "1",
+                &[super::super::readback::Hunk {
+                    inserted: "cooper netties".into(),
+                    now: "Kubernetes".into(),
+                    at: 2,
+                }],
+            ),
+            edit_unreadable("1", "not-read"),
+            grant_lost("accessibility"),
+            secure_input(true),
             rebound("RightShift"),
             rebind_failed("LeftOption+RightOption", "x"),
             warn("usage", "m"),

@@ -871,6 +871,16 @@ mod tests {
     /// A latched session, its paste into the fake Slack at 400 ms with `read_field`, and the
     /// target's read of the clipboard; the field then holds the pasted text at the caret.
     fn pasted(w: &Shared, read_field: bool, grants: (&str, &str)) -> (Dictate, Rec) {
+        pasted_before(w, read_field, grants, AFTER)
+    }
+
+    /// The same with `after` as the field's text after the paste ("" is the end of a chat box).
+    fn pasted_before(
+        w: &Shared,
+        read_field: bool,
+        grants: (&str, &str),
+        after: &str,
+    ) -> (Dictate, Rec) {
         let mut d = dictate(w);
         let mut out = Rec::default();
         d.begin("simulate", true, grants, &mut out);
@@ -878,7 +888,7 @@ mod tests {
         run(&mut d, &mut out, 0, 100);
         d.command(Command::SessionStop, 100 * MS, &mut out);
         run(&mut d, &mut out, 100, 400);
-        let value = format!("{BEFORE}{PASTED}{AFTER}");
+        let value = format!("{BEFORE}{PASTED}{after}");
         let caret = BEFORE.chars().count() + PASTED.chars().count();
         w.borrow_mut().field = Some(Field::Text { value, caret });
         let insert =
@@ -932,6 +942,29 @@ mod tests {
         assert_eq!(w.borrow().field_reads.len(), 2);
         run(&mut d, &mut out, 1710, 3000);
         assert_eq!(edits(&out).len(), 1, "one answer per insert");
+
+        // At the end of the field there is no anchor after the paste: what the user types on
+        // after the dictation is theirs, not a correction, and stays in the helper.
+        let w = World::new();
+        let (mut d, mut out) = pasted_before(&w, true, ("granted", "granted"), "");
+        let value =
+            format!("Dear all, {BEFORE}tell the Kubernetes team the rollout and my pin is 4321");
+        w.borrow_mut().field = Some(Field::Text { value, caret: 0 });
+        d.key(true, "Return", 1700 * MS, &mut out);
+        let e = edits(&out);
+        assert_eq!(
+            e,
+            [
+                r#"{"type":"edit","id":"1","hunks":[{"inserted":"cooper netties","now":"Kubernetes","at":2}]}"#
+            ]
+        );
+        for private in ["Dear all", "pin", "4321"] {
+            assert!(
+                !e[0].contains(private),
+                "{private} left the helper: {}",
+                e[0]
+            );
+        }
     }
 
     /// DC-L2: with `read_field` off, a secure field, a terminal or the grant missing, no read
