@@ -9,7 +9,7 @@
  *   punctuation or the text's edges: "Este, bueno, vale" loses it, "este libro" keeps it.
  * - Gated by language: a list applies only when the dictation is in its language. With no
  *   language known (Parakeet names none), the hesitation sounds that are no word in either list
- *   apply; `eh` and `este` wait for Spanish.
+ *   apply; `eh` and `este` wait for Spanish. `um` stays whenever Portuguese is in the list.
  * - The punctuation around a removed filler is mended: "the, uh, plan" becomes "the plan", "Um,
  *   so" becomes "So", and "plan, um." becomes "plan.".
  */
@@ -22,6 +22,11 @@ const SOUNDS: Readonly<Record<string, RegExp>> = {
 
 /** With no language known: the sounds that are no word in any list. */
 const UNKNOWN = /^(?:u+m+|u+h+|e+r+m+|h+m+|m{2,})$/;
+
+/** Words of a language that a sound list of another would take: Portuguese `um` is "a". */
+const WORDS: Readonly<Record<string, RegExp>> = {
+  pt: /^um$/,
+};
 
 /** Fillers that are also words, removed only when they stand alone. */
 const ALONE: Readonly<Record<string, RegExp>> = {
@@ -39,6 +44,7 @@ interface Tok {
 const SPLIT = /^([^\p{L}\p{N}]*)(.*?)([^\p{L}\p{N}]*)$/su;
 const ENDS_SENTENCE = /[.!?…]/;
 const COMMA_LIKE = /[,;:]/;
+const CLOSES = /[)\]}?!]/;
 
 function tokens(text: string): Tok[] {
   const out: Tok[] = [];
@@ -76,7 +82,8 @@ export function removeFillers(text: string, languages: readonly string[]): strin
     const word = t.core.toLowerCase();
     const prev = kept.at(-1);
     const prevTrail = prev?.trail ?? "";
-    const isSound = word !== "" && sounds.some((re) => re.test(word));
+    const isSound =
+      word !== "" && sounds.some((re) => re.test(word)) && !langs.some((l) => WORDS[l]?.test(word));
     const standsAlone =
       t.trail !== "" &&
       (i === 0 || toks[i - 1]?.trail !== "" || prevTrail !== "") &&
@@ -95,11 +102,13 @@ export function removeFillers(text: string, languages: readonly string[]): strin
     // The filler opened a sentence: the word after it opens it now.
     const opensSentence = !prev || ENDS_SENTENCE.test(prevTrail);
     if (opensSentence && /^\p{Lu}/u.test(t.core)) capitalizeNext = true;
-    carryLead += t.lead;
+    // An opening mark the filler closed itself ("(um)", "¿Este?") goes with it.
+    if (!CLOSES.test(t.trail)) carryLead += t.lead;
     if (t.sep.includes("\n")) carrySep = t.sep;
     if (ENDS_SENTENCE.test(t.trail)) {
-      // "plan, um." ends the sentence where the filler did.
-      if (prev) prev.trail = prevTrail.replace(/[,;:\s]+$/, "") + t.trail.replace(/^[,;:]+/, "");
+      // "plan, um." ends the sentence where the filler did; "hello. um." has ended it already.
+      if (prev && !ENDS_SENTENCE.test(prevTrail))
+        prev.trail = prevTrail.replace(/[,;:\s]+$/, "") + t.trail.replace(/^[,;:]+/, "");
     } else if (COMMA_LIKE.test(t.trail) && prev && COMMA_LIKE.test(prevTrail.slice(-1))) {
       // "the, uh, plan": the pause was the filler's, so its commas go with it.
       prev.trail = prevTrail.replace(/[,;:]+$/, "");

@@ -366,9 +366,8 @@ export async function decodeDictation(
   if (isEcho(d.text)) {
     o.onLog?.("warn", `dictation: ${d.engine ?? engine.name} echoed its context, decoding again`);
     d = await engine.decode(samples, { ...ask, context: false });
+    // Sent with no context, the second answer is what was said, even if it reads like the wrapper.
     echoRetry = true;
-    // Still the context with none sent: nothing that was said.
-    if (isEcho(d.text)) return { kind: "empty" };
   }
   if (d.text === "") return { kind: "empty" };
   if (secure) return { kind: "text", d, text: d.text, echoRetry };

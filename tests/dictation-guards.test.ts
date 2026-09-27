@@ -227,11 +227,14 @@ describe("DC-E6: the echo guard", () => {
     expect(text && "echo_retry" in text).toBe(false);
   });
 
-  test("an echo again with no context is nothing said: nothing is inserted", async () => {
-    const s = stub([{ text: `${CONTEXT_WRAPPER} Kubernetes.` }]);
+  test("an echo again with no context sent is what was said: it is inserted", async () => {
+    const said = `${CONTEXT_WRAPPER} Kubernetes and Helm`;
+    const s = stub([{ text: said }]);
     const r = rig(HELLO, { engine: s.engine });
-    expect((await done(r))?.state).toBe("empty");
-    expect(lines(r.inserted)).toEqual([]);
+    const it = await done(r);
+    expect(s.asked).toEqual([{}, { context: false }]);
+    expect(it).toMatchObject({ text: said, raw: said, echo_retry: true });
+    expect(lines(r.inserted)[0]).toMatchObject({ text: said });
   });
 
   test("an answer that is mostly the glossary is an echo; one term said alone is not", () => {
@@ -264,8 +267,14 @@ describe("DC-S7: filler words", () => {
     ["Hmm, the plan", [], "The plan"],
     // Gated by language: `um` is Portuguese for "a", `este` English for nothing.
     ["um livro", ["pt"], "um livro"],
+    ["um livro", ["pt", "en"], "um livro"],
+    ["um livro", ["en", "pt-BR"], "um livro"],
     ["este, the plan", ["en"], "este, the plan"],
     ["plan um", ["en-US"], "plan"],
+    // A filler that ends a sentence already ended, or closes its own brackets, leaves no mark.
+    ["hello. um. world", ["en"], "hello. world"],
+    ["(um) the plan", ["en"], "the plan"],
+    ["¿Este? Sí.", ["es"], "Sí."],
   ])("%p in %p is %p", (text, langs, want) => {
     expect(removeFillers(text, langs)).toBe(want);
   });
