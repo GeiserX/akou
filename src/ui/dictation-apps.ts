@@ -8,9 +8,14 @@
  * settings code saves them like any other key: every edit writes the whole list through
  * `PATCH /config`, whose `apps` validator refuses an unknown field or an app named twice. A row
  * with no app yet is not part of the list, so adding a row saves nothing until the app is named.
+ *
+ * "Use the app I dictate into next" names the app for the user: the page waits for the next
+ * dictation in the dictation log and adds a rule for the app it went to (`nextDictatedApp`).
  */
 
 import { h } from "./dom.ts";
+import { message } from "./notepad.ts";
+import type { Transport } from "./protocol.ts";
 
 /**
  * A rule's fields and their choices, as the registry's `apps` validator takes them
@@ -33,13 +38,85 @@ export const APP_RULE_FIELDS: readonly { name: string; label: string; values: st
 type Rule = Record<string, string>;
 
 /**
+ * Waits for the next dictation into an app and hands over that app, once; `failed` gets the reason
+ * instead, and nothing more comes after either. `stop` gives up waiting.
+ */
+export type NextApp = (
+  found: (app: string) => void,
+  failed: (why: string) => void,
+) => { stop(): void };
+
+/** How often the page reads the dictation log while it waits for the next dictation. */
+export const NEXT_APP_POLL_MS = 1000;
+
+/** The button's words while the page is not waiting. */
+export const NEXT_APP_LABEL = "Use the app I dictate into next";
+
+/** What the page says while it waits. */
+export const NEXT_APP_WAITING = "Waiting: dictate into the app you want a rule for.";
+
+/**
+ * The next dictation's app from the dictation log (DC-U9): the newest dictation's start is read
+ * once, then `GET /dictations?since=` after it, every `every` ms, until a dictation started later
+ * names an app. A clip sent to the API goes to no app (`null`) and an app the helper could not tell
+ * is empty; both are passed over. The times are the log's own, so the page's clock plays no part.
+ */
+export function nextDictatedApp(
+  t: Transport,
+  found: (app: string) => void,
+  failed: (why: string) => void,
+  every = NEXT_APP_POLL_MS,
+): { stop(): void } {
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  type Page = { items?: { at?: unknown; app?: unknown }[] };
+  const read = async (query: string): Promise<Page["items"] | null> => {
+    const r = await t.request<Page>("GET", `/dictations?${query}`);
+    if (stopped) return null;
+    if (r.status >= 400 || !Array.isArray(r.body?.items)) {
+      stopped = true;
+      failed(message(r.body, `the dictations could not be read (HTTP ${r.status})`));
+      return null;
+    }
+    return r.body.items;
+  };
+  void (async () => {
+    const newest = await read("limit=1");
+    if (!newest) return;
+    const at = newest[0]?.at;
+    const since = typeof at === "number" ? at + 1 : 0;
+    const poll = async () => {
+      const items = await read(`since=${since}&limit=500`);
+      if (!items) return;
+      // Newest first: the oldest one that names an app is the next dictation.
+      const hit = [...items].reverse().find((d) => typeof d.app === "string" && d.app !== "");
+      if (hit) {
+        stopped = true;
+        found(hit.app as string);
+        return;
+      }
+      timer = setTimeout(() => void poll(), every);
+    };
+    timer = setTimeout(() => void poll(), every);
+  })();
+  return {
+    stop: () => {
+      stopped = true;
+      if (timer) clearTimeout(timer);
+    },
+  };
+}
+
+/**
  * The editor for one `apps` setting. `input` holds the rules as JSON and fires `change` after each
- * edit; `shown` is the value as it came, for the settings code to tell an edit from none.
+ * edit; `shown` is the value as it came, for the settings code to tell an edit from none. With
+ * `next`, a button adds a rule for the app of the next dictation.
  */
 export function appsEditor(
   id: string,
   value: unknown,
   disabled: boolean,
+  next?: NextApp,
 ): { root: HTMLElement; input: HTMLInputElement; shown: string } {
   const input = h("input", { id, type: "hidden" });
   const body = h("tbody", {});
@@ -149,6 +226,65 @@ export function appsEditor(
     "+ Add app",
   );
   add.disabled = disabled;
+  const nextNote = h("small", { class: "apps-next-note hint", attrs: { role: "status" } });
+  let watch: { stop(): void } | null = null;
+  const idle = (note: string) => {
+    watch = null;
+    nextButton.textContent = NEXT_APP_LABEL;
+    nextNote.textContent = note;
+  };
+  /** A rule for `app`: the one there is, or a new row saved with the app alone. */
+  const take = (app: string) => {
+    const known = [...body.querySelectorAll<HTMLInputElement>("[data-field='app']")].find(
+      (el) => el.value.trim() === app,
+    );
+    if (known) {
+      nextNote.textContent = `${app} has a rule already.`;
+      known.closest("tr")?.querySelector("select")?.focus();
+      return;
+    }
+    const tr = row({ app });
+    body.append(tr);
+    changed();
+    nextNote.textContent = `Added ${app}.`;
+    tr.querySelector("select")?.focus();
+  };
+  const nextButton = h(
+    "button",
+    {
+      type: "button",
+      class: "apps-next",
+      on: {
+        click: () => {
+          if (!next) return;
+          if (watch) {
+            watch.stop();
+            idle("");
+            return;
+          }
+          // `next` may answer before it returns (a refusal it knows at once).
+          let answered = false;
+          const w = next(
+            (app) => {
+              answered = true;
+              idle("");
+              take(app);
+            },
+            (why) => {
+              answered = true;
+              idle(why);
+            },
+          );
+          if (answered) return;
+          watch = w;
+          nextButton.textContent = "Cancel";
+          nextNote.textContent = NEXT_APP_WAITING;
+        },
+      },
+    },
+    NEXT_APP_LABEL,
+  );
+  nextButton.disabled = disabled;
   const root = h(
     "div",
     { class: "apps-editor" },
@@ -169,6 +305,8 @@ export function appsEditor(
       body,
     ),
     add,
+    next ? nextButton : null,
+    next ? nextNote : null,
   );
   return { root, input, shown };
 }

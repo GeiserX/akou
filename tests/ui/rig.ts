@@ -598,6 +598,8 @@ export async function dictationFixture(
         let items = fx.history;
         if (cursor) items = items.slice(items.findIndex((d) => d.id === cursor) + 1);
         if (q) items = items.filter((d) => (d.text ?? "").toLowerCase().includes(q));
+        const since = url.searchParams.get("since");
+        if (since !== null) items = items.filter((d) => d.at >= Number(since));
         const page = items.slice(0, limit);
         return route.fulfill({
           status: 200,
