@@ -567,7 +567,12 @@ describe("DC-O1: the pill over a whole app", () => {
     await until(() => rpc !== null, 5000, "the pill's window");
     f.tray("dictate");
     await until(() => visible, 5000, "the pill to show");
-    expect(rec.states().at(-1)).toMatchObject({ state: "listening", hotkey: "Right ⌘" });
+    // The key is the host's default (`RightCommand` here, a chord on Linux), labelled for macOS.
+    expect(rec.states().at(-1)).toMatchObject({
+      state: "listening",
+      hotkey: hotkeyLabel(r.app.dictation()?.hotkey() ?? "", "darwin"),
+    });
+    expect(r.app.dictation()?.hotkey()).not.toBe("");
     const handlers = (rpc as unknown as { handlers: { control: (p: object) => Promise<boolean> } })
       .handlers;
     expect(await handlers.control({ action: "stop" })).toBe(true);
