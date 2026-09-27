@@ -23,7 +23,7 @@ export const FORMAT_TIMEOUT_HARNESS_SECONDS = 15;
 /** The default timeout for an API or a local model, which answers in about a second. */
 export const FORMAT_TIMEOUT_API_SECONDS = 4;
 
-/** The request's timeout: the setting when set (1 to 60 s), else the provider's default. */
+/** The request's timeout: the setting when it is set, else the provider's default. */
 export function formatTimeoutMs(seconds: number | null | undefined, provider: ProviderId): number {
   if (typeof seconds === "number" && seconds > 0) return Math.round(seconds * 1000);
   return (
