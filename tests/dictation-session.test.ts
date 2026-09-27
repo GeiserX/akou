@@ -159,7 +159,8 @@ describe("DC-E4: a spoken dictation's language", () => {
     await until(() => auto.svc.log.items()[0]?.state === "inserted", 10_000, "the dictation");
     expect(asked).toEqual(["es", undefined]);
     expect(auto.svc.log.items()[0]?.language_forced).toBeNull();
-  });
+    // Two real-time runs of the fake helper: past bun's 5 s default on a slow Windows runner.
+  }, 30_000);
 });
 
 describe("DC-A1 over the fake helper", () => {
@@ -196,7 +197,8 @@ describe("DC-A1 over the fake helper", () => {
     // The key-down to the tap, plus the ring before and the post-roll after.
     expect(items[0]?.seconds as number).toBeGreaterThan(3);
     expect(items[0]?.seconds as number).toBeLessThan(3.6);
-  });
+    // A 3 s real-time run of the fake helper: close to bun's 5 s default on a Windows runner.
+  }, 30_000);
 
   test("Right Command+C is a copy: nothing is kept, and C reaches the app", async () => {
     const r = rig([
@@ -402,6 +404,28 @@ describe("the helper's stdout and stderr are two pipes", () => {
     s.onPacket(packet(320));
     await until(() => got.length === 1, 2000, "the decode");
     expect(got).toEqual([960]);
+  });
+
+  test("`session.ended` read before any packet waits for the first one past the quiet window", async () => {
+    const { s, got } = session();
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onMessage({ type: "session.ended", id: "1", reason: "release" });
+    // The stdout reader is behind: nothing has arrived three quiet windows after the end.
+    await wait(AUDIO_DRAIN_MS * 3);
+    expect(s.state).toBe("listening");
+    s.onPacket(packet(320));
+    s.onPacket(packet(320));
+    await until(() => got.length === 1, 2000, "the decode");
+    expect(got).toEqual([640]);
+  });
+
+  test("a cancel with no audio read yet is cancelled within the quiet window", async () => {
+    const { s, got, log } = session();
+    s.onMessage({ type: "session.started", id: "1", target: TARGET, capture_ns: "0" });
+    s.onMessage({ type: "session.ended", id: "1", reason: "cancel" });
+    await until(() => s.state === "idle", AUDIO_DRAIN_MS * 5, "the cancel");
+    expect(log.items()[0]?.state).toBe("cancelled");
+    expect(got).toEqual([]);
   });
 
   test("an empty dictation is settled back to the helper at once (DC-A4)", async () => {

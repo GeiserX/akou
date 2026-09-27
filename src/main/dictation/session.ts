@@ -122,6 +122,15 @@ interface Listening {
  */
 export const AUDIO_DRAIN_MS = 100;
 
+/**
+ * How long an end read before any of its session's audio waits for the first packet. A release,
+ * a tap, a key, silence or the cap always carries the ring and the post-roll, so no audio at all
+ * means the app has not read its stdout yet: a busy event loop runs the quiet window's timer
+ * before it polls the pipe. That cost a Windows runner every word of a hold. A session whose mic
+ * never delivered is still empty, this much later.
+ */
+export const FIRST_PACKET_MS = 2000;
+
 export class DictationSession {
   state: SessionState = "starting";
   ready: Extract<HelperToApp, { type: "ready" }> | null = null;
@@ -211,7 +220,8 @@ export class DictationSession {
       case "session.ended": {
         const c = this.cur;
         if (!c || c.helperId !== m.id || c.end) return;
-        c.end = { reason: m.reason, timer: setTimeout(() => this.ended(c), AUDIO_DRAIN_MS) };
+        const waitsForAudio = c.samples === 0 && m.reason !== "cancel" && m.reason !== "stop";
+        c.end = { reason: m.reason, timer: this.drain(c, waitsForAudio ? FIRST_PACKET_MS : 0) };
         return;
       }
       case "inserted": {
@@ -249,7 +259,15 @@ export class DictationSession {
     c.chunks.push(p.samples);
     c.samples += p.samples.length;
     // Audio read after the end: the pipe is still draining, so the quiet window starts again.
-    if (c.end) c.end.timer.refresh();
+    if (c.end) {
+      clearTimeout(c.end.timer);
+      c.end.timer = this.drain(c, 0);
+    }
+  }
+
+  /** The quiet window after the end, or the wait for the first packet when `ms` is longer. */
+  private drain(c: Listening, ms: number): ReturnType<typeof setTimeout> {
+    return setTimeout(() => this.ended(c), Math.max(ms, AUDIO_DRAIN_MS));
   }
 
   /** The helper exited: a session in progress is lost with it, and says so. */
