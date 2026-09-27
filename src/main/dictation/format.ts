@@ -136,3 +136,45 @@ export async function formatDictation(o: FormatOptions): Promise<FormatResult> {
     return skip(err instanceof ProviderError ? err.message : (err as Error).message);
   }
 }
+
+/** The prompts folder beside the config file: `<name>.md` for `dictation.formatPrompt: <name>`. */
+export const FORMAT_PROMPTS_DIR = "dictation-prompts";
+
+/** The `dictation.format*` settings, read at each dictation. */
+export interface FormatSettings {
+  /** `dictation.format`: `off` or `provider`. */
+  format: string;
+  /** `dictation.formatPrompt`. */
+  prompt: string;
+  /** `dictation.formatTimeoutSeconds`; 0 follows the provider. */
+  timeoutSeconds: number;
+}
+
+/**
+ * A dictation's formatting pass as the session asks for it: null while `dictation.format` is off,
+ * else `formatDictation` with the prompt the settings name. A prompt that cannot be read is a skip
+ * with its reason, so the raw text still goes in.
+ */
+export async function formatPass(
+  raw: string,
+  s: FormatSettings,
+  o: {
+    configDir: string;
+    provider(): Provider;
+    onLog?(level: "info" | "warn", msg: string): void;
+  },
+): Promise<FormatResult | null> {
+  if (s.format !== "provider") return null;
+  const p = loadFormatPrompt(s.prompt, join(o.configDir, FORMAT_PROMPTS_DIR));
+  if ("error" in p) {
+    o.onLog?.("warn", `format.skipped: ${p.error}`);
+    return { text: raw, raw, skipped: p.error, ms: 0, model: null };
+  }
+  return formatDictation({
+    raw,
+    provider: o.provider(),
+    prompt: p.prompt,
+    timeoutSeconds: s.timeoutSeconds,
+    ...(o.onLog ? { onLog: o.onLog } : {}),
+  });
+}
