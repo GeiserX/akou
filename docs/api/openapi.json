@@ -63,6 +63,9 @@
       "name": "dictations"
     },
     {
+      "name": "dictation"
+    },
+    {
       "name": "enhanced"
     },
     {
@@ -2780,7 +2783,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "The dictation log, newest first: each dictation's state, the app it went to, its text, engine and timings. `q` keeps those whose text holds it (any case); `cursor` is the last id of the page before.",
+        "description": "The dictation log, newest first: each dictation's state, the app it went to, its text, engine and timings. `q` keeps those whose text holds it (any case), `since` those started from that time on; `cursor` is the last id of the page before. A deleted dictation is not listed.",
         "parameters": [
           {
             "name": "q",
@@ -2789,6 +2792,17 @@
             "description": "Keep dictations whose text holds this, in any case.",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "description": "Keep dictations started at or after this time, epoch milliseconds.",
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 9007199254740991
             }
           },
           {
@@ -2832,6 +2846,32 @@
           "app"
         ],
         "x-akou-access": "admin"
+      },
+      "delete": {
+        "operationId": "dictations.clear",
+        "tags": [
+          "dictations"
+        ],
+        "description": "Delete every dictation, as the page's \"Delete all dictations now\": the dictation log keeps a tombstone for each and nothing else. Answers how many were deleted.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
       }
     },
     "/v1/dictations/{id}": {
@@ -2852,6 +2892,183 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "delete": {
+        "operationId": "dictations.delete",
+        "tags": [
+          "dictations"
+        ],
+        "description": "Delete one dictation: its text, words and events are gone from the dictation log, which keeps only a tombstone with its id.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The dictation id, from dictations.list.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictation": {
+      "get": {
+        "operationId": "dictation.status",
+        "tags": [
+          "dictation"
+        ],
+        "description": "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied or not-needed), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictation/start": {
+      "post": {
+        "operationId": "dictation.start",
+        "tags": [
+          "dictation"
+        ],
+        "description": "Start a latched dictation, as a tap of the dictation key: it listens until `dictation/stop`, a tap of the key, Escape, or silence. The text goes where the keyboard is when it ends. Answers once the helper is listening.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictation/stop": {
+      "post": {
+        "operationId": "dictation.stop",
+        "tags": [
+          "dictation"
+        ],
+        "description": "End the dictation that is listening: its audio is transcribed and inserted where it began, as a tap of the key would.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictation/cancel": {
+      "post": {
+        "operationId": "dictation.cancel",
+        "tags": [
+          "dictation"
+        ],
+        "description": "Cancel the dictation that is listening: nothing is transcribed or inserted, and history keeps it as cancelled.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/dictation/remote-test": {
+      "get": {
+        "operationId": "dictation.remoteTest",
+        "tags": [
+          "dictation"
+        ],
+        "description": "The Test of `dictation.remote.url` (DC-R4): `GET /v1/server` on the remote with `dictation.remote.key`, answering whether it works, its mode, the engine a dictation runs there, its accelerator, whether it biases, whether it has a dictation lane, the round trip and one summary line. A remote that refuses or is down is a result with `ok: false`, not an error; the key is never in it.",
         "responses": {
           "200": {
             "description": "OK",

@@ -21,7 +21,7 @@ import type { ModelSpecEntry } from "../asr/models.ts";
 import { parseArgs, SecretFlagError, UsageError } from "./args.ts";
 import { ApiClient, EXIT, TargetError, Unreachable } from "./client.ts";
 import { callCommands } from "./commands/calls.ts";
-import { dictateCommand } from "./commands/dictate.ts";
+import { dictateCommand, dictationsCommand } from "./commands/dictate.ts";
 import { doctorCommand } from "./commands/doctor.ts";
 import { followCommands } from "./commands/follow.ts";
 import { handoffCommands } from "./commands/handoff.ts";
@@ -66,6 +66,7 @@ export const COMMANDS: readonly Command[] = [
   ...serverCommands,
   transcribeCommand,
   dictateCommand,
+  dictationsCommand,
   skillCommand,
   mcp,
   serveCommand,
@@ -82,7 +83,7 @@ function help(): string {
     "",
     "`akou help COMMAND` shows a command's options. Exit codes: 0 ok, 3 nothing live, 64 usage,",
     "65 bad vocabulary term, 69 unavailable, 70 software, 75 already recording, 77 permission,",
-    "78 settings refuse it (`akou serve`), 124 timed out (`akou wait`).",
+    "78 settings refuse it (`akou serve`, `akou dictate start`), 124 timed out (`akou wait`).",
   ].join("\n");
 }
 

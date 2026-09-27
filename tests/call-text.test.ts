@@ -211,6 +211,10 @@ function hostileApi(pack: string): ApiClient {
     }
     if (path.endsWith("/ask")) return { text: `${INJECT} [15:36 Speaker 2]` };
     if (path.endsWith("/vocab/suggest")) return { candidates: [{ term: "repo", lines: [INJECT] }] };
+    // A dictation is the user's own words, and may hold anything they read aloud (DC-G5).
+    const dictation = { id: "d1", at: 1, state: "inserted", app: null, text: INJECT, raw: INJECT };
+    if (path === "/dictations") return { items: [dictation], next_cursor: null };
+    if (path.startsWith("/dictations/")) return dictation;
     if (path.endsWith("/vocab")) {
       return {
         call: "c1",
@@ -247,6 +251,8 @@ const CALL_TEXT_TOOLS: Record<string, Record<string, unknown>[]> = {
   akou_ask: [{ question: "what about the repo?" }],
   akou_vocab_list: [{ call: "live", unconfirmed: true }, { call: "live" }],
   akou_vocab_suggest: [{ call: "live" }],
+  akou_dictation_list: [{}],
+  akou_dictation_get: [{ id: "d1" }],
 };
 
 /** Every other tool, and why its answer carries no call text. */
