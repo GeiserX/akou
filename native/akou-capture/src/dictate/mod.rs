@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! akou-capture dictate [--hotkey KEY] [--activation hold-or-toggle|hold|toggle]
-//!   [--warm off|auto|always]
+//!   [--warm off|auto|always] [--probe]
 //! akou-capture dictate ... --from-wav FILE [--keys FILE] [--inserter fake[:FILE]]
 //!   [--clipboard fake] [--ax fake FILE] [--speed X] [--mic-open-delay MS] [--mic-bluetooth]
 //! ```
@@ -14,15 +14,23 @@
 //!
 //! The switches of the second form are the fakes of DC-N10 and exist only with the `simulate`
 //! feature, which never ships: a shipping build refuses each of them as a usage error, and CI
-//! checks that on the release binary. The insert and its guards (`insert`) run against those fakes;
-//! no real key, clipboard or accessibility backend exists yet, so without `--from-wav` the process
-//! says so and exits 69.
+//! checks that on the release binary. The insert and its guards (`insert`) run against those fakes.
+//!
+//! On macOS the real process runs the key tap, the accessibility reads and the microphone (`mac`,
+//! through the worker loop in `live`); it has no inserter yet, so an `insert` answers
+//! `insert.failed no-inserter` and the app opens the draft box. On Windows and Linux there is no
+//! backend yet: the process says so and exits 69. `--probe` prints the `ready` line the process
+//! would send (backend, `swallow_keys`, grants read without asking) and exits, on every OS.
 
 pub mod activation;
 #[cfg(any(test, feature = "simulate"))]
 pub mod fake;
 pub mod insert;
 pub mod keys;
+pub mod live;
+#[cfg(target_os = "macos")]
+pub mod mac;
+pub mod mac_keys;
 pub mod mic;
 pub mod protocol;
 pub mod readback;
@@ -36,7 +44,7 @@ use activation::Mode;
 use keys::Hotkey;
 use mic::Warm;
 
-pub const USAGE: &str = "usage: akou-capture dictate [--hotkey KEY] [--activation hold-or-toggle|hold|toggle] [--warm off|auto|always]";
+pub const USAGE: &str = "usage: akou-capture dictate [--hotkey KEY] [--activation hold-or-toggle|hold|toggle] [--warm off|auto|always] [--probe]";
 
 /// The switches only a `simulate` build has. A shipping build names them in its refusal.
 const SIMULATE_ONLY: [&str; 8] = [
@@ -55,6 +63,8 @@ pub struct Args {
     pub hotkey: Hotkey,
     pub mode: Mode,
     pub warm: Warm,
+    /// Print `ready` and exit, with no tap and no device (DC-N1's backend listing).
+    pub probe: bool,
     #[cfg(feature = "simulate")]
     pub sim: sim::Switches,
 }
@@ -74,6 +84,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
     let mut hotkey = Hotkey::parse(default_hotkey()).expect("the default binds");
     let mut mode = Mode::HoldOrToggle;
     let mut warm = Warm::Auto;
+    let mut probe = false;
     #[cfg(feature = "simulate")]
     let mut sim = sim::Switches::default();
     let mut it = argv.iter();
@@ -87,6 +98,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
             "--hotkey" => hotkey = Hotkey::parse(&val()?)?,
             "--activation" => mode = Mode::parse(&val()?)?,
             "--warm" => warm = Warm::parse(&val()?)?,
+            "--probe" => probe = true,
             other => {
                 #[cfg(feature = "simulate")]
                 if sim.take(other, &mut val)? {
@@ -105,6 +117,7 @@ pub fn parse(argv: &[String]) -> Result<Args, String> {
         hotkey,
         mode,
         warm,
+        probe,
         #[cfg(feature = "simulate")]
         sim,
     })
@@ -120,16 +133,20 @@ pub fn main(argv: &[String]) -> i32 {
         Ok(a) => a,
         Err(e) => return fail("usage", &format!("{e}\n{USAGE}"), exit::USAGE),
     };
+    if args.probe {
+        eprintln!("{}", probe());
+        return exit::OK;
+    }
+    let cfg = session::Config {
+        hotkey: args.hotkey,
+        mode: args.mode,
+        warm: args.warm,
+        bluetooth: false,
+        ring_ms: mic::RING_MS,
+        os: insert::Os::current(),
+    };
     #[cfg(feature = "simulate")]
     if args.sim.from_wav.is_some() {
-        let cfg = session::Config {
-            hotkey: args.hotkey,
-            mode: args.mode,
-            warm: args.warm,
-            bluetooth: false,
-            ring_ms: mic::RING_MS,
-            os: insert::Os::current(),
-        };
         return sim::run(
             args.sim,
             cfg,
@@ -146,7 +163,6 @@ pub fn main(argv: &[String]) -> i32 {
             exit::USAGE,
         );
     }
-    let _ = args;
     if std::env::var_os("AKOU_CAPTURE_FILE_ONLY").is_some_and(|v| v == "1") {
         return fail(
             "file-only",
@@ -154,11 +170,26 @@ pub fn main(argv: &[String]) -> i32 {
             exit::UNAVAILABLE,
         );
     }
-    fail(
-        "no-backend",
-        "dictate has no key and insert backend on this OS yet",
-        exit::UNAVAILABLE,
-    )
+    #[cfg(target_os = "macos")]
+    return mac::run(cfg);
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = cfg;
+        fail(
+            "no-backend",
+            "dictate has no key and insert backend on this OS yet",
+            exit::UNAVAILABLE,
+        )
+    }
+}
+
+/// The `ready` line this build would send, without a tap or a device: the backend and the
+/// grants, each read without asking (DC-N1's listing, which CI runs on every OS).
+pub fn probe() -> String {
+    #[cfg(target_os = "macos")]
+    return mac::probe();
+    #[cfg(not(target_os = "macos"))]
+    protocol::ready("none", false, "not-needed", "not-needed")
 }
 
 #[cfg(test)]

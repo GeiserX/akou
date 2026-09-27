@@ -111,6 +111,13 @@ impl Dictate {
         self.mic_events(ev, out);
     }
 
+    /// The device just opened is (or is not) Bluetooth, which is never kept warm (DC-N4).
+    pub fn set_bluetooth(&mut self, bluetooth: bool, t_ns: u64, out: &mut dyn Out) {
+        let mut ev = Vec::new();
+        self.mic.set_bluetooth(bluetooth, t_ns, &mut ev);
+        self.mic_events(ev, out);
+    }
+
     /// Whether the device stream should be open.
     pub fn mic_open(&self) -> bool {
         self.mic.is_open()

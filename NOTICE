@@ -20,6 +20,12 @@ Handy (MIT), https://github.com/cjpais/Handy
   back a quiet period after the last read or at a bounded timeout (a short one after a failed
   chord), and only while the clipboard is still ours. The MIT notice is in that file.
 
+handy-keys (MIT), https://github.com/handy-computer/handy-keys
+  Copyright (c) 2026 handy-computer.
+  The macOS key tap of the dictation helper (native/akou-capture/src/dictate/mac.rs) is set up
+  the way handy-keys' macOS listener is: an active session tap on its own run loop, enabled again
+  from its own callback when macOS disables it, never polled. No handy-keys code is linked.
+
 libopus (BSD-3-Clause), https://opus-codec.org
   Copyright (c) Xiph.Org Foundation, Skype Limited, Octasic, Jean-Marc Valin, Timothy B.
   Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo and contributors.
@@ -56,10 +62,12 @@ its source package at the repository given.
   num-integer v0.1.47            MIT OR Apache-2.0                  https://github.com/rust-num/num-integer
   num-traits v0.2.19             MIT OR Apache-2.0                  https://github.com/rust-num/num-traits
   objc2 v0.6.4                   MIT                                https://github.com/madsmtm/objc2
+  objc2-application-services v0.3.2  Zlib OR Apache-2.0 OR MIT      https://github.com/madsmtm/objc2
   objc2-audio-toolbox v0.3.2     Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
   objc2-core-audio v0.3.2        Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
   objc2-core-audio-types v0.3.2  Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
   objc2-core-foundation v0.3.2   Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
+  objc2-core-graphics v0.3.2     Zlib OR Apache-2.0 OR MIT          https://github.com/madsmtm/objc2
   objc2-encode v4.1.0            MIT                                https://github.com/madsmtm/objc2
   objc2-foundation v0.3.2        MIT                                https://github.com/madsmtm/objc2
   ogg v0.9.2                     BSD-3-Clause                       https://github.com/RustAudio/ogg
