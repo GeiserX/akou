@@ -9,7 +9,8 @@
  *   the user picked, and a marker inside the text is made inert.
  * - **The raw text wins every failure.** A provider that is missing, refuses, answers nothing,
  *   echoes the prompt, or takes longer than `dictation.formatTimeoutSeconds` is skipped: the raw
- *   text is inserted, the result says why for the pill, and the log gets `format.skipped`.
+ *   text is inserted, the result says why for the pill, and the log gets `format.skipped` with the
+ *   error's kind only, never the provider's message, which could quote the dictation.
  * - **The timeout follows the provider.** Empty, it is 15 s for the harness, which takes seconds to
  *   start, and 4 s for an API or a local model.
  */
@@ -110,8 +111,9 @@ export interface FormatResult {
 export async function formatDictation(o: FormatOptions): Promise<FormatResult> {
   const t0 = performance.now();
   const ms = () => Math.round(performance.now() - t0);
-  const skip = (why: string): FormatResult => {
-    o.onLog?.("warn", `format.skipped: ${why}`);
+  // `logged` is what the app log may hold: never a provider's own words, which could quote the text.
+  const skip = (why: string, logged = why): FormatResult => {
+    o.onLog?.("warn", `format.skipped: ${logged}`);
     return { text: o.raw, raw: o.raw, skipped: why, ms: ms(), model: null };
   };
   if (o.raw.trim() === "") return { text: o.raw, raw: o.raw, skipped: null, ms: 0, model: null };
@@ -133,8 +135,24 @@ export async function formatDictation(o: FormatOptions): Promise<FormatResult> {
     }
     return { text, raw: o.raw, skipped: null, ms: ms(), model: r.model };
   } catch (err) {
-    return skip(err instanceof ProviderError ? err.message : (err as Error).message);
+    return skip((err as Error)?.message ?? String(err), loggable(err));
   }
+}
+
+/** The deadline's own words (`runProvider`'s), which hold a number and never the dictation. */
+const DEADLINE = /^no answer within \d+ (?:s|ms)$/;
+
+/**
+ * A provider failure as the app log may hold it: the deadline as it reads, else the error's kind
+ * or name. The message itself stays out: it can be the model's reply on an errored turn, the
+ * harness's stderr or an API's error text, any of which could quote the dictated words.
+ */
+function loggable(err: unknown): string {
+  if (err instanceof ProviderError) {
+    return DEADLINE.test(err.message) ? err.message : `provider error (${err.kind})`;
+  }
+  const name = (err as { name?: unknown } | null)?.name;
+  return typeof name === "string" ? `error (${name})` : "error";
 }
 
 /** The prompts folder beside the config file: `<name>.md` for `dictation.formatPrompt: <name>`. */
