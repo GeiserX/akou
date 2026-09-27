@@ -120,8 +120,6 @@ const MODIFIERS: [(u16, &str); 8] = [
     (126, "RightSuper"),
 ];
 
-const BTN_LEFT: u16 = 0x110;
-const BTN_RIGHT: u16 = 0x111;
 const BUTTONS: [(u16, &str); 5] = [
     (0x112, "Mouse3"),
     (0x113, "Mouse4"),
@@ -235,7 +233,7 @@ impl Device {
             }
             return;
         }
-        if kind != EV_KEY || !matches!(value, 0 | 1) || matches!(code, BTN_LEFT | BTN_RIGHT) {
+        if kind != EV_KEY || !matches!(value, 0 | 1) {
             return;
         }
         if let Some(name) = key_name(code) {
@@ -257,6 +255,8 @@ mod tests {
     use super::*;
 
     const MS: u64 = 1_000_000;
+    const BTN_LEFT: u16 = 0x110;
+    const BTN_RIGHT: u16 = 0x111;
 
     fn gate(hotkey: &str) -> Gate {
         Gate::new(
@@ -410,22 +410,24 @@ mod tests {
         assert_eq!(g.lock().act.held(), ["RightControl"]);
     }
 
+    /// Auto-repeat (value 2) is neither a press nor a release: a held hotkey that repeats stays
+    /// held, and its session goes on.
     #[test]
-    fn auto_repeat_is_not_a_press() {
+    fn auto_repeat_is_neither_a_press_nor_a_release() {
         let g = gate("RightControl");
-        g.lock().act.record_keys(true);
         let mut d = Device::default();
+        feed(&g, &mut d, &[(EV_KEY, 97, 1, 0)], &[]);
+        g.lock().act.tick(400 * MS, &mut Vec::new());
         feed(
             &g,
             &mut d,
-            &[
-                (EV_KEY, 30, 1, 0),
-                (EV_KEY, 30, 2, 300),
-                (EV_KEY, 30, 0, 400),
-            ],
+            &[(EV_KEY, 97, 2, 450), (EV_KEY, 97, 2, 500)],
             &[],
         );
-        assert_eq!(acts(&g), vec![Action::Key("A".into())]);
+        assert!(g.lock().act.is_listening(), "a repeat is no release");
+        assert!(!acts(&g).contains(&Action::End { reason: "release" }));
+        feed(&g, &mut d, &[(EV_KEY, 97, 0, 900)], &[]);
+        assert!(acts(&g).contains(&Action::End { reason: "release" }));
     }
 
     /// A keyboard is read, a mouse only as a mouse, a power button never. The words are those of
