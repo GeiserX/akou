@@ -5,7 +5,8 @@
  * 1. A heard form matches as a whole word (or a whole run of words), case-insensitive and
  *    accent-folded. Call-scoped pairs are tried before file pairs, longer forms before shorter.
  * 2. A heard form that is a dictionary word, or 3 characters or shorter, is skipped unless the
- *    pair is call-scoped. Without a dictionary, akou cannot tell, so only call-scoped pairs apply.
+ *    pair is call-scoped or dictation-scoped. Without a dictionary, akou cannot tell, so only those
+ *    pairs apply.
  * 3. Terms without heard forms, and speaker names, are fuzzy-matched: Jaro-Winkler >= 0.92 on
  *    tokens of 4 or more characters. A dictionary word is never fuzzy-corrected, so without a
  *    dictionary there is no fuzzy matching at all. Each word of 4 or more characters in a speaker
@@ -17,13 +18,17 @@
  * and exports (`Anika (heard: "annika")`) and the list of corrections.
  */
 
-export type RuleScope = "call" | "file" | "name";
+export type RuleScope = "call" | "dictation" | "file" | "name";
 
 export interface VocabRule {
   term: string;
   /** Mishearings to replace. Empty means the term is fuzzy-matched instead. */
   heard: readonly string[];
-  /** `call` for a `vocab.add`, `file` for the vocabulary files, `name` for a speaker name. */
+  /**
+   * `call` for a `vocab.add`, `file` for the vocabulary files, `name` for a speaker name, and
+   * `dictation` for a file entry with `scope: dictation` (docs/ux/DICTATION.md DC-L6), which only
+   * dictation ever reads.
+   */
   scope: RuleScope;
   /** When set, the rule applies only to these segment ids. */
   segs?: readonly string[];
@@ -57,7 +62,7 @@ export interface CorrectResult {
 
 export const FUZZY_THRESHOLD = 0.92;
 export const FUZZY_MIN_CHARS = 4;
-/** Heard forms this short are skipped unless call-scoped. */
+/** Heard forms this short are skipped unless call-scoped or dictation-scoped. */
 export const SHORT_FORM_MAX = 3;
 
 export interface Token {
@@ -142,9 +147,11 @@ export function jaroWinkler(a: string, b: string): number {
 }
 
 /**
- * Whether a heard form may be applied at read time. Call-scoped pairs always may. Any other pair
- * is skipped when the form is 3 characters or shorter, when every word of it is a dictionary word,
- * or when there is no dictionary to ask.
+ * Whether a heard form may be applied at read time. Call-scoped and dictation-scoped pairs always
+ * may: each is the user's own explicit fix, so "versal" to "Vercel" must work even though a short
+ * or dictionary-word form would be inert in a file pair. Any other pair is skipped when the form is
+ * 3 characters or shorter, when every word of it is a dictionary word, or when there is no
+ * dictionary to ask.
  */
 export function heardFormApplies(
   form: string,
@@ -153,7 +160,7 @@ export function heardFormApplies(
 ): boolean {
   const words = tokenize(form).map((t) => t.folded);
   if (words.length === 0) return false;
-  if (scope === "call") return true;
+  if (scope === "call" || scope === "dictation") return true;
   if (charLength(words.join(" ")) <= SHORT_FORM_MAX) return false;
   if (!isDictionaryWord) return false;
   return !words.every((w) => isDictionaryWord(w));
@@ -171,7 +178,7 @@ interface FuzzyTerm {
   scope: RuleScope;
 }
 
-const SCOPE_RANK: Record<RuleScope, number> = { call: 0, file: 1, name: 2 };
+const SCOPE_RANK: Record<RuleScope, number> = { call: 0, dictation: 0, file: 1, name: 2 };
 
 function ruleApplies(rule: VocabRule, segId: string | undefined): boolean {
   if (rule.term.trim() === "") return false;

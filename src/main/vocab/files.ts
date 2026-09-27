@@ -26,6 +26,7 @@
  *     decode: 5            # optional: true, false (read-time only) or a boost 1 to 5; biases
  *                          # decoding only with `asr.parakeet.decoding` beam
  *     note: "optional free text"
+ *     scope: "dictation"   # optional: only dictation reads it; calls never do (DC-L6)
  * rejected: ["words the skill must not propose again"]
  * ```
  *
@@ -71,7 +72,18 @@ export interface VocabEntry {
   added_at: string;
   decode?: Decode;
   note?: string;
+  /**
+   * The YAML key `scope`: `dictation` is an entry only dictation reads (docs/ux/DICTATION.md
+   * DC-L6), a fix the user taught while dictating. Calls drop it (`callEntries`): its heard form is
+   * applied whatever the dictionary says, which in a call transcript would rewrite a real word.
+   * Absent, the entry is for calls and dictation both.
+   */
+  entryScope?: EntryScope;
 }
+
+/** The values of an entry's `scope` key. */
+export const ENTRY_SCOPES = ["dictation"] as const;
+export type EntryScope = (typeof ENTRY_SCOPES)[number];
 
 export interface VocabFile {
   version: number;
@@ -94,9 +106,19 @@ export interface ParsedVocab {
   warnings: VocabIssue[];
 }
 
-const SOURCE = /^(user|correction|calendar|(call|docs|repo|export|web|agent|import):\S.*)$/;
+const SOURCE =
+  /^(user|correction|calendar|(call|dictation|docs|repo|export|web|agent|import):\S.*)$/;
 const DATE = /^\d{4}-\d{2}-\d{2}$/;
-const ENTRY_KEYS = new Set(["term", "heard", "source", "confirmed", "added_at", "decode", "note"]);
+const ENTRY_KEYS = new Set([
+  "term",
+  "heard",
+  "source",
+  "confirmed",
+  "added_at",
+  "decode",
+  "note",
+  "scope",
+]);
 const FILE_KEYS = new Set(["version", "entries", "rejected"]);
 
 export function emptyVocab(): VocabFile {
@@ -196,6 +218,14 @@ function checkEntry(raw: unknown, i: number, errors: VocabIssue[], warnings: Voc
     }
     entry.note = e.note;
   }
+  if (e.scope !== undefined) {
+    if (!(ENTRY_SCOPES as readonly unknown[]).includes(e.scope)) {
+      return fail(
+        `"scope" must be ${ENTRY_SCOPES.map((v) => `"${v}"`).join(" or ")} (term "${term}")`,
+      );
+    }
+    entry.entryScope = e.scope as EntryScope;
+  }
   return entry;
 }
 
@@ -289,6 +319,7 @@ export function serializeVocab(file: VocabFile): string {
     out.push(`    added_at: ${q(e.added_at)}`);
     if (e.decode !== undefined) out.push(`    decode: ${String(e.decode)}`);
     if (e.note !== undefined) out.push(`    note: ${q(e.note)}`);
+    if (e.entryScope !== undefined) out.push(`    scope: ${q(e.entryScope)}`);
   }
   if (file.rejected.length > 0) out.push(`rejected: [${file.rejected.map(q).join(", ")}]`);
   return `${out.join("\n")}\n`;
@@ -478,6 +509,15 @@ export function mergeVocab(
   return [...byKey.values()]
     .sort((a, b) => SCOPE_RANK[a.scope] - SCOPE_RANK[b.scope] || b.layer - a.layer)
     .map(({ layer: _l, ...e }) => e);
+}
+
+/**
+ * The entries a call reads: every one but those with `scope: dictation` (DC-L6). The app builds
+ * everything a call uses from this (the fold, the decode list, the final pass); without it a
+ * dictation fix such as "versal" to "Vercel" would rewrite call transcripts.
+ */
+export function callEntries(merged: readonly MergedEntry[]): MergedEntry[] {
+  return merged.filter((e) => e.entryScope !== "dictation");
 }
 
 /** The read-time view of the merged list, as the fold takes it. */

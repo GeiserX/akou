@@ -115,6 +115,7 @@ import type { Bindings } from "./dictation/protocol.ts";
 import { RemoteEngine } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
 import type { DictationEngine } from "./dictation/session.ts";
+import { correctDictation } from "./dictation/vocab.ts";
 import { type ExportResult, exportCall } from "./handoff/export.ts";
 import {
   buildPayload,
@@ -167,7 +168,14 @@ import { NotWritable, requireWritable } from "./server/writable.ts";
 import { LocalLink } from "./share/local-link.ts";
 import { parseExpiry, type ShareHandle, type ShareStatus } from "./share/transport.ts";
 import { callLanguages, Dictionaries } from "./vocab/dictionary.ts";
-import { mergeVocab, readVocabFile, toFoldEntries, vocabPaths } from "./vocab/files.ts";
+import {
+  callEntries,
+  type MergedEntry,
+  mergeVocab,
+  readVocabFile,
+  toFoldEntries,
+  vocabPaths,
+} from "./vocab/files.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
@@ -475,6 +483,8 @@ export class AkouApp implements ApiApp {
   private accel: AcceleratorState | null = null;
   /** Dictation (docs/ux/DICTATION.md); app mode only, since a server has no keyboard. */
   private dictationSvc: DictationService | null = null;
+  /** Dictation's vocabulary (DC-L6), read on the first dictation after a change. */
+  private dictationVocab: Promise<MergedEntry[]> | null = null;
   /** The `remote` dictation engine, made at the first remote dictation; it reads its settings live. */
   private remoteDictation: RemoteEngine | null = null;
   /** The machine that detection read: its env names the image's llama-server. */
@@ -1436,6 +1446,7 @@ export class AkouApp implements ApiApp {
   }
 
   vocabChanged(): void {
+    this.dictationVocab = null;
     this.vocabCache.clear();
     this.vocabFailed.clear();
     // A read already in flight may hold the old files; the next reader starts a fresh one.
@@ -1495,8 +1506,10 @@ export class AkouApp implements ApiApp {
       );
       if (gen !== this.vocabGen) return;
       this.vocabCache.set(workspace, {
-        entries: mergeVocab(
-          layers.map((l) => ({ scope: l.scope, path: l.path, file: l.loaded.file })),
+        // A call never reads a `scope: dictation` entry (DC-L6): not in its text, its decode list
+        // or its final pass, all of which read this.
+        entries: callEntries(
+          mergeVocab(layers.map((l) => ({ scope: l.scope, path: l.path, file: l.loaded.file }))),
         ),
         files: layers
           .filter((l) => l.loaded.exists)
@@ -1964,9 +1977,40 @@ export class AkouApp implements ApiApp {
       configDir: this.configDir,
       now: () => this.clock.now(),
       engine: (name) => this.dictationEngine(name),
+      correct: (raw, language) => this.correctDictation(raw, language),
       onLog: (level, msg) => this.log(level, msg),
     });
     this.applyDictation();
+  }
+
+  /**
+   * A dictation's text through its vocabulary (DC-L6): the global file and `vocab.extraFiles`, and
+   * the word lists of `vocab.languages` plus the language the engine found.
+   */
+  private async correctDictation(raw: string, language: string | null): Promise<string> {
+    this.dictationVocab ??= this.readDictationVocab();
+    const read = this.dictationVocab;
+    let entries: MergedEntry[];
+    try {
+      entries = await read;
+    } catch (err) {
+      // Read again on the next dictation rather than never.
+      if (this.dictationVocab === read) this.dictationVocab = null;
+      throw err;
+    }
+    const langs = callLanguages(this.cfg.settings["vocab.languages"], language ? [language] : []);
+    return correctDictation(raw, entries, this.dictionaries.predicate(langs));
+  }
+
+  private async readDictationVocab(): Promise<MergedEntry[]> {
+    const paths = vocabPaths({
+      configDir: this.configDir,
+      extra: this.cfg.settings["vocab.extraFiles"],
+    });
+    const layers = await Promise.all(
+      paths.map(async (p) => ({ ...p, file: (await readVocabFile(p.path)).file })),
+    );
+    return mergeVocab(layers);
   }
 
   /** The live Worker's Parakeet, already loaded at start, or null while no model is there. */
@@ -1992,7 +2036,8 @@ export class AkouApp implements ApiApp {
           fallback: c["dictation.remote.fallback"],
           timeoutSeconds: c["dictation.remote.timeoutSeconds"],
           ...(language !== "auto" ? { language } : {}),
-          // No learned dictation words exist yet (DC-L6), so glossary `on` sends none.
+          // Learned words go to the recognizer only through DC-L7's measured gate, which is not
+          // built, so glossary `on` sends none; DC-L6 applies them as replacements either way.
           glossary: c["dictation.glossary"] === "on" ? [] : null,
         };
       },

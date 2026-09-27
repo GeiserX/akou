@@ -14,6 +14,7 @@ import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
 import {
+  correctOrRaw,
   type DictationEngine,
   DictationSession,
   type RebindAnswer,
@@ -30,6 +31,8 @@ export interface DictationServiceOptions {
   /** The engine `dictation.engine` picks, or the one named (`fast`, `remote`); null with none. */
   engine(name?: string): DictationEngine | null;
   now(): number;
+  /** The decoded text after the dictation vocabulary (DC-L6); absent, inserted as decoded. */
+  correct?(raw: string, language: string | null): Promise<string>;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -117,6 +120,7 @@ export class DictationService {
       engine: this.o.engine,
       bindings,
       now: this.o.now,
+      ...(this.o.correct ? { correct: this.o.correct } : {}),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -225,7 +229,7 @@ export class DictationService {
             type: "dictation.text",
             id,
             raw: d.text,
-            text: d.text,
+            text: await correctOrRaw(this.o, d),
             language: d.language,
             words: d.words,
             engine: d.engine ?? engine.name,
