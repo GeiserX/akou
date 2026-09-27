@@ -55,11 +55,12 @@ impl Globe {
     }
 
     fn own(&mut self) {
-        // Saved before the write, so a crash between the two loses nothing; saved once, so owning
-        // the key again (a rebind to Fn, a restart after a crash) never saves akou's own value.
-        if self.prefs.get(OWN, SAVED).is_none() {
-            let now = self.prefs.get(HITOOLBOX, FN_USAGE).unwrap_or(UNSET);
-            self.prefs.set(OWN, SAVED, Some(now));
+        // Saved before the write, so a crash between the two loses nothing. A value that is
+        // still akou's own is never saved (a rebind to Fn, a restart after a crash); one the user
+        // chose after a crash replaces the value that crashed run saved.
+        let now = self.prefs.get(HITOOLBOX, FN_USAGE);
+        if self.prefs.get(OWN, SAVED).is_none() || now != Some(DO_NOTHING) {
+            self.prefs.set(OWN, SAVED, Some(now.unwrap_or(UNSET)));
         }
         self.prefs.set(HITOOLBOX, FN_USAGE, Some(DO_NOTHING));
     }
@@ -172,5 +173,23 @@ pub mod tests {
         store.user_chose(3);
         g.release();
         assert_eq!(store.fn_usage(), Some(3), "the user's newer choice stays");
+    }
+
+    /// DC-N2: the helper crashed while it owned Fn (the user's 2 saved), then the user picked 1 in
+    /// System Settings. The next start on Fn owns the key again and saves the 1, so a later
+    /// release gives back the newer choice, not the crashed run's 2.
+    #[test]
+    fn dc_n2_a_choice_made_after_a_crash_is_the_one_given_back() {
+        let store = Store::default();
+        store.user_chose(2);
+        let mut crashed = Globe::new(Box::new(store.clone()));
+        crashed.follow(&key("Fn"));
+        drop(crashed);
+        store.user_chose(1);
+        let mut next = Globe::new(Box::new(store.clone()));
+        next.follow(&key("Fn"));
+        assert_eq!(store.fn_usage(), Some(DO_NOTHING));
+        next.release();
+        assert_eq!(store.fn_usage(), Some(1), "the choice made after the crash");
     }
 }

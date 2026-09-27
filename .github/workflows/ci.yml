@@ -290,9 +290,8 @@ jobs:
           grep -q '"type":"stopped"' helper.err
           grep -q '"type":"mic","open":true' helper.err || { echo "the press never reached the session"; exit 1; }
           # DC-N5: a session on a real device says which input it chose, from Core Audio's list.
-          if grep -q '"type":"session.started"' helper.err; then
-            grep '"type":"session.started"' helper.err | grep -q '"mic":{"transport":' || { echo "session.started names no mic"; exit 1; }
-          fi
+          grep -q '"type":"session.started"' helper.err || { echo "no session started"; exit 1; }
+          grep '"type":"session.started"' helper.err | grep -q '"mic":{"transport":' || { echo "session.started names no mic"; exit 1; }
           echo "audio packets: $(wc -c < helper.out) bytes"
           for k in flags:59 flags:56 down:0 up:0; do
             grep -qw "$k" tapped.txt || { echo "$k was swallowed"; exit 1; }

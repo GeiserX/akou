@@ -218,10 +218,16 @@ impl Mic<'_> {
     fn choose(&mut self) -> Result<Choice, String> {
         let list = self.dev.inputs();
         if list.is_empty() {
+            // Nothing to check the pin against: it goes straight to `open`, as before DC-N5.
+            let pinned = !(self.policy.pinned.is_empty() || self.policy.pinned == "default");
             return Ok(Choice {
-                id: "default".into(),
+                id: if pinned {
+                    self.policy.pinned.clone()
+                } else {
+                    "default".into()
+                },
                 transport: Transport::Other,
-                why: "default",
+                why: if pinned { "pinned" } else { "default" },
             });
         }
         let lid = self.dev.lid_closed();
@@ -950,6 +956,18 @@ mod tests {
             Some("headset"),
             "a closed lid hides the built-in mic"
         );
+    }
+
+    /// DC-N5: a backend that cannot list its inputs still opens the pinned device, and the
+    /// default when nothing is pinned (the positive control).
+    #[test]
+    fn dc_n5_an_unlisted_backend_still_opens_the_pinned_device() {
+        let pin = r#"{"type":"rebuild_mic","device":"usb"}"#;
+        let (l, _, opens) = hold_on(Desk::default(), &[pin], None);
+        assert_eq!(opens.first().map(String::as_str), Some("usb"), "{l:?}");
+        assert!(started(&l)[0].contains(r#""why":"pinned""#), "{l:?}");
+        let (_, _, opens) = hold_on(Desk::default(), &[], None);
+        assert_eq!(opens.first().map(String::as_str), Some("default"));
     }
 
     /// DC-N5: the pinned device's stream dies mid-session: the session goes on, reopened on the
