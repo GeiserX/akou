@@ -132,6 +132,9 @@ export function electrobunUi(): NativeUi {
         rpc: defined,
         frame,
         titleBarStyle: "hidden",
+        // Only the card is painted (pill.css): the rest of the window, kept for the chip, shows
+        // what is behind it.
+        transparent: true,
         hidden: true,
         activate: false,
         ...(style.styleMask ? { styleMask: { ...style.styleMask, Resizable: false } } : {}),
