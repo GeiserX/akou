@@ -55,6 +55,10 @@ export const WORDS: readonly { sound: string; heard?: string; term?: string }[] 
   { sound: "kubernetes", heard: "kubernetis", term: "Kubernetes" },
   { sound: "ok" },
   { sound: "great" },
+  // A replacement's words (DC-U5): "example dot com" to example.com.
+  { sound: "example" },
+  { sound: "dot" },
+  { sound: "com" },
 ];
 
 export const wordFreq = (i: number) => 300 + 60 * i;

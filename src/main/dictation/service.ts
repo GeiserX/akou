@@ -646,5 +646,6 @@ function textRules(o: TextRules): TextRules {
   if (o.fillers) r.fillers = o.fillers;
   if (o.languages) r.languages = o.languages;
   if (o.punctuation) r.punctuation = o.punctuation;
+  if (o.format) r.format = o.format;
   return r;
 }

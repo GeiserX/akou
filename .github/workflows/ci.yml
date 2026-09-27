@@ -190,7 +190,7 @@ jobs:
       - name: the shipping helper refuses every dictate fake
         working-directory: native/akou-capture
         run: |
-          for s in --from-wav --keys --inserter --clipboard --ax --speed --mic-open-delay --mic-bluetooth; do
+          for s in --from-wav --keys --inserter --clipboard --ax --speed --mic-open-delay --mic-bluetooth --ring-ms; do
             set +e
             "target/shipping/akou-capture$EXE" dictate "$s" fake x 2> refused.err
             code=$?
@@ -429,13 +429,13 @@ jobs:
             END { printf "<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n<testsuite name=\"cargo test\">\n%s</testsuite>\n</testsuites>\n", n, f, s, cases }
           ' .cargo-test.log > .junit-helper.xml
           bun scripts/ci/test-floor.ts helper .junit-helper.xml
-      # The capture traps, and the app's dictation service over `dictate` (DC-T1), against the
-      # simulate build.
+      # The capture traps, the app's dictation service over `dictate` (DC-T1) and DC-N4's words
+      # from the WAV to the transcript, against the simulate build.
       - name: capture traps and dictation against the built helper
         env:
           AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}
           AKOU_CAPTURE_BIN_SHIPPING: ${{ github.workspace }}/native/akou-capture/target/shipping/akou-capture${{ env.EXE }}
-        run: bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-capture-e2e.xml tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts
+        run: bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-capture-e2e.xml tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts tests/dictation-preroll.e2e.test.ts
       # With both binaries set every test runs: the floor allows no skip.
       - run: bun scripts/ci/test-floor.ts capture-e2e .junit-capture-e2e.xml
 

@@ -15,6 +15,8 @@
 //! - `--speed X`: 0 (the default) runs as fast as it goes, 1 in real time.
 //! - `--mic-open-delay MS`: the stream delivers its first sample MS after it opens (a slow device).
 //! - `--mic-bluetooth`: the mic reports a Bluetooth transport, so it is never kept warm.
+//! - `--ring-ms MS`: the pre-roll ring's length (default 500); 0 turns it off, the positive
+//!   control of DC-N4's first-syllable check.
 //!
 //! At `--speed 0` stdin is read once the timeline is over; paced, each command lands on the step
 //! it arrives in. After the timeline the process waits for commands until `stop` or the end of
@@ -43,6 +45,7 @@ pub struct Switches {
     pub speed: f64,
     pub mic_open_delay_ms: u64,
     pub mic_bluetooth: bool,
+    pub ring_ms: Option<u64>,
 }
 
 impl Switches {
@@ -92,6 +95,13 @@ impl Switches {
                     .map_err(|_| format!("--mic-open-delay needs milliseconds, not {v}"))?;
             }
             "--mic-bluetooth" => self.mic_bluetooth = true,
+            "--ring-ms" => {
+                let v = val()?;
+                self.ring_ms = Some(
+                    v.parse()
+                        .map_err(|_| format!("--ring-ms needs milliseconds, not {v}"))?,
+                );
+            }
             _ => return Ok(false),
         }
         Ok(true)
@@ -207,6 +217,7 @@ pub fn run(
     });
     let mut cfg = cfg;
     cfg.bluetooth = sw.mic_bluetooth;
+    cfg.ring_ms = sw.ring_ms.unwrap_or(cfg.ring_ms);
     let mut d = Dictate::new(cfg, Box::new(Screen(world.clone())), inserter);
     // A paste waits for its receipt; after the timeline, time moves on in 10 ms steps until it
     // settles, so a run never ends with one pending.
@@ -508,6 +519,52 @@ mod tests {
         assert!(
             started.contains(r#""field":"unknown""#),
             "no --ax: the target is unknown"
+        );
+    }
+
+    /// DC-N4 through the switches, `warmMic: auto`: a second session 10 s after the first finds
+    /// the stream still open, and one 40 s after that finds it closed (30 s after the session
+    /// before it) and opens it again.
+    #[test]
+    fn dc_n4_auto_keeps_the_stream_open_10_s_later_and_closed_40_s_later() {
+        let sw = Switches {
+            from_wav: Some(wav("auto.wav", 1.0, (0.0, 0.0))),
+            keys: Some(file(
+                "auto.keys",
+                "400 down RightCommand\n1400 up RightCommand\n\
+                 11400 down RightCommand\n12400 up RightCommand\n\
+                 52400 down RightCommand\n53400 up RightCommand\n",
+            )),
+            ..Switches::default()
+        };
+        let (code, lines, _) = sim(sw, Warm::Auto, "");
+        assert_eq!(code, 0, "{lines:?}");
+        let seen: Vec<&str> = lines
+            .iter()
+            .filter_map(|l| {
+                if l.contains(r#""type":"mic","open":true"#) {
+                    Some("open")
+                } else if l.contains(r#""type":"mic","open":false"#) {
+                    Some("close")
+                } else if l.contains("session.started") {
+                    Some("started")
+                } else if l.contains("session.ended") {
+                    Some("ended")
+                } else {
+                    None
+                }
+            })
+            .collect();
+        // What happens to the stream at stop is not this rule's, so the check ends at the third
+        // session's end.
+        assert_eq!(
+            seen[..seen.len().min(9)],
+            [
+                "open", "started", "ended", // the first press opens the stream
+                "started", "ended", // 10 s later: still open
+                "close", "open", "started", "ended", // 40 s later: closed, opened again
+            ],
+            "{lines:?}"
         );
     }
 

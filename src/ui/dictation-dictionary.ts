@@ -11,16 +11,15 @@
  *   and calls never read it, since a heard form such as "versal" would otherwise rewrite call
  *   transcripts. Adding forms to a term the file has keeps its forms, its scope, its note, its
  *   `decode: false` and whether it is confirmed: the route replaces the whole entry, so the page
- *   sends them back. An akou whose route refuses `scope` gets no unscoped write instead: that
- *   would put a dictation fix into calls.
+ *   sends them back (the route keeps its `source` and `added_at`).
  * - Use in calls too: the same route without `scope`, which makes it an ordinary entry.
  * - Remove: `DELETE /vocab/{term}`, one click.
- * - Import: a text file, one term per line, through `POST /vocab/import`, into the same file.
- *   That route takes no `scope` yet, so imported words apply to calls too, and the page says so.
+ * - Import: a text file, one term per line, through `POST /vocab/import {scope: "dictation"}`, into
+ *   the same file; a word the file already holds for calls stays one.
  *
- * Dictation belongs to no workspace, so the page reads `GET /vocab` with none: the global file and
- * `vocab.extraFiles`. Only the global file is changed here; an entry of another file is shown with
- * its file's path.
+ * Dictation belongs to no workspace, so the page changes only the global file. It reads
+ * `GET /vocab` for the workspace of the call the window shows, if any, so that workspace's words
+ * are listed too, read only, with their file's path, as are those of `vocab.extraFiles`.
  */
 
 import { tokenize } from "../core/vocab/correct.ts";
@@ -82,9 +81,6 @@ const key = (s: string) =>
     .join(" ");
 const same = (a: string, b: string) => key(a) === key(b);
 
-/** The one refusal of an akou whose `POST /vocab` does not take `scope` yet. */
-const NO_SCOPE = "This akou cannot save dictation-only words yet; update it.";
-
 export class DictationDictionary {
   readonly root = h("div", { class: "dictation-dictionary" });
   private readonly heard = h("input", {
@@ -107,7 +103,11 @@ export class DictationDictionary {
   private entries: DictionaryEntry[] = [];
   private reads = 0;
 
-  constructor(private readonly t: Transport) {
+  constructor(
+    private readonly t: Transport,
+    /** The workspace of the call the window shows, whose words are listed read only. */
+    private readonly workspace: () => string | undefined = () => undefined,
+  ) {
     const form = h(
       "form",
       {
@@ -129,18 +129,13 @@ export class DictationDictionary {
       h(
         "p",
         { class: "hint" },
-        "A word akou should spell your way, or a phrase it should turn into other text. Leave 'You say' empty to teach a word alone; separate several ways of saying it with commas. What you add here applies to dictation only.",
+        "A word akou should spell your way, or a phrase it should turn into other text. Leave 'You say' empty to teach a word alone; separate several ways of saying it with commas. What you add or import here applies to dictation only.",
       ),
       form,
       h(
         "p",
         { class: "hint" },
-        h(
-          "label",
-          {},
-          "Import a text file, one word per line. Imported words apply to calls too: ",
-          this.file,
-        ),
+        h("label", {}, "Import a text file, one word per line: ", this.file),
       ),
       this.list,
     );
@@ -148,7 +143,11 @@ export class DictationDictionary {
 
   async load(): Promise<void> {
     const read = ++this.reads;
-    const r = await this.t.request<{ entries?: DictionaryEntry[] }>("GET", "/vocab");
+    const ws = this.workspace();
+    const r = await this.t.request<{ entries?: DictionaryEntry[] }>(
+      "GET",
+      ws ? `/vocab?workspace=${encodeURIComponent(ws)}` : "/vocab",
+    );
     if (read !== this.reads) return;
     if (r.status >= 400) {
       replace(
@@ -174,7 +173,12 @@ export class DictationDictionary {
   private row(e: DictionaryEntry): HTMLElement {
     const mine = e.scope === "global";
     const where = [
-      e.entryScope === "dictation" ? "dictation only" : "calls and dictation",
+      // Dictation reads no workspace file: those words are for that workspace's calls.
+      e.scope === "workspace"
+        ? `calls in ${this.workspace() ?? "this workspace"} only`
+        : e.entryScope === "dictation"
+          ? "dictation only"
+          : "calls and dictation",
       e.confirmed ? "" : "waiting for your yes",
       mine ? "" : `from ${e.file}`,
     ].filter((x) => x !== "");
@@ -234,12 +238,9 @@ export class DictationDictionary {
 
   /** Writes one entry; the refusal, if any, is shown beside the form. */
   private async write(body: WriteBody): Promise<boolean> {
-    const r = await this.t.request<{ error?: string; field?: string }>("POST", "/vocab", body);
+    const r = await this.t.request("POST", "/vocab", body);
     if (r.status >= 400) {
-      const noScope = r.body?.error === "unknown_field" && r.body.field === "scope";
-      this.refused(
-        noScope ? NO_SCOPE : message(r.body, `the word was not saved (HTTP ${r.status})`),
-      );
+      this.refused(message(r.body, `the word was not saved (HTTP ${r.status})`));
       return false;
     }
     this.issue.hidden = true;
@@ -272,7 +273,7 @@ export class DictationDictionary {
     const r = await this.t.request<{ imported?: number; skipped?: unknown[] }>(
       "POST",
       "/vocab/import",
-      { text },
+      { text, scope: "dictation" },
     );
     if (r.status >= 400) {
       toast(message(r.body, `the list was not imported (HTTP ${r.status})`));
@@ -289,10 +290,13 @@ export class DictationDictionary {
 }
 
 /** The window's Dictionary dialog, opened from the Dictation page or by `#dictation-dictionary`. */
-export function mountDictionaryDialog(t: Transport): { open(): Promise<void> } {
+export function mountDictionaryDialog(
+  t: Transport,
+  workspace?: () => string | undefined,
+): { open(): Promise<void> } {
   const dialog = document.getElementById("dictation-dictionary") as HTMLDialogElement;
   const body = document.getElementById("dictation-dictionary-body") as HTMLElement;
-  const dictionary = new DictationDictionary(t);
+  const dictionary = new DictationDictionary(t, workspace);
   body.append(dictionary.root);
   const open = async () => {
     await dictionary.load();
