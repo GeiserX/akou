@@ -38,6 +38,7 @@ import { isIP } from "node:net";
 import { type Cidr, inCidr, parseCidr } from "../api/net.ts";
 import { MAX_KEYWORDS } from "../api/routes/jobs.ts";
 import { ASR_RATE } from "../asr/engine.ts";
+import type { Decoded } from "../asr/live-worker.ts";
 import { wavBytes } from "../asr/qwen.ts";
 import { parseRemote, REMOTE_PROBE_MS } from "../server/remotes.ts";
 import { type Resolver, systemResolver } from "../server/webhooks.ts";
@@ -64,9 +65,11 @@ export class RemoteDictationError extends Error {
   constructor(
     /**
      * `refused`: the URL is not allowed; `unreachable`: no connection; `timeout`: no answer in
-     * time; `status`: an answer other than 2xx (`status`, and the remote's `code`).
+     * time; `status`: an answer other than 2xx (`status`, and the remote's `code`); `dropped`: the
+     * streamed request was cancelled, finished twice or given a buffer shorter than what it sent,
+     * which is the session's mistake and not the remote's, so nothing falls back.
      */
-    readonly kind: "refused" | "unreachable" | "timeout" | "status",
+    readonly kind: "refused" | "unreachable" | "timeout" | "status" | "dropped",
     message: string,
     readonly status: number | null = null,
     readonly code: string | null = null,
@@ -355,6 +358,8 @@ export class RemoteUpload {
   private pushed = 0;
   /** Set by `finish` (the body ends once the request is open) and by `cancel`. */
   private done = false;
+  /** Set once the request has an answer or an error: audio pushed after that is dropped. */
+  private ended = false;
   /** The request's timeout, known at `finish`. */
   private timeoutMs = 0;
   /** The request: the target it went to and the remote's answer, or why there is none. */
@@ -365,14 +370,39 @@ export class RemoteUpload {
   constructor(private readonly o: RemoteUploadOptions) {
     this.keywords = remoteKeywords(o.glossary);
     this.outcome = this.start().then(
-      (r) => r,
-      (err: unknown) => ({
-        error:
-          err instanceof RemoteDictationError
-            ? err
-            : new RemoteDictationError("unreachable", (err as Error).message),
-      }),
+      (r) => {
+        this.end();
+        return r;
+      },
+      (err: unknown) => {
+        this.end();
+        return {
+          error:
+            err instanceof RemoteDictationError
+              ? err
+              : new RemoteDictationError("unreachable", (err as Error).message),
+        };
+      },
     );
+  }
+
+  /**
+   * The request has its outcome: nothing reads the body any more, so what is held goes and what is
+   * pushed later is dropped, rather than growing for the rest of a latched session.
+   */
+  private end(): void {
+    this.ended = true;
+    this.early = [];
+    try {
+      this.body?.error(new Error("the request has ended"));
+    } catch {}
+  }
+
+  /** Bytes of audio this request holds in memory that the network has not taken yet. */
+  get pending(): number {
+    let n = 0;
+    for (const b of this.early) n += b.byteLength;
+    return n + Math.max(0, -(this.body?.desiredSize ?? 0));
   }
 
   private async start(): Promise<{ target: RemoteTarget; res: Response }> {
@@ -384,17 +414,21 @@ export class RemoteUpload {
       ),
       `--${this.boundary}\r\nContent-Disposition: form-data; name="file"; filename="dictation.wav"\r\nContent-Type: audio/wav\r\n\r\n`,
     ].join("");
-    const body = new ReadableStream<Uint8Array>({
-      start: (c) => {
-        c.enqueue(this.enc.encode(head));
-        c.enqueue(streamedWavHeader());
-        for (const b of this.early) c.enqueue(b);
-        this.early = [];
-        this.body = c;
-        // Released before the URL was checked: everything is queued, so the body ends here.
-        if (this.done) c.close();
+    const body = new ReadableStream<Uint8Array>(
+      {
+        start: (c) => {
+          c.enqueue(this.enc.encode(head));
+          c.enqueue(streamedWavHeader());
+          for (const b of this.early) c.enqueue(b);
+          this.early = [];
+          this.body = c;
+          // Released before the URL was checked: everything is queued, so the body ends here.
+          if (this.done) c.close();
+        },
       },
-    });
+      // Counted in bytes, so `pending` is what is queued: `desiredSize` is minus the bytes held.
+      { highWaterMark: 0, size: (b) => b?.byteLength ?? 0 },
+    );
     const { url, host } = aimed(target, "/audio/transcriptions");
     try {
       const res = await (this.o.fetch ?? fetch)(url, {
@@ -417,6 +451,7 @@ export class RemoteUpload {
   }
 
   private send(bytes: Uint8Array): void {
+    if (this.ended) return;
     if (this.body === null) {
       this.early.push(bytes);
       return;
@@ -440,10 +475,18 @@ export class RemoteUpload {
    * `RemoteDictationError` for the caller's fallback, as `transcribeRemote` does.
    */
   async finish(samples: Float32Array): Promise<RemoteResult> {
-    if (this.done) throw new Error("this dictation's request has already finished");
+    if (this.done) {
+      throw new RemoteDictationError(
+        "dropped",
+        "this dictation's request was cancelled or has already finished",
+      );
+    }
     if (samples.length < this.pushed) {
       this.cancel();
-      throw new Error("the buffer is shorter than the audio already sent");
+      throw new RemoteDictationError(
+        "dropped",
+        "the buffer is shorter than the audio already sent; the request was dropped",
+      );
     }
     if (samples.length > this.pushed) this.send(pcm16(samples.subarray(this.pushed)));
     this.pushed = samples.length;
@@ -605,14 +648,7 @@ export function remoteFallback(setting: string, hasLocal: boolean): RemoteFallba
 }
 
 /** What a local engine answers for a dictation (the live Worker's `decoded`, DC-E1). */
-export interface LocalDecoded {
-  text: string;
-  words: { w: string; s: number; e: number; c: number }[];
-  language: string | null;
-  /** The recognizer's registry name. */
-  model: string;
-  ms: number;
-}
+export type LocalDecoded = Decoded;
 
 /** The engine a fallback decodes on: `fast` or `best` on this machine. */
 export interface LocalEngine {
@@ -758,12 +794,15 @@ export class RemoteEngine {
         language: r.language,
         model: s.model?.trim() || "remote",
         ms: r.ms,
+        // The remote decodes the buffer as one request; how it cuts it is its own.
+        spans: 1,
         engine: "remote",
         round_trip_ms: r.ms,
         notice: null,
       };
     } catch (err) {
-      if (!(err instanceof RemoteDictationError)) throw err;
+      // A dropped request is the session's doing: the remote is fine and nothing is to insert.
+      if (!(err instanceof RemoteDictationError) || err.kind === "dropped") throw err;
       this.failed(err);
       const local = this.o.local();
       if (remoteFallback(s.fallback, local !== null) === "error" || local === null) throw err;

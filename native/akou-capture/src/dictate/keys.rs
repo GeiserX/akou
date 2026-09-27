@@ -1,9 +1,13 @@
 //! Key names, hotkey bindings (DC-A2) and the scripted key source of `--keys FILE` (DC-N10).
 //!
 //! A key is named the way `dictation.hotkey` names it: the side-specific modifiers
-//! (`RightCommand`, `LeftOption`, `RightControl`, `LeftShift`, ...), `Fn`, and any other key by
-//! its label (`Escape`, `Enter`, `Space`, `C`, `F5`). A binding is either one modifier alone
-//! (`RightCommand`) or a chord (`Control+Shift+Space`), whose modifiers may name a side or not.
+//! (`RightCommand`, `LeftOption`, `RightControl`, `LeftShift`, ...), `Fn`, the mouse buttons
+//! `Mouse3` to `Mouse5`, and any other key by its label (`Escape`, `Enter`, `Space`, `C`, `F5`).
+//! A binding is one modifier alone (`RightCommand`), one mouse button alone (`Mouse4`, DC-A6), or
+//! a chord (`Control+Shift+Space`), whose modifiers may name a side or not.
+//!
+//! Two names are the same key by `same`, everywhere: a modifier by its kind and side
+//! (`RightCtrl` is `RightControl`), anything else ignoring ASCII case (`space` is `Space`).
 
 /// The four modifiers that come in a left and a right key, plus `Fn`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,10 +57,39 @@ pub fn modifier(name: &str) -> Option<(Mod, Side)> {
     Some((m, side))
 }
 
-/// A key name as the keys file and the protocol spell it: modifiers in their canonical form,
-/// anything else as given.
 pub fn is_modifier(name: &str) -> bool {
     modifier(name).is_some()
+}
+
+/// Whether `a` and `b` name the same key: a modifier by kind and side, anything else ignoring
+/// ASCII case. The one comparison of key names, so a key going down and the same key going up
+/// always match, however the OS or the setting spells it.
+pub fn same(a: &str, b: &str) -> bool {
+    match (modifier(a), modifier(b)) {
+        (Some(x), Some(y)) => x == y,
+        (None, None) => a.eq_ignore_ascii_case(b),
+        _ => false,
+    }
+}
+
+/// `Mouse1` to `Mouse5` as a button number.
+fn mouse_button(name: &str) -> Option<u8> {
+    let n = name.get(..5)?;
+    if !n.eq_ignore_ascii_case("mouse") {
+        return None;
+    }
+    name[5..].parse().ok().filter(|b| (1..=5).contains(b))
+}
+
+/// DC-A6: the left and right buttons would take every click from every app.
+fn refuse_mouse(name: &str) -> Result<(), String> {
+    match mouse_button(name) {
+        Some(b @ (1 | 2)) => Err(format!(
+            "Mouse{b} is the {} button, which every app needs; use Mouse3, Mouse4 or Mouse5",
+            if b == 1 { "left" } else { "right" }
+        )),
+        _ => Ok(()),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +107,15 @@ impl Hotkey {
             return Err(format!("{s:?} is not a key or a chord"));
         }
         if let [one] = parts.as_slice() {
+            refuse_mouse(one)?;
+            if let Some(b) = mouse_button(one) {
+                // A button alone behaves as a chord with no modifier: it starts at button-down
+                // and is swallowed, so Mouse4 does not also go back a page.
+                return Ok(Hotkey::Chord {
+                    mods: Vec::new(),
+                    key: format!("Mouse{b}"),
+                });
+            }
             return match modifier(one) {
                 Some((Mod::Fn, _)) => Ok(Hotkey::Modifier("Fn".into())),
                 Some((_, Side::Either)) => {
@@ -89,6 +131,7 @@ impl Hotkey {
         if is_modifier(key) {
             return Err(format!("the last key of {s} must not be a modifier"));
         }
+        refuse_mouse(key)?;
         let mut out: Vec<(Mod, Side)> = Vec::new();
         for m in mods {
             let (m, side) = modifier(m).ok_or_else(|| format!("{m} is not a modifier"))?;
@@ -124,9 +167,9 @@ impl Hotkey {
     /// Whether `key` going down, with `held` already down, is this binding's press.
     pub fn pressed_by(&self, key: &str, held: &[String]) -> bool {
         match self {
-            Hotkey::Modifier(k) => k == key,
+            Hotkey::Modifier(k) => same(k, key),
             Hotkey::Chord { mods, key: k } => {
-                k.eq_ignore_ascii_case(key)
+                same(k, key)
                     && mods.iter().all(|(m, side)| {
                         held.iter().any(|h| {
                             modifier(h).is_some_and(|(hm, hs)| {
@@ -218,6 +261,42 @@ mod tests {
         assert!(!chord.pressed_by("Space", &held(&["LeftControl", "LeftShift"])));
         assert!(!chord.pressed_by("Space", &held(&["RightControl"])));
         assert!(!chord.pressed_by("K", &held(&["RightControl", "LeftShift"])));
+    }
+
+    /// DC-A6: `Mouse4` is a binding that starts at button-down; the left and right buttons are
+    /// refused alone and in a chord, and the wheel is no button at all.
+    #[test]
+    fn dc_a6_mouse_buttons_three_to_five_bind_and_the_rest_are_refused() {
+        for b in ["Mouse3", "Mouse4", "mouse5"] {
+            let h = Hotkey::parse(b).unwrap();
+            assert!(!h.is_modifier_only(), "{b}");
+            assert!(same(h.trigger(), b), "{b}");
+            assert!(h.pressed_by(b, &[]), "{b}");
+        }
+        assert!(Hotkey::parse("Mouse1").unwrap_err().contains("left button"));
+        assert!(
+            Hotkey::parse("Mouse2")
+                .unwrap_err()
+                .contains("right button")
+        );
+        assert!(Hotkey::parse("Control+Mouse1").is_err());
+        assert!(Hotkey::parse("Control+Mouse4").is_ok());
+        assert!(Hotkey::parse("WheelUp").is_err());
+        assert!(Hotkey::parse("Mouse6").is_err());
+    }
+
+    /// One comparison for every key name: sides and spellings of a modifier, and the case of any
+    /// other key, so a key's down and its up always match.
+    #[test]
+    fn same_matches_a_key_however_it_is_spelled() {
+        assert!(same("RightCtrl", "RightControl"));
+        assert!(same("space", "Space"));
+        assert!(same("LeftWin", "LeftCommand"));
+        assert!(!same("LeftControl", "RightControl"));
+        assert!(!same("Control", "LeftControl"), "a side is not either side");
+        assert!(!same("Shift", "S"));
+        let chord = Hotkey::parse("Control+Shift+space").unwrap();
+        assert!(chord.pressed_by("Space", &["RightCtrl".into(), "LeftShift".into()]));
     }
 
     #[test]

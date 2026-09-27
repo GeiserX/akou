@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 use super::insert::{Clipboard, Key, Sink, Snapshot, Targets};
 use super::protocol::Target;
+use super::readback::Field;
 use crate::json::Json;
 
 #[derive(Default)]
@@ -39,6 +40,11 @@ pub struct World {
     pub now: u64,
     /// Where `--inserter fake:FILE` appends what happened, one JSON line each.
     pub log: Option<PathBuf>,
+    /// The focused field as the accessibility API would read it (DC-L2), and every read made.
+    pub field: Option<Field>,
+    pub field_reads: Vec<Target>,
+    /// `AXIsProcessTrusted`.
+    pub trusted: bool,
 }
 
 pub type Shared = Rc<RefCell<World>>;
@@ -55,6 +61,7 @@ impl World {
             count: 1,
             layout: vec![('v', 9)],
             target: slack(),
+            trusted: true,
             ..World::default()
         }))
     }
@@ -200,5 +207,13 @@ impl Targets for Screen {
         w.focused.push(t.clone());
         w.script.clear();
         w.target = t.clone();
+    }
+    fn read_field(&mut self, t: &Target) -> Field {
+        let mut w = self.0.borrow_mut();
+        w.field_reads.push(t.clone());
+        w.field.clone().unwrap_or(Field::Unreadable)
+    }
+    fn trusted(&mut self) -> bool {
+        self.0.borrow().trusted
     }
 }

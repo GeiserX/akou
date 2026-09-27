@@ -19,7 +19,8 @@
 //! | `session.ended` | `id`, `reason`: `release`, `tap`, `key` (Enter or Shift+Enter ended it), `cancel`, `silence`, `max`, `stop` |
 //! | `inserted` | `id`, `method` (`paste`, `type`, `clipboard`), `receipt_ms` (chord to the target's first read; 0 when nothing was pasted), and `reason` only when the helper chose clipboard-only for the user: `secure` (DC-N8) or `elevated` (a Windows admin window) |
 //! | `insert.failed` | `id`, `reason`: `focus-changed`, `not-editable`, `field-unknown` (DC-N9: the app opens the draft box), `no-receipt` (the target never read in 8 s), `clipboard-changed` (another writer took the clipboard before the target read), `no-v-key`, `no-inserter`, or the backend's error |
-//! | `edit` / `edit.unreadable` | `id`, `hunks` / `reason` |
+//! | `edit` | `id`, `hunks: [{inserted, now, at}]`: each run of words the user changed in the field after the insert (`inserted` the words akou inserted there, `now` what the field holds there now, `at` the index of the hunk's first inserted word); empty when nothing changed (DC-L2) |
+//! | `edit.unreadable` | `id`, `reason`: `unreadable` (the field could not be read), `lost` (the pasted text is gone or the field was cleared), `too-long`, `not-read` (a secure field, Secure Input, a terminal or no grant: nothing was read) |
 //! | `secure_input` | `on` |
 //! | `mic` | `open`: the stream opened or closed (the warm mic of DC-N4) |
 //! | `rebound` / `rebind.failed` | `hotkey` / `hotkey`, `reason` (the answer to `rebind`, DC-A7) |
@@ -27,9 +28,11 @@
 //! | `stopped` | `reason` |
 //!
 //! App to helper: `rebind {hotkey, activation, draft, fixLast, pasteLast}`, `insert {id, text,
-//! method, send_key, target, restore}` (`method` `paste`, `type` or `clipboard`, default `paste`;
-//! `send_key` `Enter`, `Ctrl+Enter`, `Cmd+Enter`, `Shift+Enter` or `none`, the default; `restore`
-//! is `dictation.restoreClipboard`, default true; any other value is refused), `settled {id}` (the session will not be inserted: empty, drafted or
+//! method, send_key, target, restore, read_field}` (`method` `paste`, `type` or `clipboard`,
+//! default `paste`; `send_key` `Enter`, `Ctrl+Enter`, `Cmd+Enter`, `Shift+Enter` or `none`, the
+//! default; `restore` is `dictation.restoreClipboard`, default true; `read_field` is
+//! `dictation.readField` for this insert, default false, so an app that never sends it never
+//! causes a read; any other value is refused), `settled {id}` (the session will not be inserted: empty, drafted or
 //! cancelled while transcribing), `focus {target}`, `session.start`, `session.stop`,
 //! `session.cancel` (the tray's and the CLI's door), `rebuild_mic {device}`, `warm {mode}`,
 //! `record_keys {on}`, `stop`.
@@ -170,6 +173,38 @@ pub fn rebind_failed(hotkey: &str, reason: &str) -> String {
     )
 }
 
+pub fn grant_lost(name: &str) -> String {
+    line("grant.lost", vec![("name", Json::str(name))])
+}
+
+pub fn secure_input(on: bool) -> String {
+    line("secure_input", vec![("on", Json::Bool(on))])
+}
+
+pub fn edit(id: &str, hunks: &[super::readback::Hunk]) -> String {
+    let hunks = hunks
+        .iter()
+        .map(|h| {
+            Json::obj(vec![
+                ("inserted", Json::str(&h.inserted)),
+                ("now", Json::str(&h.now)),
+                ("at", Json::Int(h.at as i64)),
+            ])
+        })
+        .collect();
+    line(
+        "edit",
+        vec![("id", Json::str(id)), ("hunks", Json::Arr(hunks))],
+    )
+}
+
+pub fn edit_unreadable(id: &str, reason: &str) -> String {
+    line(
+        "edit.unreadable",
+        vec![("id", Json::str(id)), ("reason", Json::str(reason))],
+    )
+}
+
 pub fn stopped(reason: &str) -> String {
     line("stopped", vec![("reason", Json::str(reason))])
 }
@@ -192,6 +227,7 @@ pub enum Command {
         send_key: String,
         target: Option<Target>,
         restore: bool,
+        read_field: bool,
     },
     Settled {
         id: String,
@@ -251,6 +287,10 @@ impl Command {
                     restore: match v.get("restore") {
                         None => true,
                         Some(r) => r.as_bool().ok_or("restore must be true or false")?,
+                    },
+                    read_field: match v.get("read_field") {
+                        None => false,
+                        Some(r) => r.as_bool().ok_or("read_field must be true or false")?,
                     },
                 }
             }
@@ -532,10 +572,11 @@ mod tests {
                         field: "editable".into(),
                     }),
                     restore: true,
+                    read_field: false,
                 },
             ),
             (
-                r#"{"type":"insert","id":"4","text":"x","restore":false}"#,
+                r#"{"type":"insert","id":"4","text":"x","restore":false,"read_field":true}"#,
                 Command::Insert {
                     id: "4".into(),
                     text: "x".into(),
@@ -543,6 +584,7 @@ mod tests {
                     send_key: "none".into(),
                     target: None,
                     restore: false,
+                    read_field: true,
                 },
             ),
             (
@@ -595,6 +637,7 @@ mod tests {
             r#"{"type":"insert","id":"1","text":"x","send_key":"Command+Q"}"#,
             r#"{"type":"insert","id":"1","text":"x","method":"drop"}"#,
             r#"{"type":"insert","id":"1","text":"x","restore":"no"}"#,
+            r#"{"type":"insert","id":"1","text":"x","read_field":1}"#,
             "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
         ] {
             assert!(Command::parse(bad).is_err(), "{bad}");
@@ -650,10 +693,30 @@ mod tests {
             ),
             (stopped("stop"), "stopped"),
             (warn("usage", "m"), "warn"),
+            (grant_lost("accessibility"), "grant.lost"),
+            (secure_input(true), "secure_input"),
+            (edit("1", &[]), "edit"),
+            (edit_unreadable("1", "lost"), "edit.unreadable"),
         ] {
             let v = Value::parse(&l).unwrap();
             assert_eq!(v.get("type").unwrap().as_str(), Some(kind), "{l}");
         }
+    }
+
+    /// `edit` carries the hunks and nothing else: no field text, no unchanged words.
+    #[test]
+    fn edit_carries_its_hunks_as_objects() {
+        let h = super::super::readback::Hunk {
+            inserted: "cooper netties".into(),
+            now: "Kubernetes \"k8s\"".into(),
+            at: 2,
+        };
+        assert_eq!(
+            edit("1", &[h]),
+            r#"{"type":"edit","id":"1","hunks":[{"inserted":"cooper netties","now":"Kubernetes \"k8s\"","at":2}]}"#
+        );
+        let v = Value::parse(&edit("1", &[])).unwrap();
+        assert_eq!(v.get("hunks"), Some(&Value::Arr(vec![])));
     }
 
     /// The lines both sides are held to, in `tests/fixtures/akou-dictate/`: every line this file
@@ -681,6 +744,17 @@ mod tests {
         written.extend([
             inserted("1", "paste", 12, None),
             insert_failed("1", "focus-changed"),
+            edit(
+                "1",
+                &[super::super::readback::Hunk {
+                    inserted: "cooper netties".into(),
+                    now: "Kubernetes".into(),
+                    at: 2,
+                }],
+            ),
+            edit_unreadable("1", "not-read"),
+            grant_lost("accessibility"),
+            secure_input(true),
             rebound("RightShift"),
             rebind_failed("LeftOption+RightOption", "x"),
             warn("usage", "m"),
@@ -716,6 +790,7 @@ mod tests {
                     send_key: "none".into(),
                     target: Some(t),
                     restore: true,
+                    read_field: false,
                 },
                 Command::Settled { id: "1".into() },
                 Command::Focus { target: secure },

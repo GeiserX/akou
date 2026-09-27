@@ -2,14 +2,26 @@
 //! from the app, and every `akou-dictate/1` message out. The OS parts (the key tap, the device,
 //! the inserter, the accessibility read) are behind the small traits below, so the same core runs
 //! under `--from-wav` with fakes and, per OS, with the real backends.
+//!
+//! Two threads share it (DC-N1). The tap thread holds a `tap::Gate` and only decides
+//! swallow-or-pass; everything else (the mic, the insert, the accessibility reads, every line
+//! out) runs here, on the worker, which takes the tap's queue under the gate's lock before each
+//! of its own activation steps and carries it out after the lock is released. So a stalled
+//! insert or a slow field read never delays the tap's answer.
 
 use super::activation::{Action, Activation, Mode};
 pub use super::insert::Targets;
-use super::insert::{Captured, Inserter, Outcome, Request};
+use super::insert::{Captured, Inserter, Os, Outcome, QUIET_MS, Request, is_terminal};
 use super::keys::Hotkey;
 use super::mic::{Mic, MicEvent, Warm};
 use super::protocol::{self as p, Command, Target};
+use super::readback::Watch;
+use super::tap::{Gate, Note, TapEvent};
 use crate::protocol::{Ch, encode_packet};
+
+const MS: u64 = 1_000_000;
+/// How often Secure Input is polled for `secure_input {on}`.
+pub const SECURE_POLL_MS: u64 = 250;
 
 /// Where the protocol goes: JSON lines to stderr, packets to stdout.
 pub trait Out {
@@ -23,10 +35,20 @@ pub struct Config {
     pub warm: Warm,
     pub bluetooth: bool,
     pub ring_ms: u64,
+    pub os: Os,
+}
+
+/// An insert the app asked to read back (DC-L2), until its outcome.
+struct Reading {
+    id: String,
+    text: String,
+    target: Target,
+    secure_input: bool,
 }
 
 pub struct Dictate {
-    act: Activation,
+    gate: Gate,
+    os: Os,
     mic: Mic,
     warm: Warm,
     targets: Box<dyn Targets>,
@@ -37,12 +59,22 @@ pub struct Dictate {
     live: Option<(String, Captured)>,
     /// The last ended session, whose text the app inserts next.
     last: Option<(String, Captured)>,
+    /// The Accessibility grant as `ready` reported it, until `grant.lost`.
+    accessibility: String,
+    secure_on: bool,
+    next_secure_poll: u64,
+    reading: Option<Reading>,
+    /// A typed insert has no receipt: its snapshot waits `QUIET_MS` for the app to take the
+    /// events, as a paste's waits for the quiet after the last read.
+    snapshot_at: Option<(Reading, u64)>,
+    watch: Option<Watch>,
 }
 
 impl Dictate {
     pub fn new(cfg: Config, targets: Box<dyn Targets>, inserter: Option<Inserter>) -> Dictate {
         Dictate {
-            act: Activation::new(cfg.hotkey, cfg.mode),
+            gate: Gate::new(Activation::new(cfg.hotkey, cfg.mode), cfg.os),
+            os: cfg.os,
             mic: Mic::new(cfg.warm, cfg.bluetooth, cfg.ring_ms),
             warm: cfg.warm,
             targets,
@@ -50,7 +82,18 @@ impl Dictate {
             next_id: 1,
             live: None,
             last: None,
+            accessibility: "not-needed".into(),
+            secure_on: false,
+            next_secure_poll: 0,
+            reading: None,
+            snapshot_at: None,
+            watch: None,
         }
+    }
+
+    /// The tap thread's handle (DC-N1).
+    pub fn gate(&self) -> Gate {
+        self.gate.clone()
     }
 
     /// Writes `ready` and applies the warm policy (an `always` stream opens now).
@@ -62,6 +105,7 @@ impl Dictate {
         out: &mut dyn Out,
     ) {
         out.line(p::ready(backend, swallow_keys, grants.0, grants.1));
+        self.accessibility = grants.1.to_string();
         let mut ev = Vec::new();
         self.mic.set_warm(self.warm, 0, &mut ev);
         self.mic_events(ev, out);
@@ -77,18 +121,51 @@ impl Dictate {
         self.inserter.as_ref().is_some_and(Inserter::busy)
     }
 
-    /// One key event from the tap; returns whether it is swallowed.
+    /// One activation step on the worker: the tap's queue first, then `f`'s own actions, all
+    /// taken under the lock and carried out after it is released.
+    fn act<R>(
+        &mut self,
+        t_ns: u64,
+        out: &mut dyn Out,
+        f: impl FnOnce(&mut Activation, &mut Vec<Action>) -> R,
+    ) -> R {
+        let (r, queued) = {
+            let mut s = self.gate.lock();
+            let mut queued = std::mem::take(&mut s.queue);
+            let mut acts = Vec::new();
+            let r = f(&mut s.act, &mut acts);
+            queued.extend(acts.into_iter().map(|a| (t_ns, Note::Act(a))));
+            (r, queued)
+        };
+        self.apply(queued, out);
+        r
+    }
+
+    /// Carries out what the tap queued since the last step.
+    pub fn pump(&mut self, t_ns: u64, out: &mut dyn Out) {
+        self.act(t_ns, out, |_, _| ());
+    }
+
+    /// One key event, tap and worker on one thread (the simulate run and the tests); returns
+    /// whether it is swallowed.
     pub fn key(&mut self, down: bool, name: &str, t_ns: u64, out: &mut dyn Out) -> bool {
-        let mut acts = Vec::new();
-        let swallow = self.act.key(down, name, t_ns, &mut acts);
-        self.apply(acts, t_ns, out);
-        swallow
+        let v = self.gate.event(TapEvent::Key { down, name, t_ns });
+        self.pump(t_ns, out);
+        v.swallow
+    }
+
+    /// The machine woke, or a session could not start: a grant present at `ready` may be gone
+    /// (revoked, or reset by a re-signed build), which silently kills the tap. Asks the
+    /// non-prompting check and says `grant.lost` once.
+    pub fn recheck_grant(&mut self, out: &mut dyn Out) {
+        if self.accessibility == "granted" && !self.targets.trusted() {
+            self.accessibility = "denied".into();
+            out.line(p::grant_lost("accessibility"));
+        }
     }
 
     pub fn tick(&mut self, t_ns: u64, out: &mut dyn Out) {
-        let mut acts = Vec::new();
-        self.act.tick(t_ns, &mut acts);
-        self.apply(acts, t_ns, out);
+        self.act(t_ns, out, |a, acts| a.tick(t_ns, acts));
         let mut ev = Vec::new();
         self.mic.tick(t_ns, &mut ev);
         self.mic_events(ev, out);
@@ -96,24 +173,90 @@ impl Dictate {
         if let Some(ins) = self.inserter.as_mut() {
             ins.tick(t_ns, &mut done);
         }
-        self.report(done, out);
+        self.report(done, t_ns, out);
+        if t_ns >= self.next_secure_poll {
+            self.next_secure_poll = t_ns + SECURE_POLL_MS * MS;
+            let on = self.targets.secure_input();
+            if on != self.secure_on {
+                self.secure_on = on;
+                out.line(p::secure_input(on));
+            }
+        }
+        if let Some((r, _)) = self.snapshot_at.take_if(|(_, at)| t_ns >= *at) {
+            self.start_watch(r, t_ns, out);
+        }
+        if let Some(w) = self.watch.as_mut() {
+            let left = w.poll_due(t_ns) && {
+                let (a, b) = (self.targets.target(t_ns), &w.target);
+                (a.app.as_str(), a.pid, a.window.as_str()) != (b.app.as_str(), b.pid, &b.window)
+            };
+            if left || w.expired(t_ns) {
+                self.finish_watch(out);
+            }
+        }
     }
 
-    /// `inserted` or `insert.failed`; the session's keys pass again once its insert settled.
-    fn report(&mut self, done: Vec<(String, Outcome)>, out: &mut dyn Out) {
+    /// `inserted` or `insert.failed`; the session's keys pass again once its insert settled, and
+    /// an insert the app asked to read back takes its snapshot.
+    fn report(&mut self, done: Vec<(String, Outcome)>, t_ns: u64, out: &mut dyn Out) {
         for (id, o) in done {
-            out.line(match o {
+            out.line(match &o {
                 Outcome::Inserted {
                     method,
                     receipt_ms,
                     reason,
-                } => p::inserted(&id, method, receipt_ms, reason),
-                Outcome::Failed(reason) => p::insert_failed(&id, &reason),
+                } => p::inserted(&id, method, *receipt_ms, *reason),
+                Outcome::Failed(reason) => p::insert_failed(&id, reason),
             });
             if self.last.as_ref().is_some_and(|(l, _)| *l == id) {
-                self.act.settled();
+                self.act(t_ns, out, |a, _| a.settled());
+            }
+            let Some(r) = self.reading.take_if(|r| r.id == id) else {
+                continue;
+            };
+            match o {
+                Outcome::Inserted {
+                    method: "paste",
+                    reason: None,
+                    ..
+                } => self.start_watch(r, t_ns, out),
+                Outcome::Inserted {
+                    method: "type",
+                    reason: None,
+                    ..
+                } => self.snapshot_at = Some((r, t_ns + QUIET_MS * MS)),
+                _ => {}
             }
         }
+    }
+
+    /// DC-L2's snapshot. Every insert the app asked to read back that landed gets exactly one
+    /// `edit` or `edit.unreadable`; this one says `not-read` where the helper will not read.
+    fn start_watch(&mut self, r: Reading, t_ns: u64, out: &mut dyn Out) {
+        let readable = self.accessibility != "denied"
+            && r.target.field == "editable"
+            && !r.secure_input
+            && !self.targets.secure_input()
+            && !is_terminal(self.os, &r.target.app);
+        if !readable {
+            out.line(p::edit_unreadable(&r.id, "not-read"));
+            return;
+        }
+        let field = self.targets.read_field(&r.target);
+        match Watch::start(&r.id, &r.text, r.target, field, t_ns) {
+            Ok(w) => self.watch = Some(w),
+            Err(reason) => out.line(p::edit_unreadable(&r.id, reason)),
+        }
+    }
+
+    /// DC-L2's second read, and the hunks out.
+    fn finish_watch(&mut self, out: &mut dyn Out) {
+        let Some(w) = self.watch.take() else { return };
+        let field = self.targets.read_field(&w.target);
+        out.line(match w.finish(field) {
+            Ok(hunks) => p::edit(&w.id, &hunks),
+            Err(reason) => p::edit_unreadable(&w.id, reason),
+        });
     }
 
     /// Mic samples, 16 kHz mono, the first at `t_ns`.
@@ -125,11 +268,9 @@ impl Dictate {
 
     /// One command from the app. Returns false on `stop`.
     pub fn command(&mut self, cmd: Command, t_ns: u64, out: &mut dyn Out) -> bool {
-        let mut acts = Vec::new();
         match cmd {
             Command::Stop => {
-                self.act.end("stop", t_ns, &mut acts);
-                self.apply(acts, t_ns, out);
+                self.act(t_ns, out, |a, acts| a.end("stop", t_ns, acts));
                 // A session in its post-roll ends now too, and says so.
                 let mut ev = Vec::new();
                 self.mic.end(t_ns, "stop", &mut ev);
@@ -138,7 +279,9 @@ impl Dictate {
                 if let Some(ins) = self.inserter.as_mut() {
                     ins.finish(t_ns, &mut done);
                 }
-                self.report(done, out);
+                self.report(done, t_ns, out);
+                self.watch = None;
+                self.snapshot_at = None;
                 return false;
             }
             Command::Rebind { hotkey, activation } => {
@@ -150,7 +293,7 @@ impl Dictate {
                 });
                 match parsed {
                     Ok((h, mode)) => {
-                        self.act.rebind(h, mode, &mut acts);
+                        self.act(t_ns, out, |a, acts| a.rebind(h, mode, acts));
                         out.line(p::rebound(&hotkey));
                     }
                     Err(e) => out.line(p::rebind_failed(&hotkey, &e)),
@@ -163,8 +306,14 @@ impl Dictate {
                 send_key,
                 target,
                 restore,
+                read_field,
             } => {
-                self.act.insert_started(t_ns);
+                // A field still watched is read now: the new text is about to land.
+                if let Some((r, _)) = self.snapshot_at.take() {
+                    self.start_watch(r, t_ns, out);
+                }
+                self.finish_watch(out);
+                self.act(t_ns, out, |a, _| a.insert_started(t_ns));
                 // The session's own record, with the app's target when it names one (the draft
                 // box inserts where the session began).
                 let mut cap = self.last.as_ref().filter(|(l, _)| *l == id).map_or_else(
@@ -177,6 +326,12 @@ impl Dictate {
                 if let Some(t) = target {
                     cap.target = t;
                 }
+                self.reading = read_field.then(|| Reading {
+                    id: id.clone(),
+                    text: text.clone(),
+                    target: cap.target.clone(),
+                    secure_input: cap.secure_input,
+                });
                 let req = Request {
                     id: id.clone(),
                     text,
@@ -189,13 +344,13 @@ impl Dictate {
                     Some(ins) => ins.insert(&req, &cap, &mut *self.targets, t_ns, &mut done),
                     None => done.push((id, Outcome::Failed("no-inserter".into()))),
                 }
-                self.report(done, out);
+                self.report(done, t_ns, out);
             }
-            Command::Settled { .. } => self.act.settled(),
+            Command::Settled { .. } => self.act(t_ns, out, |a, _| a.settled()),
             Command::Focus { target } => self.targets.focus(&target),
-            Command::SessionStart => self.act.start(t_ns, &mut acts),
-            Command::SessionStop => self.act.end("tap", t_ns, &mut acts),
-            Command::SessionCancel => self.act.end("cancel", t_ns, &mut acts),
+            Command::SessionStart => self.act(t_ns, out, |a, acts| a.start(t_ns, acts)),
+            Command::SessionStop => self.act(t_ns, out, |a, acts| a.end("tap", t_ns, acts)),
+            Command::SessionCancel => self.act(t_ns, out, |a, acts| a.end("cancel", t_ns, acts)),
             Command::Warm { mode } => match Warm::parse(&mode) {
                 Ok(w) => {
                     self.warm = w;
@@ -205,21 +360,21 @@ impl Dictate {
                 }
                 Err(e) => out.line(p::warn("bad-command", &e)),
             },
-            Command::RecordKeys { on } => self.act.record_keys(on),
+            Command::RecordKeys { on } => self.act(t_ns, out, |a, _| a.record_keys(on)),
             // The device is chosen per OS (DC-N5); a file mic has nothing to rebuild.
             Command::RebuildMic { .. } => {}
         }
-        self.apply(acts, t_ns, out);
+        self.pump(t_ns, out);
         true
     }
 
-    fn apply(&mut self, acts: Vec<Action>, t_ns: u64, out: &mut dyn Out) {
-        for a in acts {
+    fn apply(&mut self, notes: Vec<(u64, Note)>, out: &mut dyn Out) {
+        for (t_ns, note) in notes {
             let mut ev = Vec::new();
-            match a {
-                Action::Arm { t_ns: at } => self.mic.arm(at, &mut ev),
-                Action::Disarm => self.mic.disarm(t_ns, &mut ev),
-                Action::Start { t_ns: at } => {
+            match note {
+                Note::Act(Action::Arm { t_ns: at }) => self.mic.arm(at, &mut ev),
+                Note::Act(Action::Disarm) => self.mic.disarm(t_ns, &mut ev),
+                Note::Act(Action::Start { t_ns: at }) => {
                     let id = self.next_id.to_string();
                     self.next_id += 1;
                     let cap = Captured {
@@ -229,8 +384,10 @@ impl Dictate {
                     self.live = Some((id, cap));
                     self.mic.start(at, &mut ev);
                 }
-                Action::End { reason } => self.mic.end(t_ns, reason, &mut ev),
-                Action::Key(name) => out.line(p::key(&name)),
+                Note::Act(Action::End { reason }) => self.mic.end(t_ns, reason, &mut ev),
+                Note::Act(Action::Key(name)) => out.line(p::key(&name)),
+                Note::Commit => self.finish_watch(out),
+                Note::Disabled => self.recheck_grant(out),
             }
             self.mic_events(ev, out);
         }
@@ -270,7 +427,7 @@ impl Dictate {
                 }
                 MicEvent::Vanished => {
                     self.live = None;
-                    self.act.settled();
+                    self.act(0, out, |a, _| a.settled());
                 }
             }
         }
@@ -281,7 +438,7 @@ impl Dictate {
 mod tests {
     use super::*;
     use crate::dictate::fake::{Board, Keys, Screen, Shared, World};
-    use crate::dictate::insert::Os;
+    use crate::dictate::readback::Field;
     use crate::protocol::decode_packets;
 
     const MS: u64 = 1_000_000;
@@ -308,6 +465,7 @@ mod tests {
                 warm: Warm::Always,
                 bluetooth: false,
                 ring_ms: 500,
+                os: Os::Mac,
             },
             Box::new(Screen(w.clone())),
             Some(Inserter::new(
@@ -547,5 +705,347 @@ mod tests {
             "{}",
             ended[1]
         );
+    }
+
+    /// DC-N1: the tap answers while the worker is stuck inside an insert. The fake sink blocks in
+    /// the paste chord until the test lets it go; meanwhile a key reaches the gate on another
+    /// thread and must be answered (Escape, swallowed: the insert has not settled). The 10 s
+    /// limit only turns a hang into a failure; it is not a speed bound.
+    #[test]
+    fn dc_n1_a_stalled_inserter_does_not_delay_the_taps_answer() {
+        use crate::dictate::insert::{Key, Sink};
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        struct Stall {
+            stalled: mpsc::Sender<()>,
+            release: mpsc::Receiver<()>,
+        }
+        impl Sink for Stall {
+            fn held_modifiers(&mut self) -> Vec<String> {
+                Vec::new()
+            }
+            fn modifier(&mut self, _: &str, _: bool) -> Result<(), String> {
+                Ok(())
+            }
+            fn press(&mut self, _: &[&str], _: Key) -> Result<(), String> {
+                self.stalled.send(()).unwrap();
+                self.release.recv().unwrap();
+                Ok(())
+            }
+            fn keycode(&mut self, _: char) -> Option<u16> {
+                Some(9)
+            }
+            fn type_text(&mut self, _: &str) -> Result<(), String> {
+                Ok(())
+            }
+        }
+
+        let (gate_tx, gate_rx) = mpsc::channel();
+        let (stalled_tx, stalled_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            let w = World::new();
+            let sink = Stall {
+                stalled: stalled_tx,
+                release: release_rx,
+            };
+            let mut d = Dictate::new(
+                Config {
+                    hotkey: Hotkey::parse("RightCommand").unwrap(),
+                    mode: Mode::HoldOrToggle,
+                    warm: Warm::Always,
+                    bluetooth: false,
+                    ring_ms: 500,
+                    os: Os::Mac,
+                },
+                Box::new(Screen(w.clone())),
+                Some(Inserter::new(
+                    Os::Mac,
+                    Box::new(Board(w.clone())),
+                    Box::new(sink),
+                )),
+            );
+            let mut out = Rec::default();
+            gate_tx.send(d.gate()).unwrap();
+            d.command(Command::SessionStart, 0, &mut out);
+            run(&mut d, &mut out, 0, 100);
+            d.command(Command::SessionStop, 100 * MS, &mut out);
+            run(&mut d, &mut out, 100, 400);
+            let insert = r#"{"type":"insert","id":"1","text":"hi"}"#;
+            d.command(Command::parse(insert).unwrap(), 400 * MS, &mut out);
+        });
+        let gate = gate_rx.recv().unwrap();
+        stalled_rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the insert reached the sink");
+        let (answer_tx, answer_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let v = gate.event(TapEvent::Key {
+                down: true,
+                name: "Escape",
+                t_ns: 500 * MS,
+            });
+            answer_tx.send(v).unwrap();
+        });
+        let v = answer_rx.recv_timeout(Duration::from_secs(10));
+        release_tx.send(()).unwrap();
+        worker.join().unwrap();
+        let v = v.expect("the tap answered while the insert was stalled");
+        assert!(
+            v.swallow,
+            "the insert has not settled: Escape is still dictation's"
+        );
+    }
+
+    /// DC-N1: a grant present at `ready` that the non-prompting check no longer confirms is
+    /// `grant.lost`, once, on wake or when the tap was disabled; a grant never given is never
+    /// lost (positive control).
+    #[test]
+    fn dc_n1_a_trust_check_turning_false_is_grant_lost_once() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        d.recheck_grant(&mut out);
+        assert!(!types(&out).contains(&"grant.lost".to_string()));
+        w.borrow_mut().trusted = false;
+        d.gate().event(TapEvent::Disabled {
+            t_ns: MS,
+            held: &[],
+        });
+        d.pump(MS, &mut out);
+        let lost = |out: &Rec| {
+            out.lines
+                .iter()
+                .filter(|l| l.contains("grant.lost"))
+                .cloned()
+                .collect::<Vec<String>>()
+        };
+        assert_eq!(
+            lost(&out),
+            [r#"{"type":"grant.lost","name":"accessibility"}"#],
+            "the disabled tap re-checked"
+        );
+        d.recheck_grant(&mut out);
+        assert_eq!(lost(&out).len(), 1, "once");
+
+        let w = World::new();
+        w.borrow_mut().trusted = false;
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "not-needed"), &mut out);
+        d.recheck_grant(&mut out);
+        assert!(!types(&out).contains(&"grant.lost".to_string()));
+    }
+
+    /// DC-N1: Secure Input turning on and off is reported once each way.
+    #[test]
+    fn secure_input_changes_are_reported_once_each_way() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        run(&mut d, &mut out, 0, 300);
+        w.borrow_mut().secure_input = true;
+        run(&mut d, &mut out, 300, 1000);
+        w.borrow_mut().secure_input = false;
+        run(&mut d, &mut out, 1000, 1500);
+        let lines: Vec<&String> = out
+            .lines
+            .iter()
+            .filter(|l| l.contains("secure_input"))
+            .collect();
+        assert_eq!(
+            lines,
+            [
+                r#"{"type":"secure_input","on":true}"#,
+                r#"{"type":"secure_input","on":false}"#
+            ]
+        );
+    }
+
+    const BEFORE: &str = "Hi team, ";
+    const PASTED: &str = "tell the cooper netties team the rollout";
+    const AFTER: &str = " is on Thursday. Thanks";
+
+    /// A latched session, its paste into the fake Slack at 400 ms with `read_field`, and the
+    /// target's read of the clipboard; the field then holds the pasted text at the caret.
+    fn pasted(w: &Shared, read_field: bool, grants: (&str, &str)) -> (Dictate, Rec) {
+        pasted_before(w, read_field, grants, AFTER)
+    }
+
+    /// The same with `after` as the field's text after the paste ("" is the end of a chat box).
+    fn pasted_before(
+        w: &Shared,
+        read_field: bool,
+        grants: (&str, &str),
+        after: &str,
+    ) -> (Dictate, Rec) {
+        let mut d = dictate(w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, grants, &mut out);
+        d.command(Command::SessionStart, 0, &mut out);
+        run(&mut d, &mut out, 0, 100);
+        d.command(Command::SessionStop, 100 * MS, &mut out);
+        run(&mut d, &mut out, 100, 400);
+        let value = format!("{BEFORE}{PASTED}{after}");
+        let caret = BEFORE.chars().count() + PASTED.chars().count();
+        w.borrow_mut().field = Some(Field::Text { value, caret });
+        let insert =
+            format!(r#"{{"type":"insert","id":"1","text":"{PASTED}","read_field":{read_field}}}"#);
+        d.command(Command::parse(&insert).unwrap(), 400 * MS, &mut out);
+        w.borrow_mut().pending_reads.push(410 * MS);
+        run(&mut d, &mut out, 400, 700);
+        (d, out)
+    }
+
+    fn edited(w: &Shared) {
+        let value = format!("{BEFORE}tell the Kubernetes team the rollout{AFTER}");
+        w.borrow_mut().field = Some(Field::Text { value, caret: 0 });
+    }
+
+    fn edits(out: &Rec) -> Vec<&String> {
+        out.lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"edit"#))
+            .collect()
+    }
+
+    /// DC-L2: the value changes 1.2 s after the paste, then a Return reaches the app: one `edit`
+    /// with the changed words, and nothing else from the field (not its other text, not the
+    /// words the user left alone).
+    #[test]
+    fn dc_l2_an_edit_then_return_yields_the_hunks_and_only_the_hunks() {
+        let w = World::new();
+        let (mut d, mut out) = pasted(&w, true, ("granted", "granted"));
+        assert_eq!(w.borrow().field_reads.len(), 1, "the snapshot");
+        run(&mut d, &mut out, 700, 1600);
+        edited(&w);
+        run(&mut d, &mut out, 1600, 1700);
+        assert!(edits(&out).is_empty(), "nothing before the commit key");
+        assert!(!d.key(true, "Return", 1700 * MS, &mut out));
+        d.key(false, "Return", 1710 * MS, &mut out);
+        let e = edits(&out);
+        assert_eq!(
+            e,
+            [
+                r#"{"type":"edit","id":"1","hunks":[{"inserted":"cooper netties","now":"Kubernetes","at":2}]}"#
+            ]
+        );
+        for private in ["Hi team", "Thursday", "Thanks", "rollout", "tell"] {
+            assert!(
+                !e[0].contains(private),
+                "{private} left the helper: {}",
+                e[0]
+            );
+        }
+        assert_eq!(w.borrow().field_reads.len(), 2);
+        run(&mut d, &mut out, 1710, 3000);
+        assert_eq!(edits(&out).len(), 1, "one answer per insert");
+
+        // At the end of the field there is no anchor after the paste: what the user types on
+        // after the dictation is theirs, not a correction, and stays in the helper.
+        let w = World::new();
+        let (mut d, mut out) = pasted_before(&w, true, ("granted", "granted"), "");
+        let value =
+            format!("Dear all, {BEFORE}tell the Kubernetes team the rollout and my pin is 4321");
+        w.borrow_mut().field = Some(Field::Text { value, caret: 0 });
+        d.key(true, "Return", 1700 * MS, &mut out);
+        let e = edits(&out);
+        assert_eq!(
+            e,
+            [
+                r#"{"type":"edit","id":"1","hunks":[{"inserted":"cooper netties","now":"Kubernetes","at":2}]}"#
+            ]
+        );
+        for private in ["Dear all", "pin", "4321"] {
+            assert!(
+                !e[0].contains(private),
+                "{private} left the helper: {}",
+                e[0]
+            );
+        }
+    }
+
+    /// DC-L2: with `read_field` off, a secure field, a terminal or the grant missing, no read
+    /// call is made; a dormant tree is read once and yields `unreadable`.
+    #[test]
+    fn dc_l2_nothing_is_read_where_the_rules_say_not_to() {
+        let w = World::new();
+        let (mut d, mut out) = pasted(&w, false, ("granted", "granted"));
+        edited(&w);
+        d.key(true, "Return", 800 * MS, &mut out);
+        run(&mut d, &mut out, 800, 1000);
+        assert!(w.borrow().field_reads.is_empty() && edits(&out).is_empty());
+
+        let w = World::new();
+        w.borrow_mut().target.field = "secure".into();
+        let (_, out) = pasted(&w, true, ("granted", "granted"));
+        assert!(w.borrow().field_reads.is_empty() && edits(&out).is_empty());
+        assert!(out.lines.iter().any(|l| l.contains(r#""reason":"secure""#)));
+
+        for (app, grants) in [
+            ("com.apple.Terminal", ("granted", "granted")),
+            ("Slack", ("granted", "denied")),
+        ] {
+            let w = World::new();
+            w.borrow_mut().target.app = app.into();
+            let (_, out) = pasted(&w, true, grants);
+            assert!(w.borrow().field_reads.is_empty(), "{app}");
+            assert_eq!(
+                edits(&out),
+                [r#"{"type":"edit.unreadable","id":"1","reason":"not-read"}"#],
+                "{app}"
+            );
+        }
+
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        d.command(Command::SessionStart, 0, &mut out);
+        run(&mut d, &mut out, 0, 100);
+        d.command(Command::SessionStop, 100 * MS, &mut out);
+        run(&mut d, &mut out, 100, 400);
+        let insert = r#"{"type":"insert","id":"1","text":"hi","read_field":true}"#;
+        d.command(Command::parse(insert).unwrap(), 400 * MS, &mut out);
+        w.borrow_mut().pending_reads.push(410 * MS);
+        run(&mut d, &mut out, 400, 700);
+        assert_eq!(w.borrow().field_reads.len(), 1);
+        assert_eq!(
+            edits(&out),
+            [r#"{"type":"edit.unreadable","id":"1","reason":"unreadable"}"#]
+        );
+    }
+
+    /// DC-L2: the target losing the keyboard ends the watch once the grace passed, reading the
+    /// original field; a typed insert's snapshot waits for the app to take the events.
+    #[test]
+    fn dc_l2_leaving_the_field_reads_it_and_a_typed_insert_snapshots_after_the_quiet() {
+        let w = World::new();
+        let (mut d, mut out) = pasted(&w, true, ("granted", "not-needed"));
+        edited(&w);
+        w.borrow_mut().target.app = "Mail".into();
+        run(&mut d, &mut out, 700, 1200);
+        assert_eq!(edits(&out).len(), 1, "{:?}", out.lines);
+        assert_eq!(w.borrow().field_reads[1].app, "Slack", "the original field");
+
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.command(Command::SessionStart, 0, &mut out);
+        run(&mut d, &mut out, 0, 100);
+        d.command(Command::SessionStop, 100 * MS, &mut out);
+        run(&mut d, &mut out, 100, 400);
+        w.borrow_mut().field = Some(Field::Text {
+            value: "hi".into(),
+            caret: 2,
+        });
+        let insert = r#"{"type":"insert","id":"1","text":"hi","method":"type","read_field":true}"#;
+        d.command(Command::parse(insert).unwrap(), 400 * MS, &mut out);
+        run(&mut d, &mut out, 400, 590);
+        assert!(w.borrow().field_reads.is_empty(), "not before the quiet");
+        run(&mut d, &mut out, 590, 620);
+        assert_eq!(w.borrow().field_reads.len(), 1);
     }
 }
