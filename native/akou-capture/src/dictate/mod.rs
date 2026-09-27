@@ -5,6 +5,7 @@
 //!   [--warm off|auto|always] [--probe]
 //! akou-capture dictate ... --from-wav FILE [--keys FILE] [--inserter fake[:FILE]]
 //!   [--clipboard fake] [--ax fake FILE] [--speed X] [--mic-open-delay MS] [--mic-bluetooth]
+//!   [--ring-ms MS]
 //! ```
 //!
 //! It owns everything with a timing or a permission constraint: the hotkey, the warm mic and its
@@ -52,7 +53,7 @@ use mic::Warm;
 pub const USAGE: &str = "usage: akou-capture dictate [--hotkey KEY] [--activation hold-or-toggle|hold|toggle] [--warm off|auto|always] [--probe]";
 
 /// The switches only a `simulate` build has. A shipping build names them in its refusal.
-const SIMULATE_ONLY: [&str; 8] = [
+const SIMULATE_ONLY: [&str; 9] = [
     "--from-wav",
     "--keys",
     "--inserter",
@@ -61,6 +62,7 @@ const SIMULATE_ONLY: [&str; 8] = [
     "--speed",
     "--mic-open-delay",
     "--mic-bluetooth",
+    "--ring-ms",
 ];
 
 #[derive(Debug)]
@@ -241,9 +243,10 @@ mod tests {
     #[test]
     fn dc_n10_a_test_build_takes_every_simulate_switch() {
         let a = parse(&argv(
-            "--from-wav a.wav --keys k --inserter fake:log --clipboard fake --ax fake ax --speed 1 --mic-open-delay 300 --mic-bluetooth",
+            "--from-wav a.wav --keys k --inserter fake:log --clipboard fake --ax fake ax --speed 1 --mic-open-delay 300 --mic-bluetooth --ring-ms 0",
         ))
         .unwrap();
+        assert_eq!(a.sim.ring_ms, Some(0));
         assert_eq!(a.sim.inserter, Some(Some("log".into())));
         assert!(a.sim.clipboard_fake && a.sim.mic_bluetooth);
         assert_eq!(a.sim.mic_open_delay_ms, 300);
