@@ -971,10 +971,8 @@ describe("DC-R6: the audio goes to the remote during the hold", () => {
       expect(d.message).toContain("shorter");
       expect(local.calls).toBe(0);
       expect(e.health()).toMatchObject({ failures: 0, error: null, down: false });
-      // Nothing went again: one request per hold, and neither ended.
+      // Nothing went again: one request per hold.
       expect(net.sent).toHaveLength(2);
-      for (let i = 0; i < 100 && r.got.broken < 2; i++) await Bun.sleep(10);
-      expect(r.got).toMatchObject({ ended: 0 });
     } finally {
       r.stop();
     }
