@@ -10,14 +10,23 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
+import { SETTINGS } from "../../src/main/config/schema.ts";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
+import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
-import type { CaptureInput } from "../../src/ui/dictation-mic.ts";
-import { type DictationGrants, onDictationPage } from "../../src/ui/dictation-page.ts";
+import { type CaptureInput, readMics } from "../../src/ui/dictation-mic.ts";
+import {
+  DICTATION_GROUPS,
+  type DictationGrants,
+  ENABLE_KEY,
+  onDictationPage,
+} from "../../src/ui/dictation-page.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
-import type { PillState } from "../../src/ui/pill-protocol.ts";
+import { PREVIEW_CHARS } from "../../src/ui/pill.ts";
+import { type PillState, pillPreview } from "../../src/ui/pill-protocol.ts";
+import type { Transport } from "../../src/ui/protocol.ts";
 import { tempDir } from "../helpers.ts";
 import {
   CLIPBOARD_PERMISSIONS,
@@ -31,7 +40,10 @@ import {
   uiRig,
   until,
   type ViewPage,
+  VOCAB_FILE,
+  type VocabFixture,
   viewPage,
+  vocabFixture,
   windowPage,
 } from "./rig.ts";
 
@@ -174,6 +186,62 @@ describe("DC-O1: the pill", () => {
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "[DC-O2] the preview shows the words while listening, only the tail when long, and never after",
+    async () => {
+      const p = v.page;
+      const shown = () => text(p, "#preview");
+      const onPage = (m: string) =>
+        p.evaluate((x) => document.documentElement.outerHTML.includes(x), m);
+      const since = await now();
+      // A partial before any session has nowhere to go.
+      await v.send("preview", { text: "too early" });
+      await state({ state: "listening", since, keys: [], hotkey: "Right ⌘" });
+      expect(await visible(p, "#preview")).toBe(false);
+      expect(await onPage("too early")).toBe(false);
+
+      await v.send("preview", { text: "ping the team" });
+      expect(await visible(p, "#preview")).toBe(true);
+      expect(await shown()).toBe("ping the team");
+      // The same session sent again, with other hints, keeps its words.
+      await state({ state: "listening", since, keys: ["escape"], hotkey: "Right ⌘" });
+      expect(await shown()).toBe("ping the team");
+
+      const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+      await v.send("preview", { text: long });
+      const tail = await shown();
+      expect(tail.startsWith("…word")).toBe(true);
+      expect(tail.endsWith("word39")).toBe(true);
+      expect(tail.length).toBeLessThanOrEqual(PREVIEW_CHARS + 1);
+
+      // Listening ends: the words go, and a partial arriving late is dropped.
+      await state({ state: "transcribing", since });
+      expect(await visible(p, "#preview")).toBe(false);
+      expect(await onPage("word39")).toBe(false);
+      await v.send("preview", { text: "late partial" });
+      expect(await onPage("late partial")).toBe(false);
+      // A new session starts with none.
+      await state({ state: "listening", since: since + 5000, keys: [], hotkey: "Right ⌘" });
+      expect(await shown()).toBe("");
+      await state({ state: "hidden" });
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-O2, DC-D2: the preview's gate on the main side", () => {
+  test("a partial becomes a preview only with the preview on and the pill hidden from capture", () => {
+    const on = { pillPreview: true, hiddenFromCapture: true };
+    expect(pillPreview("ping the team", on)).toEqual({ text: "ping the team" });
+    expect(pillPreview("ping the team", { ...on, pillPreview: false })).toBeNull();
+    // Only a real true turns it on, not a string a hand-edited file might hold.
+    expect(pillPreview("ping the team", { ...on, pillPreview: "true" })).toBeNull();
+    // A window a screen share can see never shows the words (DC-D2).
+    expect(pillPreview("ping the team", { ...on, hiddenFromCapture: false })).toBeNull();
+    expect(pillPreview("  ", on)).toBeNull();
+    expect(pillPreview({ text: "x" }, on)).toBeNull();
+  });
 });
 
 describe("DC-L4: the learn chip", () => {
@@ -594,6 +662,46 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
+    "on the real registry: every group, every dictation key, and a change saved as that key alone",
+    async () => {
+      // No fixture: the keys, the values and the save are the app's own.
+      const page = await rig.open();
+      const patches: unknown[] = [];
+      page.on("request", (r) => {
+        if (r.method() === "PATCH" && r.url().endsWith("/config")) patches.push(r.postDataJSON());
+      });
+      await page.click("#dictation-open");
+      await page.waitForSelector("#dictation fieldset[data-group='Keys']", { state: "visible" });
+      const groups = await page.$$eval("#dictation fieldset", (g) =>
+        g.map((x) => x.getAttribute("data-group")),
+      );
+      expect(groups).toEqual(DICTATION_GROUPS.map((g) => g.title));
+      // Settings hides every dictation key, so each must be here, and the page names none the
+      // registry lacks.
+      const keys = await page.$$eval("#dictation [data-key]:not(div)", (e) =>
+        e.map((x) => (x as HTMLElement).dataset.key),
+      );
+      const registry = Object.keys(SETTINGS).filter((k) => k.startsWith("dictation."));
+      expect(registry.filter((k) => !keys.includes(k))).toEqual([]);
+      expect(keys.sort()).toEqual(
+        [ENABLE_KEY, ...DICTATION_GROUPS.flatMap((g) => g.keys)]
+          .filter((k) => k in SETTINGS)
+          .sort(),
+      );
+      expect(DICTATION_GROUPS.flatMap((g) => g.keys).filter((k) => !(k in SETTINGS))).toEqual([]);
+
+      const days = "#dictation [data-key='dictation.retainDays']:not(div)";
+      await page.fill(days, "45");
+      await page.press(days, "Tab");
+      await page.waitForFunction(() => document.getElementById("toast")?.textContent === "Saved.");
+      expect(patches).toEqual([{ "dictation.retainDays": 45 }]);
+      const cfg = await rig.api("GET", "/config");
+      expect(cfg.body.settings["dictation.retainDays"]).toBe(45);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "the Settings list leaves the dictation keys out and links to the page; #dictation opens it",
     async () => {
       const page = await rig.open(undefined, { before: (p) => dictationFixture(p) });
@@ -648,6 +756,149 @@ describe("DC-U1: the Dictation page in the window", () => {
       await page.click("#settings-open");
       await page.waitForSelector("#settings-fields .setting");
       expect(await page.$("#settings-dictation")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U5: the dictionary and replacements", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-vocab-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  /** Opens the Dictionary from the Dictation page; with `entries`, over the vocabulary fixture. */
+  const openDictionary = async (entries?: DictionaryEntry[]) => {
+    let fx: VocabFixture | null = null;
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        if (entries) fx = await vocabFixture(p, entries);
+      },
+    });
+    await page.click("#dictation-open");
+    await page.click("#dictation-dictionary-open");
+    await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li");
+    return { page, fx: fx as unknown as VocabFixture };
+  };
+  const row = (term: string) => `#dictionary-list li[data-term='${term}']`;
+  const global = (e: Partial<DictionaryEntry> & { term: string }): DictionaryEntry => ({
+    heard: [],
+    confirmed: true,
+    scope: "global",
+    file: VOCAB_FILE,
+    ...e,
+  });
+
+  test(
+    "a replacement is written for dictation only, shown as what you say to what akou writes, and removed in one click",
+    async () => {
+      const { page, fx } = await openDictionary([]);
+      expect(await text(page, "#dictionary-list li")).toBe(
+        "No words yet. Add one above, or import a list.",
+      );
+      await page.fill("#dictionary-heard", "dot com");
+      await page.fill("#dictionary-term", ".com");
+      await page.press("#dictionary-term", "Enter");
+      await page.waitForSelector(row(".com"));
+      expect(fx.calls).toEqual([
+        {
+          method: "POST",
+          path: "/vocab",
+          body: { term: ".com", heard: ["dot com"], scope: "dictation" },
+        },
+      ]);
+      expect(await text(page, `${row(".com")} .heard`)).toBe("dot com");
+      expect(await text(page, `${row(".com")} .term`)).toBe(".com");
+      expect(await text(page, `${row(".com")} .where`)).toBe("dictation only");
+      expect(await page.inputValue("#dictionary-term")).toBe("");
+
+      // A word alone, with no way of saying it.
+      await page.fill("#dictionary-term", "Kubernetes");
+      await page.click("#dictionary-add");
+      await page.waitForSelector(row("Kubernetes"));
+      expect(fx.calls.at(-1)?.body).toEqual({ term: "Kubernetes", heard: [], scope: "dictation" });
+      expect(await page.$(`${row("Kubernetes")} .heard`)).toBeNull();
+
+      fx.calls.length = 0;
+      await page.click(`${row(".com")} button.remove`);
+      await page.waitForSelector(row(".com"), { state: "detached" });
+      expect(fx.calls).toEqual([{ method: "DELETE", path: "/vocab/.com" }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "more forms keep a term's spelling, forms and scope; Use in calls too drops the scope; another file's word is read only; a refusal shows",
+    async () => {
+      const { page, fx } = await openDictionary([
+        global({ term: "Vercel", heard: ["versal"] }),
+        global({ term: "Kubernetes", heard: ["cooper netties"], entryScope: "dictation" }),
+        { term: "Acme", heard: [], confirmed: false, scope: "extra", file: "/team/words.yaml" },
+      ]);
+      expect(await text(page, `${row("Vercel")} .where`)).toBe("calls and dictation");
+      expect(await text(page, `${row("Kubernetes")} .where`)).toBe("dictation only");
+      expect(await text(page, `${row("Acme")} .where`)).toBe(
+        "calls and dictation, waiting for your yes, from /team/words.yaml",
+      );
+      expect(await page.$$(`${row("Acme")} button`)).toHaveLength(0);
+      expect(await page.$(`${row("Vercel")} button.calls-too`)).toBeNull();
+
+      // A calls entry stays one: no scope is added to it, and its first form is kept.
+      await page.fill("#dictionary-heard", "for sell, Versal");
+      await page.fill("#dictionary-term", "vercel");
+      await page.click("#dictionary-add");
+      await until(() => fx.calls.length === 1, 5000, "the save");
+      expect(fx.calls[0]?.body).toEqual({ term: "Vercel", heard: ["versal", "for sell"] });
+
+      await page.click(`${row("Kubernetes")} button.calls-too`);
+      await until(() => fx.calls.length === 2, 5000, "calls too");
+      expect(fx.calls[1]?.body).toEqual({ term: "Kubernetes", heard: ["cooper netties"] });
+      await page.waitForFunction(
+        (sel) => document.querySelector(sel)?.textContent === "calls and dictation",
+        `${row("Kubernetes")} .where`,
+      );
+
+      fx.refuse = "a term needs at least one letter or digit";
+      await page.fill("#dictionary-heard", "at sign");
+      await page.fill("#dictionary-term", "@");
+      await page.click("#dictionary-add");
+      await page.waitForSelector("#dictionary-issue", { state: "visible" });
+      expect(await text(page, "#dictionary-issue")).toBe(
+        "a term needs at least one letter or digit",
+      );
+      // The typed words stay, to fix.
+      expect(await page.inputValue("#dictionary-term")).toBe("@");
+      await page.fill("#dictionary-term", "at");
+      await page.click("#dictionary-add");
+      await page.waitForSelector("#dictionary-issue", { state: "hidden" });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a file of 200 lines imports 200 words through the app's own route",
+    async () => {
+      const { page } = await openDictionary();
+      const lines = Array.from({ length: 200 }, (_, i) => `Term${String(i).padStart(3, "0")}`);
+      await page.setInputFiles("#dictionary-import", {
+        name: "words.txt",
+        mimeType: "text/plain",
+        buffer: Buffer.from(lines.join("\n")),
+      });
+      await page.waitForFunction(
+        () => document.getElementById("toast")?.textContent === "Imported 200 words.",
+      );
+      await page.waitForFunction(
+        () => document.querySelectorAll("#dictionary-list li[data-term]").length === 200,
+      );
+      const r = await rig.api("GET", "/vocab");
+      expect((r.body.entries as { term: string }[]).map((e) => e.term)).toEqual(lines);
     },
     UI_TIMEOUT,
   );
@@ -1340,6 +1591,24 @@ describe("DC-U3: the dictation key recorder", () => {
     },
     UI_TIMEOUT,
   );
+});
+
+describe("DC-U4: reading the microphones", () => {
+  // `readMics` makes one request; nothing else of a transport is reached.
+  const answering = (status: number, body: unknown) =>
+    ({ kind: "browser", request: async () => ({ status, body }) }) as unknown as Transport;
+  test("a body without a list of inputs is a reason beside the text box, never a throw", async () => {
+    for (const body of [{ inputs: {} }, { inputs: "mic" }, {}, null]) {
+      expect(await readMics(answering(200, body))).toEqual({
+        error: "akou's answer lists no microphones",
+      });
+    }
+    // Positive control: a list is read, less the entries with no id or name.
+    const inputs = [{ id: "m1", name: "Desk Mic" }, { id: "", name: "x" }, { name: "y" }];
+    expect(await readMics(answering(200, { inputs }))).toEqual({
+      inputs: [{ id: "m1", name: "Desk Mic" }],
+    });
+  });
 });
 
 describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation page", () => {

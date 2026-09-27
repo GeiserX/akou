@@ -24,6 +24,7 @@ import {
 } from "playwright-core";
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
+import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import type { DictationRow } from "../../src/ui/dictation-history.ts";
 import type { CaptureInput } from "../../src/ui/dictation-mic.ts";
 import type { DictationGrants } from "../../src/ui/dictation-page.ts";
@@ -640,6 +641,83 @@ export function dictationRow(n: number, o: Partial<DictationRow> = {}): Dictatio
     ms: 120,
     ...o,
   };
+}
+
+export interface VocabFixture {
+  /** What `GET /vocab` lists. */
+  entries: DictionaryEntry[];
+  /** Every `POST /vocab` and `DELETE /vocab/{term}`, in order. */
+  calls: { method: string; path: string; body?: unknown }[];
+  /** Refuses the next `POST /vocab` with this message, as the route refuses a bad term. */
+  refuse: string | null;
+}
+
+/** The global vocabulary file of the fixture. */
+export const VOCAB_FILE = "/config/vocabulary.yaml";
+
+/**
+ * Answers the Dictionary's requests from `entries`, as the vocabulary routes will once
+ * `POST /vocab` takes the entry's `scope` (DC-L6): today the route refuses that field. An upsert
+ * replaces the entry of the same term, as `upsertEntry` does. `POST /vocab/import` goes to the app.
+ */
+export async function vocabFixture(
+  page: Page,
+  entries: DictionaryEntry[] = [],
+  prefix = "/api/v1",
+): Promise<VocabFixture> {
+  const fx: VocabFixture = { entries, calls: [], refuse: null };
+  await page.route(
+    (u) =>
+      (u.pathname === `${prefix}/vocab` || u.pathname.startsWith(`${prefix}/vocab/`)) &&
+      u.pathname !== `${prefix}/vocab/import`,
+    (route) => {
+      const req = route.request();
+      const path = new URL(req.url()).pathname.slice(prefix.length);
+      if (req.method() === "GET" && path === "/vocab")
+        return route.fulfill({
+          status: 200,
+          json: {
+            workspace: null,
+            files: [{ scope: "global", path: VOCAB_FILE }],
+            entries: fx.entries,
+          },
+        });
+      const sent = req.postData() ? (req.postDataJSON() as Record<string, unknown>) : {};
+      const body = Object.keys(sent).length > 0 ? sent : undefined;
+      fx.calls.push({ method: req.method(), path, ...(body === undefined ? {} : { body }) });
+      const key = (t: string) => t.toLowerCase();
+      if (req.method() === "POST" && path === "/vocab") {
+        if (fx.refuse) {
+          const message = fx.refuse;
+          fx.refuse = null;
+          return route.fulfill({ status: 400, json: { error: "bad_term", message } });
+        }
+        const b = sent as { term: string; heard?: string[]; scope?: "dictation" };
+        const entry: DictionaryEntry = {
+          term: b.term,
+          heard: b.heard ?? [],
+          confirmed: true,
+          scope: "global",
+          file: VOCAB_FILE,
+          ...(b.scope ? { entryScope: b.scope } : {}),
+        };
+        const at = fx.entries.findIndex((e) => e.scope === "global" && key(e.term) === key(b.term));
+        if (at < 0) fx.entries.push(entry);
+        else fx.entries[at] = entry;
+        return route.fulfill({ status: 201, json: { ok: true, path: VOCAB_FILE, entry } });
+      }
+      const term = decodeURIComponent(path.slice("/vocab/".length));
+      const at = fx.entries.findIndex((e) => e.scope === "global" && key(e.term) === key(term));
+      if (req.method() !== "DELETE" || at < 0)
+        return route.fulfill({
+          status: 404,
+          json: { error: "not_found", message: "no such word" },
+        });
+      fx.entries.splice(at, 1);
+      return route.fulfill({ status: 200, json: { ok: true, path: VOCAB_FILE, term } });
+    },
+  );
+  return fx;
 }
 
 /** A small ElectroBun view (the pill, the draft box) on its own page, with a fake main side. */

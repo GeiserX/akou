@@ -16,6 +16,7 @@ const rpc = Electroview.defineRPC<PillRpc>({
     messages: {
       state: (s: PillState) => sink?.state(s),
       level: (l: { db: number }) => sink?.level(l),
+      preview: (p: { text: string }) => sink?.preview(p),
       chip: (c: Chip) => sink?.chip(c),
     },
   },

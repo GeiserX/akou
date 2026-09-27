@@ -4,7 +4,7 @@
  * of dictation requests served in the last hour, and nothing of the app's groups: no key, no
  * engine picker, and never the remote's address. Over plain http from another host the page says
  * it has no microphone instead of offering to record. The dictation keys and the count come from
- * fixtures (`rig.ts`) until the registry and `GET /v1/server` carry them.
+ * fixtures (`rig.ts`), and once from the server's own registry and `GET /v1/server`.
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
@@ -46,18 +46,25 @@ afterAll(async () => {
  * Logs in on the Dictation page. `origin`: where the browser thinks the page is; anything but the
  * app's own loopback address is carried to it by the router.
  */
-async function dictationPage(origin?: string): Promise<{ page: Page; fx: DictationFixture }> {
+async function dictationPage(
+  origin?: string,
+  o: { fixture?: boolean } = {},
+): Promise<{ page: Page; fx: DictationFixture }> {
   const context = await (await launch()).newContext();
   contexts.push(context);
   const local = `http://127.0.0.1:${rig.port}`;
   if (origin) await proxyRoute(context, origin, local);
   const page = await context.newPage();
   page.on("pageerror", (e) => errors.push(e.message));
-  const fx = await dictationFixture(page, {
-    schema: { ...DICTATION_SCHEMA, ...DICTATION_SERVER_SCHEMA },
-    server: { slots: 1, engine: "auto", served_last_hour: 3 },
-    proxy: origin ? { from: origin, to: local } : undefined,
-  });
+  // Without the fixture the keys, the count and the save are the server's own.
+  const fx =
+    o.fixture === false
+      ? (null as unknown as DictationFixture)
+      : await dictationFixture(page, {
+          schema: { ...DICTATION_SCHEMA, ...DICTATION_SERVER_SCHEMA },
+          server: { slots: 1, engine: "auto", served_last_hour: 3 },
+          proxy: origin ? { from: origin, to: local } : undefined,
+        });
   await page.goto(`${origin ?? local}/#dictation`);
   await page.waitForSelector("#login", { state: "visible" });
   await page.fill("#login-secret", PASSWORD);
@@ -104,6 +111,41 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       await page.click("#server-nav [data-page='dictation']");
       await page.waitForFunction(() =>
         document.getElementById("dictation-served")?.textContent?.endsWith(": 4"),
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "on the real registry and GET /v1/server: the Server group, the count, and one key saved",
+    async () => {
+      const { page } = await dictationPage(undefined, { fixture: false });
+      const patches: unknown[] = [];
+      page.on("request", (r) => {
+        if (r.method() === "PATCH" && r.url().endsWith("/config")) patches.push(r.postDataJSON());
+      });
+      expect(
+        await page.$$eval("#page-dictation fieldset", (g) =>
+          g.map((x) => x.getAttribute("data-group")),
+        ),
+      ).toEqual(["Server"]);
+      const keys = await page.$$eval("#page-dictation [data-key]:not(div)", (e) =>
+        e.map((x) => (x as HTMLElement).dataset.key),
+      );
+      expect(keys).toEqual(["server.dictation_slots", "server.dictation_engine"]);
+      // No dictation request reached this server yet.
+      expect(await page.textContent("#dictation-served")).toBe(
+        "Dictation requests served in the last hour: 0",
+      );
+      const slots = "#page-dictation [data-key='server.dictation_slots']:not(div)";
+      await page.fill(slots, "2");
+      await page.press(slots, "Tab");
+      await until(() => patches.length === 1, 5000, "the save");
+      expect(patches).toEqual([{ "server.dictation_slots": 2 }]);
+      await until(
+        async () => (await rig.api("GET", "/config")).body.settings["server.dictation_slots"] === 2,
+        5000,
+        "the value saved",
       );
     },
     UI_TIMEOUT,
