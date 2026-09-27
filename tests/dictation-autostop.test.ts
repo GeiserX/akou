@@ -191,6 +191,8 @@ describe("DC-A3: a latched session stops after silence", () => {
     endAsTap(r);
     await until(() => r.sent.some((x) => x.c.type === "insert"), 5000, "the insert");
     expect(events(r).find((e) => e.type === "dictation.ended")).toMatchObject({ reason: "tap" });
+    // Never near the maximum length: no warning in the log.
+    expect(events(r).find((e) => e.type === "dictation.ended")).not.toHaveProperty("warned");
   });
 });
 
@@ -203,9 +205,11 @@ describe("DC-A3: any session stops at dictation.maxMinutes", () => {
     expect(stops(r).map((x) => x.at)).toEqual([120]);
     endAsTap(r);
     await until(() => r.sent.some((x) => x.c.type === "insert"), 5000, "the insert");
+    // The warning is in the log too, 60 s before the stop.
     expect(events(r).find((e) => e.type === "dictation.ended")).toMatchObject({
       reason: "max",
       seconds: 125,
+      warned: 60,
     });
     expect(r.decoded[0]?.length).toBe(125 * CAPTURE_RATE);
   });

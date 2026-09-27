@@ -179,6 +179,18 @@ describe("DC-L3: the audio check", () => {
     expect(calls).toBe(1);
   });
 
+  test("an answer that is the fix alone is the context echoed: evidence none", async () => {
+    const [c] = found();
+    expect(await checkAudio(c as Candidate, async () => "Kubernetes.")).toMatchObject({
+      term: "Kubernetes",
+      evidence: "none",
+    });
+    // Positive control: the fix inside the rest of what was said confirms it.
+    expect(await checkAudio(c as Candidate, async () => "Deploy it on Kubernetes.")).toMatchObject({
+      evidence: "audio",
+    });
+  });
+
   test("a check that fails leaves the candidate standing with evidence none", async () => {
     const broken = async () => {
       throw new Error("llama-server is gone");
@@ -211,5 +223,19 @@ describe("DC-L5: the pairs of the words to review", () => {
       ["Cooper Netties", "kubernetes", "accepted", "d3", 4],
       ["versal", "Vercel", "proposed", "d2", 2],
     ]);
+  });
+
+  test("an accepted pair the vocabulary no longer holds waits again as ignored", () => {
+    const events = [
+      ev(1, "d1", "cooper netties", "Kubernetes", "accepted"),
+      ev(2, "d2", "versal", "Vercel", "accepted"),
+    ];
+    const known = (heard: string, term: string) => heard === "versal" && term === "Vercel";
+    expect(reviewPairs(events, known).map((r) => [r.term, r.status])).toEqual([
+      ["Vercel", "accepted"],
+      ["Kubernetes", "ignored"],
+    ]);
+    // Positive control: without the vocabulary, the log's word stands.
+    expect(reviewPairs(events).map((r) => r.status)).toEqual(["accepted", "accepted"]);
   });
 });

@@ -16,7 +16,12 @@
  * - **Language (DC-E4).** A forced tag goes to Qwen as its language prefix; on `auto` the answer is
  *   bounded by the dictation's languages (`dictation.languages`, else `asr.languages`).
  * - **One Metal engine at a time.** The server gives way to a Metal llama-server already running (a
- *   call's final pass) instead of stopping it: the dictation falls back to `fast` meanwhile.
+ *   call's final pass) instead of stopping it: the dictation falls back to `fast` meanwhile. A
+ *   changed spec stops the old server before the new one starts, so it is not the Metal server the
+ *   new one gives way to.
+ * - **The audio check (DC-L3).** `check` decodes a kept dictation again with a fixed word as the
+ *   only context, on the same server and budget, with no exit to `fast`: a Parakeet answer would
+ *   say nothing about the fix.
  */
 
 import type { LlamaEngineSpec } from "../asr/engine.ts";
@@ -65,6 +70,8 @@ export class BestEngine implements DictationEngine {
   private server: BestServer | null = null;
   /** The spec the running server was made from: a changed one makes a new server. */
   private made = "";
+  /** The server being made while the old one stops: every caller meanwhile waits for it. */
+  private making: Promise<BestServer> | null = null;
   private idle: unknown = null;
   private busy = 0;
   private starting = false;
@@ -83,24 +90,40 @@ export class BestEngine implements DictationEngine {
 
   /** Starts the server now, so the next dictation finds it warm. A failure is only logged. */
   warm(): void {
-    let server: BestServer;
-    try {
-      server = this.ensure();
-    } catch (err) {
-      this.o.onLog?.("warn", `dictation best: ${(err as Error).message}`);
-      return;
-    }
-    void this.health(server).then(
-      () => this.armIdle(),
-      (err: Error) => this.o.onLog?.("warn", `dictation best did not start: ${err.message}`),
+    void this.ensure().then(
+      (server) =>
+        this.health(server).then(
+          () => this.armIdle(),
+          (err: Error) => this.o.onLog?.("warn", `dictation best did not start: ${err.message}`),
+        ),
+      (err: Error) => this.o.onLog?.("warn", `dictation best: ${err.message}`),
     );
+  }
+
+  /**
+   * The audio check of DC-L3: `samples` decoded again with `glossary` as the only context, and the
+   * text answered. Throws when Qwen fails or runs past its budget; nothing falls back.
+   */
+  async check(
+    samples: Float32Array,
+    glossary: readonly string[],
+    language?: string,
+  ): Promise<string> {
+    this.busy++;
+    this.disarmIdle();
+    try {
+      return (await this.qwen(samples, language, glossary)).text;
+    } finally {
+      this.busy--;
+      this.armIdle();
+    }
   }
 
   async decode(samples: Float32Array, d: { language?: string } = {}): Promise<EngineDecoded> {
     this.busy++;
     this.disarmIdle();
     try {
-      return await this.qwen(samples, d.language);
+      return await this.qwen(samples, d.language, []);
     } catch (err) {
       const fast = this.o.fast();
       if (!fast) throw err;
@@ -116,27 +139,40 @@ export class BestEngine implements DictationEngine {
   /** Stops the server; the next `warm` or dictation starts it again. */
   async stop(): Promise<void> {
     this.disarmIdle();
+    while (this.making) await this.making.catch(() => {});
     const server = this.server;
     this.server = null;
     this.made = "";
     await server?.stop();
   }
 
-  private ensure(): BestServer {
+  private async ensure(): Promise<BestServer> {
+    while (this.making) await this.making.catch(() => {});
     const spec = this.o.spec();
     if (!spec) throw new Error("Qwen3-ASR cannot run here: its model or llama-server is missing");
     const key = JSON.stringify(spec);
     if (this.server && this.made === key) return this.server;
     const old = this.server;
-    if (old) void old.stop();
-    this.server =
-      this.o.server?.(spec) ??
-      createLlamaServer(spec, {
-        yieldMetal: true,
-        log: (level, msg) => this.o.onLog?.(level, `dictation best: ${msg}`),
-      });
-    this.made = key;
-    return this.server;
+    const make = async (): Promise<BestServer> => {
+      // The old server goes first: on Metal the new one would give way to it (yieldMetal).
+      await old?.stop();
+      const server =
+        this.o.server?.(spec) ??
+        createLlamaServer(spec, {
+          yieldMetal: true,
+          log: (level, msg) => this.o.onLog?.(level, `dictation best: ${msg}`),
+        });
+      this.server = server;
+      this.made = key;
+      return server;
+    };
+    const making = make();
+    this.making = making;
+    try {
+      return await making;
+    } finally {
+      if (this.making === making) this.making = null;
+    }
   }
 
   private async health(server: BestServer): Promise<void> {
@@ -148,8 +184,12 @@ export class BestEngine implements DictationEngine {
     }
   }
 
-  private async qwen(samples: Float32Array, language: string | undefined): Promise<EngineDecoded> {
-    const server = this.ensure();
+  private async qwen(
+    samples: Float32Array,
+    language: string | undefined,
+    glossary: readonly string[],
+  ): Promise<EngineDecoded> {
+    const server = await this.ensure();
     const id = (this.o.spec() as LlamaEngineSpec).engine;
     // The load is waited for; the budget is the decode's own.
     await this.health(server);
@@ -179,7 +219,7 @@ export class BestEngine implements DictationEngine {
     });
     try {
       const h = await Promise.race([
-        engine.decode({ samples, lang: language ?? "auto", glossary: [] }),
+        engine.decode({ samples, lang: language ?? "auto", glossary: [...glossary] }),
         deadline,
       ]);
       return {

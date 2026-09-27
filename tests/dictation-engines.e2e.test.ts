@@ -12,7 +12,7 @@ import { dirname, join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { MODELS, modelFile } from "../src/main/asr/models.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
-import { until } from "./capture-helpers.ts";
+import { ManualClock, until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
 import { tempDir } from "./helpers.ts";
@@ -52,7 +52,7 @@ interface Rig {
 
 async function rig(
   settings: Record<string, unknown>,
-  o: { qwen?: boolean; llama?: string[] } = {},
+  o: { qwen?: boolean; llama?: string[]; helper?: string[]; clock?: ManualClock } = {},
 ): Promise<Rig> {
   const dir = scratch();
   const models = join(dir, "models");
@@ -60,6 +60,8 @@ async function rig(
   const log = join(dir, "llama.log");
   const fetched: string[] = [];
   const r = await appRig({
+    ...(o.helper ? { helperArgs: o.helper } : {}),
+    ...(o.clock ? { clock: o.clock } : {}),
     settings: {
       "asr.modelsDir": models,
       "asr.llamaServer": [process.execPath, FAKE_LLAMA, "--fake-log", log, ...(o.llama ?? [])],
@@ -168,6 +170,31 @@ describe("DC-E2: best kept warm while dictation is on", () => {
     await until(() => !alive(pid), 10_000, "Qwen to stop with dictation off");
   });
 
+  test("asr.qwenIdleMinutes set while Qwen idles arms its timer at once", async () => {
+    const clock = new ManualClock();
+    const x = await rig(
+      { "dictation.engine": "best", "dictation.enabled": true },
+      { qwen: true, clock },
+    );
+    await until(() => x.llama().some((l) => l.argv), 10_000, "the warm start");
+    await until(() => x.r.app.dictation()?.status().loading === false, 10_000, "the load");
+    const pid = x.llama().find((l) => l.argv)?.pid as number;
+    await clock.advance(2 * 60_000);
+    // Positive control: with 0, the default, it stays up.
+    expect(alive(pid)).toBe(true);
+    await x.r.api("PATCH", "/config", { "asr.qwenIdleMinutes": 1 });
+    await clock.advance(2 * 60_000);
+    await until(() => !alive(pid), 10_000, "Qwen to stop after its idle time");
+  });
+
+  test("with dictation off, a clip over the API starts Qwen and stops it after", async () => {
+    const x = await rig({ "dictation.engine": "best" }, { qwen: true });
+    const res = await upload(x.r);
+    expect(res.body).toMatchObject({ text: "hello", engine: "best" });
+    const pid = x.llama().find((l) => l.argv)?.pid as number;
+    await until(() => !alive(pid), 10_000, "Qwen to stop after the clip");
+  });
+
   test("positive control: with dictation off, nothing starts Qwen until a dictation needs it", async () => {
     const x = await rig({ "dictation.engine": "best" }, { qwen: true });
     await Bun.sleep(300);
@@ -183,6 +210,60 @@ describe("DC-E2: best kept warm while dictation is on", () => {
     expect(res.body).toMatchObject({ text: "hello", engine: "fast", fallback_from: "best" });
     const one = await x.r.api("GET", `/dictations/${res.body.id}`);
     expect(one.body).toMatchObject({ engine: "fast", fallback_from: "best" });
+  });
+});
+
+describe("DC-L3: the audio check on the warm best", () => {
+  const chipless = { open: () => {}, chip: () => {}, showInactive: () => {}, hide: () => {} };
+
+  /** A spoken "deploy to kubernetes" through the fake helper, fixed in the box with Fix. */
+  async function fixed(engine: string) {
+    const dir = scratch();
+    const wav = join(dir, "mic.wav");
+    writeFileSync(wav, monoWav(concat(speak(["deploy", "to", "kubernetes"]), silence(3))));
+    const x = await rig(
+      { "dictation.engine": engine, "dictation.enabled": true },
+      { qwen: true, helper: ["--wav", wav, "--inserter-log", join(dir, "inserted.jsonl")] },
+    );
+    const d = x.r.app.dictation();
+    if (!d) throw new Error("the app runs no dictation");
+    d.draft.attach(chipless);
+    await until(() => d.status().state === "idle", 10_000, "the helper ready");
+    if (engine === "best")
+      await until(
+        () => d.status().loading === false && x.llama().some((l) => l.argv),
+        10_000,
+        "the warm start",
+      );
+    expect((await x.r.api("POST", "/dictation/start")).status).toBe(200);
+    // The fake's mic runs in real time: let the words be spoken before the stop.
+    await Bun.sleep(2500);
+    expect((await x.r.api("POST", "/dictation/stop")).status).toBe(200);
+    await until(() => d.log.items()[0]?.state === "inserted", 10_000, "the insert");
+    const id = d.log.items()[0]?.id as string;
+    expect(d.log.items()[0]?.text).toBe("deploy to kubernetis");
+    expect(d.draft.open(id, { focus: true, fix: true })).toEqual({ ok: true });
+    await d.draft.handlers.insert({ id, text: "deploy to Kubernetes", send: false });
+    return { x, learn: d.log.events().filter((e) => e.type === "dictation.learn") };
+  }
+
+  test("a fix in the box is decoded again on Qwen with the word as context: evidence audio", async () => {
+    const { x, learn } = await fixed("best");
+    expect(learn).toEqual([
+      expect.objectContaining({ term: "Kubernetes", heard: "kubernetis", evidence: "audio" }),
+    ]);
+    const bodies = x.llama().filter((l) => l.body) as {
+      body: { messages: { role: string; content: unknown }[] };
+    }[];
+    expect(bodies.at(-1)?.body.messages.find((m) => m.role === "system")?.content).toBe(
+      "Kubernetes",
+    );
+  });
+
+  test("positive control: dictating on fast, no check runs and the fix has evidence none", async () => {
+    const { x, learn } = await fixed("fast");
+    expect(learn).toEqual([expect.objectContaining({ term: "Kubernetes", evidence: "none" })]);
+    expect(x.llama().filter((l) => l.body)).toEqual([]);
   });
 });
 

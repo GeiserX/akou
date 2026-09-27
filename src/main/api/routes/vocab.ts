@@ -18,7 +18,9 @@
  *   dictation log's `dictation.learn` events at its latest status, and `POST /vocab/approve` and
  *   `/reject` with `dictation: true` answer them as the chip does: approve writes the pair's
  *   `scope: dictation` entry and `accepted`, reject writes `rejected` (and takes a learned pair
- *   back out), so the pair is never proposed again. `ignored` is a status of dictation only.
+ *   back out), so the pair is never proposed again. `ignored` is a status of dictation only. An
+ *   accepted pair the vocabulary no longer holds (removed in the editor) is listed as `ignored`
+ *   again, so it can be accepted once more.
  *
  * Not built yet, answered `501`: `check` (it needs the model's tokenizer on disk).
  */
@@ -27,7 +29,7 @@ import { type ReviewPair, reviewPairs } from "../../../core/dictation/learn.ts";
 import { formatWall } from "../../../core/log/clock.ts";
 import { isAgentAuthor } from "../../../core/log/events.ts";
 import type { CallView } from "../../../core/log/fold.ts";
-import { learnPair, unlearnPair } from "../../dictation/vocab.ts";
+import { knowsPair, learnPair, unlearnPair } from "../../dictation/vocab.ts";
 import { ProviderError } from "../../llm/provider.ts";
 import { reasonText } from "../../query/ask.ts";
 import { STOPWORDS } from "../../query/bm25.ts";
@@ -201,9 +203,15 @@ const WORKSPACE = {
   doc: "The workspace whose file this is; default: the global file.",
 } as const;
 
-/** The pairs fixed while dictating (DC-L5); none where dictation does not run (server mode). */
-function dictationPairs(app: ApiApp): ReviewPair[] {
-  return reviewPairs(app.dictation?.()?.log.events() ?? []);
+/**
+ * The pairs fixed while dictating (DC-L5), none where dictation does not run (server mode), read
+ * against the vocabulary dictation applies: an accepted pair removed in the editor waits again.
+ */
+async function dictationPairs(app: ApiApp): Promise<ReviewPair[]> {
+  const d = app.dictation?.();
+  if (!d) return [];
+  const { entries } = await mergedFor(app, undefined);
+  return reviewPairs(d.log.events(), (heard, term) => knowsPair(entries, heard, term));
 }
 
 /**
@@ -219,7 +227,7 @@ async function answerDictation(
   const d = app.dictation?.();
   if (!d) throw new HttpError(404, "not_found", "dictation runs in the desktop app only");
   const open = action === "approve" ? ["proposed", "ignored"] : ["proposed", "ignored", "accepted"];
-  const pairs = reviewPairs(d.log.events()).filter(
+  const pairs = (await dictationPairs(app)).filter(
     (p) => keys.has(termKey(p.term)) && open.includes(p.status),
   );
   const path = targetPath(app, undefined);
@@ -467,7 +475,7 @@ export function vocabRoutes(r: Router<ApiApp>): void {
         workspace: workspace ?? null,
         files: out.files,
         entries,
-        ...(flag("dictation") ? { dictation: dictationPairs(c.app) } : {}),
+        ...(flag("dictation") ? { dictation: await dictationPairs(c.app) } : {}),
       });
     },
   );

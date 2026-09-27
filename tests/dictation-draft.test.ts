@@ -17,6 +17,7 @@ import type { Bridge } from "../src/main/window/bridge.ts";
 import { type DraftHandlers, Shell, type ShellApp } from "../src/main/window/shell.ts";
 import type { DraftOpen } from "../src/ui/dictation-protocol.ts";
 import type { Chip } from "../src/ui/pill-protocol.ts";
+import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
 import { fakeUi } from "./shell-helpers.ts";
 
@@ -298,6 +299,53 @@ describe("DC-L1: the draft box learns from the edit", () => {
     ]);
     // The box stays up without the keyboard for the chip, after the insert.
     expect(f.calls.slice(-2)).toEqual(["hide", "showInactive"]);
+  });
+
+  test("with a warm Qwen the audio check confirms the fix on the dictation's audio", async () => {
+    const asked: { id: string; glossary: readonly string[] }[] = [];
+    const f = box({
+      recheck: (id) => async (glossary) => {
+        asked.push({ id, glossary });
+        return "tell the Kubernetes team";
+      },
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: true });
+    await f.b.handlers.insert({ id: a, text: FIXED, send: false });
+    expect(asked).toEqual([{ id: a, glossary: ["Kubernetes"] }]);
+    expect(f.log.events().filter((e) => e.type === "dictation.learn")).toEqual([
+      expect.objectContaining({ term: "Kubernetes", status: "proposed", evidence: "audio" }),
+    ]);
+    expect(f.chips).toHaveLength(1);
+  });
+
+  test("positive control: an audio check that still hears the heard form proposes nothing", async () => {
+    const f = box({ recheck: () => async () => HEARD });
+    const a = f.dictation();
+    f.b.open(a, { focus: true });
+    await f.b.handlers.insert({ id: a, text: FIXED, send: false });
+    expect(f.learnEvents()).toEqual([]);
+    expect(f.chips).toEqual([]);
+    // The insert went in all the same.
+    expect(f.inserts.map((i) => i.text)).toEqual([FIXED]);
+  });
+
+  test("the insert does not wait for the audio check; the chip comes once the check is done", async () => {
+    let answer: (text: string) => void = () => {};
+    const f = box({
+      recheck: () => () =>
+        new Promise<string>((res) => {
+          answer = res;
+        }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: true });
+    const done = f.b.handlers.insert({ id: a, text: FIXED, send: false });
+    await until(() => f.inserts.length === 1, 2000, "the insert");
+    expect(f.chips).toEqual([]);
+    answer(FIXED);
+    expect(await done).toBe(true);
+    expect(f.chips).toHaveLength(1);
   });
 
   test("with dictation.learn off no candidate is computed", async () => {

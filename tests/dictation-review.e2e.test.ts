@@ -89,6 +89,14 @@ describe("DC-L5: dictation's words in the words to review", () => {
     // The dictionary editor's one click: the entry goes, and the next dictation types what it hears.
     expect((await r.api("DELETE", "/vocab/Kubernetes", {})).status).toBe(200);
     expect(await dictate()).toBe("deploy to kubernetis");
+
+    // Removed in the editor, the pair waits again, and Accept brings it back.
+    expect((await r.api("GET", "/vocab?dictation=true")).body.dictation).toMatchObject([
+      { term: "Kubernetes", status: "ignored" },
+    ]);
+    const again = await r.api("POST", "/vocab/approve", { terms: ["Kubernetes"], dictation: true });
+    expect(again.body.approved).toEqual(["Kubernetes"]);
+    expect(await dictate()).toBe("deploy to Kubernetes");
   });
 
   test("Reject writes rejected, adds no entry, and the pair is never offered again", async () => {

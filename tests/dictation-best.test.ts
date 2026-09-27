@@ -190,6 +190,21 @@ describe("DC-E2: best falls back to fast", () => {
     expect(r.best.pid()).toBeNull();
   });
 
+  test("the budget grows 0.2 s per audio second: a 20 s dictation still waits at 12 s", async () => {
+    const r = rig(["--fake-hang"]);
+    let settled = false;
+    const long = concat(silence(0.3), speak(["hello"]), silence(18.6));
+    const p = r.best.decode(long).finally(() => {
+      settled = true;
+    });
+    await until(() => r.requests().length > 0, 10_000, "the request to reach the server");
+    // About 20 s of audio: 10 s plus 4 s. Without the audio's share it would give up at 10 s.
+    await r.clock.advance(12_000);
+    expect(settled).toBe(false);
+    await r.clock.advance(3_000);
+    expect(await p).toMatchObject({ engine: "fast", fallback_from: "best" });
+  });
+
   test("Qwen that cannot run here (its model or llama-server missing) falls back too", async () => {
     const none = new BestEngine({
       spec: () => null,
@@ -275,6 +290,56 @@ describe("one Metal engine at a time: dictation gives way", () => {
     const r = rig([], { accelerator: "metal" });
     expect(await r.best.decode(HELLO)).toMatchObject({ engine: "fast", fallback_from: "best" });
     expect(alive(pass.pid() as number)).toBe(true);
+  });
+});
+
+describe("DC-L3: the audio check on best", () => {
+  test("the fixed word goes to Qwen as its only context, and the text comes back", async () => {
+    const r = rig();
+    expect(await r.best.check(HELLO, ["Kubernetes"])).toBe("hello");
+    const [req] = r.requests();
+    expect(req?.messages.filter((m) => m.role === "system")).toEqual([
+      { role: "system", content: "Kubernetes" },
+    ]);
+    // Positive control: a dictation's own decode sends no context.
+    await r.best.decode(HELLO);
+    expect(r.requests()[1]?.messages.some((m) => m.role === "system")).toBe(false);
+  });
+
+  test("a failed check throws, and never answers with fast's text", async () => {
+    const r = rig(["--fake-die-on", "1"]);
+    await expect(r.best.check(HELLO, ["Kubernetes"])).rejects.toThrow();
+  });
+});
+
+describe("a changed spec on Metal", () => {
+  test("the old server stops before the new one starts, so the new one does not give way to it", async () => {
+    const t = tempDir("akou-dict-respec-");
+    cleanups.push(t.cleanup);
+    let spec: LlamaEngineSpec = {
+      kind: "llama-server",
+      engine: QWEN_ASR,
+      model: join(t.dir, QWEN_MODEL_FILE),
+      mmproj: join(t.dir, QWEN_MMPROJ_FILE),
+      accelerator: "metal",
+      gpuLayers: 0,
+      command: [process.execPath, FAKE],
+    };
+    const best = new BestEngine({
+      spec: () => spec,
+      fast: () => FAST,
+      settings: () => ({ timeoutSeconds: 10, idleMinutes: 0, languages: [] }),
+      clock: new ManualClock(),
+    });
+    cleanups.push(() => best.stop());
+    expect(await best.decode(HELLO)).toMatchObject({ engine: "best" });
+    const first = best.pid() as number;
+    spec = { ...spec, command: [process.execPath, FAKE, "--fake-loading-ms", "10"] };
+    const next = await best.decode(HELLO);
+    expect(next).toMatchObject({ engine: "best" });
+    expect(next.fallback_from).toBeUndefined();
+    expect(alive(first)).toBe(false);
+    expect(best.pid()).not.toBe(first);
   });
 });
 

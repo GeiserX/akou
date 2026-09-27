@@ -20,8 +20,9 @@
  *   Learn writes a `scope: dictation` vocabulary entry and `accepted`; Not a word `rejected`;
  *   closing or the 8 s timeout `ignored`; Undo takes the entry back out. With `dictation.learn`
  *   `auto` the entries are written first and the chip only offers Undo; with `off` no candidate is
- *   computed. The audio check needs a local Qwen that takes a glossary (DC-L7), so today every
- *   candidate records `evidence: none`.
+ *   computed. The audio check (DC-L3) runs on the dictation's kept audio when a local Qwen is warm
+ *   for it (`recheck`); otherwise the candidate records `evidence: none`. Learning runs beside the
+ *   insert, never in front of it: the chip comes once both are done.
  */
 
 import type { DictationItem, Target } from "../../core/dictation/events.ts";
@@ -30,6 +31,7 @@ import {
   learn,
   pairHistory,
   pairKey,
+  type Redecode,
   shouldAsk,
 } from "../../core/dictation/learn.ts";
 import type { DraftOpen, DraftRpc, DraftWord } from "../../ui/dictation-protocol.ts";
@@ -87,6 +89,11 @@ export interface DraftBoxOptions {
   unlearnEntry(p: { id: string; term: string; heard: string }): Promise<void>;
   /** The offer to learn from dictation `id` is over: its audio may go (DC-H2). */
   closeLearnWindow?(id: string): void;
+  /**
+   * DC-L3's audio check on dictation `id`'s kept audio, or null when it cannot run (no local Qwen
+   * warm for it, or no audio kept): the candidate then records `evidence: none`.
+   */
+  recheck?(id: string): Redecode | null;
   /** Runs `fn` after `ms`; returns the cancel. Tests pass their own. */
   later?(ms: number, fn: () => void): () => void;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
@@ -262,19 +269,22 @@ export class DraftBox {
     const c = this.cur;
     if (!c || c.id !== id || c.answered) return false;
     c.answered = true;
-    const chip = await this.learnFrom(c, text);
+    // The audio check can take a decode's time: the insert does not wait for it.
+    const learning = this.learnFrom(c, text);
     if (c.fix) {
-      this.afterAnswer(chip);
+      this.afterAnswer(await learning);
       return true;
     }
     const s = this.o.session();
     if (!s || !c.target) {
+      await learning;
       this.reopen(c, text, "dictation is off");
       return false;
     }
     // The keyboard goes back to the target, so the box steps aside first.
     this.hide();
     const r = await s.insertText(id, text, c.target, send ? this.o.sendKey() : "none");
+    const chip = await learning;
     if (!r.ok) {
       this.reopen(c, text, r.reason);
       if (chip) this.win?.chip(chip);
@@ -306,11 +316,12 @@ export class DraftBox {
   private async copy(id: string, text: string): Promise<boolean> {
     const c = this.cur;
     if (!c || c.id !== id) return false;
-    const chip = await this.learnFrom(c, text);
-    if (chip) this.win?.chip(chip);
+    const learning = this.learnFrom(c, text);
     const s = this.o.session();
-    if (!s) return false;
-    const r = await s.copyText(text, c.target ?? NO_TARGET);
+    const r = s ? await s.copyText(text, c.target ?? NO_TARGET) : null;
+    const chip = await learning;
+    if (chip) this.win?.chip(chip);
+    if (!r) return false;
     if (!r.ok) this.o.onLog?.("warn", `dictation ${id}: copy refused (${r.reason})`);
     return r.ok;
   }
@@ -365,7 +376,7 @@ export class DraftBox {
           ...(known ? { known } : {}),
           rejected,
         },
-        null,
+        this.o.recheck?.(c.id) ?? null,
       );
     } catch (err) {
       this.o.onLog?.("warn", `dictation ${c.id}: no learning (${failure(err)})`);
