@@ -21,6 +21,7 @@ import {
 } from "bun:test";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { dictationTrip } from "../scripts/server-roundtrip.ts";
 import { laneAsk } from "../src/main/api/routes/jobs.ts";
 import type { ModelSpec } from "../src/main/asr/engine.ts";
 import { MODELS } from "../src/main/asr/models.ts";
@@ -402,4 +403,72 @@ test("an interactive POST /v1/jobs finishes while the queue's job is held", asyn
     g.open();
     await r.close();
   }
+});
+
+// ---------------------------------------------------------------------------
+// The server CI job's dictation trip (scripts/server-roundtrip.ts), against the real routes
+
+describe("DC-R2: the server job's dictation trip", () => {
+  async function tripRig(slots: number) {
+    const r = await appRig({
+      settings: { ...SERVER },
+      jobs: {
+        decode: (path: string, signal: AbortSignal) => readUploadAudio(path, { signal }),
+        dictationSlots: () => slots,
+      } as AppOptions["jobs"],
+    });
+    cleanups.push(() => void r.close());
+    const t = tempDir("akou-trip-");
+    cleanups.push(t.cleanup);
+    const note = join(t.dir, "note.wav");
+    writeFileSync(note, NOTE);
+    const k = await newKey(r, "trip");
+    return { base: `http://127.0.0.1:${r.port}`, key: k.key, note, heard: "hello world" };
+  }
+
+  test("the app's client dictates through the lane, after its Test, beside a plain request the lane does not count", async () => {
+    const lines = await dictationTrip(await tripRig(1));
+    expect(lines[0]).toContain("the Test says ok, fast on");
+    expect(lines[1]).toMatch(/answered by the lane in \d+ ms: hello world/);
+  });
+
+  test("positive control: a server with no dictation slots fails the trip at the Test", async () => {
+    await expect(dictationTrip(await tripRig(0))).rejects.toThrow(
+      /the Test of the remote says: .*no dictation slots/,
+    );
+  });
+
+  test("positive control: a dictation sent without interactive=true fails the trip, since the lane did not count it", async () => {
+    // A client that drops the field: the request is answered, but by the queue.
+    const dropField: typeof fetch = Object.assign(
+      (input: string | URL | Request, init?: RequestInit) => {
+        const body = init?.body;
+        if (body instanceof FormData && body.has("interactive")) {
+          const form = new FormData();
+          for (const [k, v] of body.entries()) if (k !== "interactive") form.append(k, v);
+          return fetch(input, { ...init, body: form });
+        }
+        return fetch(input, init);
+      },
+      { preconnect: fetch.preconnect },
+    );
+    await expect(dictationTrip({ ...(await tripRig(1)), fetch: dropField })).rejects.toThrow(
+      /the dictation did not run in the lane \(served 0 -> 0, queue jobs 1 -> 2\)/,
+    );
+  });
+
+  test("positive control: a lane that counts a plain request fails the trip at its control", async () => {
+    // Every transcription marked interactive, as a server counting all of them in the lane would.
+    const markAll: typeof fetch = Object.assign(
+      (input: string | URL | Request, init?: RequestInit) => {
+        const body = init?.body;
+        if (body instanceof FormData && !body.has("interactive")) body.set("interactive", "true");
+        return fetch(input, init);
+      },
+      { preconnect: fetch.preconnect },
+    );
+    await expect(dictationTrip({ ...(await tripRig(1)), fetch: markAll })).rejects.toThrow(
+      /a plain request moved the lane \(served 0 -> 1, queue jobs 0 -> 0\)/,
+    );
+  });
 });
