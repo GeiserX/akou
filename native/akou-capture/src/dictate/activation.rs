@@ -125,6 +125,17 @@ impl Activation {
         self.record = on;
     }
 
+    /// A mouse button is the binding, or the recorder is open (DC-A6): only then does a backend
+    /// need the mouse buttons, and the Windows one installs its mouse hook.
+    pub fn wants_mouse(&self) -> bool {
+        self.record
+            || self
+                .hotkey
+                .trigger()
+                .get(..5)
+                .is_some_and(|p| p.eq_ignore_ascii_case("mouse"))
+    }
+
     /// The keys down now, as the tap saw them.
     pub fn held(&self) -> &[String] {
         &self.held
@@ -611,6 +622,29 @@ mod tests {
             ]
         );
         assert_eq!(swallowed.len(), 2, "back is not also a page back");
+    }
+
+    /// DC-A6 on Windows: the mouse hook, which sees every move on the machine, is wanted only
+    /// while a button is the binding or the recorder is open, and not once a key is bound again.
+    #[test]
+    fn dc_a6_the_mouse_is_wanted_only_for_a_button_binding_or_the_recorder() {
+        let mut a = Activation::new(Hotkey::parse("RightControl").unwrap(), Mode::HoldOrToggle);
+        assert!(!a.wants_mouse());
+        a.record_keys(true);
+        assert!(a.wants_mouse(), "the recorder may be given Mouse4");
+        a.record_keys(false);
+        a.rebind(
+            Hotkey::parse("mouse5").unwrap(),
+            Mode::Hold,
+            &mut Vec::new(),
+        );
+        assert!(a.wants_mouse());
+        a.rebind(
+            Hotkey::parse("Control+Shift+M").unwrap(),
+            Mode::Hold,
+            &mut Vec::new(),
+        );
+        assert!(!a.wants_mouse(), "a chord ending in M is no mouse button");
     }
 
     /// The portal reports the binding, not its keys: `trigger` runs a hold with no modifier seen.
