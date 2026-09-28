@@ -44,7 +44,7 @@ use super::insert::Targets;
 use super::live::{self, Device, Stdio};
 use super::protocol::{self as p, Target};
 use super::readback::Field;
-use super::session::{Config, Dictate};
+use super::session::{Config, Dictate, Out};
 use super::tap::{Gate, TapEvent};
 use crate::clock;
 use crate::linux::DictateMic;
@@ -89,7 +89,7 @@ fn nodes() -> Vec<(PathBuf, Kind)> {
             Some((e.path(), evdev_keys::kind(&caps, usize::BITS)))
         })
         .collect();
-    out.sort();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
     out
 }
 
