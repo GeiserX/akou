@@ -296,7 +296,7 @@ select:focus-visible {
   padding: 0 8px;
 }
 #draft-foot button.pri,
-#chip-learn {
+#chip #chip-learn {
   background: var(--pri-bg);
   color: var(--pri-fg);
 }

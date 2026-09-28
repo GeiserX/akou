@@ -234,6 +234,11 @@ button:focus-visible {
     opacity: 0;
   }
 }
+@media (prefers-reduced-motion: reduce) {
+  #hints {
+    animation: none;
+  }
+}
 .key {
   font-size: 10px;
   font-weight: 500;
@@ -280,7 +285,7 @@ button:focus-visible {
   background: var(--btn-bg);
 }
 #buttons button:first-child,
-#chip-learn {
+#chip #chip-learn {
   background: var(--pri-bg);
   color: var(--pri-fg);
 }
