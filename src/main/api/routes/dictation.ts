@@ -328,13 +328,17 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictation",
     {
       id: "dictation.status",
-      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied or not-needed), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
+      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied or not-needed; read by a probe of the helper while dictation is off), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
       access: "admin",
       modes: ["app"],
       ok: 200,
     },
-    (c) => {
-      const st = service(c).status();
+    async (c) => {
+      const svc = service(c);
+      const st = svc.status();
+      // While dictation is off no helper runs, so a probe reads them: the switch knows what the
+      // setup must ask for before it starts one (DC-U2, DC-N3).
+      const grants = await svc.grants();
       const r = st.remote;
       return json(200, {
         enabled: c.app.config().settings["dictation.enabled"] === true,
@@ -352,7 +356,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
               probing: r.health?.probing ?? false,
             }
           : null,
-        grants: st.grants,
+        grants,
         backend: st.backend,
         swallow_keys: st.swallow_keys,
       });

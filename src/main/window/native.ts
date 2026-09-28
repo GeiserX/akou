@@ -83,6 +83,7 @@ export function electrobunUi(): NativeUi {
           showCall: (m) => defined.send.showCall(m),
           showSettings: (m) => defined.send.showSettings(m),
           askQuit: (m) => defined.send.askQuit(m),
+          dictationKey: (m) => defined.send.dictationKey(m),
         },
       };
     },

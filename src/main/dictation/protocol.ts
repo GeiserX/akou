@@ -132,7 +132,11 @@ export type AppToHelper =
   | { type: "session.start" }
   | { type: "session.stop" }
   | { type: "session.cancel" }
-  | { type: "rebuild_mic"; device: string }
+  /**
+   * The microphone (DC-U4, DC-N5): `device` is `dictation.mic`, `default` when empty;
+   * `prefer_built_in` is `dictation.preferBuiltInOverBluetooth`, true when absent.
+   */
+  | { type: "rebuild_mic"; device: string; prefer_built_in?: boolean }
   | { type: "warm"; mode: "off" | "auto" | "always" }
   | { type: "record_keys"; on: boolean }
   | { type: "stop" };
