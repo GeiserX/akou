@@ -51,6 +51,7 @@ import {
   processAlive,
   readLock,
 } from "../core/log/writer.ts";
+import { Cues } from "../ui/dictation-cues.ts";
 import {
   ensureToken,
   type Guard,
@@ -113,6 +114,7 @@ import {
   type SettingValue,
 } from "./config/schema.ts";
 import { BestEngine } from "./dictation/best.ts";
+import { SystemCuePlayer } from "./dictation/cues.ts";
 import {
   dictationLanguages,
   type EngineVerdict,
@@ -1487,6 +1489,12 @@ export class AkouApp implements ApiApp {
     if (before["dictation.enabled"] !== after["dictation.enabled"]) this.applyDictation();
     else if (after["dictation.enabled"] && WARM_KEYS.some((k) => !sameValue(before[k], after[k])))
       this.warmDictation();
+    if (
+      before["dictation.mic"] !== after["dictation.mic"] ||
+      before["dictation.preferBuiltInOverBluetooth"] !==
+        after["dictation.preferBuiltInOverBluetooth"]
+    )
+      this.dictationSvc?.rebuildMic();
     // Fewer days, or the audio no longer kept: what is past it goes now, not at the next sweep.
     if (
       before["dictation.retainDays"] !== after["dictation.retainDays"] ||
@@ -2027,6 +2035,13 @@ export class AkouApp implements ApiApp {
    */
   private startDictation(): void {
     if (this.runMode !== "app") return;
+    const cues = new Cues(
+      new SystemCuePlayer({ onLog: (level, msg) => this.log(level, msg) }),
+      () => ({
+        sounds: this.cfg.settings["dictation.sounds"],
+        pill: this.cfg.settings["dictation.pill"],
+      }),
+    );
     this.dictationSvc ??= new DictationService({
       configDir: this.configDir,
       now: () => this.clock.now(),
@@ -2106,6 +2121,16 @@ export class AkouApp implements ApiApp {
           health: this.remoteDictation?.health() ?? null,
         };
       },
+      probe: () => [
+        ...locateHelper(this.cfg.settings["capture.helper"]).command,
+        "dictate",
+        "--probe",
+      ],
+      cue: (moment) => cues.cue(moment),
+      mic: () => ({
+        device: this.cfg.settings["dictation.mic"],
+        preferBuiltIn: this.cfg.settings["dictation.preferBuiltInOverBluetooth"],
+      }),
       onLog: (level, msg) => this.log(level, msg),
     });
     // Qwen landing while `best` waits for it: it is warmed at once (DC-E3).

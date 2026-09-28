@@ -23,6 +23,8 @@ export interface WindowSend {
   showCall(m: Messages["showCall"]): void;
   showSettings(m: Messages["showSettings"]): void;
   askQuit(m: Messages["askQuit"]): void;
+  /** A key the dictation helper reported while the page's recorder is open (DC-U3). */
+  dictationKey?(m: Messages["dictationKey"]): void;
 }
 
 export interface WindowRpc {
@@ -58,6 +60,8 @@ export function windowRpc(
 ): WindowRpc {
   const follows = new Map<string, () => void>();
   const asks = new Map<string, AbortController>();
+  /** The page's dictation key recorder holds the helper's keys (DC-U3). */
+  let recording = false;
   const unwatch = bridge.watchLifecycle(() => {
     void (bridge.app.status() as Promise<unknown>).then((s) => send().status(s as AppStatus));
   });
@@ -151,14 +155,22 @@ export function windowRpc(
         return true;
       },
 
-      // The dictation helper is not wired yet (docs/ux/DICTATION.md DC-U3): no helper keys, so the
-      // recorder takes what the page itself sees.
-      recordDictationKeys: async () => false,
+      // The helper reports every key while the recorder is open, Fn and Globe included, which the
+      // webview never sees (DC-U3). False with dictation off: the recorder takes what the page sees.
+      recordDictationKeys: async ({ on }) => {
+        const d = bridge.app.dictation?.();
+        if (!d) return false;
+        const ok = d.recordKeys(on ? (name) => send().dictationKey?.({ name }) : null);
+        recording = on && ok;
+        return ok;
+      },
       // Nor its mic level (DC-N3): the setup's meter stays still and the setup goes on.
       watchDictationMic: async () => false,
     },
     close: () => {
       unwatch();
+      if (recording) bridge.app.dictation?.()?.recordKeys(null);
+      recording = false;
       for (const s of [...follows.keys()]) stopFollow(s);
       for (const a of asks.values()) a.abort();
       asks.clear();
