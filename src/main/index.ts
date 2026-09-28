@@ -770,6 +770,7 @@ export class AkouApp implements ApiApp {
     const dir = now.dir;
     const pull: ModelsPull = { running: null, done: new Map() };
     this.modelsPull = pull;
+    let pushedAt = 0;
     pull.running = downloadModels(
       dir,
       this.registry().map((m) => m.id),
@@ -779,6 +780,12 @@ export class AkouApp implements ApiApp {
         onProgress: (p) => {
           pull.file = `${p.model}/${p.name}`;
           pull.done.set(pull.file, p.bytes);
+          // The progress rides the status push (DESKTOP DK-E2), at most once a second, so the
+          // window's welcome follows it without polling `GET /models`.
+          const now = Date.now();
+          if (now - pushedAt < 1000) return;
+          pushedAt = now;
+          for (const fn of this.statusWatchers) fn();
         },
       },
     ).then(

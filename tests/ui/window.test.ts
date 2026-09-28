@@ -12,9 +12,11 @@ import { join } from "node:path";
 import type { Page, Route } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
+import { NEMOTRON, RECOGNIZER } from "../../src/main/asr/models.ts";
 import { renderExport } from "../../src/main/handoff/export.ts";
 import { onDictationPage } from "../../src/ui/dictation-page.ts";
 import { stereoWav } from "../fixtures/audio.ts";
+import { modelRegistry } from "../fixtures/model-registry.ts";
 import { tempDir } from "../helpers.ts";
 import {
   CLIPBOARD_PERMISSIONS,
@@ -1712,11 +1714,113 @@ describe("the share viewer (DESIGN 8.3)", () => {
   );
 });
 
-describe("the first-run download card (DESIGN 3)", () => {
+describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
   test(
-    "a pull or a progress poll whose request fails is a toast or a skipped tick, never an unhandled rejection",
+    "with the models missing the welcome replaces the workspace, Record waits, and the download's progress rides the status push",
     async () => {
-      // One model file that is not on disk, so the card offers the download.
+      const reg = modelRegistry(64 * 1024);
+      const home = tempDir("akou-ui-welcome-");
+      const modelsDir = join(home.dir, "models");
+      mkdirSync(modelsDir, { recursive: true });
+      const catalog = [reg.entry(RECOGNIZER, ["a.onnx"]), reg.entry(NEMOTRON, ["d.onnx"])];
+      // The recognizer's file sends its first bytes, then waits: the download is caught mid-way.
+      const release = reg.hold("a.onnx", 4096);
+      try {
+        await withRig(
+          {
+            modelRegistry: catalog,
+            settings: { "asr.modelsDir": modelsDir, "asr.diarizer": "nemotron" },
+          },
+          async (rig) => {
+            const page = await rig.open();
+            await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
+            // No calls list, transcript, tabs or player: they carry hidden, and the watch checks
+            // that hidden means hidden.
+            for (const sel of ["#sidebar", "#scroller", "#side"]) {
+              expect(await page.getAttribute(sel, "hidden")).toBe("");
+            }
+            expect(await page.isVisible("#calls")).toBe(false);
+            expect(await page.isVisible("#tab-notes")).toBe(false);
+            expect(await page.isVisible("#player-bar")).toBe(false);
+            expect(await text(page, "#welcome h1")).toBe("Welcome to akou");
+            // One row per model the download fetches, the recognizer first, each with its size.
+            await page.waitForSelector("#models-rows:not([hidden]) li >> nth=1");
+            expect(
+              await page.$$eval("#models-rows li", (li) =>
+                li.map((l) => (l as HTMLElement).dataset.id),
+              ),
+            ).toEqual([RECOGNIZER, NEMOTRON]);
+            expect(await text(page, "#models-rows li .sz")).toBe("66 KB");
+            expect(await text(page, "#models-size")).toBe("131 KB");
+            expect(await text(page, "#models-text")).toBe("One download, 131 KB");
+            expect(await text(page, "#models-where-text")).toBe(
+              `Kept in ${modelsDir}. Nothing leaves this computer.`,
+            );
+            // Record waits, and says why.
+            expect(await page.isDisabled("#record")).toBe(true);
+            expect(await page.getAttribute("#record", "title")).toBe(
+              "Record needs the speech models: download them first.",
+            );
+
+            // The agent step's quiet button opens Settings on the provider field.
+            await page.click("#welcome-agent");
+            await page.waitForSelector("#settings[open]");
+            await until(
+              async () =>
+                (await page.evaluate(
+                  () => (document.activeElement as HTMLElement | null)?.dataset.key,
+                )) === "provider.kind",
+              5000,
+              "the provider setting focused",
+            );
+            await page.click("#settings-close");
+            await page.waitForSelector("#settings", { state: "hidden" });
+
+            // Every GET /models from here on fails, so what moves the bar is the status push.
+            await page.route("**/api/v1/models", (r) => r.abort());
+            // A reload would lose this mark.
+            await page.evaluate(() => {
+              (window as unknown as { __same?: boolean }).__same = true;
+            });
+            await page.click("#models-pull");
+            await page.waitForSelector("#models-progress:not([hidden])");
+            expect(await page.isVisible("#models-pull")).toBe(false);
+            await until(
+              async () =>
+                (await page.$eval("#models-progress", (p) => (p as HTMLProgressElement).value)) > 0,
+              10_000,
+              "progress from the status push",
+            );
+            expect(await text(page, "#models-text")).toMatch(/^\d+ KB of 131 KB · \d+ % · /);
+            expect(await page.getAttribute("#record", "title")).toContain("finish downloading");
+
+            // The download finishes: the welcome goes by itself, without a reload.
+            release();
+            await page.waitForSelector("#welcome", { state: "hidden", timeout: 10_000 });
+            for (const sel of ["#sidebar", "#scroller", "#side"]) {
+              expect(await page.getAttribute(sel, "hidden")).toBeNull();
+            }
+            expect(await page.isVisible("#tab-notes")).toBe(true);
+            expect(await page.isDisabled("#record")).toBe(false);
+            expect(await page.getAttribute("#record", "title")).toBe("");
+            expect(
+              await page.evaluate(() => (window as unknown as { __same?: boolean }).__same),
+            ).toBe(true);
+          },
+        );
+      } finally {
+        release();
+        reg.stop();
+        home.cleanup();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a pull or a fallback poll whose request fails is a toast or a skipped tick, never an unhandled rejection",
+    async () => {
+      // One model file that is not on disk, so the welcome offers the download.
       const modelRegistry = [
         {
           id: "tiny",
@@ -1730,7 +1834,7 @@ describe("the first-run download card (DESIGN 3)", () => {
       ];
       await withRig({ modelRegistry }, async (rig) => {
         const page = await rig.open();
-        await page.waitForSelector("#models-card:not([hidden]) #models-pull:not([hidden])");
+        await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
 
         // The request itself fails (the app quit, the network dropped): the button says so.
         await page.route("**/api/v1/models/pull", (r) => r.abort());
@@ -1738,7 +1842,8 @@ describe("the first-run download card (DESIGN 3)", () => {
         await page.waitForSelector("#toast:not([hidden])");
         expect(await text(page, "#toast")).toContain("could not start");
 
-        // A download in progress whose polls fail: each failed tick is skipped, none throws.
+        // A pull answered "downloading" that no status push follows: the poll is the fallback,
+        // and each of its failed ticks is skipped, none throws.
         await page.unroute("**/api/v1/models/pull");
         const { dir } = (await rig.api("GET", "/models")).body as { dir: string };
         await page.route("**/api/v1/models/pull", (r) =>
@@ -1755,7 +1860,7 @@ describe("the first-run download card (DESIGN 3)", () => {
         });
         await page.click("#models-pull");
         await page.waitForSelector("#models-progress:not([hidden])");
-        await until(async () => polls >= 2, 10_000, "two failed polls");
+        await until(async () => polls >= 2, 15_000, "two failed polls");
       });
     },
     UI_TIMEOUT,
