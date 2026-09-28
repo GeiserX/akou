@@ -1118,9 +1118,13 @@ jobs:
           # Every check runs and every failure is named, so one run shows each rule that broke.
           failed=0
           check() { if ! eval "$1"; then echo "FAILED: $2"; failed=1; fi; }
+          # The evdev step's virtual devices may still be here with this user's ACL on them; take
+          # it off, so no keyboard is readable and only the portal can start a session.
+          for n in /dev/input/event*; do sudo setfacl -b "$n" 2>/dev/null || true; done
           "$bin" dictate --probe 2> probe-none.err
           cat probe-none.err
           check 'grep -q "\"backend\":\"evdev\"" probe-none.err' "the backend is not evdev with no portal on the bus"
+          check 'grep -q "\"accessibility\":\"denied\"" probe-none.err' "a keyboard is readable, so the portal is not the only way in"
           mkfifo portal.in helper.in
           exec 6<>portal.in 3<>helper.in
           python3 portal.py <portal.in >> portal.out &
