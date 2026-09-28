@@ -61,6 +61,17 @@ impl Choice {
     }
 }
 
+/// Linux: a PulseAudio or PipeWire source's transport, from its name. A Bluetooth headset's mic
+/// is `bluez_input.*` (PipeWire) or `bluez_source.*` (PulseAudio). The name does not tell a
+/// laptop's own mic from a desktop's empty line-in jack, so nothing else is taken for built-in.
+pub fn pulse_transport(source: &str) -> Transport {
+    if source.starts_with("bluez_") {
+        Transport::Bluetooth
+    } else {
+        Transport::Other
+    }
+}
+
 /// The settings the choice follows.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Policy {
@@ -228,6 +239,25 @@ mod tests {
             )),
             ("mac".into(), "fallback")
         );
+    }
+
+    /// DC-N4 and DC-N5 on Linux: a Bluetooth source is told by its name under both sound
+    /// servers, so it is never kept warm; a wired or on-board source is `other`.
+    #[test]
+    fn a_linux_bluetooth_source_is_told_by_its_name() {
+        for s in [
+            "bluez_input.00_11_22_33_44_55.0",
+            "bluez_source.00_11_22_33_44_55.handsfree_head_unit",
+        ] {
+            assert_eq!(pulse_transport(s), Transport::Bluetooth, "{s}");
+        }
+        for s in [
+            "alsa_input.pci-0000_00_1f.3.analog-stereo",
+            "alsa_input.usb-Blue_Yeti-00.analog-stereo",
+            "default",
+        ] {
+            assert_eq!(pulse_transport(s), Transport::Other, "{s}");
+        }
     }
 
     #[test]

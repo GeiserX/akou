@@ -21,16 +21,20 @@
 //! through the worker loop in `live`) and inserts through the general pasteboard and posted key
 //! events (`mac_insert`). On Windows it runs a low-level keyboard hook, UI Automation and the
 //! WASAPI microphone (`win`) and inserts through the clipboard and `SendInput` (`win_insert`). On
-//! Linux there is no backend yet: the process says so and exits 69. `--probe` prints the `ready` line the process
-//! would send (backend, `swallow_keys`, grants read without asking) and exits, on every OS.
+//! Linux it reads the keys from evdev and records through the sound server (`linux`), with no
+//! inserter yet. `--probe` prints the `ready` line the process would send (backend,
+//! `swallow_keys`, grants read without asking) and exits, on every OS.
 
 pub mod activation;
+pub mod evdev_keys;
 #[cfg(any(test, feature = "simulate"))]
 pub mod fake;
 pub mod globe;
 pub mod inputs;
 pub mod insert;
 pub mod keys;
+#[cfg(target_os = "linux")]
+pub mod linux;
 pub mod live;
 #[cfg(target_os = "macos")]
 pub mod mac;
@@ -187,7 +191,9 @@ pub fn main(argv: &[String]) -> i32 {
     return mac::run(cfg);
     #[cfg(target_os = "windows")]
     return win::run(cfg);
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    return linux::run(cfg);
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     {
         let _ = cfg;
         fail(
@@ -205,7 +211,9 @@ pub fn probe() -> String {
     return mac::probe();
     #[cfg(target_os = "windows")]
     return win::probe();
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    #[cfg(target_os = "linux")]
+    return linux::probe();
+    #[cfg(not(any(target_os = "macos", target_os = "windows", target_os = "linux")))]
     protocol::ready("none", false, "not-needed", "not-needed")
 }
 

@@ -766,6 +766,40 @@ impl Frontend for LinuxFrontend {
     }
 }
 
+/// The microphone alone, for `akou-capture dictate` (DC-N4): the same worker and record stream
+/// `run` uses, opened on the source `dictate` chose and closed when its warm hold ends. Nothing is
+/// held back at the start: dictate's readiness gate waits for the first sample itself.
+pub struct DictateMic(Handle);
+
+impl DictateMic {
+    /// Opens `device` (a source name, or `default`).
+    pub fn open(device: &str, events: SyncSender<Event>) -> Result<DictateMic, OpenError> {
+        let cfg = DeviceConfig {
+            mic: device.to_string(),
+            call: CallMode::None,
+            exclude_responsible: None,
+        };
+        let h = Handle::spawn(
+            cfg,
+            events,
+            [Arc::new(AtomicU64::new(0)), Arc::new(AtomicU64::new(0))],
+            Arc::new(AtomicU64::new(0)),
+            Arc::new(AtomicBool::new(true)),
+        );
+        match h.open(Ch::Mic, REBUILD_BUDGET) {
+            Ok(_) => Ok(DictateMic(h)),
+            Err(e) => {
+                h.close(CLOSE_BUDGET);
+                Err(e)
+            }
+        }
+    }
+
+    pub fn close(self) {
+        self.0.close(CLOSE_BUDGET);
+    }
+}
+
 /// Every source and sink the server lists. Monitors are left out of the inputs.
 pub fn list_devices() -> Result<Endpoints, OpenError> {
     let (tx, rx) = mpsc::channel();
