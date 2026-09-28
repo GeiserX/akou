@@ -55,7 +55,7 @@ Columns:
 
 | Region | Holds | Reads from |
 |---|---|---|
-| Composer row | the state word and dot; idle: the workspace chip inside the title field, the template, the Mic and Call meters with their health dots, and the round red Record with the global hotkey; recording: the elapsed time, the round Stop, and Mute and Pause as icon buttons | `status` push, the fold |
+| Composer row | the state word and dot; idle: the workspace chip inside the title field, the template, the Mic and Call meters with their health dots, and the round red Record with the global hotkey where the shell registers one; recording: the elapsed time, the round Stop, and Mute and Pause as icon buttons | `status` push, the fold |
 | Call header | the open call's title; its day and start, length, workspace, template and what the state adds; the speakers with their talk time; the words to review, languages and shared pills; Restart, Share, Copy transcript | the fold |
 | Banner | one message at a time, highest severity first, with at most one action button | `health`, provider, models |
 | Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
@@ -81,16 +81,16 @@ The composer row's state word and dot show one of the rows below. The state mach
 
 | State | Word | Dot | Enabled controls | Way out |
 |---|---|---|---|---|
-| Speech models missing, no call open | setup | grey | none in the composer row: it shows only the word, and the welcome (section 10) holds the one Download | the download ends → ready, without a reload |
+| Speech models missing, the welcome on screen | setup | grey | none in the composer row: it shows only the word, and the welcome (section 10) holds the one Download | the download ends → ready, without a reload |
 | No call yet | ready | grey | Record, workspace, title, template | Record |
 | Starting | starting | red pulse | Stop | 201 → rec; failure → recording failed |
 | Recording | rec | red pulse | Stop, Mute, Pause, Restart; Share, Copy transcript in the call header; Discard in the first 60 s is W2.7, not built | Stop, Pause |
 | Mic muted | rec, the tooltip adds "mic muted" | red pulse, the Mute icon crossed | Unmute, Pause, Stop | Unmute |
-| Paused | paused | amber | Resume, Stop | Resume, Stop |
+| Paused | paused | amber | Resume, Stop, Mute, Restart | Resume, Stop |
 | Not capturing (no level for 5 s, or both channels proven dead) | not capturing | amber | Stop, Restart | capture comes back, or Restart |
 | Stopping | stopping | red pulse | none (under 5 s by design) | → saved, and the final pass runs |
-| Final pass running | saved, with the final-pass note and its bar under the composer row | green | Share, Copy transcript, Enhance | → saved |
-| Saved | saved | green | Share, Copy transcript, Enhance, Record a new call | Record |
+| Final pass running | saved, with the final-pass note and its bar under the composer row | green | Share, Copy transcript, Enhance; Restart when no other call records | → saved |
+| Saved | saved | green | Share, Copy transcript, Enhance, Record a new call; Restart when no other call records | Record |
 | Failed to start | recording failed, the tooltip names the stage and the error | red | Restart, Record | Restart or a new call |
 | Ended unexpectedly or interrupted | ended unexpectedly, interrupted | amber | Restart (same call) | Restart |
 | Another call recording | another call is recording | grey | Stop the other call | the other call stops |
@@ -113,7 +113,7 @@ Moved: W2.6 (confirm Quit during a call) is DESKTOP DK-M3.
 
 ### 3.1 Starting and controlling a call
 
-The controls are the ones hark-viewer had (DESIGN 7), laid out as the composer row: the status word, the workspace as a chip inside the title field, the template, two thin meters labelled Mic and Call, and Record as a round red disc with its word and the global hotkey in dim text, never an accent fill. While a call records, the same spot shows a red dot with the elapsed time, Stop in the same round form, and Mute and Pause as quiet icon buttons. The open call's title, its line of facts and its speakers with their talk time are the call header over the transcript. No debug chips: the clock's zone and the call's decode list are the tooltip of that line, and the agent's state, the speech engine's state and the version are read-only rows in Settings. The additions still to build are the input choice, start-muted, words for the call, and marking a moment.
+The controls are the ones hark-viewer had (DESIGN 7), laid out as the composer row: the status word, the workspace as a chip inside the title field, the template, two thin meters labelled Mic and Call, and Record as a round red disc with its word and, where the shell registers one, the global hotkey in dim text, never an accent fill. While a call records, the same spot shows a red dot with the elapsed time, Stop in the same round form, and Mute and Pause as quiet icon buttons. The open call's title, its line of facts and its speakers with their talk time are the call header over the transcript. No debug chips: the clock's zone and the call's decode list are the tooltip of that line, and the agent's state, the speech engine's state and the version are read-only rows in Settings. The additions still to build are the input choice, start-muted, words for the call, and marking a moment.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -360,7 +360,7 @@ The window shows where a call went and gives the one-click ways out. It does not
 
 ## 13. Calls list
 
-The sidebar is the window's left column, the full height of the window: the wordmark, then Calls with its search and the calls grouped by workspace and day, then Dictation, Models and Settings, which open their dialogs, and at the foot the readiness row. The readiness row is green "Ready" when the app can record, and amber "Models missing" with "Setup 1 of 3" while the speech models are not there (section 10). With no call on disk the list shows the default workspace with "No calls yet". The search filters the metadata the list already holds, titles and workspaces; it is not a search across meetings (DESIGN section 7). `Mod+K` stays with the command palette (W14.5), so the search has no key of its own yet.
+The sidebar is the window's left column, the full height of the window: the wordmark, then Calls with its search and the calls grouped by workspace, each row with its day, then Dictation, Models and Settings, which open their dialogs, and at the foot the readiness row. The readiness row is green "Ready" when the app can record, and amber "Models missing" with "Setup 1 of 3" while the speech models are not there (section 10). With no call on disk the list shows the default workspace with "No calls yet". The search filters the metadata the list already holds, titles and workspaces; it is not a search across meetings (DESIGN section 7). `Mod+K` stays with the command palette (W14.5), so the search has no key of its own yet.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
