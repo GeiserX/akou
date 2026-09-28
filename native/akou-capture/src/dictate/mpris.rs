@@ -93,7 +93,9 @@ impl Players for Mpris {
             let status = match status.as_deref() {
                 Ok("Playing") => Status::Playing,
                 Ok("Paused") => Status::Paused,
-                _ => Status::Other,
+                Ok(_) => Status::Other,
+                // A player that did not answer in time may still be one akou paused.
+                Err(_) => Status::Unknown,
             };
             if !out.iter().any(|(o, _)| *o == owner) {
                 out.push((owner, status));
