@@ -1734,14 +1734,38 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
           async (rig) => {
             const page = await rig.open();
             await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
-            // No calls list, transcript, tabs or player: they carry hidden, and the watch checks
-            // that hidden means hidden.
-            for (const sel of ["#sidebar", "#scroller", "#side"]) {
+            // No transcript, tabs or player: they carry hidden, and the watch checks that hidden
+            // means hidden. The sidebar stays, with its empty workspace, and its readiness row
+            // says what is missing; the Models row carries the amber dot.
+            for (const sel of ["#scroller", "#side"]) {
               expect(await page.getAttribute(sel, "hidden")).toBe("");
             }
-            expect(await page.isVisible("#calls")).toBe(false);
             expect(await page.isVisible("#tab-notes")).toBe(false);
             expect(await page.isVisible("#player-bar")).toBe(false);
+            expect(await page.isVisible("#sidebar")).toBe(true);
+            expect(await text(page, "#calls .none")).toBe("No calls yet");
+            await until(
+              async () => (await text(page, "#readiness-text")) === "Models missing",
+              5000,
+              "the readiness row",
+            );
+            expect(await page.getAttribute("#readiness", "data-state")).toBe("missing");
+            expect(await text(page, "#readiness-setup")).toBe("Setup 1 of 3");
+            expect(await page.isVisible("#readiness-where")).toBe(false);
+            // Under 1248 px the sidebar narrows; "Setup 1 of 3" must stay inside it and clickable.
+            const wide = page.viewportSize() ?? { width: 1280, height: 720 };
+            await page.setViewportSize({ width: 1200, height: 800 });
+            const bar = await page.locator("#sidebar").boundingBox();
+            const setup = await page.locator("#readiness-setup").boundingBox();
+            expect(bar && setup).toBeTruthy();
+            if (bar && setup) {
+              expect(setup.x).toBeGreaterThanOrEqual(bar.x);
+              expect(setup.x + setup.width).toBeLessThanOrEqual(bar.x + bar.width);
+            }
+            await page.click("#readiness-setup", { timeout: 5000 });
+            expect(await page.evaluate(() => document.activeElement?.id)).toBe("models-pull");
+            await page.setViewportSize(wide);
+            expect(await page.isVisible("#models-pip")).toBe(true);
             expect(await text(page, "#welcome h1")).toBe("Welcome to akou");
             // One row per model the download fetches, the recognizer first, each with its size.
             await page.waitForSelector("#models-rows:not([hidden]) li >> nth=1");
@@ -1793,14 +1817,19 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             );
             expect(await text(page, "#models-text")).toMatch(/^\d+ KB of 131 KB · \d+ % · /);
             expect(await page.getAttribute("#record", "title")).toContain("finish downloading");
+            expect(await text(page, "#readiness-text")).toBe("Downloading models");
 
             // The download finishes: the welcome goes by itself, without a reload.
             release();
             await page.waitForSelector("#welcome", { state: "hidden", timeout: 10_000 });
-            for (const sel of ["#sidebar", "#scroller", "#side"]) {
+            for (const sel of ["#scroller", "#side"]) {
               expect(await page.getAttribute(sel, "hidden")).toBeNull();
             }
             expect(await page.isVisible("#tab-notes")).toBe(true);
+            expect(await text(page, "#readiness-text")).toBe("Ready");
+            expect(await page.getAttribute("#readiness", "data-state")).toBe("ready");
+            expect(await page.isVisible("#models-pip")).toBe(false);
+            expect(await page.isVisible("#readiness-setup")).toBe(false);
             expect(await page.isDisabled("#record")).toBe(false);
             expect(await page.getAttribute("#record", "title")).toBe("");
             expect(
@@ -1813,6 +1842,44 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
         reg.stop();
         home.cleanup();
       }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a call picked from the sidebar lifts the welcome; the readiness row brings it back",
+    async () => {
+      // One model file that is not on disk, so the welcome shows; nothing is downloaded.
+      const modelRegistry = [
+        {
+          id: "tiny",
+          job: "test",
+          licence: "MIT",
+          source: "test",
+          files: [
+            { name: "a.onnx", url: "http://127.0.0.1:9/a.onnx", sha256: "0".repeat(64), size: 1e6 },
+          ],
+        },
+      ];
+      let id = "";
+      await withRig(
+        { modelRegistry, seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          const page = await rig.open();
+          await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
+          // The saved call is listed while the welcome shows, and one click opens it.
+          await page.click(`#calls li[data-id="${id}"] button`);
+          await page.waitForSelector("#welcome", { state: "hidden" });
+          await page.waitForSelector("#lines .row >> nth=3");
+          expect(await page.getAttribute("#scroller", "hidden")).toBeNull();
+          expect(await text(page, "#readiness-text")).toBe("Models missing");
+          // Setup 1 of 3 goes back to the welcome, on its download.
+          await page.click("#readiness-setup");
+          await page.waitForSelector("#welcome:not([hidden])");
+          expect(await page.getAttribute("#scroller", "hidden")).toBe("");
+          expect(await page.evaluate(() => document.activeElement?.id)).toBe("models-pull");
+        },
+      );
     },
     UI_TIMEOUT,
   );

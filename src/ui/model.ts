@@ -497,3 +497,106 @@ export function positionText(v: CallView, part: number, a: number): string {
   if (!p) return "";
   return formatWall(p.clock.wallFromAudio(a), v.call?.tz ?? "UTC");
 }
+
+// ---------------------------------------------------------------------------
+// The calls list (WINDOW section 13)
+
+/** One call as `GET /calls` lists it: metadata only, never its content. */
+export interface CallSummary {
+  id: string;
+  title: string;
+  workspace: string;
+  createdAt: number;
+  /** Null while the call is live. */
+  endedAt?: number | null;
+  state: string;
+}
+
+export interface CallGroup {
+  workspace: string;
+  calls: CallSummary[];
+}
+
+/**
+ * The calls by workspace, each workspace newest first with the live call on top, the workspaces
+ * ordered by their newest call. A query keeps the calls whose title or workspace contains it, in
+ * any case; it never reads what was said.
+ */
+export function groupCalls(
+  calls: readonly CallSummary[],
+  query = "",
+  live: string | null = null,
+): CallGroup[] {
+  const q = query.trim().toLowerCase();
+  const rank = (c: CallSummary) => (c.id === live ? Number.POSITIVE_INFINITY : c.createdAt);
+  const groups = new Map<string, CallSummary[]>();
+  for (const c of calls) {
+    if (q && !`${c.title}\n${c.workspace}`.toLowerCase().includes(q)) continue;
+    const list = groups.get(c.workspace) ?? [];
+    list.push(c);
+    groups.set(c.workspace, list);
+  }
+  const out = [...groups].map(([workspace, list]) => ({
+    workspace,
+    calls: list.sort((a, b) => rank(b) - rank(a)),
+  }));
+  const top = (g: CallGroup) => rank(g.calls[0] as CallSummary);
+  return out.sort((a, b) => top(b) - top(a) || a.workspace.localeCompare(b.workspace));
+}
+
+/** The calendar date of `t` in `tz`. */
+function dateIn(t: number, tz: string): { year: number; month: number; day: number } {
+  const p = new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(t);
+  const n = (type: string) => Number(p.find((x) => x.type === type)?.value);
+  return { year: n("year"), month: n("month"), day: n("day") };
+}
+
+/** Spelled out here: engines disagree on the short name of September ("Sep" or "Sept"). */
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const WEEKDAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/** The day of a call, local: Today, Yesterday, the weekday within a week, then the date. */
+export function dayLabel(t: number, now: number, tz: string): string {
+  const d = dateIn(t, tz);
+  const today = dateIn(now, tz);
+  // Days since the epoch of each calendar date, so two dates subtract.
+  const utc = (x: typeof d) => Date.UTC(x.year, x.month - 1, x.day);
+  const ago = Math.round((utc(today) - utc(d)) / 86_400_000);
+  if (ago === 0) return "Today";
+  if (ago === 1) return "Yesterday";
+  if (ago > 1 && ago < 7) return WEEKDAYS[new Date(utc(d)).getUTCDay()] as string;
+  const date = `${d.day} ${MONTHS[d.month - 1]}`;
+  return d.year === today.year ? date : `${date} ${d.year}`;
+}
+
+/**
+ * The line under a call's title: its day, its local start time and how long it ran, from the start
+ * to the end of its last part. `Today, 14:02 · 38 min`; a live call says live, a failed start
+ * failed.
+ */
+export function callMeta(c: CallSummary, now: number, tz: string, live: boolean): string {
+  const time = new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(c.createdAt);
+  let span: string;
+  if (live) span = "live";
+  else if (c.state === "failed") span = "failed";
+  else {
+    const min = Math.round(Math.max(0, (c.endedAt ?? c.createdAt) - c.createdAt) / 60_000);
+    span =
+      min < 1
+        ? "under 1 min"
+        : min < 60
+          ? `${min} min`
+          : formatDuration(min * 60).replace(/ 0 min$/, "");
+  }
+  return `${dayLabel(c.createdAt, now, tz)}, ${time} · ${span}`;
+}

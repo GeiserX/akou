@@ -40,10 +40,10 @@ Columns:
 ├ banner (only when something needs attention) ─────────────────────────────────────────┤
 ├──────────────┬──────────────────────────────────────────┬─────────────────────────────┤
 │ Calls        │ transcript                               │ [Notes] [Ask] [Enhanced]    │
-│ ▸ today      │ 15:41  Ben    we should move the build   │                             │
+│ ▾ PRODUCT  2 │ 15:41  Ben    we should move the build   │                             │
 │   Weekly…  ● │ 15:41  You    to the new box? which one  │  side pane                  │
 │   1:1 Ana    │ …                                        │                             │
-│ ▸ yesterday  │ ┆ 15:42  c3?  (still being spoken)  ┆    │                             │
+│ ▸ HIRING   1 │ ┆ 15:42  c3?  (still being spoken)  ┆    │                             │
 │              │                          [↓ Back to live]│ ▶ 15:41:07  1.0x  mic ◂▸ call│
 └──────────────┴──────────────────────────────────────────┴─────────────────────────────┘
 ```
@@ -52,7 +52,7 @@ Columns:
 |---|---|---|
 | Header | state label and dot, title, elapsed time, pills (clock, workspace, template, provider, models, words to review, languages, shared), controls, level meters | `status` push, the fold |
 | Banner | one message at a time, highest severity first, with at most one action button | `health`, provider, models |
-| Calls | calls grouped by day, live call on top, failed calls marked | the metadata list |
+| Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
 | Transcript | committed lines, the provisional row, the find bar when open | the fold |
 | Side pane | Notes, Ask, Enhanced | the fold and the ask stream |
 | Player bar | play or pause, position as wall time, speed, balance | the call's audio |
@@ -285,13 +285,13 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 
 [DESKTOP.md](DESKTOP.md) section 11 owns the first-run flow, its steps and their order. The window draws those screens with strings from the catalog (section 16), and the Welcome screen carries the interface language choice next to `user.name`, so everything after it is already in the right language. Every step writes a normal setting; setup has no state of its own.
 
-While the speech models are missing, downloading or failed, and no call is recording, the welcome replaces the calls list, the transcript, the side pane and the player. It says "Welcome to akou", one line on what to do, then three steps:
+While the speech models are missing, downloading or failed, and no call is recording, the welcome replaces the transcript, the side pane and the player. The sidebar stays, with the calls on disk, and its readiness row reads "Models missing" (or "Downloading models", or "Download failed") with "Setup 1 of 3"; the Models row carries an amber dot. It says "Welcome to akou", one line on what to do, then three steps:
 
 1. **Speech models** (Required): one row per model the download fetches, each with its job and size, the total, one dim sentence with the teal info glyph on where they are kept ("Kept in Application Support on this Mac. Nothing leaves this computer."), and the one Download button. While it downloads: a bar, the bytes of the total, the percentage and the file being fetched. The API has no cancel, so the step shows none. A failed download says why and offers Try again.
 2. **Microphone and system audio** (Later): "macOS asks for both the first time you press Record."
 3. **Your agent** (Optional): one line, and a quiet button that opens Settings on the provider field.
 
-The footer says "You can change any of this later in Settings." The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen.
+The footer says "You can change any of this later in Settings." The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen. A call picked in the sidebar also lifts the welcome, so a call recorded without models can be read once it is stopped; until the user picks it, the welcome shows and that call is only the marked row in the sidebar, while the header still shows its state and its Restart, Share and Copy transcript. "Setup 1 of 3" brings the welcome back with the focus on the download.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -343,9 +343,11 @@ The window shows where a call went and gives the one-click ways out. It does not
 
 ## 13. Calls list
 
+The sidebar is the window's left column, the full height of the window: the wordmark, then Calls with its search and the calls grouped by workspace and day, then Dictation, Models and Settings, which open their dialogs, and at the foot the readiness row. The readiness row is green "Ready" when the app can record, and amber "Models missing" with "Setup 1 of 3" while the speech models are not there (section 10). With no call on disk the list shows the default workspace with "No calls yet". The search filters the metadata the list already holds, titles and workspaces; it is not a search across meetings (DESIGN section 7). `Mod+K` stays with the command palette (W14.5), so the search has no key of its own yet.
+
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W13.1 | Calls grouped by date, live call on top, failed calls marked, switch without reload | done | DESIGN 7 | Existing tests | has |
+| W13.1 | The sidebar's calls: grouped by workspace, each group folding with the mouse or the keyboard and showing its count; newest first inside a group, the live call on top with a red dot, the group with the newest call first; each row the title and a line with the day (Today, Yesterday, the weekday within a week, then the date), the local start time and how long it ran ("live", "failed"); a search that narrows the list by title or workspace as you type, never by what was said, and Escape or clearing it brings every group back; switch without reload | done | DESIGN 7; design-explorations | `tests/ui/parity.test.ts` "Sidebar list of calls by workspace and day…", with a positive control on the search; `tests/ui-model.test.ts` "the calls list" | has |
 | W13.2 | Retitle a call and move it to another workspace | P1 | Audit: no rename anywhere | Rename goes through PG-A4 and writes a `call.retitled` event; the export file is found again by `akou_id` and renamed on the next export | missing |
 | W13.3 | Delete a call to the Trash, restore from it, empty it now | P1 | Granola, Minutes; audit: no delete in any surface | Delete follows PG-A4 (refused for a live call, folder moved to `trash/`, purged after 30 days); the call leaves the list; Restore brings it back intact; "Empty trash now" asks for confirmation. Exports already written are the user's and are not touched | missing |
 | W13.4 | Suggested title for a call started without one, applied only on the user's yes | P2 | heed | After the final pass, an untitled call shows "Title: Budget review? Use it" | missing |

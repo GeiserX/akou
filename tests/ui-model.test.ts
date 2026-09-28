@@ -9,8 +9,12 @@ import { formatWall } from "../src/core/log/clock.ts";
 import { fold } from "../src/core/log/fold.ts";
 import {
   banner,
+  type CallSummary,
+  callMeta,
+  dayLabel,
   finalNote,
   formatDuration,
+  groupCalls,
   HUES,
   HueBook,
   languages,
@@ -624,5 +628,74 @@ describe("[W5.3] the player's position is a wall time", () => {
     expect(positionText(v, 1, 20)).not.toMatch(/^\d{1,2}:\d{2}$/);
     // A part the view does not have yet shows nothing rather than a guess.
     expect(positionText(v, 9, 1)).toBe("");
+  });
+});
+
+describe("the calls list (WINDOW section 13)", () => {
+  const H = 3_600_000;
+  const call = (id: string, workspace: string, createdAt: number, title = id): CallSummary => ({
+    id,
+    title,
+    workspace,
+    createdAt,
+    endedAt: createdAt + 38 * 60_000,
+    state: "ended",
+  });
+  const calls = [
+    call("a", "work", T0, "Weekly sync"),
+    call("b", "hiring", T0 + H, "Design loop"),
+    call("c", "work", T0 + 2 * H, "Pricing review"),
+  ];
+  const shape = (g: ReturnType<typeof groupCalls>) =>
+    g.map((x) => `${x.workspace}: ${x.calls.map((c) => c.id).join(" ")}`);
+
+  test("by workspace, newest first, the workspace with the newest call first", () => {
+    expect(shape(groupCalls(calls))).toEqual(["work: c a", "hiring: b"]);
+  });
+
+  test("the live call is on top, and its workspace first, whatever its start", () => {
+    expect(shape(groupCalls(calls, "", "b"))).toEqual(["hiring: b", "work: c a"]);
+    expect(shape(groupCalls(calls, "", "a"))).toEqual(["work: a c", "hiring: b"]);
+  });
+
+  test("the search keeps a title or a workspace that contains it, in any case", () => {
+    expect(shape(groupCalls(calls, "SYNC"))).toEqual(["work: a"]);
+    expect(shape(groupCalls(calls, "  hiring "))).toEqual(["hiring: b"]);
+    expect(groupCalls(calls, "nobody said this")).toEqual([]);
+    expect(shape(groupCalls(calls, ""))).toEqual(["work: c a", "hiring: b"]);
+  });
+
+  test("positive control: a search that ignored the query would keep every call", () => {
+    const all = shape(groupCalls(calls));
+    expect(shape(groupCalls(calls, "sync"))).not.toEqual(all);
+  });
+
+  test("the day: Today, Yesterday, the weekday within a week, then the date", () => {
+    // T0 is Wednesday 23 September 2026, 15:36 in Chicago.
+    const day = 86_400_000;
+    expect(dayLabel(T0, T0 + H, TZ)).toBe("Today");
+    expect(dayLabel(T0, T0 + day, TZ)).toBe("Yesterday");
+    expect(dayLabel(T0, T0 + 3 * day, TZ)).toBe("Wed");
+    expect(dayLabel(T0, T0 + 7 * day, TZ)).toBe("23 Sep");
+    expect(dayLabel(T0, T0 + 200 * day, TZ)).toBe("23 Sep 2026");
+    // Days are the zone's: 23:30 and 00:30 local are a day apart, an hour apart in time.
+    const late = Date.UTC(2026, 8, 24, 4, 30);
+    expect(dayLabel(late, late + H, TZ)).toBe("Yesterday");
+  });
+
+  test("the row's line: day, local start time and how long it ran; live and failed say so", () => {
+    const c = call("a", "work", T0);
+    expect(callMeta(c, T0 + H, TZ, false)).toBe("Today, 15:36 · 38 min");
+    expect(callMeta({ ...c, endedAt: T0 + 20_000 }, T0 + H, TZ, false)).toBe(
+      "Today, 15:36 · under 1 min",
+    );
+    expect(callMeta({ ...c, endedAt: T0 + 60 * 60_000 }, T0 + 2 * H, TZ, false)).toBe(
+      "Today, 15:36 · 1 h",
+    );
+    expect(callMeta({ ...c, endedAt: T0 + 95 * 60_000 }, T0 + 2 * H, TZ, false)).toBe(
+      "Today, 15:36 · 1 h 35 min",
+    );
+    expect(callMeta({ ...c, endedAt: null }, T0 + H, TZ, true)).toBe("Today, 15:36 · live");
+    expect(callMeta({ ...c, state: "failed" }, T0 + H, TZ, false)).toBe("Today, 15:36 · failed");
   });
 });
