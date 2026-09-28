@@ -115,8 +115,8 @@ describe("notifyFor", () => {
     const refusal = (code: string) =>
       notifyFor({ type: "refused", origin: "hotkey", code }, at(false))?.body;
     // A failed capture says what to do next, with the window's own Record button.
-    expect(readFileSync(join(import.meta.dir, "../src/ui/index.html"), "utf8")).toContain(
-      ">● Record</button>",
+    expect(readFileSync(join(import.meta.dir, "../src/ui/index.html"), "utf8")).toMatch(
+      /<button [^>]*id="record"[^\n]*>Record</,
     );
     expect(refusal("capture_failed")).toBe(
       "The audio capture did not start. Press Record in the akou window to try again.",

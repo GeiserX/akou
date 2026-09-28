@@ -202,9 +202,8 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       expect(await page.evaluate(() => window.isSecureContext)).toBe(false);
       expect(await page.textContent("#dictation-no-mic")).toBe(NO_MIC_NOTICE);
       expect(await page.$("#record")).toBeNull();
-      expect(await page.$$eval("button", (b) => b.map((x) => x.textContent))).not.toContain(
-        "● Record",
-      );
+      const names = await page.$$eval("button", (b) => b.map((x) => x.textContent ?? ""));
+      expect(names.filter((n) => /^\W*Record/.test(n))).toEqual([]);
     },
     UI_TIMEOUT,
   );

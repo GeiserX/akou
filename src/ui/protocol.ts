@@ -126,7 +126,14 @@ export interface QuitQuestion {
 
 /** The parts of `GET /status` the window reads. */
 export interface AppStatus {
-  app: { version: string; headless: boolean };
+  app: {
+    version: string;
+    headless: boolean;
+    /** The host's OS (`darwin`, `win32`, `linux`); absent from an older app. */
+    platform?: string;
+    /** The global hotkey that starts and stops a call; null where no shell registers one. */
+    hotkey?: string | null;
+  };
   live: {
     call: string;
     title: string;

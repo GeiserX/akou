@@ -230,6 +230,8 @@ export interface WindowShell {
   /** Brings the window forward, on a call when one is named (`akou open CALL`). */
   show(call?: string): void | Promise<void>;
   close(): Promise<void>;
+  /** The global hotkey that starts and stops a call, or null when another app holds it. */
+  registeredHotkey?(): string | null;
 }
 
 export type WindowFactory = (app: AkouApp) => Promise<WindowShell>;
@@ -1662,6 +1664,9 @@ export class AkouApp implements ApiApp {
         pid: process.pid,
         port: this.server?.port ?? null,
         headless: this.headless,
+        // The global hotkey that starts and stops a call, which the window shows beside Record:
+        // the one the desktop shell registered, null with no shell or when another app holds it.
+        hotkey: this.window?.registeredHotkey?.() ?? null,
         window: this.window ? "open" : this.headless ? "none (headless)" : "not built yet",
         page: this.page ? this.page.origin : null,
         startedAt: this.startedAt,

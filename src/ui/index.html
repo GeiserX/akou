@@ -29,38 +29,26 @@
     <span id="readiness-where" hidden></span>
   </div>
 </nav>
-<header>
+<header id="composer">
   <span id="dot" aria-hidden="true"></span>
   <span id="state" role="status" aria-live="polite">…</span>
-  <span id="title"></span>
-  <span id="meta"></span>
-  <span id="pills">
-    <span class="pill" id="pill-clock"></span>
-    <span class="pill" id="pill-ws" hidden></span>
-    <span class="pill" id="pill-template" hidden></span>
-    <span class="pill" id="pill-provider" hidden></span>
-    <span class="pill" id="pill-models" hidden></span>
-    <button class="pill warn" id="pill-review" type="button" hidden title="Proposed words: approve or reject each"></button>
-    <span class="pill" id="pill-lang" hidden></span>
-    <span class="pill shared" id="pill-share" hidden><span id="share-text"></span> <button id="share-stop" type="button" aria-label="Stop sharing">Stop</button></span>
-  </span>
   <div id="controls" role="toolbar" aria-label="Recording controls">
-    <input class="idle" id="workspace" list="workspaces" placeholder="workspace" aria-label="Workspace" maxlength="60" autocomplete="off">
-    <datalist id="workspaces"></datalist>
-    <input class="idle" id="newtitle" placeholder="Call title (optional)" aria-label="Call title" maxlength="80" autocomplete="off">
-    <select class="idle" id="template" aria-label="Template"><option value="">template: automatic</option></select>
-    <button class="idle go" id="record" type="button">● Record</button>
-    <button class="busy" id="mute" type="button">Mute mic</button>
-    <button class="busy" id="pause" type="button">Pause</button>
-    <button id="restart" type="button" hidden title="Capture broke, or the call ended? Carry on recording into the same call">↻ Restart</button>
-    <button class="busy stop" id="stop" type="button">■ Stop</button>
-    <button id="share-start" type="button" hidden title="A read-only live link to this call">Share</button>
-    <button id="copy-transcript" type="button" hidden title="Copy the transcript so far as Markdown">Copy transcript</button>
+    <div class="idle field title-field">
+      <input id="workspace" list="workspaces" placeholder="workspace" aria-label="Workspace" maxlength="60" autocomplete="off">
+      <datalist id="workspaces"></datalist>
+      <input id="newtitle" placeholder="Call title (optional)" aria-label="Call title" maxlength="80" autocomplete="off">
+    </div>
+    <select class="idle" id="template" aria-label="Template"><option value="">Template: automatic</option></select>
+    <fieldset id="meters"><legend>Levels</legend>
+      <span class="meter"><span class="health" id="health-mic" data-state="none"></span><label for="meter-mic">Mic</label><meter id="meter-mic" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
+      <span class="meter"><span class="health" id="health-call" data-state="none"></span><label for="meter-call">Call</label><meter id="meter-call" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
+    </fieldset>
+    <button class="idle rec" id="record" type="button"><span class="disc" aria-hidden="true"><i></i></span>Record<kbd id="record-key" hidden></kbd></button>
+    <span class="busy" id="elapsed" hidden><i aria-hidden="true"></i><span id="elapsed-text"></span></span>
+    <button class="busy rec on" id="stop" type="button"><span class="disc" aria-hidden="true"><i></i></span><span id="stop-label">Stop</span></button>
+    <button class="busy icon" id="mute" type="button"><svg class="ico ico-off" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.8" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5v1.7"/></svg><svg class="ico ico-on" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.8" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5v1.7M2.5 2.5l11 11"/></svg><span class="vh" id="mute-label">Mute mic</span></button>
+    <button class="busy icon" id="pause" type="button"><svg class="ico ico-off" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9M10.5 3.5v9"/></svg><svg class="ico ico-on" viewBox="0 0 16 16" aria-hidden="true"><path d="M5 3.2v9.6L12.5 8z"/></svg><span class="vh" id="pause-label">Pause</span></button>
   </div>
-  <fieldset id="meters"><legend>Levels</legend>
-    <span class="meter"><span class="health" id="health-mic" data-state="none"></span><label for="meter-mic">mic</label> <meter id="meter-mic" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
-    <span class="meter"><span class="health" id="health-call" data-state="none"></span><label for="meter-call">call</label> <meter id="meter-call" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
-  </fieldset>
 </header>
 <div id="fatal" role="alert" hidden></div>
 <form id="login" aria-label="Admin login" hidden><label for="login-secret">Admin password or admin key</label> <input id="login-secret" type="password" autocomplete="current-password" required> <button id="login-go" class="go" type="submit">Log in</button> <span id="login-error" role="alert"></span></form>
@@ -127,6 +115,22 @@
       </ol>
       <p class="foot">You can change any of this later in Settings.</p>
     </div>
+  </section>
+  <section id="call-head" aria-labelledby="title" hidden>
+    <div class="head-top">
+      <!-- biome-ignore lint/a11y/useHeadingContent: the call's title is drawn in when a call opens; with none the header is hidden -->
+      <h1 id="title"></h1>
+      <span id="pills">
+        <button class="pill warn" id="pill-review" type="button" hidden title="Proposed words: approve or reject each"></button>
+        <span class="pill" id="pill-lang" hidden></span>
+        <span class="pill shared" id="pill-share" hidden><span id="share-text"></span> <button id="share-stop" type="button" aria-label="Stop sharing">Stop</button></span>
+      </span>
+      <button id="restart" type="button" hidden title="Capture broke, or the call ended? Carry on recording into the same call">↻ Restart</button>
+      <button id="share-start" type="button" hidden title="A read-only live link to this call">Share</button>
+      <button id="copy-transcript" type="button" hidden title="Copy the transcript so far as Markdown">Copy transcript</button>
+    </div>
+    <div id="meta"></div>
+    <ul id="people" aria-label="Who spoke, and for how long" hidden></ul>
   </section>
   <main id="scroller" tabindex="-1">
     <div id="lines" role="log" aria-label="Transcript"></div>

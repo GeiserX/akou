@@ -10,7 +10,7 @@
  * durations from what the page already holds.
  */
 
-import { formatWall, formatZone } from "../core/log/clock.ts";
+import { formatZone } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
 import { mountDictationDialog } from "./dictation-page.ts";
@@ -22,13 +22,18 @@ import { type LineAction, LineMenu } from "./line-menu.ts";
 import {
   banner,
   type CallSummary,
+  callHeadMeta,
   callMeta,
   finalNote,
+  formatDuration,
   groupCalls,
   HueBook,
   languages,
+  recordKey,
+  speakerTotals,
   stateLabel,
   suggestReopen,
+  talkTime,
 } from "./model.ts";
 import { ModelsCard } from "./models-card.ts";
 import { ModelsPage } from "./models-page.ts";
@@ -241,7 +246,7 @@ class App {
     void this.enhanced.loadTemplates().then((names) => {
       replace(
         byId("template"),
-        h("option", { value: "" }, "template: automatic"),
+        h("option", { value: "" }, "Template: automatic"),
         ...names.map((n) => h("option", { value: n }, n)),
       );
     });
@@ -284,6 +289,7 @@ class App {
     this.enhanced.reset();
     this.player.stop();
     this.meters(null);
+    this.drawPeople(null);
     if (this.t.kind === "browser")
       history.replaceState(null, "", `?call=${encodeURIComponent(id)}`);
     const f = new Follower(this.t, id, {
@@ -309,6 +315,9 @@ class App {
         }
         if (notes) this.notepad.render();
         if (speakers) this.askPane.renderPresets();
+        // The talk times follow the lines and the names, not the one-second tick.
+        const lines = c.events.some((e) => e.type === "seg" || e.type.startsWith("final."));
+        if (speakers || lines) this.drawPeople(f.view);
         document.body.dataset.cursor = String(f.cursor);
         document.body.dataset.reconnects = String(f.stats.reconnects);
         document.body.dataset.duplicates = String(f.stats.duplicates);
@@ -362,15 +371,15 @@ class App {
     for (const c of ["ready", "recording", "paused", "saved", "offline", "failed", "other"]) {
       body.classList.toggle(c, c === st.cls);
     }
-    byId("state").textContent = st.label;
-    byId("meta").textContent = st.meta;
+    const state = byId("state");
+    state.textContent = st.label;
+    // With no call open the transcript header is gone, so what the state adds is its tooltip.
+    state.title = st.meta;
     const call = v?.call;
-    byId("title").textContent = call
-      ? [call.workspace, call.title].filter(Boolean).join(" · ")
-      : "";
     document.title = call ? `${call.title || call.workspace} · akou` : "akou";
     this.welcome();
-    this.pills(v, now);
+    this.callHead(v, now, st.meta);
+    this.pills(v);
     this.controls(v);
     this.drawBanner(v, now);
     this.drawHealth(v);
@@ -396,6 +405,8 @@ class App {
     const on = missing && !this.status?.live && !this.chosen;
     byId("welcome").hidden = !on;
     for (const id of ["scroller", "side"]) byId(id).hidden = on;
+    // The transcript header goes with the transcript, and needs a call to describe.
+    byId("call-head").hidden = on || !this.view()?.call;
     document.body.classList.toggle("welcoming", on);
     // The readiness row (WINDOW section 13): what is missing, and the page that fixes it.
     const s = this.status;
@@ -416,36 +427,73 @@ class App {
     byId("models-pip").hidden = !missing;
   }
 
-  private pills(v: CallView | null, now: number): void {
-    const tz = v?.call?.tz ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const clock = byId("pill-clock");
-    clock.textContent = formatWall(now, tz);
-    clock.title = `Times are local, ${formatZone(tz, now)}`;
-    const ws = byId("pill-ws");
-    ws.textContent = v?.call?.workspace ? `workspace: ${v.call.workspace}` : "";
-    ws.hidden = !v?.call;
-    const tpl = byId("pill-template");
-    tpl.textContent = `template: ${v?.call?.template ?? "automatic"}`;
-    tpl.hidden = !v?.call;
-    const p = this.status?.provider;
-    const prov = byId("pill-provider");
-    prov.hidden = !p;
-    if (p) {
-      const name = p.harness ?? p.id;
-      prov.textContent = `provider: ${name}${p.state === "available" ? "" : ` (${p.state})`}`;
-      prov.title = p.detail ?? p.reason ?? "";
-      prov.classList.toggle("warn", p.state === "unavailable");
+  /**
+   * The transcript header (WINDOW section 3.1): the call's title, the line under it (day and start,
+   * length, workspace, template, then what the state adds) and who spoke for how long.
+   */
+  private callHead(v: CallView | null, now: number, note: string): void {
+    const call = v?.call;
+    byId("title").textContent = call ? call.title || "Untitled call" : "";
+    const meta = byId("meta");
+    if (!v || !call) {
+      meta.textContent = "";
+      meta.title = "";
+      return;
     }
-    const models = byId("pill-models");
-    const asr = this.status?.asr;
-    models.hidden = !asr;
-    if (asr) {
-      const used = v?.vocabUsed;
-      models.textContent = `speech: ${asr.state}${used ? ` · ${used.entries.length} words` : ""}`;
-      models.title = [asr.reason ?? "", used ? `Decode list: ${used.entries.join(", ")}` : ""]
-        .filter(Boolean)
-        .join("\n");
-    }
+    const seconds = v.live
+      ? null
+      : v.parts().reduce((sum, p) => sum + (p.ended?.fileSeconds ?? 0), 0);
+    meta.textContent = callHeadMeta({
+      createdAt: call.t,
+      tz: call.tz,
+      now,
+      seconds,
+      workspace: call.workspace,
+      template: call.template,
+      note,
+    });
+    const tz = call.tz;
+    const used = v.vocabUsed;
+    meta.title = [
+      `Times are local, ${formatZone(tz, now)}`,
+      used?.entries.length ? `Words this call listens for: ${used.entries.join(", ")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  }
+
+  /** The speaker chips under the title: each voice's colour and its time, the most first. */
+  private drawPeople(v: CallView | null): void {
+    const totals = v?.call
+      ? speakerTotals(v.lines(), {
+          named: new Set(
+            v
+              .roster()
+              .filter((s) => s.name)
+              .map((s) => s.spk),
+          ),
+          finalDoneSeq: v.final.done?.seq,
+        })
+      : [];
+    const people = byId("people");
+    people.hidden = totals.length === 0;
+    replace(
+      people,
+      ...totals.map((t) => {
+        const dot = h("i", { attrs: { "aria-hidden": "true" } });
+        dot.style.setProperty("--h", String(this.hues.hue(t.spk)));
+        return h(
+          "li",
+          { attrs: { "data-spk": t.spk } },
+          dot,
+          h("span", { class: "who" }, t.label),
+          h("span", { class: "len" }, talkTime(t.seconds)),
+        );
+      }),
+    );
+  }
+
+  private pills(v: CallView | null): void {
     const review = byId("pill-review");
     const proposed = v?.proposals("proposed").length ?? 0;
     review.hidden = proposed === 0;
@@ -472,21 +520,37 @@ class App {
     const other = !!live && live.call !== this.callId;
     const body = document.body;
     body.classList.toggle("busy", mine || other);
-    byId<HTMLButtonElement>("stop").textContent =
-      other && !mine ? "■ Stop the other call" : "■ Stop";
+    byId("stop-label").textContent = other && !mine ? "Stop the other call" : "Stop";
     // Record waits for the speech models with its reason, so the page never sends a start that
     // the app refuses with 503 models_missing.
     const blocked = recordBlocked(this.status?.models);
     const record = byId<HTMLButtonElement>("record");
     record.disabled = this.starting || blocked !== null;
     record.title = blocked ?? "";
+    // The global hotkey, which records and stops from any app, where a shell registers one.
+    const key = byId("record-key");
+    key.textContent = recordKey(this.status?.app);
+    key.hidden = key.textContent === "";
+    // How long the call on screen has recorded, beside its Stop.
+    const elapsed = byId("elapsed");
+    const first = mine ? v?.parts()[0]?.wallStart : undefined;
+    elapsed.hidden = first === undefined;
+    if (first !== undefined) {
+      byId("elapsed-text").textContent = formatDuration((Date.now() - first) / 1000);
+    }
+    // Quiet icon buttons: the label is their name for a screen reader and their tooltip.
+    const muteLabel = v?.muted ? "Unmute mic" : "Mute mic";
     const mute = byId<HTMLButtonElement>("mute");
-    mute.textContent = v?.muted ? "Unmute mic" : "Mute mic";
+    byId("mute-label").textContent = muteLabel;
+    mute.title = muteLabel;
     mute.classList.toggle("on", !!v?.muted);
+    mute.setAttribute("aria-pressed", String(!!v?.muted));
     mute.disabled = !mine;
+    const paused = v?.state === "paused";
     const pause = byId<HTMLButtonElement>("pause");
-    pause.textContent = v?.state === "paused" ? "Resume" : "Pause";
-    pause.classList.toggle("on", v?.state === "paused");
+    byId("pause-label").textContent = paused ? "Resume" : "Pause";
+    pause.title = paused ? "Resume" : "Pause";
+    pause.classList.toggle("on", paused);
     pause.disabled = !mine;
     const ended = ["ended", "failed", "crashed", "interrupted"].includes(v?.state ?? "");
     byId("restart").hidden = !(mine || (ended && !live));

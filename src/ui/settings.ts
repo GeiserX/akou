@@ -22,7 +22,7 @@ import { appsEditor, type NextApp } from "./dictation-apps.ts";
 import { onDictationPage } from "./dictation-page.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
-import type { Transport } from "./protocol.ts";
+import type { AppStatus, Transport } from "./protocol.ts";
 
 export interface SchemaEntry {
   type: "integer" | "number" | "boolean" | "string" | "string[]" | "hooks" | "apps";
@@ -84,7 +84,9 @@ export class SettingsPane {
   private async load(): Promise<void> {
     const [r, st] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config"),
-      this.t.request<{ app?: { platform?: string } }>("GET", "/status"),
+      this.t.request<
+        Partial<Pick<AppStatus, "provider" | "asr">> & { app?: Partial<AppStatus["app"]> }
+      >("GET", "/status"),
     ]);
     this.platform = String(st.body?.app?.platform ?? "");
     if (r.status >= 400) {
@@ -96,9 +98,22 @@ export class SettingsPane {
     const issues = new Map(r.body.issues.map((i) => [i.key, i.message]));
     const keys = Object.entries(this.schema);
     const here = keys.filter(([key]) => !onDictationPage(key));
+    const rows = here.map(([key, spec]) =>
+      this.field(key, spec, r.body.settings[key], issues.get(key)),
+    );
+    // The agent and the speech engine as they are now, read only, above the provider's keys.
+    const at = here.findIndex(([key]) => key.startsWith("provider."));
+    rows.splice(at < 0 ? rows.length : at, 0, ...engineRows(st.body ?? {}));
     replace(
       this.fields,
-      h("p", { class: "hint" }, `Saved in ${r.body.file}`),
+      h(
+        "p",
+        { class: "hint" },
+        st.body?.app?.version
+          ? h("span", { id: "settings-version" }, `akou ${st.body.app.version}. `)
+          : null,
+        `Saved in ${r.body.file}`,
+      ),
       here.length < keys.length
         ? h(
             "p",
@@ -119,7 +134,7 @@ export class SettingsPane {
             ),
           )
         : null,
-      ...here.map(([key, spec]) => this.field(key, spec, r.body.settings[key], issues.get(key))),
+      ...rows,
     );
   }
 
@@ -170,6 +185,37 @@ export class SettingsPane {
       ),
     );
   }
+}
+
+/**
+ * The agent and the speech engine, read only (WINDOW section 3.1): what the header's provider and
+ * speech pills said, kept here beside the keys that change them.
+ */
+function engineRows(st: Partial<Pick<AppStatus, "provider" | "asr">>): HTMLElement[] {
+  const row = (id: string, label: string, value: string, detail?: string) =>
+    h(
+      "div",
+      { id, class: "state-row" },
+      h("span", { class: "k" }, label),
+      h("span", { class: "v" }, value),
+      detail ? h("small", {}, detail) : null,
+    );
+  const out: HTMLElement[] = [];
+  const p = st.provider;
+  if (p) {
+    const name = p.harness ?? p.id;
+    out.push(
+      row(
+        "settings-provider-state",
+        "Agent now",
+        p.state === "available" ? name : `${name} (${p.state})`,
+        p.detail ?? p.reason,
+      ),
+    );
+  }
+  if (st.asr)
+    out.push(row("settings-engine-state", "Speech engine now", st.asr.state, st.asr.reason));
+  return out;
 }
 
 /**

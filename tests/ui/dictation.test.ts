@@ -1840,7 +1840,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
   const openDictionary = async (call?: string) => {
     const page = await rig.open(call);
     // The Dictionary reads the workspace of the call the window shows: wait until it shows one.
-    if (call) await page.waitForFunction(() => document.getElementById("pill-ws")?.textContent);
+    if (call) await page.waitForFunction(() => document.getElementById("title")?.textContent);
     await page.click("#dictation-open");
     await page.click("#dictation-dictionary-open");
     await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li[data-term]");
