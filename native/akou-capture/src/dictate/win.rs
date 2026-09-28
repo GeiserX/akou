@@ -37,6 +37,9 @@
 //! - **The microphone** is `crate::windows::DictateMic`, the stream `run` records with. The inputs
 //!   are WASAPI's capture endpoints; their transport is not read yet, so a Bluetooth headset is
 //!   not told apart (DC-N5 on Windows is open), and a lid is never reported closed.
+//! - **Other audio** (DC-U8): while the app asks for it, a session pauses the media sessions that
+//!   are playing and plays them again at its end (`win_media`, on its own thread; the media
+//!   service is reached only at the first pause).
 //!
 //! Nothing in this module runs in `cargo test`: a hook would take the developer's own keys. The
 //! CI Windows runner drives it with posted events (`.github/workflows/ci.yml`, the helper job).
@@ -84,12 +87,14 @@ use windows::core::{Interface, PCWSTR, PWSTR, w};
 use super::inputs::{Input, Transport};
 use super::insert::{Inserter, Os, Targets};
 use super::live::{self, Device, Msg, Stdio};
+use super::media::{Players, Worker};
 use super::protocol::{self as p, Target};
 use super::readback::{Field, char_index};
 use super::session::{Config, Dictate, Out};
 use super::tap::{Gate, TapEvent};
 use super::win_insert::{self, Clip, Keys};
 use super::win_keys;
+use super::win_media::Smtc;
 use crate::clock;
 use crate::windows::DictateMic;
 
@@ -774,6 +779,9 @@ pub fn run(cfg: Config) -> i32 {
     let inserter = Clip::new().map(|c| Inserter::new(Os::Windows, Box::new(c), Box::new(Keys)));
     let no_inserter = inserter.is_none();
     let mut d = Dictate::new(cfg, Box::new(Screen::new()), inserter);
+    d.set_media(Box::new(Worker::spawn(|| {
+        Smtc::new().map(|m| Box::new(m) as Box<dyn Players>)
+    })));
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
     let mut mouse_on = gate.lock().act.wants_mouse();

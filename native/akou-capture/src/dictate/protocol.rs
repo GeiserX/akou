@@ -37,7 +37,8 @@
 //! `session.cancel` (the tray's and the CLI's door), `rebuild_mic {device, prefer_built_in}`
 //! (`device` is `dictation.mic`, `default` when empty; `prefer_built_in` is
 //! `dictation.preferBuiltInOverBluetooth`, default true), `warm {mode}`,
-//! `record_keys {on}`, `stop`.
+//! `record_keys {on}`, `pause_media {on}` (`dictation.muteMedia`, off until the app sends it:
+//! sessions pause the players that are playing, DC-U8), `stop`.
 
 use crate::json::Json;
 
@@ -259,6 +260,10 @@ pub enum Command {
     RecordKeys {
         on: bool,
     },
+    /// `dictation.muteMedia` (DC-U8).
+    PauseMedia {
+        on: bool,
+    },
     Stop,
 }
 
@@ -328,6 +333,12 @@ impl Command {
                     .get("on")
                     .and_then(Value::as_bool)
                     .ok_or("record_keys needs on")?,
+            },
+            "pause_media" => Command::PauseMedia {
+                on: v
+                    .get("on")
+                    .and_then(Value::as_bool)
+                    .ok_or("pause_media needs on")?,
             },
             "stop" => Command::Stop,
             other => return Err(format!("unknown command {other}")),
@@ -634,6 +645,10 @@ mod tests {
                 r#"{"type":"record_keys","on":true}"#,
                 Command::RecordKeys { on: true },
             ),
+            (
+                r#"{"type":"pause_media","on":false}"#,
+                Command::PauseMedia { on: false },
+            ),
             (r#"{"type":"stop","extra":[1,2.5,null,{}]}"#, Command::Stop),
         ];
         for (text, want) in cases {
@@ -654,6 +669,8 @@ mod tests {
             r#"{"type":"dance"}"#,
             r#"{"type":"insert","id":"1"}"#,
             r#"{"type":"record_keys"}"#,
+            r#"{"type":"pause_media"}"#,
+            r#"{"type":"pause_media","on":"yes"}"#,
             r#"{"type":"rebuild_mic","prefer_built_in":"yes"}"#,
             r#"{"type":"stop"} x"#,
             r#"{"type":"stop""#,

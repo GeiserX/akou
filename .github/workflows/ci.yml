@@ -162,6 +162,12 @@ jobs:
         run: |
           cargo clippy --locked --all-targets -- -D warnings
           cargo clippy --locked --all-targets --features simulate -- -D warnings
+      # The MPRIS tests (DC-U8) start their own private bus with the reference daemon.
+      - name: dbus-daemon for the MPRIS tests (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          command -v dbus-daemon || { sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends dbus; }
+          dbus-daemon --version | head -1
       - name: cargo test (shipping and test builds)
         working-directory: native/akou-capture
         run: |
@@ -455,6 +461,11 @@ jobs:
               struct KEYBDINPUT { public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
               [StructLayout(LayoutKind.Explicit, Size = 40)]
               struct INPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public KEYBDINPUT ki; }
+              [StructLayout(LayoutKind.Sequential)]
+              struct MOUSEINPUT { public int dx; public int dy; public uint mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo; }
+              [StructLayout(LayoutKind.Explicit, Size = 40)]
+              struct MINPUT { [FieldOffset(0)] public uint type; [FieldOffset(8)] public MOUSEINPUT mi; }
+              [DllImport("user32.dll", EntryPoint = "SendInput")] static extern uint SendMouse(uint n, MINPUT[] inputs, int size);
 
               static HookProc keep;
               static List<string> seen = new List<string>();
@@ -471,6 +482,44 @@ jobs:
               public static void Hook() {
                   keep = Record;
                   if (SetWindowsHookEx(13, keep, GetModuleHandle(null), 0) == IntPtr.Zero) throw new Exception("no recorder hook");
+              }
+
+              // The side buttons (WM_XBUTTONDOWN/UP) as "xdown:1", the button in the high word of
+              // MSLLHOOKSTRUCT.mouseData.
+              static HookProc keepMouse;
+              static IntPtr RecordMouse(int code, IntPtr wp, IntPtr lp) {
+                  int msg = wp.ToInt32();
+                  if (code >= 0 && (msg == 0x20B || msg == 0x20C)) {
+                      int button = (Marshal.ReadInt32(lp, 8) >> 16) & 0xFFFF;
+                      lock (seen) seen.Add((msg == 0x20B ? "xdown:" : "xup:") + button);
+                  }
+                  return CallNextHookEx(IntPtr.Zero, code, wp, lp);
+              }
+
+              public static void HookMouse() {
+                  keepMouse = RecordMouse;
+                  if (SetWindowsHookEx(14, keepMouse, GetModuleHandle(null), 0) == IntPtr.Zero) throw new Exception("no mouse recorder hook");
+              }
+
+              // "d:1 u:1": side button 1 (XBUTTON1, Mouse4) down and up, 40 ms apart, like Play.
+              public static string PlayMouse(string buttons) {
+                  lock (seen) seen.Clear();
+                  string failed = null;
+                  Thread t = new Thread(() => {
+                      foreach (string b in buttons.Split(' ')) {
+                          MINPUT[] input = new MINPUT[1];
+                          input[0].type = 0;
+                          input[0].mi.mouseData = Convert.ToUInt32(b.Substring(2));
+                          input[0].mi.dwFlags = b[0] == 'd' ? 0x80u : 0x100u;
+                          if (SendMouse(1, input, Marshal.SizeOf(typeof(MINPUT))) != 1) failed = b;
+                          Thread.Sleep(40);
+                      }
+                  });
+                  t.Start();
+                  while (t.IsAlive) Pump(20);
+                  Pump(300);
+                  if (failed != null) throw new Exception("SendInput refused " + failed);
+                  lock (seen) return string.Join(" ", seen.ToArray());
               }
 
               // "<window> pid <pid>" of the window in front, the way the helper's target names it.
@@ -594,6 +643,10 @@ jobs:
                       if (!ready.WaitOne(10000)) throw new Exception("the target window never showed");
                   }
                   public string Text() { return (string)box.Invoke(new Func<string>(() => box.Text)); }
+                  // The user's edit: the box's text changed in place, the caret at its end.
+                  public void Edit(string from, string to) {
+                      box.Invoke(new Action(() => { box.Text = box.Text.Replace(from, to); box.SelectionStart = box.Text.Length; }));
+                  }
               }
           }
           '@
@@ -639,8 +692,14 @@ jobs:
           $h = New-Object 'Probe+Helper' $exe, 'dictate --warm off'
           if (-not $h.Wait('"type":"ready"', 10000)) { throw ('the helper never got ready: ' + $h.Stop()) }
           $h.Send('{"type":"focus","target":' + $tj + '}')
-          $h.Send('{"type":"insert","id":"p1","text":"pasted by akou","method":"paste","send_key":"Enter","target":' + $tj + '}')
+          $h.Send('{"type":"insert","id":"p1","text":"pasted by akou","method":"paste","send_key":"Enter","read_field":true,"target":' + $tj + '}')
           if (-not $h.Wait('"id":"p1"', 15000)) { throw ('no answer to the paste: ' + $h.Stop()) }
+          # DC-L2: the user fixes a word in the field and presses Return, where the helper reads
+          # the field again and sends only the changed words.
+          [Probe]::Pump(500)
+          $target.Edit('by akou', 'by Akou')
+          $null = [Probe]::Play('d:0D u:0D')
+          if (-not $h.Wait('"type":"edit', 5000)) { throw ('no read-back after Return: ' + $h.Stop()) }
           $h.Send('{"type":"insert","id":"t1","text":"typed \u00e9 \ud83d\ude00","method":"type","send_key":"none","target":' + $tj + '}')
           if (-not $h.Wait('"id":"t1"', 15000)) { throw ('no answer to the typing: ' + $h.Stop()) }
           [Probe]::Pump(500)
@@ -654,7 +713,9 @@ jobs:
           Check ($log -notmatch 'bad-command') 'the helper could not read a line this step sent'
           Check ($log -match '"type":"inserted","id":"p1","method":"paste"') 'the paste was not read'
           Check ($log -match '"type":"inserted","id":"t1","method":"type"') 'the typing failed'
-          $want = "pasted by akou`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600)
+          Check ($log -match '"type":"edit","id":"p1","hunks":\[\{"inserted":"akou","now":"Akou","at":2\}\]') 'the read-back did not carry exactly the fixed word'
+          Check ($log -notmatch '"now":"[^"]*typed') 'the read-back carried text the user typed on'
+          $want = "pasted by Akou`r`n`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600)
           Check ($field -ceq $want) 'the box holds the wrong text'
           Check ($clip.TrimEnd() -eq 'copied before akou') "the clipboard was not restored: $clip"
 
@@ -669,6 +730,22 @@ jobs:
           $control = [Probe]::Play($lone)
           "control: $control"
           Check ($control -match 'down:5C up:5C' -and $control -notmatch 'E8') 'with no helper the release is not masked'
+
+          # DC-A6: the back button bound as Mouse4 starts a session through the mouse hook and
+          # never reaches the app (so a browser does not also go back a page).
+          $click = 'd:1 u:1'
+          [Probe]::HookMouse()
+          $control = [Probe]::PlayMouse($click)
+          "mouse control: $control"
+          Check ($control -match 'xdown:1 xup:1') 'with no helper the back button must get through'
+          $h = New-Object 'Probe+Helper' $exe, 'dictate --hotkey Mouse4 --warm off'
+          if (-not $h.Wait('"type":"ready"', 10000)) { throw ('the helper never got ready: ' + $h.Stop()) }
+          $clicked = [Probe]::PlayMouse($click)
+          "mouse hooked: $clicked"
+          $log = $h.Stop()
+          $log
+          Check ($log -match '"code":"mic-open"|"type":"mic","open":true') 'the back button never reached the session'
+          Check ($clicked -notmatch 'xdown:1|xup:1') 'the back button reached the app'
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
@@ -867,6 +944,91 @@ jobs:
             echo "### dictate on evdev (${{ matrix.server }})"
             echo
             grep -hE '"type":"(ready|session\.(started|ended)|key)"' keys.err mouse.err | sed 's/^/    /'
+          } >> "$GITHUB_STEP_SUMMARY"
+      # DC-U8 on a real session bus. Two MPRIS players, one playing and one paused, sit on this
+      # job's bus; the shipping helper runs sessions through the tray's door (`session.start`,
+      # `session.stop`). With `pause_media` on, the session pauses the playing player while it
+      # listens and plays it again at its end, and `stop` in the middle of a session gives it back
+      # too; the paused player is never started. The same session with the setting never sent
+      # (the default) touches neither, or the check proves nothing.
+      - name: dictate pauses a playing MPRIS player for the session and gives it back
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq --no-install-recommends python3-dbus python3-gi
+          bin="$PWD/native/akou-capture/target/release/akou-capture"
+          work=$(mktemp -d)
+          cd "$work"
+          cat > player.py <<'EOF'
+          import sys, dbus, dbus.service, dbus.mainloop.glib
+          from gi.repository import GLib
+          dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+          PLAYER = "org.mpris.MediaPlayer2.Player"
+          class Player(dbus.service.Object):
+              def __init__(self, bus, name, status):
+                  self.status = status
+                  dbus.service.Object.__init__(self, dbus.service.BusName("org.mpris.MediaPlayer2." + name, bus), "/org/mpris/MediaPlayer2")
+              @dbus.service.method(PLAYER)
+              def Pause(self):
+                  self.status = "Paused"
+                  print("Pause", flush=True)
+              @dbus.service.method(PLAYER)
+              def Play(self):
+                  self.status = "Playing"
+                  print("Play", flush=True)
+              @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
+              def Get(self, iface, prop):
+                  return dbus.String(self.status)
+              @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="s", out_signature="a{sv}")
+              def GetAll(self, iface):
+                  return {"PlaybackStatus": dbus.String(self.status)}
+          player = Player(dbus.SessionBus(), sys.argv[1], sys.argv[2])
+          print("ready", flush=True)
+          GLib.MainLoop().run()
+          EOF
+          # Appending, so a file emptied between runs is written from its start again.
+          python3 player.py music Playing >> music.out &
+          music=$!
+          python3 player.py podcast Paused >> podcast.out &
+          podcast=$!
+          for _ in $(seq 1 50); do
+            if grep -q ready music.out && grep -q ready podcast.out; then break; fi
+            sleep 0.1
+          done
+          grep -q ready music.out && grep -q ready podcast.out
+          # run TAG LINES...: the helper with these stdin lines, one every 1.5 s, then its exit.
+          run() {
+            local tag=$1
+            shift
+            : > "$tag.log"
+            : > music.out
+            : > podcast.out
+            {
+              for l in "$@"; do
+                sleep 1.5
+                echo "$l"
+                if [ "$l" != '{"type":"stop"}' ]; then sleep 1.5; echo "--- after $l: $(tr '\n' ' ' < music.out)" >> "$tag.log"; fi
+              done
+            } | "$bin" dictate --warm off > /dev/null 2> "$tag.err"
+            echo "--- $tag"
+            cat "$tag.err"
+            cat "$tag.log"
+            echo "music: $(tr '\n' ' ' < music.out)"
+            echo "podcast: $(tr '\n' ' ' < podcast.out)"
+          }
+          check() { if ! eval "$1"; then echo "FAILED: $2"; exit 1; fi; }
+          run control '{"type":"session.start"}' '{"type":"session.stop"}' '{"type":"stop"}'
+          check '[ ! -s music.out ] && [ ! -s podcast.out ]' "a player was touched with pause_media never sent"
+          run paused '{"type":"pause_media","on":true}' '{"type":"session.start"}' '{"type":"session.stop"}' '{"type":"stop"}'
+          check 'grep -q "after {\"type\":\"session.start\"}: Pause $" paused.log' "the playing player was not paused while listening"
+          check '[ "$(tr "\n" " " < music.out)" = "Pause Play " ]' "the playing player was not given back once at the end"
+          check '[ ! -s podcast.out ]' "the paused player was touched"
+          run stopped '{"type":"pause_media","on":true}' '{"type":"session.start"}' '{"type":"stop"}'
+          check '[ "$(tr "\n" " " < music.out)" = "Pause Play " ]' "stop during a session did not give the player back"
+          kill "$music" "$podcast" 2>/dev/null || true
+          {
+            echo "### dictate pauses MPRIS players (${{ matrix.server }})"
+            echo
+            sed 's/^/    /' paused.log
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:

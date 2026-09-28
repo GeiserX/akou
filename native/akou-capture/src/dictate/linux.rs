@@ -25,6 +25,9 @@
 //! - **The microphone** is `crate::linux::DictateMic`, the PulseAudio-protocol stream `run`
 //!   records with (PipeWire or PulseAudio). A Bluetooth source is told by its name and never kept
 //!   warm; a built-in mic is not told apart, so DC-N5's preference does not apply here yet.
+//! - **Other audio** (DC-U8): while the app asks for it, a session pauses the MPRIS players that
+//!   are playing and plays them again at its end (`mpris`, on its own thread; the session bus is
+//!   reached only at the first pause).
 //!
 //! The GlobalShortcuts portal, AT-SPI and the X11 and Wayland inserts are still to come. Nothing
 //! in this module runs in `cargo test`: it would read the developer's own keyboard. The CI Linux
@@ -42,6 +45,8 @@ use super::evdev_keys::{self, KEY_MAX, Kind};
 use super::inputs::{self, Input};
 use super::insert::Targets;
 use super::live::{self, Device, Stdio};
+use super::media::{Players, Worker};
+use super::mpris::Mpris;
 use super::protocol::{self as p, Target};
 use super::readback::Field;
 use super::session::{Config, Dictate, Out};
@@ -372,6 +377,9 @@ pub fn run(cfg: Config) -> i32 {
     };
     let (tx, rx) = mpsc::channel();
     let mut d = Dictate::new(cfg, Box::new(Screen), None);
+    d.set_media(Box::new(Worker::spawn(|| {
+        Mpris::session().map(|m| Box::new(m) as Box<dyn Players>)
+    })));
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
     // Before the reader's first key, not only at `begin`: evdev swallows nothing (DC-A4).
