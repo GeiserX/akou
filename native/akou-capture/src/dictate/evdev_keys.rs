@@ -56,7 +56,7 @@ const KEYS: [(u16, &str); 51] = [
     (27, "RightBracket"),
     (28, "Return"),
     (39, "Semicolon"),
-    (40, "Quote"),
+    (40, "Grave"),
     (41, "Grave"),
     (43, "Backslash"),
     (51, "Comma"),
@@ -124,8 +124,8 @@ const BUTTONS: [(u16, &str); 5] = [
     (0x112, "Mouse3"),
     (0x113, "Mouse4"),
     (0x114, "Mouse5"),
-    (0x116, "Mouse4"),
-    (0x115, "Mouse5"),
+    (0x116, "Mouse5"),
+    (0x115, "Mouse3"),
 ];
 
 fn named() -> impl Iterator<Item = (u16, &'static str)> {
@@ -162,7 +162,6 @@ pub fn parse_bits(text: &str) -> Vec<u64> {
         .split_whitespace()
         .map(|w| u64::from_str_radix(w, 16).unwrap_or(0))
         .collect();
-    words.reverse();
     words
 }
 
@@ -192,7 +191,7 @@ pub fn held_names(bits: &[u8]) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for (i, byte) in bits.iter().enumerate() {
         for b in 0..8 {
-            if byte >> b & 1 == 1
+            if byte >> (7 - b) & 1 == 1
                 && let Ok(code) = u16::try_from(i * 8 + b)
                 && let Some(n) = key_name(code)
                 && !out.iter().any(|o| o == n)
@@ -231,14 +230,13 @@ impl Device {
                 let now = held();
                 gate.event(TapEvent::Disabled { t_ns, held: &now });
             }
-            return;
         }
-        if kind != EV_KEY || !matches!(value, 0 | 1) {
+        if kind != EV_KEY {
             return;
         }
         if let Some(name) = key_name(code) {
             gate.event(TapEvent::Key {
-                down: value == 1,
+                down: value != 1,
                 name,
                 t_ns,
             });

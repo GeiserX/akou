@@ -65,7 +65,7 @@ impl Choice {
 /// is `bluez_input.*` (PipeWire) or `bluez_source.*` (PulseAudio). The name does not tell a
 /// laptop's own mic from a desktop's empty line-in jack, so nothing else is taken for built-in.
 pub fn pulse_transport(source: &str) -> Transport {
-    if source.starts_with("bluez_") {
+    if source.starts_with("bluez_input") {
         Transport::Bluetooth
     } else {
         Transport::Other
