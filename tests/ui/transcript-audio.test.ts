@@ -12,7 +12,17 @@ import { formatWall } from "../../src/core/log/clock.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import type { LogBuilder } from "../helpers.ts";
 import { tempDir } from "../helpers.ts";
-import { seedCall, standardCall, T0, TZ, UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
+import {
+  seedCall,
+  silentWav,
+  standardCall,
+  T0,
+  TZ,
+  UI_TIMEOUT,
+  type UiRig,
+  uiRig,
+  until,
+} from "./rig.ts";
 
 async function withRig<T>(
   o: Parameters<typeof uiRig>[0] & { seed?: (home: string) => void },
@@ -488,6 +498,115 @@ describe("[W4.4] the line menu stays with its line", () => {
 });
 
 describe("the player bar (W5.3 to W5.6)", () => {
+  test(
+    "the bar exists only with a recording: none with no call, none while the call records, there once it is saved",
+    async () => {
+      const t = tempDir("akou-wav-");
+      try {
+        await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+          const page = await rig.open();
+          // No call: the workspace is on screen, but the bar has nothing to play.
+          await until(async () => (await text(page, "#state")) === "ready", 5000, "ready");
+          expect(await page.isVisible("#scroller")).toBe(true);
+          expect(await page.getAttribute("#player-bar", "hidden")).toBe("");
+          expect(await page.isVisible("#player-bar")).toBe(false);
+          // A live call: the transcript fills in, and still no bar.
+          const id = await rig.startCall();
+          await until(async () => (await text(page, "#state")) === "rec", 5000, "recording");
+          await page.waitForTimeout(500);
+          expect(await page.isVisible("#player-bar")).toBe(false);
+          // Saved with its part: the bar is there, under the transcript, and plays.
+          await rig.api("POST", "/calls/live/stop");
+          await until(() => page.isVisible("#player-bar"), 8000, "the bar once saved");
+          const bar = await page.locator("#player-bar").boundingBox();
+          const lines = await page.locator("#scroller").boundingBox();
+          expect(bar && lines).toBeTruthy();
+          if (bar && lines) {
+            expect(Math.round(bar.y)).toBe(Math.round(lines.y + lines.height));
+            expect(bar.x).toBe(lines.x);
+            expect(bar.height).toBeLessThanOrEqual(49);
+          }
+          expect(await page.getAttribute(`#calls li[data-id="${id}"] button`, "aria-current")).toBe(
+            "true",
+          );
+        });
+      } finally {
+        t.cleanup();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a bar that goes away takes its audio: Restart on a saved call stops the line playing, and a recording call plays nothing",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          await audio(rig, id, 12);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await playRow(page, "l000003");
+          await until(async () => !(await player(page)).paused, 5000, "the line playing");
+          // Restart makes the call record again: the bar goes, and the audio with it.
+          const r = await rig.api("POST", `/calls/${id}/restart`, { force: true });
+          expect(r.status).toBe(200);
+          await until(async () => !(await page.isVisible("#player-bar")), 8000, "the bar gone");
+          expect(await player(page)).toMatchObject({ paused: true, line: undefined });
+          // While it records, a line's Play button explains instead of playing blind.
+          await page.hover('#lines .row[data-id="l000002"]');
+          await page.click('#lines .row[data-id="l000002"] .play');
+          await page.waitForFunction(() => document.getElementById("toast")?.textContent !== "");
+          await page.waitForTimeout(400);
+          expect(await player(page)).toMatchObject({ paused: true, line: undefined });
+          expect(await page.isVisible("#player-bar")).toBe(false);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "in a narrow window the bar wraps inside the transcript column instead of drawing over the side pane",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          await audio(rig, id, 12);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await playRow(page, "l000003");
+          await pauseNow(page);
+          // Every control on: both times, and Follow (shown after a scroll by hand).
+          await page.evaluate(() => {
+            (document.getElementById("follow") as HTMLElement).hidden = false;
+          });
+          for (const width of [1440, 900, 800]) {
+            await page.setViewportSize({ width, height: 800 });
+            const m = await page.evaluate(() => {
+              const bar = document.getElementById("player-bar") as HTMLElement;
+              const side = document.getElementById("side") as HTMLElement;
+              return {
+                scroll: bar.scrollWidth,
+                client: bar.clientWidth,
+                right: bar.getBoundingClientRect().right,
+                side: side.getBoundingClientRect().left,
+                height: bar.getBoundingClientRect().height,
+              };
+            });
+            expect({ width, fits: m.scroll <= m.client }).toEqual({ width, fits: true });
+            expect(m.right).toBeLessThanOrEqual(m.side);
+            // Wide, it stays the slim one-row bar.
+            if (width === 1440) expect(m.height).toBeLessThanOrEqual(49);
+          }
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
   test(
     "[W5.3] seeking to 50 % shows the wall time of that instant, never a bare offset",
     async () => {

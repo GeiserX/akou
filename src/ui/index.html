@@ -12,7 +12,7 @@
 </head>
 <body class="ready shell">
 <nav id="sidebar" aria-label="akou">
-  <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="267" height="87" viewBox="0 -3 89 29" role="img" aria-label="akou"><g class="wordmark" fill="none" stroke="#f2f3f5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="16" r="8"/><path d="M18 8v16M28-1v25M38 8l-8.5 9m3-2.5 7 9.5"/><circle cx="54" cy="16" r="8"/><path d="M71 8v8a8 8 0 0 0 16 0m0-8v16"/></g><circle cx="10" cy="16" r="2.5" fill="#ff453a"/></svg></div>
+  <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="267" height="87" viewBox="0 -3 89 29" role="img" aria-label="akou"><g class="wordmark" fill="none" stroke="#f2f3f5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="16" r="8"/><path d="M18 8v16M28-1v25M38 8l-10 10.59M32.5 14.5l7 9.5"/><circle cx="54" cy="16" r="8"/><path d="M71 8v8a8 8 0 0 0 16 0m0-8v16"/></g><circle cx="10" cy="16" r="2.5" fill="#ff453a"/></svg></div>
   <h2 class="navrow on" id="calls-title"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 8v0M5 5.5v5M8 3v10M11 6v4M14 7.5v1"/></svg><span class="grow">Calls</span></h2>
   <div class="calls-sub">
     <label class="search"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg><input id="calls-search" type="search" placeholder="Search calls" aria-label="Search calls by title or workspace" autocomplete="off" spellcheck="false"></label>
@@ -137,6 +137,19 @@
     <div id="partial" hidden></div>
     <div id="empty"></div>
   </main>
+  <div id="player-bar" hidden>
+    <!-- biome-ignore lint/a11y/useMediaCaption: the transcript beside it is the caption of every line played -->
+    <audio id="player" preload="none"></audio>
+    <button id="play" type="button" disabled title="Play or pause (Space)">▶ Play</button>
+    <time id="pos"></time>
+    <input id="scrub" type="range" min="0" max="0" step="0.1" value="0" disabled aria-label="Position in this part" title="Back or forward 5 s: ← and →, or Shift+← and Shift+→ anywhere">
+    <time id="pos-end"></time>
+    <select id="speed" aria-label="Playback speed" title="Slower or faster: [ and ]"></select>
+    <button id="follow" type="button" hidden title="Keep the line being played in view">Follow</button>
+    <label for="balance">mic</label>
+    <input id="balance" type="range" min="-1" max="1" step="0.1" value="0" aria-label="Playback balance, mic to call">
+    <label for="balance">call</label>
+  </div>
   <aside id="side">
     <div id="ask-row">
     <form id="ask-form" aria-label="Ask about this call">
@@ -172,19 +185,6 @@
     <div id="compose">
       <input id="note-input" placeholder="Type a note, Enter to add it" aria-label="New note" aria-describedby="note-hints" autocomplete="off">
       <p id="note-hints"><span><code>-</code> bullet</span> <span><code>[]</code> action</span> <span><code>?</code> question</span> <span><code>#</code> section</span></p>
-    </div>
-    <div id="player-bar">
-      <!-- biome-ignore lint/a11y/useMediaCaption: the transcript beside it is the caption of every line played -->
-      <audio id="player" preload="none"></audio>
-      <button id="play" type="button" disabled title="Play or pause (Space)">▶ Play</button>
-      <time id="pos"></time>
-      <input id="scrub" type="range" min="0" max="0" step="0.1" value="0" disabled aria-label="Position in this part" title="Back or forward 5 s: ← and →, or Shift+← and Shift+→ anywhere">
-      <time id="pos-end"></time>
-      <select id="speed" aria-label="Playback speed" title="Slower or faster: [ and ]"></select>
-      <button id="follow" type="button" hidden title="Keep the line being played in view">Follow</button>
-      <label for="balance">mic</label>
-      <input id="balance" type="range" min="-1" max="1" step="0.1" value="0" aria-label="Playback balance, mic to call">
-      <label for="balance">call</label>
     </div>
   </aside>
 </div>

@@ -60,6 +60,62 @@ describe("the static bundle", () => {
   });
 });
 
+/** Every rule in `css` whose declarations read `var(--name)`, by selector. */
+function rulesUsing(css: string, name: string): string[] {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return [...bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter((m) => (m[2] ?? "").includes(`var(${name})`))
+    .map((m) => (m[1] ?? "").trim().replace(/\s+/g, " "));
+}
+
+describe("one accent per screen (the design's rules)", () => {
+  test("theme.css reads --accent only in the welcome's Download and the focus ring", () => {
+    const css = readFileSync(join(UI_DIR, "theme.css"), "utf8");
+    expect(rulesUsing(css, "--accent").sort()).toEqual(["#welcome button.go", ":focus-visible"]);
+    // Positive control: one more rule painting with the accent is caught.
+    const more = `${css}\n.row.playing .body { background: var(--accent); }`;
+    expect(rulesUsing(more, "--accent")).toContain(".row.playing .body");
+  });
+});
+
+/** WCAG contrast ratio of two `#rgb` or `#rrggbb` colours. */
+function contrast(a: string, b: string): number {
+  const lum = (hex: string) => {
+    const h = hex.slice(1);
+    const full = h.length === 3 ? [...h].map((c) => c + c).join("") : h;
+    const [r, g, b] = [0, 2, 4].map((i) => {
+      const c = Number.parseInt(full.slice(i, i + 2), 16) / 255;
+      return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4;
+    });
+    return 0.2126 * (r ?? 0) + 0.7152 * (g ?? 0) + 0.0722 * (b ?? 0);
+  };
+  const [hi, lo] = [lum(a), lum(b)].sort((x, y) => y - x);
+  return ((hi ?? 0) + 0.05) / ((lo ?? 0) + 0.05);
+}
+
+/** The value of `--name` in the first `:root` block of `css`. */
+function rootVar(css: string, name: string): string {
+  const root = css.slice(css.indexOf(":root {"));
+  const m = root.slice(0, root.indexOf("}")).match(new RegExp(`${name}:\\s*(#[0-9a-fA-F]+);`));
+  return m?.[1] ?? "";
+}
+
+describe("the accent button is readable (WCAG AA)", () => {
+  test("the welcome's Download text is at least 4.5:1 on the accent, dark and light", () => {
+    const css = readFileSync(join(UI_DIR, "theme.css"), "utf8");
+    expect(rulesUsing(css, "--on-accent")).toEqual(["#welcome button.go"]);
+    const light = css.slice(css.indexOf("@media (prefers-color-scheme: light)"));
+    for (const scheme of [css, light]) {
+      const fg = rootVar(scheme, "--on-accent");
+      const bg = rootVar(scheme, "--accent");
+      expect(fg && bg).toBeTruthy();
+      expect(contrast(fg, bg)).toBeGreaterThanOrEqual(4.5);
+    }
+    // Positive control: white on the dark theme's accent, as it was, fails.
+    expect(contrast("#fff", rootVar(css, "--accent"))).toBeLessThan(4.5);
+  });
+});
+
 describe("the window's own Content Security Policy", () => {
   // The ElectroBun window loads index.html from views://, where no server adds the header: the
   // page carries the policy itself, or the window runs with none at all.

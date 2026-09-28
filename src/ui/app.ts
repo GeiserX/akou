@@ -28,6 +28,7 @@ import {
   formatDuration,
   groupCalls,
   HueBook,
+  hasRecording,
   languages,
   recordKey,
   speakerTotals,
@@ -410,6 +411,12 @@ class App {
     for (const id of ["scroller", "side"]) byId(id).hidden = on;
     // The transcript header goes with the transcript, and needs a call to describe.
     byId("call-head").hidden = on || !this.view()?.call;
+    // The player exists only when the open call has a recording to play (WINDOW section 5). A bar
+    // that goes away takes its audio with it: Restart on a saved call must not leave it playing.
+    const bar = byId("player-bar");
+    const noBar = on || !hasRecording(this.view());
+    if (noBar && !bar.hidden) this.player.stop();
+    bar.hidden = noBar;
     document.body.classList.toggle("welcoming", on);
     // The readiness row (WINDOW section 13): what is missing, and the page that fixes it.
     const s = this.status;
@@ -1025,9 +1032,15 @@ class App {
   }
 
   private mayPlay(): boolean {
-    if (this.platform === "linux" && this.view()?.live) {
-      // PipeWire cannot keep the window's audio out of the recording (DESIGN 2.3).
-      toast("akou does not play audio while a call is recording on Linux.");
+    if (this.view()?.live) {
+      // A recording call has no player (WINDOW section 5), so nothing may start audio it could not
+      // pause. On Linux there is a second reason: PipeWire cannot keep the window's audio out of
+      // the recording (DESIGN 2.3).
+      toast(
+        this.platform === "linux"
+          ? "akou does not play audio while a call is recording on Linux."
+          : "Audio plays once the call is saved.",
+      );
       return false;
     }
     return true;

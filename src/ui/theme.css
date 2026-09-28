@@ -13,9 +13,14 @@
   --ok: #32d74b;
   --warn: #ffb340;
   --accent: #6aa8ff;
+  /* Text on the accent fill: dark on the light dark-theme blue, white on the deep light-theme one
+     (both at least 4.5:1). */
+  --on-accent: #06101f;
   --agent: #c792ea;
   /* Information, never the accent: the glyph before a dim sentence. */
   --info: #5ad1c8;
+  /* You, in the transcript and the speaker chips: a neutral grey, never a hue near the accent. */
+  --you: #b7bdc6;
   --raised: #1b1e22;
   --line2: #2a2e34;
   --size: 22px;
@@ -29,8 +34,10 @@
     --faint: #a3a7ae;
     --line: #e4e4e1;
     --accent: #1f5fd6;
+    --on-accent: #fff;
     --agent: #7b3fb0;
     --info: #0f8a82;
+    --you: #4f555d;
     --raised: #ffffff;
     --line2: #d6d6d2;
   }
@@ -218,10 +225,27 @@ button.stop {
   border-color: var(--rec);
   color: #fff;
 }
+/* One accent per screen (the design's rules): a primary action is a neutral fill in the text colour,
+   and the accent fill is the welcome's Download alone. */
 button.go {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+button.go:hover {
+  border-color: var(--fg);
+  opacity: 0.88;
+}
+#welcome button.go {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
+}
+/* The native sliders and checkboxes take the text colour, not the system's blue. */
+input[type="range"],
+input[type="checkbox"],
+input[type="radio"] {
+  accent-color: var(--fg);
 }
 :focus-visible {
   outline: 2px solid var(--accent);
@@ -561,6 +585,9 @@ button.icon.on {
     background: hsl(var(--h) 70% 36%);
   }
 }
+#people li[data-spk="you"] i {
+  background: var(--you);
+}
 
 #meters legend {
   position: absolute;
@@ -672,14 +699,14 @@ button.icon.on {
 }
 
 /* The shell (WINDOW section 1): the sidebar runs the full height on the left and the side pane on
-   the right; between them the composer row, the notices, the call's header and the transcript
-   stack, each in its own row so a hidden one leaves none. #layout lends its children to this grid.
-   The side columns are sized in rem, which + and - never move (they set --size, not the root
-   font), so a larger transcript font never squeezes the transcript itself. */
+   the right; between them the composer row, the notices, the call's header, the transcript and
+   the player bar stack, each in its own row so a hidden one leaves none. #layout lends its
+   children to this grid. The side columns are sized in rem, which + and - never move (they set
+   --size, not the root font), so a larger transcript font never squeezes the transcript itself. */
 body.shell:not(.server) {
   display: grid;
   grid-template-columns: 13.75rem minmax(0, 1fr) 24rem;
-  grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr) auto;
 }
 body.shell:not(.server) > * {
   grid-column: 2;
@@ -716,6 +743,10 @@ body.shell:not(.server) #call-head {
 body.shell:not(.server) #scroller {
   grid-column: 2;
   grid-row: 8;
+}
+body.shell:not(.server) #player-bar {
+  grid-column: 2;
+  grid-row: 9;
 }
 body.shell:not(.server) #side {
   grid-column: 3;
@@ -1314,6 +1345,10 @@ main {
     --c: hsl(var(--h) 70% 36%);
   }
 }
+/* You are a neutral grey in both appearances (--you): the accent's blue is for the primary action. */
+.row[data-h][data-spk="you"] {
+  --c: var(--you);
+}
 .row.turn {
   padding-top: 0.75em;
 }
@@ -1392,7 +1427,7 @@ main {
 }
 @keyframes flash {
   from {
-    background: color-mix(in srgb, var(--accent) 30%, transparent);
+    background: color-mix(in srgb, var(--fg) 14%, transparent);
   }
 }
 /* The line still being spoken: grey, dashed, never a row of the transcript. */
@@ -1592,7 +1627,7 @@ button.cite {
   border-radius: 4px;
   border: 1px solid var(--line2);
   background: var(--raised);
-  color: var(--dim);
+  color: var(--info);
   font-size: 11px;
   font-weight: 400;
   font-variant-numeric: tabular-nums;
@@ -1828,7 +1863,7 @@ button.cite:hover {
 }
 #enhanced-body .who-note {
   font-size: 11px;
-  color: var(--accent);
+  color: var(--dim);
 }
 .enhanced-meta,
 .hint {
@@ -1840,14 +1875,59 @@ button.cite:hover {
   gap: 6px;
   align-items: center;
 }
+/* The player (WINDOW section 5): a slim bar under the transcript, only when the call has a
+   recording. The colours are neutral: the position in the text colour, the rest dim. One 48 px
+   row when the transcript column is wide enough; in a narrow window it wraps to a second row
+   instead of drawing over the side pane (the window has no minimum width). */
 #player-bar {
   display: flex;
-  gap: 6px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   align-items: center;
-  padding: 6px 12px;
+  min-height: 48px;
+  min-width: 0;
+  padding: 6px 16px 6px 24px;
   border-top: 1px solid var(--line);
-  font-size: 11px;
+  background: var(--panel);
+  font-size: 12px;
   color: var(--dim);
+}
+#player-bar button,
+#player-bar select {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border-color: var(--line2);
+}
+#play {
+  border-radius: 14px;
+  color: var(--fg);
+}
+#player-bar time {
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#pos {
+  color: var(--fg);
+}
+/* The sliders match the buttons' 28 px, so one row fits the 48 px bar. */
+#player-bar input[type="range"] {
+  height: 28px;
+  margin: 0;
+  padding-block: 0;
+}
+#scrub {
+  flex: 1 1 120px;
+  min-width: 80px;
+}
+#balance {
+  width: 72px;
+}
+#player-bar label {
+  color: var(--faint);
+  font-size: 11px;
 }
 
 #toast {
@@ -1864,7 +1944,9 @@ button.cite:hover {
   z-index: 10;
 }
 #toast.info {
-  background: var(--accent);
+  background: var(--raised);
+  border: 1px solid var(--line2);
+  color: var(--fg);
 }
 #jump {
   position: fixed;
@@ -1877,6 +1959,10 @@ button.cite:hover {
 }
 .scrolled #jump {
   display: block;
+}
+/* Clear of the player bar when the call has one. */
+body:has(#player-bar:not([hidden])) #jump {
+  bottom: 74px;
 }
 #popover {
   position: fixed;
@@ -2015,20 +2101,9 @@ dialog {
   text-transform: none;
 }
 
-/* The line being played (W5.6). */
+/* The line being played (W5.6): a neutral fill, never the accent. */
 .row.playing .body {
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-#player-bar {
-  flex-wrap: wrap;
-}
-#player-bar time {
-  font-variant-numeric: tabular-nums;
-}
-#scrub {
-  flex: 1 1 120px;
-  min-width: 80px;
+  background: color-mix(in srgb, var(--fg) 6%, transparent);
 }
 
 /* The line menu (W4.4). */
@@ -2053,7 +2128,7 @@ dialog {
 }
 #line-menu [role="menuitem"]:focus,
 #line-menu [role="menuitem"]:hover {
-  background: color-mix(in srgb, var(--accent) 22%, transparent);
+  background: var(--line2);
 }
 
 /* Server mode's pages (docs/ux/SERVER.md section 12.4): the call window is not on the page. */
@@ -2078,8 +2153,9 @@ dialog {
   flex: 1;
 }
 #server-nav button[aria-current="page"] {
-  border-color: var(--accent);
-  color: var(--accent);
+  background: var(--line2);
+  border-color: var(--line2);
+  color: var(--fg);
 }
 #server-main {
   overflow: auto;
@@ -2241,7 +2317,7 @@ dialog {
   background: var(--ok);
 }
 .mbar.speed .fill {
-  background: var(--accent);
+  background: var(--dim);
 }
 .mbar.none .track {
   background: repeating-linear-gradient(-45deg, var(--line) 0 4px, transparent 4px 8px);
