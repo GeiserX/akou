@@ -379,7 +379,7 @@ hark-viewer's other page parameter, `?quiet=SECONDS`, is dropped on purpose. The
 | `Mod+K` | Command palette | window |
 | `Mod+F` | Find in this call | window |
 | `Mod+J` | Focus the ask box | window |
-| `Mod+1` `Mod+2` `Mod+3` | Notes, Ask, Enhanced (focus its input) | window |
+| `Mod+1` `Mod+2` | Notes, Enhanced (focus the note input) | window |
 | `Mod+Shift+C` | Copy transcript so far | window |
 | `Mod+,` | Settings | window |
 | `Alt+↑` `Alt+↓` | Previous / next call | window |

@@ -109,8 +109,12 @@ export class AskPane {
     document.addEventListener("pointerdown", (e) => {
       if (!this.presetsBox.hidden && !this.form.contains(e.target as Node)) this.menu(false);
     });
+    // Focus leaving for a known element outside the row closes the menu. A null target is not
+    // enough: WebKit does not focus a clicked button, so a click on a preset or the chevron blurs
+    // to nothing between mousedown and click, and closing then would swallow the click. Clicks
+    // outside are the pointerdown handler's job.
     this.form.addEventListener("focusout", (e) => {
-      if (!this.form.contains(e.relatedTarget as Node | null)) this.menu(false);
+      if (e.relatedTarget && !this.form.contains(e.relatedTarget as Node)) this.menu(false);
     });
   }
 

@@ -594,6 +594,13 @@ describe("the notepad (DESIGN 5.1)", () => {
           await page.keyboard.press("Escape");
           await page.waitForSelector("#notes .note-edit", { state: "detached" });
           await page.click("#note-input");
+          // Edit and delete hidden until hover take no width: the text runs to the row's edge.
+          const gap = await page.evaluate(() => {
+            const row = document.querySelector("#notes li.note.action") as HTMLElement;
+            const t = row.querySelector(".note-text") as HTMLElement;
+            return row.getBoundingClientRect().right - t.getBoundingClientRect().right;
+          });
+          expect(gap).toBeLessThan(16);
           // A pause of 2 s saves the line too, and later keystrokes edit it (rev + 1).
           await page.keyboard.type("? who owns it");
           await until(
@@ -882,7 +889,16 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           await page.click("#ask-input");
           await page.keyboard.press("Escape");
           expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          // The chevron closes an open menu too.
           await page.click("#ask-presets-open");
+          await page.click("#ask-presets-open");
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          await page.click("#ask-presets-open");
+          // WebKit does not focus a clicked button: the preset blurs to nothing before its click
+          // lands. The menu has to survive that, or the click asks nothing. Blurring by hand does
+          // the same thing in every engine.
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          expect(await page.locator("#ask-presets").isVisible()).toBe(true);
           await page.click("#ask-presets >> text=What did Ben say?");
           // Picking one closes the menu.
           expect(await page.locator("#ask-presets").isVisible()).toBe(false);

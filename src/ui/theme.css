@@ -1668,6 +1668,7 @@ button.cite:hover {
   padding: 0;
 }
 .note {
+  position: relative;
   display: flex;
   gap: 8px;
   align-items: baseline;
@@ -1741,19 +1742,41 @@ button.cite:hover {
 .note.section {
   font-weight: 700;
 }
-/* Edit and delete stay in the tab order and show on hover or focus, so the list reads clean. */
 .note .edit,
 .note .del {
   font-size: 11px;
   font-weight: 500;
   padding: 1px 6px;
-  opacity: 0;
-}
-.note:hover .edit,
-.note:hover .del,
-.note:focus-within .edit,
-.note:focus-within .del {
   opacity: 0.8;
+}
+/* With a pointer that hovers, edit and delete float over the row's top right corner and show on
+   hover or focus, so the text runs to the column edge and the list reads clean. They stay in the
+   tab order. A touch screen has no hover: there they sit in the row, visible, so a tap never lands
+   on a button it cannot see. */
+@media (hover: hover) {
+  .note .edit,
+  .note .del {
+    position: absolute;
+    top: 5px;
+    background: var(--raised);
+    opacity: 0;
+  }
+  .note .del {
+    right: 6px;
+  }
+  .note .edit {
+    right: 32px;
+  }
+  /* A note being edited keeps its field clear of the two buttons. */
+  .note:has(.note-edit) {
+    padding-right: 64px;
+  }
+  .note:hover .edit,
+  .note:hover .del,
+  .note:focus-within .edit,
+  .note:focus-within .del {
+    opacity: 1;
+  }
 }
 #compose {
   flex: none;
