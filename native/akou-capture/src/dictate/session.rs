@@ -26,6 +26,12 @@ const MS: u64 = 1_000_000;
 /// How often Secure Input is polled for `secure_input {on}`.
 pub const SECURE_POLL_MS: u64 = 250;
 
+/// A backend that binds the key outside its tap (Linux's GlobalShortcuts portal, DC-N1) hears of
+/// every binding before it takes effect; `Err` refuses it, with the reason, and the old one stays.
+pub trait Binder {
+    fn bind(&mut self, hotkey: &Hotkey) -> Result<(), String>;
+}
+
 /// Where the protocol goes: JSON lines to stderr, packets to stdout.
 pub trait Out {
     fn line(&mut self, line: String);
@@ -59,6 +65,7 @@ pub struct Dictate {
     /// The dictation key now, and the Globe action it may own (DC-N2, macOS only).
     hotkey: Hotkey,
     globe: Option<Globe>,
+    binder: Option<Box<dyn Binder>>,
     targets: Box<dyn Targets>,
     /// None: this process has no inserter (a simulate run without `--inserter`), never a real one.
     inserter: Option<Inserter>,
@@ -89,6 +96,7 @@ impl Dictate {
         Dictate {
             hotkey: cfg.hotkey.clone(),
             globe: None,
+            binder: None,
             gate: Gate::new(Activation::new(cfg.hotkey, cfg.mode), cfg.os),
             os: cfg.os,
             mic: Mic::new(cfg.warm, cfg.bluetooth, cfg.ring_ms),
@@ -119,6 +127,11 @@ impl Dictate {
     /// The backend owns the Fn key's own action while Fn is the dictation key (DC-N2).
     pub fn set_globe(&mut self, globe: Globe) {
         self.globe = Some(globe);
+    }
+
+    /// The backend binds the key itself, and is told every binding (DC-N1).
+    pub fn set_binder(&mut self, binder: Box<dyn Binder>) {
+        self.binder = Some(binder);
     }
 
     /// The OS's media players, which a session pauses while `pause_media` is on (DC-U8).
@@ -362,6 +375,10 @@ impl Dictate {
                         .as_deref()
                         .map_or(Ok(Mode::HoldOrToggle), Mode::parse)?;
                     Ok((h, mode))
+                });
+                let parsed = parsed.and_then(|(h, mode)| match self.binder.as_mut() {
+                    Some(b) => b.bind(&h).map(|()| (h, mode)),
+                    None => Ok((h, mode)),
                 });
                 match parsed {
                     Ok((h, mode)) => {
@@ -801,6 +818,52 @@ mod tests {
             .unwrap();
         d.command(good, 300 * MS, &mut out);
         assert!(out.lines.last().unwrap().contains(r#""type":"rebound""#));
+    }
+
+    /// DC-N1: a backend that binds the key itself (the portal) is told each binding; one it
+    /// refuses is `rebind.failed` with its reason and the old key keeps working, and one it takes
+    /// is `rebound` and the new key works.
+    #[test]
+    fn dc_n1_a_binding_the_backend_refuses_keeps_the_old_one() {
+        use std::sync::{Arc, Mutex};
+        struct Only(Arc<Mutex<Vec<String>>>);
+        impl Binder for Only {
+            fn bind(&mut self, h: &Hotkey) -> Result<(), String> {
+                self.0.lock().unwrap().push(h.trigger().to_string());
+                if h.is_modifier_only() {
+                    Err("chords only".into())
+                } else {
+                    Ok(())
+                }
+            }
+        }
+        let w = World::new();
+        let mut d = dictate(&w);
+        let told: Arc<Mutex<Vec<String>>> = Arc::default();
+        d.set_binder(Box::new(Only(told.clone())));
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        let rebind =
+            |k: &str| Command::parse(&format!(r#"{{"type":"rebind","hotkey":"{k}"}}"#)).unwrap();
+        d.command(rebind("RightShift"), 0, &mut out);
+        assert!(
+            out.lines
+                .last()
+                .unwrap()
+                .contains(r#""type":"rebind.failed","hotkey":"RightShift","reason":"chords only""#),
+            "{:?}",
+            out.lines
+        );
+        d.key(true, "RightCommand", 0, &mut out);
+        d.key(false, "RightCommand", 100 * MS, &mut out);
+        run(&mut d, &mut out, 0, 200);
+        assert!(
+            types(&out).contains(&"session.started".to_string()),
+            "the old key still works"
+        );
+        d.command(rebind("Control+Shift+D"), 300 * MS, &mut out);
+        assert!(out.lines.last().unwrap().contains(r#""type":"rebound""#));
+        assert_eq!(*told.lock().unwrap(), ["RightShift", "D"]);
     }
 
     /// The tray's and the CLI's door: `session.start` then `session.stop` is one latched session;

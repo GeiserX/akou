@@ -46,6 +46,6 @@ First run: <https://github.com/GeiserX/akou/actions/runs/36360828476> (jobs `cap
 
 ## Still open
 
-- **The GlobalShortcuts portal** (KDE, recent GNOME, Hyprland), which needs no rule and no group, and whose `Activated` and `Deactivated` already run a session on fakes ([tap.rs](../../native/akou-capture/src/dictate/tap.rs)). It needs a real GNOME and KDE session to check.
+- **The GlobalShortcuts portal** (KDE, recent GNOME, Hyprland), which needs no rule and no group, is written and checked against a fake portal ([dc-n1-linux-portal.md](dc-n1-linux-portal.md)). Where the session bus has it, the backend is `portal` and evdev serves only the bindings the portal cannot take. It still needs a real GNOME and KDE session to check.
 - **A real desktop.** The check runs on a runner with no display server. Whether a Wayland compositor or X11 changes what evdev sees is not checked; evdev is under both, so no difference is expected.
 - **Non-US layouts.** A chord names a place, so `Control+Shift+Z` on a German layout is the key labelled Y. The recorder shows the name the helper reports, so what the user presses is what gets bound.

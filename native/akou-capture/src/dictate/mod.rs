@@ -21,7 +21,8 @@
 //! through the worker loop in `live`) and inserts through the general pasteboard and posted key
 //! events (`mac_insert`). On Windows it runs a low-level keyboard hook, UI Automation and the
 //! WASAPI microphone (`win`) and inserts through the clipboard and `SendInput` (`win_insert`). On
-//! Linux it reads the keys from evdev and records through the sound server (`linux`), with no
+//! Linux it hears the key through the GlobalShortcuts portal where the desktop has one
+//! (`portal`), or reads it from evdev, and records through the sound server (`linux`), with no
 //! inserter yet. While the app asks for it (`pause_media`), a session pauses the media players
 //! that are playing and plays them again at its end (`media`): MPRIS on Linux (`mpris`), the
 //! system media transport controls on Windows (`win_media`). `--probe` prints the `ready` line
@@ -48,6 +49,8 @@ pub mod media;
 pub mod mic;
 #[cfg(target_os = "linux")]
 pub mod mpris;
+#[cfg(target_os = "linux")]
+pub mod portal;
 pub mod protocol;
 pub mod readback;
 pub mod selection;
