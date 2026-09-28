@@ -21,6 +21,10 @@
  * - `error` with the log's message for `ERROR_MS`. Its buttons (Retry, Copy, Open draft) wait for
  *   the draft box (DC-S1), so it offers none yet.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
+ * - the learn chip (DC-L4) for a fix made in the app's field after a direct insert (DC-L2): shown
+ *   with the window, whatever the state, until it is answered, and after Learn for its Undo line;
+ *   a page that never answers is taken as ignoring it after `CHIP_WAIT_MS`. The chip carries only
+ *   the fixed word and its heard form, the words DC-D2 lets it show.
  *
  * Only the spoken session's dictations count: a clip sent to `POST /v1/dictations` has no target
  * and never shows here.
@@ -28,6 +32,7 @@
 
 import type { ChipAnswer, PillKey, PillRpc, PillState } from "../../ui/pill-protocol.ts";
 import { pillPreview } from "../../ui/pill-protocol.ts";
+import { LEARNED_MS } from "../dictation/learner.ts";
 import type { DictationFollow } from "../dictation/service.ts";
 
 type Messages = PillRpc["webview"]["messages"];
@@ -51,6 +56,8 @@ export interface PillDictation {
   follow(fn: (m: DictationFollow) => void): () => void;
   /** Stop and Cancel, the same session door as `POST /v1/dictation/stop` and `/cancel`. */
   control(action: "stop" | "cancel"): Promise<boolean>;
+  /** The answer to a learn chip the pill showed (DC-L4); absent, no chip is answered. */
+  chip?(a: ChipAnswer): Promise<boolean>;
 }
 
 export interface PillOptions {
@@ -90,6 +97,12 @@ export const BUSY_NOTE = "still transcribing";
 /** How long that flash stays. */
 export const BUSY_MS = 1200;
 
+/**
+ * How long a question chip may stay without an answer: the page's own 8 s (`CHIP_ASK_MS`) and a
+ * margin. A page that never answers (not booted, closed) is taken as ignoring it then.
+ */
+export const CHIP_WAIT_MS = 10_000;
+
 /** The key hints of a key source that swallows keys during a session (DC-A4). */
 const SWALLOWED: readonly PillKey[] = ["escape", "enter", "shift-enter"];
 
@@ -118,11 +131,24 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   let notice: string | null = null;
   let cancelHide: () => void = () => {};
   let cancelBusy: () => void = () => {};
+  /** The dictation whose learn chip is up, and the timer that takes it down. */
+  let chipUp: string | null = null;
+  let cancelChip: () => void = () => {};
+
+  const visible = () => shown.state !== "hidden" || chipUp !== null;
 
   const put = (s: PillState) => {
     shown = s;
     send().state(s);
-    o.onVisible(s.state !== "hidden");
+    o.onVisible(visible());
+  };
+
+  /** The chip of `id` is down; the window goes with it unless a state is showing. */
+  const chipOver = (id: string) => {
+    if (chipUp !== id) return;
+    cancelChip();
+    chipUp = null;
+    o.onVisible(visible());
   };
 
   const hideAfter = (ms: number) => {
@@ -177,6 +203,21 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       if (shown.state === "listening") put({ ...shown, note: m.note });
       return;
     }
+    if (m.kind === "chip") {
+      const c = m.chip;
+      cancelChip();
+      chipUp = c.id;
+      send().chip(c);
+      o.onVisible(true);
+      cancelChip =
+        c.mode === "learned"
+          ? later(LEARNED_MS, () => chipOver(c.id))
+          : later(CHIP_WAIT_MS, () => {
+              void d.chip?.({ id: c.id, action: "ignore" });
+              chipOver(c.id);
+            });
+      return;
+    }
     if (m.kind === "busy") {
       const s = shown;
       if (s.state !== "transcribing") return;
@@ -215,8 +256,16 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         if (action !== "stop" && action !== "cancel") return false;
         return d.control(action);
       },
-      // The chip's answers are DC-L4's, and no chip is sent before it.
-      chip: async (_a: ChipAnswer) => false,
+      chip: async (a: ChipAnswer) => {
+        const ok = d.chip ? await d.chip(a) : false;
+        if (a.id !== chipUp) return ok;
+        // After Learn the Undo line stays for its time; any other answer takes the chip down.
+        if (ok && a.action === "learn") {
+          cancelChip();
+          cancelChip = later(LEARNED_MS, () => chipOver(a.id));
+        } else chipOver(a.id);
+        return ok;
+      },
       state: async () => shown,
     },
     update,
@@ -232,6 +281,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     close: () => {
       cancelHide();
       cancelBusy();
+      cancelChip();
       unfollow();
     },
   };

@@ -816,7 +816,7 @@ mod tests {
                     send_key: "none".into(),
                     target: Some(t),
                     restore: true,
-                    read_field: false,
+                    read_field: true,
                 },
                 Command::Settled { id: "1".into() },
                 Command::Focus { target: secure },

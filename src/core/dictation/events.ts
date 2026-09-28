@@ -28,6 +28,12 @@ export interface DictationWord {
   c: number;
 }
 
+/** One run of words the user changed after an insert: what akou inserted, what is there now. */
+export interface DictationHunk {
+  inserted: string;
+  now: string;
+}
+
 export type DictationDraft =
   | {
       type: "dictation.started";
@@ -87,9 +93,16 @@ export type DictationDraft =
   /** Escape or the close in the draft box: nothing was inserted, the text stays in history. */
   | { type: "dictation.discarded"; id: string }
   /**
-   * A word the user fixed in the draft box (DC-L1, DC-L3), and what became of the offer to learn
-   * it (DC-L4): `proposed` when the edit was read, then `accepted`, `rejected` or `ignored`. Only
-   * the pair is kept, never the rest of the field.
+   * The field read back after a direct insert (DC-L2): each run of words the user changed there,
+   * never the rest of the field; empty when nothing changed. With `reason` the field was not read
+   * (`unreadable`: a dormant tree or a failed read; `lost`: the text or its anchors are gone, or
+   * the app cleared the field; `too-long`; `not-read`: a terminal, Secure Input, no grant).
+   */
+  | { type: "dictation.edit"; id: string; hunks: DictationHunk[]; reason?: string }
+  /**
+   * A word the user fixed in the draft box or in the app's field (DC-L1, DC-L2, DC-L3), and what
+   * became of the offer to learn it (DC-L4): `proposed` when the edit was read, then `accepted`,
+   * `rejected` or `ignored`. Only the pair is kept, never the rest of the field.
    */
   | {
       type: "dictation.learn";
@@ -122,6 +135,7 @@ export const DICTATION_TYPES: readonly DictationDraft["type"][] = [
   "dictation.failed",
   "dictation.drafted",
   "dictation.discarded",
+  "dictation.edit",
   "dictation.learn",
   "dictation.deleted",
 ];
@@ -146,6 +160,12 @@ function isWord(v: unknown): boolean {
   if (typeof v !== "object" || v === null) return false;
   const w = v as Record<string, unknown>;
   return isStr(w.w) && isNum(w.s) && isNum(w.e) && isNum(w.c);
+}
+
+function isHunk(v: unknown): boolean {
+  if (typeof v !== "object" || v === null) return false;
+  const h = v as Record<string, unknown>;
+  return isStr(h.inserted) && isStr(h.now);
 }
 
 /** Null when a draft is well formed, else what is wrong with it. */
@@ -178,6 +198,12 @@ export function checkDictationDraft(o: Record<string, unknown>): string | null {
       return isStr(o.error) ? null : "dictation.failed";
     case "dictation.drafted":
       return isStr(o.reason) ? null : "dictation.drafted";
+    case "dictation.edit":
+      return Array.isArray(o.hunks) &&
+        o.hunks.every(isHunk) &&
+        (o.reason === undefined || isStr(o.reason))
+        ? null
+        : "dictation.edit";
     case "dictation.learn":
       return isStr(o.term) &&
         isStr(o.heard) &&
@@ -237,6 +263,11 @@ export interface DictationItem {
   /** The engine echoed its context and the dictation was decoded again without it (DC-E6). */
   echo_retry: boolean;
   error: string | null;
+  /**
+   * Why the field could not be read back after the insert (DC-L2), so nothing could be learned
+   * from a fix there: `unreadable`, `lost`, `too-long` or `not-read`; null otherwise.
+   */
+  learn: string | null;
 }
 
 /**
@@ -265,6 +296,7 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
         language_forced: null,
         echo_retry: false,
         error: null,
+        learn: null,
       });
       continue;
     }
@@ -308,6 +340,9 @@ export function foldDictations(events: readonly DictationEvent[]): DictationItem
       case "dictation.failed":
         it.state = "failed";
         it.error = e.error;
+        break;
+      case "dictation.edit":
+        it.learn = e.reason ?? null;
         break;
       case "dictation.deleted":
         items.delete(e.id);

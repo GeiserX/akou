@@ -31,6 +31,10 @@
  * the draft box (`onDraft`) and the dictation is `drafted`, never lost. The draft box's own insert
  * (`insertText`) first asks the helper to bring the captured target forward, then inserts there.
  *
+ * The read-back (DC-L2): with `readField` in the insert policy, a paste asks the helper to read the
+ * field back (`read_field`), and its one answer is logged as `dictation.edit`: the runs of words the
+ * user changed there (`onEdit`, for learning), or why the field could not be read.
+ *
  * A password field gets nothing logged but that the dictation happened (DC-N8): no text, no words,
  * and the text goes to the helper for the clipboard only.
  *
@@ -61,6 +65,7 @@ import { forcesLanguage } from "./engines.ts";
 import type {
   AppToHelper,
   Bindings,
+  EditHunk,
   EndReason,
   HelperToApp,
   InsertMethod,
@@ -154,6 +159,11 @@ export interface InsertPolicy {
   /** Press the send key after every direct insert, not only after Enter. */
   sendAlways: boolean;
   restore: boolean;
+  /**
+   * `dictation.readField` while `dictation.learn` is not `off` (DC-L2): the helper reads the field
+   * back after a paste, and the fix the user makes there can be learned. Absent, nothing is read.
+   */
+  readField?: boolean;
 }
 
 /** With no settings: paste, restore the clipboard, and never a send key. */
@@ -215,6 +225,12 @@ export interface SessionOptions extends TextRules {
   onWarning?(note: string): void;
   /** `dictation.spokenSend`: a dictation ending in "send it" presses the send key (DC-S5). */
   spokenSend?(): boolean;
+  /**
+   * The field read back after dictation `id` was pasted (DC-L2): the runs of words the user
+   * changed there, possibly none, or null when the field could not be read. Called once
+   * `dictation.edit` is written.
+   */
+  onEdit?(id: string, hunks: EditHunk[] | null): void;
 }
 
 /** When a session ends by itself (DC-A3). */
@@ -313,6 +329,8 @@ export class DictationSession {
   private secureInput = false;
   /** Dictations waiting for their insert's result, by the helper's session id. */
   private readonly inserts = new Map<string, string>();
+  /** Dictations whose field the helper reads back after the insert (DC-L2), by its session id. */
+  private readonly reads = new Map<string, string>();
   /** The draft box's inserts and copies waiting for the helper's answer, by the id sent. */
   private readonly explicit = new Map<string, Explicit>();
   private explicitSeq = 0;
@@ -498,6 +516,8 @@ export class DictationSession {
         const id = this.inserts.get(m.id);
         if (!id) return;
         this.inserts.delete(m.id);
+        // Nothing was pasted after a clipboard-only insert, so nothing is read back.
+        if (m.method === "clipboard") this.reads.delete(m.id);
         this.write({
           type: "dictation.inserted",
           id,
@@ -505,6 +525,22 @@ export class DictationSession {
           receipt_ms: m.receipt_ms,
         });
         this.settle();
+        return;
+      }
+      case "edit":
+      case "edit.unreadable": {
+        const id = this.reads.get(m.id);
+        if (!id) return;
+        this.reads.delete(m.id);
+        // Only the runs the user changed, never the field's other text (DC-L2).
+        const hunks =
+          m.type === "edit" ? m.hunks.map((h) => ({ inserted: h.inserted, now: h.now })) : [];
+        this.write(
+          m.type === "edit"
+            ? { type: "dictation.edit", id, hunks }
+            : { type: "dictation.edit", id, hunks, reason: m.reason },
+        );
+        this.o.onEdit?.(id, m.type === "edit" ? m.hunks : null);
         return;
       }
       case "insert.failed": {
@@ -517,6 +553,7 @@ export class DictationSession {
         const id = this.inserts.get(m.id);
         if (!id) return;
         this.inserts.delete(m.id);
+        this.reads.delete(m.id);
         // The keyboard moved or the field cannot take it: the text waits in the draft box.
         if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason, false)) {
           this.write({ type: "dictation.drafted", id, reason: m.reason });
@@ -527,8 +564,7 @@ export class DictationSession {
         return;
       }
       default:
-        // grant.lost, edit, edit.unreadable, mic, stopped: the pill's and learning's, in later
-        // items.
+        // grant.lost, mic, stopped: the pill's, in later items.
         return;
     }
   }
@@ -661,6 +697,7 @@ export class DictationSession {
       this.write({ type: "dictation.failed", id, error: "the dictation helper stopped" });
     }
     this.inserts.clear();
+    this.reads.clear();
     for (const x of this.explicit.values())
       x.resolve({ ok: false, reason: "the dictation helper stopped" });
     this.explicit.clear();
@@ -803,9 +840,12 @@ export class DictationSession {
     const method: InsertMethod = c.secure || p.method === "clipboard" ? "clipboard" : "paste";
     // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
     const send = method !== "clipboard" && (c.asked === "send" || p.sendAlways || spoken);
+    // DC-L2: the helper reads the field back after a paste; never a password field's.
+    const read = p.readField === true && method === "paste" && !c.secure;
     this.decoding--;
     if (this.latest === c) this.latest = null;
     this.inserts.set(c.helperId, id);
+    if (read) this.reads.set(c.helperId, id);
     this.settle();
     this.o.send({
       type: "insert",
@@ -815,6 +855,7 @@ export class DictationSession {
       send_key: send ? p.sendKey : "none",
       target: c.target,
       ...(p.restore ? {} : { restore: false }),
+      ...(read ? { read_field: true } : {}),
     });
   }
 }

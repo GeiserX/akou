@@ -5,6 +5,7 @@
 
 import { describe, expect, test } from "bun:test";
 import {
+  applyHunks,
   type Candidate,
   candidates,
   checkAudio,
@@ -237,5 +238,47 @@ describe("DC-L5: the pairs of the words to review", () => {
     ]);
     // Positive control: without the vocabulary, the log's word stands.
     expect(reviewPairs(events).map((r) => r.status)).toEqual(["accepted", "accepted"]);
+  });
+});
+
+describe("DC-L2: the field's hunks rebuild the text the user left", () => {
+  const SAID = "tell the cooper netties team today";
+
+  test("each hunk replaces the inserted words it names, from its index", () => {
+    expect(applyHunks(SAID, [{ inserted: "cooper netties", now: "Kubernetes", at: 2 }])).toBe(
+      "tell the Kubernetes team today",
+    );
+    // Two hunks, an insertion between words, and a deletion.
+    expect(
+      applyHunks(SAID, [
+        { inserted: "tell", now: "ask", at: 0 },
+        { inserted: "", now: "whole", at: 2 },
+        { inserted: "today", now: "", at: 5 },
+      ]),
+    ).toBe("ask the whole cooper netties team");
+    // No index: the first place its words stand.
+    expect(applyHunks(SAID, [{ inserted: "cooper netties", now: "Kubernetes" }])).toBe(
+      "tell the Kubernetes team today",
+    );
+    // No hunk: the text as inserted, its spacing made single.
+    expect(applyHunks("tell  the\nteam", [])).toBe("tell the team");
+  });
+
+  test("a hunk that does not match the inserted text teaches nothing", () => {
+    expect(applyHunks(SAID, [{ inserted: "cooper netties", now: "Kubernetes", at: 1 }])).toBeNull();
+    expect(applyHunks(SAID, [{ inserted: "docker", now: "Docker" }])).toBeNull();
+    expect(applyHunks(SAID, [{ inserted: "today", now: "now", at: 9 }])).toBeNull();
+    // Out of order: a hunk before the one it follows.
+    expect(
+      applyHunks(SAID, [
+        { inserted: "team", now: "crew", at: 4 },
+        { inserted: "tell", now: "ask", at: 0 },
+      ]),
+    ).toBeNull();
+  });
+
+  test("the rebuilt text yields the candidate a draft-box fix would", () => {
+    const edited = applyHunks(SAID, [{ inserted: "cooper netties", now: "Kubernetes", at: 2 }]);
+    expect(pairs(edit(SAID, edited ?? ""))).toEqual([["cooper netties", "Kubernetes"]]);
   });
 });

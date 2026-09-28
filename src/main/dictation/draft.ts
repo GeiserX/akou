@@ -26,16 +26,10 @@
  */
 
 import type { DictationItem, Target } from "../../core/dictation/events.ts";
-import {
-  type Candidate,
-  learn,
-  pairHistory,
-  pairKey,
-  type Redecode,
-  shouldAsk,
-} from "../../core/dictation/learn.ts";
+import type { Redecode } from "../../core/dictation/learn.ts";
 import type { DraftOpen, DraftRpc, DraftWord } from "../../ui/dictation-protocol.ts";
-import type { Chip, ChipAnswer } from "../../ui/pill-protocol.ts";
+import type { Chip } from "../../ui/pill-protocol.ts";
+import { Learner } from "./learner.ts";
 import type { SendKey } from "./protocol.ts";
 import type { DictationSession } from "./session.ts";
 import type { DictationLog } from "./store.ts";
@@ -105,7 +99,7 @@ export type DraftOpenResult =
   | { ok: false; code: "not_found" | "no_text" | "no_target" | "no_draft_box"; message: string };
 
 /** How long the box stays up after Learn: the chip's Undo line (`CHIP_UNDO_MS` of the page). */
-export const LEARNED_MS = 6000;
+export { LEARNED_MS } from "./learner.ts";
 
 /** The target of a dictation that went to no app: the helper's own word for "nothing known". */
 const NO_TARGET: Target = { app: "", pid: 0, window: "", field: "unknown" };
@@ -124,45 +118,38 @@ interface Open {
   answered: boolean;
 }
 
-interface PendingChip {
-  candidates: Candidate[];
-  /** The pairs written to the vocabulary, for Undo. */
-  learned: Candidate[];
-  /** Cancels the timer of its Undo line. */
-  cancel: () => void;
-}
-
-const realLater = (ms: number, fn: () => void) => {
-  const t = setTimeout(fn, ms);
-  return () => clearTimeout(t);
-};
-
-/**
- * What a learn or undo failure puts in the app log: the error's code or name, never its message.
- * Those messages quote the dictated word and its heard form (see learnPair), and the app log
- * never holds what the user dictated.
- */
-function failure(err: unknown): string {
-  const e = err as { code?: unknown; name?: unknown } | null;
-  if (typeof e?.code === "string") return e.code;
-  return typeof e?.name === "string" ? e.name : "error";
-}
-
 export class DraftBox {
   private win: DraftWindow | null = null;
   private cur: Open | null = null;
-  private readonly chips = new Map<string, PendingChip>();
+  /** The offer to learn from an edit in the box (DC-L1, DC-L4). */
+  private readonly learner: Learner;
   /** Whether the window is up, so it is hidden once. */
   private up = false;
   readonly handlers: { [K in keyof Requests]: Handler<K> };
 
   constructor(private readonly o: DraftBoxOptions) {
+    this.learner = new Learner({
+      log: o.log,
+      learnMode: o.learnMode,
+      ...(o.knownPairs ? { knownPairs: o.knownPairs } : {}),
+      ...(o.commonWords ? { commonWords: o.commonWords } : {}),
+      learnEntry: o.learnEntry,
+      unlearnEntry: o.unlearnEntry,
+      ...(o.recheck ? { recheck: o.recheck } : {}),
+      // A chip over: its learn window closes, and the box goes once nothing is left in it.
+      onDone: (id) => {
+        this.o.closeLearnWindow?.(id);
+        this.settle();
+      },
+      ...(o.later ? { later: o.later } : {}),
+      ...(o.onLog ? { onLog: o.onLog } : {}),
+    });
     this.handlers = {
       insert: (p) => this.insert(p.id, p.text, p.send),
       discard: async (p) => this.discard(p.id),
       copy: (p) => this.copy(p.id, p.text),
       retry: (p) => this.retry(p.id, p.engine),
-      chip: (a) => this.answer(a),
+      chip: (a) => this.learner.answer(a),
     };
   }
 
@@ -172,8 +159,7 @@ export class DraftBox {
     this.up = false;
     if (!w) {
       this.cur = null;
-      for (const p of this.chips.values()) p.cancel();
-      this.chips.clear();
+      this.learner.clear();
     }
   }
 
@@ -231,7 +217,7 @@ export class DraftBox {
   ): void {
     // Another dictation's draft left unanswered in the box: its learn window closes with it.
     const prev = this.cur;
-    if (prev && prev.id !== it.id && !prev.answered && !this.chips.has(prev.id))
+    if (prev && prev.id !== it.id && !prev.answered && !this.learner.has(prev.id))
       this.o.closeLearnWindow?.(prev.id);
     this.cur = {
       id: it.id,
@@ -348,129 +334,15 @@ export class DraftBox {
     return true;
   }
 
-  /**
-   * The candidates of an edit (DC-L1, DC-L3): each written `proposed`, and the chip for those the
-   * ask rule lets through; with `dictation.learn` `auto` those are learned at once.
-   */
-  private async learnFrom(c: Open, edited: string): Promise<Chip | null> {
-    const mode = this.o.learnMode();
-    if (mode === "off" || edited === c.base) return null;
-    const learnt = this.o.log.events().filter((e) => e.type === "dictation.learn");
-    const history = pairHistory(learnt);
-    // A fix of this dictation already offered (Copy, then Enter; a refused insert, then Enter
-    // again) is one correction, not another.
-    const offered = new Set(
-      learnt.filter((e) => e.id === c.id).map((e) => pairKey(e.heard, e.term)),
-    );
-    const rejected = (heard: string, term: string) =>
-      history.get(pairKey(heard, term))?.rejected === true;
-    let found: Candidate[];
-    try {
-      const common = this.o.commonWords?.(c.language);
-      const known = await this.o.knownPairs?.();
-      found = await learn(
-        {
-          inserted: c.base,
-          edited,
-          ...(c.words.length > 0 ? { words: c.words } : {}),
-          language: c.language,
-          ...(common ? { isCommonWord: common } : {}),
-          ...(known ? { known } : {}),
-          rejected,
-        },
-        this.o.recheck?.(c.id) ?? null,
-      );
-    } catch (err) {
-      this.o.onLog?.("warn", `dictation ${c.id}: no learning (${failure(err)})`);
-      return null;
-    }
-    found = found.filter((x) => !offered.has(pairKey(x.heard, x.term)));
-    const ask = found.filter((x) => shouldAsk(history.get(pairKey(x.heard, x.term))));
-    for (const x of found) this.learnEvent(c.id, x, "proposed");
-    if (ask.length === 0) return null;
-    const pending: PendingChip = { candidates: ask, learned: [], cancel: () => {} };
-    // One chip per dictation: a newer edit of the same one replaces the question.
-    this.chips.get(c.id)?.cancel();
-    this.chips.set(c.id, pending);
-    if (mode === "auto") {
-      for (const x of ask) await this.accept(c.id, x, pending);
-      if (pending.learned.length === 0) {
-        this.chips.delete(c.id);
-        return null;
-      }
-    }
-    const shown = mode === "auto" ? pending.learned : ask;
-    return {
+  /** The offer to learn from the box's edit (DC-L1, DC-L3), beside the insert. */
+  private learnFrom(c: Open, edited: string): Promise<Chip | null> {
+    return this.learner.offer({
       id: c.id,
-      candidates: shown.map((x) => ({ term: x.term, heard: x.heard })),
-      mode: mode === "auto" ? "learned" : "ask",
-    };
-  }
-
-  private async accept(id: string, x: Candidate, p: PendingChip): Promise<void> {
-    try {
-      await this.o.learnEntry({ id, term: x.term, heard: x.heard });
-    } catch (err) {
-      this.o.onLog?.("warn", `dictation ${id}: a word was not learned (${failure(err)})`);
-      return;
-    }
-    p.learned.push(x);
-    this.learnEvent(id, x, "accepted");
-  }
-
-  /** The chip's answer (DC-L4). */
-  private async answer(a: ChipAnswer): Promise<boolean> {
-    const p = this.chips.get(a.id);
-    if (!p) return false;
-    const ticked = (x: Candidate) => (a.terms ?? []).includes(x.term);
-    switch (a.action) {
-      case "learn":
-        for (const x of p.candidates) {
-          if (ticked(x)) await this.accept(a.id, x, p);
-          else this.learnEvent(a.id, x, "ignored");
-        }
-        // The Undo line stays for its time.
-        this.chipDone(a.id, p.learned.length > 0 ? LEARNED_MS : 0);
-        return true;
-      case "reject":
-        for (const x of p.candidates) this.learnEvent(a.id, x, ticked(x) ? "rejected" : "ignored");
-        this.chipDone(a.id, 0);
-        return true;
-      case "ignore":
-        for (const x of p.candidates) this.learnEvent(a.id, x, "ignored");
-        this.chipDone(a.id, 0);
-        return true;
-      case "undo":
-        for (const x of p.learned.splice(0)) {
-          try {
-            await this.o.unlearnEntry({ id: a.id, term: x.term, heard: x.heard });
-            this.learnEvent(a.id, x, "ignored");
-          } catch (err) {
-            this.o.onLog?.("warn", `dictation ${a.id}: undo failed (${failure(err)})`);
-          }
-        }
-        this.chipDone(a.id, 0);
-        return true;
-      default:
-        return false;
-    }
-  }
-
-  /**
-   * The chip of `id` is over, now or once its Undo line has had `afterMs`: its learn window closes,
-   * and the box goes once nothing is left in it.
-   */
-  private chipDone(id: string, afterMs: number): void {
-    const p = this.chips.get(id);
-    if (!p) return;
-    p.cancel();
-    if (afterMs > 0) {
-      p.cancel = (this.o.later ?? realLater)(afterMs, () => this.chipDone(id, 0));
-      return;
-    }
-    this.chips.delete(id);
-    this.o.closeLearnWindow?.(id);
-    this.settle();
+      base: c.base,
+      edited,
+      words: c.words,
+      language: c.language,
+    });
   }
 
   /**
@@ -483,7 +355,7 @@ export class DraftBox {
       this.up = true;
       this.win.chip(chip);
       // `auto`: nothing to answer but Undo, which has its time.
-      if (chip.mode === "learned") this.chipDone(chip.id, LEARNED_MS);
+      this.learner.shown(chip);
       return;
     }
     this.o.closeLearnWindow?.(c.id);
@@ -492,24 +364,9 @@ export class DraftBox {
 
   /** The box goes when no draft waits in it and no chip is up. */
   private settle(): void {
-    if (this.chips.size > 0 || (this.cur !== null && !this.cur.answered)) return;
+    if (this.learner.size > 0 || (this.cur !== null && !this.cur.answered)) return;
     this.cur = null;
     this.hide();
-  }
-
-  private learnEvent(
-    id: string,
-    x: Candidate,
-    status: "proposed" | "accepted" | "rejected" | "ignored",
-  ) {
-    this.write({
-      type: "dictation.learn",
-      id,
-      term: x.term,
-      heard: x.heard,
-      status,
-      evidence: x.evidence,
-    });
   }
 
   private write(d: Parameters<DictationLog["append"]>[0]): void {

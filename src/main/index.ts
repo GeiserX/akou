@@ -2055,6 +2055,8 @@ export class AkouApp implements ApiApp {
           sendKey: c["dictation.sendKey"] as SendKey,
           sendAlways: c["dictation.sendAlways"],
           restore: c["dictation.restoreClipboard"],
+          // The field is read back only to learn from a fix there (DC-L2) until DC-S4 reads it too.
+          readField: c["dictation.readField"] && c["dictation.learn"] !== "off",
         };
       },
       draft: {
