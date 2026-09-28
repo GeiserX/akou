@@ -25,6 +25,7 @@ import {
   type PillDictation,
   type PillSend,
   pillRpc,
+  settledWords,
 } from "../src/main/window/pill.ts";
 import {
   appForShell,
@@ -60,16 +61,27 @@ function fakeDictation() {
   const st = { state: "idle", loading: false, swallow_keys: true as boolean | null };
   const followers = new Set<(m: DictationFollow) => void>();
   const controls: string[] = [];
+  /** Whether each follower asked for partials (DC-E5). */
+  const wantsPartials: boolean[] = [];
+  /** The languages the chip moves between, and the ones it forced (akou-5v8). */
+  const choice = { languages: ["en", "es"] as readonly string[], switchable: true };
+  const forced: string[] = [];
   let seq = 0;
   const d: PillDictation = {
     status: () => ({ ...st }),
-    follow: (fn) => {
+    follow: (fn, o) => {
       followers.add(fn);
+      wantsPartials.push(o?.partials?.() === true);
       return () => followers.delete(fn);
     },
     control: async (a) => {
       controls.push(a);
       return true;
+    },
+    languageChoice: () => choice,
+    setLanguage: (l) => {
+      forced.push(l);
+      return st.state === "listening";
     },
   };
   const tell = (m: DictationFollow) => {
@@ -77,7 +89,7 @@ function fakeDictation() {
   };
   const event = (draft: DictationDraft) =>
     tell({ kind: "event", e: { ...draft, v: 1, seq: ++seq, t: seq } as DictationEvent });
-  return { d, st, controls, tell, event, followers };
+  return { d, st, controls, tell, event, followers, wantsPartials, choice, forced };
 }
 
 /** A recording page: every message the main side sent it, in order. */
@@ -112,7 +124,7 @@ function manualLater() {
   };
 }
 
-function pill(o: { preview?: unknown; hidden?: boolean; platform?: string } = {}) {
+function pill(o: { preview?: unknown; platform?: string } = {}) {
   const f = fakeDictation();
   const r = recorder();
   const t = manualLater();
@@ -123,7 +135,7 @@ function pill(o: { preview?: unknown; hidden?: boolean; platform?: string } = {}
     label: hotkeyLabel,
     now: () => 1000,
     onVisible: (v) => visible.push(v),
-    preview: { setting: () => o.preview ?? false, hiddenFromCapture: () => o.hidden ?? false },
+    preview: { setting: () => o.preview ?? false },
     later: t.later,
   });
   cleanups.push(() => p.close());
@@ -413,11 +425,15 @@ describe("DC-L4, DC-L2: the learn chip in the pill after a direct insert", () =>
 describe("DC-D2, DC-O2: no message to the pill carries the dictated words", () => {
   const SAID = "the launch code is swordfish";
 
-  /** A whole session whose transcript is `SAID`, with a partial of it while listening. */
-  function session(o: { preview?: unknown; hidden?: boolean }) {
+  /**
+   * A whole session whose transcript is `SAID`, with a partial of it while listening from the
+   * session (DC-E5) and one handed to the pill directly.
+   */
+  function session(o: { preview?: unknown }) {
     const f = pill(o);
     f.to("listening");
     f.tell({ kind: "level", rms: 0.2 });
+    f.tell({ kind: "partial", text: SAID, language: "en" });
     f.p.preview(SAID);
     spoken(f, "d1");
     f.to("transcribing");
@@ -441,22 +457,128 @@ describe("DC-D2, DC-O2: no message to the pill carries the dictated words", () =
     f.sent.some((m) => JSON.stringify(m.payload).includes("swordfish"));
 
   test("with the preview off, every message is free of the words", () => {
-    const f = session({ preview: false, hidden: true });
+    const f = session({ preview: false });
     expect(f.sent.length).toBeGreaterThan(3);
     expect(carries(f)).toBe(false);
     expect(f.sent.some((m) => m.name === "preview")).toBe(false);
   });
 
-  test("with the preview on and the window not hidden from capture, the same", () => {
-    expect(carries(session({ preview: true, hidden: false }))).toBe(false);
+  test("a preview setting that is not exactly true sends nothing either", () => {
+    expect(carries(session({ preview: "true" }))).toBe(false);
   });
 
-  test("positive control: the preview on and the window hidden from capture sends the partial", () => {
-    const f = session({ preview: true, hidden: true });
+  test("positive control: the preview on sends the session's partial", () => {
+    const f = session({ preview: true });
     expect(f.sent.filter((m) => m.name === "preview")).toEqual([
-      { name: "preview", payload: { text: SAID } },
+      { name: "preview", payload: { text: SAID, settled: 0 } },
+      { name: "preview", payload: { text: SAID, settled: SAID.length } },
     ]);
     expect(carries(f)).toBe(true);
+  });
+
+  test("a partial that comes after listening ended is never sent", () => {
+    const f = pill({ preview: true });
+    f.to("listening");
+    f.to("transcribing");
+    f.tell({ kind: "partial", text: SAID, language: "en" });
+    expect(carries(f)).toBe(false);
+  });
+});
+
+describe("DC-E5: the words as you speak on the ticker", () => {
+  test("the pill asks the session for partials", () => {
+    expect(pill().wantsPartials).toEqual([true]);
+  });
+
+  test("the words the last partial had too are settled, the rest still changing", () => {
+    const f = pill({ preview: true });
+    f.to("listening");
+    f.tell({ kind: "partial", text: "the plan", language: "en" });
+    f.tell({ kind: "partial", text: "the plan is  to", language: "en" });
+    f.tell({ kind: "partial", text: "the plan is two", language: "en" });
+    const previews = f.sent.filter((m) => m.name === "preview").map((m) => m.payload);
+    expect(previews).toEqual([
+      { text: "the plan", settled: 0 },
+      { text: "the plan is to", settled: "the plan".length },
+      { text: "the plan is two", settled: "the plan is".length },
+    ]);
+  });
+
+  test("a new session starts with nothing settled", () => {
+    const f = pill({ preview: true });
+    f.to("listening");
+    f.tell({ kind: "partial", text: "hello there", language: "en" });
+    f.to("idle");
+    f.to("listening");
+    f.tell({ kind: "partial", text: "hello there", language: "en" });
+    const last = f.sent.filter((m) => m.name === "preview").at(-1)?.payload;
+    expect(last).toEqual({ text: "hello there", settled: 0 });
+  });
+
+  test("settledWords follows the words as the decoded end of the audio slides left", () => {
+    expect(settledWords([], ["a", "b"])).toBe(0);
+    expect(settledWords(["a", "b"], ["a", "b", "c"])).toBe(2);
+    expect(settledWords(["a", "b", "c"], ["a", "x", "c"])).toBe(1);
+    // The start of a long dictation left the decoded window: the run starts later in the last one.
+    expect(settledWords(["a", "b", "c", "d"], ["c", "d", "e"])).toBe(2);
+    expect(settledWords(["a", "b"], ["x", "a", "b"])).toBe(0);
+  });
+});
+
+describe("akou-5v8: the language chip on the listening island", () => {
+  const lang = (f: ReturnType<typeof pill>) => {
+    const s = f.states().at(-1);
+    return s?.state === "listening" ? s.language : undefined;
+  };
+
+  test("no chip until a partial names the language, then the language it was heard in", () => {
+    const f = pill();
+    f.to("listening");
+    expect(lang(f)).toBeUndefined();
+    f.tell({ kind: "partial", text: "hola a todos", language: "es" });
+    expect(lang(f)).toEqual({ tag: "es", switchable: true, forced: false });
+    // The same language again sends no new state.
+    const n = f.states().length;
+    f.tell({ kind: "partial", text: "hola a todos otra", language: "es" });
+    expect(f.states()).toHaveLength(n);
+    // Words never ride the state, preview off or on.
+    expect(JSON.stringify(f.states())).not.toContain("hola");
+  });
+
+  test("a click moves the session to the next language and the chip says it was chosen", async () => {
+    const f = pill();
+    f.to("listening");
+    f.tell({ kind: "partial", text: "hola", language: "es" });
+    expect(await f.p.handlers.control({ action: "language" })).toBe(true);
+    expect(f.forced).toEqual(["en"]);
+    expect(lang(f)).toEqual({ tag: "en", switchable: true, forced: true });
+    // What the engine hears after that does not move a chosen language.
+    f.tell({ kind: "partial", text: "hola", language: "es" });
+    expect(lang(f)?.tag).toBe("en");
+    expect(await f.p.handlers.control({ action: "language" })).toBe(true);
+    expect(f.forced).toEqual(["en", "es"]);
+    // The language chosen is the session's own: the next one starts from what it hears.
+    f.to("idle");
+    f.to("listening");
+    expect(lang(f)).toBeUndefined();
+  });
+
+  test("an engine that picks its own language shows the chip read-only and refuses the click", async () => {
+    const f = pill();
+    f.choice.switchable = false;
+    f.to("listening");
+    f.tell({ kind: "partial", text: "hello", language: "en" });
+    expect(lang(f)).toEqual({ tag: "en", switchable: false, forced: false });
+    expect(await f.p.handlers.control({ action: "language" })).toBe(false);
+    expect(f.forced).toEqual([]);
+  });
+
+  test("the click does nothing outside listening", async () => {
+    const f = pill();
+    f.to("transcribing");
+    expect(await f.p.handlers.control({ action: "language" })).toBe(false);
+    expect(f.forced).toEqual([]);
+    expect(f.controls).toEqual([]);
   });
 });
 

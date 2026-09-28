@@ -13,7 +13,10 @@
  * a state ends, and the window's no-focus style is the shell's. No state carries dictated text, and
  * the page reads each field it draws by name, so an extra field is never shown (DC-D2). The one
  * exception is the words-as-I-speak preview (DC-O2), its own message, which the main side sends
- * only with `dictation.pillPreview` on; the page shows it while listening and drops it after.
+ * only with `dictation.pillPreview` on; the page shows it while listening and drops it after, the
+ * words the last partial had too in white and the rest dimmer. The language chip (akou-5v8) shows
+ * the session's language between the time and Stop; a click asks for the next of the user's
+ * languages when the engine takes a forced one.
  */
 
 import { mountChip } from "./dictation-chip.ts";
@@ -31,7 +34,7 @@ export interface PillTransport {
 export interface PillSink {
   state(s: PillState): void;
   level(l: { db: number }): void;
-  preview(p: { text: string }): void;
+  preview(p: { text: string; settled?: number }): void;
   chip(c: Chip): void;
 }
 
@@ -46,6 +49,24 @@ export function previewTail(text: string): string {
   if (text.length <= PREVIEW_CHARS) return text;
   const cut = text.slice(-PREVIEW_CHARS);
   return `…${cut.slice(cut.indexOf(" ") + 1)}`;
+}
+
+/**
+ * The preview as the ticker draws it: the end of `text` (`previewTail`) cut where its first
+ * `settled` characters end, the settled words and the part still changing. A `settled` that is not a
+ * count of characters settles nothing.
+ */
+export function previewParts(
+  text: string,
+  settled: unknown,
+): { settled: string; changing: string } {
+  const shown = previewTail(text);
+  const n = typeof settled === "number" && Number.isInteger(settled) ? settled : 0;
+  // The tail drops the start of a long text behind an ellipsis: the settled part loses as much.
+  const ellipsis = shown === text ? 0 : 1;
+  const dropped = text.length - (shown.length - ellipsis);
+  const at = n > dropped ? Math.min(shown.length, n - dropped + ellipsis) : 0;
+  return { settled: shown.slice(0, at), changing: shown.slice(at) };
 }
 
 /** Transcribing shows its time only once a wait is worth counting. */
@@ -114,8 +135,9 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
 
 export function mountPill(t: PillTransport, now: () => number = () => Date.now()): PillSink {
   let s: PillState = { state: "hidden" };
-  /** The preview's words, for this listening session only. */
+  /** The preview's words and how many characters at their start are settled, for this session. */
   let words = "";
+  let settled: unknown = 0;
   let chipUp = false;
   const chip = mountChip(
     el("chip"),
@@ -150,8 +172,28 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
 
   const showPreview = () => {
     const shown = s.state === "listening" ? words : "";
-    el("preview-words").textContent = shown;
+    const parts = previewParts(shown, settled);
+    el("preview-settled").textContent = parts.settled;
+    el("preview-changing").textContent = parts.changing;
     el("preview").hidden = shown === "";
+  };
+
+  /** The language chip: the tag in capitals, a button only when a click can change it. */
+  const showLanguage = () => {
+    const chip = el<HTMLButtonElement>("lang");
+    const l = s.state === "listening" ? s.language : undefined;
+    const tag = l && typeof l.tag === "string" ? l.tag.split("-")[0]?.toUpperCase() : "";
+    chip.hidden = !tag;
+    chip.textContent = tag ?? "";
+    const switchable = l?.switchable === true;
+    chip.toggleAttribute("data-switchable", switchable);
+    chip.toggleAttribute("data-forced", l?.forced === true);
+    chip.disabled = !switchable;
+    chip.title = switchable ? "Switch language" : "Language heard";
+    chip.setAttribute(
+      "aria-label",
+      tag ? `${switchable ? "Switch language, now" : "Language heard:"} ${tag}` : "",
+    );
   };
 
   const draw = () => {
@@ -199,6 +241,7 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
         : [];
     replace(el("buttons"), ...buttons);
     showPreview();
+    showLanguage();
     tick();
   };
 
@@ -213,6 +256,9 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
 
   el("stop").addEventListener("click", () => t.control("stop"));
   el("cancel").addEventListener("click", () => t.control("cancel"));
+  el("lang").addEventListener("click", () => {
+    if (s.state === "listening" && s.language?.switchable === true) t.control("language");
+  });
   setInterval(tick, 250);
   draw();
 
@@ -220,14 +266,18 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
     state: (next) => {
       // A new session, or the end of listening, drops the words of the one before.
       const same = s.state === "listening" && next.state === "listening" && s.since === next.since;
-      if (!same) words = "";
+      if (!same) {
+        words = "";
+        settled = 0;
+      }
       s = next;
       draw();
     },
-    preview: ({ text }) => {
+    preview: ({ text, settled: n }) => {
       if (typeof text !== "string") return;
       // Shown only while listening; the next state change drops it, so a late partial never shows.
-      words = previewTail(text.trim());
+      words = text.trim();
+      settled = n;
       showPreview();
     },
     level: ({ db }) => {

@@ -5,9 +5,13 @@
  *
  * The pill shows the session's state, never its words: every state is built here from named
  * fields (the dictation key's label, the times, a notice, an insert method, an error), so a
- * transcript in the log never reaches the page. The one way words could, the preview of DC-O2, goes
- * through `pillPreview`, which lets them through only with `dictation.pillPreview` on and the
- * window hidden from screen capture; neither is possible before DK-P3.
+ * transcript in the log never reaches the page. The one way words do, the preview of DC-O2, goes
+ * through `pillPreview`, which lets them through only with `dictation.pillPreview` on.
+ *
+ * While the pill exists it asks the session for partials (DC-E5): their language sets the chip on
+ * the listening island (akou-5v8), and with the preview on their words go to the ticker, with the
+ * part that did not change since the last partial marked as settled. A click on the chip moves the
+ * session to the next of the user's languages when the engine takes a forced one.
  *
  * - `listening` from the session's state, with the hints the key source can honour (DC-A4):
  *   Escape, Enter and Shift+Enter where it swallows keys; only the dictation key's on the portal
@@ -30,7 +34,13 @@
  * and never shows here.
  */
 
-import type { ChipAnswer, PillKey, PillRpc, PillState } from "../../ui/pill-protocol.ts";
+import type {
+  ChipAnswer,
+  PillKey,
+  PillLanguage,
+  PillRpc,
+  PillState,
+} from "../../ui/pill-protocol.ts";
 import { pillPreview } from "../../ui/pill-protocol.ts";
 import { LEARNED_MS } from "../dictation/learner.ts";
 import type { DictationFollow } from "../dictation/service.ts";
@@ -52,10 +62,17 @@ export interface PillSend {
 /** Dictation as the pill sees it: the app's `DictationService` behind the shell. */
 export interface PillDictation {
   status(): { state: string; loading: boolean; swallow_keys: boolean | null };
-  /** The log's events, the mic level and the engine's notices, from now on. */
-  follow(fn: (m: DictationFollow) => void): () => void;
+  /**
+   * The log's events, the mic level and the engine's notices, from now on; the session's partials
+   * while `partials` answers true (DC-E5).
+   */
+  follow(fn: (m: DictationFollow) => void, o?: { partials?: () => boolean }): () => void;
   /** Stop and Cancel, the same session door as `POST /v1/dictation/stop` and `/cancel`. */
   control(action: "stop" | "cancel"): Promise<boolean>;
+  /** The languages the chip moves between, and whether the engine takes a forced one (akou-5v8). */
+  languageChoice?(): { languages: readonly string[]; switchable: boolean };
+  /** Forces a language for the session listening; false with none listening. */
+  setLanguage?(language: string): boolean;
   /** The answer to a learn chip the pill showed (DC-L4); absent, no chip is answered. */
   chip?(a: ChipAnswer): Promise<boolean>;
 }
@@ -67,8 +84,8 @@ export interface PillOptions {
   now(): number;
   /** Shows the window (true) without taking the focus, or hides it. */
   onVisible(visible: boolean): void;
-  /** DC-D2's rule: `dictation.pillPreview`, and whether the window is hidden from capture. */
-  preview: { setting(): unknown; hiddenFromCapture(): boolean };
+  /** DC-D2's rule: `dictation.pillPreview`. */
+  preview: { setting(): unknown };
   /** Runs `fn` after `ms`; returns the cancel. Tests pass their own. */
   later?(ms: number, fn: () => void): () => void;
   /** The label for a binding (`Right ⌘`). */
@@ -79,7 +96,7 @@ export interface PillRpcHandlers {
   handlers: { [K in keyof Requests]: Handler<K> };
   /** The session's state changed: the shell calls this from its own watch. */
   update(): void;
-  /** A partial while listening, sent only as DC-D2 allows (DC-O2; DC-E5 produces them). */
+  /** A partial while listening, sent only as DC-D2 allows (DC-O2; the session's come here too). */
   preview(partial: unknown): void;
   /** What the page shows now. */
   shown(): PillState;
@@ -117,6 +134,21 @@ export function pasteHint(platform: string): string {
   return platform === "darwin" ? "⌘V" : "Ctrl+V";
 }
 
+/**
+ * How many words at the start of a partial are settled: the longest run of them the last partial
+ * had too, in order, from wherever it began there. The preview decodes the end of the audio, so
+ * once a dictation outgrows it the words slide left and the run starts later in the last one.
+ */
+export function settledWords(last: readonly string[], next: readonly string[]): number {
+  let best = 0;
+  for (let j = 0; j < last.length; j++) {
+    let k = 0;
+    while (j + k < last.length && k < next.length && last[j + k] === next[k]) k++;
+    best = Math.max(best, k);
+  }
+  return best;
+}
+
 const realLater = (ms: number, fn: () => void) => {
   const t = setTimeout(fn, ms);
   return () => clearTimeout(t);
@@ -134,6 +166,10 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   /** The dictation whose learn chip is up, and the timer that takes it down. */
   let chipUp: string | null = null;
   let cancelChip: () => void = () => {};
+  /** The words of the last partial sent, to mark what the next one did not change. */
+  let lastWords: string[] = [];
+  /** The language the chip forced for the session listening, else null. */
+  let forced: string | null = null;
 
   const visible = () => shown.state !== "hidden" || chipUp !== null;
 
@@ -164,6 +200,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         cancelHide();
         current = null;
         notice = null;
+        lastWords = [];
+        forced = null;
         const keys: PillKey[] = st.swallow_keys === true ? [...SWALLOWED] : [];
         put({ state: "listening", since: o.now(), keys, hotkey: o.label(o.hotkey(), o.platform) });
         return;
@@ -189,70 +227,127 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     }
   };
 
-  const unfollow = d.follow((m) => {
-    if (m.kind === "level") {
-      if (shown.state === "listening") send().level({ db: levelDb(m.rms) });
+  /** The chip on the listening island for `heard`, the language of the last partial. */
+  const chipFor = (heard: string | null): PillLanguage | undefined => {
+    const tag = forced ?? heard;
+    if (!tag) return undefined;
+    const switchable = d.languageChoice?.().switchable ?? false;
+    return { tag, switchable, forced: forced !== null };
+  };
+
+  /** The listening island with its chip for `heard`, when that changes what the chip shows. */
+  const showLanguage = (heard: string | null) => {
+    if (shown.state !== "listening") return;
+    const language = chipFor(heard ?? shown.language?.tag ?? null);
+    const was = shown.language;
+    if (
+      was?.tag === language?.tag &&
+      was?.switchable === language?.switchable &&
+      was?.forced === language?.forced
+    )
       return;
-    }
-    if (m.kind === "notice") {
-      if (m.id === current) notice = m.notice;
-      return;
-    }
-    if (m.kind === "warning") {
-      // `1 minute left` before `dictation.maxMinutes` (DC-A3), under the hints until it ends.
-      if (shown.state === "listening") put({ ...shown, note: m.note });
-      return;
-    }
-    if (m.kind === "chip") {
-      const c = m.chip;
-      cancelChip();
-      chipUp = c.id;
-      send().chip(c);
-      o.onVisible(true);
-      cancelChip =
-        c.mode === "learned"
-          ? later(LEARNED_MS, () => chipOver(c.id))
-          : later(CHIP_WAIT_MS, () => {
-              void d.chip?.({ id: c.id, action: "ignore" });
-              chipOver(c.id);
-            });
-      return;
-    }
-    if (m.kind === "busy") {
-      const s = shown;
-      if (s.state !== "transcribing") return;
-      cancelBusy();
-      put({ ...s, note: BUSY_NOTE });
-      cancelBusy = later(BUSY_MS, () => {
-        // Back to the line it had, unless the pill moved on meanwhile.
-        if (shown.state === "transcribing" && shown.note === BUSY_NOTE) put(s);
-      });
-      return;
-    }
-    const e = m.e;
-    if (e.type === "dictation.started") {
-      // A clip from the API has no target: never the pill's.
-      if (e.target !== null) {
-        current = e.id;
-        notice = null;
+    const { language: _, ...rest } = shown;
+    put(language ? { ...rest, language } : rest);
+  };
+
+  /** A partial's words to the ticker, as the preview's rule allows, with its settled start. */
+  const sendPreview = (partial: unknown) => {
+    if (shown.state !== "listening") return;
+    const p = pillPreview(partial, { pillPreview: o.preview.setting() });
+    if (!p) return;
+    const words = p.text.split(/\s+/).filter(Boolean);
+    const n = settledWords(lastWords, words);
+    lastWords = words;
+    send().preview({ text: words.join(" "), settled: words.slice(0, n).join(" ").length });
+  };
+
+  const unfollow = d.follow(
+    (m) => {
+      if (m.kind === "partial") {
+        showLanguage(m.language);
+        sendPreview(m.text);
+        return;
       }
-      return;
-    }
-    if (e.id !== current) return;
-    if (e.type === "dictation.inserted") {
-      const copied = e.method === "clipboard";
-      const note = copied ? pasteHint(o.platform) : notice;
-      put({ state: "done", how: copied ? "copied" : "inserted", ...(note ? { note } : {}) });
-      hideAfter(DONE_MS);
-    } else if (e.type === "dictation.failed") {
-      put({ state: "error", message: e.error, actions: [] });
-      hideAfter(ERROR_MS);
-    }
-  });
+      if (m.kind === "level") {
+        if (shown.state === "listening") send().level({ db: levelDb(m.rms) });
+        return;
+      }
+      if (m.kind === "notice") {
+        if (m.id === current) notice = m.notice;
+        return;
+      }
+      if (m.kind === "warning") {
+        // `1 minute left` before `dictation.maxMinutes` (DC-A3), under the hints until it ends.
+        if (shown.state === "listening") put({ ...shown, note: m.note });
+        return;
+      }
+      if (m.kind === "chip") {
+        const c = m.chip;
+        cancelChip();
+        chipUp = c.id;
+        send().chip(c);
+        o.onVisible(true);
+        cancelChip =
+          c.mode === "learned"
+            ? later(LEARNED_MS, () => chipOver(c.id))
+            : later(CHIP_WAIT_MS, () => {
+                void d.chip?.({ id: c.id, action: "ignore" });
+                chipOver(c.id);
+              });
+        return;
+      }
+      if (m.kind === "busy") {
+        const s = shown;
+        if (s.state !== "transcribing") return;
+        cancelBusy();
+        put({ ...s, note: BUSY_NOTE });
+        cancelBusy = later(BUSY_MS, () => {
+          // Back to the line it had, unless the pill moved on meanwhile.
+          if (shown.state === "transcribing" && shown.note === BUSY_NOTE) put(s);
+        });
+        return;
+      }
+      const e = m.e;
+      if (e.type === "dictation.started") {
+        // A clip from the API has no target: never the pill's.
+        if (e.target !== null) {
+          current = e.id;
+          notice = null;
+        }
+        return;
+      }
+      if (e.id !== current) return;
+      if (e.type === "dictation.inserted") {
+        const copied = e.method === "clipboard";
+        const note = copied ? pasteHint(o.platform) : notice;
+        put({ state: "done", how: copied ? "copied" : "inserted", ...(note ? { note } : {}) });
+        hideAfter(DONE_MS);
+      } else if (e.type === "dictation.failed") {
+        put({ state: "error", message: e.error, actions: [] });
+        hideAfter(ERROR_MS);
+      }
+    },
+    // The chip wants the language of every session, so partials are decoded while the pill exists.
+    { partials: () => true },
+  );
+
+  /** The chip's click: the session listening moves to the next of the user's languages. */
+  const nextLanguage = (): boolean => {
+    if (shown.state !== "listening" || !d.setLanguage) return false;
+    const c = d.languageChoice?.();
+    if (!c?.switchable) return false;
+    const at = c.languages.indexOf(shown.language?.tag ?? "");
+    const next = c.languages[(at + 1) % c.languages.length];
+    if (!next || !d.setLanguage(next)) return false;
+    forced = next;
+    showLanguage(null);
+    return true;
+  };
 
   return {
     handlers: {
       control: async ({ action }) => {
+        if (action === "language") return nextLanguage();
         if (action !== "stop" && action !== "cancel") return false;
         return d.control(action);
       },
@@ -269,14 +364,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       state: async () => shown,
     },
     update,
-    preview: (partial) => {
-      if (shown.state !== "listening") return;
-      const p = pillPreview(partial, {
-        pillPreview: o.preview.setting(),
-        hiddenFromCapture: o.preview.hiddenFromCapture(),
-      });
-      if (p) send().preview(p);
-    },
+    preview: sendPreview,
     shown: () => shown,
     close: () => {
       cancelHide();

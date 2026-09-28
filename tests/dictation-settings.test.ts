@@ -1,8 +1,7 @@
 /**
  * The dictation settings (docs/ux/DICTATION.md section 6) and the dictation keys (DC-A2, DC-A5):
  * every key of the spec's table is in the registry, each refusal says why, and the rules the
- * registry cannot say by type (the remote's URL is window-only, `pillPreview` waits for DK-P3,
- * `remote` needs a URL) hold at `PATCH /config`'s check.
+ * registry cannot say by type (the remote's URL is window-only, `remote` needs a URL) hold at `PATCH /config`'s check.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -148,10 +147,12 @@ describe("DC-A5: fix last's default", () => {
 });
 
 describe("the rules the type cannot say", () => {
-  test("DC-D2: pillPreview true is refused naming DK-P3; false passes", () => {
-    const on = validateSetting("dictation.pillPreview", true);
-    expect(on).toMatchObject({ ok: false, error: expect.stringContaining("DK-P3") });
+  test("DC-O2: pillPreview is on by default, both values pass, and the doc names the screen share", () => {
+    expect(SETTINGS["dictation.pillPreview"].default).toBe(true);
+    expect(validateSetting("dictation.pillPreview", true).ok).toBe(true);
     expect(validateSetting("dictation.pillPreview", false).ok).toBe(true);
+    expect(validateSetting("dictation.pillPreview", "yes").ok).toBe(false);
+    expect(SETTINGS["dictation.pillPreview"].doc).toContain("screen share");
   });
 
   test("DC-E2: every engine of the spec passes, best included; another name is refused", () => {

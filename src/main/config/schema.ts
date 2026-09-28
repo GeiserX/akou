@@ -828,12 +828,8 @@ export const SETTINGS = {
   },
   "dictation.pillPreview": {
     type: "boolean",
-    default: false,
-    check: (v) =>
-      v === true
-        ? "needs akou's windows hidden from screen capture (app.hideFromCapture, DK-P3), which this version does not have, so the pill never shows your words"
-        : null,
-    doc: "Show the words recognised so far in the pill during a latched dictation. Stays off until akou can hide its windows from screen capture (DK-P3), so a screen share never shows what you dictate.",
+    default: true,
+    doc: "Show the words as you speak on the pill's island. akou cannot hide its windows from screen capture yet (DK-P3), so a screen share shows them too: turn this off before sharing your screen if that matters.",
   },
   "dictation.sounds": {
     type: "string",

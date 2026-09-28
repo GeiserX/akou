@@ -1,9 +1,10 @@
 /**
- * DC-D2 end to end (docs/ux/DICTATION.md section 2): the pill's real page, fed only by the main
- * side (`src/main/window/pill.ts`) over a session whose transcript is known, never shows the words
- * with the preview off, nor with the preview on while the window is not hidden from screen capture;
- * with the preview on and the window hidden, the partial shows (the positive control). The page
- * boots late and pulls the state in force. Nothing records, types, pastes or plays.
+ * DC-D2 and DC-O2 end to end (docs/ux/DICTATION.md sections 2 and 5.1): the pill's real page, fed
+ * only by the main side (`src/main/window/pill.ts`) over a session whose transcript is known,
+ * never shows the words with the preview off; with the preview on, the session's partial shows
+ * (the positive control). The language chip (akou-5v8) shows the language heard and a click on it
+ * reaches the session. The page boots late and pulls the state in force. Nothing records, types,
+ * pastes or plays.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -23,9 +24,10 @@ afterEach(async () => {
 });
 
 /** The pill page over the main side, and a session whose words are `SAID`. */
-async function run(rule: { preview: boolean; hidden: boolean }) {
+async function run(rule: { preview: boolean }, during?: (page: ViewPage) => Promise<void>) {
   const st = { state: "idle", loading: false, swallow_keys: true };
   const followers = new Set<(m: DictationFollow) => void>();
+  const forced: string[] = [];
   let seq = 0;
   let queue: Promise<void> = Promise.resolve();
   let view: ViewPage | null = null;
@@ -47,6 +49,11 @@ async function run(rule: { preview: boolean; hidden: boolean }) {
         return () => followers.delete(fn);
       },
       control: async () => true,
+      languageChoice: () => ({ languages: ["en", "es"], switchable: true }),
+      setLanguage: (l) => {
+        forced.push(l);
+        return true;
+      },
     },
     () => send,
     {
@@ -55,7 +62,7 @@ async function run(rule: { preview: boolean; hidden: boolean }) {
       label: hotkeyLabel,
       now: () => Date.now(),
       onVisible: () => {},
-      preview: { setting: () => rule.preview, hiddenFromCapture: () => rule.hidden },
+      preview: { setting: () => rule.preview },
       later: () => () => {},
     },
   );
@@ -70,14 +77,24 @@ async function run(rule: { preview: boolean; hidden: boolean }) {
 
   // The session starts before the page has booted: the page pulls it.
   to("listening");
-  view = await viewPage("pill", { answer: (name) => (name === "state" ? p.shown() : true) });
+  view = await viewPage("pill", {
+    answer: (name, params) =>
+      name === "state"
+        ? p.shown()
+        : name === "control"
+          ? p.handlers.control(params as { action: "language" })
+          : true,
+  });
   open = view;
   const page = view.page;
   await page.waitForFunction(() => document.getElementById("pill")?.dataset.state === "listening");
-  p.preview(SAID);
-  event({ type: "dictation.started", id: "d1", target: TARGET, engine: "fast", by: "user" });
+  // The session's partial, as the service tells its followers (DC-E5).
+  for (const fn of followers) fn({ kind: "partial", text: SAID, language: "en" });
   await queue;
   const whileListening = await page.textContent("body");
+  await during?.(view);
+  await queue;
+  event({ type: "dictation.started", id: "d1", target: TARGET, engine: "fast", by: "user" });
   to("transcribing");
   event({
     type: "dictation.text",
@@ -96,14 +113,14 @@ async function run(rule: { preview: boolean; hidden: boolean }) {
   await queue;
   const after = await page.textContent("body");
   p.close();
-  return { whileListening: whileListening ?? "", after: after ?? "", page };
+  return { whileListening: whileListening ?? "", after: after ?? "", page, forced };
 }
 
 describe("DC-D2: the pill shows words only under its own rule", () => {
   test(
     "preview off: no words in the page's DOM at any point",
     async () => {
-      const r = await run({ preview: false, hidden: true });
+      const r = await run({ preview: false });
       // The listening island drew (its key hints are there), and without the words.
       expect(r.whileListening).toContain("cancels");
       expect(r.whileListening).not.toContain("swordfish");
@@ -114,22 +131,33 @@ describe("DC-D2: the pill shows words only under its own rule", () => {
   );
 
   test(
-    "preview on but the window not hidden from capture: still no words",
+    "positive control: preview on shows the session's partial",
     async () => {
-      const r = await run({ preview: true, hidden: false });
-      expect(r.whileListening).not.toContain("swordfish");
+      const r = await run({ preview: true });
+      expect(r.whileListening).toContain("swordfish");
+      // Dropped at the next state: a late partial never outlives listening.
       expect(r.after).not.toContain("swordfish");
     },
     UI_TIMEOUT,
   );
+});
 
+describe("akou-5v8: the language chip on the island", () => {
   test(
-    "positive control: preview on and the window hidden from capture shows the partial",
+    "shows the language heard, and a click moves the session to the next one",
     async () => {
-      const r = await run({ preview: true, hidden: true });
-      expect(r.whileListening).toContain("swordfish");
-      // Dropped at the next state: a late partial never outlives listening.
-      expect(r.after).not.toContain("swordfish");
+      const chip = { before: "", chosen: "" };
+      const r = await run({ preview: false }, async (view) => {
+        chip.before = (await view.page.textContent("#lang")) ?? "";
+        await view.page.click("#lang");
+        await view.page.waitForFunction(() =>
+          document.getElementById("lang")?.hasAttribute("data-forced"),
+        );
+        chip.chosen = (await view.page.textContent("#lang")) ?? "";
+      });
+      expect(chip.before).toBe("EN");
+      expect(chip.chosen).toBe("ES");
+      expect(r.forced).toEqual(["es"]);
     },
     UI_TIMEOUT,
   );
