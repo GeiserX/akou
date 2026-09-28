@@ -937,6 +937,16 @@ body.welcoming #layout {
 #readiness-setup:hover {
   color: var(--fg);
 }
+/* The narrow sidebar (below 1248 px) is too thin for the row on one line: "Setup 1 of 3" wraps
+   under the status instead of spilling across the divider. */
+@media (max-width: 1247px) {
+  #readiness {
+    flex-wrap: wrap;
+    height: auto;
+    min-height: 48px;
+    padding: 8px 16px;
+  }
+}
 
 main {
   overflow-y: auto;

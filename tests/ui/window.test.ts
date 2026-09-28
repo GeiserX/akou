@@ -1752,6 +1752,19 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.getAttribute("#readiness", "data-state")).toBe("missing");
             expect(await text(page, "#readiness-setup")).toBe("Setup 1 of 3");
             expect(await page.isVisible("#readiness-where")).toBe(false);
+            // Under 1248 px the sidebar narrows; "Setup 1 of 3" must stay inside it and clickable.
+            const wide = page.viewportSize() ?? { width: 1280, height: 720 };
+            await page.setViewportSize({ width: 1200, height: 800 });
+            const bar = await page.locator("#sidebar").boundingBox();
+            const setup = await page.locator("#readiness-setup").boundingBox();
+            expect(bar && setup).toBeTruthy();
+            if (bar && setup) {
+              expect(setup.x).toBeGreaterThanOrEqual(bar.x);
+              expect(setup.x + setup.width).toBeLessThanOrEqual(bar.x + bar.width);
+            }
+            await page.click("#readiness-setup", { timeout: 5000 });
+            expect(await page.evaluate(() => document.activeElement?.id)).toBe("models-pull");
+            await page.setViewportSize(wide);
             expect(await page.isVisible("#models-pip")).toBe(true);
             expect(await text(page, "#welcome h1")).toBe("Welcome to akou");
             // One row per model the download fetches, the recognizer first, each with its size.

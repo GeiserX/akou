@@ -40,10 +40,10 @@ Columns:
 ├ banner (only when something needs attention) ─────────────────────────────────────────┤
 ├──────────────┬──────────────────────────────────────────┬─────────────────────────────┤
 │ Calls        │ transcript                               │ [Notes] [Ask] [Enhanced]    │
-│ ▸ today      │ 15:41  Ben    we should move the build   │                             │
+│ ▾ PRODUCT  2 │ 15:41  Ben    we should move the build   │                             │
 │   Weekly…  ● │ 15:41  You    to the new box? which one  │  side pane                  │
 │   1:1 Ana    │ …                                        │                             │
-│ ▸ yesterday  │ ┆ 15:42  c3?  (still being spoken)  ┆    │                             │
+│ ▸ HIRING   1 │ ┆ 15:42  c3?  (still being spoken)  ┆    │                             │
 │              │                          [↓ Back to live]│ ▶ 15:41:07  1.0x  mic ◂▸ call│
 └──────────────┴──────────────────────────────────────────┴─────────────────────────────┘
 ```
