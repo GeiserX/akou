@@ -49,4 +49,4 @@ The four apps closest to akou on a Mac handle the same screens like this. None o
 
 ## What has shipped
 
-- **WR-1, the welcome**: with the speech models missing, the main area is the three-step welcome instead of the workspace, Record waits with its reason, and the download's progress rides the status push ([dark](built/wr1-welcome-dark.png), [light](built/wr1-welcome-light.png), [downloading](built/wr1-downloading-dark.png)).
+- **WR-1, the welcome** (#137): with the speech models missing, the main area is the three-step welcome instead of the workspace, Record waits with its reason, and the download's progress rides the status push ([dark](built/wr1-welcome-dark.png), [light](built/wr1-welcome-light.png), [downloading](built/wr1-downloading-dark.png)).
