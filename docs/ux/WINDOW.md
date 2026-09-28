@@ -94,7 +94,7 @@ Overlays that stack on any state: models missing or downloading (section 10), pr
 | W2.2 | State is never shown by colour alone: every dot has a label, every health dot an icon shape and text | P1 | Accessibility | With forced-colors emulated, each state and channel health is still distinguishable by text; the axe scan (W15.5) reports no colour-only state | partial |
 | W2.3 | Only errors use `role=alert`; info toasts use `role=status` | P1 | Audit | An info toast is announced politely; a dead-capture banner assertively | partial |
 | W2.4 | Stop while the meeting app still uses the mic: "Call audio was active 12 s ago. Stop anyway?" with a 10 s undo | P1 | DESIGN 7 (M2) | Fake helper reports call audio 5 s ago; Stop shows the inline confirm; Undo within 10 s leaves the call recording with no `part.ended` | missing |
-| W2.5 | Record while the speech models are missing offers "Record audio only" instead of a CLI hint | P0 | Audit: the toast says "run `akou models pull` … or start with --without-models" | With no models, Record shows two choices; "Audio only" starts a call with `withoutModels`; the models card stays visible; no string names a CLI flag | partial |
+| W2.5 | Record never refuses with a CLI hint while the speech models are missing: it is disabled with its reason as a tooltip, and the welcome (section 10) offers the download | P0 | Audit: the toast said "run `akou models pull` … or start with --without-models" | With no models, Record is disabled with "Record needs the speech models: download them first." and the page sends no `POST /calls`; once the download finishes it is enabled without a reload | has |
 | W2.7 | Discard a mistaken recording in its first 60 s: stops the call and moves it to the Trash (W13.3) before any hand-off runs | P2 | Superwhisper, VoiceInk; REC-05 | Discard at 30 s leaves no call in the list, no export and no `hook.done`; after 60 s the button is gone and Stop is the only way out | missing |
 
 Moved: W2.6 (confirm Quit during a call) is DESKTOP DK-M3.
@@ -285,11 +285,20 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 
 [DESKTOP.md](DESKTOP.md) section 11 owns the first-run flow, its steps and their order. The window draws those screens with strings from the catalog (section 16), and the Welcome screen carries the interface language choice next to `user.name`, so everything after it is already in the right language. Every step writes a normal setting; setup has no state of its own.
 
+While the speech models are missing, downloading or failed, and no call is recording, the welcome replaces the calls list, the transcript, the side pane and the player. It says "Welcome to akou", one line on what to do, then three steps:
+
+1. **Speech models** (Required): one row per model the download fetches, each with its job and size, the total, one dim sentence with the teal info glyph on where they are kept ("Kept in Application Support on this Mac. Nothing leaves this computer."), and the one Download button. While it downloads: a bar, the bytes of the total, the percentage and the file being fetched. The API has no cancel, so the step shows none. A failed download says why and offers Try again.
+2. **Microphone and system audio** (Later): "macOS asks for both the first time you press Record."
+3. **Your agent** (Optional): one line, and a quiet button that opens Settings on the provider field.
+
+The footer says "You can change any of this later in Settings." The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen.
+
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W10.1 | Models card: size, resumable checksummed download, percentage | done | DESIGN 7 | Existing tests | has |
+| W10.1 | The welcome: the three steps above, a resumable checksummed download with real progress, Record disabled with its reason until the models are there | done | DESIGN 7; design-explorations | `tests/ui/window.test.ts` "the welcome": with the models missing the workspace carries `hidden`, the rows and sizes show, the progress moves with every `GET /models` failing, and the welcome goes when the download ends | has |
+| W10.6 | Download progress on the status push: the app pushes the status at most once a second while a download runs; the one-second `GET /models` poll runs only after the push has been quiet for 3 s | P1 | DESKTOP DK-E2 | Same test: with every `GET /models` aborted, the bar still moves | has |
 
-Moved: W10.2 (guided first run) is DK-O2. W10.3 (3 s capture test) is DK-O1. W10.4 (free space, speed, time left, Cancel) is DK-O3 and DK-E2; the card's progress should arrive on the status push rather than the one-second poll it uses today. W10.5 (sample call) is in the parking list.
+Moved: W10.2 (guided first run) is DK-O2. W10.3 (3 s capture test) is DK-O1. W10.4 (free space, speed, time left, Cancel) is DK-O3 and DK-E2. W10.5 (sample call) is in the parking list.
 
 ## 11. Settings
 
@@ -440,7 +449,7 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 | Ask | presets only | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has) |
 | Enhanced | "Enhance turns your notes and the transcript into clean notes." | progress with the template name | the reason, the previous revision still shown |
 | Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
-| Models | card with size and Download (has) | progress, speed, time left | checksum or network error with Resume |
+| Models | the welcome with each model, the size and Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
 | Settings | n/a | n/a | the registry's refusal per key (has) |
 | Page lost the app | n/a | "Reconnecting…" | after 10 s: "akou is not running. Open it with `akou open`." Never `akou start`, which records (CLI.md rule 4) |
 
@@ -489,7 +498,7 @@ Seen, not planned. No acceptance line and no bead until someone asks or a decisi
 Five items, each a small pull request, each fixing something that is broken or promised and missing today:
 
 - **W1.1** The three side-pane tabs show one pane at a time (TESTING TS-15 proves the rule everywhere).
-- **W2.5** Record with missing models offers "Record audio only" instead of naming a CLI flag.
+- **W2.5** Record with missing models is disabled with its reason, and the welcome offers the download, instead of a toast naming a CLI flag.
 - **W5.2** The player can pause: a button and `Space`.
 - **W6.2** A note edit saves on blur and after a 2 s pause, so clicking away no longer loses it.
 - **W12.2** Copy transcript so far, promised as carried from hark and not built.
@@ -500,6 +509,6 @@ The window also depends on DESKTOP's P0s for the shell around it (the tray icon,
 
 - The window stays one page of three columns over the event log. One action registry feeds buttons, keys, the palette, the shortcuts sheet and the menus; one catalog per language feeds every string.
 - This file now owns only the window's own content. The tray, menus, notifications, floating indicator, first run, settings registry and engine settings moved to [DESKTOP.md](DESKTOP.md), and `akou://` and presets to [PROGRAMMABILITY.md](PROGRAMMABILITY.md). Their old `W` ids stay as pointers so nothing dangles. The compact strip is gone: DESKTOP's indicator shows no transcript text, and asking goes through `Mod+J` or the palette.
-- Five P0s: the stacked tabs, audio-only recording without models, pausing playback, note edits lost on blur, and Copy transcript so far.
+- Five P0s: the stacked tabs, Record waiting for the models with its reason, pausing playback, note edits lost on blur, and Copy transcript so far.
 - P1 is what makes the window the best way to follow a call: find in call, real playback with follow-audio, inline edits and per-line speakers through PG-A5, provisional live labels, mark this moment, ask stop, history and copy, a registry-driven Settings form, the keyboard map and palette, AA contrast, reduced motion and an axe scan, and English and Spanish.
 - New rows from the critique: Discard in the first 60 s, words for this call, remembered lines and an answer footer in the Ask pane, re-running the final pass, opening on a workspace, and echo and low-disk banners. P3 items moved to a parking list with no beads.

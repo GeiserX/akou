@@ -46,3 +46,7 @@ The four apps closest to akou on a Mac handle the same screens like this. None o
 - **The readiness footer** as the one place that says what is missing, with an amber dot on the page that fixes it.
 - **Live source health during a recording**: mic and call as two thin meters, each with a waiting state, instead of level bars parked in the header.
 - **Speaker colours that are not the accent**, so the accent stays for the one primary action.
+
+## What has shipped
+
+- **WR-1, the welcome** (#137): with the speech models missing, the main area is the three-step welcome instead of the workspace, Record waits with its reason, and the download's progress rides the status push ([dark](built/wr1-welcome-dark.png), [light](built/wr1-welcome-light.png), [downloading](built/wr1-downloading-dark.png)).

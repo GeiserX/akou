@@ -1,38 +1,127 @@
 /**
- * The first-run download card (docs/DESIGN.md section 3: "first run offers one explicit
- * download"). While the speech models are missing it says so, what they weigh, and offers the one
- * download (`POST /models/pull`); while they download it shows the progress from `GET /models`;
- * a failed download says why and offers to try again. Once they are there it is gone. Recording
- * is refused until then (`503 models_missing`), so this card is the first thing a new user acts on.
+ * The welcome (docs/ux/WINDOW.md section 10, docs/ux/design-explorations/README.md): while the
+ * speech models are missing, downloading or failed, it replaces the calls, the transcript, the side
+ * pane and the player. Three steps: the speech models with the one download (`POST /models/pull`),
+ * the permissions macOS asks for at the first recording, and the optional agent. Recording is
+ * refused until the models are there (`503 models_missing`), so Record waits with its reason and
+ * this is the first thing a new user acts on. Once they are there the welcome goes by itself.
+ *
+ * Progress arrives on the status push (DESKTOP.md DK-E2). A one-second `GET /models` poll is only
+ * the fallback, for a download whose push has gone quiet: an older app that sends no progress, or a
+ * reply to the pull that the push never followed.
  */
 
-import { byId, toast } from "./dom.ts";
-import { modelsCardText } from "./models-text.ts";
+import { byId, h, replace, toast } from "./dom.ts";
+import type { ModelRow } from "./models-rows.ts";
+import { modelsCardText, welcomeRows } from "./models-text.ts";
 import type { ModelsInfo, Reply, Transport } from "./protocol.ts";
+
+/** Each row's glyph by kind, drawn as SVG paths: a waveform, two people, a pulse. */
+const GLYPH: Record<ModelRow["kind"], string[]> = {
+  speech: ["M2 8v0M5 5.5v5M8 3v10M11 6v4M14 7.5v1"],
+  speakers: [
+    "M3.5 5.5a2.5 2.5 0 1 0 5 0a2.5 2.5 0 1 0-5 0",
+    "M1.5 13.5c.5-2.5 2.3-3.8 4.5-3.8s4 1.3 4.5 3.8",
+    "M11 3.2a2.5 2.5 0 0 1 0 4.6M12.5 9.9c1 .6 1.7 1.8 2 3.6",
+  ],
+  helper: ["M2 8h2.5l1.5-3.5 3 7 1.5-3.5H14"],
+};
+const SVG = "http://www.w3.org/2000/svg";
+
+function glyph(kind: ModelRow["kind"]): SVGSVGElement {
+  const svg = document.createElementNS(SVG, "svg");
+  svg.setAttribute("class", "ico");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  for (const d of GLYPH[kind]) {
+    const path = document.createElementNS(SVG, "path");
+    path.setAttribute("d", d);
+    svg.append(path);
+  }
+  return svg;
+}
+
+/** How long a download's status push may stay quiet before the page asks `GET /models` itself. */
+const QUIET_MS = 3000;
 
 export class ModelsCard {
   private polling: ReturnType<typeof setInterval> | null = null;
+  /** When the status push last carried the models. */
+  private pushedAt = 0;
+  private rows: "none" | "reading" | "read" = "none";
+  private readonly changed: () => void;
+  /** The models are not there yet: the window shows the welcome unless a call is recording. */
+  missing = false;
 
-  constructor(private readonly t: Transport) {
+  constructor(
+    private readonly t: Transport,
+    o: {
+      /** The models changed state: the window redraws what the welcome replaces. */
+      changed: () => void;
+      openAgentSettings: () => void;
+      mac: boolean;
+    },
+  ) {
+    this.changed = o.changed;
     byId("models-pull").addEventListener("click", () => void this.pull());
+    byId("welcome-agent").addEventListener("click", o.openAgentSettings);
+    if (!o.mac) {
+      byId("welcome-perm-text").textContent =
+        "Your system may ask for the microphone the first time you press Record.";
+    }
   }
 
-  update(m: ModelsInfo | undefined): void {
+  /** The models from the status push (`pushed`), a pull's reply or a poll. */
+  update(m: ModelsInfo | undefined, pushed = false): void {
+    if (pushed && m) this.pushedAt = Date.now();
     const view = modelsCardText(m);
-    byId("models-card").hidden = view === null;
+    const was = this.missing;
+    this.missing = view !== null;
+    if (was !== this.missing) this.changed();
     if (!view) {
       this.stopPolling();
       return;
     }
-    byId("models-text").textContent = view.text;
+    if (this.rows === "none") void this.readRows();
+    byId("models-size").textContent = view.size;
+    byId("models-where-text").textContent = view.where;
+    byId("models-where").title = m?.dir ?? "";
+    const text = byId("models-text");
+    text.textContent = view.text;
+    text.classList.toggle("failed", view.failed);
     const button = byId<HTMLButtonElement>("models-pull");
     button.hidden = view.button === null;
-    button.textContent = view.button ?? "";
+    byId("models-pull-label").textContent = view.button ?? "";
     const bar = byId<HTMLProgressElement>("models-progress");
     bar.hidden = view.progress === null;
     bar.value = view.progress ?? 0;
     if (m?.state === "downloading") this.startPolling();
     else this.stopPolling();
+  }
+
+  /** The rows of the models the download fetches; asked again on the next update if it failed. */
+  private async readRows(): Promise<void> {
+    this.rows = "reading";
+    let rows: ModelRow[] = [];
+    try {
+      const r = await this.t.request<ModelsInfo & { models?: ModelRow[] }>("GET", "/models");
+      if (r.status === 200) rows = r.body.models ?? [];
+    } catch {}
+    const view = welcomeRows(rows);
+    this.rows = view.length > 0 ? "read" : "none";
+    replace(
+      byId("models-rows"),
+      ...view.map((r) =>
+        h(
+          "li",
+          { attrs: { "data-id": r.id } },
+          h("span", { class: "glyph" }, glyph(r.kind)),
+          h("span", { class: "t" }, h("b", {}, r.title), h("span", {}, r.role)),
+          h("span", { class: "sz" }, r.size),
+        ),
+      ),
+    );
+    byId("models-rows").hidden = view.length === 0;
   }
 
   private async pull(): Promise<void> {
@@ -50,17 +139,20 @@ export class ModelsCard {
     this.update(r.body);
   }
 
-  /** One poll a second; a tick is skipped while the last is unanswered, and a failed one is dropped. */
+  /**
+   * The fallback: a tick a second that asks only when the push has been quiet for `QUIET_MS`. A
+   * tick is skipped while the last is unanswered, and a failed one is dropped.
+   */
   private startPolling(): void {
     let inFlight = false;
     this.polling ??= setInterval(async () => {
-      if (inFlight) return;
+      if (inFlight || Date.now() - this.pushedAt < QUIET_MS) return;
       inFlight = true;
       try {
         const r = await this.t.request<ModelsInfo>("GET", "/models");
         if (r.status === 200) this.update(r.body);
       } catch {
-        // The next tick asks again; the status push also carries the models' state.
+        // The next tick asks again.
       } finally {
         inFlight = false;
       }

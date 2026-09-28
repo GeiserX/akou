@@ -31,7 +31,8 @@ import {
   suggestReopen,
   YOU_HUE,
 } from "../src/ui/model.ts";
-import { modelsCardText } from "../src/ui/models-text.ts";
+import type { ModelRow } from "../src/ui/models-rows.ts";
+import { modelsCardText, recordBlocked, welcomeRows } from "../src/ui/models-text.ts";
 import type { AppStatus } from "../src/ui/protocol.ts";
 import { LogBuilder, T0, TZ } from "./helpers.ts";
 
@@ -377,29 +378,102 @@ describe("citations", () => {
   });
 });
 
-describe("the first-run download card", () => {
-  test("hidden once the models are there; offers the download, shows progress, offers a retry", () => {
+describe("the welcome's speech models step (WINDOW section 10)", () => {
+  test("gone once the models are there; offers the download, shows progress, offers a retry", () => {
     const base = { dir: "/m", bytes: 0, total: 700_000_000 };
     expect(modelsCardText(undefined)).toBeNull();
     expect(modelsCardText({ ...base, state: "ready", bytes: base.total })).toBeNull();
     const missing = modelsCardText({ ...base, state: "missing" });
     expect(missing?.button).toBe("Download speech models");
-    expect(missing?.text).toContain("700 MB");
+    expect(missing?.size).toBe("700 MB");
+    expect(missing?.text).toBe("One download, 700 MB");
+    expect(missing?.progress).toBeNull();
     const down = modelsCardText({
       ...base,
       state: "downloading",
       bytes: 350_000_000,
       file: "x/a.onnx",
     });
+    // No button while it downloads, and no fake Cancel: the API has none.
     expect(down?.button).toBeNull();
     expect(down?.progress).toBe(0.5);
-    expect(down?.text).toContain("50 %");
+    // Bytes of the total, the percentage and the file being fetched.
+    expect(down?.text).toBe("350 MB of 700 MB · 50 % · x/a.onnx");
     const failed = modelsCardText({ ...base, state: "failed", error: "a.onnx: SHA-256 mismatch" });
     expect(failed?.button).toBe("Try again");
+    expect(failed?.failed).toBe(true);
     expect(failed?.text).toContain("SHA-256 mismatch");
-    // A file that fails its checksum is deleted and fetched again: the card must not say it is kept.
+    // A file that fails its checksum is deleted and fetched again: the step must not say it is kept.
     expect(failed?.text).not.toContain("What arrived is kept");
     expect(failed?.text).toContain("the one that failed is fetched again");
+  });
+
+  test("where the models live is one sentence, and names Application Support only on a Mac", () => {
+    const at = (dir: string) =>
+      modelsCardText({ state: "missing", dir, bytes: 0, total: 1 })?.where;
+    expect(at("/Users/a/Library/Application Support/akou/models")).toBe(
+      "Kept in Application Support on this Mac. Nothing leaves this computer.",
+    );
+    expect(at("/home/a/.local/share/akou/models")).toBe(
+      "Kept in /home/a/.local/share/akou/models. Nothing leaves this computer.",
+    );
+  });
+
+  test("Record waits with its reason until the models are there", () => {
+    const base = { dir: "/m", bytes: 0, total: 1 };
+    // An older app sends no models: nothing to wait for.
+    expect(recordBlocked(undefined)).toBeNull();
+    expect(recordBlocked({ ...base, state: "ready" })).toBeNull();
+    for (const state of ["missing", "failed"] as const) {
+      expect(recordBlocked({ ...base, state })).toBe(
+        "Record needs the speech models: download them first.",
+      );
+    }
+    expect(recordBlocked({ ...base, state: "downloading" })).toContain("finish downloading");
+  });
+
+  test("one row per model the download fetches, the recognizer first, each with its job and size", () => {
+    const row = (id: string, kind: "speech" | "speakers" | "helper", job: string, size: number) =>
+      ({ id, kind, job, size, default: true }) as ModelRow;
+    const rows = welcomeRows([
+      row("vad", "helper", "voice activity: cut points only", 2_300_000),
+      row("diar", "speakers", "speaker labels, live and final (asr.diarizer nemotron)", 512e6),
+      // Two speaker models in one download: the second gets its own title, not "Speaker labeller" twice.
+      row("titanet-small", "speakers", "speaker embeddings for naming", 40e6),
+      row("asr", "speech", "live and final recognition, 25 European languages", 2.48e9),
+      // A catalog model the download does not fetch is not a row.
+      { ...row("qwen", "speech", "on demand", 1e9), default: false },
+    ]);
+    expect(rows).toEqual([
+      {
+        id: "asr",
+        kind: "speech",
+        title: "Speech recognizer",
+        role: "Live and final recognition, 25 European languages",
+        size: "2.48 GB",
+      },
+      {
+        id: "diar",
+        kind: "speakers",
+        title: "Speaker labeller",
+        role: "Speaker labels, live and final",
+        size: "512 MB",
+      },
+      {
+        id: "titanet-small",
+        kind: "speakers",
+        title: "Speaker embeddings",
+        role: "Speaker embeddings for naming",
+        size: "40 MB",
+      },
+      {
+        id: "vad",
+        kind: "helper",
+        title: "Helper",
+        role: "Voice activity: cut points only",
+        size: "2 MB",
+      },
+    ]);
   });
 });
 

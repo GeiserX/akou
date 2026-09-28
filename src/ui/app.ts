@@ -22,9 +22,10 @@ import { type LineAction, LineMenu } from "./line-menu.ts";
 import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from "./model.ts";
 import { ModelsCard } from "./models-card.ts";
 import { ModelsPage } from "./models-page.ts";
+import { recordBlocked } from "./models-text.ts";
 import { message, NotepadPane } from "./notepad.ts";
 import { Player } from "./player.ts";
-import type { AppStatus, Levels, QuitQuestion, Transport } from "./protocol.ts";
+import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protocol.ts";
 import { ReviewPane } from "./review.ts";
 import { SettingsPane } from "./settings.ts";
 import { TranscriptPane } from "./transcript.ts";
@@ -138,6 +139,8 @@ class App {
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
   private blobs = new Map<string, string>();
+  /** A start is on its way: Record waits for the answer. */
+  private starting = false;
 
   constructor(readonly t: Transport) {
     const view = () => this.view();
@@ -178,7 +181,11 @@ class App {
       () => void dictation.open(),
       () => void dictation.dictionary.open(),
     );
-    this.modelsCard = new ModelsCard(t);
+    this.modelsCard = new ModelsCard(t, {
+      changed: () => this.paint(),
+      openAgentSettings: () => void settings.open("provider.kind"),
+      mac: this.platform === "mac",
+    });
     wireModelsDialog(t);
     this.enhanced = new EnhancedPane({
       t,
@@ -229,7 +236,7 @@ class App {
   private onStatus(s: AppStatus): void {
     const wasLive = this.status?.live?.call ?? null;
     this.status = s;
-    this.modelsCard.update(s.models);
+    this.modelsCard.update(s.models, true);
     const live = s.live?.call ?? null;
     if (!this.chosen || (live && live !== wasLive && this.startedHere === live)) {
       const target = live ?? this.callId ?? s.last?.call ?? null;
@@ -344,6 +351,7 @@ class App {
       ? [call.workspace, call.title].filter(Boolean).join(" · ")
       : "";
     document.title = call ? `${call.title || call.workspace} · akou` : "akou";
+    this.welcome();
     this.pills(v, now);
     this.controls(v);
     this.drawBanner(v, now);
@@ -357,6 +365,18 @@ class App {
       : v?.call
         ? "No transcript lines in this call."
         : "Press Record to start a call.";
+  }
+
+  /**
+   * Readiness drives the shell (WINDOW section 10): with the speech models missing the welcome
+   * replaces the calls, the transcript, the side pane and the player. A call recording anyway (one
+   * started without models from the CLI) keeps the workspace, so it is never hidden.
+   */
+  private welcome(): void {
+    const on = this.modelsCard.missing && !this.status?.live;
+    byId("welcome").hidden = !on;
+    for (const id of ["sidebar", "scroller", "side"]) byId(id).hidden = on;
+    document.body.classList.toggle("welcoming", on);
   }
 
   private pills(v: CallView | null, now: number): void {
@@ -417,6 +437,12 @@ class App {
     body.classList.toggle("busy", mine || other);
     byId<HTMLButtonElement>("stop").textContent =
       other && !mine ? "■ Stop the other call" : "■ Stop";
+    // Record waits for the speech models with its reason, so the page never sends a start that
+    // the app refuses with 503 models_missing.
+    const blocked = recordBlocked(this.status?.models);
+    const record = byId<HTMLButtonElement>("record");
+    record.disabled = this.starting || blocked !== null;
+    record.title = blocked ?? "";
     const mute = byId<HTMLButtonElement>("mute");
     mute.textContent = v?.muted ? "Unmute mic" : "Mute mic";
     mute.classList.toggle("on", !!v?.muted);
@@ -627,15 +653,21 @@ class App {
   }
 
   private async record(): Promise<void> {
-    const btn = byId<HTMLButtonElement>("record");
-    btn.disabled = true;
+    if (this.starting || recordBlocked(this.status?.models) !== null) return;
+    this.starting = true;
+    this.paint();
     const template = byId<HTMLSelectElement>("template").value;
-    const r = await this.t.request<{ call?: string; error?: string }>("POST", "/calls", {
-      workspace: this.workspaceInput().value.trim() || undefined,
-      title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
-      ...(template ? { template } : {}),
-    });
-    btn.disabled = false;
+    let r: Reply<{ call?: string; error?: string }>;
+    try {
+      r = await this.t.request("POST", "/calls", {
+        workspace: this.workspaceInput().value.trim() || undefined,
+        title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
+        ...(template ? { template } : {}),
+      });
+    } finally {
+      this.starting = false;
+      this.paint();
+    }
     const call = r.body.call;
     if (r.status === 201 && call) {
       byId<HTMLInputElement>("newtitle").value = "";
