@@ -18,6 +18,14 @@ import type { Transport } from "./protocol.ts";
 
 export const PAUSE_SAVES_MS = 2000;
 
+/** The markers a note may start with, and what a screen reader says for the glyph drawn instead. */
+const MARKER: Partial<Record<ReturnType<typeof noteKind>, { prefix: RegExp; said: string }>> = {
+  bullet: { prefix: /^- /, said: "" },
+  action: { prefix: /^\[ ?\] /, said: "Action: " },
+  question: { prefix: /^\? /, said: "Question: " },
+  section: { prefix: /^# /, said: "Section: " },
+};
+
 export interface NotepadDeps {
   t: Transport;
   call(): string | null;
@@ -28,6 +36,7 @@ export interface NotepadDeps {
 export class NotepadPane {
   private readonly list = byId("notes");
   private readonly input = byId<HTMLInputElement>("note-input");
+  private readonly count = byId("notes-count");
   /** The line being typed: when it began, what was visible then, and its note once saved. */
   private draft: { w: number; afterSeq: number; id?: string; saved?: string } | null = null;
   private pause: ReturnType<typeof setTimeout> | null = null;
@@ -106,10 +115,13 @@ export class NotepadPane {
     const v = this.d.view();
     if (!v?.call) {
       replace(this.list);
+      this.count.textContent = "";
       return;
     }
     const tz = v.call.tz;
-    const rows = v.notes().map((n) => this.noteRow(n, tz));
+    const notes = v.notes();
+    this.count.textContent = notes.length > 0 ? String(notes.length) : "";
+    const rows = notes.map((n) => this.noteRow(n, tz));
     const at = rows.findIndex((r) => r.dataset.id === this.editing);
     const kept =
       this.editing && at >= 0
@@ -130,18 +142,25 @@ export class NotepadPane {
 
   private noteRow(n: NoteView, tz: string): HTMLElement {
     const agent = n.author === "agent";
+    const kind = noteKind(n.text);
+    // The marker is drawn as a glyph before the text (WINDOW section 6.1); the note keeps it, and
+    // an edit starts from the whole text.
+    const marker = MARKER[kind];
+    const shown = marker ? n.text.replace(marker.prefix, "") : n.text;
     return h(
       "li",
       {
-        class: `note ${noteKind(n.text)}${agent ? " agent" : " human"}`,
-        attrs: { "data-id": n.id, "data-w": String(n.w) },
+        class: `note ${kind}${agent ? " agent" : " human"}`,
+        attrs: { "data-id": n.id, "data-w": String(n.w), "data-text": n.text },
       },
       h(
         "button",
         { class: "gutter", type: "button", title: "Show and play the call from here" },
         formatWall(n.w, tz),
       ),
-      h("span", { class: "note-text" }, n.text),
+      h("span", { class: "mark", attrs: { "aria-hidden": "true" } }),
+      marker?.said ? h("span", { class: "vh" }, marker.said) : null,
+      h("span", { class: "note-text" }, shown),
       agent ? h("span", { class: "author" }, `agent ${n.client ?? n.by.slice(6)}`) : null,
       h(
         "button",
@@ -180,9 +199,10 @@ export class NotepadPane {
 
   private edit(li: HTMLElement, call: string, id: string): void {
     const span = li.querySelector(".note-text") as HTMLElement;
+    const whole = li.dataset.text ?? span.textContent ?? "";
     const input = h("input", {
       class: "note-edit",
-      value: span.textContent ?? "",
+      value: whole,
       attrs: { "aria-label": "Edit the note" },
     });
     span.replaceWith(input);
@@ -191,7 +211,7 @@ export class NotepadPane {
     // An edit is saved on Enter, when focus leaves it and after a 2 s pause (WINDOW W6.2), each
     // save a new revision; Escape closes it without saving what was not saved yet. A save that
     // fails is a toast and leaves the editor open with its text, to try again.
-    let saved = span.textContent ?? "";
+    let saved = whole;
     let pause: ReturnType<typeof setTimeout> | null = null;
     let open = true;
     const save = (): Promise<boolean> => {

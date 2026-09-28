@@ -6,7 +6,7 @@ The window is one of two equal ways to drive akou. The other is the harness, thr
 
 ## 0. The simple version
 
-- **One window, three columns.** Calls on the left, the transcript in the middle, a side pane on the right with three tabs: Notes, Ask, Enhanced. A composer row on top holds the state, the new call's fields, the Mic and Call meters and Record; the open call's header sits over the transcript. A player bar sits under the side pane.
+- **One window, three columns.** Calls on the left, the transcript in the middle, and on the right Ask on top with the last answer, then Notes with a Notes | Enhanced toggle, then the note input at the foot. A composer row on top holds the state, the new call's fields, the Mic and Call meters and Record; the open call's header sits over the transcript. A player bar sits under the side column.
 - **Asking is one keystroke away.** `Mod+J` focuses the ask box, and the command palette turns any text it cannot match into a question. The small floating indicator that stays up while the meeting app is in front belongs to [DESKTOP.md](DESKTOP.md) (DK-F1). It carries no transcript text, so it is safe during a screen share, and clicking it brings this window forward.
 - **One action registry.** Every action (Record, Mute, Find, Copy transcript, Ask "Catch me up", Rename speaker) is one entry with an id, a label, keys and a condition. The buttons, the keyboard map, the command palette, the `?` sheet, the application menu and the tooltips all read that registry. Adding an action adds it everywhere.
 - **One message catalog per language.** English and Spanish first. Every string the window, the tray and the notifications show comes from it.
@@ -34,20 +34,21 @@ Columns:
 
 ```
 ┌──────────────┬ composer row ────────────────────────────┬─────────────────────────────┐
-│ akou         │ ● SAVED [work│title……] [Template ▾]      │ [Notes] [Ask] [Enhanced]    │
-│              │   Mic ▬▬  Call ▬▬   (●) Record ⌥⌘R       │                             │
-│              ├ banner, when something needs attention ──┤                             │
-│              ├ call header ─────────────────────────────┤                             │
-│              │ Weekly sync       [review] Restart Share │                             │
-│              │ Wed, 15:36 · 27 min · work · Template: … │                             │
-│              │ (● Ben 14 min) (● You 9 min)             │                             │
-│              ├──────────────────────────────────────────┤                             │
-│ Calls        │ transcript                               │                             │
-│ ▾ PRODUCT  2 │ 15:41  Ben    we should move the build   │                             │
-│   Weekly…  ● │ 15:41  You    to the new box? which one  │  side pane                  │
-│   1:1 Ana    │ …                                        │                             │
-│ ▸ HIRING   1 │ ┆ 15:42  c3?  (still being spoken)  ┆    │                             │
-│              │                          [↓ Back to live]│ ▶ 15:41:07  1.0x  mic ◂▸ call│
+│ akou         │ ● SAVED [work│title……] [Template ▾]      │ ✦ Ask about this call  ⌄ ↵  │
+│              │   Mic ▬▬  Call ▬▬   (●) Record ⌥⌘R       ├─────────────────────────────┤
+│              ├ banner, when something needs attention ──┤ What did Ben say?           │
+│              ├ call header ─────────────────────────────┤ ┌ ✦ Answer ───────────────┐ │
+│              │ Weekly sync       [review] Restart Share │ │ Move the build [15:41 Ben]│ │
+│              │ Wed, 15:36 · 27 min · work · Template: … │ └─────────────────────────┘ │
+│              │ (● Ben 14 min) (● You 9 min)             ├─────────────────────────────┤
+│              ├──────────────────────────────────────────┤ Notes 3   [Notes|Enhanced]  │
+│ Calls        │ transcript                               │ 15:38 • budget review first │
+│ ▾ PRODUCT  2 │ 15:41  Ben    we should move the build   │ 15:41 ☐ Ben: move build box │
+│   Weekly…  ● │ 15:41  You    to the new box? which one  │ 15:44 ? which region        │
+│   1:1 Ana    │ …                                        ├─────────────────────────────┤
+│ ▸ HIRING   1 │ ┆ 15:42  c3?  (still being spoken)  ┆    │ [Type a note, Enter to add] │
+│              │                          [↓ Back to live]│ - bullet [] action ? …      │
+│              │                                          │ ▶ 15:41:07  1.0x  mic ◂▸ call│
 └──────────────┴──────────────────────────────────────────┴─────────────────────────────┘
 ```
 
@@ -58,7 +59,7 @@ Columns:
 | Banner | one message at a time, highest severity first, with at most one action button | `health`, provider, models |
 | Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
 | Transcript | committed lines, the provisional row, the find bar when open | the fold |
-| Side pane | Notes, Ask, Enhanced | the fold and the ask stream |
+| Side column | on top the ask box with its presets menu, then the last question and its cited answer; under it Notes with its count and the Notes \| Enhanced toggle over one of the two panes; at the foot the note input with its markers as hints | the fold and the ask stream |
 | Player bar | play or pause, position as wall time, speed, balance | the call's audio |
 | Dialogs | Settings, Words (review and vocabulary), share options, speaker popover, shortcuts sheet, command palette | registry and fold |
 
@@ -66,7 +67,7 @@ Under 900 px wide the calls column collapses to a button in the header. Under 64
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W1.1 | The Notes, Ask and Enhanced tabs show one pane at a time | P0 | Audit: `[role="tabpanel"]{display:flex}` in `theme.css` beats `[hidden]`, so all three panes show stacked | For each tab, the other two panes have computed `display: none` and are skipped by Tab. The general "hidden means hidden" invariant with its positive control is TESTING TS-15; this row is the fix that turns it green | has |
+| W1.1 | The Notes and Enhanced tabs show one pane at a time | P0 | Audit: `[role="tabpanel"]{display:flex}` in `theme.css` beats `[hidden]`, so the panes showed stacked | For each tab, the other pane has computed `display: none` and is skipped by Tab. The general "hidden means hidden" invariant with its positive control is TESTING TS-15; this row is the fix that turns it green | has |
 | W1.3 | Narrow layouts: calls column collapses under 900 px, side pane becomes a drawer under 640 px | P2 | Audit: at 800 px the sidebar keeps its width | Screenshots at 1280, 800 and 600 px show the described layout; no horizontal scroll | missing |
 
 Moved: W1.2 (tests assert computed visibility) is TESTING TS-15. W1.4 (remember the window frame) is DESKTOP DK-M4.
@@ -189,18 +190,22 @@ The player bar gets real controls. Line-level sync comes first, because it needs
 
 ## 6. The side pane
 
+The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it with a two-way toggle, Notes | Enhanced (a tablist of two; the arrow keys move between them and Tab skips the hidden pane). The note input is at the foot and stays on screen whichever pane is selected, because notes are the default action during a call.
+
 ### 6.1 Notes
 
 ```
- [Notes] Ask  Enhanced
- 15:38 │ - budget review first
- 15:41 │ [] Ben: move build box
- 15:44 │ ? which region
- 15:47 │ ◆ agent: Ben owns the migration          (agent colour)
-       │ ┌─────────────────────────────────────┐
-       │ │ Type a note, Enter to add           │
-       │ └─────────────────────────────────────┘
+ Notes 4                              [Notes|Enhanced]
+ 15:38  •  budget review first
+ 15:41  ☐  Ben: move build box
+ 15:44  ?  which region
+ 15:47     Ben owns the migration  agent claude-code   (agent colour)
+ ──────────────────────────────────────────────────────
+ [ Type a note, Enter to add it                      ]
+ - bullet   [] action   ? question   # section
 ```
+
+A note's marker (`- `, `[] `, `? `, `# `) is drawn as a glyph before the text, and the note keeps it: an edit starts from the whole line. The markers are listed as small hints under the input, never inside its placeholder.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -211,23 +216,24 @@ The player bar gets real controls. Line-level sync comes first, because it needs
 ### 6.2 Ask
 
 ```
- Notes [Ask] Enhanced
- [ Ask about this call…                       ] [Ask]
- Catch me up · Last 5 min · Was my name mentioned? · Decisions · Action items · What did Ben say?
+ [ ✦ Ask about this call                        ⌄  ↵ ]
+      ⌄ opens the presets: Catch me up · Was my name mentioned? · Decisions so far ·
+        Action items · What did Ben say?
  ─────────────────────────────────────────────────────
- Remembered  · Ben owns the migration (agent)              ✎
- ─────────────────────────────────────────────────────
- Q  What did Ben say about the budget?         15:52
-    Evidence  15:41 Ben "we should move the build…"   ▶
-    Ben asked to move the build to the new box [15:41 Ben] …   ■ Stop
-    Claude Code · pack 4.1k tokens                Show request · Copy
+ What did Ben say about the budget?
+ ┌ ✦ Answer                        answered by claude-code ┐
+ │ Ben asked to move the build to the new box [15:41 Ben]  │
+ └──────────────────────────────────────────────────────────┘
+   15:41 Ben "we should move the build…"          (the excerpts that matched)
 ```
+
+The column shows one question and its answer: the last one asked here, or, until one is, the call's last answered question from the log, marked with who asked it when an agent did. The answer card is in the agent's colour; its citations are chips that scroll to the line and play it. Enter asks; the presets are a menu on the input (arrow keys move, Escape closes), never a row of buttons.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W6.6 | Ask box, presets, evidence within 300 ms, streamed answer, clickable citations, "Copy context for my agent" when no provider | done | DESIGN 5.3, 7 | Existing tests | has |
 | W6.7 | Stop a running answer | P1 | Audit | Stop aborts the provider process; the log has the partial `answer` marked stopped; the box is ready for the next question | missing |
-| W6.8 | Past questions and answers of the call are drawn from the log on open and on call switch | P1 | Audit: they vanish on switch; intent: the log is the truth | Ask, switch calls, switch back: the Q&A is there; answers an agent asked through MCP are listed too, marked by client | missing |
+| W6.8 | Past questions and answers of the call are drawn from the log on open and on call switch | P1 | Audit: they vanish on switch; intent: the log is the truth | Ask, switch calls, switch back: the Q&A is there; answers an agent asked through MCP are listed too, marked by client | partial: the last answered one shows, marked by client |
 | W6.9 | Copy an answer (with citations as `[15:41 Ben]`) | P1 | Granola, audit | Copy puts the answer text on the clipboard with wall-time citations | missing |
 | W6.10 | "Last 5 minutes" preset | P1 | Fireflies "Catch Up (Last 1 min)" | The preset sends a question that the query engine routes to the recent window; the pack holds only lines from the last 5 minutes | missing |
 | W6.11 | Name-mention marker: when `user.name` or a word in `watch.words` appears in a committed call-channel line, a quiet marker in the transcript. The notification with the window in back needs a row in DESKTOP section 8 and carries no line text | P2 | Zoom, Teams markers; ASK-05 and PG-S4 are the same item at P2 | A fake call line containing the user's name produces one `mention` marker; a mic line with the name produces none | missing |
@@ -373,7 +379,7 @@ hark-viewer's other page parameter, `?quiet=SECONDS`, is dropped on purpose. The
 | `Mod+K` | Command palette | window |
 | `Mod+F` | Find in this call | window |
 | `Mod+J` | Focus the ask box | window |
-| `Mod+1` `Mod+2` `Mod+3` | Notes, Ask, Enhanced (focus its input) | window |
+| `Mod+1` `Mod+2` | Notes, Enhanced (focus the note input) | window |
 | `Mod+Shift+C` | Copy transcript so far | window |
 | `Mod+,` | Settings | window |
 | `Alt+↑` `Alt+↓` | Previous / next call | window |
@@ -503,7 +509,7 @@ Seen, not planned. No acceptance line and no bead until someone asks or a decisi
 
 Five items, each a small pull request, each fixing something that is broken or promised and missing today:
 
-- **W1.1** The three side-pane tabs show one pane at a time (TESTING TS-15 proves the rule everywhere).
+- **W1.1** The two side-pane tabs, Notes and Enhanced, show one pane at a time (TESTING TS-15 proves the rule everywhere).
 - **W2.5** Record with missing models is disabled with its reason, and the welcome offers the download, instead of a toast naming a CLI flag.
 - **W5.2** The player can pause: a button and `Space`.
 - **W6.2** A note edit saves on blur and after a 2 s pause, so clicking away no longer loses it.

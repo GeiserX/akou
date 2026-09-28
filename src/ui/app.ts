@@ -301,6 +301,7 @@ class App {
         this.transcript.update(done ? { all: true, ids: [] } : c, animate);
         let notes = c.all;
         let speakers = c.all;
+        let asked = c.all;
         for (const e of c.events) {
           // A line arriving now counts from now (the page's clock); the backlog from when it was
           // written.
@@ -309,12 +310,14 @@ class App {
           }
           if (e.type === "note" || e.type === "note.del") notes = true;
           if (e.type.startsWith("speaker.")) speakers = true;
+          if (e.type === "ask" || e.type === "answer") asked = true;
           if (e.type === "enhanced") this.enhanced.refresh();
           // Notes written before the final layer may now be offered a re-enhance.
           if (e.type === "final.done") void this.enhanced.load();
         }
         if (notes) this.notepad.render();
         if (speakers) this.askPane.renderPresets();
+        if (asked) this.askPane.restore();
         // The talk times follow the lines and the names, not the one-second tick.
         const lines = c.events.some((e) => e.type === "seg" || e.type.startsWith("final."));
         if (speakers || lines) this.drawPeople(f.view);
@@ -968,7 +971,7 @@ class App {
   }
 
   // ---------------------------------------------------------------------------
-  // Tabs: Notes, Ask, Enhanced
+  // Tabs: Notes and Enhanced. Ask sits above them and is never a tab (WINDOW section 6).
 
   private wireTabs(): void {
     const tabs = [...document.querySelectorAll<HTMLButtonElement>("[role=tab]")];
