@@ -123,6 +123,7 @@ impl Dictate {
         if let Some(g) = self.globe.as_mut() {
             g.follow(&self.hotkey);
         }
+        self.gate.lock().act.set_swallows(swallow_keys);
         out.line(p::ready(backend, swallow_keys, grants.0, grants.1));
         self.accessibility = grants.1.to_string();
         let mut ev = Vec::new();
@@ -552,6 +553,36 @@ mod tests {
             })
             .filter(|t| t != "level")
             .collect()
+    }
+
+    /// `ready` with `swallow_keys` false (evdev) makes Escape and Enter plain keys during a
+    /// session (DC-A4): not swallowed, not reported, and the session runs on to the hotkey. The
+    /// test above, with `swallow_keys` true, is the control.
+    #[test]
+    fn without_swallow_keys_enter_neither_ends_nor_is_reported() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("evdev", false, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        d.key(false, "RightCommand", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1100, 1500);
+        assert!(!d.key(true, "Enter", 1500 * MS, &mut out));
+        assert!(!d.key(false, "Enter", 1510 * MS, &mut out));
+        assert!(!d.key(true, "Escape", 1600 * MS, &mut out));
+        assert!(!d.key(false, "Escape", 1610 * MS, &mut out));
+        run(&mut d, &mut out, 1610, 2000);
+        assert_eq!(types(&out), ["ready", "mic", "session.started"]);
+        d.key(true, "RightCommand", 2000 * MS, &mut out);
+        d.key(false, "RightCommand", 2100 * MS, &mut out);
+        run(&mut d, &mut out, 2100, 2500);
+        let ended = out
+            .lines
+            .iter()
+            .find(|l| l.contains("session.ended"))
+            .unwrap();
+        assert!(ended.contains(r#""reason":"tap""#), "{ended}");
     }
 
     /// A push-to-talk press end to end: `ready`, the warm stream, `session.started` with the
