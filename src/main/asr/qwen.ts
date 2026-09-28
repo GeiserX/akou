@@ -169,6 +169,8 @@ export interface QwenOptions {
   allowed?: readonly string[];
   /** One request's limit. Default 120 s. */
   timeoutMs?: number;
+  /** Aborts the request in flight: its caller gave it up. */
+  signal?: AbortSignal;
   log?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -260,11 +262,15 @@ export class QwenEngine implements FinalEngine {
           method: "POST",
           headers: { "content-type": "application/json" },
           body,
-          signal: AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
+          signal: this.o.signal
+            ? AbortSignal.any([this.o.signal, AbortSignal.timeout(this.o.timeoutMs ?? 120_000)])
+            : AbortSignal.timeout(this.o.timeoutMs ?? 120_000),
         });
         if (answer.status < 500) break;
         why = `HTTP ${answer.status}: ${(await answer.text()).slice(0, 200)}`;
       } catch (err) {
+        // Given up by its caller: nothing to restart or retry.
+        if (this.o.signal?.aborted) throw new Error(`${this.id}: the request was given up`);
         why = (err as Error).message;
       }
       answer = null;

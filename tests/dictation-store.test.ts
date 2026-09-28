@@ -92,7 +92,15 @@ describe("the dictation log", () => {
     expect(() =>
       log.append({ type: "dictation.ended", id: "bad id!", reason: "release", seconds: 1 }),
     ).toThrow(/bad dictation event/);
+    // The max-length warning's second is a number or absent (DC-A3).
+    const warned = { type: "dictation.ended", id: "d1", reason: "max", seconds: 1 } as const;
+    expect(() => log.append({ ...warned, warned: "soon" as unknown as number })).toThrow(
+      /bad dictation event/,
+    );
     expect(readFileSync(log.path, "utf8")).toBe("");
+    // Positive control: a number is taken.
+    log.append({ ...warned, warned: 0.5 });
+    expect(readFileSync(log.path, "utf8")).toContain('"warned":0.5');
     log.close();
   });
 

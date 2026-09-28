@@ -39,7 +39,14 @@ export type DictationDraft =
       /** `user` for the key, `agent:<client>` for a door. */
       by: string;
     }
-  | { type: "dictation.ended"; id: string; reason: string; seconds: number }
+  | {
+      type: "dictation.ended";
+      id: string;
+      reason: string;
+      seconds: number;
+      /** The second of audio at which the pill said `1 minute left` (DC-A3), when it did. */
+      warned?: number;
+    }
   | {
       type: "dictation.text";
       id: string;
@@ -148,7 +155,9 @@ export function checkDictationDraft(o: Record<string, unknown>): string | null {
     case "dictation.started":
       return isTarget(o.target) && isStr(o.engine) && isStr(o.by) ? null : "dictation.started";
     case "dictation.ended":
-      return isStr(o.reason) && isNum(o.seconds) ? null : "dictation.ended";
+      return isStr(o.reason) && isNum(o.seconds) && (o.warned === undefined || isNum(o.warned))
+        ? null
+        : "dictation.ended";
     case "dictation.text":
       return isStr(o.raw) &&
         isStr(o.text) &&

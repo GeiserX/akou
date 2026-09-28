@@ -327,6 +327,10 @@ export type Redecode = (glossary: readonly string[]) => Promise<string>;
  * second decode holds the fix and no longer the heard form, and dropped (null) otherwise. With
  * none, or when it fails, the candidate stands with `evidence: none`. A replacement-only candidate
  * is a change of case the audio cannot tell, so it is never checked.
+ *
+ * An answer that is the fix and nothing else is the recognizer reading its context aloud: a
+ * candidate always comes from a longer dictation (an edit of more than half the words is a
+ * rewrite), so the answer proves nothing either way and the candidate stands with `evidence: none`.
  */
 export async function checkAudio(
   c: Candidate,
@@ -340,9 +344,10 @@ export async function checkAudio(
     return { ...c, evidence: "none" };
   }
   const got = wordKeys(text.normalize("NFC"));
-  const holdsTerm = containsRun(got, wordKeys(c.term.normalize("NFC")));
-  const holdsHeard = containsRun(got, wordKeys(c.heard.normalize("NFC")));
-  return holdsTerm && !holdsHeard ? { ...c, evidence: "audio" } : null;
+  const term = wordKeys(c.term.normalize("NFC"));
+  const heard = wordKeys(c.heard.normalize("NFC"));
+  if (got.length === term.length && containsRun(got, term)) return { ...c, evidence: "none" };
+  return containsRun(got, term) && !containsRun(got, heard) ? { ...c, evidence: "audio" } : null;
 }
 
 /** Every candidate of an edit, each through the audio check. */
@@ -413,6 +418,9 @@ export interface ReviewPair {
  * Every pair the dictation log's `dictation.learn` events name, at its latest status, newest
  * first: `proposed` and `ignored` still wait for an answer, `accepted` and `rejected` were given
  * one. A deleted dictation's events are gone from the log, and so are its pairs.
+ *
+ * With `known`, the vocabulary as it is now: an `accepted` pair it no longer holds (removed in the
+ * editor) waits again as `ignored`, so it can be accepted once more.
  */
 export function reviewPairs(
   events: readonly {
@@ -424,6 +432,7 @@ export function reviewPairs(
     status?: string;
     evidence?: string;
   }[],
+  known?: (heard: string, term: string) => boolean,
 ): ReviewPair[] {
   const out = new Map<string, ReviewPair>();
   for (const e of events) {
@@ -439,5 +448,9 @@ export function reviewPairs(
       at: e.t,
     });
   }
-  return [...out.values()].reverse();
+  const rows = [...out.values()].reverse();
+  if (!known) return rows;
+  return rows.map((p) =>
+    p.status === "accepted" && !known(p.heard, p.term) ? { ...p, status: "ignored" } : p,
+  );
 }

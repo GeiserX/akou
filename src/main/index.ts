@@ -197,12 +197,16 @@ export const APP_LOCK = "akou.lock";
 export const QUIT_FINAL_GRACE_MS = 5_000;
 /** How long a settings change waits for the dictation helper to take or refuse new keys. */
 const REBIND_ANSWER_MS = 3_000;
-/** The settings that decide which engine a dictation runs and how `best`'s server starts (DC-E3). */
+/**
+ * The settings that decide which engine a dictation runs and how `best`'s server starts and idles
+ * (DC-E2, DC-E3): a changed idle time arms its timer now, not after the next dictation.
+ */
 const WARM_KEYS = [
   "dictation.engine",
   "asr.accelerator",
   "asr.llamaServer",
   "asr.modelsDir",
+  "asr.qwenIdleMinutes",
 ] as const satisfies readonly SettingKey[];
 const sameValue = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 /** Names, merges and vocabulary change in bursts; a re-export waits this long for the last one. */
@@ -2043,6 +2047,7 @@ export class AkouApp implements ApiApp {
         maxMinutes: this.cfg.settings["dictation.maxMinutes"],
       }),
       spokenSend: () => this.cfg.settings["dictation.spokenSend"],
+      check: () => this.dictationCheck(),
       insert: () => {
         const c = this.cfg.settings;
         return {
@@ -2202,6 +2207,20 @@ export class AkouApp implements ApiApp {
     const v = this.dictationVerdict();
     if (v.engine === "best") return this.bestDictation?.loading() ?? false;
     return v.engine === "fast" && this.asrState.state === "loading";
+  }
+
+  /**
+   * DC-L3's audio check as it can run now: on the `best` engine dictation keeps warm, once its
+   * server is up and loaded. Otherwise null, and a fix is proposed with `evidence: none`: a cold
+   * start would hold the chip for a model load, and greedy Parakeet takes no context.
+   */
+  private dictationCheck():
+    | ((samples: Float32Array, glossary: readonly string[], language?: string) => Promise<string>)
+    | null {
+    const best = this.bestDictation;
+    if (!best || this.dictationVerdict().engine !== "best") return null;
+    if (best.pid() === null || best.loading()) return null;
+    return (samples, glossary, language) => best.check(samples, glossary, language);
   }
 
   /** The `best` engine, made once; it reads its settings and spec at each dictation. */

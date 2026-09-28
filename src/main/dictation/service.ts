@@ -16,11 +16,15 @@
  * `LEARN_WINDOW_MS` after the insert, DC-L2's longest read-back. A drafted one's stays open while
  * the draft waits in the box, and closes when the box answers it. A window never outlives the app:
  * at the next start, and at every sweep, the audio of a finished dictation with no open window goes.
+ *
+ * The learning check (DC-L3) runs on that audio: a fix made in the draft box is decoded again from
+ * the kept file by `check`, a local Qwen, while the learn window holds the file open.
  */
 
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
+import type { Redecode } from "../../core/dictation/learn.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
@@ -132,6 +136,13 @@ export interface DictationServiceOptions extends TextRules {
   /** `dictation.spokenSend` (DC-S5); absent, off. */
   spokenSend?(): boolean;
   /**
+   * The audio check of DC-L3 as it can run now: a local Qwen decoding a dictation's audio again
+   * with the given words as its only context, or null when none is warm for it. Absent, never.
+   */
+  check?():
+    | ((samples: Float32Array, glossary: readonly string[], language?: string) => Promise<string>)
+    | null;
+  /**
    * What the draft box needs beside the log and the session (DC-S1, DC-L1, DC-L4); absent, the
    * box sends nothing, learns nothing and inserts with no send key.
    */
@@ -239,6 +250,7 @@ export class DictationService {
       learnEntry: d.learnEntry ?? (async () => {}),
       unlearnEntry: d.unlearnEntry ?? (async () => {}),
       closeLearnWindow: (id) => this.closeLearnWindow(id),
+      recheck: (id) => this.recheck(id),
       ...(d.later ? { later: d.later } : {}),
       ...(o.onLog ? { onLog: o.onLog } : {}),
     });
@@ -333,6 +345,21 @@ export class DictationService {
     clearTimeout(this.windows.get(id));
     this.windows.delete(id);
     if (!(this.o.keepAudio?.() ?? true)) this.dropAudio(id);
+  }
+
+  /**
+   * DC-L3's audio check on dictation `id`: its kept audio decoded again with a fixed word as the
+   * only context. Null when no local Qwen can run it now or no audio is kept.
+   */
+  private recheck(id: string): Redecode | null {
+    const run = this.o.check?.();
+    if (!run || !this.audio.has(id)) return null;
+    const language = this.o.language?.();
+    return async (glossary) => {
+      const samples = await this.audio.read(id);
+      if (!samples) throw new Error("the dictation's audio is gone");
+      return run(samples, glossary, language);
+    };
   }
 
   private dropAudio(id: string): void {
