@@ -333,9 +333,16 @@ const METAL_PID_FILE = "llama-metal.json";
 /** Metal servers this thread runs; a new one stops the others first. */
 const metalServers = new Set<LlamaServer>();
 
+/** How long a `ps` answer that the pid file's process is the llama-server stands. */
+const HOLDER_CHECK_MS = 60_000;
+/** The pid file's process last confirmed as the llama-server on its port, and when. */
+let confirmed: { pid: number; port: number; at: number } | null = null;
+
 /**
  * The Metal llama-server the pid file in `lockDir` names, when it is alive, is not `except`, and
- * still listens on the port the file records (a reused pid is someone else's process).
+ * still listens on the port the file records (a reused pid is someone else's process). A `ps`
+ * that said so stands for `HOLDER_CHECK_MS`, so dictation looking every few seconds while another
+ * server holds the GPU does not fork `ps` on the main thread each time.
  */
 function pidFileHolder(lockDir: string | undefined, except: number | null): number | null {
   if (!lockDir || process.platform === "win32") return null;
@@ -347,8 +354,14 @@ function pidFileHolder(lockDir: string | undefined, except: number | null): numb
   }
   const pid = held.pid;
   if (!pid || pid === except || !alive(pid)) return null;
+  // clock: how old the last `ps` answer is, not a timer.
+  const now = Date.now();
+  const c = confirmed;
+  if (c && c.pid === pid && c.port === held.port && now - c.at < HOLDER_CHECK_MS) return pid;
   const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
-  return (r.stdout ?? "").includes(`--port ${held.port}`) ? pid : null;
+  if (!(r.stdout ?? "").includes(`--port ${held.port}`)) return null;
+  confirmed = { pid, port: held.port as number, at: now };
+  return pid;
 }
 
 /**

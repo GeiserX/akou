@@ -6,7 +6,7 @@
  */
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LlamaEngineSpec } from "../src/main/asr/engine.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "../src/main/asr/llama-catalog.ts";
@@ -336,6 +336,41 @@ describe("one Metal engine at a time: dictation gives way", () => {
     expect(metalHolder(t.dir, null)).toBe(named);
     writeFileSync(file, JSON.stringify({ pid: other.pid, port: port + 1 }));
     expect(metalHolder(t.dir, null)).toBeNull();
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port }));
+    other.kill();
+    await other.exited;
+    expect(metalHolder(t.dir, null)).toBeNull();
+  });
+
+  test("the pid file's holder, once ps confirmed it, stands without another ps for a while", async () => {
+    const t = tempDir("akou-dict-metal-");
+    cleanups.push(t.cleanup);
+    const port = 47_313;
+    const other = Bun.spawn(
+      [process.execPath, "-e", "setInterval(() => {}, 1000)", "--", "--port", String(port)],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    const path = process.env.PATH;
+    cleanups.push(() => {
+      process.env.PATH = path;
+      other.kill();
+    });
+    const file = join(t.dir, "llama-metal.json");
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port }));
+    // Windows keeps no pid file (one Metal server is a macOS rule).
+    const named = process.platform === "win32" ? null : other.pid;
+    expect(metalHolder(t.dir, null)).toBe(named);
+    // A ps that names nothing: only the earlier answer can name it now.
+    const bin = join(t.dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "ps"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    process.env.PATH = bin;
+    expect(metalHolder(t.dir, null)).toBe(named);
+    // Positive control: a port it was never confirmed on needs that ps, which names nothing.
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port: port + 1 }));
+    expect(metalHolder(t.dir, null)).toBeNull();
+    process.env.PATH = path;
+    // And a holder that ended is none, whatever was confirmed.
     writeFileSync(file, JSON.stringify({ pid: other.pid, port }));
     other.kill();
     await other.exited;

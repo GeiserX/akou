@@ -179,8 +179,10 @@ export class BestEngine implements DictationEngine {
         createLlamaServer(spec, {
           yieldMetal: true,
           onChild: (_pid, alive) => {
-            // `stop()` lets go of the server before it ends it, so only a loss gets here; and only
-            // one that had loaded, so a server that dies at every start is not started again.
+            // `stop()` lets go of the server before it ends it, so this engine's own stop never
+            // gets here. A loss does, and so does the engine's retry restart, whose later look
+            // finds the server running. Only a server that had loaded counts, so one that dies at
+            // every start is not started again.
             if (alive || this.server !== server || this.healthy !== server) return;
             this.healthy = null;
             this.o.onLost?.();
