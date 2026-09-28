@@ -464,7 +464,17 @@ class App {
 
   /** The speaker chips under the title: each voice's colour and its time, the most first. */
   private drawPeople(v: CallView | null): void {
-    const totals = v?.call ? speakerTotals(v.lines()) : [];
+    const totals = v?.call
+      ? speakerTotals(v.lines(), {
+          named: new Set(
+            v
+              .roster()
+              .filter((s) => s.name)
+              .map((s) => s.spk),
+          ),
+          finalDoneSeq: v.final.done?.seq,
+        })
+      : [];
     const people = byId("people");
     people.hidden = totals.length === 0;
     replace(

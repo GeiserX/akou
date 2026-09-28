@@ -742,6 +742,20 @@ describe("the composer row and the call header (WINDOW section 3.1)", () => {
       { spk: "c2", label: "Speaker 2", seconds: 4 },
     ]);
     expect(speakerTotals([])).toEqual([]);
+    // A voice nobody named, before the final pass, is a guess: its chip reads like its lines.
+    const guess = (spk: string, seq: number, w0: number, w1: number) => ({
+      ...line(spk, "Speaker 1", w0, w1),
+      layer: "live" as const,
+      ch: "call" as const,
+      seq,
+    });
+    const said = [guess("c1", 1, 0, 2000), guess("c1", 2, 2000, 3000)];
+    expect(speakerTotals(said, { named: new Set() })).toEqual([
+      { spk: "c1", label: "c1?", seconds: 3 },
+    ]);
+    // Named, or finished by the final pass, it is solid again.
+    expect(speakerTotals(said, { named: new Set(["c1"]) })[0]?.label).toBe("Speaker 1");
+    expect(speakerTotals(said, { named: new Set(), finalDoneSeq: 5 })[0]?.label).toBe("Speaker 1");
   });
 
   test("talk time: seconds under a minute, whole minutes after, hours past an hour", () => {

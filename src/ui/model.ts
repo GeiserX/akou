@@ -641,13 +641,33 @@ export interface SpeakerTotal {
   seconds: number;
 }
 
-/** Who spoke and for how long, from the lines on screen: the most first, ties in order of speech. */
+/**
+ * Who spoke and for how long, from the lines on screen: the most first, ties in order of speech.
+ * With `chips` (the named speakers and the fold's `final.done.seq`), a voice is called what its
+ * lines are called (`speakerChip`), so a guessed cluster reads `c1?` on its chip too.
+ */
 export function speakerTotals(
-  lines: readonly { spk: string; speaker: string; w0: number; w1: number }[],
+  lines: readonly {
+    spk: string;
+    speaker: string;
+    w0: number;
+    w1: number;
+    layer?: "live" | "final";
+    ch?: "mic" | "call";
+    seq?: number;
+  }[],
+  chips?: { named: ReadonlySet<string>; finalDoneSeq?: number },
 ): SpeakerTotal[] {
   const by = new Map<string, SpeakerTotal>();
   for (const l of lines) {
-    const t = by.get(l.spk) ?? { spk: l.spk, label: l.speaker, seconds: 0 };
+    const label =
+      chips && l.layer && l.ch
+        ? speakerChip(
+            { ...l, layer: l.layer, ch: l.ch },
+            { named: chips.named.has(l.spk), finalDoneSeq: chips.finalDoneSeq },
+          ).label
+        : l.speaker;
+    const t = by.get(l.spk) ?? { spk: l.spk, label, seconds: 0 };
     t.seconds += Math.max(0, l.w1 - l.w0) / 1000;
     by.set(l.spk, t);
   }

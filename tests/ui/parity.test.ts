@@ -121,7 +121,8 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           );
           expect(await page.locator("#meta").getAttribute("title")).toContain("Times are local");
           expect(await page.locator("#people li").count()).toBe(3);
-          expect(await text(page, "#people li >> nth=0")).toMatch(/^Speaker 1\d+ s$/);
+          // A voice nobody named, before the final pass, is a guess: its chip reads like its lines.
+          expect(await text(page, "#people li >> nth=0")).toMatch(/^c1\?\d+ s$/);
           for (const c of ["#record", "#restart", "#settings-open", "#share-start"]) {
             expect(await page.locator(c).isVisible()).toBe(true);
           }
