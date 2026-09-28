@@ -1,98 +1,125 @@
-/* The dictation pill (DC-O1) and its learn chip (DC-L4): one small floating window, readable over
-   any desktop, in dark and light. */
+/* The dictation pill (DC-O1) as the island at the top (docs/ux/design-explorations/README.md):
+   a black island that only changes width, black in both appearances like a notch. Red is the
+   recording dot only, green the inserted check only. The hint line, the error sheet and the learn
+   chip hang under it and switch material with the appearance. */
 :root {
   color-scheme: light dark;
-  --bg: #fdfdfd;
-  --fg: #1a1a1a;
-  --muted: #5c5c5c;
-  --line: #c9c9c9;
-  --warn: #8a4b00;
-  --mark: #b3261e;
+  --island: #000;
+  --island-fg: #fff;
+  --island-dim: rgba(255, 255, 255, 0.5);
+  --island-ring: rgba(255, 255, 255, 0.1);
+  --under-bg: rgba(255, 255, 255, 0.92);
+  --under-fg: rgba(0, 0, 0, 0.88);
+  --under-dim: rgba(0, 0, 0, 0.58);
+  --under-ring: rgba(0, 0, 0, 0.1);
+  --key-bg: rgba(0, 0, 0, 0.07);
+  --btn-bg: rgba(0, 0, 0, 0.07);
+  --pri-bg: #0b0b0c;
+  --pri-fg: #f5f5f7;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1f1f1f;
-    --fg: #f2f2f2;
-    --muted: #b0b0b0;
-    --line: #555;
-    --warn: #ffb35c;
-    --mark: #ff8a80;
+    --under-bg: rgba(10, 10, 11, 0.94);
+    --under-fg: #fff;
+    --under-dim: rgba(255, 255, 255, 0.58);
+    --under-ring: rgba(255, 255, 255, 0.1);
+    --key-bg: rgba(255, 255, 255, 0.14);
+    --btn-bg: rgba(255, 255, 255, 0.11);
+    --pri-bg: #f5f5f7;
+    --pri-fg: #0b0b0c;
   }
 }
 [hidden] {
   /* biome-ignore lint/complexity/noImportantStyles: the attribute must beat every display rule, whatever its specificity */
   display: none !important;
 }
-/* The window is transparent and taller than the card, which leaves room for the chip below it:
-   only the card and the chip are painted. */
+/* The window is transparent and larger than the island, which leaves room for what hangs under
+   it: only the island and those are painted. */
 html,
 body {
   margin: 0;
   background: transparent;
-  color: var(--fg);
   font:
     13px / 1.3 -apple-system,
     "Segoe UI",
     system-ui,
     sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 .pill-page {
   overflow: hidden;
   user-select: none;
 }
-button,
-select {
+#pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 16px;
+}
+button {
   font: inherit;
   color: inherit;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 8px;
+  border: 0;
   cursor: pointer;
 }
 button:focus-visible {
   outline: 2px solid Highlight;
   outline-offset: 1px;
 }
-.hint {
-  color: var(--muted);
-}
-#pill,
-#chip {
-  background: var(--bg);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 6px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-#pill-row,
-#hints,
-#buttons,
-#chip {
+
+/* The island. */
+#island {
   display: flex;
   align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-}
-#buttons {
-  justify-content: flex-end;
-}
-#grip {
+  gap: 10px;
+  height: 36px;
+  box-sizing: border-box;
+  min-width: 126px;
+  padding: 0 16px;
+  border-radius: 18px;
+  background: var(--island);
+  color: var(--island-fg);
+  white-space: nowrap;
+  justify-content: center;
+  box-shadow:
+    0 0 0 0.5px var(--island-ring),
+    0 8px 24px rgba(0, 0, 0, 0.5);
   cursor: grab;
-  opacity: 0.6;
 }
-#pill[data-state="listening"] #mark {
-  color: var(--mark);
+#pill[data-state="listening"] #island {
+  padding: 0 6px 0 14px;
 }
-#pill[data-state="transcribing"] #mark {
-  display: inline-block;
-  animation: spin 1s linear infinite;
+#pill[data-state="transcribing"] #island {
+  gap: 8px;
+  padding: 0 16px 0 8px;
 }
-#pill[data-state="error"] #mark,
-#pill[data-state="error"] #word {
-  color: var(--warn);
+.icon {
+  flex: none;
+}
+#rec {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #ff5a45;
+  animation: glow 1.6s ease-in-out infinite;
+}
+@keyframes glow {
+  0%,
+  100% {
+    box-shadow:
+      0 0 0 3px rgba(255, 90, 69, 0.16),
+      0 0 8px rgba(255, 90, 69, 0.5);
+  }
+  50% {
+    box-shadow:
+      0 0 0 4px rgba(255, 90, 69, 0.24),
+      0 0 12px rgba(255, 90, 69, 0.7);
+  }
+}
+#ring .arc {
+  transform-origin: 11px 11px;
+  animation: spin 0.9s linear infinite;
 }
 @keyframes spin {
   to {
@@ -100,36 +127,214 @@ button:focus-visible {
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  #pill[data-state="transcribing"] #mark {
+  #rec,
+  #ring .arc {
     animation: none;
   }
 }
 #level {
-  width: 80px;
+  display: flex;
+  gap: 3px;
+  flex: none;
+}
+#level i {
+  width: 10px;
   height: 6px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.16);
+}
+#level i.on {
+  background: #fff;
+}
+#level i.half {
+  background: rgba(255, 255, 255, 0.5);
+}
+/* The preview: one line, the newest words at the right, the oldest fading out at the left. */
+#preview {
+  display: flex;
+  justify-content: flex-end;
+  width: 184px;
+  flex: none;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 32px);
+  mask-image: linear-gradient(to right, transparent 0, #000 32px);
+}
+#preview-words {
+  white-space: nowrap;
+}
+#word {
+  font-weight: 500;
+}
+#pill[data-state="listening"] #word {
+  display: none;
+}
+#pill[data-state="chip"] #word {
+  font-weight: 400;
+  color: rgba(255, 255, 255, 0.75);
+}
+#word .note {
+  color: var(--island-dim);
+  font-weight: 400;
 }
 #elapsed {
+  flex: none;
   font-variant-numeric: tabular-nums;
-  margin-left: auto;
+  font-weight: 500;
+  letter-spacing: 0.2px;
 }
-#note {
-  color: var(--muted);
+#elapsed:empty {
+  display: none;
 }
-#preview {
-  max-width: 420px;
-  line-height: 1.3;
+#pill[data-state="transcribing"] #elapsed {
+  color: rgba(255, 255, 255, 0.55);
+  font-weight: 400;
+}
+#controls {
+  display: flex;
+  gap: 4px;
+  flex: none;
+}
+.round {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.11);
+}
+.round:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* What hangs under the island. */
+.under {
+  color: var(--under-fg);
+  background: var(--under-bg);
+  -webkit-backdrop-filter: blur(24px);
+  backdrop-filter: blur(24px);
+  box-shadow:
+    0 0 0 0.5px var(--under-ring),
+    0 12px 32px rgba(0, 0, 0, 0.35);
+}
+#hints {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  height: 22px;
+  padding: 0 10px;
+  border-radius: 11px;
+  font-size: 11px;
+  color: var(--under-dim);
+  white-space: nowrap;
+  animation: fade 0.25s ease-out;
+}
+@keyframes fade {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #hints {
+    animation: none;
+  }
+}
+.key {
+  font-size: 10px;
+  font-weight: 500;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--key-bg);
+  color: var(--under-fg);
+}
+.sep {
+  opacity: 0.45;
+}
+#sheet {
+  box-sizing: border-box;
+  width: 368px;
+  padding: 16px;
+  border-radius: 16px;
+}
+#message {
+  margin: 0;
+  font-weight: 600;
+  line-height: 18px;
   overflow-wrap: anywhere;
 }
+#buttons,
 #chip {
-  flex-direction: row;
-  margin-top: 4px;
+  display: flex;
+  gap: 8px;
+}
+#buttons {
+  margin-top: 16px;
+}
+#buttons:empty {
+  display: none;
+}
+#buttons button,
+#chip button {
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--btn-bg);
+}
+#buttons button:first-child,
+#chip #chip-learn {
+  background: var(--pri-bg);
+  color: var(--pri-fg);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 #chip {
+  align-items: center;
+  gap: 12px;
+  box-sizing: border-box;
+  max-width: 100%;
   margin: 0;
+  padding: 8px 8px 8px 14px;
+  border: 0;
+  border-radius: 14px;
   min-width: 0;
+  white-space: nowrap;
+}
+#chip button {
+  flex: none;
+}
+/* A long word ends in an ellipsis rather than pushing the chip past the window's edges; its
+   title holds the whole of it. */
+.chip-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.chip-q,
+.chip-w,
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.chip-q {
+  font-weight: 600;
+  line-height: 18px;
+}
+.chip-w {
+  font-size: 11px;
+  line-height: 14px;
+  color: var(--under-dim);
 }
 .chip-candidate {
   display: inline-flex;
   gap: 4px;
   align-items: center;
+  min-width: 0;
 }

@@ -10,18 +10,28 @@
 </head>
 <body class="pill-page">
 <div id="pill" data-state="hidden" hidden>
-  <div id="pill-row">
-    <span id="grip" class="electrobun-webkit-app-region-drag" title="Drag to move" aria-hidden="true">⋮⋮</span>
-    <span id="mark" aria-hidden="true"></span>
-    <meter id="level" min="-60" max="0" value="-60" aria-hidden="true" hidden></meter>
+  <div id="island" class="electrobun-webkit-app-region-drag" title="Drag to move">
+    <span id="rec" class="icon" aria-hidden="true" hidden></span>
+    <svg id="ring" class="icon" width="22" height="22" viewBox="0 0 22 22" aria-hidden="true" hidden><circle cx="11" cy="11" r="9" fill="none" stroke="rgba(255,255,255,.16)" stroke-width="2"/><circle class="arc" cx="11" cy="11" r="9" fill="none" stroke="#fff" stroke-width="2" stroke-linecap="round" stroke-dasharray="15 60"/><circle cx="11" cy="11" r="3.5" fill="rgba(255,255,255,.72)"/></svg>
+    <svg id="check" class="icon" width="18" height="18" viewBox="0 0 18 18" aria-hidden="true" hidden><circle cx="9" cy="9" r="9" fill="#30d158"/><path d="M5.2 9.3l2.4 2.4 5-5.2" stroke="#fff" stroke-width="1.9" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <svg id="copied" class="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" hidden><rect x="5" y="5" width="9" height="9" rx="2.2" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M11 3.4V3a1.6 1.6 0 0 0-1.6-1.6H3.6A1.6 1.6 0 0 0 2 3v5.8a1.6 1.6 0 0 0 1.6 1.6" fill="none" stroke="rgba(255,255,255,.6)" stroke-width="1.5"/></svg>
+    <svg id="alert" class="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" hidden><circle cx="8" cy="8" r="7" fill="none" stroke="#fff" stroke-width="1.5"/><path d="M8 4.4v4.4" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/><circle cx="8" cy="11.3" r=".95" fill="#fff"/></svg>
+    <svg id="book" class="icon" width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" hidden><path d="M3 2.5h7.5A2.5 2.5 0 0 1 13 5v8.5H5.5A2.5 2.5 0 0 1 3 11z" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="1.4" stroke-linejoin="round"/><path d="M3 11a2.5 2.5 0 0 1 2.5-2.5H13" fill="none" stroke="rgba(255,255,255,.75)" stroke-width="1.4"/></svg>
+    <span id="level" aria-hidden="true" hidden><i></i><i></i><i></i><i></i><i></i></span>
+    <span id="preview" hidden><span id="preview-words"></span></span>
     <span id="word" role="status" aria-live="polite"></span>
     <span id="elapsed"></span>
+    <span id="controls" class="electrobun-webkit-app-region-no-drag" hidden>
+      <button id="stop" class="round" type="button" title="Stop" aria-label="Stop"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><rect x="1" y="1" width="8" height="8" rx="2" fill="#fff"/></svg></button>
+      <button id="cancel" class="round" type="button" title="Cancel" aria-label="Cancel"><svg width="10" height="10" viewBox="0 0 10 10" aria-hidden="true"><path d="M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></button>
+    </span>
   </div>
-  <div id="preview" hidden></div>
-  <div id="hints" hidden></div>
-  <div id="note" hidden></div>
-  <div id="buttons" hidden></div>
+  <div id="hints" class="under" hidden></div>
+  <div id="sheet" class="under" hidden>
+    <p id="message" role="alert"></p>
+    <div id="buttons"></div>
+  </div>
+  <fieldset id="chip" class="under" aria-label="Learn a word" hidden></fieldset>
 </div>
-<fieldset id="chip" aria-label="Learn a word" hidden></fieldset>
 </body>
 </html>

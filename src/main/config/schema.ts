@@ -822,9 +822,9 @@ export const SETTINGS = {
   },
   "dictation.pill": {
     type: "string",
-    values: ["bottom", "top", "left", "right", "off"],
-    default: process.platform === "linux" ? "off" : "bottom",
-    doc: "Where the dictation pill shows `listening` and `transcribing`. Off by default on Linux, where a compositor may give the pill the keyboard and the text would land in it, so turn it on there knowingly; the tray and the sounds carry the state instead.",
+    values: ["top", "bottom", "left", "right", "off"],
+    default: process.platform === "linux" ? "off" : "top",
+    doc: "Where the dictation pill shows `listening` and `transcribing`: `top` is the island at the top centre of the display. Off by default on Linux, where a compositor may give the pill the keyboard and the text would land in it, so turn it on there knowingly; the tray and the sounds carry the state instead.",
   },
   "dictation.pillPreview": {
     type: "boolean",

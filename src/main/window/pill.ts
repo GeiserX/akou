@@ -112,9 +112,9 @@ export function levelDb(rms: number): number {
   return Math.max(-60, Math.min(0, Math.round(20 * Math.log10(rms) * 10) / 10));
 }
 
-/** The line after a clipboard-only insert: nothing was pasted, so the user pastes. */
+/** The shortcut beside `Copied` after a clipboard-only insert: nothing was pasted, so the user pastes. */
 export function pasteHint(platform: string): string {
-  return platform === "darwin" ? "copied, press ⌘V" : "copied, press Ctrl+V";
+  return platform === "darwin" ? "⌘V" : "Ctrl+V";
 }
 
 const realLater = (ms: number, fn: () => void) => {

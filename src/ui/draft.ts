@@ -2,7 +2,10 @@
  * The draft box (docs/ux/DICTATION.md section 5.2, DC-S1): where a dictation lands when you want to
  * read it before it goes anywhere. Enter inserts into the app captured when the session began,
  * Ctrl+Enter (Cmd+Enter on macOS) inserts and presses the send key, Shift+Enter is a newline, and
- * Escape discards. Copy and Retry with another engine sit below.
+ * Escape discards. Discard, Retry with another engine, Copy, Insert and Send sit below as buttons.
+ * It is drawn as a sheet dropped from the island at the top (docs/ux/design-explorations/README.md):
+ * the island says `Draft` and the audio's length, the sheet holds the field, where the text goes,
+ * and the engine, where it ran, how long it took, the audio's length and the language.
  *
  * Words the engine was unsure of are underlined, from its word confidences; an engine that gives
  * none gets the note `no confidence from this engine` and no underline. A click on an underlined
@@ -82,6 +85,26 @@ export function shiftMarks(marks: readonly Mark[], before: string, after: string
     else if (m.start >= oldEnd) out.push({ ...m, start: m.start + delta, end: m.end + delta });
   }
   return out;
+}
+
+/** The audio's length as `0:14`. */
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/** The engine line: `fast (Parakeet) on this Mac · took 0.3 s · 0:14 of audio · EN`. */
+function metaLine(d: DraftOpen): (string | HTMLElement)[] {
+  const dot = () => h("span", { class: "dot", attrs: { "aria-hidden": "true" } });
+  const here = d.platform === "darwin" ? "on this Mac" : "on this computer";
+  const parts: (string | HTMLElement)[][] = [
+    [h("b", {}, d.engine), d.local === true ? ` ${here}` : ""],
+    ["took ", h("b", {}, `${(d.ms / 1000).toFixed(1)} s`)],
+  ];
+  if (typeof d.seconds === "number" && d.seconds > 0) parts.push([`${clock(d.seconds)} of audio`]);
+  if (d.language)
+    parts.push([h("span", { id: "draft-lang", class: "lang" }, d.language.toUpperCase())]);
+  return parts.flatMap((p, i) => (i === 0 ? p : [dot(), ...p]));
 }
 
 export function mountDraft(t: DraftTransport): DraftSink {
@@ -175,6 +198,13 @@ export function mountDraft(t: DraftTransport): DraftSink {
     alts.hidden = false;
   });
   el("draft-close").addEventListener("click", discard);
+  el("draft-insert").addEventListener("click", () => insert(false));
+  el("draft-send").addEventListener("click", () => insert(true));
+  const retryWith = () => {
+    const engine = el<HTMLSelectElement>("draft-retry-engine").value;
+    el("draft-retry").textContent = engine ? `↻ Retry with ${engine}` : "";
+  };
+  el("draft-retry-engine").addEventListener("change", retryWith);
   el("draft-copy").addEventListener("click", () => {
     if (d) t.copy({ id: d.id, text: field.value });
   });
@@ -194,17 +224,20 @@ export function mountDraft(t: DraftTransport): DraftSink {
       const scored = (next.words ?? []).some((w) => typeof w.c === "number");
       el("draft-noconf").hidden = scored;
       alts.hidden = true;
-      el("draft-to").textContent = next.to ? `to: ${next.to}` : "";
-      el("draft-engine").textContent = `${next.engine} ${(next.ms / 1000).toFixed(1)} s`;
-      replace(
-        el("draft-retry-engine"),
-        ...next.engines.map((e) => h("option", { value: e }, `Retry with ${e}`)),
-      );
-      el("draft-retry-engine").hidden = next.engines.length === 0;
-      el("draft-retry").hidden = next.engines.length === 0;
-      const m = mac() ? "Cmd" : "Ctrl";
-      el("draft-keys").textContent =
-        `Enter: insert · ${m}+Enter: insert and send · Shift+Enter: newline · Esc: discard`;
+      el("draft-to").hidden = !next.to;
+      el("draft-app").textContent = next.to ?? "";
+      el("draft-app-icon").textContent = (next.to ?? "").charAt(0).toUpperCase();
+      el("draft-length").textContent =
+        typeof next.seconds === "number" && next.seconds > 0 ? `· ${clock(next.seconds)}` : "";
+      replace(el("draft-meta"), ...metaLine(next));
+      replace(el("draft-retry-engine"), ...next.engines.map((e) => h("option", { value: e }, e)));
+      el("draft-retry-group").hidden = next.engines.length === 0;
+      el("draft-retry-pick").hidden = next.engines.length < 2;
+      retryWith();
+      el("draft-send-key").textContent = mac() ? "⌘↵" : "Ctrl ↵";
+      el("draft-send").title = mac()
+        ? "Insert and send (Cmd+Enter)"
+        : "Insert and send (Ctrl+Enter)";
       el("draft").hidden = false;
       paintMarks();
       if (next.focus) {

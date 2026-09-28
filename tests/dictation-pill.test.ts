@@ -28,9 +28,11 @@ import {
 } from "../src/main/window/pill.ts";
 import {
   appForShell,
+  DRAFT_SIZE,
   type NativeUi,
   PILL_SIZE,
   type PillStyle,
+  placeDraft,
   placePill,
   type Rect,
   Shell,
@@ -236,7 +238,7 @@ describe("DC-O1: the pill's states from the session", () => {
     spoken(f, "d2");
     f.to("transcribing");
     f.event({ type: "dictation.inserted", id: "d2", method: "clipboard", receipt_ms: 0 });
-    expect(f.states().at(-1)).toEqual({ state: "done", how: "copied", note: "copied, press ⌘V" });
+    expect(f.states().at(-1)).toEqual({ state: "done", how: "copied", note: "⌘V" });
   });
 
   test("a failure shows its message for its time; empty and cancelled hide at once", () => {
@@ -466,10 +468,26 @@ describe("DC-O1: the pill's window", () => {
 
   test("each edge centres it on that side of the primary work area", () => {
     const { width, height } = PILL_SIZE;
-    expect(placePill({}, "bottom", AREAS)).toEqual({ x: 500, y: 875 - height - 24, width, height });
-    expect(placePill({}, "top", AREAS)).toEqual({ x: 500, y: 49, width, height });
-    expect(placePill({}, "left", AREAS)).toEqual({ x: 24, y: 384, width, height });
-    expect(placePill({}, "right", AREAS)).toEqual({ x: 1440 - width - 24, y: 384, width, height });
+    const cx = (1440 - width) / 2;
+    expect(placePill({}, "bottom", AREAS)).toEqual({ x: cx, y: 875 - height - 24, width, height });
+    // The island sits right under the menu bar, where a notch would be.
+    expect(placePill({}, "top", AREAS)).toEqual({ x: cx, y: 25 + 4, width, height });
+    const cy = 25 + (850 - height) / 2;
+    expect(placePill({}, "left", AREAS)).toEqual({ x: 24, y: cy, width, height });
+    expect(placePill({}, "right", AREAS)).toEqual({ x: 1440 - width - 24, y: cy, width, height });
+  });
+
+  test("the draft box drops from the island: its own island where the pill's is, at the top centre", () => {
+    const pill = placePill({}, "top", AREAS);
+    const draft = placeDraft(AREAS);
+    expect(draft).toEqual({
+      x: (1440 - DRAFT_SIZE.width) / 2,
+      y: pill.y,
+      width: DRAFT_SIZE.width,
+      height: DRAFT_SIZE.height,
+    });
+    // Both windows centre the island they draw, so the two islands share a centre line.
+    expect(draft.x + draft.width / 2).toBe(pill.x + pill.width / 2);
   });
 
   test("a dragged place is kept on its edge, pulled onto a display, and dropped for another edge", () => {

@@ -397,7 +397,7 @@ describe("DC-S2: the send key after the paste receipt", () => {
     expect(r.inserts().map((l) => [l.type, l.method, l.send_key])).toEqual([
       ["insert", "clipboard", "none"],
     ]);
-    // The pill's `copied, press ⌘V` comes from this method (tests/dictation-pill.test.ts).
+    // The pill's `Copied · ⌘V` comes from this method (tests/dictation-pill.test.ts).
     expect(r.svc.log.events().find((e) => e.type === "dictation.inserted")).toMatchObject({
       method: "clipboard",
     });
