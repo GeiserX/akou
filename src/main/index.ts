@@ -78,7 +78,7 @@ import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from 
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
-import { type LlamaPlan, llamaPlan } from "./asr/llama-server.ts";
+import { type LlamaPlan, llamaPlan, metalHolder } from "./asr/llama-server.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -197,6 +197,8 @@ export const APP_LOCK = "akou.lock";
 export const QUIT_FINAL_GRACE_MS = 5_000;
 /** How long a settings change waits for the dictation helper to take or refuse new keys. */
 const REBIND_ANSWER_MS = 3_000;
+/** How often dictation looks whether a final pass still holds the GPU `best` gave way to (DC-E2). */
+export const BEST_REWARM_MS = 5_000;
 /**
  * The settings that decide which engine a dictation runs and how `best`'s server starts and idles
  * (DC-E2, DC-E3): a changed idle time arms its timer now, not after the next dictation.
@@ -306,6 +308,12 @@ export interface AppOptions {
     probe?: Probe;
     run?: (bin: string) => Promise<{ output?: string; error?: string }>;
   };
+  /**
+   * The Metal llama-server beside dictation's own (`except`), a final pass's, or null: by default
+   * `metalHolder` over the build's pid file. Tests pass their own, since a fake llama-server named
+   * by `asr.llamaServer` has no build folder to hold the file.
+   */
+  metalHolder?: (lockDir: string | undefined, except: number | null) => number | null;
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
@@ -511,6 +519,8 @@ export class AkouApp implements ApiApp {
   private remoteDictation: RemoteEngine | null = null;
   /** The `best` dictation engine: Qwen's llama-server kept warm while dictation is on (DC-E2). */
   private bestDictation: BestEngine | null = null;
+  /** The next look at whether `best` may be warmed again, while it gives way to the GPU's holder. */
+  private bestRewarm: unknown = null;
   /** The machine that detection read: its env names the image's llama-server. */
   private accelProbe: Probe | null = null;
 
@@ -2178,11 +2188,20 @@ export class AkouApp implements ApiApp {
     if (setting === "fast" || setting === "remote")
       return resolveDictationEngine({ setting, accelerator: "cpu", bestReady: false });
     const plan = this.llamaPlan();
+    const bestReady = this.bestRuns(plan);
     return resolveDictationEngine({
       setting,
       accelerator: plan.accelerator,
-      bestReady: this.bestRuns(plan),
+      bestReady,
+      gpuBusy: bestReady && plan.accelerator === "metal" && this.metalBusy(),
     });
+  }
+
+  /** Whether another Metal llama-server (a final pass) holds the GPU `best` would need. */
+  private metalBusy(): boolean {
+    const lockDir = this.llamaSpec(QWEN_ASR).build?.dir;
+    const except = this.bestDictation?.pid() ?? null;
+    return (this.o.metalHolder ?? metalHolder)(lockDir, except) !== null;
   }
 
   /** Qwen is on disk and a llama-server is there to run it. */
@@ -2245,9 +2264,23 @@ export class AkouApp implements ApiApp {
         };
       },
       clock: this.clock,
+      // A final pass took the GPU, or the server died: warmed again once it may be.
+      onLost: () => this.rewarmBestLater(),
       onLog: (level, msg) => this.log(level, msg),
     });
     return this.bestDictation;
+  }
+
+  /**
+   * Looks again in `BEST_REWARM_MS` whether `best` may be warmed: a final pass that took the GPU
+   * writes its pid file a moment after it stopped dictation's server, and holds it until it ends.
+   */
+  private rewarmBestLater(): void {
+    if (this.bestRewarm !== null || this.quitting) return;
+    this.bestRewarm = this.clock.setTimeout(() => {
+      this.bestRewarm = null;
+      if (this.cfg.settings["dictation.enabled"]) this.warmDictation();
+    }, BEST_REWARM_MS);
   }
 
   /**
@@ -2260,6 +2293,8 @@ export class AkouApp implements ApiApp {
     if (v.download) this.fetchQwen();
     if (v.engine === "best") this.best().warm();
     else void this.bestDictation?.stop();
+    // Giving way to a final pass on Metal: warmed once the pass is over.
+    if (v.yielding) this.rewarmBestLater();
   }
 
   /** Starts Qwen's download and its llama-server build's, each refused one logged (DK-E3). */
@@ -2646,6 +2681,7 @@ export class AkouApp implements ApiApp {
       }
       await this.dictationSvc?.close();
       this.remoteDictation?.close();
+      if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
       await this.bestDictation?.stop();
       await this.asr?.close();
       await this.page?.stop();

@@ -333,6 +333,38 @@ const METAL_PID_FILE = "llama-metal.json";
 /** Metal servers this thread runs; a new one stops the others first. */
 const metalServers = new Set<LlamaServer>();
 
+/**
+ * The Metal llama-server the pid file in `lockDir` names, when it is alive, is not `except`, and
+ * still listens on the port the file records (a reused pid is someone else's process).
+ */
+function pidFileHolder(lockDir: string | undefined, except: number | null): number | null {
+  if (!lockDir || process.platform === "win32") return null;
+  let held: { pid?: number; port?: number } = {};
+  try {
+    held = JSON.parse(readFileSync(join(lockDir, METAL_PID_FILE), "utf8"));
+  } catch {
+    return null;
+  }
+  const pid = held.pid;
+  if (!pid || pid === except || !alive(pid)) return null;
+  const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
+  return (r.stdout ?? "").includes(`--port ${held.port}`) ? pid : null;
+}
+
+/**
+ * The Metal llama-server running beside `except` (a call's final pass beside dictation's own), or
+ * null when none runs: one this thread started, else the one the pid file in `lockDir` names,
+ * which another thread (the job Worker) or process wrote. A server that gives way to Metal
+ * (`yieldMetal`) asks this before it starts, since its start would fail while one runs.
+ */
+export function metalHolder(lockDir: string | undefined, except: number | null): number | null {
+  for (const s of metalServers) {
+    const pid = s.pid();
+    if (pid !== null && pid !== except) return pid;
+  }
+  return pidFileHolder(lockDir, except);
+}
+
 export class LlamaServer {
   private proc: ReturnType<typeof Bun.spawn> | null = null;
   private port = 0;
@@ -454,20 +486,8 @@ export class LlamaServer {
       if (this.o.yieldMetal && other.pid() !== null) throw new Error(busy);
       await other.stop();
     }
-    const dir = this.o.lockDir;
-    if (!dir || process.platform === "win32") return;
-    const file = join(dir, METAL_PID_FILE);
-    let held: { pid?: number; port?: number } = {};
-    try {
-      held = JSON.parse(readFileSync(file, "utf8"));
-    } catch {
-      return;
-    }
-    const pid = held.pid;
-    if (!pid || pid === this.pid() || !alive(pid)) return;
-    // Only a llama-server on the port the file records: a reused pid is someone else's process.
-    const r = spawnSync("ps", ["-o", "command=", "-p", String(pid)], { encoding: "utf8" });
-    if (!(r.stdout ?? "").includes(`--port ${held.port}`)) return;
+    const pid = pidFileHolder(this.o.lockDir, this.pid());
+    if (pid === null) return;
     if (this.o.yieldMetal) throw new Error(busy);
     this.o.log?.("info", `stopping llama-server ${pid}: one Metal engine at a time`);
     process.kill(pid, "SIGTERM");
