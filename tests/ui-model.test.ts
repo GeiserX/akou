@@ -438,6 +438,8 @@ describe("the welcome's speech models step (WINDOW section 10)", () => {
     const rows = welcomeRows([
       row("vad", "helper", "voice activity: cut points only", 2_300_000),
       row("diar", "speakers", "speaker labels, live and final (asr.diarizer nemotron)", 512e6),
+      // Two speaker models in one download: the second gets its own title, not "Speaker labeller" twice.
+      row("titanet-small", "speakers", "speaker embeddings for naming", 40e6),
       row("asr", "speech", "live and final recognition, 25 European languages", 2.48e9),
       // A catalog model the download does not fetch is not a row.
       { ...row("qwen", "speech", "on demand", 1e9), default: false },
@@ -456,6 +458,13 @@ describe("the welcome's speech models step (WINDOW section 10)", () => {
         title: "Speaker labeller",
         role: "Speaker labels, live and final",
         size: "512 MB",
+      },
+      {
+        id: "titanet-small",
+        kind: "speakers",
+        title: "Speaker embeddings",
+        role: "Speaker embeddings for naming",
+        size: "40 MB",
       },
       {
         id: "vad",

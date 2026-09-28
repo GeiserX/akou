@@ -285,8 +285,6 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 
 [DESKTOP.md](DESKTOP.md) section 11 owns the first-run flow, its steps and their order. The window draws those screens with strings from the catalog (section 16), and the Welcome screen carries the interface language choice next to `user.name`, so everything after it is already in the right language. Every step writes a normal setting; setup has no state of its own.
 
-| ID | Feature | P | From | Accept | Today |
-|---|---|---|---|---|---|
 While the speech models are missing, downloading or failed, and no call is recording, the welcome replaces the calls list, the transcript, the side pane and the player. It says "Welcome to akou", one line on what to do, then three steps:
 
 1. **Speech models** (Required): one row per model the download fetches, each with its job and size, the total, one dim sentence with the teal info glyph on where they are kept ("Kept in Application Support on this Mac. Nothing leaves this computer."), and the one Download button. While it downloads: a bar, the bytes of the total, the percentage and the file being fetched. The API has no cancel, so the step shows none. A failed download says why and offers Try again.

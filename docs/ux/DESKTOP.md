@@ -233,7 +233,7 @@ Today the first run is the window's welcome ([WINDOW.md](WINDOW.md) section 10: 
 
 This is the one first-run flow; [WINDOW.md](WINDOW.md) section 10 draws it. One screen at a time, each skippable, each reachable again from Settings > Run setup again. Every step writes a normal setting, so setup has no state of its own.
 
-1. **You.** One sentence on what akou does, your name (`user.name`), the interface language (`app.language`), and "Download the speech models (2.6 GB)" with the size and free space shown. The download runs in the background from here on, so it never blocks the next screens. Until it finishes, Record is disabled with its reason (WINDOW W2.5).
+1. **You.** One sentence on what akou does, your name (`user.name`), the interface language (`app.language`), and "Download the speech models (3 GB)" with the size and free space shown. The download runs in the background from here on, so it never blocks the next screens. Until it finishes, Record is disabled with its reason (WINDOW W2.5).
 2. **Microphone.** One sentence on why, and one Continue button that makes the helper open the mic, so the OS prompt names akou. Windows gets a button to the microphone privacy page when access is off. Linux skips this step.
 3. **The other side of the call** (macOS). The same, for the system-audio tap.
 4. **Capture test.** Two meters. "Say something" fills the mic meter. "Play any sound on this computer for 3 s (a video, music)" fills the call meter. akou cannot play the test sound itself, because the call channel excludes akou's own audio by design. Pass shows two ticks. A meter that stays flat names the pane to fix and offers to run the test again.

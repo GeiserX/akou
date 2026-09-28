@@ -67,6 +67,11 @@ const KIND_TITLE: Record<ModelRow["kind"], string> = {
   speakers: "Speaker labeller",
   helper: "Helper",
 };
+/** Models that share a kind with another default model get their own title, so no two rows read the same. */
+const TITLE: Record<string, string> = {
+  "titanet-small": "Speaker embeddings",
+  "pyannote-segmentation-3.0": "Speaker segmentation",
+};
 const KIND_ORDER: ModelRow["kind"][] = ["speech", "speakers", "helper"];
 
 /**
@@ -85,7 +90,7 @@ export function welcomeRows(
       return {
         id: r.id,
         kind: r.kind,
-        title: KIND_TITLE[r.kind],
+        title: TITLE[r.id] ?? KIND_TITLE[r.kind],
         role: job.charAt(0).toUpperCase() + job.slice(1),
         size: sizeText(r.size),
       };
