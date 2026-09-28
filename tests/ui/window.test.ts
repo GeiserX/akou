@@ -1785,6 +1785,11 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.getAttribute("#record", "title")).toBe(
               "Record needs the speech models: download them first.",
             );
+            // No workspace means no composer controls: the row keeps only its state word.
+            expect(await page.isVisible("#state")).toBe(true);
+            for (const sel of ["#record", "#newtitle", "#template", "#meters"]) {
+              expect(await page.isVisible(sel)).toBe(false);
+            }
 
             // The agent step's quiet button opens Settings on the provider field.
             await page.click("#welcome-agent");
@@ -1831,6 +1836,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.isVisible("#models-pip")).toBe(false);
             expect(await page.isVisible("#readiness-setup")).toBe(false);
             expect(await page.isDisabled("#record")).toBe(false);
+            expect(await page.isVisible("#record")).toBe(true);
             expect(await page.getAttribute("#record", "title")).toBe("");
             expect(
               await page.evaluate(() => (window as unknown as { __same?: boolean }).__same),
