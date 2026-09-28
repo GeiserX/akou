@@ -2,6 +2,12 @@
 //! key reader and the microphone. There is no inserter and no field read on Linux yet, so every
 //! insert answers `insert.failed no-inserter` and the app opens the draft box.
 //!
+//! - **Which backend.** Where the session bus has the GlobalShortcuts portal (`portal`), the
+//!   backend is `portal`: the desktop binds a chord of plain modifiers and a key, with no rule and
+//!   no group. A binding the portal cannot take (a modifier alone, a side, a mouse button) goes to
+//!   evdev below, and is refused (`rebind.failed`) when no keyboard under `/dev/input` is readable,
+//!   so the chord that works stays. Without the portal the backend is `evdev`. While the portal
+//!   holds the binding, the evdev reader reads no keyboard except for the recorder.
 //! - **evdev.** The keys come from the kernel's input devices, `/dev/input/event*`, read on their
 //!   own thread, which names each key (`evdev_keys`), hands it to `tap::Gate` and goes back to
 //!   `poll`. Reading a device takes nothing from the apps: evdev cannot swallow a key without
@@ -29,27 +35,31 @@
 //!   are playing and plays them again at its end (`mpris`, on its own thread; the session bus is
 //!   reached only at the first pause).
 //!
-//! The GlobalShortcuts portal, AT-SPI and the X11 and Wayland inserts are still to come. Nothing
-//! in this module runs in `cargo test`: it would read the developer's own keyboard. The CI Linux
-//! runner drives it with a virtual keyboard and mouse (`.github/workflows/ci.yml`).
+//! AT-SPI and the X11 and Wayland inserts are still to come. Nothing in this module runs in
+//! `cargo test`: it would read the developer's own keyboard. The CI Linux runner drives it with a
+//! virtual keyboard and mouse, and the portal with a fake one on its session bus
+//! (`.github/workflows/ci.yml`).
 
 use std::ffi::CString;
 use std::fs::{File, OpenOptions};
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{self, SyncSender};
 use std::time::{Duration, Instant};
 
 use super::evdev_keys::{self, KEY_MAX, Kind};
 use super::inputs::{self, Input};
 use super::insert::Targets;
-use super::live::{self, Device, Stdio};
+use super::keys::Hotkey;
+use super::live::{self, Device, Msg, Stdio};
 use super::media::{Players, Worker};
 use super::mpris::Mpris;
+use super::portal::{self, Portal};
 use super::protocol::{self as p, Target};
 use super::readback::Field;
-use super::session::{Config, Dictate, Out};
+use super::session::{Binder, Config, Dictate, Out};
 use super::tap::{Gate, TapEvent};
 use crate::clock;
 use crate::linux::DictateMic;
@@ -115,9 +125,21 @@ pub fn access() -> &'static str {
     if any { "granted" } else { "denied" }
 }
 
-/// `dictate --probe`: what this build would report at `ready`, without reading a device.
+/// The session bus's GlobalShortcuts portal, when it has one: its connection, app id registered.
+fn find_portal() -> Option<zbus::blocking::Connection> {
+    let conn = portal::connect(None).ok()?;
+    portal::version(&conn).map(|_| conn)
+}
+
+/// `dictate --probe`: what this build would report at `ready`, without reading a device or
+/// binding a key.
 pub fn probe() -> String {
-    p::ready(BACKEND, false, "not-needed", access())
+    let backend = if find_portal().is_some() {
+        portal::BACKEND
+    } else {
+        BACKEND
+    };
+    p::ready(backend, false, "not-needed", access())
 }
 
 struct Node {
@@ -168,8 +190,9 @@ fn now_ns() -> u64 {
     clock::now().awake_ns
 }
 
-/// Reads what one device has; false once it is gone.
-fn drain(gate: &Gate, node: &mut Node, fds: &[RawFd]) -> bool {
+/// Reads what one device has; false once it is gone. With `feed` false the events are read and
+/// dropped: the portal holds the binding.
+fn drain(gate: &Gate, node: &mut Node, fds: &[RawFd], feed: bool) -> bool {
     const SIZE: usize = std::mem::size_of::<libc::input_event>();
     let mut buf = [0u8; SIZE * 64];
     loop {
@@ -186,6 +209,9 @@ fn drain(gate: &Gate, node: &mut Node, fds: &[RawFd]) -> bool {
         }
         if n == 0 {
             return false;
+        }
+        if !feed {
+            continue;
         }
         for chunk in buf[..n as usize].chunks_exact(SIZE) {
             // SAFETY: the kernel writes whole `input_event`s; the copy needs no alignment.
@@ -217,28 +243,41 @@ fn resync(gate: &Gate, open: &[Node]) {
 }
 
 /// The reader thread: rescans the devices, polls the open ones and hands their keys to the gate.
-fn start_reader(gate: Gate) -> Result<(), String> {
+/// While the portal holds the binding it reads keyboards only for the recorder.
+fn start_reader(gate: Gate, portal: Option<Arc<portal::Shared>>) -> Result<(), String> {
     std::thread::Builder::new()
         .name("akou-dictate-evdev".into())
         .spawn(move || {
             let mut open: Vec<Node> = Vec::new();
             let mut scanned: Option<Instant> = None;
             let mut mouse = false;
+            let mut keyboard = true;
             loop {
-                let want_mouse = gate.lock().act.wants_mouse();
-                if scanned.is_none_or(|t| t.elapsed() >= RESCAN) || want_mouse != mouse {
+                let (want_mouse, recording) = {
+                    let s = gate.lock();
+                    (s.act.wants_mouse(), s.act.recording())
+                };
+                let want_keyboard = portal::evdev_reads_keyboards(recording, portal.as_deref());
+                if scanned.is_none_or(|t| t.elapsed() >= RESCAN)
+                    || want_mouse != mouse
+                    || want_keyboard != keyboard
+                {
                     mouse = want_mouse;
+                    keyboard = want_keyboard;
                     scanned = Some(Instant::now());
                     let found = nodes();
                     let before = open.len();
                     open.retain(|n| {
                         found.iter().any(|(p, _)| *p == n.path)
-                            && (n.kind == Kind::Keyboard || mouse)
+                            && match n.kind {
+                                Kind::Keyboard => keyboard,
+                                _ => mouse,
+                            }
                     });
                     let closed = open.len() < before;
                     for (path, kind) in found {
                         let wanted = match kind {
-                            Kind::Keyboard => true,
+                            Kind::Keyboard => keyboard,
                             Kind::Mouse => mouse,
                             Kind::Other => false,
                         };
@@ -272,9 +311,14 @@ fn start_reader(gate: Gate) -> Result<(), String> {
                     continue;
                 }
                 let raw: Vec<RawFd> = fds.iter().map(|f| f.fd).collect();
+                // Asked again after the wait: a portal that took the binding during it must not
+                // see the same press from a keyboard as well.
+                let recording = gate.lock().act.recording();
+                let keys_now = portal::evdev_reads_keyboards(recording, portal.as_deref());
                 let mut gone: Vec<usize> = Vec::new();
                 for (i, f) in fds.iter().enumerate() {
-                    if f.revents != 0 && !drain(&gate, &mut open[i], &raw) {
+                    let feed = open[i].kind != Kind::Keyboard || keys_now;
+                    if f.revents != 0 && !drain(&gate, &mut open[i], &raw, feed) {
                         gone.push(i);
                     }
                 }
@@ -369,6 +413,18 @@ impl Device for LinuxMic {
 
 // ---------------------------------------------------------------------------
 
+/// The portal backend's bindings: a chord to the portal, anything else to evdev when a keyboard
+/// is readable (`portal::admit`).
+struct Keys(Portal);
+
+impl Binder for Keys {
+    fn bind(&mut self, hotkey: &Hotkey) -> Result<(), String> {
+        portal::admit(hotkey, access() == "granted")?;
+        self.0.bind(hotkey);
+        Ok(())
+    }
+}
+
 /// Runs the dictate process on this machine until `stop` or the end of stdin.
 pub fn run(cfg: Config) -> i32 {
     let mut out = Stdio {
@@ -376,27 +432,54 @@ pub fn run(cfg: Config) -> i32 {
         stderr: std::io::stderr(),
     };
     let (tx, rx) = mpsc::channel();
+    let hotkey = cfg.hotkey.clone();
     let mut d = Dictate::new(cfg, Box::new(Screen), None);
     d.set_media(Box::new(Worker::spawn(|| {
         Mpris::session().map(|m| Box::new(m) as Box<dyn Players>)
     })));
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
-    // Before the reader's first key, not only at `begin`: evdev swallows nothing (DC-A4).
+    // Before the reader's first key, not only at `begin`: neither evdev nor the portal swallows
+    // anything (DC-A4).
     gate.lock().act.set_swallows(false);
     let grant = access();
+    let portal = find_portal().and_then(|conn| {
+        let say = tx.clone();
+        Portal::start(
+            conn,
+            gate.clone(),
+            Box::new(move |l| {
+                let _ = say.send(Msg::Say(l));
+            }),
+        )
+        .ok()
+    });
+    let backend = if portal.is_some() {
+        portal::BACKEND
+    } else {
+        BACKEND
+    };
     // The reader starts even with nothing readable: it looks again every 2 s, so a udev rule
     // applied after the start lets the key work without a restart. `ready` has already said
     // `denied` by then, and the protocol has no line to take that back yet.
-    let reader = start_reader(gate);
-    d.begin(BACKEND, false, ("not-needed", grant), &mut out);
+    let reader = start_reader(gate, portal.as_ref().map(|p| p.shared.clone()));
+    let mut refused = None;
+    if let Some(p) = portal {
+        let mut keys = Keys(p);
+        refused = keys.bind(&hotkey).err();
+        d.set_binder(Box::new(keys));
+    }
+    d.begin(backend, false, ("not-needed", grant), &mut out);
     match reader {
         Err(e) => out.line(p::warn("no-tap", &e)),
-        Ok(()) if grant != "granted" => out.line(p::warn(
+        Ok(()) if backend == BACKEND && grant != "granted" => out.line(p::warn(
             "no-tap",
             "no keyboard under /dev/input can be read by this user: a udev rule tagging them uaccess, or the input group, gives access",
         )),
         Ok(()) => {}
+    }
+    if let Some(e) = refused {
+        out.line(p::warn("no-tap", &e));
     }
     // Every insert answers `insert.failed no-inserter` and the app opens the draft box.
     out.line(p::warn(

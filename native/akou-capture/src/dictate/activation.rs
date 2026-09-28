@@ -136,6 +136,11 @@ impl Activation {
         self.record = on;
     }
 
+    /// The recorder is open (`record_keys`).
+    pub fn recording(&self) -> bool {
+        self.record
+    }
+
     /// A mouse button is the binding, or the recorder is open (DC-A6): only then does a backend
     /// need the mouse buttons, and the Windows one installs its mouse hook.
     pub fn wants_mouse(&self) -> bool {

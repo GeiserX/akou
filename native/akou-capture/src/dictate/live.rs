@@ -69,6 +69,8 @@ pub enum Msg {
     Mic(u64, Event),
     /// The tap queued something.
     Tap,
+    /// A line a backend thread has for the app (the portal's `warn portal-bind`).
+    Say(String),
 }
 
 /// Sleep, seen from two clocks: the awake clock stops while the machine sleeps, the continuous
@@ -394,6 +396,7 @@ pub fn serve_with(
                 mic.died();
             }
             Ok(Msg::Mic(_, Event::Warn { code, msg })) => out.line(p::warn(code, &msg)),
+            Ok(Msg::Say(l)) => out.line(l),
             Ok(Msg::Mic(..) | Msg::Tap) | Err(RecvTimeoutError::Timeout) => {}
         }
         d.pump(t, out);

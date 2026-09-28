@@ -55,7 +55,8 @@ impl Smtc {
             let status = match s.GetPlaybackInfo().and_then(|p| p.PlaybackStatus()) {
                 Ok(p) if p == Playback::Playing => Status::Playing,
                 Ok(p) if p == Playback::Paused => Status::Paused,
-                _ => Status::Other,
+                Ok(_) => Status::Other,
+                Err(_) => Status::Unknown,
             };
             out.push((format!("{app}#{n}"), s, status));
         }

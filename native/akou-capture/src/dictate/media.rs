@@ -26,6 +26,9 @@ pub enum Status {
     Paused,
     /// Stopped, or a state the OS names otherwise: never paused, never played.
     Other,
+    /// The player did not say (its status call failed or timed out): never paused, and one akou
+    /// paused is kept to give back at the next session's end rather than forgotten.
+    Unknown,
 }
 
 /// The OS's media players.
@@ -77,16 +80,24 @@ impl Media for Pauser {
     }
 
     fn resume(&mut self) {
-        let ours = std::mem::take(&mut self.ours);
-        if ours.is_empty() {
+        if self.ours.is_empty() {
             return;
         }
+        // A list that fails keeps every player akou paused, for the next session's end.
         let Ok(list) = self.players.list() else {
             return;
         };
+        let ours = std::mem::take(&mut self.ours);
         for (id, status) in list {
-            if status == Status::Paused && ours.contains(&id) {
-                let _ = self.players.play(&id);
+            if !ours.contains(&id) {
+                continue;
+            }
+            match status {
+                Status::Paused => {
+                    let _ = self.players.play(&id);
+                }
+                Status::Unknown => self.ours.push(id),
+                Status::Playing | Status::Other => {}
             }
         }
     }
@@ -102,19 +113,20 @@ pub struct Worker {
 }
 
 impl Worker {
-    /// `make` runs on the worker's thread at the first pause; `Err` leaves every call a no-op.
-    pub fn spawn<F>(make: F) -> Worker
+    /// `make` runs on the worker's thread at the first pause, and again at the next pause while
+    /// it fails (a session bus or media service that was not up yet); until it works every call
+    /// is a no-op.
+    pub fn spawn<F>(mut make: F) -> Worker
     where
-        F: FnOnce() -> Result<Box<dyn Players>, String> + Send + 'static,
+        F: FnMut() -> Result<Box<dyn Players>, String> + Send + 'static,
     {
         let (tx, rx) = mpsc::channel::<bool>();
         let (done_tx, done) = mpsc::channel();
         std::thread::spawn(move || {
-            let mut make = Some(make);
             let mut pauser: Option<Pauser> = None;
             for pause in rx {
-                if pause && let Some(m) = make.take() {
-                    pauser = m().ok().map(Pauser::new);
+                if pause && pauser.is_none() {
+                    pauser = make().ok().map(Pauser::new);
                 }
                 if let Some(p) = pauser.as_mut() {
                     if pause { p.pause() } else { p.resume() }
@@ -273,7 +285,7 @@ mod tests {
             let b = b.clone();
             Worker::spawn(move || {
                 made.store(true, Ordering::SeqCst);
-                Ok(Box::new(b) as Box<dyn Players>)
+                Ok(Box::new(b.clone()) as Box<dyn Players>)
             })
         };
         let made = std::sync::Arc::new(AtomicBool::new(false));
@@ -290,6 +302,70 @@ mod tests {
         w.resume();
         w.finish();
         assert!(made.load(Ordering::SeqCst));
+        assert_eq!(b.calls(), ["pause a", "play a"]);
+    }
+
+    /// A player list that fails at the session's end forgets nothing: the players akou paused
+    /// are given back at the next end. So is one whose status did not come back in time, while one
+    /// that says it plays is left alone (the user played it).
+    #[test]
+    fn dc_u8_a_failed_list_or_an_unknown_status_keeps_what_akou_paused() {
+        use std::sync::Arc;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        struct Flaky(Board, Arc<AtomicBool>);
+        impl Players for Flaky {
+            fn list(&mut self) -> Result<Vec<(String, Status)>, String> {
+                if self.1.load(Ordering::SeqCst) {
+                    return Err("timed out".into());
+                }
+                self.0.list()
+            }
+            fn pause(&mut self, id: &str) -> Result<(), String> {
+                self.0.pause(id)
+            }
+            fn play(&mut self, id: &str) -> Result<(), String> {
+                self.0.play(id)
+            }
+        }
+        let b = Board::with(&[("a", Status::Playing), ("b", Status::Playing)]);
+        let fail = Arc::new(AtomicBool::new(false));
+        let mut m = Pauser::new(Box::new(Flaky(b.clone(), fail.clone())));
+        m.pause();
+        fail.store(true, Ordering::SeqCst);
+        m.resume();
+        assert_eq!(
+            b.calls(),
+            ["pause a", "pause b"],
+            "nothing to play without a list"
+        );
+        fail.store(false, Ordering::SeqCst);
+        b.set("b", Status::Unknown);
+        m.resume();
+        assert_eq!(b.calls(), ["pause a", "pause b", "play a"]);
+        b.set("b", Status::Paused);
+        m.resume();
+        assert_eq!(b.calls(), ["pause a", "pause b", "play a", "play b"]);
+    }
+
+    /// Players that could not be reached at the first pause are tried again at the next one.
+    #[test]
+    fn dc_u8_the_worker_connects_again_after_a_failure() {
+        let b = Board::with(&[("a", Status::Playing)]);
+        let board = b.clone();
+        let mut tries = 0;
+        let mut w = Worker::spawn(move || {
+            tries += 1;
+            if tries == 1 {
+                Err("no session bus yet".into())
+            } else {
+                Ok(Box::new(board.clone()) as Box<dyn Players>)
+            }
+        });
+        w.pause();
+        w.resume();
+        w.pause();
+        w.resume();
+        w.finish();
         assert_eq!(b.calls(), ["pause a", "play a"]);
     }
 
