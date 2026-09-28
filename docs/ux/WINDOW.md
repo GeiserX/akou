@@ -295,7 +295,7 @@ While the speech models are missing, downloading or failed, and no call is recor
 2. **Microphone and system audio** (Later): "macOS asks for both the first time you press Record."
 3. **Your agent** (Optional): one line, and a quiet button that opens Settings on the provider field.
 
-The footer says "You can change any of this later in Settings." The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen. A call picked in the sidebar also lifts the welcome, so a call recorded without models can be read once it is stopped; until the user picks it, the welcome shows, that call is only the marked row in the sidebar, and the composer row shows its state word. "Setup 1 of 3" brings the welcome back with the focus on the download.
+The footer says "You can change any of this later in Settings." While the welcome shows, the composer row keeps only its state word: no title field, template, meters or Record. The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen. A call picked in the sidebar also lifts the welcome, so a call recorded without models can be read once it is stopped; until the user picks it, the welcome shows, that call is only the marked row in the sidebar, and the composer row shows its state word. "Setup 1 of 3" brings the welcome back with the focus on the download.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|

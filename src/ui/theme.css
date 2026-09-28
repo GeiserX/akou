@@ -262,6 +262,10 @@ body:not(.busy) #composer .busy {
 #composer #state {
   font-size: 10px;
 }
+/* With no models there is no workspace (WINDOW section 10): the row keeps only its state word. */
+body.welcoming #composer #controls {
+  display: none;
+}
 #composer #controls {
   flex: 1;
   min-width: 0;
