@@ -45,7 +45,14 @@
  *   --speed X               0 = as fast as possible (default); 1 = key times in real time
  *   --grants LIST           the grants `ready` reports as `granted`: `mic,accessibility`
  *                           (default), or fewer; the others are `denied`
+ *   --not-asked LIST        of the grants not given, those reported as `not-asked` instead of
+ *                           `denied`, as a macOS microphone never asked for (DC-N3)
  *   --backend NAME          the key source `ready` reports (default `fake`)
+ *   --probe                 prints the `ready` line and exits, as `akou-capture dictate --probe`
+ *   --probe-grants LIST     the grants `--probe` reports instead of `--grants`: a grant given
+ *                           after the helper started (DC-U2, DC-N3)
+ *   --recorder-keys LIST    the keys reported as `key` when `record_keys {on: true}` arrives, as
+ *                           the helper reports every key while the recorder is open (DC-U3)
  *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4): Escape
  *                           and Enter never reach the activation rule, so they pass through to
  *                           the app and are never reported
@@ -534,6 +541,10 @@ async function runDictate(): Promise<void> {
       case "settled":
         machine?.settled();
         return;
+      case "record_keys":
+        if (c.on)
+          for (const name of opt("--recorder-keys")?.split(",") ?? []) say({ type: "key", name });
+        return;
       case "focus":
         focused = c.target;
         return;
@@ -607,7 +618,10 @@ async function runDictate(): Promise<void> {
     }
   };
 
-  const grant = (name: string) => (grants.includes(name) ? "granted" : "denied");
+  const given = flag("--probe") ? (opt("--probe-grants")?.split(",") ?? grants) : grants;
+  const notAsked = opt("--not-asked")?.split(",") ?? [];
+  const grant = (name: string) =>
+    given.includes(name) ? "granted" : notAsked.includes(name) ? "not-asked" : "denied";
   say({
     type: "ready",
     protocol: DICTATE_PROTOCOL,
@@ -616,6 +630,7 @@ async function runDictate(): Promise<void> {
     swallow_keys: !flag("--no-swallow"),
     grants: { mic: grant("mic"), accessibility: grant("accessibility") },
   });
+  if (flag("--probe")) process.exit(EXIT.ok);
   const dec = new TextDecoder();
   let rest = "";
   for await (const chunk of Bun.stdin.stream()) {

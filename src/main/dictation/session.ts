@@ -69,6 +69,7 @@ import type { DictationDraft, Target } from "../../core/dictation/events.ts";
 import { removeFillers } from "../../core/dictation/fillers.ts";
 import { type PunctuationLists, spokenPunctuation } from "../../core/dictation/punctuation.ts";
 import { spokenSend } from "../../core/dictation/send.ts";
+import type { CueMoment } from "../../ui/dictation-cues.ts";
 import type { Decoded } from "../asr/live-worker.ts";
 import { CAPTURE_RATE, type Packet } from "../capture/protocol.ts";
 import { forcesLanguage } from "./engines.ts";
@@ -248,6 +249,19 @@ export interface SessionOptions extends TextRules {
   preview?(): PreviewDecode | null;
   /** A partial of the session listening: shown, never inserted (DC-E5). */
   onPartial?(p: PreviewPartial): void;
+  /**
+   * A moment of a spoken dictation for its cue (DC-O3): `start` when its audio starts, `stop` once
+   * the post-roll ended and it goes to the engine, `cancel` when it is dropped, `done` when its text
+   * went in.
+   */
+  onCue?(moment: CueMoment): void;
+  /** A key the helper reported while the Dictation page's recorder is open (DC-U3). */
+  onRecordedKey?(name: string): void;
+  /**
+   * `dictation.mic` (`default` when empty) and `dictation.preferBuiltInOverBluetooth`, sent as
+   * `rebuild_mic` after `ready` (DC-U4, DC-N5); absent, the helper keeps its default.
+   */
+  mic?(): { device: string; preferBuiltIn: boolean };
 }
 
 /** A decode of the end of the audio so far, for the preview only. */
@@ -391,6 +405,8 @@ export class DictationSession {
   private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
   /** When the tray or the CLI last asked for `session.start`: its session is latched (DC-A3). */
   private doorAt = Number.NEGATIVE_INFINITY;
+  /** The recorder is open: the helper reports every key and starts no session (DC-U3). */
+  private recording = false;
 
   constructor(private readonly o: SessionOptions) {}
 
@@ -425,6 +441,28 @@ export class DictationSession {
     if (!this.ready) return Promise.resolve({ ok: true });
     this.o.send({ type: "rebind", ...(b ?? this.o.bindings()) });
     return new Promise((res) => this.rebinds.push(res));
+  }
+
+  /**
+   * Opens or closes the Dictation page's key recorder (DC-U3): while it is open the helper reports
+   * every key it sees, Fn included, and starts no session. False before `ready`.
+   */
+  recordKeys(on: boolean): boolean {
+    if (!this.ready) return false;
+    this.recording = on;
+    this.o.send({ type: "record_keys", on });
+    return true;
+  }
+
+  /** Sends the helper the microphone the settings pick (DC-U4, DC-N5); nothing before `ready`. */
+  rebuildMic(): void {
+    const m = this.o.mic?.();
+    if (!this.ready || !m) return;
+    this.o.send({
+      type: "rebuild_mic",
+      device: m.device === "" ? "default" : m.device,
+      prefer_built_in: m.preferBuiltIn,
+    });
   }
 
   /**
@@ -476,8 +514,10 @@ export class DictationSession {
     switch (m.type) {
       case "ready":
         this.ready = m;
+        this.recording = false;
         this.set("idle");
         void this.rebind();
+        this.rebuildMic();
         return;
       case "rebound":
         this.rebinds.shift()?.({ ok: true });
@@ -496,7 +536,8 @@ export class DictationSession {
         this.o.onLevel?.(m.rms);
         return;
       case "key":
-        this.key(m.name);
+        if (this.recording) this.o.onRecordedKey?.(m.name);
+        else this.key(m.name);
         return;
       case "session.started": {
         // The last session is still draining its pipe: it ends now, with the audio it has, since
@@ -532,6 +573,7 @@ export class DictationSession {
         const early = this.early.chunks;
         this.early = { chunks: [], samples: 0 };
         this.set("listening");
+        this.o.onCue?.("start");
         for (const chunk of early) this.take(c, chunk);
         return;
       }
@@ -571,6 +613,7 @@ export class DictationSession {
           method: m.method,
           receipt_ms: m.receipt_ms,
         });
+        this.o.onCue?.("done");
         this.settle();
         return;
       }
@@ -820,9 +863,12 @@ export class DictationSession {
     if (reason === "cancel" || reason === "stop") {
       c.hold?.request.cancel();
       this.write({ type: "dictation.cancelled", id });
+      // The app stopping the helper (dictation turned off) is not the user's cancel.
+      if (reason === "cancel") this.o.onCue?.("cancel");
       this.settle();
       return;
     }
+    this.o.onCue?.("stop");
     this.decoding++;
     this.latest = c;
     this.set("transcribing");
@@ -911,6 +957,7 @@ export class DictationSession {
     // Escape while it transcribed: the text stays in history, and nothing goes in (DC-A4).
     if (c.asked === "cancel") {
       this.notInserted(c, { type: "dictation.cancelled", id });
+      this.o.onCue?.("cancel");
       return;
     }
     // Shift+Enter: the draft box, taking the keyboard. Never a password field's text in it.

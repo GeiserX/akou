@@ -1890,6 +1890,86 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
   );
 });
 
+describe("DC-U2 on the real app: a missing grant opens the setup, never the helper", () => {
+  // The helper's probe reports the microphone refused; dictation is off, so no helper runs.
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  let commands: string;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-probe-");
+    commands = join(t.dir, "commands.jsonl");
+    rig = await uiRig({
+      home: t.dir,
+      helperArgs: ["--grants", "accessibility", "--commands-log", commands],
+    });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  test(
+    "the switch runs the setup at the microphone and stays off; no dictate process starts",
+    async () => {
+      const toggle = "#dictation .dictation-enable input[data-key='dictation.enabled']";
+      const page = await rig.open();
+      await page.click("#dictation-open");
+      await page.waitForSelector(toggle);
+      expect(await text(page, "#dictation-off-reason")).toBe(
+        "Dictation stays off: akou has no access to the microphone.",
+      );
+      await page.click(toggle);
+      await page.waitForSelector("#dictation .dictation-setup[data-step='mic']");
+      expect(await page.isChecked(toggle)).toBe(false);
+      expect(rig.app.config().settings["dictation.enabled"]).toBe(false);
+      expect(rig.app.dictation()?.status()).toMatchObject({ enabled: false, state: "off" });
+      // The probe printed its line and exited; a dictate process would have logged a rebind.
+      expect(existsSync(commands)).toBe(false);
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("DC-U2 on the real app: a microphone never asked for starts the helper", () => {
+  // macOS asks for the microphone when the device first opens, and lists akou in the Microphone
+  // pane only after that: the switch must start the helper, not send the user to that pane.
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  let commands: string;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-notasked-");
+    commands = join(t.dir, "commands.jsonl");
+    rig = await uiRig({
+      home: t.dir,
+      helperArgs: ["--grants", "accessibility", "--not-asked", "mic", "--commands-log", commands],
+    });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  test(
+    "the switch saves and a dictate process starts, with no setup and no off reason",
+    async () => {
+      const toggle = "#dictation .dictation-enable input[data-key='dictation.enabled']";
+      const page = await rig.open();
+      await page.click("#dictation-open");
+      await page.waitForSelector(toggle);
+      expect(await page.locator("#dictation-off-reason").count()).toBe(0);
+      await page.click(toggle);
+      await until(
+        () => rig.app.config().settings["dictation.enabled"] === true,
+        5000,
+        "the switch saved",
+      );
+      await until(() => existsSync(commands), 10_000, "a dictate process started");
+      expect(await page.locator("#dictation .dictation-setup").count()).toBe(0);
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("DC-H1: the History page", () => {
   let rig: UiRig;
   let t: ReturnType<typeof tempDir>;
