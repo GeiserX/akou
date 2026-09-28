@@ -16,10 +16,10 @@ export type PillKey = "escape" | "enter" | "shift-enter";
 export type PillAction = "retry" | "copy" | "open-draft";
 
 /**
- * The language chip on the listening island (akou-5v8): the language the session is heard in, a
- * BCP-47 tag, as the engine found it or as the chip forced it. `switchable`: a click moves the
- * session to the next of the user's languages (the engine takes a forced one); otherwise it only
- * says what was heard (`fast` picks its own, DC-E4).
+ * The language chip on the listening island (akou-5v8): the session's language, a BCP-47 tag, as a
+ * partial named it, as the chip forced it, as `dictation.language` sets it, or `auto` while the
+ * engine chooses. `switchable`: a click moves the session to the next of the user's languages (the
+ * engine takes a forced one); otherwise it only says what was heard (`fast` picks its own, DC-E4).
  */
 export interface PillLanguage {
   tag: string;
@@ -39,7 +39,7 @@ export type PillState =
       hotkey: string;
       /** A one-line notice under the hints (`still transcribing`, `1 minute left`). */
       note?: string;
-      /** The language chip, once the session's language is known. */
+      /** The language chip: from the start on an engine that takes a forced language. */
       language?: PillLanguage;
     }
   | { state: "transcribing"; since: number; note?: string }

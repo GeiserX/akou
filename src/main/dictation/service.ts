@@ -548,9 +548,10 @@ export class DictationService {
   }
 
   /**
-   * The preview's decoder (DC-E5): the local `fast` engine, which picks the language itself and
-   * decodes a few seconds in a fraction of a second, whatever engine the dictation's own text
-   * comes from. Null while no follower wants partials or no local model is loaded.
+   * The preview's decoder (DC-E5): the local `fast` engine, which decodes a few seconds in a
+   * fraction of a second, whatever engine the dictation's own text comes from. Parakeet names no
+   * language, so its partials carry none. Null while no follower wants partials or no local model
+   * is loaded.
    */
   private previewDecode(): PreviewDecode | null {
     if (![...this.partialWants.values()].some((wants) => wants())) return null;
@@ -563,12 +564,21 @@ export class DictationService {
   /**
    * The languages the pill's chip moves between (akou-5v8): `dictation.languages`, else
    * `asr.languages`; `switchable` when there are two or more and the engine takes a forced one
-   * (`fast` picks its own, DC-E4).
+   * (`fast` picks its own, DC-E4); `language`, the one a session asks for before the chip moves
+   * it: `dictation.language`, else null (the engine chooses).
    */
-  languageChoice(): { languages: readonly string[]; switchable: boolean } {
+  languageChoice(): {
+    languages: readonly string[];
+    switchable: boolean;
+    language: string | null;
+  } {
     const languages = this.o.languages?.() ?? [];
     const engine = this.o.engine()?.name ?? "fast";
-    return { languages, switchable: languages.length >= 2 && forcesLanguage(engine) };
+    return {
+      languages,
+      switchable: languages.length >= 2 && forcesLanguage(engine),
+      language: this.o.language?.() ?? null,
+    };
   }
 
   /** Forces `language` for the session listening, from the pill's chip; false with none. */

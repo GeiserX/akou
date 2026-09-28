@@ -15,6 +15,7 @@ import { MAX_WARNING } from "../src/main/dictation/session.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
 import { hotkeyLabel } from "../src/main/window/hotkey.ts";
 import {
+  AUTO_LANGUAGE,
   BUSY_MS,
   BUSY_NOTE,
   CHIP_WAIT_MS,
@@ -64,7 +65,11 @@ function fakeDictation() {
   /** Whether each follower asked for partials (DC-E5). */
   const wantsPartials: boolean[] = [];
   /** The languages the chip moves between, and the ones it forced (akou-5v8). */
-  const choice = { languages: ["en", "es"] as readonly string[], switchable: true };
+  const choice = {
+    languages: ["en", "es"] as readonly string[],
+    switchable: true,
+    language: null as string | null,
+  };
   const forced: string[] = [];
   let seq = 0;
   const d: PillDictation = {
@@ -161,6 +166,7 @@ describe("DC-O1: the pill's states from the session", () => {
       since: 1000,
       keys: ["escape", "enter", "shift-enter"],
       hotkey: "Right ⌘",
+      language: { tag: AUTO_LANGUAGE, switchable: true, forced: false },
     });
     expect(f.visible.at(-1)).toBe(true);
     spoken(f, "d1");
@@ -216,6 +222,7 @@ describe("DC-O1: the pill's states from the session", () => {
       since: 1000,
       keys: ["escape", "enter", "shift-enter"],
       hotkey: "Right ⌘",
+      language: { tag: AUTO_LANGUAGE, switchable: true, forced: false },
       note: MAX_WARNING,
     });
     // Positive control: a warning with nothing listening shows nothing.
@@ -486,8 +493,11 @@ describe("DC-D2, DC-O2: no message to the pill carries the dictated words", () =
 });
 
 describe("DC-E5: the words as you speak on the ticker", () => {
-  test("the pill asks the session for partials", () => {
-    expect(pill().wantsPartials).toEqual([true]);
+  test("the pill asks the session for partials only with the preview on", () => {
+    expect(pill({ preview: true }).wantsPartials).toEqual([true]);
+    // Off, nothing would show them: no decode is spent on them.
+    expect(pill({ preview: false }).wantsPartials).toEqual([false]);
+    expect(pill({ preview: "true" }).wantsPartials).toEqual([false]);
   });
 
   test("the words the last partial had too are settled, the rest still changing", () => {
@@ -531,10 +541,29 @@ describe("akou-5v8: the language chip on the listening island", () => {
     return s?.state === "listening" ? s.language : undefined;
   };
 
-  test("no chip until a partial names the language, then the language it was heard in", () => {
+  test("a switchable engine shows the chip from the start, and keeps it through Parakeet's partials", () => {
+    const f = pill({ preview: true });
+    f.to("listening");
+    expect(lang(f)).toEqual({ tag: AUTO_LANGUAGE, switchable: true, forced: false });
+    // The preview decodes on `fast` (Parakeet), whose partials name no language.
+    const n = f.states().length;
+    f.tell({ kind: "partial", text: "hola a todos", language: null });
+    expect(f.states()).toHaveLength(n);
+    expect(lang(f)?.tag).toBe(AUTO_LANGUAGE);
+  });
+
+  test("with dictation.language set, the chip starts on it, not chosen by the chip", async () => {
+    const f = pill();
+    f.choice.language = "es";
+    f.to("listening");
+    expect(lang(f)).toEqual({ tag: "es", switchable: true, forced: false });
+    expect(await f.p.handlers.control({ action: "language" })).toBe(true);
+    expect(f.forced).toEqual(["en"]);
+  });
+
+  test("a partial that names its language shows it", () => {
     const f = pill();
     f.to("listening");
-    expect(lang(f)).toBeUndefined();
     f.tell({ kind: "partial", text: "hola a todos", language: "es" });
     expect(lang(f)).toEqual({ tag: "es", switchable: true, forced: false });
     // The same language again sends no new state.
@@ -548,7 +577,8 @@ describe("akou-5v8: the language chip on the listening island", () => {
   test("a click moves the session to the next language and the chip says it was chosen", async () => {
     const f = pill();
     f.to("listening");
-    f.tell({ kind: "partial", text: "hola", language: "es" });
+    f.tell({ kind: "partial", text: "hola", language: null });
+    // From `auto`, the first click forces the first of the user's languages.
     expect(await f.p.handlers.control({ action: "language" })).toBe(true);
     expect(f.forced).toEqual(["en"]);
     expect(lang(f)).toEqual({ tag: "en", switchable: true, forced: true });
@@ -557,16 +587,20 @@ describe("akou-5v8: the language chip on the listening island", () => {
     expect(lang(f)?.tag).toBe("en");
     expect(await f.p.handlers.control({ action: "language" })).toBe(true);
     expect(f.forced).toEqual(["en", "es"]);
-    // The language chosen is the session's own: the next one starts from what it hears.
+    // The language chosen is the session's own: the next one starts from the setting again.
     f.to("idle");
     f.to("listening");
-    expect(lang(f)).toBeUndefined();
+    expect(lang(f)).toEqual({ tag: AUTO_LANGUAGE, switchable: true, forced: false });
   });
 
   test("an engine that picks its own language shows the chip read-only and refuses the click", async () => {
     const f = pill();
     f.choice.switchable = false;
     f.to("listening");
+    // Nothing to show until a partial names the language: Parakeet's never do.
+    expect(lang(f)).toBeUndefined();
+    f.tell({ kind: "partial", text: "hello", language: null });
+    expect(lang(f)).toBeUndefined();
     f.tell({ kind: "partial", text: "hello", language: "en" });
     expect(lang(f)).toEqual({ tag: "en", switchable: false, forced: false });
     expect(await f.p.handlers.control({ action: "language" })).toBe(false);

@@ -88,8 +88,9 @@ async function run(rule: { preview: boolean }, during?: (page: ViewPage) => Prom
   open = view;
   const page = view.page;
   await page.waitForFunction(() => document.getElementById("pill")?.dataset.state === "listening");
-  // The session's partial, as the service tells its followers (DC-E5).
-  for (const fn of followers) fn({ kind: "partial", text: SAID, language: "en" });
+  // The session's partial, as the service tells its followers (DC-E5): decoded on `fast`, whose
+  // Parakeet names no language.
+  for (const fn of followers) fn({ kind: "partial", text: SAID, language: null });
   await queue;
   const whileListening = await page.textContent("body");
   await during?.(view);
@@ -144,7 +145,7 @@ describe("DC-D2: the pill shows words only under its own rule", () => {
 
 describe("akou-5v8: the language chip on the island", () => {
   test(
-    "shows the language heard, and a click moves the session to the next one",
+    "is up from the start without a language heard, and a click moves the session to the first",
     async () => {
       const chip = { before: "", chosen: "" };
       const r = await run({ preview: false }, async (view) => {
@@ -155,9 +156,9 @@ describe("akou-5v8: the language chip on the island", () => {
         );
         chip.chosen = (await view.page.textContent("#lang")) ?? "";
       });
-      expect(chip.before).toBe("EN");
-      expect(chip.chosen).toBe("ES");
-      expect(r.forced).toEqual(["es"]);
+      expect(chip.before).toBe("AUTO");
+      expect(chip.chosen).toBe("EN");
+      expect(r.forced).toEqual(["en"]);
     },
     UI_TIMEOUT,
   );

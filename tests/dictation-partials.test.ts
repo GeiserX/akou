@@ -47,7 +47,9 @@ const decoded = (text: string, language: string | null = "en"): Decoded => ({
  * answers each call with its own words, so no partial can be mistaken for the final. `gate` holds
  * the preview's answers until it resolves.
  */
-function rig(o: { preview?: boolean; gate?: Promise<void>; secure?: boolean } = {}) {
+function rig(
+  o: { preview?: boolean; gate?: Promise<void>; secure?: boolean; remote?: boolean } = {},
+) {
   const t = tempDir("akou-dict-partials-");
   cleanups.push(t.cleanup);
   const log = new DictationLog(t.dir);
@@ -56,12 +58,31 @@ function rig(o: { preview?: boolean; gate?: Promise<void>; secure?: boolean } = 
   const partials: PreviewPartial[] = [];
   const previews: number[] = [];
   const asked: (string | undefined)[] = [];
+  /** The request a `remote` engine opened at the press (DC-R6): what happened to it. */
+  const hold = { opened: 0, decoded: 0, cancelled: 0 };
   const engine: DictationEngine = {
-    name: "best",
+    name: o.remote ? "remote" : "best",
     decode: async (_s, r) => {
       asked.push(r.language);
       return decoded(FINAL);
     },
+    ...(o.remote
+      ? {
+          open: () => {
+            hold.opened++;
+            return {
+              push: () => {},
+              decode: async () => {
+                hold.decoded++;
+                return decoded(FINAL);
+              },
+              cancel: () => {
+                hold.cancelled++;
+              },
+            };
+          },
+        }
+      : {}),
   };
   const preview: PreviewDecode = async (samples) => {
     previews.push(samples.length);
@@ -117,7 +138,7 @@ function rig(o: { preview?: boolean; gate?: Promise<void>; secure?: boolean } = 
     await until(() => sent.some((c) => c.type === "insert"), 5000, "the insert");
   };
   const insert = () => sent.find((c) => c.type === "insert");
-  return { s, log, partials, previews, asked, feed, release, insert };
+  return { s, log, partials, previews, asked, hold, feed, release, insert };
 }
 
 describe("DC-E5: partials while listening, the whole decode inserted", () => {
@@ -184,6 +205,27 @@ describe("akou-5v8: the language the chip forces for the session", () => {
     expect(r.s.setLanguage("en")).toBe(false);
   });
 
+  test("on remote, a language chosen on the chip drops the request opened at the press", async () => {
+    const r = rig({ remote: true });
+    await r.feed(1);
+    expect(r.s.setLanguage("es")).toBe(true);
+    await r.feed(1);
+    await r.release();
+    // That request asked for the language of the press: it is cancelled, never decoded, and the
+    // whole buffer goes with the chosen language.
+    expect(r.hold).toEqual({ opened: 1, decoded: 0, cancelled: 1 });
+    expect(r.asked).toEqual(["es"]);
+    expect(r.insert()).toMatchObject({ text: FINAL });
+  });
+
+  test("positive control: on remote without the chip, the request opened at the press answers", async () => {
+    const r = rig({ remote: true });
+    await r.feed(1);
+    await r.release();
+    expect(r.hold).toEqual({ opened: 1, decoded: 1, cancelled: 0 });
+    expect(r.asked).toEqual([]);
+  });
+
   test("positive control: without the chip, the decode asks for no language", async () => {
     const r = rig();
     await r.feed(1);
@@ -193,7 +235,7 @@ describe("akou-5v8: the language the chip forces for the session", () => {
 });
 
 describe("the service's side", () => {
-  function service(o: { engine?: string; languages?: string[] } = {}) {
+  function service(o: { engine?: string; languages?: string[]; language?: string } = {}) {
     const t = tempDir("akou-dict-partials-svc-");
     cleanups.push(t.cleanup);
     const fast: DictationEngine = { name: "fast", decode: async () => decoded("x") };
@@ -202,6 +244,7 @@ describe("the service's side", () => {
       now: () => Date.now(),
       engine: (name) => (name === "fast" ? fast : { ...fast, name: o.engine ?? "best" }),
       languages: () => o.languages ?? ["en", "es"],
+      language: () => o.language,
     });
     cleanups.push(() => svc.close());
     // The decoder the session asks for before each partial.
@@ -227,7 +270,13 @@ describe("the service's side", () => {
   });
 
   test("the chip can switch with two languages on an engine that takes one", () => {
-    expect(service().svc.languageChoice()).toEqual({ languages: ["en", "es"], switchable: true });
+    expect(service().svc.languageChoice()).toEqual({
+      languages: ["en", "es"],
+      switchable: true,
+      language: null,
+    });
+    // The chip starts on dictation.language when it is set.
+    expect(service({ language: "es" }).svc.languageChoice().language).toBe("es");
     expect(service({ engine: "fast" }).svc.languageChoice().switchable).toBe(false);
     expect(service({ languages: ["en"] }).svc.languageChoice().switchable).toBe(false);
     // No helper runs, so no session listens for the chip to force.

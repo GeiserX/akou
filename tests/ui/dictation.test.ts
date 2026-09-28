@@ -405,6 +405,32 @@ describe("DC-O2: settled words and the phrase still changing", () => {
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "a read-only language chip says its language at full contrast (akou-5v8)",
+    async () => {
+      const v = await viewPage("pill");
+      try {
+        const listening = { state: "listening", since: Date.now(), keys: [], hotkey: "Ctrl" };
+        await v.send("state", {
+          ...listening,
+          language: { tag: "es", switchable: false, forced: false },
+        });
+        const look = await v.page.evaluate(() => {
+          const e = document.getElementById("lang") as HTMLButtonElement;
+          return {
+            text: e.textContent,
+            disabled: e.disabled,
+            opacity: getComputedStyle(e).opacity,
+          };
+        });
+        expect(look).toEqual({ text: "ES", disabled: true, opacity: "1" });
+      } finally {
+        await v.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
 });
 
 describe("DC-O2, DC-D2: the preview's gate on the main side", () => {

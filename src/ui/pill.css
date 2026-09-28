@@ -183,6 +183,11 @@ button:focus-visible {
 #lang[data-switchable] {
   cursor: pointer;
 }
+/* Read-only, it still says the language at full contrast, unlike a disabled button. */
+#lang:disabled {
+  opacity: 1;
+  cursor: default;
+}
 #lang[data-switchable]:hover {
   background: rgba(255, 255, 255, 0.2);
 }

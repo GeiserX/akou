@@ -263,9 +263,11 @@ export interface PreviewPartial {
 export const PREVIEW_EVERY_SECONDS = 0.5;
 /**
  * How much of the end of the audio each preview decode takes. The pill's ticker shows one line, the
- * newest words, so the start of a long dictation is never decoded again and a decode stays short.
+ * newest words, so the start of a long dictation is never decoded again and a decode stays short:
+ * it shares the live Worker with the release's whole-buffer decode and a recorded call's segments,
+ * which wait behind the one in flight.
  */
-export const PREVIEW_TAIL_SECONDS = 20;
+export const PREVIEW_TAIL_SECONDS = 8;
 
 /** When a session ends by itself (DC-A3). */
 export interface AutoStop {

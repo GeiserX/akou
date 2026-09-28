@@ -8,10 +8,12 @@
  * transcript in the log never reaches the page. The one way words do, the preview of DC-O2, goes
  * through `pillPreview`, which lets them through only with `dictation.pillPreview` on.
  *
- * While the pill exists it asks the session for partials (DC-E5): their language sets the chip on
- * the listening island (akou-5v8), and with the preview on their words go to the ticker, with the
- * part that did not change since the last partial marked as settled. A click on the chip moves the
- * session to the next of the user's languages when the engine takes a forced one.
+ * With the preview on the pill asks the session for partials (DC-E5): their words go to the ticker,
+ * with the part that did not change since the last partial marked as settled. The chip on the
+ * listening island (akou-5v8) is up from the start when the engine takes a forced language: it
+ * shows `dictation.language`, or `auto` while the engine chooses, and a click moves the session to
+ * the next of the user's languages. A partial that names its language shows it; Parakeet's name
+ * none, so on `fast` the chip stays down.
  *
  * - `listening` from the session's state, with the hints the key source can honour (DC-A4):
  *   Escape, Enter and Shift+Enter where it swallows keys; only the dictation key's on the portal
@@ -69,8 +71,15 @@ export interface PillDictation {
   follow(fn: (m: DictationFollow) => void, o?: { partials?: () => boolean }): () => void;
   /** Stop and Cancel, the same session door as `POST /v1/dictation/stop` and `/cancel`. */
   control(action: "stop" | "cancel"): Promise<boolean>;
-  /** The languages the chip moves between, and whether the engine takes a forced one (akou-5v8). */
-  languageChoice?(): { languages: readonly string[]; switchable: boolean };
+  /**
+   * The languages the chip moves between, whether the engine takes a forced one, and the one a
+   * session asks for before a click: `dictation.language`, else null (akou-5v8).
+   */
+  languageChoice?(): {
+    languages: readonly string[];
+    switchable: boolean;
+    language?: string | null;
+  };
   /** Forces a language for the session listening; false with none listening. */
   setLanguage?(language: string): boolean;
   /** The answer to a learn chip the pill showed (DC-L4); absent, no chip is answered. */
@@ -139,6 +148,9 @@ export function pasteHint(platform: string): string {
  * had too, in order, from wherever it began there. The preview decodes the end of the audio, so
  * once a dictation outgrows it the words slide left and the run starts later in the last one.
  */
+/** The chip's tag while the engine chooses the language and no partial has named one. */
+export const AUTO_LANGUAGE = "auto";
+
 export function settledWords(last: readonly string[], next: readonly string[]): number {
   let best = 0;
   for (let j = 0; j < last.length; j++) {
@@ -203,7 +215,14 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         lastWords = [];
         forced = null;
         const keys: PillKey[] = st.swallow_keys === true ? [...SWALLOWED] : [];
-        put({ state: "listening", since: o.now(), keys, hotkey: o.label(o.hotkey(), o.platform) });
+        const language = chipFor(null);
+        put({
+          state: "listening",
+          since: o.now(),
+          keys,
+          hotkey: o.label(o.hotkey(), o.platform),
+          ...(language ? { language } : {}),
+        });
         return;
       }
       case "transcribing":
@@ -227,11 +246,15 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     }
   };
 
-  /** The chip on the listening island for `heard`, the language of the last partial. */
+  /**
+   * The chip on the listening island for `heard`, the language of the last partial. An engine that
+   * takes a forced language has it from the start: the session's own until a partial names one.
+   */
   const chipFor = (heard: string | null): PillLanguage | undefined => {
-    const tag = forced ?? heard;
+    const c = d.languageChoice?.();
+    const switchable = c?.switchable ?? false;
+    const tag = forced ?? heard ?? (switchable ? (c?.language ?? AUTO_LANGUAGE) : null);
     if (!tag) return undefined;
-    const switchable = d.languageChoice?.().switchable ?? false;
     return { tag, switchable, forced: forced !== null };
   };
 
@@ -327,8 +350,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         hideAfter(ERROR_MS);
       }
     },
-    // The chip wants the language of every session, so partials are decoded while the pill exists.
-    { partials: () => true },
+    // Partials are decoded only for the ticker: Parakeet's carry no language for the chip.
+    { partials: () => o.preview.setting() === true },
   );
 
   /** The chip's click: the session listening moves to the next of the user's languages. */
