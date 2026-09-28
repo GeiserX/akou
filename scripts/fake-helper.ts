@@ -45,6 +45,8 @@
  *   --speed X               0 = as fast as possible (default); 1 = key times in real time
  *   --grants LIST           the grants `ready` reports as `granted`: `mic,accessibility`
  *                           (default), or fewer; the others are `denied`
+ *   --not-asked LIST        of the grants not given, those reported as `not-asked` instead of
+ *                           `denied`, as a macOS microphone never asked for (DC-N3)
  *   --backend NAME          the key source `ready` reports (default `fake`)
  *   --probe                 prints the `ready` line and exits, as `akou-capture dictate --probe`
  *   --probe-grants LIST     the grants `--probe` reports instead of `--grants`: a grant given
@@ -617,7 +619,9 @@ async function runDictate(): Promise<void> {
   };
 
   const given = flag("--probe") ? (opt("--probe-grants")?.split(",") ?? grants) : grants;
-  const grant = (name: string) => (given.includes(name) ? "granted" : "denied");
+  const notAsked = opt("--not-asked")?.split(",") ?? [];
+  const grant = (name: string) =>
+    given.includes(name) ? "granted" : notAsked.includes(name) ? "not-asked" : "denied";
   say({
     type: "ready",
     protocol: DICTATE_PROTOCOL,

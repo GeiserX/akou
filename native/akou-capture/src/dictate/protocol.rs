@@ -11,7 +11,7 @@
 //!
 //! | `type` | fields |
 //! |---|---|
-//! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied` or `not-needed`) |
+//! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied`, `not-asked` on a macOS microphone never asked for, or `not-needed`) |
 //! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample), and `mic: {transport, why}` when a device backend chose the mic (DC-N5): `transport` `built-in`, `bluetooth` or `other`; `why` `pinned`, `built-in` (instead of a Bluetooth default), `default` or `fallback` |
 //! | `level` | `rms` (linear, 0 to 1), 20 per second while a session runs |
 //! | `key` | `name`: `Escape`, `Enter` or `Shift+Enter` during a session and until its insert settles; the hotkey's name when it is pressed while a session is still transcribing; any key while `record_keys` is on |

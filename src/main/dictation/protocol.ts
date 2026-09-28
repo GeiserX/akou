@@ -45,8 +45,11 @@ export type SendKey = (typeof SEND_KEYS)[number];
 
 export { ACTIVATIONS, type Activation } from "../../core/dictation/activation.ts";
 
-/** A grant as `ready` reports it; `not-needed` where the OS asks for none (Windows). */
-export const GRANTS = ["granted", "denied", "not-needed"] as const;
+/**
+ * A grant as `ready` reports it; `not-needed` where the OS asks for none (Windows), `not-asked`
+ * where macOS has never asked for the microphone, which it does when the device first opens.
+ */
+export const GRANTS = ["granted", "denied", "not-asked", "not-needed"] as const;
 export type Grant = (typeof GRANTS)[number];
 
 /** One hunk of an edit read back from the field (DC-L2): only the text around the insert. */

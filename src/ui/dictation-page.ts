@@ -417,7 +417,13 @@ export class DictationSettings {
     const g = this.grants;
     if (!g) return null;
     const word = (x: string) =>
-      x === "granted" ? "ok" : x === "not-needed" ? "not needed" : "not granted";
+      x === "granted"
+        ? "ok"
+        : x === "not-needed"
+          ? "not needed"
+          : x === "not-asked"
+            ? "not asked yet"
+            : "not granted";
     return h(
       "p",
       { id: "dictation-permissions", class: "hint" },

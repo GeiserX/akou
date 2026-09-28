@@ -76,7 +76,7 @@ const PROBE_DEADLINE_MS = 5000;
 
 export type Grants = { mic: Grant; accessibility: Grant };
 
-/** A grant dictation can work with: given, or one the OS does not ask for. */
+/** A grant dictation can work with: given, one the OS does not ask for, or one not asked yet. */
 const grantOk = (g: Grant) => g !== "denied";
 
 /** How often `dictation.retainDays` is applied while the app runs. */

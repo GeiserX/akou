@@ -31,8 +31,12 @@ export const HEARD_DB = -50;
 /** The key of the clipboard-only fallback, which binds chords only (DC-N3). */
 export const FALLBACK_HOTKEY = "Control+Shift+Space";
 
-/** A grant the helper has, or one the OS does not ask for. */
-export const grantOk = (g: string | undefined): boolean => g === "granted" || g === "not-needed";
+/**
+ * A grant the helper has, one the OS does not ask for, or a macOS microphone never asked for:
+ * macOS asks when the helper first opens it, and lists akou in the Microphone pane only after.
+ */
+export const grantOk = (g: string | undefined): boolean =>
+  g === "granted" || g === "not-needed" || g === "not-asked";
 
 /** What the setup needs from the page it runs on. */
 export interface SetupHost {
@@ -207,7 +211,13 @@ export class DictationSetup {
       }) ?? null;
     return [
       h("h4", {}, "Microphone"),
-      h("p", {}, "akou can use the microphone."),
+      h(
+        "p",
+        {},
+        g?.mic === "not-asked"
+          ? "macOS asks for the microphone the first time akou listens."
+          : "akou can use the microphone.",
+      ),
       meter,
       heard,
       h(
