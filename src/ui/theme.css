@@ -13,6 +13,9 @@
   --ok: #32d74b;
   --warn: #ffb340;
   --accent: #6aa8ff;
+  /* Text on the accent fill: dark on the light dark-theme blue, white on the deep light-theme one
+     (both at least 4.5:1). */
+  --on-accent: #06101f;
   --agent: #c792ea;
   /* Information, never the accent: the glyph before a dim sentence. */
   --info: #5ad1c8;
@@ -31,6 +34,7 @@
     --faint: #a3a7ae;
     --line: #e4e4e1;
     --accent: #1f5fd6;
+    --on-accent: #fff;
     --agent: #7b3fb0;
     --info: #0f8a82;
     --you: #4f555d;
@@ -235,7 +239,7 @@ button.go:hover {
 #welcome button.go {
   background: var(--accent);
   border-color: var(--accent);
-  color: #fff;
+  color: var(--on-accent);
 }
 /* The native sliders and checkboxes take the text colour, not the system's blue. */
 input[type="range"],
@@ -1872,13 +1876,17 @@ button.cite:hover {
   align-items: center;
 }
 /* The player (WINDOW section 5): a slim bar under the transcript, only when the call has a
-   recording. The colours are neutral: the position in the text colour, the rest dim. */
+   recording. The colours are neutral: the position in the text colour, the rest dim. One 48 px
+   row when the transcript column is wide enough; in a narrow window it wraps to a second row
+   instead of drawing over the side pane (the window has no minimum width). */
 #player-bar {
   display: flex;
-  gap: 12px;
+  flex-wrap: wrap;
+  gap: 8px 12px;
   align-items: center;
-  height: 48px;
-  padding: 0 16px 0 24px;
+  min-height: 48px;
+  min-width: 0;
+  padding: 6px 16px 6px 24px;
   border-top: 1px solid var(--line);
   background: var(--panel);
   font-size: 12px;
@@ -1903,6 +1911,12 @@ button.cite:hover {
 }
 #pos {
   color: var(--fg);
+}
+/* The sliders match the buttons' 28 px, so one row fits the 48 px bar. */
+#player-bar input[type="range"] {
+  height: 28px;
+  margin: 0;
+  padding-block: 0;
 }
 #scrub {
   flex: 1 1 120px;

@@ -538,6 +538,76 @@ describe("the player bar (W5.3 to W5.6)", () => {
   );
 
   test(
+    "a bar that goes away takes its audio: Restart on a saved call stops the line playing, and a recording call plays nothing",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          await audio(rig, id, 12);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await playRow(page, "l000003");
+          await until(async () => !(await player(page)).paused, 5000, "the line playing");
+          // Restart makes the call record again: the bar goes, and the audio with it.
+          const r = await rig.api("POST", `/calls/${id}/restart`, { force: true });
+          expect(r.status).toBe(200);
+          await until(async () => !(await page.isVisible("#player-bar")), 8000, "the bar gone");
+          expect(await player(page)).toMatchObject({ paused: true, line: undefined });
+          // While it records, a line's Play button explains instead of playing blind.
+          await page.hover('#lines .row[data-id="l000002"]');
+          await page.click('#lines .row[data-id="l000002"] .play');
+          await page.waitForFunction(() => document.getElementById("toast")?.textContent !== "");
+          await page.waitForTimeout(400);
+          expect(await player(page)).toMatchObject({ paused: true, line: undefined });
+          expect(await page.isVisible("#player-bar")).toBe(false);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "in a narrow window the bar wraps inside the transcript column instead of drawing over the side pane",
+    async () => {
+      let id = "";
+      await withRig(
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        async (rig) => {
+          await audio(rig, id, 12);
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await playRow(page, "l000003");
+          await pauseNow(page);
+          // Every control on: both times, and Follow (shown after a scroll by hand).
+          await page.evaluate(() => {
+            (document.getElementById("follow") as HTMLElement).hidden = false;
+          });
+          for (const width of [1440, 900, 800]) {
+            await page.setViewportSize({ width, height: 800 });
+            const m = await page.evaluate(() => {
+              const bar = document.getElementById("player-bar") as HTMLElement;
+              const side = document.getElementById("side") as HTMLElement;
+              return {
+                scroll: bar.scrollWidth,
+                client: bar.clientWidth,
+                right: bar.getBoundingClientRect().right,
+                side: side.getBoundingClientRect().left,
+                height: bar.getBoundingClientRect().height,
+              };
+            });
+            expect({ width, fits: m.scroll <= m.client }).toEqual({ width, fits: true });
+            expect(m.right).toBeLessThanOrEqual(m.side);
+            // Wide, it stays the slim one-row bar.
+            if (width === 1440) expect(m.height).toBeLessThanOrEqual(49);
+          }
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "[W5.3] seeking to 50 % shows the wall time of that instant, never a bare offset",
     async () => {
       let id = "";

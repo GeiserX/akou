@@ -172,7 +172,7 @@ The log is append-only, so an edit is a new revision, never a rewrite: `seg rev+
 
 ## 5. Audio sync
 
-The player bar gets real controls. It is a slim bar under the transcript, and it exists only when the open call has a recording: a saved call with at least one part. With no call, and while a call records, the bar is gone (its keys have nothing to act on). Line-level sync comes first, because it needs nothing new in the log. Word-level sync waits for word timings, which the multi-engine fusion work needs anyway.
+The player bar gets real controls. It is a slim bar under the transcript, and it exists only when the open call has a recording: a saved call with at least one part. With no call, and while a call records, the bar is gone, and so is playback: a line's Play button and "Play from here" answer with a toast instead, and Restart on a saved call stops the audio as the bar goes. Line-level sync comes first, because it needs nothing new in the log. Word-level sync waits for word timings, which the multi-engine fusion work needs anyway.
 
 ```
  ▶ 15:41:07  ───────●─────────── 16:03:40   1.25x   mic ◂──●──▸ call
