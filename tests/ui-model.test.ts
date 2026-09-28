@@ -166,6 +166,15 @@ describe("the state label (hark-viewer's states)", () => {
     expect(stateLabel(setup).label).toBe("setup");
     // A call recording elsewhere still says so.
     expect(stateLabel({ ...setup, status: status("x") }).label).toBe("another call is recording");
+    // The last saved call opens behind the welcome; the word follows the welcome, not that call.
+    const ended = live((b) => {
+      b.partEnded(1, "stop");
+      b.add({ type: "call.ended", reason: "stop" });
+    });
+    expect(stateLabel({ ...setup, view: ended, lines: 3 }).label).toBe("setup");
+    expect(stateLabel({ ...base, view: ended, status: status(null), lines: 3 }).label).toBe(
+      "saved",
+    );
   });
 
   test("recording, paused, not capturing", () => {

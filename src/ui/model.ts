@@ -160,10 +160,13 @@ export function stateLabel(i: StateInput): StateLabel {
         : "akou is not answering; retrying",
     };
   }
+  // The welcome covers the page even when the last saved call sits open behind it, so the word
+  // follows the welcome, not that call. A call recording elsewhere still says so.
+  if (i.setup && !liveId) {
+    return { cls: "ready", label: "setup", meta: "the speech models are not here yet" };
+  }
   if (!v?.call) {
     if (liveId) return { cls: "other", label: "another call is recording", meta: "" };
-    if (i.setup)
-      return { cls: "ready", label: "setup", meta: "the speech models are not here yet" };
     return { cls: "ready", label: "ready", meta: "" };
   }
   if (v.live) {
