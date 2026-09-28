@@ -1115,7 +1115,9 @@ jobs:
           print("ready", flush=True)
           GLib.MainLoop().run()
           EOF
-          check() { if ! eval "$1"; then echo "FAILED: $2"; exit 1; fi; }
+          # Every check runs and every failure is named, so one run shows each rule that broke.
+          failed=0
+          check() { if ! eval "$1"; then echo "FAILED: $2"; failed=1; fi; }
           "$bin" dictate --probe 2> probe-none.err
           cat probe-none.err
           check 'grep -q "\"backend\":\"evdev\"" probe-none.err' "the backend is not evdev with no portal on the bus"
@@ -1168,6 +1170,7 @@ jobs:
             grep -hE '"type":"(ready|session\.(started|ended)|rebound|rebind\.failed)"' helper.err | sed 's/^/    /'
             sed 's/^/    /' portal.out
           } >> "$GITHUB_STEP_SUMMARY"
+          exit "$failed"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:
           bun-version-file: .bun-version
