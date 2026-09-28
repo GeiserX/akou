@@ -72,6 +72,8 @@ select:focus-visible {
   flex-direction: column;
   align-items: center;
   gap: 8px;
+  box-sizing: border-box;
+  max-height: 100vh;
   padding: 4px 20px 28px;
 }
 #draft-island {
@@ -109,6 +111,13 @@ select:focus-visible {
     0 20px 48px rgba(0, 0, 0, 0.45);
   display: flex;
   flex-direction: column;
+  min-height: 0;
+}
+/* What sits between the header and the buttons scrolls when it outgrows the window, so the
+   buttons never leave it. */
+#draft-body {
+  min-height: 0;
+  overflow-y: auto;
 }
 #draft-head {
   display: flex;

@@ -97,7 +97,11 @@ export function mountChip(
               on: { change: () => untick() },
             })
           : null,
-        `${quoted(c.term)} (heard ${quoted(c.heard)})`,
+        h(
+          "span",
+          { class: "chip-label", title: `${c.term} (heard ${c.heard})` },
+          `${quoted(c.term)} (heard ${quoted(c.heard)})`,
+        ),
       ),
     );
     const only = chip.candidates[0] as Chip["candidates"][number];

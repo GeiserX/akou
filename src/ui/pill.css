@@ -296,6 +296,8 @@ button:disabled {
 #chip {
   align-items: center;
   gap: 12px;
+  box-sizing: border-box;
+  max-width: 100%;
   margin: 0;
   padding: 8px 8px 8px 14px;
   border: 0;
@@ -303,10 +305,23 @@ button:disabled {
   min-width: 0;
   white-space: nowrap;
 }
+#chip button {
+  flex: none;
+}
+/* A long word ends in an ellipsis rather than pushing the chip past the window's edges; its
+   title holds the whole of it. */
 .chip-text {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  min-width: 0;
+}
+.chip-q,
+.chip-w,
+.chip-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .chip-q {
   font-weight: 600;
@@ -321,4 +336,5 @@ button:disabled {
   display: inline-flex;
   gap: 4px;
   align-items: center;
+  min-width: 0;
 }

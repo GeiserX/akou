@@ -220,6 +220,25 @@ describe("DC-S1: the draft box's keys", () => {
     expect(f.opens.at(-1)).toMatchObject({ id: b, text: FIXED, engine: "best (q)", ms: 9 });
   });
 
+  test("the box hears the audio's length, its language and where the engine ran; a remote retry is not local", async () => {
+    const f = box({
+      retry: async () => ({
+        ok: true,
+        answer: { text: FIXED, words: [], engine: "remote", model: null, ms: 400 },
+      }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: false });
+    expect(f.opens.at(-1)).toMatchObject({ seconds: 2, language: "en", local: true });
+    expect(await f.b.handlers.retry({ id: a, engine: "remote" })).toBe(true);
+    expect(f.opens.at(-1)).toMatchObject({
+      engine: "remote",
+      local: false,
+      seconds: 2,
+      language: "en",
+    });
+  });
+
   test("a draft answered while its retry decodes is not shown again, so it is never inserted twice", async () => {
     let decoded: () => void = () => {};
     const f = box({

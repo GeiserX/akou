@@ -16,6 +16,7 @@ import { QWEN_ASR } from "../../src/main/asr/llama-catalog.ts";
 import { MODELS, modelFile } from "../../src/main/asr/models.ts";
 import { SETTINGS } from "../../src/main/config/schema.ts";
 import { parseVocab } from "../../src/main/vocab/files.ts";
+import { DRAFT_SIZE, PILL_SIZE } from "../../src/main/window/shell.ts";
 import { NEXT_APP_LABEL, NEXT_APP_WAITING } from "../../src/ui/dictation-apps.ts";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
@@ -196,6 +197,8 @@ describe("DC-O1: the pill, the island at the top", () => {
       expect(await text(p, "#word")).toBe("Didn’t finish");
       expect(await visible(p, "#sheet")).toBe(true);
       expect(await text(p, "#message")).toBe("remote akou not reachable");
+      // A screen reader hears the message, not only the island's word.
+      expect(await p.getAttribute("#message", "role")).toBe("alert");
       expect(await p.$$eval("#buttons button", (b) => b.map((x) => x.textContent))).toEqual([
         "Retry locally",
         "Copy",
@@ -504,6 +507,47 @@ describe("DC-L4: the learn chip", () => {
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "a chip of long words stays inside the pill's window, its buttons whole",
+    async () => {
+      const p = v.page;
+      await p.setViewportSize(PILL_SIZE);
+      try {
+        await v.send("chip", {
+          id: "d9",
+          mode: "ask",
+          candidates: [
+            { term: "Kubernetes Engine Autopilot", heard: "cooper netties engine auto pilot" },
+            { term: "Vercel", heard: "versal" },
+            { term: "Grafana Loki", heard: "grafanna low key" },
+            { term: "Tailscale", heard: "tail scale" },
+          ],
+        });
+        const boxes = await p.$$eval("#chip, #chip button", (els) =>
+          els.map((e) => {
+            const r = e.getBoundingClientRect();
+            return { id: e.id, left: r.left, right: r.right, bottom: r.bottom };
+          }),
+        );
+        const size = await p.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+        expect(boxes.map((b) => b.id)).toEqual(["chip", "chip-learn", "chip-reject"]);
+        for (const b of boxes) {
+          expect(b.left).toBeGreaterThanOrEqual(0);
+          expect(b.right).toBeLessThanOrEqual(size.w);
+          expect(b.bottom).toBeLessThanOrEqual(size.h);
+        }
+        // The cut word keeps its whole in the title.
+        expect(await p.getAttribute("#chip .chip-label", "title")).toBe(
+          "Kubernetes Engine Autopilot (heard cooper netties engine auto pilot)",
+        );
+        await p.click("#chip-reject");
+      } finally {
+        await p.setViewportSize({ width: 1280, height: 720 });
+      }
+    },
+    UI_TIMEOUT,
+  );
 });
 
 describe("DC-S1: the draft box", () => {
@@ -716,6 +760,50 @@ describe("DC-S1: the draft box", () => {
       await v.send("open", draft({ id: "d12" }));
       expect(await visible(p, "#chip")).toBe(false);
       expect(v.requests).toEqual([{ name: "chip", params: { id: "d11", action: "ignore" } }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with the other readings and a chip of three, the buttons stay inside the window",
+    async () => {
+      const p = v.page;
+      await p.setViewportSize(DRAFT_SIZE);
+      try {
+        await v.send("open", draft({ id: "d13", engines: ["best", "remote"] }));
+        const at = draft().text.indexOf("cooper") + 2;
+        await p.$eval(
+          "#draft-text",
+          (t, i) => (t as HTMLTextAreaElement).setSelectionRange(i, i),
+          at,
+        );
+        await p.dispatchEvent("#draft-text", "click");
+        await v.send("chip", {
+          id: "d13",
+          mode: "ask",
+          candidates: [
+            { term: "Kubernetes", heard: "cooper netties" },
+            { term: "Vercel", heard: "versal" },
+            { term: "Grafana", heard: "grafanna" },
+          ],
+        });
+        expect(await visible(p, "#draft-alts")).toBe(true);
+        expect(await visible(p, "#chip")).toBe(true);
+        const h = await p.evaluate(() => innerHeight);
+        for (const sel of ["#draft-foot", "#draft-send", "#draft-close"]) {
+          const box = await p.$eval(sel, (e) => e.getBoundingClientRect().bottom);
+          expect(box).toBeLessThanOrEqual(h);
+        }
+        // At the window's own size all of it shows, with nothing scrolled away.
+        expect(await p.$eval("#draft-body", (e) => e.scrollHeight <= e.clientHeight)).toBe(true);
+        // Past what the window holds, the middle scrolls and the buttons still stay.
+        await p.setViewportSize({ width: DRAFT_SIZE.width, height: 360 });
+        const foot = await p.$eval("#draft-foot", (e) => e.getBoundingClientRect().bottom);
+        expect(foot).toBeLessThanOrEqual(360);
+        await p.keyboard.press("Escape");
+      } finally {
+        await p.setViewportSize({ width: 1280, height: 720 });
+      }
     },
     UI_TIMEOUT,
   );

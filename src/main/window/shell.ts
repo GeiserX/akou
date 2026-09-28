@@ -322,8 +322,11 @@ const INDICATOR_MARGIN = 16;
  * transparent; only those are painted (pill.css).
  */
 export const PILL_SIZE = { width: 480, height: 200 } as const;
-/** The draft box's size: its island, the sheet with the field, the chip, the engine line and the buttons. */
-export const DRAFT_SIZE = { width: 640, height: 420 } as const;
+/**
+ * The draft box's size: its island, the sheet with the field, the other readings, a chip of three
+ * candidates, the engine line and the buttons. Past that the middle scrolls and the buttons stay.
+ */
+export const DRAFT_SIZE = { width: 640, height: 520 } as const;
 /** Its distance from the work area's edge on the side `dictation.pill` names. */
 const PILL_MARGIN = 24;
 /** At the top the island sits right under the menu bar, where a notch would be. */
