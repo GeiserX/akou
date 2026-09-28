@@ -101,8 +101,7 @@ pub fn trusted() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
-/// The microphone grant without asking: `AVAuthorizationStatusAuthorized` is 3. Not asked yet
-/// reads `denied` until the protocol has a word for it; opening the device asks.
+/// The microphone grant without asking (DC-N3).
 fn mic_grant() -> &'static str {
     autoreleasepool(|_| {
         let Some(cls) = AnyClass::get(c"AVCaptureDevice") else {
@@ -111,8 +110,19 @@ fn mic_grant() -> &'static str {
         let media = NSString::from_str("soun");
         // SAFETY: a class method taking an NSString and returning an NSInteger.
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: &*media] };
-        if status == 3 { "granted" } else { "denied" }
+        mic_word(status)
     })
+}
+
+/// An `AVAuthorizationStatus` as `ready` names it: 3 (authorized) is `granted`, 0 (not
+/// determined) is `not-asked`, since macOS asks when the device first opens and lists akou in the
+/// Microphone pane only after that; 1 (restricted) and 2 (denied) are `denied`.
+fn mic_word(status: isize) -> &'static str {
+    match status {
+        3 => "granted",
+        0 => "not-asked",
+        _ => "denied",
+    }
 }
 
 /// `(mic, accessibility)` as `ready` names them.
@@ -684,5 +694,15 @@ mod tests {
         assert_eq!(field_kind(Some("AXWebArea"), None, true), "editable");
         assert_eq!(field_kind(Some("AXButton"), None, false), "not-editable");
         assert_eq!(field_kind(None, None, false), "unknown");
+    }
+
+    /// DC-N3: a microphone never asked for is not a refusal, so the switch can start the helper
+    /// and opening the device asks.
+    #[test]
+    fn the_mic_grant_tells_never_asked_from_refused() {
+        assert_eq!(mic_word(3), "granted");
+        assert_eq!(mic_word(0), "not-asked");
+        assert_eq!(mic_word(1), "denied");
+        assert_eq!(mic_word(2), "denied");
     }
 }

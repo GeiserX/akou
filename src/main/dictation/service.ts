@@ -32,6 +32,7 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
 import { applyHunks, type Redecode } from "../../core/dictation/learn.ts";
+import type { CueMoment } from "../../ui/dictation-cues.ts";
 import type { Chip, ChipAnswer } from "../../ui/pill-protocol.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
@@ -63,6 +64,20 @@ import { DICTATION_DIR, DictationLog, expiredDictations, FINAL, newDictationId }
 
 /** How long `stop` waits for the helper to exit before it is killed. */
 const STOP_MS = 2000;
+
+/**
+ * How long the grants a probe read are reused (DC-U2, DC-N3): the setup reads them once a second
+ * while a grant step waits, so each read runs at most one probe.
+ */
+export const PROBE_MS = 1000;
+
+/** A probe that has not printed its `ready` line by then answers nothing. */
+const PROBE_DEADLINE_MS = 5000;
+
+export type Grants = { mic: Grant; accessibility: Grant };
+
+/** A grant dictation can work with: given, one the OS does not ask for, or one not asked yet. */
+const grantOk = (g: Grant) => g !== "denied";
 
 /** How often `dictation.retainDays` is applied while the app runs. */
 const SWEEP_MS = 60 * 60 * 1000;
@@ -143,6 +158,15 @@ export interface DictationServiceOptions extends TextRules {
   loading?(): boolean;
   /** The remote engine's standing while `dictation.engine` is `remote`, else null (DC-R3). */
   remote?(): DictationRemoteStatus | null;
+  /**
+   * The helper's `dictate --probe` command, which prints the `ready` line with the grants read
+   * without asking and exits (DC-U2, DC-N3). Absent, the grants are known only while it runs.
+   */
+  probe?(): readonly string[];
+  /** Plays the cue for a moment of a spoken dictation, or nothing, as the settings say (DC-O3). */
+  cue?(moment: CueMoment): void;
+  /** `dictation.mic` and `dictation.preferBuiltInOverBluetooth`, for `rebuild_mic` (DC-U4). */
+  mic?(): { device: string; preferBuiltIn: boolean };
   /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
   retainDays?(): number;
   /** `dictation.keepAudio` as it is now; absent, the audio is kept. */
@@ -205,7 +229,7 @@ export interface DictationStatus {
   verdict: string | null;
   /** The engine is loading its model: a press now is kept and decoded once it is ready. */
   loading: boolean;
-  grants: { mic: Grant; accessibility: Grant } | null;
+  grants: Grants | null;
   backend: string | null;
   /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
   swallow_keys: boolean | null;
@@ -240,6 +264,8 @@ interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   session: DictationSession;
   exited: Promise<void>;
+  /** Started again because a grant arrived: it is not started again for one more. */
+  regranted?: boolean;
 }
 
 export class DictationService {
@@ -259,6 +285,14 @@ export class DictationService {
   private wanted: { argv: readonly string[]; bindings: () => Bindings } | null = null;
   /** The keys of the last start, for the pill's hint. */
   private keys: (() => Bindings) | null = null;
+  /** The command of the last start, to start it again when a grant arrives. */
+  private argv: readonly string[] | null = null;
+  /** Counts the stops, so a start again after a grant does not undo a stop asked meanwhile. */
+  private stops = 0;
+  /** The Dictation page's key recorder while it is open (DC-U3). */
+  private recorder: ((name: string) => void) | null = null;
+  /** The last probe's grants and when it ran. */
+  private probed: { at: number; grants: Promise<Grants | null> } | null = null;
 
   /** Where `POST /v1/dictations` spools a clip while it is decoded; emptied at every start. */
   readonly uploadDir: string;
@@ -679,6 +713,8 @@ export class DictationService {
       return;
     }
     this.keys = bindings;
+    this.argv = argv;
+    this.recorder = null;
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
     try {
       proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -706,6 +742,9 @@ export class DictationService {
       onEdit: (id, hunks) => void this.fromField(id, hunks),
       preview: () => this.previewDecode(),
       onPartial: (p) => this.tell({ kind: "partial", ...p }),
+      onCue: (m) => this.o.cue?.(m),
+      onRecordedKey: (name) => this.recorder?.(name),
+      ...(this.o.mic ? { mic: this.o.mic } : {}),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -762,8 +801,101 @@ export class DictationService {
     return this.helper?.session.rebind(b) ?? Promise.resolve({ ok: true });
   }
 
+  /**
+   * Opens the Dictation page's key recorder (DC-U3), which gets every key the helper sees, Fn
+   * included, while no session can start; null closes it. False with no helper ready.
+   */
+  recordKeys(fn: ((name: string) => void) | null): boolean {
+    const s = this.helper?.session;
+    if (!s?.ready) return false;
+    this.recorder = fn;
+    return s.recordKeys(fn !== null);
+  }
+
+  /** `dictation.mic` or `dictation.preferBuiltInOverBluetooth` changed: the helper opens it now. */
+  rebuildMic(): void {
+    this.helper?.session.rebuildMic();
+  }
+
+  /**
+   * The grants as the OS holds them now (DC-U2, DC-N3). The running helper's, while each is given;
+   * else a probe's, read without asking, so the setup sees a grant arrive and the switch sees one
+   * missing before any helper starts. A helper that started without a grant the probe now finds
+   * is started again once idle, since the macOS key tap is made at the start. Null when nothing
+   * can say.
+   */
+  async grants(): Promise<Grants | null> {
+    const h = this.helper;
+    const ready = h?.session.ready?.grants ?? null;
+    if (ready && grantOk(ready.mic) && grantOk(ready.accessibility)) return ready;
+    const fresh = await this.probeGrants();
+    if (!fresh) return ready;
+    if (
+      h &&
+      ready &&
+      this.helper === h &&
+      !h.regranted &&
+      h.session.state === "idle" &&
+      ((!grantOk(ready.mic) && grantOk(fresh.mic)) ||
+        (!grantOk(ready.accessibility) && grantOk(fresh.accessibility)))
+    ) {
+      this.restartForGrant(h);
+    }
+    return fresh;
+  }
+
+  private probeGrants(): Promise<Grants | null> {
+    const argv = this.o.probe?.();
+    if (!argv) return Promise.resolve(null);
+    const at = Date.now();
+    if (this.probed && at - this.probed.at < PROBE_MS) return this.probed.grants;
+    const grants = (async (): Promise<Grants | null> => {
+      let proc: Bun.Subprocess<"ignore", "ignore", "pipe">;
+      try {
+        proc = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+      } catch (err) {
+        this.o.onLog?.("warn", `dictation probe did not start: ${(err as Error).message}`);
+        return null;
+      }
+      const r = await withDeadline(realClock, new Response(proc.stderr).text(), PROBE_DEADLINE_MS);
+      if (!r.ok) {
+        proc.kill("SIGKILL");
+        return null;
+      }
+      for (const line of r.value.split("\n")) {
+        const m = parseHelperLine(line);
+        if (m.kind === "msg" && m.msg.type === "ready") return m.msg.grants;
+      }
+      return null;
+    })();
+    this.probed = { at, grants };
+    return grants;
+  }
+
+  /** Stops helper `h` and starts it again with the same command and keys, unless stopped meanwhile. */
+  private restartForGrant(h: Helper): void {
+    const argv = this.argv;
+    const keys = this.keys;
+    if (!argv || !keys) return;
+    this.o.onLog?.(
+      "info",
+      "dictation: a grant arrived since the helper started; starting it again",
+    );
+    h.regranted = true;
+    const stop = this.stop();
+    const mine = this.stops;
+    void stop.then(() => {
+      if (this.stops !== mine || this.helper) return;
+      this.start(argv, keys);
+      // `start` sets the helper; the check above narrowed it to null.
+      const started = this.helper as Helper | null;
+      if (started) started.regranted = true;
+    });
+  }
+
   /** Stops the helper: `stop`, then a kill if it has not exited within 2 s. */
   async stop(): Promise<void> {
+    this.stops++;
     this.wanted = null;
     const h = this.helper;
     if (!h) return this.stopping ?? undefined;

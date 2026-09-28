@@ -79,10 +79,17 @@ describe("DC-G1: GET /v1/dictation", () => {
     });
   });
 
-  test("off: enabled false, state off, no grants", async () => {
-    const r = await rig({ "dictation.enabled": false });
+  test("off: enabled false, state off, and the grants a probe of the helper reads (DC-U2)", async () => {
+    const r = await rig({ "dictation.enabled": false }, ["--grants", "mic"]);
     const res = await r.api("GET", "/dictation");
-    expect(res.body).toMatchObject({ enabled: false, state: "off", grants: null });
+    expect(res.body).toMatchObject({
+      enabled: false,
+      state: "off",
+      grants: { mic: "granted", accessibility: "denied" },
+    });
+    // The probe started no helper: dictation is still off and no key is taken.
+    expect(r.app.dictation()?.status()).toMatchObject({ enabled: false, state: "off" });
+    expect(existsSync(r.commands)).toBe(false);
   });
 
   test("the remote engine shows its fallback and standing", async () => {
