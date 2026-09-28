@@ -19,7 +19,17 @@ import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
-import { banner, finalNote, HueBook, languages, stateLabel, suggestReopen } from "./model.ts";
+import {
+  banner,
+  type CallSummary,
+  callMeta,
+  finalNote,
+  groupCalls,
+  HueBook,
+  languages,
+  stateLabel,
+  suggestReopen,
+} from "./model.ts";
 import { ModelsCard } from "./models-card.ts";
 import { ModelsPage } from "./models-page.ts";
 import { recordBlocked } from "./models-text.ts";
@@ -141,6 +151,11 @@ class App {
   private blobs = new Map<string, string>();
   /** A start is on its way: Record waits for the answer. */
   private starting = false;
+  /** The calls as `GET /calls` last listed them, and the workspaces the user folded. */
+  private calls: CallSummary[] = [];
+  private folded = new Set<string>();
+  /** What the calls list was last drawn from, so an unchanged list is not redrawn. */
+  private drawnCalls = "";
 
   constructor(readonly t: Transport) {
     const view = () => this.view();
@@ -217,6 +232,7 @@ class App {
   async start(): Promise<void> {
     document.body.dataset.transport = this.t.kind;
     this.wireControls();
+    this.wireSidebar();
     this.wireTabs();
     this.wirePopover();
     const pinned = new URLSearchParams(location.search).get("call");
@@ -249,7 +265,11 @@ class App {
   /** Shows a call: a new follower, every pane reset. */
   openCall(id: string, chosen: boolean): void {
     this.chosen = chosen;
-    if (id === this.callId && this.follower) return;
+    if (id === this.callId && this.follower) {
+      // Picked again: the call may be behind the welcome, which the pick now lifts.
+      this.paint();
+      return;
+    }
     this.follower?.stop();
     this.callId = id;
     this.hues = new HueBook();
@@ -313,9 +333,7 @@ class App {
     this.follower = f;
     this.askPane.renderPresets();
     this.enhanced.paint();
-    for (const li of byId("calls").children as unknown as Iterable<HTMLElement>) {
-      li.querySelector("button")?.setAttribute("aria-current", String(li.dataset.id === id));
-    }
+    this.drawCalls();
     this.paint();
   }
 
@@ -369,14 +387,33 @@ class App {
 
   /**
    * Readiness drives the shell (WINDOW section 10): with the speech models missing the welcome
-   * replaces the calls, the transcript, the side pane and the player. A call recording anyway (one
-   * started without models from the CLI) keeps the workspace, so it is never hidden.
+   * replaces the transcript, the side pane and the player; the sidebar stays. A call recording
+   * anyway (one started without models from the CLI) keeps the workspace, so it is never hidden,
+   * and so does a call the user picked from the list; the readiness row brings the welcome back.
    */
   private welcome(): void {
-    const on = this.modelsCard.missing && !this.status?.live;
+    const missing = this.modelsCard.missing;
+    const on = missing && !this.status?.live && !this.chosen;
     byId("welcome").hidden = !on;
-    for (const id of ["sidebar", "scroller", "side"]) byId(id).hidden = on;
+    for (const id of ["scroller", "side"]) byId(id).hidden = on;
     document.body.classList.toggle("welcoming", on);
+    // The readiness row (WINDOW section 13): what is missing, and the page that fixes it.
+    const s = this.status;
+    byId("readiness").dataset.state = !s ? "none" : missing ? "missing" : "ready";
+    byId("readiness-text").textContent = !s
+      ? ""
+      : !missing
+        ? "Ready"
+        : s.models?.state === "downloading"
+          ? "Downloading models"
+          : s.models?.state === "failed"
+            ? "Download failed"
+            : "Models missing";
+    byId("readiness-setup").hidden = !missing;
+    const where = byId("readiness-where");
+    where.hidden = !s || missing;
+    where.textContent = this.platform === "mac" ? "Runs on this Mac" : "Runs on this computer";
+    byId("models-pip").hidden = !missing;
   }
 
   private pills(v: CallView | null, now: number): void {
@@ -522,60 +559,148 @@ class App {
   }
 
   // ---------------------------------------------------------------------------
-  // The list of calls: by date and title, one open at a time, no search
+  // The list of calls (WINDOW section 13): by workspace, newest first, one open at a time, and a
+  // search over titles and workspaces, never over what was said
 
   private async loadCalls(): Promise<void> {
-    type Summary = {
-      id: string;
-      title: string;
-      workspace: string;
-      createdAt: number;
-      state: string;
-    };
     // Failed starts are listed apart by the API; the window shows them in the one list, marked.
     const [ok, failed] = await Promise.all([
-      this.t.request<{ calls?: Summary[] }>("GET", "/calls?limit=200"),
-      this.t.request<{ calls?: Summary[] }>("GET", "/calls?limit=50&failed=true"),
+      this.t.request<{ calls?: CallSummary[] }>("GET", "/calls?limit=200"),
+      this.t.request<{ calls?: CallSummary[] }>("GET", "/calls?limit=50&failed=true"),
     ]);
-    const calls = [...(ok.body.calls ?? []), ...(failed.body.calls ?? [])].sort(
+    this.calls = [...(ok.body.calls ?? []), ...(failed.body.calls ?? [])].sort(
       (a, b) => b.createdAt - a.createdAt,
     );
-    const live = this.status?.live?.call;
-    replace(
-      byId("calls"),
-      ...calls.map((c) => {
-        const when = new Date(c.createdAt);
-        const date = new Intl.DateTimeFormat("en-CA", {
-          year: "numeric",
-          month: "2-digit",
-          day: "2-digit",
-        }).format(when);
-        const time = new Intl.DateTimeFormat("en-GB", {
-          hour: "2-digit",
-          minute: "2-digit",
-          hourCycle: "h23",
-        }).format(when);
-        return h(
-          "li",
-          { attrs: { "data-id": c.id }, class: c.id === live ? "live" : c.state },
-          h(
-            "button",
-            {
-              type: "button",
-              attrs: { "aria-current": String(c.id === this.callId) },
-              on: { click: () => this.openCall(c.id, true) },
-            },
-            h("span", { class: "when" }, `${date} ${time}`),
-            h("span", { class: "what" }, c.title || c.workspace),
-            h("span", { class: "ws" }, c.workspace),
-          ),
-        );
-      }),
-    );
-    const names = [...new Set(["default", ...calls.map((c) => c.workspace)])];
+    this.drawCalls();
+    const names = [...new Set(["default", ...this.calls.map((c) => c.workspace)])];
     replace(byId("workspaces"), ...names.map((n) => h("option", { value: n })));
     const ws = this.workspaceInput();
-    if (!ws.value) ws.value = calls[0]?.workspace ?? "default";
+    if (!ws.value) ws.value = this.calls[0]?.workspace ?? "default";
+  }
+
+  private wireSidebar(): void {
+    const search = byId<HTMLInputElement>("calls-search");
+    search.addEventListener("input", () => this.drawCalls());
+    search.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !search.value) return;
+      e.preventDefault();
+      search.value = "";
+      this.drawCalls();
+    });
+    byId("readiness-setup").addEventListener("click", () => {
+      // Back to the welcome, unless a call is recording: then the Models dialog.
+      this.chosen = false;
+      this.paint();
+      if (byId("welcome").hidden) byId("models-open").click();
+      else byId("models-pull").focus();
+    });
+  }
+
+  private drawCalls(): void {
+    const query = byId<HTMLInputElement>("calls-search").value;
+    const live = this.status?.live?.call ?? null;
+    const now = Date.now();
+    const key = JSON.stringify([
+      this.calls,
+      query,
+      live,
+      this.callId,
+      [...this.folded],
+      new Date(now).toDateString(),
+    ]);
+    if (key === this.drawnCalls) return;
+    this.drawnCalls = key;
+    const list = byId("calls");
+    // Redrawing must not take the keyboard away from the row or the group it is on.
+    const had = document.activeElement as HTMLElement | null;
+    const focus = had && list.contains(had) ? (had.dataset.ws ?? had.dataset.id) : undefined;
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    const groups = groupCalls(this.calls, query, live);
+    if (groups.length === 0) {
+      replace(
+        list,
+        query.trim()
+          ? h("p", { class: "none" }, `No call title or workspace has “${query.trim()}”.`)
+          : this.groupEl({ workspace: "default", calls: [] }, 0, "", now, tz),
+      );
+    } else {
+      replace(list, ...groups.map((g, i) => this.groupEl(g, i, query, now, tz, live)));
+    }
+    if (focus === undefined) return;
+    for (const el of list.querySelectorAll<HTMLElement>("button[data-ws], button[data-id]")) {
+      if ((el.dataset.ws ?? el.dataset.id) === focus) {
+        el.focus();
+        break;
+      }
+    }
+  }
+
+  /** One workspace: a header that folds it, with its count, then its calls. */
+  private groupEl(
+    g: { workspace: string; calls: CallSummary[] },
+    i: number,
+    query: string,
+    now: number,
+    tz: string,
+    live: string | null = null,
+  ): HTMLElement {
+    // A search shows every call it finds, folded or not.
+    const open = !this.folded.has(g.workspace) || query.trim() !== "";
+    const id = `calls-ws-${i}`;
+    const chevron = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    chevron.setAttribute("class", "ico");
+    chevron.setAttribute("viewBox", "0 0 16 16");
+    chevron.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", "m4 6 4 4 4-4");
+    chevron.append(path);
+    const head = h(
+      "button",
+      {
+        type: "button",
+        class: "ws-head",
+        attrs: { "aria-expanded": String(open), "aria-controls": id, "data-ws": g.workspace },
+        on: {
+          click: () => {
+            if (this.folded.has(g.workspace)) this.folded.delete(g.workspace);
+            else this.folded.add(g.workspace);
+            this.drawCalls();
+          },
+        },
+      },
+      chevron,
+      h("span", { class: "ws-name" }, g.workspace),
+      g.calls.length > 0 && h("span", { class: "cnt" }, String(g.calls.length)),
+    );
+    const body =
+      g.calls.length === 0
+        ? h("p", { class: "none", id, hidden: !open }, "No calls yet")
+        : h(
+            "ul",
+            { id, hidden: !open },
+            ...g.calls.map((c) =>
+              h(
+                "li",
+                { attrs: { "data-id": c.id }, class: c.id === live ? "live" : c.state },
+                h(
+                  "button",
+                  {
+                    type: "button",
+                    attrs: { "aria-current": String(c.id === this.callId), "data-id": c.id },
+                    on: { click: () => this.openCall(c.id, true) },
+                  },
+                  h("span", { class: "what" }, c.title || "Untitled call"),
+                  h("span", { class: "when" }, callMeta(c, now, tz, c.id === live)),
+                ),
+              ),
+            ),
+          );
+    return h(
+      "section",
+      { class: "ws-group", attrs: { "data-workspace": g.workspace } },
+      head,
+      body,
+    );
   }
 
   // ---------------------------------------------------------------------------

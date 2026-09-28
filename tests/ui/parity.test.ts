@@ -527,7 +527,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
-    "Sidebar list of calls by date and title; one open at a time; switch without reload; no search",
+    "Sidebar list of calls by workspace and day; one open at a time; switch without reload; search by title and workspace, never by what was said",
     async () => {
       const ids: string[] = [];
       await withRig(
@@ -548,19 +548,44 @@ describe("DESIGN 7 parity with hark-viewer", () => {
                 b.add({ type: "call.ended", reason: "stop" });
               }).id,
             );
+            // A minute ago, in another workspace: its group comes first and its day is Today.
+            const recent = Date.now() - 60_000;
+            ids.push(
+              seedCall(home, (b) => {
+                b.created(
+                  { id: "01J8Z6Q4M2VX0K7B3D4E5THIRD", title: "Design loop", workspace: "hiring" },
+                  recent,
+                );
+                b.partStarted(1, recent);
+                b.seg({ id: "l000001", ch: "call", w0: recent + 1000, text: "hello" });
+                b.partEnded(1, "stop");
+                b.add({ type: "call.ended", reason: "stop" });
+              }).id,
+            );
           },
         },
         async (rig) => {
           const page = await rig.open(ids[0]);
           await page.waitForSelector("#lines .row >> nth=3");
+          await page.waitForSelector("#calls li >> nth=2");
           const items = page.locator("#calls li");
-          expect(await items.count()).toBe(2);
-          expect(await items.allTextContents()).toEqual([
-            expect.stringContaining("Second call"),
-            expect.stringContaining("Weekly sync"),
-          ]);
+          const titles = () => page.locator("#calls li .what").allTextContents();
+          const groups = () =>
+            page.$$eval("#calls .ws-group", (g) =>
+              g.map(
+                (x) =>
+                  `${(x as HTMLElement).dataset.workspace} ${x.querySelector(".cnt")?.textContent}`,
+              ),
+            );
+          // By workspace, the one with the newest call first; newest first inside each.
+          expect(await groups()).toEqual(["hiring 1", "work 2"]);
+          expect(await titles()).toEqual(["Design loop", "Second call", "Weekly sync"]);
+          // Each row: its day, its local start time and how long it ran.
           expect(await items.first().locator(".when").textContent()).toMatch(
-            /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}$/,
+            /^Today, \d{2}:\d{2} · (under 1 min|\d+ min)$/,
+          );
+          expect(await items.nth(1).locator(".when").textContent()).toMatch(
+            /^(Yesterday|Mon|Tue|Wed|Thu|Fri|Sat|Sun|\d{1,2} [A-Z][a-z]{2}( \d{4})?), \d{2}:\d{2} · /,
           );
           await page.evaluate(() => {
             (window as unknown as { marker: number }).marker = 42;
@@ -581,12 +606,59 @@ describe("DESIGN 7 parity with hark-viewer", () => {
               .locator(`#calls li[data-id="${ids[1]}"] button`)
               .getAttribute("aria-current"),
           ).toBe("true");
-          expect(
-            await page
-              .locator(`#calls li[data-id="${ids[0]}"] button`)
-              .getAttribute("aria-current"),
-          ).toBe("false");
-          expect(await page.locator("#sidebar input").count()).toBe(0);
+          expect(await page.locator('#calls [aria-current="true"]').count()).toBe(1);
+
+          // The search narrows by title or workspace as you type; clearing it brings every group
+          // back. It never reads what was said: "only line here" is in a transcript, not a title.
+          const search = page.locator("#calls-search");
+          await search.fill("second");
+          await until(async () => (await items.count()) === 1, 5000, "narrowed by title");
+          expect(await titles()).toEqual(["Second call"]);
+          expect(await groups()).toEqual(["work 1"]);
+          await search.fill("HIRING");
+          await until(async () => (await items.count()) === 1, 5000, "narrowed by workspace");
+          expect(await titles()).toEqual(["Design loop"]);
+          await search.fill("only line here");
+          await until(async () => (await items.count()) === 0, 5000, "no match");
+          expect(await text(page, "#calls .none")).toBe(
+            "No call title or workspace has “only line here”.",
+          );
+          await search.fill("");
+          await until(async () => (await items.count()) === 3, 5000, "cleared");
+          expect(await groups()).toEqual(["hiring 1", "work 2"]);
+          await search.fill("weekly");
+          await until(async () => (await items.count()) === 1, 5000, "narrowed again");
+          await search.press("Escape");
+          await until(async () => (await items.count()) === 3, 5000, "Escape clears");
+          expect(await search.inputValue()).toBe("");
+
+          // A group folds and unfolds with the mouse and with the keyboard.
+          const hiring = page.locator('#calls .ws-head[data-ws="hiring"]');
+          await hiring.click();
+          await until(
+            async () => (await hiring.getAttribute("aria-expanded")) === "false",
+            5000,
+            "folded",
+          );
+          expect(await page.isVisible(`#calls li[data-id="${ids[2]}"]`)).toBe(false);
+          expect(await page.isVisible(`#calls li[data-id="${ids[1]}"]`)).toBe(true);
+          await hiring.click();
+          await page.waitForSelector(`#calls li[data-id="${ids[2]}"]`, { state: "visible" });
+          const work = page.locator('#calls .ws-head[data-ws="work"]');
+          await work.focus();
+          await page.keyboard.press("Enter");
+          await page.waitForSelector(`#calls li[data-id="${ids[0]}"]`, { state: "hidden" });
+          expect(await work.getAttribute("aria-expanded")).toBe("false");
+          // The redraw keeps the keyboard on the group, so the same key unfolds it.
+          await page.keyboard.press("Space");
+          await page.waitForSelector(`#calls li[data-id="${ids[0]}"]`, { state: "visible" });
+          expect(await work.getAttribute("aria-expanded")).toBe("true");
+
+          // The readiness row: the models are there.
+          expect(await text(page, "#readiness-text")).toBe("Ready");
+          expect(await page.getAttribute("#readiness", "data-state")).toBe("ready");
+          expect(await page.isVisible("#models-pip")).toBe(false);
+          expect(await page.isVisible("#readiness-setup")).toBe(false);
         },
       );
     },
