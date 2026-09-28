@@ -232,6 +232,7 @@ impl Device {
                 let now = held();
                 gate.event(TapEvent::Disabled { t_ns, held: &now });
             }
+            std::hint::black_box(());
         }
         if kind != EV_KEY {
             return;
