@@ -15,6 +15,7 @@ use super::inputs::{Choice, Transport};
 pub use super::insert::Targets;
 use super::insert::{Captured, Inserter, Os, Outcome, QUIET_MS, Request, is_terminal};
 use super::keys::Hotkey;
+use super::media::Media;
 use super::mic::{Mic, MicEvent, Warm};
 use super::protocol::{self as p, Command, Target};
 use super::readback::Watch;
@@ -75,6 +76,12 @@ pub struct Dictate {
     /// events, as a paste's waits for the quiet after the last read.
     snapshot_at: Option<(Reading, u64)>,
     watch: Option<Watch>,
+    /// The OS's media players (DC-U8); none where the backend has no way to reach them.
+    media: Option<Box<dyn Media>>,
+    /// `pause_media {on}`: `dictation.muteMedia`, off until the app turns it on.
+    pause_media: bool,
+    /// A session paused the players and they have not been given back yet.
+    media_held: bool,
 }
 
 impl Dictate {
@@ -98,6 +105,9 @@ impl Dictate {
             reading: None,
             snapshot_at: None,
             watch: None,
+            media: None,
+            pause_media: false,
+            media_held: false,
         }
     }
 
@@ -109,6 +119,31 @@ impl Dictate {
     /// The backend owns the Fn key's own action while Fn is the dictation key (DC-N2).
     pub fn set_globe(&mut self, globe: Globe) {
         self.globe = Some(globe);
+    }
+
+    /// The OS's media players, which a session pauses while `pause_media` is on (DC-U8).
+    pub fn set_media(&mut self, media: Box<dyn Media>) {
+        self.media = Some(media);
+    }
+
+    /// A session starts: the players that play now are paused, if the app asked for it.
+    fn media_pause(&mut self) {
+        if self.pause_media
+            && let Some(m) = self.media.as_mut()
+        {
+            m.pause();
+            self.media_held = true;
+        }
+    }
+
+    /// The session ended, or the setting went off: what akou paused plays again.
+    fn media_resume(&mut self) {
+        if self.media_held
+            && let Some(m) = self.media.as_mut()
+        {
+            m.resume();
+        }
+        self.media_held = false;
     }
 
     /// Writes `ready` and applies the warm policy (an `always` stream opens now).
@@ -315,6 +350,10 @@ impl Dictate {
                 self.report(done, t_ns, out);
                 self.watch = None;
                 self.snapshot_at = None;
+                self.media_resume();
+                if let Some(m) = self.media.as_mut() {
+                    m.finish();
+                }
                 return false;
             }
             Command::Rebind { hotkey, activation } => {
@@ -409,6 +448,12 @@ impl Dictate {
                 Err(e) => out.line(p::warn("bad-command", &e)),
             },
             Command::RecordKeys { on } => self.act(t_ns, out, |a, _| a.record_keys(on)),
+            Command::PauseMedia { on } => {
+                self.pause_media = on;
+                if !on {
+                    self.media_resume();
+                }
+            }
             // The device is chosen per OS (DC-N5); a file mic has nothing to rebuild.
             Command::RebuildMic { .. } => {}
         }
@@ -431,6 +476,7 @@ impl Dictate {
                     };
                     self.live = Some((id, cap));
                     self.mic.start(at, &mut ev);
+                    self.media_pause();
                 }
                 Note::Act(Action::End { reason }) => self.mic.end(t_ns, reason, &mut ev),
                 Note::Act(Action::Key(name)) => out.line(p::key(&name)),
@@ -473,12 +519,14 @@ impl Dictate {
                 }
                 MicEvent::Level(rms) => out.line(p::level(rms)),
                 MicEvent::Ended { reason } => {
+                    self.media_resume();
                     if let Some((id, cap)) = self.live.take() {
                         out.line(p::session_ended(&id, reason));
                         self.last = Some((id, cap));
                     }
                 }
                 MicEvent::Vanished => {
+                    self.media_resume();
                     self.live = None;
                     self.act(0, out, |a, _| a.settled());
                 }
@@ -1249,5 +1297,84 @@ mod tests {
         assert_eq!(store.fn_usage(), Some(DO_NOTHING));
         assert!(!d.command(Command::Stop, 0, &mut out));
         assert_eq!(store.fn_usage(), Some(2));
+    }
+
+    /// A dictate over a fake player list, one playing and one paused, `pause_media` sent as
+    /// `on` (never when `None`), and a second of warm mic behind it.
+    fn with_players(on: Option<bool>) -> (Dictate, Rec, crate::dictate::media::fake::Board) {
+        use crate::dictate::media::{Pauser, Status, fake::Board};
+        let w = World::new();
+        let board = Board::with(&[("music", Status::Playing), ("podcast", Status::Paused)]);
+        let mut d = dictate(&w);
+        d.set_media(Box::new(Pauser::new(Box::new(board.clone()))));
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        if let Some(on) = on {
+            d.command(Command::PauseMedia { on }, 0, &mut out);
+        }
+        run(&mut d, &mut out, 0, 1000);
+        (d, out, board)
+    }
+
+    /// A push-to-talk hold from `at` for 600 ms.
+    fn hold(d: &mut Dictate, out: &mut Rec, at: u64) {
+        d.key(true, "RightCommand", at * MS, out);
+        run(d, out, at, at + 600);
+        d.key(false, "RightCommand", (at + 600) * MS, out);
+    }
+
+    /// DC-U8 through the protocol: with `pause_media` on, a session pauses what plays and its
+    /// end, after the post-roll, plays it again; the player already paused is never started.
+    #[test]
+    fn dc_u8_a_session_pauses_the_players_and_its_end_gives_back_only_those() {
+        use crate::dictate::media::Status;
+        let (mut d, mut out, board) = with_players(Some(true));
+        hold(&mut d, &mut out, 1000);
+        assert_eq!(board.calls(), ["pause music"], "paused while listening");
+        run(&mut d, &mut out, 1600, 1700);
+        assert_eq!(
+            board.calls(),
+            ["pause music"],
+            "not before the post-roll ends"
+        );
+        run(&mut d, &mut out, 1700, 2200);
+        assert!(types(&out).contains(&"session.ended".to_string()));
+        assert_eq!(board.calls(), ["pause music", "play music"]);
+        assert_eq!(board.status("podcast"), Some(Status::Paused));
+    }
+
+    /// The positive control of the test above: with the setting never sent (the default) or sent
+    /// off, the same session touches no player.
+    #[test]
+    fn dc_u8_with_the_setting_off_no_player_is_touched() {
+        for on in [None, Some(false)] {
+            let (mut d, mut out, board) = with_players(on);
+            hold(&mut d, &mut out, 1000);
+            run(&mut d, &mut out, 1600, 2200);
+            assert!(board.calls().is_empty(), "{on:?}: {:?}", board.calls());
+        }
+    }
+
+    /// Turning the setting off during a session gives the players back at once, and the
+    /// session's end does not give them back a second time.
+    #[test]
+    fn dc_u8_turning_it_off_during_a_session_gives_the_players_back() {
+        let (mut d, mut out, board) = with_players(Some(true));
+        hold(&mut d, &mut out, 1000);
+        d.command(Command::PauseMedia { on: false }, 1610 * MS, &mut out);
+        assert_eq!(board.calls(), ["pause music", "play music"], "back now");
+        run(&mut d, &mut out, 1610, 2200);
+        assert_eq!(board.calls().len(), 2, "and not twice");
+    }
+
+    /// `stop` in the middle of a session gives the players back before the process exits.
+    #[test]
+    fn dc_u8_stop_during_a_session_gives_the_players_back() {
+        let (mut d, mut out, board) = with_players(Some(true));
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        run(&mut d, &mut out, 1000, 1500);
+        assert_eq!(board.calls(), ["pause music"]);
+        assert!(!d.command(Command::Stop, 1500 * MS, &mut out));
+        assert_eq!(board.calls(), ["pause music", "play music"]);
     }
 }

@@ -36,6 +36,9 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = ["
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 libc = "0.2"
 pulseaudio = "0.3"
+# Dictation's media pause (DC-U8): MPRIS lives on the session bus. zbus is D-Bus in pure Rust, so,
+# like the sound server above, nothing links libdbus and the helper starts on any Linux.
+zbus = "5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 wasapi = "0.24"
@@ -47,7 +50,12 @@ wasapi = "0.24"
 # notice that reinstalls the hook (System_RemoteDesktop) and the microphone privacy switch
 # (System_Registry). These are the calls handy-keys and enigo make on Windows, taken directly so
 # the hook can decide per event what DC-A4 swallows and every posted event carries akou's mark.
+# Media_Control (with Foundation and Foundation_Collections) is the system media transport
+# controls' session list, which dictation's media pause reads and drives (DC-U8).
 windows = { version = "0.62", features = [
+  "Foundation",
+  "Foundation_Collections",
+  "Media_Control",
   "Wdk_System_SystemServices",
   "Win32_Foundation",
   "Win32_Graphics_Gdi",
