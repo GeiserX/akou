@@ -15,6 +15,7 @@ import type { DictationItem } from "../../src/core/dictation/events.ts";
 import { parseVocab } from "../../src/main/vocab/files.ts";
 import { Bridge } from "../../src/main/window/bridge.ts";
 import { appForShell, type DraftHandlers, Shell } from "../../src/main/window/shell.ts";
+import { CHIP_ASK_MS } from "../../src/ui/dictation-chip.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import type { Chip } from "../../src/ui/pill-protocol.ts";
 import { type AppRig, appRig } from "../api-helpers.ts";
@@ -237,7 +238,7 @@ describe("DC-S1: the draft box's page over the real main side", () => {
       // The focus guard refused the paste: the box shows without the keyboard.
       expect(g.calls).toEqual(["showInactive"]);
       expect(await focused(g)).not.toBe("draft-text");
-      expect(await page.textContent("#draft-to")).toBe("to: com.example.editor");
+      expect(await page.textContent("#draft-app")).toBe("com.example.editor");
       // The fake engine gives no word confidences: nothing underlined, and the box says so.
       expect(await page.isVisible("#draft-noconf")).toBe(true);
       expect(await page.$$("#draft-marks mark")).toHaveLength(0);
@@ -262,7 +263,8 @@ describe("DC-S1: the draft box's page over the real main side", () => {
       await until(() => g.chips.length === 1, 5000, "the chip");
       expect(g.calls).toEqual(["showInactive", "hide", "showInactive"]);
       await page.waitForSelector("#chip:not([hidden])");
-      expect(await page.textContent("#chip")).toContain('"Kubernetes" (heard "kubernetis")');
+      expect(await page.textContent("#chip")).toContain('Learn "Kubernetes"?');
+      expect(await page.textContent("#chip")).toContain("You changed kubernetis");
     },
     UI_TIMEOUT,
   );
@@ -297,8 +299,10 @@ describe("DC-S1: the draft box's page over the real main side", () => {
       const before = g.inserted().length;
       await g.view.page.press("#draft-text", `${mod}+Enter`);
       await until(() => g.inserted().length > before, 10_000, "the insert");
-      // dictation.sendKey's default.
-      expect(g.inserted().at(-1)).toMatchObject({
+      // dictation.sendKey's default. The fake helper logs the send key it pressed as a record of
+      // its own right after the insert, so the insert is the last record with a text, not the last.
+      const records = g.inserted().slice(before) as { text?: string; type?: string }[];
+      expect(records.filter((x) => x.text !== undefined).at(-1)).toMatchObject({
         text: "see you at the standup",
         send_key: "Enter",
       });
@@ -400,6 +404,10 @@ describe("DC-L4: the chip asks once, from the draft box's page", () => {
     return { id, chip };
   }
 
+  /** Waits out the chip's own time, after which it answers `ignore`. */
+  const ignored = () =>
+    g.view.page.waitForSelector("#chip", { state: "hidden", timeout: CHIP_ASK_MS + 5000 });
+
   const statuses = (id: string) =>
     dictation(g)
       .log.events()
@@ -413,14 +421,16 @@ describe("DC-L4: the chip asks once, from the draft box's page", () => {
       const fixed = "we moved the box to Hetzner today";
       const first = await fix(heard, fixed);
       expect(first.chip).toBe(true);
-      expect(await g.view.page.textContent("#chip")).toContain('"Hetzner" (heard "hetzna")');
-      await g.view.page.click("#chip-close");
+      expect(await g.view.page.textContent("#chip")).toContain('Learn "Hetzner"?');
+      expect(await g.view.page.textContent("#chip")).toContain("You changed hetzna");
+      // The chip asks with Learn and Not a word only: left alone, it answers ignore by itself.
+      await ignored();
       await until(() => statuses(first.id).includes("ignored"), 5000, "ignored written");
       expect(statuses(first.id)).toEqual(["proposed", "ignored"]);
       expect((await fix(heard, fixed)).chip).toBe(false);
       const third = await fix(heard, fixed);
       expect(third.chip).toBe(true);
-      await g.view.page.click("#chip-close");
+      await ignored();
       await until(() => statuses(third.id).includes("ignored"), 5000, "ignored written");
       expect((await fix(heard, fixed)).chip).toBe(false);
       expect((await fix(heard, fixed)).chip).toBe(false);

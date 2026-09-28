@@ -32,7 +32,7 @@ export type PillState =
   | {
       state: "done";
       how: "inserted" | "copied";
-      /** `press ⌘V` after a clipboard-only insert; `best failed, used fast` after a fallback. */
+      /** The paste key (`⌘V`, `Ctrl+V`) after a clipboard-only insert; `best failed, used fast` after a fallback. */
       note?: string;
     }
   | {

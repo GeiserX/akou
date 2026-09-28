@@ -68,9 +68,7 @@ describe("the dictation keys of the spec are in the registry", () => {
     expect(SETTINGS["dictation.silenceStopSeconds"].default).toBe(30);
     expect(SETTINGS["dictation.retainDays"].default).toBe(30);
     // DC-O1: a compositor may give the pill the keyboard, so Linux has none unless asked.
-    expect(SETTINGS["dictation.pill"].default).toBe(
-      process.platform === "linux" ? "off" : "bottom",
-    );
+    expect(SETTINGS["dictation.pill"].default).toBe(process.platform === "linux" ? "off" : "top");
     expect(SETTINGS["server.dictation_slots"].default).toBe(1);
     expect(validateSetting("server.dictation_slots", 9).ok).toBe(false);
     expect(validateSetting("server.dictation_slots", 0).ok).toBe(true);

@@ -16,6 +16,7 @@ import { QWEN_ASR } from "../../src/main/asr/llama-catalog.ts";
 import { MODELS, modelFile } from "../../src/main/asr/models.ts";
 import { SETTINGS } from "../../src/main/config/schema.ts";
 import { parseVocab } from "../../src/main/vocab/files.ts";
+import { DRAFT_SIZE, PILL_SIZE } from "../../src/main/window/shell.ts";
 import { NEXT_APP_LABEL, NEXT_APP_WAITING } from "../../src/ui/dictation-apps.ts";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
@@ -62,7 +63,7 @@ const visible = (page: Page, sel: string) => page.isVisible(sel);
 const ids = (page: Page, sel: string) =>
   page.$$eval(sel, (els) => els.map((e) => (e as HTMLElement).id));
 
-describe("DC-O1: the pill", () => {
+describe("DC-O1: the pill, the island at the top", () => {
   let v: ViewPage;
   beforeAll(async () => {
     v = await viewPage("pill", { clock: new Date("2026-09-26T10:00:00Z") });
@@ -72,46 +73,53 @@ describe("DC-O1: the pill", () => {
   });
   const state = (s: PillState) => v.send("state", s);
   const now = () => v.page.evaluate(() => Date.now());
+  /** The island's icons that show, by id. */
+  const icons = (p: Page) =>
+    p.$$eval("#island .icon", (els) =>
+      els.filter((e) => getComputedStyle(e).display !== "none").map((e) => e.id),
+    );
+  const caps = (p: Page) => p.$$eval("#hints .key", (k) => k.map((x) => x.textContent));
+  const segments = (p: Page) =>
+    p.$$eval("#level i", (bars) => bars.map((b) => b.className || "off"));
 
   test(
-    "hidden until a state arrives, then listening with the meter, the time, the hints and the buttons",
+    "hidden until a state arrives, then listening with the dot, the level, the time, Stop and Cancel",
     async () => {
       const p = v.page;
       expect(await visible(p, "#pill")).toBe(false);
       await state({ state: "listening", since: (await now()) - 4200, keys: [], hotkey: "Right ⌘" });
       expect(await p.getAttribute("#pill", "data-state")).toBe("listening");
-      expect(await text(p, "#word")).toBe("listening");
+      expect(await icons(p)).toEqual(["rec"]);
+      expect(await visible(p, "#word")).toBe(false);
       expect(await text(p, "#elapsed")).toBe("0:04");
       expect(await visible(p, "#level")).toBe(true);
+      expect(await ids(p, "#controls button")).toEqual(["stop", "cancel"]);
       // A backend that cannot hold keys: the dictation key's hint only.
-      expect(await p.$$eval("#hints .hint", (h) => h.map((x) => x.textContent))).toEqual([
-        "Right ⌘ stop",
-      ]);
-      // One that can: every key it honours, and no others.
+      expect(await caps(p)).toEqual(["Right ⌘"]);
+      expect(await text(p, "#hints")).toBe("Right ⌘stops");
+      // One that can: every key it honours, in the island's order, and no others.
       await state({
         state: "listening",
-        since: await now(),
+        since: (await now()) - 4200,
         keys: ["escape", "enter"],
         hotkey: "Right ⌘",
       });
-      expect(await p.$$eval("#hints .hint", (h) => h.map((x) => x.textContent))).toEqual([
-        "Right ⌘ stop",
-        "Esc cancel",
-        "Enter send",
-      ]);
-      expect(await ids(p, "#buttons button")).toEqual(["stop", "cancel"]);
+      expect(await caps(p)).toEqual(["↵", "esc"]);
+      expect(await text(p, "#hints")).toBe("↵sends·esccancels");
 
-      // The meter follows the level, clamped to its range.
-      const meter = () => p.$eval("#level", (m) => (m as HTMLMeterElement).value);
+      // The five segments follow the level, clamped to their range.
+      await v.send("level", { db: -60 });
+      expect(await segments(p)).toEqual(["off", "off", "off", "off", "off"]);
+      await v.send("level", { db: -30 });
+      expect(await segments(p)).toEqual(["on", "on", "half", "off", "off"]);
       await v.send("level", { db: -20 });
-      expect(await meter()).toBe(-20);
-      await v.send("level", { db: -45 });
-      expect(await meter()).toBe(-45);
+      expect(await segments(p)).toEqual(["on", "on", "on", "off", "off"]);
       // A clipping mic reads full scale, never silence.
       await v.send("level", { db: 0 });
-      expect(await meter()).toBe(0);
+      expect(await segments(p)).toEqual(["on", "on", "on", "on", "on"]);
       await v.send("level", { db: 12 });
-      expect(await meter()).toBe(0);
+      expect(await segments(p)).toEqual(["on", "on", "on", "on", "on"]);
+      expect(await p.getAttribute("#level", "data-db")).toBe("0");
 
       v.requests.length = 0;
       await p.click("#stop");
@@ -125,25 +133,58 @@ describe("DC-O1: the pill", () => {
   );
 
   test(
-    "transcribing shows its time only past 2 s; inserted and copied; error with its buttons",
+    "the key hints fade in under the island only after 1.5 s of listening",
+    async () => {
+      const p = v.page;
+      await state({ state: "listening", since: await now(), keys: ["enter"], hotkey: "Right ⌘" });
+      expect(await visible(p, "#hints")).toBe(false);
+      await p.clock.runFor(1000);
+      expect(await visible(p, "#hints")).toBe(false);
+      await p.clock.runFor(750);
+      expect(await visible(p, "#hints")).toBe(true);
+      // `1 minute left` joins the hint line.
+      await state({
+        state: "listening",
+        since: (await now()) - 1750,
+        keys: ["enter"],
+        hotkey: "Right ⌘",
+        note: "1 minute left",
+      });
+      expect(await text(p, "#warn")).toBe("1 minute left");
+      await state({ state: "hidden" });
+      expect(await visible(p, "#hints")).toBe(false);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "transcribing rings the dot and shows its time only past 2 s; inserted and copied; error drops a sheet",
     async () => {
       const p = v.page;
       await state({ state: "transcribing", since: await now() });
       expect(await p.getAttribute("#pill", "data-state")).toBe("transcribing");
-      expect(await text(p, "#word")).toBe("transcribing");
+      expect(await icons(p)).toEqual(["ring"]);
+      expect(await text(p, "#word")).toBe("Transcribing");
       expect(await text(p, "#elapsed")).toBe("");
       expect(await visible(p, "#level")).toBe(false);
-      expect(await visible(p, "#buttons")).toBe(false);
-      await p.clock.runFor(2500);
-      expect(await text(p, "#elapsed")).toBe("0:02");
+      expect(await visible(p, "#controls")).toBe(false);
+      expect(await visible(p, "#hints")).toBe(false);
+      await p.clock.runFor(1700);
+      expect(await text(p, "#elapsed")).toBe("");
+      // Past 2 s, in tenths of a second as the island shows it (the page ticks every 250 ms).
+      await p.clock.runFor(800);
+      expect(await text(p, "#elapsed")).toMatch(/^2\.[2-5] s$/);
+      await state({ state: "transcribing", since: await now(), note: "loading model" });
+      expect(await text(p, "#word")).toBe("Transcribing · loading model");
 
       await state({ state: "done", how: "inserted" });
       expect(await p.getAttribute("#pill", "data-state")).toBe("inserted");
-      expect(await text(p, "#word")).toBe("inserted");
+      expect(await icons(p)).toEqual(["check"]);
+      expect(await text(p, "#word")).toBe("Inserted");
       expect(await text(p, "#elapsed")).toBe("");
-      await state({ state: "done", how: "copied", note: "press ⌘V" });
-      expect(await text(p, "#word")).toBe("copied");
-      expect(await text(p, "#note")).toBe("press ⌘V");
+      await state({ state: "done", how: "copied", note: "⌘V" });
+      expect(await icons(p)).toEqual(["copied"]);
+      expect(await text(p, "#word")).toBe("Copied · ⌘V");
 
       await state({
         state: "error",
@@ -152,7 +193,12 @@ describe("DC-O1: the pill", () => {
         retryLabel: "Retry locally",
       });
       expect(await p.getAttribute("#pill", "data-state")).toBe("error");
-      expect(await text(p, "#word")).toBe("remote akou not reachable");
+      expect(await icons(p)).toEqual(["alert"]);
+      expect(await text(p, "#word")).toBe("Didn’t finish");
+      expect(await visible(p, "#sheet")).toBe(true);
+      expect(await text(p, "#message")).toBe("remote akou not reachable");
+      // A screen reader hears the message, not only the island's word.
+      expect(await p.getAttribute("#message", "role")).toBe("alert");
       expect(await p.$$eval("#buttons button", (b) => b.map((x) => x.textContent))).toEqual([
         "Retry locally",
         "Copy",
@@ -171,6 +217,54 @@ describe("DC-O1: the pill", () => {
 
       await state({ state: "hidden" });
       expect(await visible(p, "#pill")).toBe(false);
+      expect(await visible(p, "#sheet")).toBe(false);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the island is black in both appearances; red is the dot only and green the check only",
+    async () => {
+      const p = v.page;
+      /** Every painted colour on the page that is clearly red or clearly green, by element id. */
+      const hues = () =>
+        p.evaluate(() => {
+          const out: { red: string[]; green: string[] } = { red: [], green: [] };
+          const rgb = (c: string) => c.match(/[\d.]+/g)?.map(Number) ?? [];
+          const who = (e: Element) => e.id || e.closest("[id]")?.id || e.tagName;
+          for (const e of document.querySelectorAll("#pill *")) {
+            if (!e.checkVisibility()) continue;
+            const cs = getComputedStyle(e);
+            for (const c of [cs.backgroundColor, cs.color, cs.fill, cs.stroke]) {
+              const [r = 0, g = 0, b = 0, a = 1] = rgb(c);
+              if (a === 0) continue;
+              if (r > 180 && g < 120 && b < 120) out.red.push(who(e));
+              if (g > 150 && r < 120 && b < 140) out.green.push(who(e));
+            }
+          }
+          return { red: [...new Set(out.red)], green: [...new Set(out.green)] };
+        });
+      const island = () => p.$eval("#island", (e) => getComputedStyle(e).backgroundColor);
+      const sheet = () => p.$eval("#sheet", (e) => getComputedStyle(e).backgroundColor);
+      const sheets: string[] = [];
+      for (const scheme of ["light", "dark"] as const) {
+        await p.emulateMedia({ colorScheme: scheme });
+        await state({ state: "listening", since: await now(), keys: [], hotkey: "Right ⌘" });
+        await v.send("level", { db: -10 });
+        expect(await island()).toBe("rgb(0, 0, 0)");
+        expect(await hues()).toEqual({ red: ["rec"], green: [] });
+        await state({ state: "done", how: "inserted" });
+        expect(await island()).toBe("rgb(0, 0, 0)");
+        expect((await hues()).red).toEqual([]);
+        expect((await hues()).green.length).toBeGreaterThan(0);
+        expect((await hues()).green.every((id) => id === "check")).toBe(true);
+        await state({ state: "error", message: "nothing heard", actions: ["retry"] });
+        sheets.push(await sheet());
+      }
+      // Positive control for the appearance: what hangs under the island does switch material.
+      expect(sheets[0]).not.toBe(sheets[1]);
+      await p.emulateMedia({ colorScheme: null });
+      await state({ state: "hidden" });
     },
     UI_TIMEOUT,
   );
@@ -198,7 +292,7 @@ describe("DC-O1: the pill", () => {
   );
 
   test(
-    "[DC-O2] the preview shows the words while listening, only the tail when long, and never after",
+    "[DC-O2] the preview ticks the words in one line while listening, only the tail when long, and never after",
     async () => {
       const p = v.page;
       const shown = () => text(p, "#preview");
@@ -224,12 +318,18 @@ describe("DC-O1: the pill", () => {
       expect(tail.startsWith("…word")).toBe(true);
       expect(tail.endsWith("word39")).toBe(true);
       expect(tail.length).toBeLessThanOrEqual(PREVIEW_CHARS + 1);
-      // The tail fits two lines of the pill.
-      const lines = await p.$eval(
-        "#preview",
-        (e) => e.getBoundingClientRect().height / Number.parseFloat(getComputedStyle(e).lineHeight),
-      );
-      expect(Math.round(lines)).toBeLessThanOrEqual(2);
+      // One line, the newest word at the right edge of the ticker.
+      const box = await p.$eval("#preview", (e) => {
+        const r = e.getBoundingClientRect();
+        const w = (e.firstElementChild as HTMLElement).getBoundingClientRect();
+        return {
+          lines: r.height / Number.parseFloat(getComputedStyle(e).lineHeight),
+          right: r.right,
+          wordsRight: w.right,
+        };
+      });
+      expect(Math.round(box.lines)).toBe(1);
+      expect(Math.abs(box.right - box.wordsRight)).toBeLessThan(1);
 
       // Listening ends: the words go, and a partial arriving late is dropped.
       await state({ state: "transcribing", since });
@@ -241,6 +341,25 @@ describe("DC-O1: the pill", () => {
       await state({ state: "listening", since: since + 5000, keys: [], hotkey: "Right ⌘" });
       expect(await shown()).toBe("");
       await state({ state: "hidden" });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a press on Stop or Cancel is a press, not a drag of the island",
+    async () => {
+      const p = v.page;
+      expect((await p.$$(".electrobun-webkit-app-region-drag")).length).toBeGreaterThan(0);
+      const moves = await p.$$eval("button", (els) =>
+        els
+          .filter(
+            (e) =>
+              e.closest(".electrobun-webkit-app-region-drag") &&
+              !e.closest(".electrobun-webkit-app-region-no-drag"),
+          )
+          .map((e) => e.id),
+      );
+      expect(moves).toEqual([]);
     },
     UI_TIMEOUT,
   );
@@ -279,21 +398,29 @@ describe("DC-L4: the learn chip", () => {
     async () => {
       const p = v.page;
       await v.send("chip", one("d1"));
-      expect(await text(p, "#chip .chip-text")).toBe(
-        'Learn "Kubernetes" (heard "cooper netties")?',
-      );
+      expect(await text(p, "#chip .chip-q")).toBe('Learn "Kubernetes"?');
+      expect(await text(p, "#chip .chip-w")).toBe("You changed cooper netties");
+      expect(await text(p, "#chip .chip-w s")).toBe("cooper netties");
+      // With no state showing, the chip hangs under a neutral island.
+      expect(await visible(p, "#pill")).toBe(true);
+      expect(await p.getAttribute("#pill", "data-state")).toBe("chip");
+      expect(await text(p, "#word")).toBe("Vocabulary");
+      // It asks with Learn and Not a word, nothing else.
+      expect(await ids(p, "#chip button")).toEqual(["chip-learn", "chip-reject"]);
       v.requests.length = 0;
       await p.click("#chip-learn");
       expect(v.requests).toEqual([
         { name: "chip", params: { id: "d1", action: "learn", terms: ["Kubernetes"] } },
       ]);
-      expect(await text(p, "#chip .chip-text")).toBe('Learned "Kubernetes"');
+      expect(await text(p, "#chip .chip-q")).toBe('Learned "Kubernetes"');
       await p.click("#chip-undo");
       expect(v.requests[1]).toEqual({
         name: "chip",
         params: { id: "d1", action: "undo", terms: ["Kubernetes"] },
       });
       expect(await visible(p, "#chip")).toBe(false);
+      // The island goes with the chip when nothing else shows.
+      expect(await visible(p, "#pill")).toBe(false);
 
       // Left alone, the Undo line goes after 6 s and answers nothing more.
       await v.send("chip", one("d2"));
@@ -306,7 +433,7 @@ describe("DC-L4: the learn chip", () => {
   );
 
   test(
-    "Not a word rejects; ignored for 8 s answers ignore; close answers ignore",
+    "Not a word rejects; ignored for 8 s answers ignore; a chip under a listening island keeps it",
     async () => {
       const p = v.page;
       v.requests.length = 0;
@@ -318,13 +445,22 @@ describe("DC-L4: the learn chip", () => {
       expect(await visible(p, "#chip")).toBe(true);
       await p.clock.runFor(600);
       expect(await visible(p, "#chip")).toBe(false);
-      await v.send("chip", one("d5"));
-      await p.click("#chip-close");
       expect(v.requests.map((r) => r.params)).toEqual([
         { id: "d3", action: "reject", terms: ["Kubernetes"] },
         { id: "d4", action: "ignore" },
-        { id: "d5", action: "ignore" },
       ]);
+      // A chip while listening hangs under the listening island, not a neutral one.
+      await v.send("state", {
+        state: "listening",
+        since: await p.evaluate(() => Date.now()),
+        keys: [],
+        hotkey: "Right ⌘",
+      });
+      await v.send("chip", one("d5"));
+      expect(await p.getAttribute("#pill", "data-state")).toBe("listening");
+      await p.click("#chip-reject");
+      await v.send("state", { state: "hidden" });
+      expect(await visible(p, "#pill")).toBe(false);
     },
     UI_TIMEOUT,
   );
@@ -344,7 +480,7 @@ describe("DC-L4: the learn chip", () => {
       });
       expect(await p.$$eval("#chip input[type=checkbox]", (b) => b.length)).toBe(2);
       await v.send("chip", one("d7"));
-      expect(await text(p, "#chip .chip-text")).toContain("Learn these words?");
+      expect(await text(p, "#chip .chip-q")).toBe("Learn these words?");
       // With nothing ticked there is nothing to learn or reject.
       await p.uncheck('#chip input[data-term="Kubernetes"]');
       await p.uncheck('#chip input[data-term="Vercel"]');
@@ -358,7 +494,7 @@ describe("DC-L4: the learn chip", () => {
       await p.click("#chip-undo");
 
       await v.send("chip", { ...one("d8"), mode: "learned" });
-      expect(await text(p, "#chip .chip-text")).toBe('Learned "Kubernetes"');
+      expect(await text(p, "#chip .chip-q")).toBe('Learned "Kubernetes"');
       expect(await p.$("#chip-learn")).toBeNull();
       await p.click("#chip-undo");
       expect(v.requests.at(-1)?.params).toEqual({
@@ -368,6 +504,47 @@ describe("DC-L4: the learn chip", () => {
       });
       // The second chip (d7) never showed and was never answered.
       expect(v.requests.some((r) => (r.params as { id: string }).id === "d7")).toBe(false);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a chip of long words stays inside the pill's window, its buttons whole",
+    async () => {
+      const p = v.page;
+      await p.setViewportSize(PILL_SIZE);
+      try {
+        await v.send("chip", {
+          id: "d9",
+          mode: "ask",
+          candidates: [
+            { term: "Kubernetes Engine Autopilot", heard: "cooper netties engine auto pilot" },
+            { term: "Vercel", heard: "versal" },
+            { term: "Grafana Loki", heard: "grafanna low key" },
+            { term: "Tailscale", heard: "tail scale" },
+          ],
+        });
+        const boxes = await p.$$eval("#chip, #chip button", (els) =>
+          els.map((e) => {
+            const r = e.getBoundingClientRect();
+            return { id: e.id, left: r.left, right: r.right, bottom: r.bottom };
+          }),
+        );
+        const size = await p.evaluate(() => ({ w: innerWidth, h: innerHeight }));
+        expect(boxes.map((b) => b.id)).toEqual(["chip", "chip-learn", "chip-reject"]);
+        for (const b of boxes) {
+          expect(b.left).toBeGreaterThanOrEqual(0);
+          expect(b.right).toBeLessThanOrEqual(size.w);
+          expect(b.bottom).toBeLessThanOrEqual(size.h);
+        }
+        // The cut word keeps its whole in the title.
+        expect(await p.getAttribute("#chip .chip-label", "title")).toBe(
+          "Kubernetes Engine Autopilot (heard cooper netties engine auto pilot)",
+        );
+        await p.click("#chip-reject");
+      } finally {
+        await p.setViewportSize({ width: 1280, height: 720 });
+      }
     },
     UI_TIMEOUT,
   );
@@ -394,6 +571,9 @@ describe("DC-S1: the draft box", () => {
     to: "Slack",
     engine: "fast (Parakeet)",
     ms: 300,
+    local: true,
+    seconds: 14,
+    language: "es",
     engines: ["best"],
     focus: true,
     platform: "linux",
@@ -410,9 +590,15 @@ describe("DC-S1: the draft box", () => {
       await v.send("open", draft());
       expect(await visible(p, "#draft")).toBe(true);
       expect(await value(p)).toBe(draft().text);
-      expect(await text(p, "#draft-to")).toBe("to: Slack");
-      expect(await text(p, "#draft-engine")).toBe("fast (Parakeet) 0.3 s");
-      expect(await text(p, "#draft-keys")).toContain("Ctrl+Enter: insert and send");
+      // The island says Draft and the audio's length; the sheet where it goes and how it was heard.
+      expect(await text(p, "#draft-island")).toBe("Draft· 0:14");
+      expect(await text(p, "#draft-to")).toBe("Goes toSSlack");
+      expect(await text(p, "#draft-meta")).toBe(
+        "fast (Parakeet) on this computertook 0.3 s0:14 of audioES",
+      );
+      expect(await text(p, "#draft-lang")).toBe("ES");
+      expect(await text(p, "#draft-send-key")).toBe("Ctrl ↵");
+      expect(await text(p, "#draft-retry")).toBe("↻ Retry with best");
       expect(await active(p)).toBe("draft-text");
 
       v.requests.length = 0;
@@ -435,7 +621,8 @@ describe("DC-S1: the draft box", () => {
       });
       // On macOS the send chord is Cmd+Enter, and Ctrl+Enter is not it.
       await v.send("open", draft({ id: "d3", platform: "darwin" }));
-      expect(await text(p, "#draft-keys")).toContain("Cmd+Enter: insert and send");
+      expect(await text(p, "#draft-send-key")).toBe("⌘↵");
+      expect(await text(p, "#draft-meta")).toContain("on this Mac");
       await p.keyboard.press("Control+Enter");
       expect(v.requests.length).toBe(2);
       await p.keyboard.press("Meta+Enter");
@@ -445,16 +632,44 @@ describe("DC-S1: the draft box", () => {
       await p.keyboard.press("Escape");
       expect(v.requests[3]).toEqual({ name: "discard", params: { id: "d4" } });
 
-      await v.send("open", draft({ id: "d5" }));
+      await v.send("open", draft({ id: "d5", engines: ["best", "remote"] }));
       await p.click("#draft-copy");
-      await p.selectOption("#draft-retry-engine", "best");
+      await p.selectOption("#draft-retry-engine", "remote");
+      expect(await text(p, "#draft-retry")).toBe("↻ Retry with remote");
       await p.click("#draft-retry");
       await p.click("#draft-close");
+      // The buttons do what the keys do.
+      await v.send("open", draft({ id: "d5b" }));
+      await p.click("#draft-insert");
+      await v.send("open", draft({ id: "d5c" }));
+      await p.click("#draft-send");
       expect(v.requests.slice(4)).toEqual([
         { name: "copy", params: { id: "d5", text: draft().text } },
-        { name: "retry", params: { id: "d5", engine: "best" } },
+        { name: "retry", params: { id: "d5", engine: "remote" } },
         { name: "discard", params: { id: "d5" } },
+        { name: "insert", params: { id: "d5b", text: draft().text, send: false } },
+        { name: "insert", params: { id: "d5c", text: draft().text, send: true } },
       ]);
+      // A remote reading says nothing about this machine; nothing known is left out.
+      await v.send(
+        "open",
+        draft({
+          id: "d5d",
+          engine: "remote",
+          local: false,
+          seconds: undefined,
+          language: undefined,
+          to: undefined,
+        }),
+      );
+      expect(await text(p, "#draft-meta")).toBe("remotetook 0.3 s");
+      expect(await text(p, "#draft-length")).toBe("");
+      expect(await visible(p, "#draft-to")).toBe(false);
+      // With one engine to retry with there is nothing to pick.
+      await v.send("open", draft({ id: "d5e" }));
+      expect(await visible(p, "#draft-retry-pick")).toBe(false);
+      await v.send("open", draft({ id: "d5f", engines: [] }));
+      expect(await visible(p, "#draft-retry-group")).toBe(false);
     },
     UI_TIMEOUT,
   );
@@ -545,6 +760,50 @@ describe("DC-S1: the draft box", () => {
       await v.send("open", draft({ id: "d12" }));
       expect(await visible(p, "#chip")).toBe(false);
       expect(v.requests).toEqual([{ name: "chip", params: { id: "d11", action: "ignore" } }]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with the other readings and a chip of three, the buttons stay inside the window",
+    async () => {
+      const p = v.page;
+      await p.setViewportSize(DRAFT_SIZE);
+      try {
+        await v.send("open", draft({ id: "d13", engines: ["best", "remote"] }));
+        const at = draft().text.indexOf("cooper") + 2;
+        await p.$eval(
+          "#draft-text",
+          (t, i) => (t as HTMLTextAreaElement).setSelectionRange(i, i),
+          at,
+        );
+        await p.dispatchEvent("#draft-text", "click");
+        await v.send("chip", {
+          id: "d13",
+          mode: "ask",
+          candidates: [
+            { term: "Kubernetes", heard: "cooper netties" },
+            { term: "Vercel", heard: "versal" },
+            { term: "Grafana", heard: "grafanna" },
+          ],
+        });
+        expect(await visible(p, "#draft-alts")).toBe(true);
+        expect(await visible(p, "#chip")).toBe(true);
+        const h = await p.evaluate(() => innerHeight);
+        for (const sel of ["#draft-foot", "#draft-send", "#draft-close"]) {
+          const box = await p.$eval(sel, (e) => e.getBoundingClientRect().bottom);
+          expect(box).toBeLessThanOrEqual(h);
+        }
+        // At the window's own size all of it shows, with nothing scrolled away.
+        expect(await p.$eval("#draft-body", (e) => e.scrollHeight <= e.clientHeight)).toBe(true);
+        // Past what the window holds, the middle scrolls and the buttons still stay.
+        await p.setViewportSize({ width: DRAFT_SIZE.width, height: 360 });
+        const foot = await p.$eval("#draft-foot", (e) => e.getBoundingClientRect().bottom);
+        expect(foot).toBeLessThanOrEqual(360);
+        await p.keyboard.press("Escape");
+      } finally {
+        await p.setViewportSize({ width: 1280, height: 720 });
+      }
     },
     UI_TIMEOUT,
   );

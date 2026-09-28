@@ -104,9 +104,10 @@ describe("DC-D2: the pill shows words only under its own rule", () => {
     "preview off: no words in the page's DOM at any point",
     async () => {
       const r = await run({ preview: false, hidden: true });
-      expect(r.whileListening).toContain("listening");
+      // The listening island drew (its key hints are there), and without the words.
+      expect(r.whileListening).toContain("cancels");
       expect(r.whileListening).not.toContain("swordfish");
-      expect(r.after).toContain("inserted");
+      expect(r.after).toContain("Inserted");
       expect(r.after).not.toContain("swordfish");
     },
     UI_TIMEOUT,
