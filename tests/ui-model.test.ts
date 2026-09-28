@@ -10,6 +10,7 @@ import { fold } from "../src/core/log/fold.ts";
 import {
   banner,
   type CallSummary,
+  callHeadMeta,
   callMeta,
   dayLabel,
   finalNote,
@@ -25,14 +26,17 @@ import {
   RATES,
   REOPEN_AFTER_MS,
   rateLabel,
+  recordKey,
   resolveTimeCitation,
   restoreRate,
   seekBy,
   speakerChip,
+  speakerTotals,
   splitCitations,
   stateLabel,
   stepRate,
   suggestReopen,
+  talkTime,
   YOU_HUE,
 } from "../src/ui/model.ts";
 import type { ModelRow } from "../src/ui/models-rows.ts";
@@ -697,5 +701,62 @@ describe("the calls list (WINDOW section 13)", () => {
     );
     expect(callMeta({ ...c, endedAt: null }, T0 + H, TZ, true)).toBe("Today, 15:36 · live");
     expect(callMeta({ ...c, state: "failed" }, T0 + H, TZ, false)).toBe("Today, 15:36 · failed");
+  });
+});
+
+describe("the composer row and the call header (WINDOW section 3.1)", () => {
+  const H = 3600_000;
+
+  test("the line under the title: day and start, length, workspace, template, then what the state adds", () => {
+    const base = { createdAt: T0, tz: TZ, now: T0 + H, workspace: "work", note: "" };
+    expect(callHeadMeta({ ...base, seconds: 38 * 60 + 12, template: "standup" })).toBe(
+      "Today, 15:36 · 38 min 12 s · work · Template: standup",
+    );
+    // No template is the automatic one; no length yet (live) leaves the length out.
+    expect(
+      callHeadMeta({ ...base, seconds: null, note: "recording for 2 s · last line 1 s ago" }),
+    ).toBe("Today, 15:36 · work · Template: automatic · recording for 2 s · last line 1 s ago");
+    // A saved call with no audio has no length to show, and a failure is its own item.
+    expect(callHeadMeta({ ...base, seconds: 0, note: "open: permission denied" })).toBe(
+      "Today, 15:36 · work · Template: automatic · open: permission denied",
+    );
+  });
+
+  test("speaker chips: each voice's talk time, the most first, ties in order of speech", () => {
+    const line = (spk: string, speaker: string, w0: number, w1: number) => ({
+      spk,
+      speaker,
+      w0,
+      w1,
+    });
+    expect(
+      speakerTotals([
+        line("you", "Ana", 0, 4000),
+        line("c1", "Ben", 4000, 14_000),
+        line("c2", "Speaker 2", 14_000, 18_000),
+        line("you", "Ana", 18_000, 20_000),
+      ]),
+    ).toEqual([
+      { spk: "c1", label: "Ben", seconds: 10 },
+      { spk: "you", label: "Ana", seconds: 6 },
+      { spk: "c2", label: "Speaker 2", seconds: 4 },
+    ]);
+    expect(speakerTotals([])).toEqual([]);
+  });
+
+  test("talk time: seconds under a minute, whole minutes after, hours past an hour", () => {
+    expect(talkTime(0.2)).toBe("1 s");
+    expect(talkTime(40)).toBe("40 s");
+    expect(talkTime(59.6)).toBe("1 min");
+    expect(talkTime(14 * 60 + 20)).toBe("14 min");
+    expect(talkTime(62 * 60)).toBe("1 h 2 min");
+    expect(talkTime(60 * 60)).toBe("1 h");
+  });
+
+  test("the key beside Record is the registered global hotkey, as keycaps; none without a shell", () => {
+    expect(recordKey({ hotkey: "Alt+Command+R", platform: "darwin" })).toBe("⌥⌘R");
+    expect(recordKey({ hotkey: "Control+Shift+F9", platform: "win32" })).toBe("Ctrl+Shift+F9");
+    expect(recordKey({ hotkey: null, platform: "darwin" })).toBe("");
+    expect(recordKey(undefined)).toBe("");
   });
 });

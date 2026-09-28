@@ -598,6 +598,11 @@ export class Shell implements WindowShell {
     private readonly o: ShellOptions,
   ) {}
 
+  /** The global hotkey this shell holds, or null when another app took it first. */
+  registeredHotkey(): string | null {
+    return this.hotkey;
+  }
+
   /** The tray, the hotkey, the login item and the quit path. The window opens on `show`. */
   async start(): Promise<void> {
     const s = this.app.config().settings;

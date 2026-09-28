@@ -6,7 +6,7 @@ The window is one of two equal ways to drive akou. The other is the harness, thr
 
 ## 0. The simple version
 
-- **One window, three columns.** Calls on the left, the transcript in the middle, a side pane on the right with three tabs: Notes, Ask, Enhanced. A header on top holds the state, the controls and the pills. A player bar sits under the side pane.
+- **One window, three columns.** Calls on the left, the transcript in the middle, a side pane on the right with three tabs: Notes, Ask, Enhanced. A composer row on top holds the state, the new call's fields, the Mic and Call meters and Record; the open call's header sits over the transcript. A player bar sits under the side pane.
 - **Asking is one keystroke away.** `Mod+J` focuses the ask box, and the command palette turns any text it cannot match into a question. The small floating indicator that stays up while the meeting app is in front belongs to [DESKTOP.md](DESKTOP.md) (DK-F1). It carries no transcript text, so it is safe during a screen share, and clicking it brings this window forward.
 - **One action registry.** Every action (Record, Mute, Find, Copy transcript, Ask "Catch me up", Rename speaker) is one entry with an id, a label, keys and a condition. The buttons, the keyboard map, the command palette, the `?` sheet, the application menu and the tooltips all read that registry. Adding an action adds it everywhere.
 - **One message catalog per language.** English and Spanish first. Every string the window, the tray and the notifications show comes from it.
@@ -33,13 +33,16 @@ Columns:
 ## 1. Information architecture
 
 ```
-┌ header ─────────────────────────────────────────────────────────────────────────────┐
-│ ● Recording  Weekly sync  · 27 min      [15:36] [work] [standup] [Claude Code] [models]│
-│ [workspace ▾] [title……………] [template ▾]  ● Record | Mute  Pause  ■ Stop  Share  ⚙      │
-│ mic ▮▮▮▮▯▯  call ▮▮▮▮▮▯                                                               │
-├ banner (only when something needs attention) ─────────────────────────────────────────┤
-├──────────────┬──────────────────────────────────────────┬─────────────────────────────┤
-│ Calls        │ transcript                               │ [Notes] [Ask] [Enhanced]    │
+┌──────────────┬ composer row ────────────────────────────┬─────────────────────────────┐
+│ akou         │ ● SAVED [work│title……] [Template ▾]      │ [Notes] [Ask] [Enhanced]    │
+│              │   Mic ▬▬  Call ▬▬   (●) Record ⌥⌘R       │                             │
+│              ├ banner, when something needs attention ──┤                             │
+│              ├ call header ─────────────────────────────┤                             │
+│              │ Weekly sync       [review] Restart Share │                             │
+│              │ Wed, 15:36 · 27 min · work · Template: … │                             │
+│              │ (● Ben 14 min) (● You 9 min)             │                             │
+│              ├──────────────────────────────────────────┤                             │
+│ Calls        │ transcript                               │                             │
 │ ▾ PRODUCT  2 │ 15:41  Ben    we should move the build   │                             │
 │   Weekly…  ● │ 15:41  You    to the new box? which one  │  side pane                  │
 │   1:1 Ana    │ …                                        │                             │
@@ -50,7 +53,8 @@ Columns:
 
 | Region | Holds | Reads from |
 |---|---|---|
-| Header | state label and dot, title, elapsed time, pills (clock, workspace, template, provider, models, words to review, languages, shared), controls, level meters | `status` push, the fold |
+| Composer row | the state word and dot; idle: the workspace chip inside the title field, the template, the Mic and Call meters with their health dots, and the round red Record with the global hotkey; recording: the elapsed time, the round Stop, and Mute and Pause as icon buttons | `status` push, the fold |
+| Call header | the open call's title; its day and start, length, workspace, template and what the state adds; the speakers with their talk time; the words to review, languages and shared pills; Restart, Share, Copy transcript | the fold |
 | Banner | one message at a time, highest severity first, with at most one action button | `health`, provider, models |
 | Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
 | Transcript | committed lines, the provisional row, the find bar when open | the fold |
@@ -86,7 +90,7 @@ The header state is one of the rows below. The state machine lives in the main p
 | Another call recording | Another call is recording: title | red | Open that call, Stop the other call | either |
 | App unreachable (browser page, share viewer) | Reconnecting… / Offline | grey | none | reconnects from last `seq` |
 
-Overlays that stack on any state: models missing or downloading (section 10), provider unavailable (the pill turns amber and the ask pane says why), shared live (red pill with viewer count).
+Overlays that stack on any state: models missing or downloading (section 10), provider unavailable (the ask pane says why, and Settings shows the agent's state), shared live (red pill with viewer count).
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -103,7 +107,7 @@ Moved: W2.6 (confirm Quit during a call) is DESKTOP DK-M3.
 
 ### 3.1 Starting and controlling a call
 
-The header controls are the ones hark-viewer had (DESIGN 7). The additions are the input choice, start-muted, words for the call, and marking a moment.
+The controls are the ones hark-viewer had (DESIGN 7), laid out as the composer row: the status word, the workspace as a chip inside the title field, the template, two thin meters labelled Mic and Call, and Record as a round red disc with its word and the global hotkey in dim text, never an accent fill. While a call records, the same spot shows a red dot with the elapsed time, Stop in the same round form, and Mute and Pause as quiet icon buttons. The open call's title, its line of facts and its speakers with their talk time are the call header over the transcript. No debug chips: the clock's zone and the call's decode list are the tooltip of that line, and the agent's state, the speech engine's state and the version are read-only rows in Settings. The additions still to build are the input choice, start-muted, words for the call, and marking a moment.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -276,7 +280,7 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W9.1 | "Fix this word", "Words to review" pill and dialog, raw text on hover, decode list under the models pill | done | DESIGN 7 | Existing tests | has |
+| W9.1 | "Fix this word", "Words to review" pill and dialog, raw text on hover, decode list as the tooltip of the call header's line | done | DESIGN 7 | Existing tests | has |
 | W9.2 | The vocabulary list is editable in the Words dialog: add a term (with heard forms), remove, confirm, change scope | P1 | Audit: read-only panel; Wispr, VoiceInk, Descript | Adding "Vercel" heard "versal" writes the workspace file through the API; the dialog and `akou vocab list` agree | partial: the Dictionary dialog (DICTATION DC-U5) adds, removes and changes scope in the global file, and Settings opens it instead of its old read-only list; confirming and the workspace file are not there yet |
 | W9.3 | An inline edit that changes one word becomes a vocabulary proposal, not an automatic add | P2 | VoiceInk AutoLearn, Descript, Wispr | Editing "versal" to "Vercel" on a line adds a pending proposal to "Words to review"; nothing is written to the vocabulary until Approve | missing |
 | W9.4 | Rejected proposals are never proposed again, and the dialog says so | done | DESIGN, `vocab/pass.ts` | Existing tests | has |
@@ -291,7 +295,7 @@ While the speech models are missing, downloading or failed, and no call is recor
 2. **Microphone and system audio** (Later): "macOS asks for both the first time you press Record."
 3. **Your agent** (Optional): one line, and a quiet button that opens Settings on the provider field.
 
-The footer says "You can change any of this later in Settings." The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen. A call picked in the sidebar also lifts the welcome, so a call recorded without models can be read once it is stopped; until the user picks it, the welcome shows and that call is only the marked row in the sidebar, while the header still shows its state and its Restart, Share and Copy transcript. "Setup 1 of 3" brings the welcome back with the focus on the download.
+The footer says "You can change any of this later in Settings." The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen. A call picked in the sidebar also lifts the welcome, so a call recorded without models can be read once it is stopped; until the user picks it, the welcome shows, that call is only the marked row in the sidebar, and the composer row shows its state word. "Setup 1 of 3" brings the welcome back with the focus on the download.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|

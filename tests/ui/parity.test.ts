@@ -48,7 +48,7 @@ async function events(rig: UiRig, id: string): Promise<LogEvent[]> {
 
 describe("DESIGN 7 parity with hark-viewer", () => {
   test(
-    "Header: status dot, state label, title, meta, controls, plus local clock, workspace, template, provider and share pills",
+    "Header: status dot, state label, title, meta, controls, as the composer row and the call header; provider and engine under Settings",
     async () => {
       let id = "";
       await withRig(
@@ -65,15 +65,63 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           await page.waitForSelector("#lines .row >> nth=3");
           expect(await page.locator("#dot").count()).toBe(1);
           expect(await text(page, "#state")).toBe("saved");
-          expect(await text(page, "#title")).toBe("work · Weekly sync");
-          expect(await text(page, "#meta")).toBe("4 lines");
-          expect(await text(page, "#pill-clock")).toMatch(/^\d{2}:\d{2}:\d{2}$/);
-          expect(await page.locator("#pill-clock").getAttribute("title")).toContain(
-            "Times are local",
+          // The composer row: the workspace chip inside the title field, the template, the Mic
+          // and Call meters with their health dots, and Record, all on screen at once.
+          for (const c of [
+            "#composer .title-field #workspace",
+            "#composer .title-field #newtitle",
+            "#composer #template",
+            "#composer #meter-mic",
+            "#composer #meter-call",
+            "#composer #health-mic",
+            "#composer #health-call",
+            "#composer #record",
+          ]) {
+            expect(await page.locator(c).isVisible()).toBe(true);
+          }
+          expect(await text(page, '#meters label[for="meter-mic"]')).toBe("Mic");
+          expect(await text(page, '#meters label[for="meter-call"]')).toBe("Call");
+          // Record is the round red disc with its word, never an accent-filled pill.
+          expect(await text(page, "#record")).toBe("Record");
+          const look = await page.evaluate(() => {
+            const r = document.getElementById("record") as HTMLElement;
+            const disc = r.querySelector(".disc i") as HTMLElement;
+            const box = r.querySelector(".disc") as HTMLElement;
+            const probe = document.createElement("i");
+            probe.style.color = "var(--rec)";
+            document.body.append(probe);
+            const rec = getComputedStyle(probe).color;
+            probe.remove();
+            return {
+              go: r.classList.contains("go"),
+              fill: getComputedStyle(r).backgroundColor,
+              disc: getComputedStyle(disc).backgroundColor,
+              rec,
+              round: getComputedStyle(box).borderRadius,
+              size: Math.round(box.getBoundingClientRect().width),
+            };
+          });
+          expect(look.go).toBe(false);
+          expect(look.fill).toBe("rgba(0, 0, 0, 0)");
+          expect(look.disc).toBe(look.rec);
+          expect(look.round).toBe("50%");
+          expect(look.size).toBe(34);
+          // No debug chips: no clock, workspace, template, provider or speech pill anywhere.
+          expect(
+            await page
+              .locator("#pill-clock, #pill-ws, #pill-template, #pill-provider, #pill-models")
+              .count(),
+          ).toBe(0);
+          expect(await page.locator("#composer .pill, #composer #title").count()).toBe(0);
+          // The call header over the transcript: the title, then day and start, length,
+          // workspace, template and what the state adds; the speakers with their talk time.
+          expect(await text(page, "#call-head #title")).toBe("Weekly sync");
+          expect(await text(page, "#call-head #meta")).toMatch(
+            /^[^·]+, 15:36 · 12 s · work · Template: standup · 4 lines$/,
           );
-          expect(await text(page, "#pill-ws")).toBe("workspace: work");
-          expect(await text(page, "#pill-template")).toBe("template: standup");
-          expect(await text(page, "#pill-provider")).toBe("provider: none (unavailable)");
+          expect(await page.locator("#meta").getAttribute("title")).toContain("Times are local");
+          expect(await page.locator("#people li").count()).toBe(3);
+          expect(await text(page, "#people li >> nth=0")).toMatch(/^Speaker 1\d+ s$/);
           for (const c of ["#record", "#restart", "#settings-open", "#share-start"]) {
             expect(await page.locator(c).isVisible()).toBe(true);
           }
@@ -82,6 +130,13 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           expect((await rig.api("POST", "/share", { call: id })).status).toBe(201);
           await page.waitForSelector("#pill-share:not([hidden])");
           expect(await text(page, "#share-text")).toBe("Shared live · 0 viewers");
+          // What the provider and speech pills said is in Settings, read only, with the version.
+          await page.click("#settings-open");
+          await page.waitForSelector("#settings-provider-state");
+          expect(await text(page, "#settings-provider-state .v")).toBe("none (unavailable)");
+          expect(await text(page, "#settings-engine-state .v")).toBe("ready");
+          const version = (await rig.api("GET", "/status")).body.app.version as string;
+          expect(await text(page, "#settings-version")).toBe(`akou ${version}. `);
         },
       );
     },
@@ -136,7 +191,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           // A live call elsewhere: the call on screen says so, and Stop names the other call.
           const live = await rig.startCall({ title: "Live one" });
           await until(async () => (await state()) === "another call is recording", 5000, "other");
-          expect(await text(page, "#stop")).toBe("■ Stop the other call");
+          expect(await text(page, "#stop")).toBe("Stop the other call");
           // Open the live call: recording, then not capturing once no audio arrives for 5 s.
           await page.click(`#calls li[data-id="${live}"] button`);
           await until(async () => (await state()) === "rec", 5000, "rec");
@@ -225,13 +280,23 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           await page.click("#record");
           await until(async () => (await state()) === "rec", 8000, "recording");
           const id = (await rig.api("GET", "/status")).body.live.call as string;
+          // While it records, Record's spot holds the elapsed time and the round Stop; Mute and
+          // Pause are quiet icon buttons whose label is their name and their tooltip.
+          expect(await page.locator("#record").isVisible()).toBe(false);
+          expect(await page.locator("#elapsed").isVisible()).toBe(true);
+          expect(await text(page, "#elapsed")).toMatch(/^\d+ (s|min)/);
+          expect(await page.locator("#stop .disc").isVisible()).toBe(true);
+          expect(await page.locator("#newtitle").isVisible()).toBe(false);
           await page.click("#mute");
           await until(async () => (await text(page, "#mute")) === "Unmute mic", 5000, "muted");
+          expect(await page.getAttribute("#mute", "aria-pressed")).toBe("true");
+          expect(await page.getAttribute("#mute", "title")).toBe("Unmute mic");
           expect((await events(rig, id)).some((e) => e.type === "mute")).toBe(true);
           await page.click("#mute");
           await until(async () => (await text(page, "#mute")) === "Mute mic", 5000, "unmuted");
           await page.click("#pause");
           await until(async () => (await text(page, "#pause")) === "Resume", 5000, "paused");
+          expect(await page.getAttribute("#pause", "title")).toBe("Resume");
           await page.click("#pause");
           await until(async () => (await state()) === "rec", 5000, "resumed");
           await page.click("#stop");
@@ -276,7 +341,8 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           "Kickoff",
           "standup",
         ]);
-        expect(await text(page, "#title")).toBe("acme · Kickoff");
+        expect(await text(page, "#title")).toBe("Kickoff");
+        expect(await text(page, "#meta")).toContain(" · acme · Template: standup");
         await page.click("#stop");
       });
     },
@@ -596,7 +662,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
             5000,
             "switched",
           );
-          expect(await text(page, "#title")).toBe("work · Second call");
+          expect(await text(page, "#title")).toBe("Second call");
           expect(await page.evaluate(() => (window as unknown as { marker: number }).marker)).toBe(
             42,
           );

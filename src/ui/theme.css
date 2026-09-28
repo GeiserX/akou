@@ -227,17 +227,340 @@ button.go {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
 }
-#newtitle {
-  width: 14em;
-}
-#workspace {
-  width: 9em;
-}
 
 /* Idle controls show when nothing on screen is recording; busy ones while something is. */
 body.busy .idle,
 body:not(.busy) .busy {
   display: none;
+}
+/* The composer's own display rules outrank the pair above: restate it for the row. */
+body.busy #composer .idle,
+body:not(.busy) #composer .busy {
+  display: none;
+}
+/* A control's name for a screen reader, not drawn: the icon says it on screen. */
+.vh {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+/* The composer row (WINDOW section 3.1): the status word, the workspace chip inside the title
+   field, the template, two thin meters and the round red Record. While a call records, the same
+   spot holds the elapsed time, Stop in the same round form, and Mute and Pause as quiet icons.
+   Record is the one strong colour on the idle screen. */
+#composer {
+  flex-wrap: nowrap;
+  gap: 8px;
+  height: 56px;
+  min-height: 56px;
+  padding: 0 16px;
+}
+#composer #state {
+  font-size: 10px;
+}
+#composer #controls {
+  flex: 1;
+  min-width: 0;
+  flex-wrap: nowrap;
+  justify-content: flex-end;
+  margin-left: 8px;
+}
+#composer .ico {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+#composer .title-field {
+  flex: 1;
+  min-width: 8rem;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+#composer .title-field:focus-within {
+  border-color: var(--faint);
+}
+#workspace {
+  flex: none;
+  width: 7.5em;
+  height: 24px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--raised);
+  border: 1px solid var(--line2);
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 500;
+}
+#newtitle {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 6px;
+  border: 0;
+  background: transparent;
+  font-size: 13px;
+}
+#composer #template {
+  flex: none;
+  width: 11.5rem;
+  height: 32px;
+  padding: 0 8px;
+  font-size: 12px;
+  font-weight: 500;
+}
+#composer #meters {
+  flex: none;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 7rem;
+  padding: 0 8px;
+}
+#composer .meter {
+  display: flex;
+  gap: 6px;
+  font-size: 10px;
+  line-height: 1;
+  color: var(--faint);
+}
+#composer .meter label {
+  width: 2em;
+}
+#composer .meter meter {
+  flex: 1;
+  min-width: 0;
+  width: auto;
+  height: 3px;
+  appearance: none;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line2);
+}
+#composer .meter meter::-webkit-meter-bar {
+  height: 3px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line2);
+}
+#composer .meter meter::-webkit-meter-optimum-value {
+  border-radius: 2px;
+  background: var(--ok);
+}
+#composer .meter meter::-webkit-meter-suboptimum-value {
+  border-radius: 2px;
+  background: var(--warn);
+}
+#composer .meter meter::-webkit-meter-even-less-good-value {
+  border-radius: 2px;
+  background: var(--rec);
+}
+#composer .meter meter::-moz-meter-bar {
+  border-radius: 2px;
+  background: var(--ok);
+}
+#composer .health {
+  width: 6px;
+  height: 6px;
+  flex: none;
+}
+/* Record and Stop: a red disc with a thin darker ring and the word beside it, never a filled pill.
+   Stop is the same disc with a white square in it. */
+button.rec {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  margin-left: 4px;
+  padding: 0 4px 0 0;
+  border: 0;
+  border-radius: 17px;
+  background: none;
+  color: var(--fg);
+  font-weight: 400;
+  font-size: 13px;
+}
+button.rec .disc {
+  width: 34px;
+  height: 34px;
+  flex: none;
+  display: flex;
+  padding: 2px;
+  border-radius: 50%;
+  border: 2px solid #6b1d19;
+}
+button.rec .disc i {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  background: var(--rec);
+}
+button.rec:not(:disabled):hover .disc i {
+  filter: brightness(1.1);
+}
+button.rec.on .disc i::after {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: #fff;
+}
+button.rec kbd {
+  font:
+    12px -apple-system,
+    "SF Pro Text",
+    system-ui,
+    sans-serif;
+  color: var(--faint);
+}
+#elapsed {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+#elapsed i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--rec);
+}
+.recording #elapsed i {
+  animation: pulse 1.6s ease-in-out infinite;
+}
+.paused #elapsed i {
+  background: var(--warn);
+}
+button.icon {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+  border-color: var(--line2);
+  background: transparent;
+  color: var(--dim);
+}
+button.icon .ico-on,
+button.icon.on .ico-off {
+  display: none;
+}
+button.icon.on .ico-on {
+  display: block;
+}
+button.icon.on {
+  background: transparent;
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+/* The open call's header, over the transcript: its title, the line under it and who spoke for how
+   long. The words to review, the languages, the share and the call's own actions sit on the right. */
+#call-head {
+  padding: 20px 32px 14px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+  color: var(--dim);
+}
+#call-head .head-top {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+#call-head h1 {
+  flex: 1;
+  min-width: 0;
+  max-width: none;
+  margin: 0;
+  color: var(--fg);
+  font-size: 20px;
+  line-height: 28px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+#call-head .head-top > button {
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  background: transparent;
+  border-color: var(--line2);
+  color: var(--dim);
+}
+#call-head .head-top > button:hover {
+  color: var(--fg);
+}
+#call-head #meta {
+  margin-top: 4px;
+  font-size: 12px;
+  white-space: normal;
+}
+#people {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+#people li {
+  height: 24px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px 0 8px;
+  border-radius: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 12px;
+}
+#people i {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: hsl(var(--h) 85% 70%);
+}
+#people .len {
+  color: var(--faint);
+  font-size: 11px;
+}
+/* The side pane's top edge lines up with the composer row's. */
+#side > [role="tablist"] {
+  min-height: 56px;
+  align-items: center;
+}
+@media (prefers-color-scheme: light) {
+  button.rec .disc {
+    border-color: #f3b4ae;
+  }
+  #people i {
+    background: hsl(var(--h) 70% 36%);
+  }
 }
 
 #meters legend {
@@ -349,14 +672,15 @@ body:not(.busy) .busy {
   font-weight: 700;
 }
 
-/* The shell (WINDOW section 1): the sidebar runs the full height on the left; the header, the
-   notices and the columns stack on the right, each in its own row so a hidden one leaves none.
+/* The shell (WINDOW section 1): the sidebar runs the full height on the left and the side pane on
+   the right; between them the composer row, the notices, the call's header and the transcript
+   stack, each in its own row so a hidden one leaves none. #layout lends its children to this grid.
    The side columns are sized in rem, which + and - never move (they set --size, not the root
    font), so a larger transcript font never squeezes the transcript itself. */
 body.shell:not(.server) {
   display: grid;
-  grid-template-columns: 13.75rem minmax(0, 1fr);
-  grid-template-rows: auto auto auto auto auto auto minmax(0, 1fr);
+  grid-template-columns: 13.75rem minmax(0, 1fr) 24rem;
+  grid-template-rows: auto auto auto auto auto auto auto minmax(0, 1fr);
 }
 body.shell:not(.server) > * {
   grid-column: 2;
@@ -383,8 +707,28 @@ body.shell > #final {
 body.shell > #confirm {
   grid-row: 6;
 }
-body.shell > #layout {
+body.shell:not(.server) > #layout {
+  display: contents;
+}
+body.shell:not(.server) #call-head {
+  grid-column: 2;
   grid-row: 7;
+}
+body.shell:not(.server) #scroller {
+  grid-column: 2;
+  grid-row: 8;
+}
+body.shell:not(.server) #side {
+  grid-column: 3;
+  grid-row: 1 / -1;
+}
+body.shell:not(.server) #welcome {
+  grid-column: 2;
+  grid-row: 7 / -1;
+}
+/* The welcome (WINDOW section 10) takes the transcript's place and the side pane's. */
+body.shell.welcoming:not(.server) {
+  grid-template-columns: 13.75rem minmax(0, 1fr);
 }
 #layout {
   flex: 1;
@@ -395,15 +739,11 @@ body.shell > #layout {
 /* Below 1248 px the full side columns would leave the transcript less than half the window. */
 @media (max-width: 1247px) {
   body.shell:not(.server) {
+    grid-template-columns: 10rem minmax(0, 1fr) 18rem;
+  }
+  body.shell.welcoming:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr);
   }
-  #layout {
-    grid-template-columns: minmax(0, 1fr) 18rem;
-  }
-}
-/* The welcome (WINDOW section 10) replaces the three columns while the speech models are missing. */
-body.welcoming #layout {
-  grid-template-columns: minmax(0, 1fr);
 }
 #welcome {
   overflow-y: auto;
@@ -1317,6 +1657,20 @@ dialog {
   font-family: ui-monospace, monospace;
 }
 .setting small {
+  color: var(--dim);
+}
+/* The agent and the speech engine as they are now (WINDOW section 3.1): read only, no input. */
+.state-row {
+  display: grid;
+  grid-template-columns: 11rem minmax(0, 1fr);
+  gap: 2px 12px;
+  margin: 8px 0;
+}
+.state-row .k {
+  font-weight: 700;
+}
+.state-row small {
+  grid-column: 2;
   color: var(--dim);
 }
 .setting.refused input,

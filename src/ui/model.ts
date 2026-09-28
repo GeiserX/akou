@@ -10,6 +10,7 @@
 
 import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
+import { hotkeyLabel } from "../main/window/hotkey.ts";
 import type { AppStatus } from "./protocol.ts";
 
 // ---------------------------------------------------------------------------
@@ -580,12 +581,7 @@ export function dayLabel(t: number, now: number, tz: string): string {
  * failed.
  */
 export function callMeta(c: CallSummary, now: number, tz: string, live: boolean): string {
-  const time = new Intl.DateTimeFormat("en-GB", {
-    timeZone: tz,
-    hour: "2-digit",
-    minute: "2-digit",
-    hourCycle: "h23",
-  }).format(c.createdAt);
+  const time = hourMinute(c.createdAt, tz);
   let span: string;
   if (live) span = "live";
   else if (c.state === "failed") span = "failed";
@@ -599,4 +595,76 @@ export function callMeta(c: CallSummary, now: number, tz: string, live: boolean)
           : formatDuration(min * 60).replace(/ 0 min$/, "");
   }
   return `${dayLabel(c.createdAt, now, tz)}, ${time} · ${span}`;
+}
+
+/** `14:02`: a wall-clock time to the minute, local to `tz`. */
+function hourMinute(t: number, tz: string): string {
+  return new Intl.DateTimeFormat("en-GB", {
+    timeZone: tz,
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).format(t);
+}
+
+// ---------------------------------------------------------------------------
+// The transcript header and the composer row (WINDOW section 3.1)
+
+export interface CallHeadInput {
+  /** When the call was created, and its zone. */
+  createdAt: number;
+  tz: string;
+  now: number;
+  /** The audio recorded, in seconds; null while the call is live (the state says how long). */
+  seconds: number | null;
+  workspace: string;
+  template?: string;
+  /** What the state adds (`stateLabel`'s meta): lines, a failure, how long it has recorded. */
+  note: string;
+}
+
+/**
+ * The line under the open call's title: `Today, 14:02 · 38 min 12 s · work · Template: standup`,
+ * then what the state adds, such as `4 lines` or `open: permission denied`.
+ */
+export function callHeadMeta(i: CallHeadInput): string {
+  const bits = [`${dayLabel(i.createdAt, i.now, i.tz)}, ${hourMinute(i.createdAt, i.tz)}`];
+  if (i.seconds !== null && i.seconds > 0) bits.push(formatDuration(i.seconds));
+  bits.push(i.workspace, `Template: ${i.template || "automatic"}`);
+  if (i.note) bits.push(...i.note.split(/\s+·\s+/));
+  return bits.filter(Boolean).join(" · ");
+}
+
+export interface SpeakerTotal {
+  spk: string;
+  label: string;
+  seconds: number;
+}
+
+/** Who spoke and for how long, from the lines on screen: the most first, ties in order of speech. */
+export function speakerTotals(
+  lines: readonly { spk: string; speaker: string; w0: number; w1: number }[],
+): SpeakerTotal[] {
+  const by = new Map<string, SpeakerTotal>();
+  for (const l of lines) {
+    const t = by.get(l.spk) ?? { spk: l.spk, label: l.speaker, seconds: 0 };
+    t.seconds += Math.max(0, l.w1 - l.w0) / 1000;
+    by.set(l.spk, t);
+  }
+  // A stable sort: equal totals keep the order in which the speakers first spoke.
+  return [...by.values()].sort((a, b) => b.seconds - a.seconds);
+}
+
+/** A speaker's time on a chip: `40 s` under a minute, then whole minutes, `1 h 2 min` past an hour. */
+export function talkTime(seconds: number): string {
+  if (seconds < 59.5) return `${Math.max(1, Math.round(seconds))} s`;
+  return formatDuration(Math.round(seconds / 60) * 60).replace(/ 0 min$/, "");
+}
+
+/**
+ * The shortcut beside Record: the global hotkey that starts and stops a call, as keycaps
+ * (`⌥⌘R`), or empty when the app registers none (a headless app has no shell to register it).
+ */
+export function recordKey(app: { hotkey?: string | null; platform?: string } | undefined): string {
+  return app?.hotkey ? hotkeyLabel(app.hotkey, app.platform ?? "") : "";
 }
