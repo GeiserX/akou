@@ -323,7 +323,7 @@ mod tests {
     }
 
     /// DC-N1 on Linux: press and release of a chord from a fake evdev source both reach the
-    /// session, and so do a modifier-only key's press and release across two keyboards.
+    /// session, also when its modifiers are held on another keyboard than its key.
     #[test]
     fn dc_n1_press_and_release_from_evdev_reach_the_session() {
         let g = gate("Control+Shift+Space");
@@ -344,13 +344,14 @@ mod tests {
         assert!(a.contains(&Action::Start { t_ns: 20 * MS }), "{a:?}");
         assert!(a.contains(&Action::End { reason: "release" }), "{a:?}");
 
-        let g = gate("RightSuper");
+        // A chord whose modifiers are on one keyboard and whose key is on another.
+        let g = gate("Control+Shift+Space");
         let (mut one, mut two) = (Device::default(), Device::default());
-        feed(&g, &mut one, &[(EV_KEY, 126, 1, 0)], &[]);
-        g.lock().act.tick(400 * MS, &mut Vec::new());
-        feed(&g, &mut two, &[(EV_KEY, 30, 1, 450)], &[]);
-        feed(&g, &mut one, &[(EV_KEY, 126, 0, 900)], &[]);
+        feed(&g, &mut one, &[(EV_KEY, 97, 1, 0), (EV_KEY, 54, 1, 5)], &[]);
+        feed(&g, &mut two, &[(EV_KEY, KEY_SPACE, 1, 20)], &[]);
+        feed(&g, &mut two, &[(EV_KEY, KEY_SPACE, 0, 900)], &[]);
         let a = acts(&g);
+        assert!(a.contains(&Action::Start { t_ns: 20 * MS }), "{a:?}");
         assert!(
             a.contains(&Action::End { reason: "release" }),
             "the release ends the hold: {a:?}"

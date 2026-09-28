@@ -822,7 +822,8 @@ jobs:
           done
           echo "keyboard $kb, mouse $mouse"
           test -n "$kb" && test -n "$mouse"
-          # hold TAG HOTKEY FD CODE: starts the helper, holds CODE for 800 ms, then (for the
+          # hold TAG HOTKEY FD CODE: starts the helper, holds CODE for 2 s (a cold PulseAudio stream
+          # can take most of a second to deliver its first sample), then (for the
           # keyboard) opens the recorder and taps A, and stops the helper.
           hold() {
             mkfifo "$1.in"
@@ -830,8 +831,8 @@ jobs:
             "$bin" dictate --hotkey "$2" <"$1.in" >"$1.akp" 2>"$1.err" &
             local pid=$!
             sleep 1.5
-            printf '%s 1\nwait 800\n%s 0\nwait 1500\n' "$4" "$4" >&"$3"
-            sleep 3
+            printf '%s 1\nwait 2000\n%s 0\nwait 1500\n' "$4" "$4" >&"$3"
+            sleep 4.5
             if [ "$1" = keys ]; then
               echo '{"type":"record_keys","on":true}' >&3
               sleep 0.3
