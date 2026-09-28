@@ -313,8 +313,11 @@ interface Listening {
   samples: number;
   /** Secure Input was on at the start, or the field is a password field (DC-N8). */
   secure: boolean;
-  /** The engine picked at the press, and its request opened then (DC-R6); null for the others. */
-  hold: { engine: DictationEngine; request: EngineHold } | null;
+  /**
+   * The engine picked at the press, its request opened then (DC-R6), and the language that request
+   * asked for; null for the others.
+   */
+  hold: { engine: DictationEngine; request: EngineHold; language: string | undefined } | null;
   /** Set by `session.ended`: the reason, and the timer that waits for the pipe to drain. */
   end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
   /** What the keys during the session, or while it transcribes, asked for (DC-A4). */
@@ -836,7 +839,7 @@ export class DictationSession {
     if (!engine?.open) return null;
     const language = this.o.language?.();
     try {
-      return { engine, request: engine.open(language ? { language } : {}) };
+      return { engine, request: engine.open(language ? { language } : {}), language };
     } catch (err) {
       this.o.onLog?.(
         "warn",
@@ -880,10 +883,10 @@ export class DictationSession {
       return;
     }
     const language = c.language ?? this.o.language?.();
-    // A request opened at the press asked for the language of then: a language chosen since on the
-    // chip drops it, and the buffer goes whole with the new one.
+    // A request opened at the press asked for the language of then: a different language chosen
+    // since on the chip drops it, and the buffer goes whole with the new one.
     let hold = c.hold?.request;
-    if (hold && c.language !== null) {
+    if (hold && c.language !== null && c.language !== c.hold?.language) {
       hold.cancel();
       hold = undefined;
     }

@@ -48,7 +48,14 @@ const decoded = (text: string, language: string | null = "en"): Decoded => ({
  * the preview's answers until it resolves.
  */
 function rig(
-  o: { preview?: boolean; gate?: Promise<void>; secure?: boolean; remote?: boolean } = {},
+  o: {
+    preview?: boolean;
+    gate?: Promise<void>;
+    secure?: boolean;
+    remote?: boolean;
+    /** `dictation.language`. */
+    language?: string;
+  } = {},
 ) {
   const t = tempDir("akou-dict-partials-");
   cleanups.push(t.cleanup);
@@ -103,6 +110,7 @@ function rig(
     now: () => Date.now(),
     preview: () => (o.preview === false ? null : preview),
     onPartial: (p) => partials.push(p),
+    language: () => o.language,
   });
   s.onMessage({
     type: "ready",
@@ -216,6 +224,16 @@ describe("akou-5v8: the language the chip forces for the session", () => {
     expect(r.hold).toEqual({ opened: 1, decoded: 0, cancelled: 1 });
     expect(r.asked).toEqual(["es"]);
     expect(r.insert()).toMatchObject({ text: FINAL });
+  });
+
+  test("on remote, the chip landing on the language of the press keeps that request", async () => {
+    const r = rig({ remote: true, language: "es" });
+    await r.feed(1);
+    expect(r.s.setLanguage("es")).toBe(true);
+    await r.feed(1);
+    await r.release();
+    expect(r.hold).toEqual({ opened: 1, decoded: 1, cancelled: 0 });
+    expect(r.asked).toEqual([]);
   });
 
   test("positive control: on remote without the chip, the request opened at the press answers", async () => {
