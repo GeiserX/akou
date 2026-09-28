@@ -51,3 +51,31 @@ The four apps closest to akou on a Mac handle the same screens like this. None o
 
 - **WR-1, the welcome** (#137): with the speech models missing, the main area is the three-step welcome instead of the workspace, Record waits with its reason, and the download's progress rides the status push ([dark](built/wr1-welcome-dark.png), [light](built/wr1-welcome-light.png), [downloading](built/wr1-downloading-dark.png)).
 - **WR-2, the sidebar** (#138): the wordmark, Calls with a search over titles and workspaces, the calls grouped by workspace and day, Dictation, Models and Settings, and the readiness row at the foot ([ready](built/wr2-ready-dark.png), [light](built/wr2-ready-light.png), [search](built/wr2-search-dark.png), [welcome](built/wr2-welcome-dark.png), [welcome light](built/wr2-welcome-light.png)).
+
+## The dictation pill: three candidates
+
+Dictation shows a small floating window while it runs: the pill. The spec (DICTATION.md 5.1) fixes what it must show in each state: listening with a level, the time, the key hints and clickable Stop and Cancel; transcribing with a spinner; inserted or copied for 1.5 s; an error with up to three buttons; and, with the preview on, the words recognised so far. Today it is a plain rounded rectangle. Three shapes were drawn, each as a storyboard of every state at real size over a generic app, plus the draft box. One of them will be picked; the rules they share are the ones above: red only on the recording dot, green only on inserted, neutral surfaces, dark and light following the system.
+
+### P1. The capsule at the bottom
+
+![P1 states](p1-states.png)
+
+![P1 draft box](p1-draft.png)
+
+A glass capsule centred at the bottom of the display with a live waveform, the dot and the time, and the hints under it. With the preview on it widens and the words stream inside it on one line, committed words white and the changing tail grey. Inserted shrinks and fades; the error grows to two lines with its buttons. The draft box opens under the caret with a small notch.
+
+### P2. The caret bubble
+
+![P2 states](p2-states.png)
+
+![P2 draft box](p2-draft.png)
+
+A 28 px bubble anchored under the text caret with only a dot, a three-bar level and the time; Stop, Cancel and the hints appear on hover or after 3 s. With the preview on the words render in the target field itself as ghost text that turns solid as it commits, so the dictation is read where it lands. Inserted flashes the bubble green; the error slides a compact card out of it. The draft box opens above the insertion point.
+
+### P3. The island at the top
+
+![P3 states](p3-states.png)
+
+![P3 draft box](p3-draft.png)
+
+A black island at the top centre, where a notch sits, that only changes width: at rest a dot; listening adds a five-segment level, the time, the language chip (EN or ES, a tap switches) and round Stop and Cancel; with the preview on it widens into a ticker. Transcribing rings the dot; inserted collapses to a check; the error drops a compact sheet under it, and so does the draft box. It stays black in both appearances, like a notch.

@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=1440">
+<title>akou · P2 · The caret bubble · states</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{margin:0;background:#0f0f11}
+body{font-family:-apple-system,"SF Pro Text","SF Pro",Helvetica,sans-serif;-webkit-font-smoothing:antialiased}
+#root{position:relative;width:1440px;height:900px;overflow:hidden;background:#141416;color:rgba(255,255,255,.88)}
+
+/* frame header */
+.hdr{position:absolute;left:32px;right:32px;top:0;height:48px;display:flex;align-items:center;justify-content:space-between;font-size:12px;color:rgba(255,255,255,.5)}
+.hdr b{color:rgba(255,255,255,.92);font-weight:600;font-size:13px;margin-right:8px}
+.hdr .tag{padding:2px 8px;border-radius:10px;border:1px solid rgba(255,255,255,.12);margin-left:8px}
+
+/* ---------- akou bubble ---------- */
+.caret{position:relative;display:inline-block;width:1.5px;height:17px;vertical-align:-3px;background:#fff;border-radius:1px;animation:blink 1.06s steps(1) infinite}
+@keyframes blink{50%{background:transparent}}
+.pop{position:absolute;top:23px;left:-18px;display:flex;align-items:center;gap:4px;z-index:5;white-space:nowrap;font-style:normal;text-decoration:none;line-height:normal}
+.pop.col{flex-direction:column;align-items:flex-start}
+.bubble{position:relative;height:28px;display:inline-flex;align-items:center;gap:8px;padding:0 11px 0 10px;border-radius:14px;background:#2b2b2f;border:.5px solid rgba(255,255,255,.16);box-shadow:0 8px 24px rgba(0,0,0,.45),0 1px 3px rgba(0,0,0,.35);font-size:12px;font-weight:500;font-variant-numeric:tabular-nums;color:rgba(255,255,255,.92);white-space:nowrap}
+.bubble::before{content:"";position:absolute;top:-4.5px;left:14px;width:8px;height:8px;background:inherit;border-left:.5px solid rgba(255,255,255,.16);border-top:.5px solid rgba(255,255,255,.16);border-top-left-radius:2px;transform:rotate(45deg)}
+.bubble.free::before{display:none}
+.bubble.round{width:28px;padding:0;justify-content:center}
+.bubble.hov{padding-right:4px}
+.bubble.ok{background:#22a046;border-color:rgba(255,255,255,.2);color:#fff}
+.bubble.ok::before{border-color:rgba(255,255,255,.2)}
+.dot{width:8px;height:8px;border-radius:50%;background:#ff5b4f;flex:none;animation:breathe 1.8s ease-in-out infinite}
+@keyframes breathe{0%,100%{transform:scale(.8);box-shadow:0 0 0 0 rgba(255,91,79,.55)}50%{transform:scale(1);box-shadow:0 0 0 5px rgba(255,91,79,0)}}
+.lvl{display:flex;align-items:center;gap:2px;height:12px}
+.lvl i{display:block;width:2.5px;height:12px;border-radius:2px;background:currentColor;opacity:.85;transform:scaleY(.4);animation:lv .82s ease-in-out infinite}
+.lvl i:nth-child(2){animation-duration:.64s;animation-delay:-.2s}
+.lvl i:nth-child(3){animation-duration:.94s;animation-delay:-.45s}
+@keyframes lv{0%,100%{transform:scaleY(.33)}45%{transform:scaleY(1)}70%{transform:scaleY(.6)}}
+.lvl.flat i{animation:none;transform:scaleY(.25);opacity:.35}
+.t{min-width:26px;color:rgba(255,255,255,.72)}
+.ok .t,.ok span{color:#fff}
+.dim{color:rgba(255,255,255,.5)}
+.spin{width:12px;height:12px;flex:none;animation:rot .8s linear infinite}
+@keyframes rot{to{transform:rotate(360deg)}}
+.sep{width:1px;height:14px;background:rgba(255,255,255,.14)}
+.ib{position:relative;width:20px;height:20px;border-radius:10px;display:grid;place-items:center;background:rgba(255,255,255,.1)}
+.ib.hot{background:rgba(255,255,255,.2)}
+.ptr{position:absolute;left:11px;top:10px;width:13px;height:19px;z-index:6;filter:drop-shadow(0 1px 1px rgba(0,0,0,.5))}
+.tip{height:22px;display:inline-flex;align-items:center;gap:4px;padding:0 8px;border-radius:6px;background:rgba(32,32,35,.92);border:.5px solid rgba(255,255,255,.1);font-size:11px;color:rgba(255,255,255,.5);margin-left:2px}
+.tip .m{margin:0 3px;opacity:.6}
+kbd{font-family:inherit;font-size:10.5px;padding:1px 4px;border-radius:4px;background:rgba(255,255,255,.1);color:rgba(255,255,255,.82)}
+.card{width:296px;padding:10px 12px 12px;border-radius:12px;background:#2b2b2f;border:.5px solid rgba(255,255,255,.16);box-shadow:0 12px 32px rgba(0,0,0,.5),0 1px 3px rgba(0,0,0,.35);white-space:normal}
+.card h4{font-size:13px;font-weight:600;line-height:16px;color:rgba(255,255,255,.94)}
+.card p{font-size:12px;line-height:16px;color:rgba(255,255,255,.6);margin-top:2px}
+.btns{display:flex;gap:8px;margin-top:8px}
+.btn{height:24px;padding:0 10px;border-radius:6px;display:inline-flex;align-items:center;font-size:12px;font-weight:500;background:rgba(255,255,255,.1);border:.5px solid rgba(255,255,255,.1);color:rgba(255,255,255,.9)}
+.btn.pri{background:rgba(255,255,255,.92);color:#18181b;border-color:transparent}
+.chip{height:28px;display:inline-flex;align-items:center;gap:6px;padding:0 4px 0 12px;border-radius:14px;background:#2b2b2f;border:.5px solid rgba(255,255,255,.16);box-shadow:0 8px 24px rgba(0,0,0,.45),0 1px 3px rgba(0,0,0,.35);font-size:12px;color:rgba(255,255,255,.75)}
+.chip b{color:#fff;font-weight:600}
+.chip .btn{height:20px;border-radius:10px;padding:0 9px;font-size:11.5px}
+.chip .lead{margin-right:2px}
+.aa{font-size:11px;font-weight:600;letter-spacing:-.02em;color:rgba(255,255,255,.85)}
+
+/* live text */
+.commit{position:relative;color:rgba(255,255,255,.94)}
+.ghost{position:relative;color:rgba(255,255,255,.42);font-style:italic;text-decoration:underline dotted rgba(255,255,255,.38);text-decoration-thickness:1px;text-underline-offset:3px}
+.tail{animation:gh 1.2s ease-in-out infinite}
+@keyframes gh{50%{color:rgba(255,255,255,.26)}}
+.fixed{background:rgba(255,255,255,.12);border-radius:3px;padding:1px 2px;margin:0 -2px}
+
+/* pins */
+.pin{position:absolute;width:16px;height:16px;border-radius:8px;background:#45454c;color:rgba(255,255,255,.92);font-size:10px;font-weight:600;font-style:normal;display:grid;place-items:center;line-height:1;text-decoration:none;box-shadow:0 0 0 2px #1e1e21}
+.pin.inl{position:static;margin-left:6px}
+.pin.sup{position:relative;display:inline-grid;vertical-align:1px;margin:0 2px 0 6px;box-shadow:none}
+
+/* ---------- in-situ strip ---------- */
+.strip{position:absolute;left:32px;top:52px;width:1376px;height:332px;border-radius:16px;background:radial-gradient(rgba(255,255,255,.035) 1px,transparent 1px) 0 0/16px 16px,#18181b;border:1px solid rgba(255,255,255,.06)}
+.win{position:absolute;left:24px;top:24px;width:920px;height:276px;border-radius:12px;background:#1e1e21;border:.5px solid rgba(255,255,255,.12);box-shadow:0 24px 60px rgba(0,0,0,.5);display:flex}
+.side{width:196px;flex:none;background:#19191c;border-radius:12px 0 0 12px;border-right:.5px solid rgba(255,255,255,.07);padding:12px 10px;opacity:.5}
+.lights{display:flex;gap:8px;margin:0 0 14px 4px}.lights i{width:12px;height:12px;border-radius:6px;background:#4a4a50}
+.ws{display:flex;gap:8px;align-items:center;padding:0 4px;margin-bottom:10px}
+.appico{width:24px;height:24px;border-radius:6px;background:linear-gradient(160deg,#4d5e77,#2e3a4c);display:grid;place-items:center;font-size:12px;font-weight:700;color:#e9eef5;flex:none}
+.ws b{display:block;font-size:13px}.ws small{display:block;font-size:11px;color:rgba(255,255,255,.5)}
+.sec{font-size:11px;color:rgba(255,255,255,.4);padding:6px 8px 4px;font-weight:600}
+.ch{font-size:13px;height:24px;line-height:24px;padding:0 8px;border-radius:6px;color:rgba(255,255,255,.72)}
+.ch.on{background:rgba(255,255,255,.1);color:#fff}
+.main{flex:1;position:relative}
+.mh{height:44px;display:flex;align-items:center;gap:10px;padding:0 16px;border-bottom:.5px solid rgba(255,255,255,.07);font-size:13px;opacity:.5}
+.mh span{color:rgba(255,255,255,.5);font-size:12px}
+.msgs{padding:12px 16px;display:flex;flex-direction:column;gap:12px;opacity:.5}
+.msg{display:flex;gap:10px}
+.av{width:28px;height:28px;border-radius:14px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:600;color:#fff}
+.who{font-size:13px;display:flex;gap:8px;align-items:baseline}.who time{font-size:11px;color:rgba(255,255,255,.45)}
+.msg p{font-size:13px;color:rgba(255,255,255,.8);margin-top:2px}
+.composer{position:absolute;left:16px;right:16px;bottom:16px;height:44px;border-radius:10px;background:#26262a;border:.5px solid rgba(255,255,255,.2);box-shadow:0 0 0 3px rgba(255,255,255,.04);display:flex;align-items:center;padding:0 10px 0 14px}
+.line{flex:1;font-size:14px;line-height:44px;white-space:nowrap;color:rgba(255,255,255,.9)}
+.cicons{display:flex;gap:8px;color:rgba(255,255,255,.38)}
+.notes{position:absolute;left:976px;top:24px;width:376px;height:276px;display:flex;flex-direction:column}
+.kicker{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:rgba(255,255,255,.4);margin-bottom:14px}
+.note{display:flex;gap:10px;margin-bottom:12px;font-size:12.5px;line-height:18px;color:rgba(255,255,255,.62)}
+.note b{color:rgba(255,255,255,.92);font-weight:600}
+.note .pin{position:static;flex:none;margin-top:1px;box-shadow:none}
+.foot{margin-top:auto;font-size:12px;line-height:17px;color:rgba(255,255,255,.42);padding-top:12px;border-top:.5px solid rgba(255,255,255,.08)}
+
+/* ---------- tiles ---------- */
+.grid{position:absolute;left:32px;top:400px;width:1376px}
+.row{display:flex;gap:16px;margin-bottom:16px}
+.tile{position:relative;height:236px;border-radius:12px;background:#1b1b1e;border:1px solid rgba(255,255,255,.06);overflow:hidden;flex:none}
+.stage{position:absolute;left:0;right:0;top:0;height:166px;background:radial-gradient(rgba(255,255,255,.035) 1px,transparent 1px) 0 0/16px 16px,#19191c;border-bottom:1px solid rgba(255,255,255,.05)}
+.field{position:absolute;left:24px;right:24px;top:24px;height:32px;padding:0 12px;border-radius:8px;background:#232327;border:.5px solid rgba(255,255,255,.12);font-size:13px;line-height:31px;white-space:nowrap;color:rgba(255,255,255,.86)}
+.cap{position:absolute;left:16px;right:16px;top:178px}
+.cap h3{font-size:13px;font-weight:600;color:rgba(255,255,255,.92);display:flex;gap:8px;align-items:baseline}
+.cap h3 small{font-size:11px;font-weight:500;color:rgba(255,255,255,.35);font-variant-numeric:tabular-nums}
+.cap p{font-size:12px;color:rgba(255,255,255,.5);margin-top:4px;line-height:16px}
+.rows{position:absolute;left:24px;right:24px;top:20px}
+.rows div{height:28px;display:flex;align-items:center;gap:10px;border-bottom:.5px solid rgba(255,255,255,.05)}
+.rows i{width:14px;height:14px;border-radius:3px;background:rgba(255,255,255,.12)}
+.rows s{height:6px;border-radius:3px;background:rgba(255,255,255,.1)}
+</style>
+</head>
+<body>
+<div id="root">
+
+  <div class="hdr">
+    <div><b>akou dictation</b>P2 · The caret bubble<span class="tag">States</span></div>
+    <div>Dark appearance · all tiles at 1:1</div>
+  </div>
+
+  <!-- ===== in situ ===== -->
+  <section class="strip">
+    <div class="win">
+      <aside class="side">
+        <div class="lights"><i></i><i></i><i></i></div>
+        <div class="ws"><span class="appico">H</span><div><b>Harbor</b><small>Lumen Studio</small></div></div>
+        <div class="sec">Channels</div>
+        <div class="ch"># general</div>
+        <div class="ch on"># release-train</div>
+        <div class="ch"># design-crit</div>
+        <div class="ch"># tablet-app</div>
+        <div class="sec">Direct</div>
+        <div class="ch">Ines Kovač</div>
+      </aside>
+      <div class="main">
+        <div class="mh"><b># release-train</b><span>8 members</span></div>
+        <div class="msgs">
+          <div class="msg"><span class="av" style="background:#56678a">IK</span><div><div class="who"><b>Ines Kovač</b><time>10:42</time></div><p>Build 482 is on staging. Who wants the release notes?</p></div></div>
+          <div class="msg"><span class="av" style="background:#6e5d7e">TR</span><div><div class="who"><b>Tomás Reyes</b><time>10:44</time></div><p>I can take them if the sign-in fix lands today.</p></div></div>
+        </div>
+        <div class="composer">
+          <div class="line">Sounds good, <span class="caret"><span class="pop"><span class="bubble"><span class="dot"></span><span class="lvl"><i></i><i></i><i></i></span><span class="t">0:06</span></span><span class="pin inl">1</span></span></span><span class="commit">I'll push the fix tonight and<span class="pin sup">2</span></span> <span class="ghost">tag the release once CI is <span class="tail">green</span><span class="pin sup">3</span></span></div>
+          <div class="cicons">
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M9 4v10M4 9h10"/></svg>
+            <svg width="18" height="18" viewBox="0 0 18 18" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 9.2 14.5 4l-3.4 10.5-2.3-4.4z"/></svg>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="notes">
+      <div class="kicker">In situ · live preview on</div>
+      <div class="note"><span class="pin">1</span><div><b>The bubble.</b> 28 px tall, 6 px under the caret. A breathing red dot, a three-bar level and the elapsed time. Nothing else while you talk.</div></div>
+      <div class="note"><span class="pin">2</span><div><b>Committed words.</b> Final text from the engine, drawn solid exactly where it will land.</div></div>
+      <div class="note"><span class="pin">3</span><div><b>Live partial.</b> Dim, italic, dotted underline. It can still change, and it turns solid once committed.</div></div>
+      <div class="foot">Harbor keeps the keyboard; akou only draws on top. With the preview off, the field stays untouched until you let go.</div>
+    </div>
+  </section>
+
+  <!-- ===== state tiles ===== -->
+  <div class="grid">
+    <div class="row">
+
+      <div class="tile" style="width:300px">
+        <div class="stage">
+          <div class="field">Lunch moved to <span class="caret"><span class="pop"><span class="bubble"><span class="dot"></span><span class="lvl"><i></i><i></i><i></i></span><span class="t">0:04</span></span></span></span></div>
+        </div>
+        <div class="cap"><h3><small>01</small>Listening</h3><p>Preview off. Dot, level and time, anchored under the caret. No hints yet.</p></div>
+      </div>
+
+      <div class="tile" style="width:360px">
+        <div class="stage">
+          <div class="field">Reply: <span class="caret"><span class="pop col"><span class="bubble hov"><span class="dot"></span><span class="lvl"><i></i><i></i><i></i></span><span class="t">0:05</span><span class="sep"></span><span class="ib hot" title="Stop"><svg width="8" height="8" viewBox="0 0 8 8"><rect width="8" height="8" rx="1.5" fill="#fff"/></svg><svg class="ptr" viewBox="0 0 13 19"><path d="M1 1v14.5l3.6-3.4 2.3 5.4 2.4-1-2.3-5.3h5z" fill="#fff" stroke="#000" stroke-width="1" stroke-linejoin="round"/></svg></span><span class="ib" title="Cancel"><svg width="8" height="8" viewBox="0 0 8 8" stroke="#fff" stroke-width="1.5" stroke-linecap="round"><path d="M1 1l6 6M7 1 1 7"/></svg></span></span><span class="tip"><kbd>⏎</kbd>sends<span class="m">·</span><kbd>⇧⏎</kbd>drafts<span class="m">·</span><kbd>esc</kbd>cancels</span></span></span></div>
+        </div>
+        <div class="cap"><h3><small>02</small>Listening, hover or past 3 s</h3><p>Stop and Cancel slide out of the bubble. Key hints sit below in a dim line.</p></div>
+      </div>
+
+      <div class="tile" style="width:380px">
+        <div class="stage">
+          <div class="field">Notes: <span class="caret"><span class="pop"><span class="bubble"><span class="dot"></span><span class="lvl"><i></i><i></i><i></i></span><span class="t">0:09</span></span></span></span><span class="commit">vendor call moved to</span> <span class="ghost">Thursday at <span class="tail">ten</span></span></div>
+        </div>
+        <div class="cap"><h3><small>03</small>Listening, live preview on</h3><p>Words appear in the field where they will land. Solid means final, dim italic is still changing.</p></div>
+      </div>
+
+      <div class="tile" style="width:288px">
+        <div class="stage">
+          <div class="field">Lunch moved to <span class="caret"><span class="pop"><span class="bubble"><svg class="spin" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="4.75" stroke="rgba(255,255,255,.2)" stroke-width="1.5"/><path d="M6 1.25A4.75 4.75 0 0 1 10.75 6" stroke="#fff" stroke-width="1.5" stroke-linecap="round"/></svg><span class="lvl flat"><i></i><i></i><i></i></span><span class="t">0:03</span></span></span></span></div>
+        </div>
+        <div class="cap"><h3><small>04</small>Transcribing</h3><p>The dot becomes a spinner and the level rests. Time shows once past 2 s.</p></div>
+      </div>
+
+    </div>
+    <div class="row">
+
+      <div class="tile" style="width:280px">
+        <div class="stage">
+          <div class="field">Lunch is Friday.<span class="caret"><span class="pop"><span class="bubble ok"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 6.3 5 8.7 9.6 3.5"/></svg><span>Inserted</span></span></span></span></div>
+        </div>
+        <div class="cap"><h3><small>05</small>Inserted</h3><p>Flashes green for 1.5 s, then fades. The text is already in the field.</p></div>
+      </div>
+
+      <div class="tile" style="width:280px">
+        <div class="stage">
+          <div class="rows"><div><i></i><s style="width:120px"></s></div><div><i></i><s style="width:92px"></s></div><div><i></i><s style="width:140px"></s></div><div><i></i><s style="width:76px"></s></div></div>
+          <svg style="position:absolute;left:104px;top:58px;width:13px;height:19px;filter:drop-shadow(0 1px 1px rgba(0,0,0,.5))" viewBox="0 0 13 19"><path d="M1 1v14.5l3.6-3.4 2.3 5.4 2.4-1-2.3-5.3h5z" fill="#fff" stroke="#000" stroke-width="1" stroke-linejoin="round"/></svg>
+          <div style="position:absolute;left:120px;top:80px"><span class="bubble free"><svg width="12" height="12" viewBox="0 0 12 12" fill="none" stroke="#fff" stroke-width="1.3" stroke-linejoin="round"><rect x="2.2" y="2" width="7.6" height="9" rx="1.4"/><rect x="4.2" y="1" width="3.6" height="2" rx=".7" fill="#2b2b2f"/></svg><span>Copied</span><span class="dim">⌘V to paste</span></span></div>
+        </div>
+        <div class="cap"><h3><small>06</small>Copied</h3><p>No field had focus, so the text went to the clipboard. Shown by the pointer for 1.5 s.</p></div>
+      </div>
+
+      <div class="tile" style="width:384px">
+        <div class="stage">
+          <div class="field" style="top:14px">Q4: <span class="caret"><span class="pop col"><span class="bubble"><svg width="12" height="12" viewBox="0 0 12 12" fill="none"><circle cx="6" cy="6" r="5" stroke="rgba(255,255,255,.85)" stroke-width="1.3"/><path d="M6 3.4v3.2" stroke="#fff" stroke-width="1.4" stroke-linecap="round"/><circle cx="6" cy="8.6" r=".8" fill="#fff"/></svg><span class="t">0:07</span></span><span class="card"><h4>Couldn't type into Ledgerly</h4><p>The app refused the keystrokes. Your text is kept.</p><span class="btns"><span class="btn pri">Retry</span><span class="btn">Copy</span><span class="btn">Open draft</span></span></span></span></span></div>
+        </div>
+        <div class="cap"><h3><small>07</small>Error</h3><p>A compact card slides out of the bubble with the message and up to three actions. No red: red means recording.</p></div>
+      </div>
+
+      <div class="tile" style="width:384px">
+        <div class="stage">
+          <div class="field"><span class="fixed">Quillbase</span><span class="caret"><span class="pop"><span class="bubble round"><span class="aa">Aa</span></span><span class="chip"><span class="lead">Learn <b>“Quillbase”</b>?</span><span class="btn pri">Learn</span><span class="btn">Not a word</span></span></span></span> is back up.</div>
+        </div>
+        <div class="cap"><h3><small>08</small>Learn chip</h3><p>After an insert you corrected, the chip docks to the bubble's side. It flips left near the screen edge.</p></div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
