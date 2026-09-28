@@ -39,7 +39,7 @@ import {
 } from "../src/main/window/shell.ts";
 import { fileState } from "../src/main/window/state.ts";
 import type { Chip, ChipAnswer, PillState } from "../src/ui/pill-protocol.ts";
-import { type AppRig, appRig } from "./api-helpers.ts";
+import { type AppRig, appRig, FAKE_MODELS, type RigOptions } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
 import { monoWav } from "./fixtures/audio.ts";
@@ -677,7 +677,9 @@ describe("DC-O1: the pill's window", () => {
 });
 
 describe("DC-O1: the pill over a whole app", () => {
-  async function rig(): Promise<AppRig> {
+  async function rig(
+    o: Pick<RigOptions, "models" | "jobs"> & { settings?: Record<string, unknown> } = {},
+  ): Promise<AppRig> {
     const t = tempDir("akou-dict-pill-");
     cleanups.push(t.cleanup);
     const wav = join(t.dir, "mic.wav");
@@ -685,12 +687,161 @@ describe("DC-O1: the pill over a whole app", () => {
     const r = await appRig({
       helperArgs: ["--wav", wav],
       // Named, since the default is off on Linux.
-      settings: { "dictation.enabled": true, "dictation.pill": "bottom" },
+      settings: { "dictation.enabled": true, "dictation.pill": "bottom", ...o.settings },
+      ...(o.models !== undefined ? { models: o.models } : {}),
+      ...(o.jobs ? { jobs: o.jobs } : {}),
     });
     cleanups.push(() => r.close());
     await until(() => r.app.dictation()?.status().state === "idle", 10_000, "the helper ready");
     return r;
   }
+
+  /** The real shell's pill over `r`, recording what the page is told. */
+  async function pillOver(r: AppRig) {
+    const f = fakeUi();
+    const rec = recorder();
+    let rpc: Parameters<NonNullable<NativeUi["openPill"]>>[0]["rpc"] | null = null;
+    f.ui.openPill = (o) => {
+      rpc = o.rpc;
+      return {
+        window: {
+          showInactive: () => {},
+          hide: () => {},
+          close: () => {},
+          onClose: () => {},
+          onFrame: () => {},
+        },
+        send: rec.send,
+      };
+    };
+    const shell = new Shell(appForShell(r.app), new Bridge(r.app), f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    cleanups.push(() => shell.close());
+    await shell.start();
+    await until(() => rpc !== null, 5000, "the pill's window");
+    const control = (action: string) =>
+      (
+        rpc as unknown as { handlers: { control: (p: object) => Promise<boolean> } }
+      ).handlers.control({ action });
+    return { f, rec, control };
+  }
+
+  /** One spoken dictation from the tray, stopped from the pill once the pill says listening. */
+  async function dictate(p: Awaited<ReturnType<typeof pillOver>>): Promise<void> {
+    p.f.tray("dictate");
+    await until(
+      () => p.rec.states().some((s) => s.state === "listening"),
+      5000,
+      "the pill to say listening",
+    );
+    // The fake's mic runs in real time: the word is spoken before the stop.
+    await Bun.sleep(1500);
+    expect(await p.control("stop")).toBe(true);
+  }
+
+  test("DC-E2: a press while the live Worker still loads its model shows loading model, and inserts once it is ready", async () => {
+    const t = tempDir("akou-dict-pill-load-");
+    cleanups.push(t.cleanup);
+    // The fake recognizer behind a gate: the Worker's load waits until the test opens it.
+    const gate = join(t.dir, "gate");
+    const mod = join(t.dir, "gated-models.ts");
+    writeFileSync(
+      mod,
+      [
+        'import { existsSync } from "node:fs";',
+        `while (!existsSync(${JSON.stringify(gate)})) await Bun.sleep(20);`,
+        `export { createModels } from ${JSON.stringify(FAKE_MODELS)};`,
+      ].join("\n"),
+    );
+    const r = await rig({
+      models: { kind: "module", path: mod, model: "fake-parakeet", options: {} },
+    });
+    expect(r.app.dictation()?.status().loading).toBe(true);
+    const p = await pillOver(r);
+    await dictate(p);
+    await until(
+      () => p.rec.states().some((s) => s.state === "transcribing"),
+      5000,
+      "the pill to say transcribing",
+    );
+    expect(p.rec.states().at(-1)).toMatchObject({ state: "transcribing", note: LOADING_NOTE });
+    // The audio is kept: nothing is inserted, and nothing fails, while the model loads.
+    await Bun.sleep(300);
+    expect(r.app.dictation()?.log.items()[0]?.state).not.toBe("failed");
+    expect(p.rec.states().map((s) => s.state)).toEqual(["listening", "transcribing"]);
+    writeFileSync(gate, "");
+    await until(
+      () => p.rec.states().some((s) => s.state === "done"),
+      10_000,
+      "the insert once the model is ready",
+    );
+    expect(p.rec.states().at(-1)).toEqual({ state: "done", how: "inserted" });
+    expect(r.app.dictation()?.log.items()[0]).toMatchObject({ state: "inserted", text: "hello" });
+  });
+
+  test("DC-E3: best chosen with Qwen missing starts its download, and the pill says fast ran meanwhile", async () => {
+    const fetched: string[] = [];
+    const r = await rig({
+      settings: { "dictation.engine": "best" },
+      jobs: {
+        modelStore: {
+          freeBytes: () => 1e13,
+          // A download that never finishes.
+          fetch: ((url: string | URL | Request) => {
+            fetched.push(String(url instanceof Request ? url.url : url));
+            return new Promise<Response>(() => {});
+          }) as typeof fetch,
+        },
+      },
+    });
+    await until(() => fetched.length > 0, 10_000, "Qwen's download to start");
+    const p = await pillOver(r);
+    await dictate(p);
+    await until(() => p.rec.states().some((s) => s.state === "done"), 10_000, "the insert");
+    expect(p.rec.states().at(-1)).toEqual({
+      state: "done",
+      how: "inserted",
+      note: "downloading best, using fast",
+    });
+    expect(r.app.dictation()?.log.items()[0]).toMatchObject({
+      text: "hello",
+      engine: "fast",
+      fallback_from: "best",
+    });
+  });
+
+  test("DC-E3: remote with no local model downloads nothing, reports fallback error, and a stopped remote shows the error state", async () => {
+    const gone = Bun.serve({ port: 0, hostname: "127.0.0.1", fetch: () => new Response("") });
+    const url = `http://127.0.0.1:${gone.port}`;
+    gone.stop(true);
+    const fetched: string[] = [];
+    const r = await rig({
+      models: null,
+      settings: { "dictation.engine": "remote", "dictation.remote.url": url },
+      jobs: {
+        modelStore: {
+          freeBytes: () => 1e13,
+          fetch: ((u: string | URL | Request) => {
+            fetched.push(String(u instanceof Request ? u.url : u));
+            return new Promise<Response>(() => {});
+          }) as typeof fetch,
+        },
+      },
+    });
+    const st = (await r.api("GET", "/dictation")).body;
+    expect(st).toMatchObject({ engine: "remote", fallback: "error" });
+    const p = await pillOver(r);
+    await dictate(p);
+    await until(() => p.rec.states().some((s) => s.state === "error"), 10_000, "the error state");
+    expect(p.rec.states().at(-1)).toMatchObject({
+      state: "error",
+      message: expect.stringContaining(`${url} could not be reached`),
+    });
+    expect(r.app.dictation()?.log.items()[0]?.state).toBe("failed");
+    expect(fetched).toEqual([]);
+  });
 
   test("the pill's Stop ends a session into an insert, and no message carries its words", async () => {
     const r = await rig();

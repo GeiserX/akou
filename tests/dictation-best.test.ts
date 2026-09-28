@@ -6,15 +6,16 @@
  */
 
 import { afterEach, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LlamaEngineSpec } from "../src/main/asr/engine.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "../src/main/asr/llama-catalog.ts";
-import { LlamaServer } from "../src/main/asr/llama-server.ts";
+import { LlamaServer, metalHolder } from "../src/main/asr/llama-server.ts";
 import { BestEngine, type BestSettings } from "../src/main/dictation/best.ts";
 import {
   dictationLanguages,
   forcesLanguage,
+  GPU_BUSY_VERDICT,
   resolveDictationEngine,
 } from "../src/main/dictation/engines.ts";
 import type { DictationEngine } from "../src/main/dictation/session.ts";
@@ -70,6 +71,7 @@ function rig(
     fast?: DictationEngine | null;
     keepWarm?: () => boolean;
     accelerator?: LlamaEngineSpec["accelerator"];
+    onLost?: () => void;
   } = {},
 ): Rig {
   const t = tempDir("akou-dict-best-");
@@ -90,6 +92,7 @@ function rig(
     fast: () => (o.fast === undefined ? FAST : o.fast),
     settings: () => ({ timeoutSeconds: 10, idleMinutes: 0, languages: [], ...o.settings }),
     ...(o.keepWarm ? { keepWarm: o.keepWarm } : {}),
+    ...(o.onLost ? { onLost: o.onLost } : {}),
     clock,
     onLog: (level, msg) => logs.push(`${level} ${msg}`),
   });
@@ -291,6 +294,116 @@ describe("one Metal engine at a time: dictation gives way", () => {
     expect(await r.best.decode(HELLO)).toMatchObject({ engine: "fast", fallback_from: "best" });
     expect(alive(pass.pid() as number)).toBe(true);
   });
+
+  test("metalHolder names the Metal server beside dictation's own, and none once it ends", async () => {
+    const t = tempDir("akou-dict-metal-");
+    cleanups.push(t.cleanup);
+    expect(metalHolder(t.dir, null)).toBeNull();
+    const pass = new LlamaServer({
+      command: [process.execPath, FAKE],
+      model: join(t.dir, QWEN_MODEL_FILE),
+      mmproj: join(t.dir, QWEN_MMPROJ_FILE),
+      accelerator: "metal",
+      gpuLayers: 0,
+      lockDir: t.dir,
+    });
+    cleanups.push(() => pass.stop());
+    await pass.url();
+    const pid = pass.pid() as number;
+    expect(metalHolder(t.dir, null)).toBe(pid);
+    // Dictation's own server is never its own holder.
+    expect(metalHolder(t.dir, pid)).toBeNull();
+    await pass.stop();
+    expect(metalHolder(t.dir, null)).toBeNull();
+  });
+
+  test("the pid file another thread wrote: a live llama-server on its port holds the GPU, a reused pid does not", async () => {
+    const t = tempDir("akou-dict-metal-");
+    cleanups.push(t.cleanup);
+    // Another thread's final pass: a process of its own, known only through the pid file.
+    const port = 47_311;
+    const other = Bun.spawn(
+      [process.execPath, "-e", "setInterval(() => {}, 1000)", "--", "--port", String(port)],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    cleanups.push(() => {
+      other.kill();
+    });
+    const file = join(t.dir, "llama-metal.json");
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port }));
+    // Windows keeps no pid file (one Metal server is a macOS rule).
+    const named = process.platform === "win32" ? null : other.pid;
+    expect(metalHolder(t.dir, null)).toBe(named);
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port: port + 1 }));
+    expect(metalHolder(t.dir, null)).toBeNull();
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port }));
+    other.kill();
+    await other.exited;
+    expect(metalHolder(t.dir, null)).toBeNull();
+  });
+
+  test("the pid file's holder, once ps confirmed it, stands without another ps for a while", async () => {
+    const t = tempDir("akou-dict-metal-");
+    cleanups.push(t.cleanup);
+    const port = 47_313;
+    const other = Bun.spawn(
+      [process.execPath, "-e", "setInterval(() => {}, 1000)", "--", "--port", String(port)],
+      { stdout: "ignore", stderr: "ignore" },
+    );
+    const path = process.env.PATH;
+    cleanups.push(() => {
+      process.env.PATH = path;
+      other.kill();
+    });
+    const file = join(t.dir, "llama-metal.json");
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port }));
+    // Windows keeps no pid file (one Metal server is a macOS rule).
+    const named = process.platform === "win32" ? null : other.pid;
+    expect(metalHolder(t.dir, null)).toBe(named);
+    // A ps that names nothing: only the earlier answer can name it now.
+    const bin = join(t.dir, "bin");
+    mkdirSync(bin);
+    writeFileSync(join(bin, "ps"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    process.env.PATH = bin;
+    expect(metalHolder(t.dir, null)).toBe(named);
+    // Positive control: a port it was never confirmed on needs that ps, which names nothing.
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port: port + 1 }));
+    expect(metalHolder(t.dir, null)).toBeNull();
+    process.env.PATH = path;
+    // And a holder that ended is none, whatever was confirmed.
+    writeFileSync(file, JSON.stringify({ pid: other.pid, port }));
+    other.kill();
+    await other.exited;
+    expect(metalHolder(t.dir, null)).toBeNull();
+  });
+
+  test("a warm server a final pass stops is reported lost; one best stops itself is not", async () => {
+    let lost = 0;
+    const r = rig([], { onLost: () => lost++ });
+    await r.best.decode(HELLO);
+    const pid = r.best.pid() as number;
+    process.kill(pid, "SIGKILL");
+    await until(() => lost === 1, 10_000, "the loss reported");
+    // Started again by the next dictation, then stopped by best: no loss.
+    await r.best.decode(HELLO);
+    const again = r.best.pid() as number;
+    await r.best.stop();
+    await until(() => !alive(again), 10_000, "the server stopped");
+    await Bun.sleep(100);
+    expect(lost).toBe(1);
+  });
+
+  test("a server that dies while it loads is not reported lost, so nothing starts it in a loop", async () => {
+    let lost = 0;
+    const r = rig(["--fake-loading-ms", "60000"], { onLost: () => lost++ });
+    r.best.warm();
+    await until(() => r.best.loading() && r.best.pid() !== null, 5000, "the load to begin");
+    const pid = r.best.pid() as number;
+    process.kill(pid, "SIGKILL");
+    await until(() => !r.best.loading(), 10_000, "the failed start");
+    await Bun.sleep(100);
+    expect(lost).toBe(0);
+  });
 });
 
 describe("DC-L3: the audio check on best", () => {
@@ -452,10 +565,39 @@ describe("DC-E3: which engine a dictation runs", () => {
       verdict: "downloading best, using fast",
       download: true,
       wanted: "best",
+      yielding: false,
     });
     expect(
       resolveDictationEngine({ setting: "best", accelerator: "cpu", bestReady: true }).engine,
     ).toBe("best");
+  });
+
+  test("a final pass holding the GPU: best gives way to fast and says why, auto or forced", () => {
+    for (const setting of ["auto", "best"]) {
+      expect(
+        resolveDictationEngine({ setting, accelerator: "metal", bestReady: true, gpuBusy: true }),
+      ).toEqual({
+        engine: "fast",
+        verdict: GPU_BUSY_VERDICT,
+        download: false,
+        wanted: "best",
+        yielding: true,
+      });
+    }
+    // Qwen still downloading is the download's verdict; fast and remote never wait on the GPU.
+    expect(
+      resolveDictationEngine({
+        setting: "best",
+        accelerator: "metal",
+        bestReady: false,
+        gpuBusy: true,
+      }),
+    ).toMatchObject({ download: true, yielding: false });
+    for (const setting of ["fast", "remote"] as const) {
+      expect(
+        resolveDictationEngine({ setting, accelerator: "metal", bestReady: true, gpuBusy: true }),
+      ).toMatchObject({ engine: setting, yielding: false });
+    }
   });
 
   test("fast and remote are what they say, whatever the machine", () => {

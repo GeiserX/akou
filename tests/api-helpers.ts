@@ -77,6 +77,8 @@ export interface RigOptions {
   engine?: CaptureEngine;
   /** The machine `asr.accelerator` reads; by default a Linux box with no GPU, whatever runs the test. */
   accelerator?: AppOptions["accelerator"];
+  /** The Metal llama-server beside dictation's own; by default the build's pid file. */
+  metalHolder?: AppOptions["metalHolder"];
 }
 
 /** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
@@ -139,6 +141,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     jobs: o.jobs,
     engine: o.engine,
     accelerator: o.accelerator ?? NO_GPU,
+    ...(o.metalHolder ? { metalHolder: o.metalHolder } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;
