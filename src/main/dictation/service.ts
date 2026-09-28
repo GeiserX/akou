@@ -37,6 +37,7 @@ import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
 import { DraftBox, type DraftBoxOptions } from "./draft.ts";
+import { forcesLanguage } from "./engines.ts";
 import { Learner } from "./learner.ts";
 import {
   type Bindings,
@@ -52,6 +53,7 @@ import {
   DictationSession,
   decodeDictation,
   type InsertPolicy,
+  type PreviewDecode,
   type RebindAnswer,
   type SessionState,
   type TextRules,
@@ -224,6 +226,11 @@ export type DictationFollow =
   /** A line for the pill while listening (`1 minute left`, DC-A3), never written anywhere. */
   | { kind: "warning"; note: string }
   /**
+   * The words heard so far in the session listening and their language (DC-E5), produced only
+   * while a follower asks for them, never written anywhere and never inserted.
+   */
+  | { kind: "partial"; text: string; language: string | null }
+  /**
    * The learn chip for a fix made in the app's field after a direct insert (DC-L2, DC-L4): the
    * pill shows it, or with the pill off the shell notifies and releases it (DC-O4).
    */
@@ -257,6 +264,8 @@ export class DictationService {
   readonly uploadDir: string;
   private readonly watchers = new Set<(state: DictationStatus["state"]) => void>();
   private readonly followers = new Set<(m: DictationFollow) => void>();
+  /** The followers that asked for partials, each with its own say on whether it wants them now. */
+  private readonly partialWants = new Map<(m: DictationFollow) => void, () => boolean>();
   private readonly sweeper: ReturnType<typeof setInterval>;
 
   constructor(private readonly o: DictationServiceOptions) {
@@ -526,11 +535,55 @@ export class DictationService {
 
   /**
    * Called with every event the log appends and every mic level, from now on (DC-G2). Returns the
-   * unsubscribe.
+   * unsubscribe. `partials`: while it answers true, the session listening is decoded again for the
+   * words as you speak (DC-E5); with no follower asking, no partial is ever decoded.
    */
-  follow(fn: (m: DictationFollow) => void): () => void {
+  follow(fn: (m: DictationFollow) => void, o: { partials?: () => boolean } = {}): () => void {
     this.followers.add(fn);
-    return () => this.followers.delete(fn);
+    if (o.partials) this.partialWants.set(fn, o.partials);
+    return () => {
+      this.followers.delete(fn);
+      this.partialWants.delete(fn);
+    };
+  }
+
+  /**
+   * The preview's decoder (DC-E5): the local `fast` engine, which decodes a few seconds in a
+   * fraction of a second, whatever engine the dictation's own text comes from. Parakeet names no
+   * language, so its partials carry none. Null while no follower wants partials or no local model
+   * is loaded.
+   */
+  private previewDecode(): PreviewDecode | null {
+    if (![...this.partialWants.values()].some((wants) => wants())) return null;
+
+    const fast = this.o.engine("fast");
+    if (!fast) return null;
+    return (samples) => fast.decode(samples, {});
+  }
+
+  /**
+   * The languages the pill's chip moves between (akou-5v8): `dictation.languages`, else
+   * `asr.languages`; `switchable` when there are two or more and the engine takes a forced one
+   * (`fast` picks its own, DC-E4); `language`, the one a session asks for before the chip moves
+   * it: `dictation.language`, else null (the engine chooses).
+   */
+  languageChoice(): {
+    languages: readonly string[];
+    switchable: boolean;
+    language: string | null;
+  } {
+    const languages = this.o.languages?.() ?? [];
+    const engine = this.o.engine()?.name ?? "fast";
+    return {
+      languages,
+      switchable: languages.length >= 2 && forcesLanguage(engine),
+      language: this.o.language?.() ?? null,
+    };
+  }
+
+  /** Forces `language` for the session listening, from the pill's chip; false with none. */
+  setLanguage(language: string): boolean {
+    return this.helper?.session.setLanguage(language) ?? false;
   }
 
   private tell(m: DictationFollow): void {
@@ -651,6 +704,8 @@ export class DictationService {
       ...(this.o.autoStop ? { autoStop: this.o.autoStop } : {}),
       ...(this.o.spokenSend ? { spokenSend: this.o.spokenSend } : {}),
       onEdit: (id, hunks) => void this.fromField(id, hunks),
+      preview: () => this.previewDecode(),
+      onPartial: (p) => this.tell({ kind: "partial", ...p }),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));

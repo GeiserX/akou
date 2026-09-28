@@ -31,7 +31,7 @@ import {
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
-import { PREVIEW_CHARS } from "../../src/ui/pill.ts";
+import { PREVIEW_CHARS, previewParts } from "../../src/ui/pill.ts";
 import { type PillState, pillPreview } from "../../src/ui/pill-protocol.ts";
 import type { Transport } from "../../src/ui/protocol.ts";
 import { concat, silence, speak } from "../fixtures/asr-fake.ts";
@@ -365,15 +365,81 @@ describe("DC-O1: the pill, the island at the top", () => {
   );
 });
 
+describe("DC-O2: settled words and the phrase still changing", () => {
+  test("previewParts splits at the settled count, and shifts it when the tail drops the start", () => {
+    expect(previewParts("ping the team", 8)).toEqual({ settled: "ping the", changing: " team" });
+    expect(previewParts("ping the team", 0)).toEqual({ settled: "", changing: "ping the team" });
+    // A count that is not one settles nothing; one past the end settles all.
+    expect(previewParts("ping the team", "8")).toEqual({ settled: "", changing: "ping the team" });
+    expect(previewParts("ping", 99)).toEqual({ settled: "ping", changing: "" });
+    const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
+    const upTo38 = long.lastIndexOf(" word39");
+    const parts = previewParts(long, upTo38);
+    expect(parts.settled.startsWith("…word")).toBe(true);
+    expect(parts.changing).toBe(" word39");
+    // Settled words that all fell off the front leave only the changing part, ellipsis included.
+    expect(previewParts(long, 5).settled).toBe("");
+  });
+
+  test(
+    "the page draws the settled words white and the rest dimmer",
+    async () => {
+      const v = await viewPage("pill");
+      try {
+        await v.send("state", { state: "listening", since: Date.now(), keys: [], hotkey: "Ctrl" });
+        await v.send("preview", { text: "ping the team", settled: 8 });
+        const look = await v.page.evaluate(() => {
+          const color = (id: string) => {
+            const e = document.getElementById(id) as HTMLElement;
+            return { text: e.textContent, color: getComputedStyle(e).color };
+          };
+          return { settled: color("preview-settled"), changing: color("preview-changing") };
+        });
+        expect(look.settled.text).toBe("ping the");
+        expect(look.changing.text).toBe(" team");
+        expect(look.settled.color).toBe("rgb(255, 255, 255)");
+        expect(look.changing.color).not.toBe(look.settled.color);
+      } finally {
+        await v.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a read-only language chip says its language at full contrast (akou-5v8)",
+    async () => {
+      const v = await viewPage("pill");
+      try {
+        const listening = { state: "listening", since: Date.now(), keys: [], hotkey: "Ctrl" };
+        await v.send("state", {
+          ...listening,
+          language: { tag: "es", switchable: false, forced: false },
+        });
+        const look = await v.page.evaluate(() => {
+          const e = document.getElementById("lang") as HTMLButtonElement;
+          return {
+            text: e.textContent,
+            disabled: e.disabled,
+            opacity: getComputedStyle(e).opacity,
+          };
+        });
+        expect(look).toEqual({ text: "ES", disabled: true, opacity: "1" });
+      } finally {
+        await v.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("DC-O2, DC-D2: the preview's gate on the main side", () => {
-  test("a partial becomes a preview only with the preview on and the pill hidden from capture", () => {
-    const on = { pillPreview: true, hiddenFromCapture: true };
+  test("a partial becomes a preview only with the preview on", () => {
+    const on = { pillPreview: true };
     expect(pillPreview("ping the team", on)).toEqual({ text: "ping the team" });
-    expect(pillPreview("ping the team", { ...on, pillPreview: false })).toBeNull();
+    expect(pillPreview("ping the team", { pillPreview: false })).toBeNull();
     // Only a real true turns it on, not a string a hand-edited file might hold.
-    expect(pillPreview("ping the team", { ...on, pillPreview: "true" })).toBeNull();
-    // A window a screen share can see never shows the words (DC-D2).
-    expect(pillPreview("ping the team", { ...on, hiddenFromCapture: false })).toBeNull();
+    expect(pillPreview("ping the team", { pillPreview: "true" })).toBeNull();
     expect(pillPreview("  ", on)).toBeNull();
     expect(pillPreview({ text: "x" }, on)).toBeNull();
   });

@@ -162,6 +162,39 @@ button:focus-visible {
 #preview-words {
   white-space: nowrap;
 }
+/* Words the last partial had too are white; the phrase still changing is dimmer. */
+#preview-changing {
+  color: rgba(255, 255, 255, 0.42);
+}
+/* The language chip (akou-5v8): the language the session is heard in. */
+#lang {
+  flex: none;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.88);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  line-height: 20px;
+  cursor: default;
+}
+#lang[data-switchable] {
+  cursor: pointer;
+}
+/* Read-only, it still says the language at full contrast, unlike a disabled button. */
+#lang:disabled {
+  opacity: 1;
+  cursor: default;
+}
+#lang[data-switchable]:hover {
+  background: rgba(255, 255, 255, 0.2);
+}
+/* A language the chip chose, rather than the one the engine heard, wears a thin ring. */
+#lang[data-forced] {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.6);
+}
 #word {
   font-weight: 500;
 }

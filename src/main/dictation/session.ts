@@ -52,6 +52,16 @@
  * `session.stop`, and the dictation is logged as ended by `max` or `silence`; its audio is
  * transcribed like any other. A session is latched when the tray or the CLI started it, when
  * `dictation.activation` is `toggle`, or when the helper says so (`latched`).
+ *
+ * The words as you speak (DC-E5): while a session listens and someone wants them (`preview`), the
+ * last `PREVIEW_TAIL_SECONDS` of its audio are decoded again every `PREVIEW_EVERY_SECONDS` on the
+ * preview engine, one decode at a time, and each answer goes out as a partial (`onPartial`) while
+ * the same session still listens. A partial is only ever shown: the inserted text is the decode of
+ * the whole buffer at the release. A password field's session has no partials (DC-N8).
+ *
+ * The session's language (DC-E4, akou-5v8): the pill's language chip forces one for the session
+ * listening (`setLanguage`), and its decode at the release asks for that one instead of
+ * `dictation.language`.
  */
 
 import { isEcho } from "../../core/dictation/echo.ts";
@@ -231,7 +241,33 @@ export interface SessionOptions extends TextRules {
    * `dictation.edit` is written.
    */
   onEdit?(id: string, hunks: EditHunk[] | null): void;
+  /**
+   * The decoder for the words as you speak (DC-E5), or null when nobody wants them now or no
+   * engine can give them. Asked before each partial, so a setting changed mid-session applies.
+   */
+  preview?(): PreviewDecode | null;
+  /** A partial of the session listening: shown, never inserted (DC-E5). */
+  onPartial?(p: PreviewPartial): void;
 }
+
+/** A decode of the end of the audio so far, for the preview only. */
+export type PreviewDecode = (samples: Float32Array) => Promise<Pick<Decoded, "text" | "language">>;
+
+/** The words heard so far in the session listening, and the language the engine heard them in. */
+export interface PreviewPartial {
+  text: string;
+  language: string | null;
+}
+
+/** How often a listening session's audio is decoded again for the preview (DC-E5). */
+export const PREVIEW_EVERY_SECONDS = 0.5;
+/**
+ * How much of the end of the audio each preview decode takes. The pill's ticker shows one line, the
+ * newest words, so the start of a long dictation is never decoded again and a decode stays short:
+ * it shares the live Worker with the release's whole-buffer decode and a recorded call's segments,
+ * which wait behind the one in flight.
+ */
+export const PREVIEW_TAIL_SECONDS = 8;
 
 /** When a session ends by itself (DC-A3). */
 export interface AutoStop {
@@ -277,8 +313,11 @@ interface Listening {
   samples: number;
   /** Secure Input was on at the start, or the field is a password field (DC-N8). */
   secure: boolean;
-  /** The engine picked at the press, and its request opened then (DC-R6); null for the others. */
-  hold: { engine: DictationEngine; request: EngineHold } | null;
+  /**
+   * The engine picked at the press, its request opened then (DC-R6), and the language that request
+   * asked for; null for the others.
+   */
+  hold: { engine: DictationEngine; request: EngineHold; language: string | undefined } | null;
   /** Set by `session.ended`: the reason, and the timer that waits for the pipe to drain. */
   end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
   /** What the keys during the session, or while it transcribes, asked for (DC-A4). */
@@ -298,6 +337,11 @@ interface Listening {
   heard: number;
   /** The VAD's verdicts run one at a time, in order. */
   vad: Promise<void>;
+  /** The samples the last preview decode took, and whether one is running (DC-E5). */
+  previewAt: number;
+  previewing: boolean;
+  /** The language the pill's chip forced for this session, else null (akou-5v8). */
+  language: string | null;
 }
 
 /**
@@ -480,6 +524,9 @@ export class DictationSession {
           judged: 0,
           heard: 0,
           vad: Promise.resolve(),
+          previewAt: 0,
+          previewing: false,
+          language: null,
         };
         this.cur = c;
         const early = this.early.chunks;
@@ -614,12 +661,24 @@ export class DictationSession {
     if (c.end) c.end.timer.refresh();
   }
 
+  /**
+   * Forces `language` for the session listening, from the pill's chip (akou-5v8): its decode at the
+   * release asks for it. False with no session listening.
+   */
+  setLanguage(language: string): boolean {
+    const c = this.cur;
+    if (!c || c.end) return false;
+    c.language = language;
+    return true;
+  }
+
   /** A session's audio: kept, sent on to a request opened at the press, and watched (DC-A3). */
   private take(c: Listening, samples: Float32Array): void {
     c.chunks.push(samples);
     c.samples += samples.length;
     c.hold?.request.push(samples);
     if (c.end || c.stopping) return;
+    this.previewTick(c);
     const a = this.o.autoStop?.();
     if (!a) return;
     const limit = a.maxMinutes * 60 * CAPTURE_RATE;
@@ -646,6 +705,31 @@ export class DictationSession {
       const end = c.judged;
       c.vad = c.vad.then(() => this.judge(c, window, end, a.silenceSeconds));
     }
+  }
+
+  /**
+   * The next partial of the session listening (DC-E5), once `PREVIEW_EVERY_SECONDS` more audio came
+   * in and the last decode answered. An answer that comes after the session stopped listening is
+   * dropped, so a partial never outlives it; a failed one costs only that partial.
+   */
+  private previewTick(c: Listening): void {
+    if (c.secure || c.previewing) return;
+    if (c.samples - c.previewAt < PREVIEW_EVERY_SECONDS * CAPTURE_RATE) return;
+    const decode = this.o.preview?.();
+    if (!decode) return;
+    c.previewAt = c.samples;
+    c.previewing = true;
+    const tail = lastSamples(c.chunks, c.samples, PREVIEW_TAIL_SECONDS * CAPTURE_RATE);
+    void decode(tail)
+      .then((d) => {
+        if (this.cur !== c || c.end || c.stopping) return;
+        const text = d.text.trim();
+        if (text !== "") this.o.onPartial?.({ text, language: d.language });
+      })
+      .catch((err) => this.o.onLog?.("info", `dictation preview: ${(err as Error).message}`))
+      .finally(() => {
+        c.previewing = false;
+      });
   }
 
   /**
@@ -755,7 +839,7 @@ export class DictationSession {
     if (!engine?.open) return null;
     const language = this.o.language?.();
     try {
-      return { engine, request: engine.open(language ? { language } : {}) };
+      return { engine, request: engine.open(language ? { language } : {}), language };
     } catch (err) {
       this.o.onLog?.(
         "warn",
@@ -798,10 +882,17 @@ export class DictationSession {
       });
       return;
     }
-    const language = this.o.language?.();
+    const language = c.language ?? this.o.language?.();
+    // A request opened at the press asked for the language of then: a different language chosen
+    // since on the chip drops it, and the buffer goes whole with the new one.
+    let hold = c.hold?.request;
+    if (hold && c.language !== null && c.language !== c.hold?.language) {
+      hold.cancel();
+      hold = undefined;
+    }
     let r: DictationResult;
     try {
-      r = await decodeDictation(this.o, engine, samples, language, c.secure, c.hold?.request, {
+      r = await decodeDictation(this.o, engine, samples, language, c.secure, hold, {
         spokenSend: this.o.spokenSend?.() ?? false,
       });
     } catch (err) {
@@ -1007,6 +1098,20 @@ export function languageForced(
   engine: string,
 ): { language_forced?: boolean } {
   return language ? { language_forced: forcesLanguage(engine) } : {};
+}
+
+/** The last `n` of the `total` samples in `chunks` (all of them when there are fewer). */
+function lastSamples(chunks: readonly Float32Array[], total: number, n: number): Float32Array {
+  if (total <= n) return concat(chunks, total);
+  const out = new Float32Array(n);
+  let end = n;
+  for (let i = chunks.length - 1; i >= 0 && end > 0; i--) {
+    const ch = chunks[i] as Float32Array;
+    const take = Math.min(ch.length, end);
+    out.set(ch.subarray(ch.length - take), end - take);
+    end -= take;
+  }
+  return out;
 }
 
 function concat(chunks: readonly Float32Array[], n: number): Float32Array {

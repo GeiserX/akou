@@ -229,7 +229,8 @@ export interface ShellApp {
  * Dictation as the tray and the pill see it: its state, the same session door as the API, its
  * changes, and for the pill its events and levels.
  */
-export interface ShellDictation extends Pick<PillDictation, "follow"> {
+export interface ShellDictation
+  extends Pick<PillDictation, "follow" | "languageChoice" | "setLanguage"> {
   /** `off`, `starting`, `idle`, `listening`, `transcribing` or `inserting`. */
   state(): string;
   status(): ReturnType<PillDictation["status"]>;
@@ -279,7 +280,10 @@ export function appForShell(app: AkouApp): ShellApp {
       },
       control: async (action) => (await app.dictation()?.control(action))?.ok === true,
       watch: (fn) => app.dictation()?.watch(fn) ?? (() => {}),
-      follow: (fn) => app.dictation()?.follow(fn) ?? (() => {}),
+      follow: (fn, o) => app.dictation()?.follow(fn, o) ?? (() => {}),
+      languageChoice: () =>
+        app.dictation()?.languageChoice() ?? { languages: [], switchable: false },
+      setLanguage: (language) => app.dictation()?.setLanguage(language) ?? false,
       hotkey: () => app.dictation()?.hotkey() ?? "",
       draft: () => app.dictation()?.draft ?? null,
       chip: async (a) => (await app.dictation()?.answerChip(a)) === true,
@@ -1031,11 +1035,8 @@ export class Shell implements WindowShell {
         if (visible) win?.showInactive();
         else win?.hide();
       },
-      // No window of akou is hidden from screen capture before DK-P3, so no preview passes.
-      preview: {
-        setting: () => this.app.config().settings["dictation.pillPreview"],
-        hiddenFromCapture: () => false,
-      },
+      // The words as you speak are on by default (DC-O2); a screen share shows them until DK-P3.
+      preview: { setting: () => this.app.config().settings["dictation.pillPreview"] },
     });
     let w: ReturnType<typeof open>;
     try {
