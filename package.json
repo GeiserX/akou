@@ -20,7 +20,7 @@
     "@types/bun": "1.4.2",
     "electrobun": "2.0.1",
     "gpt-tokenizer": "4.0.0",
-    "playwright-core": "1.60.0",
+    "playwright-core": "1.63.0",
     "typescript": "7.0.2"
   },
   "dependencies": {
