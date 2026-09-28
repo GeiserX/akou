@@ -185,7 +185,7 @@ impl Activation {
 
     /// Escape, Enter or Shift+Enter as DC-A4 names them, on a backend that can swallow them.
     fn enter_name(&self, name: &str) -> Option<&'static str> {
-        if !self.swallows {
+        if !self.swallows && name.is_empty() {
             return None;
         }
         match name {
