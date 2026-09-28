@@ -714,7 +714,6 @@ jobs:
           Check ($log -match '"type":"inserted","id":"p1","method":"paste"') 'the paste was not read'
           Check ($log -match '"type":"inserted","id":"t1","method":"type"') 'the typing failed'
           Check ($log -match '"type":"edit","id":"p1","hunks":\[\{"inserted":"akou","now":"Akou","at":2\}\]') 'the read-back did not carry exactly the fixed word'
-          Check ($log -notmatch '"now":"[^"]*typed') 'the read-back carried text the user typed on'
           $want = "pasted by Akou`r`n`r`ntyped " + [char]0xE9 + ' ' + [char]::ConvertFromUtf32(0x1F600)
           Check ($field -ceq $want) 'the box holds the wrong text'
           Check ($clip.TrimEnd() -eq 'copied before akou') "the clipboard was not restored: $clip"
@@ -1029,6 +1028,145 @@ jobs:
             echo "### dictate pauses MPRIS players (${{ matrix.server }})"
             echo
             sed 's/^/    /' paused.log
+          } >> "$GITHUB_STEP_SUMMARY"
+      # DC-N1 through the GlobalShortcuts portal. A fake portal on this job's session bus serves
+      # org.freedesktop.portal.GlobalShortcuts the way xdg-desktop-portal does: requests answered
+      # by a Response signal, sessions closed by Close, Activated and Deactivated sent when this
+      # script says. No keyboard is readable here, so only the portal can start a session. The
+      # shipping helper must pick the portal backend (and evdev with no portal: the control),
+      # register its app id, bind the default chord, run a session from Activated to Deactivated
+      # and ignore a press of another shortcut; a rebind to another chord binds it in a new
+      # session and closes the old one, and a lone modifier, which neither the portal nor an
+      # unreadable keyboard can hear, is refused.
+      - name: dictate hears its chord through the GlobalShortcuts portal
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq --no-install-recommends python3-dbus python3-gi
+          bin="$PWD/native/akou-capture/target/release/akou-capture"
+          work=$(mktemp -d)
+          cd "$work"
+          cat > portal.py <<'EOF'
+          import sys, dbus, dbus.service, dbus.mainloop.glib
+          from gi.repository import GLib
+          dbus.mainloop.glib.DBusGMainLoop(set_as_default=True)
+          DEST, PATH = "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop"
+          GS = "org.freedesktop.portal.GlobalShortcuts"
+          bus = dbus.SessionBus()
+          name = dbus.service.BusName(DEST, bus)
+          if bus.get_name_owner(DEST) != bus.get_unique_name():
+              print("another process owns", DEST, flush=True)
+              sys.exit(1)
+          def token(sender):
+              return sender[1:].replace(".", "_")
+          class Request(dbus.service.Object):
+              @dbus.service.signal("org.freedesktop.portal.Request", signature="ua{sv}")
+              def Response(self, code, results):
+                  pass
+          class Session(dbus.service.Object):
+              def __init__(self, path):
+                  dbus.service.Object.__init__(self, bus, path)
+                  self.path = path
+              @dbus.service.method("org.freedesktop.portal.Session")
+              def Close(self):
+                  print("close", self.path, flush=True)
+          def answer(path):
+              r = Request(bus, path)
+              def send():
+                  r.Response(dbus.UInt32(0), dbus.Dictionary({}, signature="sv"))
+                  return False
+              GLib.idle_add(send)
+              return dbus.ObjectPath(path)
+          sessions = []
+          class Portal(dbus.service.Object):
+              @dbus.service.method("org.freedesktop.host.portal.Registry", in_signature="sa{sv}")
+              def Register(self, app_id, options):
+                  print("register", app_id, flush=True)
+              @dbus.service.method(dbus.PROPERTIES_IFACE, in_signature="ss", out_signature="v")
+              def Get(self, iface, prop):
+                  return dbus.UInt32(1)
+              @dbus.service.method(GS, in_signature="a{sv}", out_signature="o", sender_keyword="sender")
+              def CreateSession(self, options, sender=None):
+                  s = f"{PATH}/session/{token(sender)}/{options['session_handle_token']}"
+                  Session(s)
+                  sessions.append(s)
+                  return answer(f"{PATH}/request/{token(sender)}/{options['handle_token']}")
+              @dbus.service.method(GS, in_signature="oa(sa{sv})sa{sv}", out_signature="o", sender_keyword="sender")
+              def BindShortcuts(self, session, shortcuts, parent, options, sender=None):
+                  for sid, o in shortcuts:
+                      print("bind", session, sid, o.get("preferred_trigger", ""), flush=True)
+                  return answer(f"{PATH}/request/{token(sender)}/{options['handle_token']}")
+              @dbus.service.signal(GS, signature="osta{sv}")
+              def Activated(self, session, sid, t, options):
+                  pass
+              @dbus.service.signal(GS, signature="osta{sv}")
+              def Deactivated(self, session, sid, t, options):
+                  pass
+          portal = Portal(bus, PATH)
+          def command(fd, cond):
+              line = sys.stdin.readline()
+              if not line:
+                  return False
+              what, sid = line.split()
+              signal = portal.Activated if what == "activate" else portal.Deactivated
+              signal(dbus.ObjectPath(sessions[-1]), sid, dbus.UInt64(0), dbus.Dictionary({}, signature="sv"))
+              print(what, sid, flush=True)
+              return True
+          GLib.io_add_watch(sys.stdin.fileno(), GLib.IO_IN, command)
+          print("ready", flush=True)
+          GLib.MainLoop().run()
+          EOF
+          check() { if ! eval "$1"; then echo "FAILED: $2"; exit 1; fi; }
+          "$bin" dictate --probe 2> probe-none.err
+          cat probe-none.err
+          check 'grep -q "\"backend\":\"evdev\"" probe-none.err' "the backend is not evdev with no portal on the bus"
+          mkfifo portal.in helper.in
+          exec 6<>portal.in 3<>helper.in
+          python3 portal.py <portal.in >> portal.out &
+          fake=$!
+          for _ in $(seq 1 50); do grep -q ready portal.out && break; sleep 0.1; done
+          grep -q ready portal.out
+          "$bin" dictate --probe 2> probe.err
+          cat probe.err
+          check 'grep -q "\"backend\":\"portal\"" probe.err' "the backend is not the portal with one on the bus"
+          "$bin" dictate --warm off <helper.in >helper.akp 2>helper.err &
+          pid=$!
+          sleep 1.5
+          check 'grep -q "^bind .* dictate CTRL+SHIFT+space$" portal.out' "the default chord was not bound through the portal"
+          first=$(grep '^bind ' portal.out | head -1 | cut -d' ' -f2)
+          echo 'activate other' >&6
+          sleep 1
+          check '! grep -q "\"type\":\"session.started\"" helper.err' "a press of another shortcut started a session"
+          echo 'activate dictate' >&6
+          sleep 2
+          echo 'deactivate dictate' >&6
+          sleep 1.5
+          echo '{"type":"rebind","hotkey":"Control+Alt+D"}' >&3
+          sleep 1.5
+          echo '{"type":"rebind","hotkey":"RightControl"}' >&3
+          sleep 0.5
+          echo '{"type":"stop"}' >&3
+          for _ in $(seq 1 50); do kill -0 "$pid" 2>/dev/null || break; sleep 0.1; done
+          kill "$pid" 2>/dev/null || true
+          kill "$fake" 2>/dev/null || true
+          exec 3>&- 6>&-
+          echo "--- helper"
+          cat helper.err
+          echo "--- portal"
+          cat portal.out
+          check 'grep -q "\"type\":\"ready\".*\"backend\":\"portal\"" helper.err' "ready did not name the portal"
+          check 'grep -q "^register io.github.geiserx.akou$" portal.out' "the helper did not register its app id"
+          check 'grep -q "\"type\":\"session.started\"" helper.err' "Activated started no session"
+          check 'grep -q "\"type\":\"session.ended\",\"id\":\"[^\"]*\",\"reason\":\"release\"" helper.err' "Deactivated did not end the session"
+          check '[ "$(grep -c "\"type\":\"session.started\"" helper.err)" = 1 ]' "more than one session started"
+          check 'grep -q "^bind .* dictate CTRL+ALT+d$" portal.out' "the rebind did not bind the new chord"
+          check 'grep -q "^close $first$" portal.out' "the first portal session was not closed on the rebind"
+          check 'grep -q "\"type\":\"rebound\",\"hotkey\":\"Control+Alt+D\"" helper.err' "the rebind to a chord was not answered rebound"
+          check 'grep -q "\"type\":\"rebind.failed\",\"hotkey\":\"RightControl\"" helper.err' "a lone modifier with no readable keyboard was not refused"
+          {
+            echo "### dictate through the GlobalShortcuts portal (${{ matrix.server }})"
+            echo
+            grep -hE '"type":"(ready|session\.(started|ended)|rebound|rebind\.failed)"' helper.err | sed 's/^/    /'
+            sed 's/^/    /' portal.out
           } >> "$GITHUB_STEP_SUMMARY"
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
         with:

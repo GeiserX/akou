@@ -1,0 +1,28 @@
+# DC-N1: the dictation key on Linux through the GlobalShortcuts portal
+
+The question from [DICTATION.md](../ux/DICTATION.md) DC-N1, for a Linux desktop that has the GlobalShortcuts portal (KDE, GNOME 48 and later, Hyprland): how does `akou-capture dictate` hear its key there without reading `/dev/input`, what can the portal bind, and what has been checked?
+
+Result: partial
+
+## Answer
+
+- At start the helper asks the session bus for `org.freedesktop.portal.GlobalShortcuts` (its `version` property on `org.freedesktop.portal.Desktop`). If it answers, the backend in `ready` is `portal`; otherwise it is `evdev` ([dc-n1-linux-evdev.md](dc-n1-linux-evdev.md)). `--probe` reports the same without binding anything.
+- The helper first registers the app id `io.github.geiserx.akou` with `org.freedesktop.host.portal.Registry.Register`. A program outside a sandbox has no app id the portal can read, and GNOME binds nothing for an empty one. The registry exists from xdg-desktop-portal 1.19.1; on an older portal the call fails and binding goes on without it.
+- A binding is one portal session with one shortcut, `dictate`, whose preferred trigger is the chord in the XDG shortcuts format: `Control+Shift+Space` is `CTRL+SHIFT+space`, `Alt+Super+D` is `ALT+LOGO+d`. The portal answers each request with a `Response` signal, which may come only after the user has read a dialog. That wait runs on its own thread, never on the worker, and a newer binding abandons it.
+- `Activated` for that session and shortcut is the key going down, `Deactivated` the key coming up. The signal thread hands them to the gate at once, stamped when they arrive, and they run hold-or-toggle like a key ([portal.rs](../../native/akou-capture/src/dictate/portal.rs), [tap.rs](../../native/akou-capture/src/dictate/tap.rs)). A signal for another shortcut or another session counts for nothing.
+- `rebind` closes the portal session and opens a new one for the new chord. The old binding stops counting at once, so a late `Activated` from it starts nothing. If the user cancels the dialog or the portal fails, the helper says `warn portal-bind` once.
+- The portal takes chords of plain modifiers only. It has no way to name a modifier alone, a left or right side, `Fn` or a mouse button. On the portal backend such a binding goes to evdev when a keyboard under `/dev/input` is readable, and is refused with `rebind.failed` otherwise, so the chord that works stays bound. That is why `ready.grants.accessibility` still says whether a keyboard is readable on the portal backend: it tells the app whether those bindings can work.
+- While the portal holds the binding, the evdev reader opens no keyboard, and it drops what a keyboard already open sends, so one press is never heard twice. It still reads keyboards while the recorder is open (`record_keys`), where a keyboard is readable.
+- Nothing is swallowed: the desktop keeps the chord from the apps, but no other key, so `swallow_keys` is false and Escape, Enter and Shift+Enter do nothing to a session (DC-A4).
+- A trigger names a key symbol, which the layout decides. On a German layout `Control+Shift+Z` is the key labelled Z, where evdev would name the place.
+
+## The check
+
+- `cargo test` on Linux ([portal.rs](../../native/akou-capture/src/dictate/portal.rs)) serves a fake portal on a private `dbus-daemon` the test starts: the app id is registered; the default chord is bound as `CTRL+SHIFT+space`; `Activated` and `Deactivated` of that session reach the gate as a press and a release, while the same signals for another shortcut or session do not; a rebind binds the new chord in a new session and closes the old one, whose signals stop counting; a lone modifier closes the session and binds nothing; a cancelled dialog binds nothing, says so once, and its session's signals count for nothing. The trigger of every kind of binding is checked, and so is which bindings the portal backend refuses.
+- The `capture-linux` jobs in [ci.yml](../../.github/workflows/ci.yml), on both sound servers, run the shipping helper against a fake portal on the job's session bus, written in Python the way xdg-desktop-portal answers. No keyboard is readable there, so only the portal can start a session. The helper has to report `evdev` from `--probe` with no portal on the bus (the control), then `portal` with it; register its app id; bind `CTRL+SHIFT+space`; start nothing on an `Activated` of another shortcut; start one session on `Activated` and end it with `reason: release` on `Deactivated`; answer a rebind to `Control+Alt+D` with `rebound`, bind `CTRL+ALT+d` and close the first session; and refuse a rebind to `RightControl` with `rebind.failed`.
+
+## Still open
+
+- **A real desktop.** Neither check runs xdg-desktop-portal or a desktop's portal backend. The spike DICTATION.md names before the Linux half ships is still to do on real GNOME and KDE sessions: does `Deactivated` arrive reliably, including when the chord is released in another order or the window loses focus mid-press; does the dialog come back on every start or only once; does `Register` give an app id that GNOME accepts for a program started outside a desktop file. The checks here pin the helper's side of the protocol, not the desktops' behaviour.
+- **A trigger the user changed.** The dialog may let the user pick another trigger. The helper runs the session whatever the trigger is, but the app still shows the chord it asked for; the portal's answer (`shortcuts` with a `trigger_description`) and `ShortcutsChanged` are not read yet.
+- **The recorder on the portal.** Where no keyboard is readable, `record_keys` hears nothing, so the page has to take the chord as text or let the portal's dialog pick it.

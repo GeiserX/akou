@@ -36,8 +36,9 @@ objc2-core-graphics = { version = "0.3", default-features = false, features = ["
 futures = { version = "0.3", default-features = false, features = ["executor"] }
 libc = "0.2"
 pulseaudio = "0.3"
-# Dictation's media pause (DC-U8): MPRIS lives on the session bus. zbus is D-Bus in pure Rust, so,
-# like the sound server above, nothing links libdbus and the helper starts on any Linux.
+# Dictation's media pause (DC-U8) and its key through the GlobalShortcuts portal (DC-N1): MPRIS
+# and the portal live on the session bus. zbus is D-Bus in pure Rust, so, like the sound server
+# above, nothing links libdbus and the helper starts on any Linux.
 zbus = "5"
 
 [target.'cfg(target_os = "windows")'.dependencies]
