@@ -23,12 +23,14 @@
  *   undo and select all only through them.
  * - **Notifications** (DK-N1, DK-N2, DK-T5): `notify.ts` decides; the shell feeds it the app's
  *   starts and shares, the capture's health, and its own tray and hotkey starts, and shows each
- *   notice once a minute at most.
+ *   notice once a minute at most. With the dictation pill off, a learn chip for a fix made in the
+ *   app's field becomes one notification, which names no word (Notification Center keeps it), and
+ *   the fix waits in the words to review (DC-O4).
  */
 
 import { join } from "node:path";
 import type { DraftOpen, DraftRpc } from "../../ui/dictation-protocol.ts";
-import type { Chip } from "../../ui/pill-protocol.ts";
+import type { Chip, ChipAnswer } from "../../ui/pill-protocol.ts";
 import type { AppStatus, QuitQuestion } from "../../ui/protocol.ts";
 import type { DraftWindow } from "../dictation/draft.ts";
 import type { AkouApp, Announcement, WindowShell } from "../index.ts";
@@ -239,6 +241,10 @@ export interface ShellDictation extends Pick<PillDictation, "follow"> {
   hotkey(): string;
   /** The draft box's main side, or null with no dictation service. */
   draft?(): { handlers: DraftHandlers; attach(w: DraftWindow | null): void } | null;
+  /** A learn chip the pill showed was answered (DC-L4). */
+  chip?(a: ChipAnswer): Promise<boolean>;
+  /** A learn chip had nowhere to show: its pairs wait in the words to review (DC-O4). */
+  releaseChip?(id: string): void;
 }
 
 /** The app as the shell sees it. */
@@ -276,6 +282,8 @@ export function appForShell(app: AkouApp): ShellApp {
       follow: (fn) => app.dictation()?.follow(fn) ?? (() => {}),
       hotkey: () => app.dictation()?.hotkey() ?? "",
       draft: () => app.dictation()?.draft ?? null,
+      chip: async (a) => (await app.dictation()?.answerChip(a)) === true,
+      releaseChip: (id) => app.dictation()?.releaseChip(id),
     },
   };
 }
@@ -621,6 +629,11 @@ export class Shell implements WindowShell {
         this.syncDraft();
         void this.refresh();
       }) ?? (() => {});
+    // With the pill off, a learn chip falls back to a notification (DC-O4).
+    const unchip =
+      this.app.dictation?.follow((m) => {
+        if (m.kind === "chip" && !this.pill) this.chipNotice(m.chip);
+      }) ?? (() => {});
     const unhealth = this.bridge.app.watch((call, e) => {
       if (e.type === "health") this.notify({ type: "capture", call, ch: e.ch, state: e.state });
       // The indicator lives with the recording: from the call's start (or a new part) to its end.
@@ -633,10 +646,33 @@ export class Shell implements WindowShell {
       unannounce();
       unhealth();
       undictation();
+      unchip();
     };
     this.syncPill();
     this.syncDraft();
     await this.refresh();
+  }
+
+  /**
+   * A learn chip with the pill off (DC-O4): one notification per dictation, then the chip is let go
+   * with nothing written, so its fixes wait in the words to review on the Dictation page. It names
+   * no word: macOS keeps notifications in Notification Center, and the words stay in akou.
+   */
+  private chipNotice(c: Chip): void {
+    const one = c.candidates.length === 1;
+    const words = one ? "a word" : `${c.candidates.length} words`;
+    this.ui.showNotification(
+      c.mode === "learned"
+        ? {
+            title: `akou learned ${words} you fixed`,
+            body: `Undo ${one ? "it" : "them"} in Words to review on the Dictation page.`,
+          }
+        : {
+            title: `akou can learn ${words} you fixed`,
+            body: `${one ? "It waits" : "They wait"} in Words to review on the Dictation page.`,
+          },
+    );
+    this.app.dictation?.releaseChip?.(c.id);
   }
 
   /** Shows what `notifyFor` says for an event, unless the same showed within a minute. */

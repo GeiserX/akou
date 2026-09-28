@@ -17,19 +17,34 @@
  * the draft waits in the box, and closes when the box answers it. A window never outlives the app:
  * at the next start, and at every sweep, the audio of a finished dictation with no open window goes.
  *
- * The learning check (DC-L3) runs on that audio: a fix made in the draft box is decoded again from
- * the kept file by `check`, a local Qwen, while the learn window holds the file open.
+ * The learning check (DC-L3) runs on that audio: a fix made in the draft box, or in the app's own
+ * field after a direct insert, is decoded again from the kept file by `check`, a local Qwen, while
+ * the learn window holds the file open.
+ *
+ * Learning from the app's field (DC-L2): with `dictation.readField` on, the helper reads the field
+ * back after a paste and sends the runs of words the user changed. Their candidates go through the
+ * same offer as the draft box's, and the chip goes to the followers (`chip`): the pill shows it,
+ * and with the pill off the shell shows one notification and releases it, so its pairs wait in the
+ * words to review (DC-O4). Its answers come back through `answerChip`.
  */
 
 import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
-import type { Redecode } from "../../core/dictation/learn.ts";
+import { applyHunks, type Redecode } from "../../core/dictation/learn.ts";
+import type { Chip, ChipAnswer } from "../../ui/pill-protocol.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
 import { DraftBox, type DraftBoxOptions } from "./draft.ts";
-import { type Bindings, encodeCommand, type Grant, parseHelperLine } from "./protocol.ts";
+import { Learner } from "./learner.ts";
+import {
+  type Bindings,
+  type EditHunk,
+  encodeCommand,
+  type Grant,
+  parseHelperLine,
+} from "./protocol.ts";
 import type { RemoteFallback, RemoteHealth } from "./remote.ts";
 import {
   type AutoStop,
@@ -55,9 +70,10 @@ export const CONTROL_MS = 3000;
 
 /**
  * How long a dictation's audio outlives its insert with `dictation.keepAudio` off: DC-L2 reads the
- * field back within 60 s, and the learning check runs on the audio after that read.
+ * field back within 60 s of the insert, and the learning check runs on the audio after that read;
+ * the 5 s more let the helper's last read arrive. An answer from the helper closes it sooner.
  */
-export const LEARN_WINDOW_MS = 60_000;
+export const LEARN_WINDOW_MS = 65_000;
 
 /** The events after which a dictation's learn window can open or close. */
 const SETTLED = new Set([
@@ -68,6 +84,13 @@ const SETTLED = new Set([
   "dictation.empty",
   "dictation.failed",
 ]);
+
+/**
+ * How long a chip for a fix in the app's field waits for an answer before it is released, so its
+ * learn window closes even when no pill or shell took it: the page's 8 s question, its 6 s Undo
+ * line, and a margin.
+ */
+export const CHIP_RELEASE_MS = 20_000;
 
 /** A retry's answer (DC-G1): the same audio decoded again, beside the dictation, never over it. */
 export interface RetryAnswer {
@@ -199,7 +222,12 @@ export type DictationFollow =
   /** The dictation key was pressed while a dictation transcribes: refused, never queued (DC-A4). */
   | { kind: "busy" }
   /** A line for the pill while listening (`1 minute left`, DC-A3), never written anywhere. */
-  | { kind: "warning"; note: string };
+  | { kind: "warning"; note: string }
+  /**
+   * The learn chip for a fix made in the app's field after a direct insert (DC-L2, DC-L4): the
+   * pill shows it, or with the pill off the shell notifies and releases it (DC-O4).
+   */
+  | { kind: "chip"; chip: Chip };
 
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -213,6 +241,8 @@ export class DictationService {
   readonly audio: DictationAudio;
   /** The draft box's main side (DC-S1); the shell attaches the window. */
   readonly draft: DraftBox;
+  /** The offer to learn from a fix made in the app's own field (DC-L2, DC-L4). */
+  private readonly field: Learner;
   /** The open learn windows with `dictation.keepAudio` off: the timer that closes each. */
   private readonly windows = new Map<string, ReturnType<typeof setTimeout> | undefined>();
   private helper: Helper | null = null;
@@ -251,6 +281,18 @@ export class DictationService {
       unlearnEntry: d.unlearnEntry ?? (async () => {}),
       closeLearnWindow: (id) => this.closeLearnWindow(id),
       recheck: (id) => this.recheck(id),
+      ...(d.later ? { later: d.later } : {}),
+      ...(o.onLog ? { onLog: o.onLog } : {}),
+    });
+    this.field = new Learner({
+      log: this.log,
+      learnMode: d.learnMode ?? (() => "off"),
+      ...(d.knownPairs ? { knownPairs: d.knownPairs } : {}),
+      ...(d.commonWords ? { commonWords: d.commonWords } : {}),
+      learnEntry: d.learnEntry ?? (async () => {}),
+      unlearnEntry: d.unlearnEntry ?? (async () => {}),
+      recheck: (id) => this.recheck(id),
+      onDone: (id) => this.closeLearnWindow(id),
       ...(d.later ? { later: d.later } : {}),
       ...(o.onLog ? { onLog: o.onLog } : {}),
     });
@@ -360,6 +402,65 @@ export class DictationService {
       if (!samples) throw new Error("the dictation's audio is gone");
       return run(samples, glossary, language);
     };
+  }
+
+  /**
+   * The field read back after dictation `id` was pasted (DC-L2): the user's fix there is offered
+   * like one made in the draft box, and the chip goes to the followers. Null hunks, a field that
+   * could not be read, or an edit with nothing to offer ends the learn window now.
+   */
+  private async fromField(id: string, hunks: EditHunk[] | null): Promise<void> {
+    const it = this.log.item(id);
+    const base = it?.text
+      ? it.text
+          .split(/\s+/)
+          .filter((w) => w !== "")
+          .join(" ")
+      : null;
+    const edited = base !== null && hunks && hunks.length > 0 ? applyHunks(base, hunks) : null;
+    if (!it || base === null || edited === null) {
+      if (it && base !== null && hunks && hunks.length > 0)
+        this.o.onLog?.("warn", `dictation ${id}: the field's edit does not match the insert`);
+      this.closeLearnWindow(id);
+      return;
+    }
+    // The learning runs on the audio: the window stays open until the chip is over.
+    clearTimeout(this.windows.get(id));
+    if (this.windows.has(id)) this.windows.set(id, undefined);
+    const chip = await this.field.offer({
+      id,
+      base,
+      edited,
+      words: it.words,
+      language: it.language,
+    });
+    if (!chip) {
+      this.closeLearnWindow(id);
+      return;
+    }
+    this.field.shown(chip);
+    const later =
+      this.o.draft?.later ??
+      ((ms: number, fn: () => void) => {
+        const t = setTimeout(fn, ms);
+        t.unref?.();
+        return () => clearTimeout(t);
+      });
+    later(CHIP_RELEASE_MS, () => this.field.release(id));
+    this.tell({ kind: "chip", chip });
+  }
+
+  /** The user's answer to a chip the pill showed for a fix in the app's field (DC-L4). */
+  answerChip(a: ChipAnswer): Promise<boolean> {
+    return this.field.answer(a);
+  }
+
+  /**
+   * The chip for dictation `id` has nowhere to show (the pill is off): it is over with nothing
+   * written, so its pairs wait in the words to review (DC-O4, DC-L5).
+   */
+  releaseChip(id: string): void {
+    this.field.release(id);
   }
 
   private dropAudio(id: string): void {
@@ -549,6 +650,7 @@ export class DictationService {
       onWarning: (note) => this.tell({ kind: "warning", note }),
       ...(this.o.autoStop ? { autoStop: this.o.autoStop } : {}),
       ...(this.o.spokenSend ? { spokenSend: this.o.spokenSend } : {}),
+      onEdit: (id, hunks) => void this.fromField(id, hunks),
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -668,6 +770,7 @@ export class DictationService {
 
   async close(): Promise<void> {
     clearInterval(this.sweeper);
+    this.field.clear();
     for (const t of this.windows.values()) clearTimeout(t);
     this.windows.clear();
     await this.stop();
