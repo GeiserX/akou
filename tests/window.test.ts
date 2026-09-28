@@ -60,6 +60,24 @@ describe("the static bundle", () => {
   });
 });
 
+/** Every rule in `css` whose declarations read `var(--name)`, by selector. */
+function rulesUsing(css: string, name: string): string[] {
+  const bare = css.replace(/\/\*[\s\S]*?\*\//g, "");
+  return [...bare.matchAll(/([^{}]+)\{([^{}]*)\}/g)]
+    .filter((m) => (m[2] ?? "").includes(`var(${name})`))
+    .map((m) => (m[1] ?? "").trim().replace(/\s+/g, " "));
+}
+
+describe("one accent per screen (the design's rules)", () => {
+  test("theme.css reads --accent only in the welcome's Download and the focus ring", () => {
+    const css = readFileSync(join(UI_DIR, "theme.css"), "utf8");
+    expect(rulesUsing(css, "--accent").sort()).toEqual(["#welcome button.go", ":focus-visible"]);
+    // Positive control: one more rule painting with the accent is caught.
+    const more = `${css}\n.row.playing .body { background: var(--accent); }`;
+    expect(rulesUsing(more, "--accent")).toContain(".row.playing .body");
+  });
+});
+
 describe("the window's own Content Security Policy", () => {
   // The ElectroBun window loads index.html from views://, where no server adds the header: the
   // page carries the policy itself, or the window runs with none at all.

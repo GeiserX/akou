@@ -12,7 +12,17 @@ import { formatWall } from "../../src/core/log/clock.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import type { LogBuilder } from "../helpers.ts";
 import { tempDir } from "../helpers.ts";
-import { seedCall, standardCall, T0, TZ, UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
+import {
+  seedCall,
+  silentWav,
+  standardCall,
+  T0,
+  TZ,
+  UI_TIMEOUT,
+  type UiRig,
+  uiRig,
+  until,
+} from "./rig.ts";
 
 async function withRig<T>(
   o: Parameters<typeof uiRig>[0] & { seed?: (home: string) => void },
@@ -488,6 +498,45 @@ describe("[W4.4] the line menu stays with its line", () => {
 });
 
 describe("the player bar (W5.3 to W5.6)", () => {
+  test(
+    "the bar exists only with a recording: none with no call, none while the call records, there once it is saved",
+    async () => {
+      const t = tempDir("akou-wav-");
+      try {
+        await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+          const page = await rig.open();
+          // No call: the workspace is on screen, but the bar has nothing to play.
+          await until(async () => (await text(page, "#state")) === "ready", 5000, "ready");
+          expect(await page.isVisible("#scroller")).toBe(true);
+          expect(await page.getAttribute("#player-bar", "hidden")).toBe("");
+          expect(await page.isVisible("#player-bar")).toBe(false);
+          // A live call: the transcript fills in, and still no bar.
+          const id = await rig.startCall();
+          await until(async () => (await text(page, "#state")) === "rec", 5000, "recording");
+          await page.waitForTimeout(500);
+          expect(await page.isVisible("#player-bar")).toBe(false);
+          // Saved with its part: the bar is there, under the transcript, and plays.
+          await rig.api("POST", "/calls/live/stop");
+          await until(() => page.isVisible("#player-bar"), 8000, "the bar once saved");
+          const bar = await page.locator("#player-bar").boundingBox();
+          const lines = await page.locator("#scroller").boundingBox();
+          expect(bar && lines).toBeTruthy();
+          if (bar && lines) {
+            expect(Math.round(bar.y)).toBe(Math.round(lines.y + lines.height));
+            expect(bar.x).toBe(lines.x);
+            expect(bar.height).toBeLessThanOrEqual(49);
+          }
+          expect(await page.getAttribute(`#calls li[data-id="${id}"] button`, "aria-current")).toBe(
+            "true",
+          );
+        });
+      } finally {
+        t.cleanup();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
   test(
     "[W5.3] seeking to 50 % shows the wall time of that instant, never a bare offset",
     async () => {

@@ -28,6 +28,7 @@ import {
   formatDuration,
   groupCalls,
   HueBook,
+  hasRecording,
   languages,
   recordKey,
   speakerTotals,
@@ -410,6 +411,8 @@ class App {
     for (const id of ["scroller", "side"]) byId(id).hidden = on;
     // The transcript header goes with the transcript, and needs a call to describe.
     byId("call-head").hidden = on || !this.view()?.call;
+    // The player exists only when the open call has a recording to play (WINDOW section 5).
+    byId("player-bar").hidden = on || !hasRecording(this.view());
     document.body.classList.toggle("welcoming", on);
     // The readiness row (WINDOW section 13): what is missing, and the page that fixes it.
     const s = this.status;

@@ -6,7 +6,7 @@ The window is one of two equal ways to drive akou. The other is the harness, thr
 
 ## 0. The simple version
 
-- **One window, three columns.** Calls on the left, the transcript in the middle, and on the right Ask on top with the last answer, then Notes with a Notes | Enhanced toggle, then the note input at the foot. A composer row on top holds the state, the new call's fields, the Mic and Call meters and Record; the open call's header sits over the transcript. A player bar sits under the side column.
+- **One window, three columns.** Calls on the left, the transcript in the middle, and on the right Ask on top with the last answer, then Notes with a Notes | Enhanced toggle, then the note input at the foot. A composer row on top holds the state, the new call's fields, the Mic and Call meters and Record; the open call's header sits over the transcript. A slim player bar sits under the transcript, and only when the open call has a recording.
 - **Asking is one keystroke away.** `Mod+J` focuses the ask box, and the command palette turns any text it cannot match into a question. The small floating indicator that stays up while the meeting app is in front belongs to [DESKTOP.md](DESKTOP.md) (DK-F1). It carries no transcript text, so it is safe during a screen share, and clicking it brings this window forward.
 - **One action registry.** Every action (Record, Mute, Find, Copy transcript, Ask "Catch me up", Rename speaker) is one entry with an id, a label, keys and a condition. The buttons, the keyboard map, the command palette, the `?` sheet, the application menu and the tooltips all read that registry. Adding an action adds it everywhere.
 - **One message catalog per language.** English and Spanish first. Every string the window, the tray and the notifications show comes from it.
@@ -48,7 +48,8 @@ Columns:
 │   1:1 Ana    │ …                                        ├─────────────────────────────┤
 │ ▸ HIRING   1 │ ┆ 15:42  c3?  (still being spoken)  ┆    │ [Type a note, Enter to add] │
 │              │                          [↓ Back to live]│ - bullet [] action ? …      │
-│              │                                          │ ▶ 15:41:07  1.0x  mic ◂▸ call│
+│              ├ player bar, saved calls only ────────────┤                             │
+│              │ ▶ 15:41:07 ──●─── 16:03:40 1.0x mic◂▸call│                             │
 └──────────────┴──────────────────────────────────────────┴─────────────────────────────┘
 ```
 
@@ -60,7 +61,7 @@ Columns:
 | Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
 | Transcript | committed lines, the provisional row, the find bar when open | the fold |
 | Side column | on top the ask box with its presets menu, then the last question and its cited answer; under it Notes with its count and the Notes \| Enhanced toggle over one of the two panes; at the foot the note input with its markers as hints | the fold and the ask stream |
-| Player bar | play or pause, position as wall time, speed, balance | the call's audio |
+| Player bar | under the transcript, only for a saved call with a recorded part (never with no call or during a live call): play or pause, position as wall time, speed, balance | the call's audio |
 | Dialogs | Settings, Words (review and vocabulary), share options, speaker popover, shortcuts sheet, command palette | registry and fold |
 
 Under 900 px wide the calls column collapses to a button in the header. Under 640 px the side pane becomes a drawer over the transcript.
@@ -171,7 +172,7 @@ The log is append-only, so an edit is a new revision, never a rewrite: `seg rev+
 
 ## 5. Audio sync
 
-The player bar gets real controls. Line-level sync comes first, because it needs nothing new in the log. Word-level sync waits for word timings, which the multi-engine fusion work needs anyway.
+The player bar gets real controls. It is a slim bar under the transcript, and it exists only when the open call has a recording: a saved call with at least one part. With no call, and while a call records, the bar is gone (its keys have nothing to act on). Line-level sync comes first, because it needs nothing new in the log. Word-level sync waits for word timings, which the multi-engine fusion work needs anyway.
 
 ```
  ▶ 15:41:07  ───────●─────────── 16:03:40   1.25x   mic ◂──●──▸ call
@@ -272,6 +273,8 @@ Find works on the fold the page already holds, so it needs no API and no index. 
 | W7.3 | Filter the call list by title, workspace and date | P2 | Audit: no filter over 200 calls | Typing in the filter narrows the list; no request reads call content | missing |
 
 ## 8. Speakers
+
+Speaker colours stay off the accent's hue, so the accent is only ever the one primary action. Everyone else takes a hue from the palette in order of first appearance; you are drawn in a neutral grey (`--you`), in the transcript and in the speaker chips.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
