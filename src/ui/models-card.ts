@@ -1,7 +1,7 @@
 /**
  * The welcome (docs/ux/WINDOW.md section 10, docs/ux/design-explorations/README.md): while the
- * speech models are missing, downloading or failed, it replaces the calls, the transcript, the side
- * pane and the player. Three steps: the speech models with the one download (`POST /models/pull`),
+ * speech models are missing, downloading or failed, it replaces the transcript, the side pane and
+ * the player, and the sidebar with the calls stays. Three steps: the speech models with the one download (`POST /models/pull`),
  * the permissions macOS asks for at the first recording, and the optional agent. Recording is
  * refused until the models are there (`503 models_missing`), so Record waits with its reason and
  * this is the first thing a new user acts on. Once they are there the welcome goes by itself.

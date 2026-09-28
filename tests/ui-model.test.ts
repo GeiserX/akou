@@ -161,6 +161,13 @@ describe("the state label (hark-viewer's states)", () => {
     );
   });
 
+  test("setup, never ready, while the welcome shows because the speech models are missing", () => {
+    const setup = { ...base, view: null, status: status(null), setup: true };
+    expect(stateLabel(setup).label).toBe("setup");
+    // A call recording elsewhere still says so.
+    expect(stateLabel({ ...setup, status: status("x") }).label).toBe("another call is recording");
+  });
+
   test("recording, paused, not capturing", () => {
     const v = live();
     expect(stateLabel({ ...base, view: v, status: status(v.call?.id ?? null) })).toMatchObject({

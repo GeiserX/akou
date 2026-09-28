@@ -100,6 +100,11 @@ export interface StateInput {
    */
   reopen?: boolean;
   lines: number;
+  /**
+   * The welcome is on screen (WINDOW section 10): the speech models are missing, so nothing can
+   * record, and the state word must not say ready.
+   */
+  setup?: boolean;
 }
 
 /** Channel health states that mean nothing is being recorded on that side. */
@@ -157,6 +162,8 @@ export function stateLabel(i: StateInput): StateLabel {
   }
   if (!v?.call) {
     if (liveId) return { cls: "other", label: "another call is recording", meta: "" };
+    if (i.setup)
+      return { cls: "ready", label: "setup", meta: "the speech models are not here yet" };
     return { cls: "ready", label: "ready", meta: "" };
   }
   if (v.live) {

@@ -1976,8 +1976,10 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.getAttribute("#record", "title")).toBe(
               "Record needs the speech models: download them first.",
             );
-            // No workspace means no composer controls: the row keeps only its state word.
+            // No workspace means no composer controls: the row keeps only its state word, and
+            // that word never says ready while nothing can record.
             expect(await page.isVisible("#state")).toBe(true);
+            expect(await text(page, "#state")).toBe("setup");
             for (const sel of ["#record", "#newtitle", "#template", "#meters"]) {
               expect(await page.isVisible(sel)).toBe(false);
             }
@@ -2024,6 +2026,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.isVisible("#tab-notes")).toBe(true);
             expect(await text(page, "#readiness-text")).toBe("Ready");
             expect(await page.getAttribute("#readiness", "data-state")).toBe("ready");
+            expect(await text(page, "#state")).toBe("ready");
             expect(await page.isVisible("#models-pip")).toBe(false);
             expect(await page.isVisible("#readiness-setup")).toBe(false);
             expect(await page.isDisabled("#record")).toBe(false);
