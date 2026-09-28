@@ -151,9 +151,12 @@ pub mod fake {
     use super::*;
     use std::sync::{Arc, Mutex};
 
-    /// Players in memory; every call is logged as `pause <id>` or `play <id>`.
+    /// The players with their status, and every call as `pause <id>` or `play <id>`.
+    type State = (Vec<(String, Status)>, Vec<String>);
+
+    /// Players in memory.
     #[derive(Clone, Default)]
-    pub struct Board(pub Arc<Mutex<(Vec<(String, Status)>, Vec<String>)>>);
+    pub struct Board(pub Arc<Mutex<State>>);
 
     impl Board {
         pub fn with(players: &[(&str, Status)]) -> Board {

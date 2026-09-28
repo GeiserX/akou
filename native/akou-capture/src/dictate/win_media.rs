@@ -33,7 +33,7 @@ impl Smtc {
         // SAFETY: once, on the media thread, before any WinRT call on it.
         let _ = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
         let manager = Manager::RequestAsync()
-            .and_then(|op| op.get())
+            .and_then(|op| op.join())
             .map_err(text)?;
         Ok(Smtc { manager })
     }
@@ -67,9 +67,9 @@ impl Smtc {
             return Err(format!("{id} is gone"));
         };
         let done = if pause {
-            s.TryPauseAsync().and_then(|op| op.get())
+            s.TryPauseAsync().and_then(|op| op.join())
         } else {
-            s.TryPlayAsync().and_then(|op| op.get())
+            s.TryPlayAsync().and_then(|op| op.join())
         };
         if done.map_err(text)? {
             Ok(())
