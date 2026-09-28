@@ -64,6 +64,7 @@ export function dictationBody(it: DictationItem) {
     ...(it.language_forced !== null ? { language_forced: it.language_forced } : {}),
     ...(it.echo_retry ? { echo_retry: true } : {}),
     ...(it.error ? { error: it.error } : {}),
+    ...(it.learn ? { learn: it.learn } : {}),
   };
 }
 

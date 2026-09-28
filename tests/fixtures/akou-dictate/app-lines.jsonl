@@ -1,5 +1,5 @@
 {"type":"rebind","hotkey":"RightCommand","draft":"","fixLast":"","pasteLast":"","activation":"hold-or-toggle"}
-{"type":"insert","id":"1","text":"hello","method":"paste","send_key":"none","target":{"app":"Slack","pid":7,"window":"w1","field":"editable"}}
+{"type":"insert","id":"1","text":"hello","method":"paste","send_key":"none","target":{"app":"Slack","pid":7,"window":"w1","field":"editable"},"read_field":true}
 {"type":"settled","id":"1"}
 {"type":"focus","target":{"app":"Slack","pid":7,"window":"w1","field":"secure"}}
 {"type":"session.start"}

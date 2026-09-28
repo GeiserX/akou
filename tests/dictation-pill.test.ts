@@ -9,6 +9,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { DictationDraft, DictationEvent } from "../src/core/dictation/events.ts";
+import { LEARNED_MS } from "../src/main/dictation/learner.ts";
 import type { DictationFollow } from "../src/main/dictation/service.ts";
 import { MAX_WARNING } from "../src/main/dictation/session.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
@@ -16,6 +17,7 @@ import { hotkeyLabel } from "../src/main/window/hotkey.ts";
 import {
   BUSY_MS,
   BUSY_NOTE,
+  CHIP_WAIT_MS,
   DONE_MS,
   ERROR_MS,
   LOADING_NOTE,
@@ -36,7 +38,7 @@ import {
   type ShellState,
 } from "../src/main/window/shell.ts";
 import { fileState } from "../src/main/window/state.ts";
-import type { PillState } from "../src/ui/pill-protocol.ts";
+import type { Chip, ChipAnswer, PillState } from "../src/ui/pill-protocol.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -326,6 +328,86 @@ describe("DC-O1: the pill's states from the session", () => {
   });
 });
 
+describe("DC-L4, DC-L2: the learn chip in the pill after a direct insert", () => {
+  const CHIP: Chip = {
+    id: "d1",
+    candidates: [{ term: "Kubernetes", heard: "kubernetis" }],
+    mode: "ask",
+  };
+
+  function withChip() {
+    const f = pill();
+    const answers: ChipAnswer[] = [];
+    f.d.chip = async (a) => {
+      answers.push(a);
+      return true;
+    };
+    return { ...f, answers };
+  }
+
+  test("a chip shows the idle pill's window; Learn keeps it for the Undo line, then it hides", async () => {
+    const f = withChip();
+    f.tell({ kind: "chip", chip: CHIP });
+    expect(f.sent.at(-1)).toEqual({ name: "chip", payload: CHIP });
+    expect(f.states()).toEqual([]);
+    expect(f.visible.at(-1)).toBe(true);
+    const learn: ChipAnswer = { id: "d1", action: "learn", terms: ["Kubernetes"] };
+    expect(await f.p.handlers.chip(learn)).toBe(true);
+    expect(f.answers).toEqual([learn]);
+    expect(f.visible.at(-1)).toBe(true);
+    expect(f.t.pending()).toEqual([LEARNED_MS]);
+    f.t.run(LEARNED_MS);
+    expect(f.visible.at(-1)).toBe(false);
+  });
+
+  test("Not a word takes it down at once, and an outcome still showing keeps the window", async () => {
+    const f = withChip();
+    spoken(f, "d0");
+    f.event({ type: "dictation.inserted", id: "d0", method: "paste", receipt_ms: 5 });
+    f.to("idle");
+    f.tell({ kind: "chip", chip: CHIP });
+    expect(await f.p.handlers.chip({ id: "d1", action: "reject", terms: ["Kubernetes"] })).toBe(
+      true,
+    );
+    expect(f.visible.at(-1)).toBe(true);
+    f.t.run(DONE_MS);
+    expect(f.states().at(-1)).toEqual({ state: "hidden" });
+    expect(f.visible.at(-1)).toBe(false);
+  });
+
+  test("an outcome ending under a chip leaves the window up until the chip is answered", async () => {
+    const f = withChip();
+    spoken(f, "d0");
+    f.event({ type: "dictation.inserted", id: "d0", method: "paste", receipt_ms: 5 });
+    f.to("idle");
+    f.tell({ kind: "chip", chip: CHIP });
+    f.t.run(DONE_MS);
+    expect(f.states().at(-1)).toEqual({ state: "hidden" });
+    expect(f.visible.at(-1)).toBe(true);
+    expect(await f.p.handlers.chip({ id: "d1", action: "ignore" })).toBe(true);
+    expect(f.visible.at(-1)).toBe(false);
+  });
+
+  test("a page that never answers is taken as ignoring the chip", () => {
+    const f = withChip();
+    f.tell({ kind: "chip", chip: CHIP });
+    expect(f.t.pending()).toEqual([CHIP_WAIT_MS]);
+    f.t.run(CHIP_WAIT_MS);
+    expect(f.answers).toEqual([{ id: "d1", action: "ignore" }]);
+    expect(f.visible.at(-1)).toBe(false);
+  });
+
+  test("a word learned for the user (learn: auto) stays for its Undo line only", () => {
+    const f = withChip();
+    f.tell({ kind: "chip", chip: { ...CHIP, mode: "learned" } });
+    expect(f.visible.at(-1)).toBe(true);
+    expect(f.t.pending()).toEqual([LEARNED_MS]);
+    f.t.run(LEARNED_MS);
+    expect(f.answers).toEqual([]);
+    expect(f.visible.at(-1)).toBe(false);
+  });
+});
+
 describe("DC-D2, DC-O2: no message to the pill carries the dictated words", () => {
   const SAID = "the launch code is swordfish";
 
@@ -459,6 +541,7 @@ describe("DC-O1: the pill's window", () => {
       },
     };
     let fire = () => {};
+    const released: string[] = [];
     const settings: Record<string, unknown> = {
       "app.hotkey": "",
       "app.openAtLogin": false,
@@ -484,6 +567,7 @@ describe("DC-O1: the pill's window", () => {
         },
         follow: fd.d.follow,
         hotkey: () => "RightCommand",
+        releaseChip: (id) => released.push(id),
       },
     };
     const bridge = {
@@ -504,7 +588,7 @@ describe("DC-O1: the pill's window", () => {
       fd.st.state = state;
       fire();
     };
-    return { shell, opened, win, r, to, settings, saved: () => saved, fd, logs, f };
+    return { shell, opened, win, r, to, settings, saved: () => saved, fd, logs, f, released };
   }
 
   test("macOS opens a non-activating panel, Windows a no-activate window, hidden until a session", async () => {
@@ -544,9 +628,40 @@ describe("DC-O1: the pill's window", () => {
     s.to("listening");
     expect(s.opened).toEqual([]);
     expect(s.logs.some((l) => l.includes("the dictation pill did not open"))).toBe(true);
-    // Nothing is left following the session for a window that never opened.
-    expect(s.fd.followers.size).toBe(0);
+    // Nothing is left following the session for a window that never opened: the one follower
+    // is the shell's own, which turns a learn chip into a notification while no pill shows (DC-O4).
+    expect(s.fd.followers.size).toBe(1);
     await until(() => s.f.title() === "● dictating", 1000, "the tray to say dictating");
+  });
+
+  test("DC-O4: a learn chip goes to the pill while it is on, and to one notification naming no word while it is off", async () => {
+    const chip: Chip = {
+      id: "d1",
+      candidates: [{ term: "Kubernetes", heard: "kubernetis" }],
+      mode: "ask",
+    };
+    const on = await shellWith({ platform: "darwin" });
+    on.fd.tell({ kind: "chip", chip });
+    expect(on.r.sent.filter((m) => m.name === "chip")).toEqual([{ name: "chip", payload: chip }]);
+    expect(on.win.visible).toBe(true);
+    expect(on.f.notices).toEqual([]);
+    expect(on.released).toEqual([]);
+    await on.shell.close();
+
+    const off = await shellWith({ platform: "darwin", pill: "off" });
+    off.fd.tell({ kind: "chip", chip });
+    off.fd.tell({ kind: "chip", chip: { ...chip, id: "d2", mode: "learned" } });
+    expect(off.f.notices).toEqual([
+      {
+        title: "akou can learn a word you fixed",
+        body: "It waits in Words to review on the Dictation page.",
+      },
+      {
+        title: "akou learned a word you fixed",
+        body: "Undo it in Words to review on the Dictation page.",
+      },
+    ]);
+    expect(off.released).toEqual(["d1", "d2"]);
   });
 
   test("dictation off closes the window; a drag is remembered and restored at the next open", async () => {

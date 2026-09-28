@@ -80,8 +80,12 @@
  *   --focus-change          the target lost focus before the insert: `insert.failed` (DC-N9).
  *                           A `focus {target}` (the draft box's Enter) brings the target back:
  *                           from then until the next session, inserts land there
- *   --dormant-tree          the field cannot be read back: `edit.unreadable` after the insert
- *                           (DC-L2)
+ *   --dormant-tree          the field cannot be read back: `edit.unreadable` after an insert
+ *                           with `read_field` (DC-L2)
+ *   --edit JSON             the hunks of the user's fix in the field, sent as `edit` right after
+ *                           the receipt of an insert with `read_field` (the real helper sends it
+ *                           at a commit key or after 60 s); default `[]`, nothing changed. Every
+ *                           paste with `read_field` gets exactly one `edit` or `edit.unreadable`
  *   --tap-disabled-at MS    the first key event at or after MS finds the tap disabled and is lost;
  *                           the tap is re-enabled from that callback (DC-N1)
  *   --deaf-start            `session.start` is read and dropped, as the real helper drops it while
@@ -554,7 +558,12 @@ async function runDictate(): Promise<void> {
           if (c.method !== "clipboard" && c.send_key !== "none")
             log(opt("--inserter-log"), { type: "send", key: c.send_key, at: now() });
           say({ type: "inserted", id: c.id, method: c.method, receipt_ms: receiptMs });
-          if (flag("--dormant-tree")) say({ type: "edit.unreadable", id: c.id, reason: "dormant" });
+          // DC-L2's read-back: one answer per paste that asked for it, never after the clipboard.
+          if (c.read_field === true && c.method !== "clipboard") {
+            if (flag("--dormant-tree"))
+              say({ type: "edit.unreadable", id: c.id, reason: "unreadable" });
+            else say({ type: "edit", id: c.id, hunks: JSON.parse(opt("--edit") ?? "[]") });
+          }
         }, receiptMs);
         return;
       }

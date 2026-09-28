@@ -55,6 +55,8 @@ export interface EditHunk {
   inserted: string;
   /** What the field holds there now. */
   now: string;
+  /** The index of the hunk's first inserted word, counted over the inserted text's words. */
+  at?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -117,6 +119,11 @@ export type AppToHelper =
       target: Target;
       /** `dictation.restoreClipboard`: absent, the helper puts the old clipboard back. */
       restore?: boolean;
+      /**
+       * `dictation.readField` (DC-L2): read the field back after the insert and answer with one
+       * `edit` or `edit.unreadable`. Absent, nothing is read.
+       */
+      read_field?: boolean;
     }
   /** This session will not be inserted: the helper stops holding Escape and Enter now. */
   | { type: "settled"; id: string }
@@ -157,7 +164,11 @@ function isTarget(v: unknown): v is Target {
 function isHunk(v: unknown): v is EditHunk {
   if (typeof v !== "object" || v === null) return false;
   const h = v as Record<string, unknown>;
-  return isStr(h.inserted) && isStr(h.now);
+  return (
+    isStr(h.inserted) &&
+    isStr(h.now) &&
+    (h.at === undefined || (isNum(h.at) && Number.isInteger(h.at) && h.at >= 0))
+  );
 }
 
 /** Null when the message is well formed, else what is wrong with it. */
