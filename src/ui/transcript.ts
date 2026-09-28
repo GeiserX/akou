@@ -361,8 +361,8 @@ export class TranscriptPane {
   }
 
   /**
-   * The line being played (W5.6): lit, and kept in view while the audio runs and the reader has
-   * not scrolled by hand. `loaded` false means nothing is loaded: no light, and following resets.
+   * The line being played (W5.6): lit, and kept in view while the audio runs, or when a new line
+   * lights as it stops, unless the reader scrolled by hand. `loaded` false means nothing is loaded: no light, and following resets.
    */
   playing(id: string | null, running: boolean, loaded = true): void {
     const a = this.audio;
@@ -379,8 +379,9 @@ export class TranscriptPane {
     }
     row?.classList.add("playing");
     row?.setAttribute("aria-current", "true");
+    const before = a.id;
     a.id = row ? (id as string) : null;
-    if (running && a.follow && a.id) this.keepInView(a.id);
+    if ((running || a.id !== before) && a.follow && a.id) this.keepInView(a.id);
   }
 
   /** A scroll by hand while audio is loaded stops the following until Follow is pressed. */
