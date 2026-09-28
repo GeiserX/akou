@@ -272,7 +272,8 @@ interface Listening {
   /** Why the app asked the helper to stop it (DC-A3): its `tap` is logged as this. */
   stopping: "silence" | "max" | null;
   /** The pill was told one minute is left. */
-  warned: boolean;
+  /** The second of audio at which the pill was warned of the maximum length, or null. */
+  warned: number | null;
   /** The audio not judged by the VAD yet, less than a window of it. */
   window: Float32Array;
   filled: number;
@@ -455,7 +456,7 @@ export class DictationSession {
           asked: "insert",
           latched: door || this.o.bindings().activation === "toggle",
           stopping: null,
-          warned: false,
+          warned: null,
           window: new Float32Array(SILENCE_WINDOW),
           filled: 0,
           judged: 0,
@@ -586,8 +587,8 @@ export class DictationSession {
     const a = this.o.autoStop?.();
     if (!a) return;
     const limit = a.maxMinutes * 60 * CAPTURE_RATE;
-    if (!c.warned && c.samples >= limit - 60 * CAPTURE_RATE) {
-      c.warned = true;
+    if (c.warned === null && c.samples >= limit - 60 * CAPTURE_RATE) {
+      c.warned = Math.round((c.samples / CAPTURE_RATE) * 1000) / 1000;
       this.o.onWarning?.(MAX_WARNING);
     }
     if (c.samples >= limit) {
@@ -688,7 +689,13 @@ export class DictationSession {
     const samples = concat(c.chunks, c.samples);
     // A cancelled dictation keeps its audio too, so it can still be retried from history.
     this.keep(id, c, samples);
-    this.write({ type: "dictation.ended", id, reason, seconds });
+    this.write({
+      type: "dictation.ended",
+      id,
+      reason,
+      seconds,
+      ...(c.warned !== null ? { warned: c.warned } : {}),
+    });
     if (reason === "cancel" || reason === "stop") {
       c.hold?.request.cancel();
       this.write({ type: "dictation.cancelled", id });
@@ -757,20 +764,15 @@ export class DictationSession {
     const language = this.o.language?.();
     let r: DictationResult;
     try {
-      r = await decodeDictation(this.o, engine, samples, language, c.secure, c.hold?.request);
+      r = await decodeDictation(this.o, engine, samples, language, c.secure, c.hold?.request, {
+        spokenSend: this.o.spokenSend?.() ?? false,
+      });
     } catch (err) {
       this.notInserted(c, { type: "dictation.failed", id, error: (err as Error).message });
       return;
     }
-    // "send it" at the very end (DC-S5): the words go, and the send key goes with the insert.
-    let spoken = false;
-    if (r.kind === "text" && !c.secure && this.o.spokenSend?.()) {
-      const s = spokenSend(r.text);
-      if (s.send) {
-        r = { ...r, text: s.text };
-        spoken = true;
-      }
-    }
+    // "send it" at the very end (DC-S5): the words went, and the send key goes with the insert.
+    const spoken = r.kind === "text" && r.send;
     if (r.kind === "text" && r.d.notice) this.o.onNotice?.(id, r.d.notice);
     // Never a password field's anything in the log (DC-N8): its text goes to the helper only.
     if (r.kind === "text" && !c.secure) this.write(textEvent(id, r, engine.name, language));
@@ -817,15 +819,21 @@ export class DictationSession {
   }
 }
 
-/** What a dictation's buffer became: nothing heard, or the text to insert and what was decoded. */
+/**
+ * What a dictation's buffer became: nothing heard, or the text to insert and what was decoded;
+ * `send` when it ended in a spoken send (DC-S5), whose words are gone from `text`.
+ */
 export type DictationResult =
   | { kind: "empty" }
-  | { kind: "text"; d: EngineDecoded; text: string; echoRetry: boolean };
+  | { kind: "text"; d: EngineDecoded; text: string; echoRetry: boolean; send?: boolean };
 
 /**
  * A dictation's buffer through the guards and the text rules (DC-E6, DC-L6, DC-S7, DC-S6): no
  * speech is no decode; an echoed context is decoded again without it; the text is the
  * vocabulary's, less its fillers, with its spoken marks replaced. A password field (`secure`) gets exactly what was heard. Throws when the engine fails.
+ *
+ * With `spokenSend`, a trailing "send it" is judged on the text before the formatting pass
+ * (DC-U6), which could drop the phrase or add one: its words leave and `send` is set.
  */
 export async function decodeDictation(
   o: TextRules,
@@ -834,6 +842,7 @@ export async function decodeDictation(
   language: string | undefined,
   secure = false,
   hold?: EngineHold,
+  x: { spokenSend?: boolean } = {},
 ): Promise<DictationResult> {
   if ((await hearsSpeech(o, samples)) === false) {
     hold?.cancel();
@@ -858,10 +867,12 @@ export async function decodeDictation(
   if (o.fillers?.()) text = removeFillers(text, langs);
   const lists = punctuationLists(o);
   if (lists) text = spokenPunctuation(text, d.words, langs, lists);
+  let send = false;
+  if (x.spokenSend) ({ text, send } = spokenSend(text));
   const f = await formatted(o, text);
   if (f?.skipped)
     d = { ...d, notice: d.notice ? `${d.notice}; ${FORMAT_SKIPPED}` : FORMAT_SKIPPED };
-  return { kind: "text", d, text: f?.text ?? text, echoRetry };
+  return { kind: "text", d, text: f?.text ?? text, echoRetry, ...(send ? { send } : {}) };
 }
 
 /** The pill's line when the formatting pass was skipped and the raw text went in (DC-U6). */

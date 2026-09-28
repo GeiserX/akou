@@ -48,7 +48,12 @@ describe("DC-S5: a spoken dictation ending in send it", () => {
 
   async function dictate(
     said: string,
-    o: { spokenSend?: boolean; insert?: InsertPolicy; secure?: boolean } = {},
+    o: {
+      spokenSend?: boolean;
+      insert?: InsertPolicy;
+      secure?: boolean;
+      format?: (text: string) => Promise<{ text: string; skipped: string | null }>;
+    } = {},
   ) {
     const t = tempDir("akou-dict-send-");
     cleanups.push(t.cleanup);
@@ -79,6 +84,7 @@ describe("DC-S5: a spoken dictation ending in send it", () => {
       now: () => Date.now(),
       insertPolicy: () => o.insert ?? SEND_ENTER,
       spokenSend: () => o.spokenSend ?? true,
+      ...(o.format ? { format: o.format } : {}),
     });
     const target = o.secure ? { ...TARGET, field: "secure" as const } : TARGET;
     s.onMessage({ type: "session.started", id: "1", target, capture_ns: "0" });
@@ -130,6 +136,23 @@ describe("DC-S5: a spoken dictation ending in send it", () => {
       insert: { ...SEND_ENTER, method: "clipboard" },
     });
     expect(insert).toMatchObject({ method: "clipboard", send_key: "none" });
+  });
+
+  test("the phrase is judged before the formatting pass, which never sees it", async () => {
+    const seen: string[] = [];
+    // A provider that tidies the text and drops a trailing command of its own accord.
+    const format = async (text: string) => {
+      seen.push(text);
+      return { text: "Tell them tomorrow.", skipped: null };
+    };
+    const { insert } = await dictate("tell them tomorrow send it", { format });
+    expect(seen).toEqual(["tell them tomorrow"]);
+    expect(insert).toMatchObject({ text: "Tell them tomorrow.", send_key: "Enter" });
+    // Positive control: a formatted text that merely ends in the phrase sends nothing.
+    const added = await dictate("tell them tomorrow", {
+      format: async () => ({ text: "Tell them tomorrow, send it.", skipped: null }),
+    });
+    expect(added.insert).toMatchObject({ send_key: "none" });
   });
 
   test("a password field gets exactly what was heard", async () => {

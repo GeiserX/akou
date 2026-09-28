@@ -63,12 +63,13 @@ interface Rig {
   audioFiles(): string[];
 }
 
-/** A service over the fake helper, "hello" on the mic from 1 s, running `keys` once. */
+/** A service over the fake helper, "hello" (or `words`) on the mic from 1 s, running `keys` once. */
 function rig(
   keys: [number, string, boolean][],
   extra: Partial<DictationServiceOptions> = {},
   switches: string[] = [],
   dir = scratch(),
+  words = ["hello"],
 ): Rig {
   const keyFile = join(dir, "keys.jsonl");
   writeFileSync(
@@ -76,7 +77,7 @@ function rig(
     keys.map(([at, key, down]) => JSON.stringify({ at, key, down } satisfies KeyInput)).join("\n"),
   );
   const mic = join(dir, "mic.wav");
-  writeFileSync(mic, monoWav(concat(silence(1), speak(["hello"]), silence(3))));
+  writeFileSync(mic, monoWav(concat(silence(1), speak(words), silence(3))));
   const fast = fastEngine();
   const svc = new DictationService({
     configDir: dir,
@@ -192,6 +193,76 @@ describe("DC-H2: dictation.keepAudio off", () => {
     const noLearn = rig(HOLD, { keepAudio: () => false, learns: () => false });
     await settledAs(noLearn, "inserted");
     expect(noLearn.audioFiles()).toEqual([]);
+  });
+});
+
+describe("DC-H2: dictation.keepAudio off, the learning check", () => {
+  // The fake engine hears "kubernetes" as "kubernetis": the fix the user makes in the box.
+  const WORDS = ["deploy", "to", "kubernetes"];
+  const HOLD_LONG: [number, string, boolean][] = [
+    [800, RC, true],
+    [2600, RC, false],
+  ];
+  const chipless = { open: () => {}, chip: () => {}, showInactive: () => {}, hide: () => {} };
+
+  test("the audio survives the insert, the check runs on it, and it goes when the window closes; the text stays", async () => {
+    const heard: number[] = [];
+    const r = rig(
+      HOLD_LONG,
+      {
+        keepAudio: () => false,
+        draft: { learnMode: () => "ask" },
+        check: () => async (samples, glossary) => {
+          heard.push(samples.length);
+          return `deploy to ${glossary[0]}`;
+        },
+      },
+      [],
+      scratch(),
+      WORDS,
+    );
+    r.svc.draft.attach(chipless);
+    await settledAs(r, "inserted");
+    const id = first(r);
+    const it = r.svc.log.items()[0];
+    expect(it?.text).toBe("deploy to kubernetis");
+    expect(r.audioFiles()).toEqual([`${id}.wav`]);
+    // Fix on the history item: the box for teaching, Enter learns and inserts nothing.
+    expect(r.svc.draft.open(id, { focus: true, fix: true })).toEqual({ ok: true });
+    await r.svc.draft.handlers.insert({ id, text: "deploy to Kubernetes", send: false });
+    // The check decoded the kept file, the whole utterance.
+    expect(heard).toHaveLength(1);
+    expect((heard[0] as number) / 16000).toBeCloseTo(it?.seconds as number, 2);
+    expect(r.svc.log.events().filter((e) => e.type === "dictation.learn")).toEqual([
+      expect.objectContaining({ term: "Kubernetes", status: "proposed", evidence: "audio" }),
+    ]);
+    expect(r.audioFiles()).toEqual([`${id}.wav`]);
+    // Closing the chip closes the learn window: the audio goes at once, the text stays.
+    expect(await r.svc.draft.handlers.chip({ id, action: "ignore" })).toBe(true);
+    expect(r.audioFiles()).toEqual([]);
+    expect(r.svc.log.items()[0]).toMatchObject({
+      id,
+      state: "inserted",
+      text: "deploy to kubernetis",
+    });
+  });
+
+  test("positive control: with no local Qwen for the check, the fix is proposed with evidence none", async () => {
+    const r = rig(
+      HOLD_LONG,
+      { keepAudio: () => false, draft: { learnMode: () => "ask" }, check: () => null },
+      [],
+      scratch(),
+      WORDS,
+    );
+    r.svc.draft.attach(chipless);
+    await settledAs(r, "inserted");
+    const id = first(r);
+    r.svc.draft.open(id, { focus: true, fix: true });
+    await r.svc.draft.handlers.insert({ id, text: "deploy to Kubernetes", send: false });
+    expect(r.svc.log.events().filter((e) => e.type === "dictation.learn")).toEqual([
+      expect.objectContaining({ term: "Kubernetes", evidence: "none" }),
+    ]);
   });
 });
 
