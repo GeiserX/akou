@@ -668,7 +668,7 @@ Everything hark-viewer did is kept:
 | Record, Mute, Pause, Stop, Restart; "Stop the other call"; toasts | Same. Restart stays visible when a call ended, failed or crashed. While the speech models are missing, Record is disabled with its reason and a welcome with the one download replaces the transcript and the side pane |
 | Workspace picker, title field | Same, plus template picker |
 | Append-only rows: time column, speaker label on change, last 3 bright, older dim, rise animation, pinned auto-scroll, "Back to live" after 80 px, font 14 to 44 px | Same. The time column is wall clock. Speaker chips are clickable to rename, merge, unmerge |
-| Stable speaker hues: you = 214, others from `[36,145,285,5,178,58,325,100]` in order of first appearance | Same; a renamed speaker keeps its hue |
+| Stable speaker hues: you = 214, others from `[36,145,285,5,178,58,325,100]` in order of first appearance | Same, and none within 30° of the accent; you are drawn in a neutral grey, not your hue; a renamed speaker keeps its hue |
 | Grey provisional row, dashed border | Same, with the 3 s expiry |
 | Dark and light from `prefers-color-scheme`, 22 px base | Same |
 | Follow the live or last call; `?call=` pin; switch without reload | Sidebar list of calls by workspace and day; one open at a time; switch without reload; search by title and workspace, never by what was said |

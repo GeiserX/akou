@@ -517,7 +517,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
-    "Stable speaker hues: you = 214, others in order of first appearance; a renamed speaker keeps its hue",
+    "Stable speaker hues: you = 214 drawn in neutral grey, others in order of first appearance; a renamed speaker keeps its hue",
     async () => {
       let id = "";
       await withRig(
@@ -530,6 +530,23 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           expect(await hue("l000001")).toBe(String(YOU_HUE));
           expect(await hue("l000002")).toBe(String(HUES[0]));
           expect(await hue("l000003")).toBe(String(HUES[1]));
+          // You are drawn in a neutral grey, never on the accent's blue; the others keep a hue.
+          const spread = (sel: string, prop: "color" | "backgroundColor" = "color") =>
+            page.$eval(
+              sel,
+              (el, p) => {
+                const [r, g, b] = (getComputedStyle(el)[p].match(/\d+/g) ?? []).map(Number);
+                return Math.max(r ?? 0, g ?? 0, b ?? 0) - Math.min(r ?? 0, g ?? 0, b ?? 0);
+              },
+              prop,
+            );
+          expect(await spread('#lines .row[data-id="l000001"] .who')).toBeLessThan(24);
+          expect(await spread('#people li[data-spk="you"] i', "backgroundColor")).toBeLessThan(24);
+          // Positive control: a speaker with a hue is far from grey, as a line and as a chip.
+          expect(await spread('#lines .row[data-id="l000002"] .who')).toBeGreaterThan(60);
+          expect(await spread('#people li[data-spk="c1"] i', "backgroundColor")).toBeGreaterThan(
+            60,
+          );
           await rig.api("POST", `/calls/${id}/speakers`, { spk: "c1", name: "Ben" });
           await until(
             async () =>
