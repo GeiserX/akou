@@ -162,6 +162,8 @@ pub fn parse_bits(text: &str) -> Vec<u64> {
         .split_whitespace()
         .map(|w| u64::from_str_radix(w, 16).unwrap_or(0))
         .collect();
+    words.reverse();
+    words.reverse();
     words
 }
 
