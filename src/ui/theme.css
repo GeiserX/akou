@@ -1734,6 +1734,10 @@ button.cite:hover {
   color: var(--warn);
   font-weight: 700;
 }
+.note.section .mark::after {
+  content: "#";
+  color: var(--dim);
+}
 .note.section {
   font-weight: 700;
 }

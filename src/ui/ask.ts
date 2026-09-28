@@ -96,11 +96,15 @@ export class AskPane {
       if (d && items.length > 0) {
         e.preventDefault();
         items[(at + d + items.length) % items.length]?.focus();
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        this.menu(false);
-        this.menuButton.focus();
       }
+    });
+    // Escape closes an open menu from anywhere in the ask row, the input included.
+    this.form.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || this.presetsBox.hidden) return;
+      e.preventDefault();
+      const inMenu = this.presetsBox.contains(document.activeElement);
+      this.menu(false);
+      if (inMenu) this.menuButton.focus();
     });
     document.addEventListener("pointerdown", (e) => {
       if (!this.presetsBox.hidden && !this.form.contains(e.target as Node)) this.menu(false);

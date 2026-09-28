@@ -875,6 +875,14 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
             "Action items",
             "What did Ben say?",
           ]);
+          // Escape closes it, with the focus in the menu or back in the input.
+          await page.keyboard.press("Escape");
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          await page.click("#ask-presets-open");
+          await page.click("#ask-input");
+          await page.keyboard.press("Escape");
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          await page.click("#ask-presets-open");
           await page.click("#ask-presets >> text=What did Ben say?");
           // Picking one closes the menu.
           expect(await page.locator("#ask-presets").isVisible()).toBe(false);
