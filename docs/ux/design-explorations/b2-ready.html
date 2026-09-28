@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>akou · Calls</title>
+<title>akou · Calls (B2)</title>
 <style>
 :root{
   --bg:#0d0e10;--panel:#15171a;--raised:#1b1e22;--line:#1f2226;--line2:#2a2e34;
@@ -32,7 +32,7 @@ svg{display:block;flex:none}
 /* sidebar */
 .side{width:220px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 8px 0}
 .brand{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;margin-bottom:16px}
-.brand b{font-size:15px;font-weight:650;letter-spacing:-.01em}
+.brand svg{height:28px;width:86px}
 .nav a{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:6px;color:var(--dim);text-decoration:none}
 .nav a .grow{flex:1}
 .nav a.on{color:var(--fg)}
@@ -71,8 +71,12 @@ svg{display:block;flex:none}
 .meter span{width:22px}
 .meter i{flex:1;height:3px;border-radius:2px;background:var(--line2);overflow:hidden;display:block}
 .meter i b{display:block;height:100%;background:var(--ok);opacity:.85;border-radius:2px}
-.rec{height:32px;padding:0 14px 0 10px;border:0;border-radius:8px;background:var(--accent);color:#08101c;font:600 13px/1 -apple-system,"SF Pro Text",Helvetica,sans-serif;display:inline-flex;align-items:center;gap:8px}
-.rec i{width:12px;height:12px;border-radius:50%;background:var(--rec);box-shadow:0 0 0 2px #0b1320;display:block}
+.rec{height:34px;padding:0 4px 0 0;border:0;background:none;color:var(--fg);font:400 13px/1 -apple-system,"SF Pro Text",Helvetica,sans-serif;display:inline-flex;align-items:center;gap:8px;margin-left:4px}
+.rec .disc{width:34px;height:34px;border-radius:50%;border:2px solid #6b1d19;padding:2px;display:flex;flex:none}
+.rec .disc i{flex:1;border-radius:50%;background:var(--rec);display:flex;align-items:center;justify-content:center}
+.rec.on .disc i::after{content:"";width:10px;height:10px;border-radius:2px;background:#fff}
+.rec kbd{font:12px -apple-system,"SF Pro Text",Helvetica,sans-serif;color:var(--faint)}
+.rec .elapsed{font-variant-numeric:tabular-nums;font-weight:500}
 
 .head{padding:24px 32px 16px;border-bottom:1px solid var(--line);flex:none}
 .head-top{display:flex;align-items:center;gap:8px}
@@ -162,10 +166,7 @@ svg{display:block;flex:none}
 
     <!-- Sidebar -->
     <aside class="side">
-      <div class="brand">
-        <svg width="24" height="24" viewBox="0 0 24 24"><rect width="24" height="24" rx="6" fill="#1f2226"/><rect x=".5" y=".5" width="23" height="23" rx="5.5" fill="none" stroke="#2a2e34"/><g stroke="#f2f3f5" stroke-width="2" stroke-linecap="round"><path d="M7 10.5v3M10 7.5v9M13 9.5v5M16 11v2"/></g></svg>
-        <b>akou</b>
-      </div>
+      <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="267" height="87" viewBox="0 -3 89 29" role="img" aria-label="akou"><g fill="none" stroke="#f2f3f5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="16" r="8"/><path d="M18 8v16M28-1v25M38 8l-8.5 9m3-2.5 7 9.5"/><circle cx="54" cy="16" r="8"/><path d="M71 8v8a8 8 0 0 0 16 0m0-8v16"/></g><circle cx="10" cy="16" r="2.5" fill="#ff453a"/></svg></div>
 
       <nav class="nav">
         <a class="on" href="#">
@@ -223,7 +224,9 @@ svg{display:block;flex:none}
           <div class="meter"><span>Mic</span><i><b style="width:38%"></b></i></div>
           <div class="meter"><span>Call</span><i><b style="width:14%"></b></i></div>
         </div>
-        <button class="rec"><i></i>Record</button>
+        <button class="rec"><span class="disc"><i></i></span>Record<kbd>⌘R</kbd></button>
+        <!-- While recording, the same spot becomes:
+        <button class="rec on"><span class="disc"><i></i></span><span class="elapsed">04:12</span>Stop<kbd>⌘R</kbd></button> -->
       </div>
 
       <div class="head">

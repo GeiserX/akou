@@ -2,48 +2,39 @@
 
 akou 0.4.0 opens on a full call workspace even when it cannot record yet. With no speech models on disk the window shows a status dot that says READY, a Record button that works, a clock, debug chips for the provider and the speech engine, an empty calls list, a placeholder that says "Press Record", tabs for Notes, Ask and Enhanced over nothing, and a player with two volume sliders for a recording that does not exist. The one thing the user has to do, download the models, is a banner in the middle. Three controls share the same blue: the active tab, Record and Download. Informational text uses the primary accent too.
 
-This page holds three mockups of a different shape, what the apps closest to akou do on the same screens, and the direction we want to take. Each mockup is a self-contained HTML file beside its image, rendered at 1440 x 900.
+This page holds two mockups of a different shape, what the apps closest to akou do on the same screens, and the direction we want. Each mockup is a self-contained HTML file beside its image. The ready frames render at 1440 x 900, the standalone welcome at 720 x 800. A light checklist variant was drawn and dropped: dark stays the only theme.
 
 ## The rules every mockup follows
 
 - **Readiness drives the shell.** With no models there is no workspace, only the welcome. Record is never enabled with a reason hidden somewhere else.
-- **One accent per screen.** The primary action is the only thing in the accent colour. Selected tabs and list rows use a neutral fill. Red means recording or stop. Green means ready or live.
-- **Information gets its own colour.** Where the models live, what leaves the computer, what a permission is for: those are teal, never the accent, so they cannot be mistaken for a button.
+- **The real brand.** The wordmark and the app icon are the files in `assets/brand`, inlined as they are. Nothing is redrawn.
+- **Record looks like recording on a Mac.** A round red button with the word Record beside it and the shortcut in dim text, the same shape QuickTime and Voice Memos use. Never an accent-filled pill.
+- **One accent per screen.** The primary action is the only thing in the accent colour. Selected tabs and list rows use a neutral fill. Red means recording. Green means ready or live.
+- **Information is a sentence, not a box.** Where the models live and what leaves the computer is one dim line with a small teal glyph, never a boxed callout and never the accent.
+- **Notes are the default action**, so the note input is always visible while a call is open. Asking the agent sits next to it, never instead of it.
 - **No debug chips.** The version, the provider and the speech engine live under Settings. The header shows one status word.
-- **Nothing dead on screen.** The player exists only when the call has a recording. The Notes and Ask surfaces exist only when a call is selected.
+- **Nothing dead on screen.** The player exists only when the call has a recording. Notes and Ask exist only when a call is selected.
 - **Permissions are asked in context**, at the first recording, and the welcome says so instead of asking up front.
 
-## A. A welcome card, then one document
+## A. A welcome window, then one document
 
-![A, welcome](a-welcome.png)
+![A, welcome window](a2-welcome.png)
 
-![A, ready](a-ready.png)
+The welcome is its own compact window, so the main window never shows a workspace it cannot use and the welcome never floats in empty space. The app icon, one line on what akou does, then three steps. Step one is the download, with the only accent button, the size, a time estimate, and a progress inset that says closing the window does not stop it. Step two names the two permissions and says macOS asks at the first Record. Step three is the optional agent, a quiet link. The footer says where recordings, transcripts and notes stay.
 
-First run is a centred card with three steps. Step one is the download, with the only accent button, the size and a time estimate, and a progress inset that says the window can be closed. Step two explains the microphone and system audio prompts and when they come. Step three is the optional agent, a quiet link. The chrome keeps a "Setting up" status at the top left and a gear at the top right.
+![A, ready](a2-ready.png)
 
-Once ready, the window is a list and a document. Record sits at the top of the list with its shortcut, then search, then calls grouped by day. Dictation, Models, the agent and Settings are four icons at the foot of the list. The document is the call: title, date, duration, people, then the transcript as timestamped speaker paragraphs, with the user's notes, actions and questions inline as tinted blocks at the moment they were written. Ask is an input at the bottom of the document. The player is a slim bar under it, with note marks on the scrubber, and it exists only because this call has a recording.
+The main window is a list and a document. The wordmark and Record sit at the top of the list, then search, then calls grouped by day. Dictation, Models, the agent and Settings are four icons at the foot of the list. The document is the call: title, date, duration, people and counts, then the transcript as timestamped speaker paragraphs, with the user's notes, actions and answers inline as tinted blocks at the moment they were written. The note input is docked under the document with the playhead stamp, the bullet, action and question hints as chips, and Ask as a button at its right end. The player is a slim bar under it, only because this call has a recording.
 
 ## B. A sidebar shell
 
-![B, welcome](b-welcome.png)
+![B, welcome](b2-welcome.png)
 
-![B, ready](b-ready.png)
+A permanent sidebar carries the wordmark, navigation to Calls, Dictation, Models and Settings, search and the workspaces with their calls. Its footer is the readiness row: an amber "Models missing" with "Setup 1 of 3", or a green "Ready". The Models item carries an amber dot while something is missing. First run keeps the sidebar and replaces the main area with three cards: the two models with one line and a size each, the dim sentence on where they are kept, and the one download button; the permissions card marked "Later" with one line; the optional agent card with a quiet button.
 
-A permanent sidebar carries the app mark, navigation to Calls, Dictation, Models and Settings, search and the workspaces with their calls. Its footer is the readiness row: an amber "Models missing" with "Setup 1 of 3", or a green "Ready". The Models item carries an amber dot while something is missing.
+![B, ready](b2-ready.png)
 
-First run keeps the sidebar and replaces the main area with a stepper of three cards: the models with what is inside them and their sizes, the teal strip that says where they are kept and that nothing else leaves the computer, and the one download button; the permissions card marked "Later" with an explanation; the optional agent card.
-
-Once ready, the main area has a compact composer row above the transcript: the workspace as a chip inside the title field, the template select, two thin live meters for mic and call, and Record as the only accent. Speakers have warm non-accent colours and time totals as chips under the title. The right column has Ask on top with a cited answer, then Notes with a Notes and Enhanced toggle, then the input with its three syntax hints as chips under it. The player is a slim bar under the transcript.
-
-## C. A checklist, light and calm
-
-![C, welcome](c-welcome.png)
-
-![C, ready](c-ready.png)
-
-A light theme, to see the same ideas without the dark chrome. First run is a two-column welcome. The left column is the checklist: Speech models to do with its size, Microphone and System audio marked as asked at the first recording, the agent optional, and a footer that counts what is left before you can record. The right column explains the selected step before it asks: the three models with sizes and what each does, the teal "Kept on this Mac" box, three flat tiles with time estimates, the one download button, and a grey link to skip for people who will only dictate through a remote akou.
-
-Once recording, the checklist collapses into a green "All set" dot in the top bar, and the pages become three text tabs on the right. The call header has the title, the workspace and the people, the elapsed time with a red dot, two thin live meters and one red Stop button. The transcript follows live from the bottom with the partial line lighter, and a footer says scrolling up holds the view. The notepad on the right has timestamped notes, an action with a checkbox, a question with its answer and the timestamp it came from, and the input with the syntax hints under the field rather than inside the placeholder. There is no player while recording.
+Once ready, the main area has a compact composer row above the transcript: the workspace as a chip inside the title field, the template select, two thin live meters for mic and call, and the round red Record with its shortcut. Speakers have warm non-accent colours and time totals as chips under the title. The right column has Ask on top with a cited answer, then Notes with a Notes and Enhanced toggle, then the note input at the bottom with its three hints as chips. The player is a slim bar under the transcript.
 
 ## What the nearest apps do
 
@@ -59,12 +50,10 @@ The four apps closest to akou on a Mac handle the same screens like this. None o
 
 ## The direction we want
 
-- **The shell of A.** One list, one document, Record at the top of the list, pages as icons at its foot. It is the least chrome for what akou does, and it keeps the transcript and the notes on one timeline, which is akou's own idea.
-- **The welcome of C, inside A's card.** Explain before asking: the models with sizes and what each does, the teal box for where they live, a real time estimate, one download button, and a skip link for remote-only dictation. The permissions rows say when they will be asked. The checklist collapses to one status dot once everything is set.
+- **B's shell for the ready state.** Sidebar, composer row with the live meters, transcript in the middle, Ask at the top right and the note input at the bottom right. That is the layout we like best in use: talk to the agent above, add notes below.
+- **Either welcome.** A's standalone window is the cleaner first run because nothing else is on screen; B's in-shell stepper keeps the navigation visible so the user learns the app while waiting. Decide when the download flow is built; both share the same three steps and the same copy rules.
 - **Real progress with a cancel, then continue by itself**, the way Handy does it. Never an animated bar.
 - **A ten-second test recording as step two**, the way Minutes does it, so the first real item in the list is the user's own voice and the permissions arrive with their own priming line, in context.
 - **B's readiness footer** as the one place that says what is missing, with an amber dot on the page that fixes it.
 - **Live source health during a recording**: mic and call as two thin meters, each with a waiting state, instead of level bars parked in the header.
-- **Speaker colours that are not the accent**, so the accent stays for the primary action.
-
-Dark stays the default. The light theme in C is kept as a variant, not a direction.
+- **Speaker colours that are not the accent**, so the accent stays for the one primary action.
