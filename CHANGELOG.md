@@ -34,11 +34,11 @@ The Telegram-Archive contract keeps its shape: the event feed, the job fields an
 ### Known limitations
 - **Dictation ships in the macOS app only.** No desktop app is built for Windows or Linux yet (akou-w51.70). The Linux helper has no X11 or Wayland insert, and its portal backend has not been tried on a real GNOME or KDE desktop.
 - **The pill's error state has no buttons.** The app does not wire up Retry, Copy and Open draft yet, so you retry a failed dictation from History. The learn chip does show in the pill after a direct insert. But a second fix arriving while a chip is up replaces it without answering it, and no test covers the chip over a whole app yet. On macOS nobody has checked on a real Mac that clicking Stop leaves the keyboard with the app.
-- **The hotkey recorder and the mic picker wait on the app's main side.** The recorder takes chords and single modifiers, but not Fn or Globe. The mic picker has no device list, its meter does not move, and the mic you choose is not used yet.
+- **The hotkey recorder and the mic picker wait on the app's main side.** The recorder takes chords and single modifiers, but not Fn or Globe. Fn as the key is set in the config and has not been tried on a real Mac with an Apple keyboard. The mic picker has no device list, its meter does not move, and the mic you choose is not used yet.
 - **Onboarding sees grants only while the helper runs.** Turning dictation on with the mic or Accessibility grant missing does not open the setup. A grant given after the helper started is seen only once dictation is turned off and on again.
-- **Some saved settings have no effect yet:** per-app rules (`dictation.apps`), the draft, fix-last and paste-last keys, sounds, pausing other media, and stopping a hands-free session after silence.
+- **Some saved settings have no effect yet:** per-app rules (`dictation.apps`), the draft, fix-last and paste-last keys, sounds, pausing other media, and the silence stop for a session you latched by tapping the key. Sessions started from the tray, the CLI or the API do stop after silence.
 - **The latency nightly and the engine-biasing gate are not in CI.** The latency figures in [section 7](docs/ux/DICTATION.md#7-engines-and-the-remote-mode) are estimates, and `dictation.glossary` stays off by default until the gate shows that biasing helps without inventing names.
-- Every item under 0.3.0's Known limitations still applies.
+- **GPU speed is measured on Apple silicon and on one Intel iGPU.** On an Intel UHD 770 the `-vulkan` image decoded about 2x slower than the CPU image, so `best` on that iGPU is not faster than the CPU yet. Pass the render node akou detected with `--device`, not the whole `/dev/dri`. The CUDA image has passed CI, but nobody has timed it on a real card. Every other item under 0.3.0's Known limitations still applies.
 
 ## 0.3.0 — the best preset, on the GPU the box has
 
