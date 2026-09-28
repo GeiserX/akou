@@ -7,12 +7,18 @@
 //!   --from-wav <stereo.wav> [--speed X | --realtime] [--loop]
 //! akou-capture devices
 //! akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]
+//! akou-capture decode --in <part.opus> [--from FRAME] [--frames N] | --info
 //! akou-capture --version
 //! ```
 //!
 //! `devices` prints one JSON line on stdout, `{"type":"devices","backend",…,"inputs":[{id,name,
 //! default}],"outputs":[…]}`: what the OS lists, read without opening a stream or asking for a
 //! permission. The ids are what `--mic <id>` takes.
+//!
+//! `decode` reads a part's Ogg Opus file back for the app's final pass (SV-P10): stereo little-endian
+//! f32 at 16 kHz on stdout, mic then call per frame, from frame `--from` for `--frames` frames (to
+//! the end without it). `--info` prints one JSON line instead, `{"type":"decoded","rate":16000,
+//! "channels":2,"frames":N,"ended":bool}`. It opens no device.
 //!
 //! With `--from-wav` no device is opened on any OS: the WAV's left channel is the mic and its right
 //! channel the call. Setting `AKOU_CAPTURE_FILE_ONLY=1` refuses device capture altogether, which
@@ -27,7 +33,7 @@ use akou_capture::simulate::Faults;
 use akou_capture::source::{CallMode, DeviceConfig, Frontend};
 
 const USAGE: &str = "usage: akou-capture run --out FILE --mic default|<id>|none --call system|none|app:<id>[,<id>] \
-[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]\n       akou-capture devices\n       akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]";
+[--exclude-responsible <bundle-id|pid>] [--from-wav FILE [--speed X | --realtime] [--loop]]\n       akou-capture devices\n       akou-capture decode --in FILE [--from FRAME] [--frames N] | --info\n       akou-capture dictate [--hotkey KEY] [--activation MODE] [--warm off|auto|always]";
 
 /// The slowest `--speed` other than 0: a hundred times slower than real time. Below it the pacing
 /// wait of a long file no longer fits a `Duration`.
@@ -104,6 +110,75 @@ fn parse(argv: &[String]) -> Result<Args, String> {
     })
 }
 
+#[derive(Debug, PartialEq)]
+struct DecodeArgs {
+    input: PathBuf,
+    from: u64,
+    frames: Option<u64>,
+    info: bool,
+}
+
+fn parse_decode(argv: &[String]) -> Result<DecodeArgs, String> {
+    let mut it = argv.iter();
+    let (mut input, mut from, mut frames, mut info) = (None, 0, None, false);
+    while let Some(a) = it.next() {
+        let mut num = || -> Result<u64, String> {
+            let v = it.next().ok_or_else(|| format!("{a} needs a value"))?;
+            v.parse::<u64>()
+                .map_err(|_| format!("{a} needs a whole number, not {v}"))
+        };
+        match a.as_str() {
+            "--in" => {
+                input = Some(PathBuf::from(
+                    it.next().ok_or_else(|| format!("{a} needs a value"))?,
+                ))
+            }
+            "--from" => from = num()?,
+            "--frames" => frames = Some(num()?),
+            "--info" => info = true,
+            other => return Err(format!("unknown argument {other}")),
+        }
+    }
+    if info && (from != 0 || frames.is_some()) {
+        return Err("--info takes no range".into());
+    }
+    Ok(DecodeArgs {
+        input: input.ok_or("--in is required")?,
+        from,
+        frames,
+        info,
+    })
+}
+
+/// `akou-capture decode`: exit 0 with the audio or the info line, 64 on a usage error, 74 when
+/// the file cannot be read as Ogg Opus.
+fn decode_main(argv: &[String]) {
+    use akou_capture::json::Json;
+    use akou_capture::opus_reader;
+    use std::io::Write;
+    let a =
+        parse_decode(argv).unwrap_or_else(|e| fail("usage", &format!("{e}\n{USAGE}"), exit::USAGE));
+    let io_fail =
+        |e: std::io::Error| -> ! { fail("io", &format!("{}: {e}", a.input.display()), exit::IO) };
+    if a.info {
+        let i = opus_reader::info(&a.input).unwrap_or_else(|e| io_fail(e));
+        let line = Json::obj(vec![
+            ("type", Json::str("decoded")),
+            ("rate", Json::Int(opus_reader::DECODE_RATE as i64)),
+            ("channels", Json::Int(2)),
+            ("frames", Json::Int(i.frames as i64)),
+            ("ended", Json::Bool(i.ended)),
+        ])
+        .to_line();
+        println!("{line}");
+        return;
+    }
+    let stdout = std::io::stdout();
+    let mut out = std::io::BufWriter::with_capacity(1 << 16, stdout.lock());
+    opus_reader::decode(&a.input, a.from, a.frames, &mut out).unwrap_or_else(|e| io_fail(e));
+    out.flush().unwrap_or_else(|e| io_fail(e));
+}
+
 fn fail(code: &str, msg: &str, status: i32) -> ! {
     eprintln!("{}", protocol::warn(code, msg));
     std::process::exit(status)
@@ -143,6 +218,10 @@ fn main() {
         Some("--help" | "help" | "-h")
     ) {
         println!("{USAGE}");
+        return;
+    }
+    if matches!(argv.first().map(String::as_str), Some("decode")) {
+        decode_main(&argv[1..]);
         return;
     }
     if matches!(argv.first().map(String::as_str), Some("dictate")) {
@@ -302,6 +381,27 @@ mod tests {
             .speed,
             0.01
         );
+    }
+
+    #[test]
+    fn parses_the_decode_arguments_the_app_sends() {
+        let a = parse_decode(&argv(
+            "--in /x/part-001.opus --from 9600000 --frames 9600000",
+        ))
+        .unwrap();
+        assert_eq!(a.input, PathBuf::from("/x/part-001.opus"));
+        assert_eq!(
+            (a.from, a.frames, a.info),
+            (9_600_000, Some(9_600_000), false)
+        );
+        let b = parse_decode(&argv("--in p.opus --info")).unwrap();
+        assert!(b.info);
+        assert_eq!((b.from, b.frames), (0, None));
+        assert!(parse_decode(&argv("--from 0")).is_err());
+        assert!(parse_decode(&argv("--in p.opus --from -1")).is_err());
+        assert!(parse_decode(&argv("--in p.opus --frames 1.5")).is_err());
+        assert!(parse_decode(&argv("--in p.opus --info --from 3")).is_err());
+        assert!(parse_decode(&argv("--in p.opus --speed 2")).is_err());
     }
 
     /// DESIGN 2.5: fault switches are absent from a shipping build.

@@ -265,8 +265,8 @@ export interface AppOptions {
    */
   modelRegistry?: readonly ModelSpecEntry[];
   /**
-   * Where the final pass reads a call's audio, or null when it cannot. By default a part is read
-   * from a 16-bit WAV beside its Opus file (`part-001.wav`); the app cannot decode Opus yet.
+   * Where the final pass reads a call's audio, or null when it cannot. By default a part's Opus
+   * file, decoded by the capture helper, or a 16-bit WAV beside it (`partsAudio`).
    */
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   /** The window. None means headless. */
@@ -418,16 +418,28 @@ function finalCurrent(v: CallView): boolean {
   return done !== null && v.parts().every((p) => p.startSeq < done);
 }
 
-/** The default final-pass audio: a WAV beside every part's Opus file, or nothing. */
-function wavBesideParts(call: { dir: string; parts: number[] }): FinalAudioSpec | null {
+/**
+ * The default final-pass audio (SV-P10): a 16-bit WAV beside every part's Opus file when each has
+ * one (hark and the fake helper write them), else every part's Opus file decoded by the capture
+ * helper. Null when a part has neither, when its Opus file is empty (a helper that never wrote a
+ * header), or when the helper is not there.
+ */
+export function partsAudio(
+  call: { dir: string; parts: number[] },
+  helper: { command: string[]; found: string | null },
+): FinalAudioSpec | null {
   if (call.parts.length === 0) return null;
-  const files: Record<number, string> = {};
+  const opus: Record<number, string> = {};
+  const wav: Record<number, string> = {};
   for (const p of call.parts) {
-    const wav = join(call.dir, partFile(p).replace(/\.opus$/, ".wav"));
-    if (!existsSync(wav)) return null;
-    files[p] = wav;
+    opus[p] = join(call.dir, partFile(p));
+    const w = (opus[p] as string).replace(/\.opus$/, ".wav");
+    if (existsSync(w)) wav[p] = w;
   }
-  return { kind: "wav", files };
+  if (Object.keys(wav).length === call.parts.length) return { kind: "wav", files: wav };
+  if (!helper.found) return null;
+  for (const f of Object.values(opus)) if (!existsSync(f) || statSync(f).size === 0) return null;
+  return { kind: "opus", command: helper.command, files: opus };
 }
 
 export class AkouApp implements ApiApp {
@@ -1766,6 +1778,12 @@ export class AkouApp implements ApiApp {
     return this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
   }
 
+  /** Where the final pass reads a call's audio: the test's choice, or `partsAudio`. */
+  private finalAudio(call: { id: string; dir: string; parts: number[] }): FinalAudioSpec | null {
+    if (this.o.finalAudio) return this.o.finalAudio(call);
+    return partsAudio(call, findHelper(this.cfg.settings["capture.helper"]));
+  }
+
   /**
    * Starts the final pass in the background. Returns null once started, or why it cannot run;
    * `unavailable` when the call lacks what the pass needs (readable audio, the models).
@@ -1777,10 +1795,10 @@ export class AkouApp implements ApiApp {
     if (!c || c.live) return { why: "the call is not ended" };
     if (!force && finalCurrent(c.view)) return { why: "the final pass already ran" };
     const parts = c.view.parts().map((p) => p.part);
-    const audio = (this.o.finalAudio ?? wavBesideParts)({ id, dir: c.dir, parts });
+    const audio = this.finalAudio({ id, dir: c.dir, parts });
     if (!audio)
       return {
-        why: "the final pass cannot read this call's audio yet (Opus decoding is not built)",
+        why: "the final pass cannot read this call's audio: a part has no audio file, or the capture helper that decodes it is not there",
         unavailable: true,
       };
     const models = this.finalModels();
@@ -1816,7 +1834,10 @@ export class AkouApp implements ApiApp {
     shelf.recordRun(RECOGNIZER, audioS, decodeS);
   }
 
-  /** Calls that ended while akou was not running and have no final layer yet. */
+  /**
+   * Calls that ended while akou was not running and have no final layer yet, one pass at a time:
+   * each pass loads its own models, and a backlog run side by side would hold them all at once.
+   */
   private async catchUpFinals(): Promise<void> {
     for (const s of this.manager.calls()) {
       if (this.quitting) return;
@@ -1826,9 +1847,9 @@ export class AkouApp implements ApiApp {
         const v = fold(events);
         if (finalCurrent(v)) continue;
         const parts = v.parts().map((p) => p.part);
-        if (!(this.o.finalAudio ?? wavBesideParts)({ id: s.id, dir: s.dir, parts })) continue;
+        if (!this.finalAudio({ id: s.id, dir: s.dir, parts })) continue;
         const c = await this.manager.open(s.id);
-        if (c) this.runFinal(s.id, false);
+        if (c && this.runFinal(s.id, false) === null) await this.finals.get(s.id);
       } catch (err) {
         this.log("warn", `final catch-up for ${s.id}: ${(err as Error).message}`);
       }
