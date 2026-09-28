@@ -22,8 +22,11 @@
 //! events (`mac_insert`). On Windows it runs a low-level keyboard hook, UI Automation and the
 //! WASAPI microphone (`win`) and inserts through the clipboard and `SendInput` (`win_insert`). On
 //! Linux it reads the keys from evdev and records through the sound server (`linux`), with no
-//! inserter yet. `--probe` prints the `ready` line the process would send (backend,
-//! `swallow_keys`, grants read without asking) and exits, on every OS.
+//! inserter yet. While the app asks for it (`pause_media`), a session pauses the media players
+//! that are playing and plays them again at its end (`media`): MPRIS on Linux (`mpris`), the
+//! system media transport controls on Windows (`win_media`). `--probe` prints the `ready` line
+//! the process would send (backend, `swallow_keys`, grants read without asking) and exits, on
+//! every OS.
 
 pub mod activation;
 pub mod evdev_keys;
@@ -41,7 +44,10 @@ pub mod mac;
 #[cfg(target_os = "macos")]
 pub mod mac_insert;
 pub mod mac_keys;
+pub mod media;
 pub mod mic;
+#[cfg(target_os = "linux")]
+pub mod mpris;
 pub mod protocol;
 pub mod readback;
 pub mod selection;
@@ -54,6 +60,8 @@ pub mod win;
 #[cfg(target_os = "windows")]
 pub mod win_insert;
 pub mod win_keys;
+#[cfg(target_os = "windows")]
+pub mod win_media;
 
 use crate::protocol::exit;
 use activation::Mode;
