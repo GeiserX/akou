@@ -300,7 +300,6 @@ describe("XSS: every text from a transcript, a note, a name or an answer renders
         async (rig) => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=1");
-          await page.click("#tab-ask");
           await page.fill("#ask-input", "what about the build");
           await page.keyboard.press("Enter");
           await page.waitForSelector("#ask-out .answer button.cite");
@@ -361,8 +360,12 @@ describe("keyboard access", () => {
         );
         expect(outline).not.toBe("none");
         await page.keyboard.press("ArrowRight");
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-ask");
-        expect(await page.locator("#pane-ask").isVisible()).toBe(true);
+        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-enhanced");
+        expect(await page.locator("#pane-enhanced").isVisible()).toBe(true);
+        // Two tabs: the arrow wraps back to Notes.
+        await page.keyboard.press("ArrowRight");
+        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-notes");
+        expect(await page.locator("#pane-notes").isVisible()).toBe(true);
       });
     },
     UI_TIMEOUT,
@@ -371,15 +374,31 @@ describe("keyboard access", () => {
 
 describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
   test(
-    "[W1.1] for each tab, the other two panes have computed display none and are skipped by Tab",
+    "[W1.1] for each tab, the other pane has computed display none and is skipped by Tab",
     async () => {
       let id = "";
       await withRig(
-        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        {
+          seed: (home) =>
+            (id = seedCall(home, (b) => {
+              standardCall(b);
+              // A note, so the Notes pane has its own controls to reach with Tab.
+              b.add({
+                type: "note",
+                id: "n0001",
+                rev: 1,
+                text: "budget review",
+                w: T0 + 2000,
+                afterSeq: 3,
+                by: "user",
+              });
+            }).id),
+        },
         async (rig) => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
-          const panes = ["notes", "ask", "enhanced"];
+          await page.waitForSelector("#notes li.note");
+          const panes = ["notes", "enhanced"];
           for (const tab of panes) {
             await page.click(`#tab-${tab}`);
             const display = await page.evaluate(
@@ -439,8 +458,8 @@ describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
               }
             }, on);
           await force(true);
-          expect(await hiddenOffenders(page)).toEqual(["#pane-ask shows", "#pane-enhanced shows"]);
-          await page.click("#tab-ask");
+          expect(await hiddenOffenders(page)).toEqual(["#pane-enhanced shows"]);
+          await page.click("#tab-enhanced");
           expect(await watchedOffenders(page, { clear: true })).toEqual(
             expect.arrayContaining(["#pane-notes shows", "#pane-enhanced shows"]),
           );
@@ -566,6 +585,15 @@ describe("the notepad (DESIGN 5.1)", () => {
           expect(Math.abs(note.w - typed)).toBeLessThan(5000);
           expect(note.afterSeq).toBeGreaterThan(0);
           expect(await page.locator("#notes li.note.action").count()).toBe(1);
+          // The marker is drawn as a glyph, not as text; an edit starts from the whole line.
+          expect(await text(page, "#notes li.note.action .note-text")).toBe("move the build");
+          await page.click("#notes li.note.action .edit");
+          expect(await page.inputValue("#notes li.note.action .note-edit")).toBe(
+            "[] move the build",
+          );
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("#notes .note-edit", { state: "detached" });
+          await page.click("#note-input");
           // A pause of 2 s saves the line too, and later keystrokes edit it (rev + 1).
           await page.keyboard.type("? who owns it");
           await until(
@@ -834,7 +862,12 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           // The answer cites the line the way the pack teaches a model to: [HH:MM Name].
           const minute = formatWall(T0 + 3000, TZ, { seconds: false });
           provider.answer = () => `Ben said to move the build [${minute} Ben].`;
-          await page.click("#tab-ask");
+          // Ask is always on screen, above Notes: no tab to open first.
+          expect(await page.locator("#ask-input").isVisible()).toBe(true);
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          // The presets are a menu on the input.
+          await page.click("#ask-presets-open");
+          expect(await page.getAttribute("#ask-presets-open", "aria-expanded")).toBe("true");
           expect(await page.locator("#ask-presets .preset").allTextContents()).toEqual([
             "Catch me up",
             "Was my name mentioned?",
@@ -843,6 +876,9 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
             "What did Ben say?",
           ]);
           await page.click("#ask-presets >> text=What did Ben say?");
+          // Picking one closes the menu.
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          expect(await page.getAttribute("#ask-presets-open", "aria-expanded")).toBe("false");
           await page.waitForSelector("#ask-out .card");
           // The tokens stream: the first half shows before the answer is complete.
           await page.waitForSelector("#ask-out .answer.streaming");
@@ -863,6 +899,137 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           expect((asked[0] as { by: string }).by).toBe("user");
         },
       );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a saved call opens on its last answered question, citations live; a question asked here replaces it",
+    async () => {
+      let id = "";
+      const provider = new FakeProvider();
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            id = seedCall(home, (b) => {
+              standardCall(b);
+              b.add({ type: "ask", id: "q1", q: "who spoke first?", by: "user" });
+              b.add({
+                type: "answer",
+                ask: "q1",
+                text: "An older answer.",
+                cites: [],
+                model: "fake/1.0",
+                pack: { mode: "whole-call", tokens: 10 },
+              });
+              b.add({ type: "ask", id: "q2", q: "what about the build?", by: "agent:codex" });
+              b.add({
+                type: "answer",
+                ask: "q2",
+                text: "Move it to the new box [#l000002].",
+                cites: ["l000002"],
+                model: "fake/1.0",
+                pack: { mode: "whole-call", tokens: 10 },
+              });
+              // Asked, never answered: not what the column shows.
+              b.add({ type: "ask", id: "q3", q: "still thinking?", by: "user" });
+            }).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.waitForSelector("#ask-out .a-card .answer button.cite");
+          expect(await page.locator("#ask-out .qa").count()).toBe(1);
+          expect(await text(page, "#ask-out .question")).toBe("what about the build?");
+          expect(await text(page, "#ask-out .answer")).toContain("Move it to the new box");
+          expect(await text(page, "#ask-out .ask-status")).toBe(
+            "asked by agent codex · answered by fake/1.0",
+          );
+          await page.click("#ask-out .answer button.cite");
+          await page.waitForSelector('#lines .row.flash[data-id="l000002"]');
+          // A question asked here is the one on screen, and one is all the column holds.
+          provider.answer = () => "Ana spoke first.";
+          await page.fill("#ask-input", "who spoke first, again?");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await text(page, "#ask-out .answer")) === "Ana spoke first.",
+            5000,
+            "the new answer",
+          );
+          expect(await page.locator("#ask-out .qa").count()).toBe(1);
+          expect(await text(page, "#ask-out .question")).toBe("who spoke first, again?");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the side column (WINDOW section 6)", () => {
+  test(
+    "Ask on top, Notes under it, the note input at the foot with its markers as hints, during a call and after",
+    async () => {
+      const t = tempDir("akou-wav-");
+      const provider = new FakeProvider();
+      await withRig({ provider, helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const id = await rig.startCall({ title: "Column" });
+        const page = await rig.open(id);
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
+        await until(async () => (await rowIds(page)).length === 1, 5000, "the row");
+        // Top to bottom: the ask row, the Notes header with its toggle, the note input.
+        const tops = await page.evaluate(() =>
+          ["ask-row", "notes-head", "compose"].map(
+            (x) => (document.getElementById(x) as HTMLElement).getBoundingClientRect().top,
+          ),
+        );
+        expect(tops).toEqual([...tops].sort((a, b) => a - b));
+        expect(await page.getAttribute("#note-input", "placeholder")).toBe(
+          "Type a note, Enter to add it",
+        );
+        // The markers are text under the field, never in its placeholder.
+        expect(await text(page, "#note-hints")).toBe("- bullet [] action ? question # section");
+        const field = await page.locator("#note-input").boundingBox();
+        const hints = await page.locator("#note-hints").boundingBox();
+        expect(hints && field && hints.y >= field.y + field.height).toBe(true);
+        expect(await page.locator("[role=tab]").count()).toBe(2);
+        // Whichever pane is selected, Ask and the note input stay on screen.
+        for (const tab of ["tab-enhanced", "tab-notes"]) {
+          await page.click(`#${tab}`);
+          expect(await page.locator("#ask-input").isVisible()).toBe(true);
+          expect(await page.locator("#note-input").isVisible()).toBe(true);
+        }
+        // A note from the foot, while the Enhanced pane is open, lands in the Notes count.
+        await page.click("#tab-enhanced");
+        await page.click("#note-input");
+        await page.keyboard.type("- budget first");
+        await page.keyboard.press("Enter");
+        await until(async () => (await text(page, "#notes-count")) === "1", 5000, "the count");
+        // Ask works during the call...
+        provider.answer = () => "Move the build.";
+        await page.fill("#ask-input", "what did they say?");
+        await page.keyboard.press("Enter");
+        await until(
+          async () => (await text(page, "#ask-out .a-card .answer")) === "Move the build.",
+          5000,
+          "the answer during the call",
+        );
+        // ...and after it.
+        await rig.api("POST", "/calls/live/stop");
+        await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
+        provider.answer = () => "Still the build.";
+        await page.fill("#ask-input", "and now?");
+        await page.keyboard.press("Enter");
+        await until(
+          async () => (await text(page, "#ask-out .a-card .answer")) === "Still the build.",
+          5000,
+          "the answer after the call",
+        );
+        expect(await hiddenOffenders(page)).toEqual([]);
+      });
+      t.cleanup();
     },
     UI_TIMEOUT,
   );
@@ -1279,9 +1446,9 @@ describe("playback and Fix this word", () => {
           expect(await page.inputValue("#note-input")).toBe("a b");
           expect((await player()).paused).toBe(false);
           // On any other button, Space presses that button and leaves the audio alone.
-          await page.focus("#tab-ask");
+          await page.focus("#tab-enhanced");
           await page.keyboard.press("Space");
-          expect(await page.getAttribute("#tab-ask", "aria-selected")).toBe("true");
+          expect(await page.getAttribute("#tab-enhanced", "aria-selected")).toBe("true");
           expect((await player()).paused).toBe(false);
         },
       );
