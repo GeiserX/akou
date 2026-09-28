@@ -9,7 +9,7 @@ Result: partial
 - The helper reads the kernel's input devices, `/dev/input/event*`, on its own thread ([linux.rs](../../native/akou-capture/src/dictate/linux.rs)). That thread names each key ([evdev_keys.rs](../../native/akou-capture/src/dictate/evdev_keys.rs)), hands it to the gate and goes back to `poll`. It never waits on the mic or anything else.
 - A device is classified from `/sys/class/input/eventN/device/capabilities/key`, without opening it. A keyboard (a space bar or a modifier) is read always. A mouse (a middle or side button, no keys) is read only while a mouse button is bound or the recorder is open, since it also reports every move. Anything else, like a power button or a headset's buttons, is never read. The list is read again every 2 s.
 - Keys are named by their evdev code, a place on the keyboard: `KEY_A` is the key labelled A on a US keyboard on any layout, as on macOS. The Super keys are the Command family, Alt the Option family. The back button is `Mouse4` and the forward button `Mouse5`, under either code pair a mouse may send.
-- evdev cannot hide a key from the apps without grabbing the whole keyboard and replaying every other key through uinput. The helper does neither: `ready.swallow_keys` is false, so the app shows no Enter hint (DC-A4), and a chord's last key also reaches the app under the cursor.
+- evdev cannot hide a key from the apps without grabbing the whole keyboard and replaying every other key through uinput. The helper does neither: `ready.swallow_keys` is false, so the app shows no Enter hint (DC-A4), and a chord's last key also reaches the app under the cursor, as does a bound mouse button: Mouse4 goes back a page in a browser while it starts a session. Escape, Enter and Shift+Enter are plain keys during a session there: the helper does not act on them, since the app would get them too and an Enter would both send the dictation and reach the field.
 - Events are stamped by the kernel on `CLOCK_MONOTONIC` (`EVIOCSCLOCKID`), the helper's awake clock. When a device's buffer overflows (`SYN_DROPPED`) or the device goes away, the gate is resynced from the keys the kernel says are down (`EVIOCGKEY`), so a hotkey released in the gap does not stick.
 
 ## What it needs
@@ -29,6 +29,8 @@ The nodes belong to `root:input` with mode `0660`. `grants.accessibility` in `re
 Either one lets any program of that user read every keyboard, which is also what a keylogger needs. That is why the portal comes first where the desktop has one, and evdev only where it does not.
 
 The package does not install the rule yet; that comes with the Linux desktop build (akou-w51.70).
+
+A rule applied while the helper runs is picked up on the next 2 s rescan, so the key works without a restart, but `ready` has already said `accessibility: denied` and the protocol has no line that says the grant came back, so the app keeps asking for it until the helper restarts. The same holds after the only keyboard is unplugged and plugged in again.
 
 ## The check
 

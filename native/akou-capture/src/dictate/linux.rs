@@ -374,9 +374,12 @@ pub fn run(cfg: Config) -> i32 {
     let mut d = Dictate::new(cfg, Box::new(Screen), None);
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
+    // Before the reader's first key, not only at `begin`: evdev swallows nothing (DC-A4).
+    gate.lock().act.set_swallows(false);
     let grant = access();
     // The reader starts even with nothing readable: it looks again every 2 s, so a udev rule
-    // applied after the start takes effect without a restart.
+    // applied after the start lets the key work without a restart. `ready` has already said
+    // `denied` by then, and the protocol has no line to take that back yet.
     let reader = start_reader(gate);
     d.begin(BACKEND, false, ("not-needed", grant), &mut out);
     match reader {

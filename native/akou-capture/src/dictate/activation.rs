@@ -13,7 +13,9 @@
 //!   latches, so Right Command + C stays a copy. The modifier itself is never swallowed.
 //! - **Keys during a session**: from the press until the insert settles (`settled`, or
 //!   `SETTLE_MS` after the last session end or insert), Escape, Enter and Shift+Enter are
-//!   swallowed and reported. Outside a session nothing is swallowed.
+//!   swallowed and reported. Outside a session nothing is swallowed. On a backend that cannot
+//!   swallow (evdev, the portal: `ready.swallow_keys` false) they would reach the app as well, so
+//!   there they are plain keys: no key but the hotkey does anything in a session.
 //! - **Which rule wins**: before a press is a session (a modifier-only key held under `HOLD_MS`)
 //!   every other key, Enter included, is the interrupt rule, since nothing is swallowed outside a
 //!   session. Once it is a session, Escape, Enter and Shift+Enter are DC-A4's even while the
@@ -92,6 +94,9 @@ pub struct Activation {
     /// Keys whose down was swallowed, so their up is swallowed too.
     swallowed: Vec<String>,
     record: bool,
+    /// The backend can keep a key from the app (`ready.swallow_keys`); without that DC-A4's keys
+    /// are plain keys, or Enter would end the session and also land in the app.
+    swallows: bool,
 }
 
 impl Activation {
@@ -103,7 +108,13 @@ impl Activation {
             held: Vec::new(),
             swallowed: Vec::new(),
             record: false,
+            swallows: true,
         }
+    }
+
+    /// Whether the backend can swallow a key (`ready.swallow_keys`, DC-A4).
+    pub fn set_swallows(&mut self, on: bool) {
+        self.swallows = on;
     }
 
     /// A new binding (DC-A7). A press in progress is dropped; a running session keeps running.
@@ -172,7 +183,11 @@ impl Activation {
         swallow
     }
 
+    /// Escape, Enter or Shift+Enter as DC-A4 names them, on a backend that can swallow them.
     fn enter_name(&self, name: &str) -> Option<&'static str> {
+        if !self.swallows {
+            return None;
+        }
         match name {
             "Escape" => Some("Escape"),
             "Enter" | "Return" | "KeypadEnter" => Some(if self.shift_held() {
@@ -794,6 +809,58 @@ mod tests {
         assert!(a.key(false, "Enter", 3 * MS, &mut out));
         a.settled();
         assert!(!a.key(true, "Enter", 4 * MS, &mut out));
+    }
+
+    /// DC-A4 on a backend that cannot swallow (evdev): Escape and Enter would reach the app as
+    /// well, so they neither end the session nor are reported, and during a confirmed hold Enter
+    /// is the interrupt rule like any key. The same keys with `swallows` on are the control.
+    #[test]
+    fn dc_a4_keys_do_nothing_on_a_backend_that_cannot_swallow() {
+        for swallows in [true, false] {
+            let mut a = Activation::new(Hotkey::parse("RightCommand").unwrap(), Mode::HoldOrToggle);
+            a.set_swallows(swallows);
+            let mut out = Vec::new();
+            a.start(0, &mut out);
+            out.clear();
+            let enter = a.key(true, "Enter", MS, &mut out);
+            a.key(false, "Enter", 2 * MS, &mut out);
+            if swallows {
+                assert!(enter);
+                assert_eq!(
+                    out,
+                    vec![Action::Key("Enter".into()), Action::End { reason: "key" }]
+                );
+                a.settled();
+            } else {
+                assert!(!enter, "Enter is not claimed as swallowed");
+                assert_eq!(out, vec![], "Enter neither sends nor ends the session");
+                assert!(!a.key(true, "Escape", 3 * MS, &mut out));
+                a.key(false, "Escape", 4 * MS, &mut out);
+                assert_eq!(out, vec![], "Escape does not cancel");
+                assert!(a.is_listening());
+                a.end("tap", 5 * MS, &mut out);
+                out.clear();
+                assert!(!a.key(true, "Enter", 6 * MS, &mut out));
+                a.key(false, "Enter", 7 * MS, &mut out);
+                assert_eq!(out, vec![], "Enter while transcribing asks nothing");
+                a.settled();
+            }
+            // A confirmed push-to-talk hold, then Enter.
+            out.clear();
+            a.key(true, "RightCommand", 100 * MS, &mut out);
+            a.tick(500 * MS, &mut out);
+            out.clear();
+            let enter = a.key(true, "Enter", 600 * MS, &mut out);
+            assert_eq!(enter, swallows);
+            if swallows {
+                assert_eq!(
+                    out,
+                    vec![Action::Key("Enter".into()), Action::End { reason: "key" }]
+                );
+            } else {
+                assert_eq!(out, vec![Action::End { reason: "cancel" }]);
+            }
+        }
     }
 
     #[test]
