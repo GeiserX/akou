@@ -174,14 +174,15 @@ export function electrobunUi(): NativeUi {
         handlers: { requests: handlers, messages: {} },
       });
       // Hidden until a draft opens, and never activated by being shown: an automatic open must
-      // not take the keyboard from the app the user is typing in. The page draws its own title
-      // row (a drag region) and close.
+      // not take the keyboard from the app the user is typing in. The page draws its own island
+      // and sheet (drag regions) and Discard; the rest of the window is transparent.
       const win = new BrowserWindow({
         title: "akou draft",
         url,
         rpc: defined,
         frame,
         titleBarStyle: "hidden",
+        transparent: true,
         hidden: true,
         activate: false,
       });

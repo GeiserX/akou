@@ -1,19 +1,35 @@
-/* The draft box (DC-S1) and its learn chip (DC-L4), in dark and light. */
+/* The draft box (DC-S1) and its learn chip (DC-L4): a sheet dropped from the island at the top
+   (docs/ux/design-explorations/README.md). The island stays black in both appearances; the sheet
+   switches material. */
 :root {
   color-scheme: light dark;
-  --bg: #fdfdfd;
+  --bg: rgba(250, 250, 252, 0.96);
   --fg: #1a1a1a;
-  --muted: #5c5c5c;
-  --line: #c9c9c9;
+  --muted: rgba(0, 0, 0, 0.55);
+  --strong: rgba(0, 0, 0, 0.82);
+  --ring: rgba(0, 0, 0, 0.12);
+  --field: rgba(0, 0, 0, 0.03);
+  --field-ring: rgba(0, 0, 0, 0.2);
+  --btn: rgba(0, 0, 0, 0.07);
+  --key: rgba(0, 0, 0, 0.08);
+  --pri-bg: #0b0b0c;
+  --pri-fg: #f5f5f7;
   --warn: #8a4b00;
   --mark: #b3261e;
 }
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #1f1f1f;
-    --fg: #f2f2f2;
-    --muted: #b0b0b0;
-    --line: #555;
+    --bg: rgba(14, 14, 16, 0.95);
+    --fg: #f5f5f7;
+    --muted: rgba(255, 255, 255, 0.55);
+    --strong: rgba(255, 255, 255, 0.82);
+    --ring: rgba(255, 255, 255, 0.11);
+    --field: rgba(255, 255, 255, 0.05);
+    --field-ring: rgba(255, 255, 255, 0.22);
+    --btn: rgba(255, 255, 255, 0.11);
+    --key: rgba(255, 255, 255, 0.14);
+    --pri-bg: #f5f5f7;
+    --pri-fg: #0b0b0c;
     --warn: #ffb35c;
     --mark: #ff8a80;
   }
@@ -22,81 +38,135 @@
   /* biome-ignore lint/complexity/noImportantStyles: the attribute must beat every display rule, whatever its specificity */
   display: none !important;
 }
+/* The window is transparent: only the island and the sheet are painted. */
 html,
 body {
   margin: 0;
-  background: var(--bg);
+  background: transparent;
   color: var(--fg);
   font:
     13px / 1.3 -apple-system,
     "Segoe UI",
     system-ui,
     sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 button,
 select {
   font: inherit;
   color: inherit;
-  background: transparent;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 8px;
+  border: 0;
   cursor: pointer;
 }
-button:focus-visible {
+button:focus-visible,
+select:focus-visible {
   outline: 2px solid Highlight;
   outline-offset: 1px;
 }
-.hint {
+.hint,
+.dim {
   color: var(--muted);
-}
-#chip {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-wrap: wrap;
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 6px 10px;
-}
-#chip {
-  margin: 0;
-  min-width: 0;
-}
-.chip-candidate {
-  display: inline-flex;
-  gap: 4px;
-  align-items: center;
 }
 #draft {
   display: flex;
   flex-direction: column;
-  gap: 6px;
-  padding: 10px;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 20px 28px;
+}
+#draft-island {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 36px;
+  box-sizing: border-box;
+  min-width: 126px;
+  padding: 0 16px;
+  justify-content: center;
+  border-radius: 18px;
+  background: #000;
+  color: #fff;
+  font-weight: 500;
+  white-space: nowrap;
+  box-shadow:
+    0 0 0 0.5px rgba(255, 255, 255, 0.1),
+    0 8px 24px rgba(0, 0, 0, 0.5);
+}
+#draft-island .dim {
+  color: rgba(255, 255, 255, 0.5);
+  font-weight: 400;
+}
+#draft-sheet {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 16px;
+  border-radius: 18px;
+  background: var(--bg);
+  -webkit-backdrop-filter: blur(28px);
+  backdrop-filter: blur(28px);
+  box-shadow:
+    0 0 0 0.5px var(--ring),
+    0 20px 48px rgba(0, 0, 0, 0.45);
+  display: flex;
+  flex-direction: column;
 }
 #draft-head {
   display: flex;
   align-items: center;
-  gap: 8px;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 24px;
+}
+#draft-title {
+  font-weight: 600;
+}
+#draft-title .dim,
+#draft-length {
+  font-weight: 400;
+  margin-left: 6px;
 }
 #draft-to {
-  margin-left: auto;
-  color: var(--muted);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+  color: var(--strong);
+}
+#draft-app {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#draft-app-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: linear-gradient(180deg, #5a5a60, #3a3a3f);
+  color: #fff;
+  font-size: 9.5px;
+  font-weight: 700;
 }
 #draft-field {
   position: relative;
+  margin-top: 12px;
 }
 /* The marks sit behind the field with the same box and font, so an underline lands on its word. */
 #draft-marks,
 #draft-text {
   box-sizing: border-box;
   width: 100%;
-  min-height: 6em;
+  min-height: 104px;
   margin: 0;
-  padding: 6px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
+  padding: 12px 16px;
+  border: 1px solid transparent;
+  border-radius: 10px;
   font: inherit;
+  font-size: 15px;
+  line-height: 24px;
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
@@ -111,26 +181,162 @@ button:focus-visible {
   color: transparent;
   background: transparent;
   text-decoration: underline wavy var(--mark);
-  text-underline-offset: 3px;
+  text-underline-offset: 4px;
 }
 #draft-text {
   position: relative;
-  background: transparent;
+  display: block;
+  background: var(--field);
+  border-color: var(--field-ring);
   color: var(--fg);
-  resize: vertical;
+  resize: none;
+  outline: none;
+}
+#draft-text:focus {
+  box-shadow: 0 0 0 3px var(--btn);
+}
+#draft-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 24px;
+  margin: 8px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+#draft-meta b {
+  font-weight: 500;
+  color: var(--strong);
+}
+#draft-meta .dot {
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--muted);
+  opacity: 0.5;
+}
+.lang {
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  line-height: 18px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--btn);
+  color: var(--strong);
+}
+#draft-noconf {
+  margin: 4px 0 0;
+  font-size: 12px;
 }
 #draft-alts {
   display: flex;
   gap: 6px;
   align-items: center;
+  margin-top: 8px;
+  font-size: 12px;
+}
+#chip {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 12px 0 0;
+  padding: 8px 8px 8px 14px;
+  border: 0;
+  border-radius: 12px;
+  min-width: 0;
+  background: var(--field);
+  box-shadow: inset 0 0 0 0.5px var(--ring);
+}
+.chip-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-right: auto;
+}
+.chip-q {
+  font-weight: 600;
+}
+.chip-w {
+  font-size: 11px;
+  color: var(--muted);
+}
+.chip-candidate {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
 }
 #draft-foot {
   display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
   align-items: center;
+  gap: 8px;
+  margin: 12px -16px 0;
+  padding: 16px 16px 0;
+  border-top: 0.5px solid var(--ring);
 }
-#draft-keys {
-  flex-basis: 100%;
-  margin: 0;
+.spring {
+  flex: 1;
+}
+#draft-foot button,
+#draft-alts button,
+#chip button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 8px;
+  font-weight: 500;
+  white-space: nowrap;
+  background: var(--btn);
+}
+#draft-foot button.plain {
+  background: transparent;
+  color: var(--muted);
+  padding: 0 8px;
+}
+#draft-foot button.pri,
+#chip-learn {
+  background: var(--pri-bg);
+  color: var(--pri-fg);
+}
+button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+kbd {
+  font: inherit;
+  font-size: 10px;
+  line-height: 14px;
+  padding: 0 5px;
+  border-radius: 4px;
+  background: var(--key);
+}
+.pri kbd {
+  background: rgba(127, 127, 127, 0.18);
+}
+/* Retry with an engine: the button retries, the chevron beside it picks the engine. */
+#draft-retry-group {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 8px;
+  background: var(--btn);
+}
+#draft-retry-group #draft-retry {
+  background: transparent;
+  padding-right: 4px;
+}
+#draft-retry-pick {
+  position: relative;
+  display: inline-grid;
+  place-items: center;
+  width: 22px;
+  height: 30px;
+  font-size: 11px;
+}
+/* The select is invisible over the chevron: a click opens the OS's own menu of engines. */
+#draft-retry-engine {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
 }

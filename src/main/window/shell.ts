@@ -317,14 +317,17 @@ export const INDICATOR_SIZE = { width: 330, height: 40 } as const;
 /** Its distance from the work area's edge the first time it shows. */
 const INDICATOR_MARGIN = 16;
 /**
- * The dictation pill's size: the widest state (listening with the hints and Stop and Cancel, or an
- * error with three buttons) and the learn chip under it, at the page's 420 px measure.
+ * The dictation pill's size: the island at its widest (listening with the preview's ticker) and what
+ * hangs under it, the error's sheet or the learn chip, with room for their shadows. The window is
+ * transparent; only those are painted (pill.css).
  */
-export const PILL_SIZE = { width: 440, height: 132 } as const;
-/** The draft box's size: the field, the chip under it, the engine line and the key hints. */
-export const DRAFT_SIZE = { width: 560, height: 320 } as const;
+export const PILL_SIZE = { width: 480, height: 200 } as const;
+/** The draft box's size: its island, the sheet with the field, the chip, the engine line and the buttons. */
+export const DRAFT_SIZE = { width: 640, height: 420 } as const;
 /** Its distance from the work area's edge on the side `dictation.pill` names. */
 const PILL_MARGIN = 24;
+/** At the top the island sits right under the menu bar, where a notch would be. */
+const ISLAND_TOP = 4;
 
 /** A frame with an area. The SDK reports {0,0,0,0} for a window that is already gone. */
 const hasArea = (r: Rect) => r.width > 0 && r.height > 0;
@@ -388,7 +391,7 @@ export function placePill(
   const cy = primary.y + Math.round((primary.height - height) / 2);
   const at =
     edge === "top"
-      ? { x: cx, y: primary.y + PILL_MARGIN }
+      ? { x: cx, y: primary.y + ISLAND_TOP }
       : edge === "left"
         ? { x: primary.x + PILL_MARGIN, y: cy }
         : edge === "right"
@@ -397,14 +400,17 @@ export function placePill(
   return fitInto({ ...at, width, height }, areas, PILL_SIZE);
 }
 
-/** Where the draft box opens: centred on the primary work area. */
+/**
+ * Where the draft box opens: dropped from the island, at the top centre of the primary work area,
+ * so its own island sits where the pill's does.
+ */
 export function placeDraft(areas: readonly Rect[]): Rect {
   const primary = areas.find((a) => a.width > 0 && a.height > 0);
   const { width, height } = DRAFT_SIZE;
   if (!primary) return { x: 0, y: 0, width, height };
   const want = {
     x: primary.x + Math.round((primary.width - width) / 2),
-    y: primary.y + Math.round((primary.height - height) / 2),
+    y: primary.y + ISLAND_TOP,
     width,
     height,
   };
@@ -985,7 +991,7 @@ export class Shell implements WindowShell {
    */
   private syncPill(): void {
     const d = this.app.dictation;
-    const edge = String(this.app.config().settings["dictation.pill"] ?? "bottom");
+    const edge = String(this.app.config().settings["dictation.pill"] ?? "top");
     const want =
       !!d && !!this.ui.openPill && !this.quitting && edge !== "off" && d.state() !== "off";
     if (this.pill && (!want || this.pill.edge !== edge)) this.closePill();

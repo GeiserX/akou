@@ -1,10 +1,10 @@
 /**
  * The learn chip (docs/ux/DICTATION.md DC-L4), drawn in the pill after a direct insert and in the
  * draft box under the field. One chip at a time, holding every candidate of one dictation, with a
- * checkbox each when there are several. Learn, Not a word and a close; nothing else, and no sound.
+ * checkbox each when there are several. Learn and Not a word; nothing else, and no sound.
  *
- * It closes by itself after 8 s, and closing or ignoring it answers `ignore`, which changes nothing
- * but akou's count. Learn answers `learn` with the ticked terms and leaves `Learned "…" (Undo)` up
+ * It closes by itself after 8 s, and ignoring it answers `ignore`, which changes nothing but akou's
+ * count. Learn answers `learn` with the ticked terms and leaves `Learned "…" (Undo)` up
  * for 6 s; Undo answers `undo`. With `dictation.learn` `auto` the chip arrives as `learned`: the
  * entries are written already and only the Undo line shows.
  *
@@ -28,7 +28,14 @@ export interface ChipView {
 
 const quoted = (s: string) => `"${s}"`;
 
-export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): ChipView {
+/**
+ * `changed` hears whenever the chip goes up or down, so the pill can show or hide what holds it.
+ */
+export function mountChip(
+  root: HTMLElement,
+  answer: (a: ChipAnswer) => void,
+  changed: (up: boolean) => void = () => {},
+): ChipView {
   let up: Chip | null = null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let drop: (() => void) | null = null;
@@ -39,6 +46,7 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
     drop = null;
     root.hidden = true;
     replace(root);
+    changed(false);
   };
 
   const learned = (chip: Chip, terms: string[]) => {
@@ -48,7 +56,11 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
     root.dataset.mode = "learned";
     replace(
       root,
-      h("span", { class: "chip-text" }, `Learned ${terms.map(quoted).join(", ")}`),
+      h(
+        "span",
+        { class: "chip-text" },
+        h("span", { class: "chip-q" }, `Learned ${terms.map(quoted).join(", ")}`),
+      ),
       h(
         "button",
         {
@@ -65,6 +77,7 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
       ),
     );
     root.hidden = false;
+    changed(true);
     timer = setTimeout(close, CHIP_UNDO_MS);
   };
 
@@ -87,6 +100,7 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
         `${quoted(c.term)} (heard ${quoted(c.heard)})`,
       ),
     );
+    const only = chip.candidates[0] as Chip["candidates"][number];
     const ticked = () =>
       many
         ? [...root.querySelectorAll<HTMLInputElement>("input[data-term]")]
@@ -107,8 +121,18 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
     replace(
       root,
       many
-        ? h("span", { class: "chip-text" }, "Learn these words?", ...boxes)
-        : h("span", { class: "chip-text" }, "Learn ", ...boxes, "?"),
+        ? h(
+            "span",
+            { class: "chip-text" },
+            h("span", { class: "chip-q" }, "Learn these words?"),
+            ...boxes,
+          )
+        : h(
+            "span",
+            { class: "chip-text" },
+            h("span", { class: "chip-q" }, `Learn ${quoted(only.term)}?`),
+            h("span", { class: "chip-w" }, "You changed ", h("s", {}, only.heard)),
+          ),
       h(
         "button",
         { id: "chip-learn", type: "button", on: { click: () => done("learn", ticked()) } },
@@ -119,18 +143,9 @@ export function mountChip(root: HTMLElement, answer: (a: ChipAnswer) => void): C
         { id: "chip-reject", type: "button", on: { click: () => done("reject", ticked()) } },
         "Not a word",
       ),
-      h(
-        "button",
-        {
-          id: "chip-close",
-          type: "button",
-          attrs: { "aria-label": "Close" },
-          on: { click: () => done("ignore") },
-        },
-        "×",
-      ),
     );
     root.hidden = false;
+    changed(true);
     timer = setTimeout(() => done("ignore"), CHIP_ASK_MS);
   };
 
