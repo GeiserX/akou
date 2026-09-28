@@ -11,6 +11,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { MODELS, modelFile } from "../src/main/asr/models.ts";
+import { GPU_BUSY_VERDICT } from "../src/main/dictation/engines.ts";
+import { BEST_REWARM_MS } from "../src/main/index.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
 import { ManualClock, until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
@@ -52,7 +54,13 @@ interface Rig {
 
 async function rig(
   settings: Record<string, unknown>,
-  o: { qwen?: boolean; llama?: string[]; helper?: string[]; clock?: ManualClock } = {},
+  o: {
+    qwen?: boolean;
+    llama?: string[];
+    helper?: string[];
+    clock?: ManualClock;
+    metalHolder?: () => number | null;
+  } = {},
 ): Promise<Rig> {
   const dir = scratch();
   const models = join(dir, "models");
@@ -62,6 +70,7 @@ async function rig(
   const r = await appRig({
     ...(o.helper ? { helperArgs: o.helper } : {}),
     ...(o.clock ? { clock: o.clock } : {}),
+    ...(o.metalHolder ? { metalHolder: o.metalHolder } : {}),
     settings: {
       "asr.modelsDir": models,
       "asr.llamaServer": [process.execPath, FAKE_LLAMA, "--fake-log", log, ...(o.llama ?? [])],
@@ -210,6 +219,61 @@ describe("DC-E2: best kept warm while dictation is on", () => {
     expect(res.body).toMatchObject({ text: "hello", engine: "fast", fallback_from: "best" });
     const one = await x.r.api("GET", `/dictations/${res.body.id}`);
     expect(one.body).toMatchObject({ engine: "fast", fallback_from: "best" });
+  });
+});
+
+describe("DC-E2: best gives way to a final pass holding the GPU on Metal", () => {
+  const metal = {
+    "dictation.engine": "best",
+    "dictation.enabled": true,
+    "asr.accelerator": "metal",
+  };
+
+  test("while a final pass holds it, GET /v1/dictation says so and a dictation is fast; once the pass ends, best is warmed", async () => {
+    const clock = new ManualClock();
+    let holder: number | null = 4242;
+    const x = await rig(metal, { qwen: true, clock, metalHolder: () => holder });
+    const st = (await x.r.api("GET", "/dictation")).body;
+    expect(st).toMatchObject({ engine: "fast", verdict: GPU_BUSY_VERDICT });
+    const res = await upload(x.r);
+    expect(res.body).toMatchObject({ text: "hello", engine: "fast", fallback_from: "best" });
+    // No start that would fail: Qwen was never asked for.
+    expect(x.llama()).toEqual([]);
+    // Positive control: while the pass runs, looking again changes nothing.
+    await clock.advance(BEST_REWARM_MS);
+    await Bun.sleep(200);
+    expect(x.llama()).toEqual([]);
+    holder = null;
+    await clock.advance(BEST_REWARM_MS);
+    await until(() => x.llama().some((l) => l.argv), 10_000, "best warmed after the pass");
+    expect((await x.r.api("GET", "/dictation")).body).toMatchObject({
+      engine: "best",
+      verdict: "best on metal",
+    });
+  });
+
+  test("a final pass that stops the warm server: best waits for it to end, then is warmed again", async () => {
+    const clock = new ManualClock();
+    let holder: number | null = null;
+    const x = await rig(metal, { qwen: true, clock, metalHolder: () => holder });
+    await until(() => x.llama().some((l) => l.argv), 10_000, "the warm start");
+    await until(() => x.r.app.dictation()?.status().loading === false, 10_000, "the load");
+    const pid = x.llama().find((l) => l.argv)?.pid as number;
+    // The pass takes the GPU: it stops dictation's server and holds the pid file.
+    holder = 4242;
+    process.kill(pid, "SIGKILL");
+    await until(() => !alive(pid), 10_000, "the warm server gone");
+    await clock.advance(BEST_REWARM_MS);
+    await Bun.sleep(200);
+    expect(x.llama().filter((l) => l.argv).length).toBe(1);
+    expect((await x.r.api("GET", "/dictation")).body.verdict).toBe(GPU_BUSY_VERDICT);
+    holder = null;
+    await clock.advance(BEST_REWARM_MS);
+    await until(
+      () => x.llama().filter((l) => l.argv).length === 2,
+      10_000,
+      "best warmed after the pass",
+    );
   });
 });
 

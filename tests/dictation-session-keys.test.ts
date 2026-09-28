@@ -367,6 +367,15 @@ describe("DC-A4: Escape, Enter and Shift+Enter during a session", () => {
 describe("DC-S2: the send key after the paste receipt", () => {
   const enterDuringHold: Key[] = [[800, RC, true], ...press(1600, "Enter"), [1700, RC, false]];
 
+  test("a receipt that never comes: no send key at all, then the helper's no-receipt is the dictation's failure", async () => {
+    const r = rig(enterDuringHold, { switches: ["--no-receipt", "--receipt-timeout-ms", "300"] });
+    await r.settled();
+    expect(r.inserts().map((l) => [l.type, l.send_key])).toEqual([["insert", "Enter"]]);
+    expect(r.item()).toMatchObject({ state: "failed", error: "insert: no-receipt" });
+    // The pill shows a dictation.failed as its error state (tests/dictation-pill.test.ts).
+    expect(r.follow.some((m) => m.kind === "event" && m.e.type === "dictation.failed")).toBe(true);
+  });
+
   test("sendKey: none presses nothing even on Enter", async () => {
     const r = rig(enterDuringHold, { insert: { ...DEFAULT_INSERT, sendKey: "none" } });
     await r.settled();

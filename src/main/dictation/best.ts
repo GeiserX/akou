@@ -16,9 +16,10 @@
  * - **Language (DC-E4).** A forced tag goes to Qwen as its language prefix; on `auto` the answer is
  *   bounded by the dictation's languages (`dictation.languages`, else `asr.languages`).
  * - **One Metal engine at a time.** The server gives way to a Metal llama-server already running (a
- *   call's final pass) instead of stopping it: the dictation falls back to `fast` meanwhile. A
- *   changed spec stops the old server before the new one starts, so it is not the Metal server the
- *   new one gives way to.
+ *   call's final pass) instead of stopping it: the dictation falls back to `fast` meanwhile, and
+ *   the app's verdict says so (`GPU_BUSY_VERDICT`). A final pass that starts later stops this one;
+ *   `onLost` tells the app, which warms it again once the pass is over. A changed spec stops the
+ *   old server before the new one starts, so it is not the Metal server the new one gives way to.
  * - **The audio check (DC-L3).** `check` decodes a kept dictation again with a fixed word as the
  *   only context, on the same server and budget, with no exit to `fast`: a Parakeet answer would
  *   say nothing about the fix. It runs only on the warm server as the settings name it now, never
@@ -60,6 +61,11 @@ export interface BestEngineOptions {
   clock: Pick<Clock, "setTimeout" | "clearTimeout">;
   /** Makes the server; the supervised llama-server by default. */
   server?(spec: LlamaEngineSpec): BestServer;
+  /**
+   * The warm server's process ended without this engine stopping it: a final pass on Metal took
+   * the GPU, or it crashed. The next dictation would start it cold, so the host warms it again.
+   */
+  onLost?(): void;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -76,6 +82,8 @@ export class BestEngine implements DictationEngine {
   /** The server being made while the old one stops: every caller meanwhile waits for it. */
   private making: Promise<BestServer> | null = null;
   private idle: unknown = null;
+  /** The server that answered its health check, until its process ends. */
+  private healthy: BestServer | null = null;
   private busy = 0;
   private starting = false;
   /** The audio checks in flight: a dictation's decode abandons them. */
@@ -170,6 +178,15 @@ export class BestEngine implements DictationEngine {
         this.o.server?.(spec) ??
         createLlamaServer(spec, {
           yieldMetal: true,
+          onChild: (_pid, alive) => {
+            // `stop()` lets go of the server before it ends it, so this engine's own stop never
+            // gets here. A loss does, and so does the engine's retry restart, whose later look
+            // finds the server running. Only a server that had loaded counts, so one that dies at
+            // every start is not started again.
+            if (alive || this.server !== server || this.healthy !== server) return;
+            this.healthy = null;
+            this.o.onLost?.();
+          },
           log: (level, msg) => this.o.onLog?.(level, `dictation best: ${msg}`),
         });
       this.server = server;
@@ -189,6 +206,7 @@ export class BestEngine implements DictationEngine {
     this.starting = true;
     try {
       await server.url();
+      this.healthy = server;
     } finally {
       this.starting = false;
     }

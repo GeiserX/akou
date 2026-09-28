@@ -67,7 +67,9 @@
  *                           insert or a refused one
  *   --commands-log FILE     every command the app sent, one JSON line each
  *   --receipt-ms N          the fake target reads the clipboard N ms after the insert (default 5)
- *   --no-receipt            the target never reads it: no `inserted` ever comes
+ *   --no-receipt            the target never reads it: no `inserted` ever comes, and no send key
+ *                           is pressed; `insert.failed` with `no-receipt` follows after
+ *                           `--receipt-timeout-ms` (default 8000, the real helper's receipt timeout)
  *   --bind-fail             every `rebind` is refused with `rebind.failed`
  *   --refuse-hotkey KEY     a `rebind` to this hotkey is refused; the binding in force stays (DC-A7)
  *   --play-after-rebinds N  the scripted keys play after the Nth `rebind` (default 1), refused or
@@ -537,7 +539,14 @@ async function runDictate(): Promise<void> {
         return;
       case "insert": {
         log(opt("--inserter-log"), { ...c, at: now() });
-        if (flag("--no-receipt")) return;
+        if (flag("--no-receipt")) {
+          // The real inserter gives up on a target that never read: no send key, then the failure.
+          setTimeout(() => {
+            machine?.settled();
+            say({ type: "insert.failed", id: c.id, reason: "no-receipt" });
+          }, num("--receipt-timeout-ms") ?? 8000);
+          return;
+        }
         // The guards look at the tree now, when the insert arrives, not after the receipt.
         // The app's target is the one to compare (the draft box names the session's).
         const cap = c.target ?? captured.get(c.id) ?? target;
