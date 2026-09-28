@@ -35,21 +35,21 @@ Columns:
 ```
 ┌──────────────┬ composer row ────────────────────────────┬─────────────────────────────┐
 │ akou         │ ● SAVED [work│title……] [Template ▾]      │ ✦ Ask about this call  ⌄ ↵  │
-│              │   Mic ▬▬  Call ▬▬   (●) Record ⌥⌘R       ├─────────────────────────────┤
-│              ├ banner, when something needs attention ──┤ What did Ben say?           │
-│              ├ call header ─────────────────────────────┤ ┌ ✦ Answer ───────────────┐ │
-│              │ Weekly sync       [review] Restart Share │ │ Move the build [15:41 Ben]│ │
-│              │ Wed, 15:36 · 27 min · work · Template: … │ └─────────────────────────┘ │
-│              │ (● Ben 14 min) (● You 9 min)             ├─────────────────────────────┤
+│ ▮ Calls      │   Mic ▬▬  Call ▬▬   (●) Record ⌥⌘R       ├─────────────────────────────┤
+│ [⌕ Search  ] ├ banner, when something needs attention ──┤ What did Ben say?           │
+│ ▾ PRODUCT  2 ├ call header ─────────────────────────────┤ ┌ ✦ Answer ───────────────┐ │
+│   Weekly…  ● │ Weekly sync       [review] Restart Share │ │ Move the build [15:41 Ben]│ │
+│   1:1 Ana    │ Wed, 15:36 · 27 min · work · Template: … │ └─────────────────────────┘ │
+│ ▸ HIRING   1 │ (● Ben 14 min) (● You 9 min)             ├─────────────────────────────┤
 │              ├──────────────────────────────────────────┤ Notes 3   [Notes|Enhanced]  │
-│ Calls        │ transcript                               │ 15:38 • budget review first │
-│ ▾ PRODUCT  2 │ 15:41  Ben    we should move the build   │ 15:41 ☐ Ben: move build box │
-│   Weekly…  ● │ 15:41  You    to the new box? which one  │ 15:44 ? which region        │
-│   1:1 Ana    │ …                                        ├─────────────────────────────┤
-│ ▸ HIRING   1 │ ┆ 15:42  c3?  (still being spoken)  ┆    │ [Type a note, Enter to add] │
+│   Dictation  │ transcript                               │ 15:38 • budget review first │
+│   Models     │ 15:41  Ben    we should move the build   │ 15:41 ☐ Ben: move build box │
+│   Settings   │ 15:41  You    to the new box? which one  │ 15:44 ? which region        │
+│              │ …                                        ├─────────────────────────────┤
+│              │ ┆ 15:42  c3?  (still being spoken)  ┆    │ [Type a note, Enter to add] │
 │              │                          [↓ Back to live]│ - bullet [] action ? …      │
 │              ├ player bar, saved calls only ────────────┤                             │
-│              │ ▶ 15:41:07 ──●─── 16:03:40 1.0x mic◂▸call│                             │
+│ ● Ready      │ ▶ 15:41:07 ──●─── 16:03:40 1.0x mic◂▸call│                             │
 └──────────────┴──────────────────────────────────────────┴─────────────────────────────┘
 ```
 
@@ -64,7 +64,9 @@ Columns:
 | Player bar | under the transcript, only for a saved call with a recorded part (never with no call or during a live call): play or pause, position as wall time, speed, balance | the call's audio |
 | Dialogs | Settings, Words (review and vocabulary), share options, speaker popover, shortcuts sheet, command palette | registry and fold |
 
-Under 900 px wide the calls column collapses to a button in the header. Under 640 px the side pane becomes a drawer over the transcript.
+Below 1248 px wide the sidebar narrows to 10 rem and the side column to 18 rem, so the transcript keeps at least half the window. The calls column collapsing under 900 px and the side column becoming a drawer under 640 px are W1.3, not built.
+
+One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Enhance, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The selected Notes | Enhanced tab, the open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -75,28 +77,30 @@ Moved: W1.2 (tests assert computed visibility) is TESTING TS-15. W1.4 (remember 
 
 ## 2. States
 
-The header state is one of the rows below. The state machine lives in the main process, and the window only draws it. Every state has a way out, and the table names it.
+The composer row's state word and dot show one of the rows below. The state machine lives in the main process, and the window only draws it. Every state has a way out, and the table names it. The word is lowercase in the markup and drawn in capitals; what the state adds (how long it has recorded, the last line, the failure) is the word's tooltip and the call header's line of facts. The words are English until the catalog (W16.1) brings Spanish.
 
-| State | Label (en / es) | Dot | Enabled controls | Way out |
+| State | Word | Dot | Enabled controls | Way out |
 |---|---|---|---|---|
-| No call yet | Ready / Listo | grey | Record, workspace, title, template | Record |
-| Starting | Starting… / Iniciando… | amber pulse | Stop | 201 → Recording; failure → Failed to start |
-| Recording | Recording / Grabando | red pulse | Mute, Pause, Stop, Share; Discard in the first 60 s | Stop, Pause, Discard (W2.7) |
-| Paused | Paused / En pausa | amber | Resume, Stop | Resume, Stop |
-| Mic muted | Recording · mic muted | red, mic meter crossed | Unmute, Pause, Stop | Unmute |
-| Stopping | Stopping… | grey pulse | none (under 5 s by design) | → Final pass |
-| Final pass running | Saved · improving transcript N % | green | Restart, Enhance so far, Copy | → Ready |
-| Ready (done) | Saved | green | Restart, Enhance, Export, Share off | Record a new call |
-| Failed to start | Could not start: reason | red | Record (retry), open the named settings pane | Retry |
-| Ended unexpectedly or interrupted | Ended unexpectedly at 15:52 | red | Restart (same call) | Restart |
-| Another call recording | Another call is recording: title | red | Open that call, Stop the other call | either |
-| App unreachable (browser page, share viewer) | Reconnecting… / Offline | grey | none | reconnects from last `seq` |
+| Speech models missing, no call open | setup | grey | none in the composer row: it shows only the word, and the welcome (section 10) holds the one Download | the download ends → ready, without a reload |
+| No call yet | ready | grey | Record, workspace, title, template | Record |
+| Starting | starting | red pulse | Stop | 201 → rec; failure → recording failed |
+| Recording | rec | red pulse | Stop, Mute, Pause, Restart; Share, Copy transcript in the call header; Discard in the first 60 s is W2.7, not built | Stop, Pause |
+| Mic muted | rec, the tooltip adds "mic muted" | red pulse, the Mute icon crossed | Unmute, Pause, Stop | Unmute |
+| Paused | paused | amber | Resume, Stop | Resume, Stop |
+| Not capturing (no level for 5 s, or both channels proven dead) | not capturing | amber | Stop, Restart | capture comes back, or Restart |
+| Stopping | stopping | red pulse | none (under 5 s by design) | → saved, and the final pass runs |
+| Final pass running | saved, with the final-pass note and its bar under the composer row | green | Share, Copy transcript, Enhance | → saved |
+| Saved | saved | green | Share, Copy transcript, Enhance, Record a new call | Record |
+| Failed to start | recording failed, the tooltip names the stage and the error | red | Restart, Record | Restart or a new call |
+| Ended unexpectedly or interrupted | ended unexpectedly, interrupted | amber | Restart (same call) | Restart |
+| Another call recording | another call is recording | grey | Stop the other call | the other call stops |
+| App unreachable (browser page, share viewer) | reconnecting | amber | none | reconnects from last `seq` |
 
-Overlays that stack on any state: models missing or downloading (section 10), provider unavailable (the ask pane says why, and Settings shows the agent's state), shared live (red pill with viewer count).
+Overlays that stack on any state: models missing or downloading (section 10: the readiness row at the foot of the sidebar and the welcome), provider unavailable (the ask pane says why, and Settings shows the agent's state), shared live (red pill with viewer count in the call header).
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W2.1 | Header states and banners as in hark-viewer | done | DESIGN 7 | Existing parity tests | has |
+| W2.1 | States and banners as in hark-viewer | done | DESIGN 7 | Existing parity tests | has |
 | W2.2 | State is never shown by colour alone: every dot has a label, every health dot an icon shape and text | P1 | Accessibility | With forced-colors emulated, each state and channel health is still distinguishable by text; the axe scan (W15.5) reports no colour-only state | partial |
 | W2.3 | Only errors use `role=alert`; info toasts use `role=status` | P1 | Audit | An info toast is announced politely; a dead-capture banner assertively | partial |
 | W2.4 | Stop while the meeting app still uses the mic: "Call audio was active 12 s ago. Stop anyway?" with a 10 s undo | P1 | DESIGN 7 (M2) | Fake helper reports call audio 5 s ago; Stop shows the inline confirm; Undo within 10 s leaves the call recording with no `part.ended` | missing |
@@ -105,7 +109,7 @@ Overlays that stack on any state: models missing or downloading (section 10), pr
 
 Moved: W2.6 (confirm Quit during a call) is DESKTOP DK-M3.
 
-## 3. Recording: header controls and the shell around the window
+## 3. Recording: the composer row and the shell around the window
 
 ### 3.1 Starting and controlling a call
 
@@ -115,7 +119,7 @@ The controls are the ones hark-viewer had (DESIGN 7), laid out as the composer r
 |---|---|---|---|---|---|
 | W3.1 | Record, Mute, Pause, Stop, Restart; workspace, title, template pickers | done | DESIGN 7 | Existing tests | has |
 | W3.2 | Mark this moment: a button and `Mod+D` star the line being spoken, with an optional label | P1 | Otter, tl;dv, Fathom, MacWhisper | During a call, `Mod+D` writes one `mark` event at the current wall time; the line shows a star; the mark is in the pack for "what did I mark" and in the export | missing |
-| W3.3 | Mic and call source picker in the header (idle only) | P1 | REQ F0.7, audit: the window cannot pick devices | The picker lists the devices the API reports; the chosen one is sent as `mic`/`call` on start. Depends on CLI-07 and a devices route in [PROGRAMMABILITY.md](PROGRAMMABILITY.md) | missing |
+| W3.3 | Mic and call source picker in the composer row (idle only) | P1 | REQ F0.7, audit: the window cannot pick devices | The picker lists the devices the API reports; the chosen one is sent as `mic`/`call` on start. Depends on CLI-07 and a devices route in [PROGRAMMABILITY.md](PROGRAMMABILITY.md) | missing |
 | W3.4 | Start with the mic muted (checkbox beside Record) | P2 | Minutes | Start with the box ticked writes `mute` before the first mic segment; the mic meter shows muted | missing |
 | W3.5 | Silence reminder: after N minutes with no audio on either channel, a banner "Nothing heard for 10 min. Keep recording?" with Keep and Stop; never stops by itself unless the user set an auto-stop | P2 | Minutes, Granola, Wispr; intent: no false alarms | Fake helper silent for the set time shows the banner once; Keep resets it; no banner in a quiet but live call where either channel has speech | missing |
 | W3.15 | Words for this call: an optional field beside the title (attendees, product names), sent as `vocab` on start, the window's equal of `akou start --vocab` | P2 | Parity: CLI, API and MCP take `--vocab` at start, the window cannot | Typing "Ben, Vercel" and Record starts a call whose `call.created` carries both words; the speaker popover suggests "Ben" (W8.3) | missing |
@@ -296,7 +300,7 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 
 ## 10. First run and models
 
-[DESKTOP.md](DESKTOP.md) section 11 owns the first-run flow, its steps and their order. The window draws those screens with strings from the catalog (section 16), and the Welcome screen carries the interface language choice next to `user.name`, so everything after it is already in the right language. Every step writes a normal setting; setup has no state of its own.
+[DESKTOP.md](DESKTOP.md) section 11 owns the first-run flow, its steps and their order. What ships is the welcome below; the rest of that flow (your name and the interface language, a permission per screen, the capture test) is DK-O2 and DK-O1, not built. Every step writes a normal setting; setup has no state of its own.
 
 While the speech models are missing, downloading or failed, and no call is recording, the welcome replaces the transcript, the side pane and the player. The sidebar stays, with the calls on disk, and its readiness row reads "Models missing" (or "Downloading models", or "Download failed") with "Setup 1 of 3"; the Models row carries an amber dot. It says "Welcome to akou", one line on what to do, then three steps:
 
@@ -304,11 +308,11 @@ While the speech models are missing, downloading or failed, and no call is recor
 2. **Microphone and system audio** (Later): "macOS asks for both the first time you press Record."
 3. **Your agent** (Optional): one line, and a quiet button that opens Settings on the provider field.
 
-The footer says "You can change any of this later in Settings." While the welcome shows, the composer row keeps only its state word: no title field, template, meters or Record. The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen. A call picked in the sidebar also lifts the welcome, so a call recorded without models can be read once it is stopped; until the user picks it, the welcome shows, that call is only the marked row in the sidebar, and the composer row shows its state word. "Setup 1 of 3" brings the welcome back with the focus on the download.
+The footer says "You can change any of this later in Settings." While the welcome shows, the composer row keeps only its state word, and the word reads "setup", never "ready": no title field, template, meters or Record. The welcome goes by itself when the models are ready, without a reload. A call recording without models (started from the CLI) keeps the workspace on screen. A call picked in the sidebar also lifts the welcome, so a call recorded without models can be read once it is stopped; until the user picks it, the welcome shows, that call is only the marked row in the sidebar, and the composer row shows its state word. "Setup 1 of 3" brings the welcome back with the focus on the download.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W10.1 | The welcome: the three steps above, a resumable checksummed download with real progress, Record disabled with its reason until the models are there | done | DESIGN 7; design-explorations | `tests/ui/window.test.ts` "the welcome": with the models missing the workspace carries `hidden`, the rows and sizes show, the progress moves with every `GET /models` failing, and the welcome goes when the download ends | has |
+| W10.1 | The welcome: the three steps above, a resumable checksummed download with real progress, Record disabled with its reason until the models are there | done | DESIGN 7; design-explorations | `tests/ui/window.test.ts` "the welcome": with the models missing the workspace carries `hidden`, the state word reads "setup", the rows and sizes show, the progress moves with every `GET /models` failing, and the welcome goes when the download ends | has |
 | W10.6 | Download progress on the status push: the app pushes the status at most once a second while a download runs; the one-second `GET /models` poll runs only after the push has been quiet for 3 s | P1 | DESKTOP DK-E2 | Same test: with every `GET /models` aborted, the bar still moves | has |
 
 Moved: W10.2 (guided first run) is DK-O2. W10.3 (3 s capture test) is DK-O1. W10.4 (free space, speed, time left, Cancel) is DK-O3 and DK-E2. W10.5 (sample call) is in the parking list.
@@ -345,7 +349,7 @@ The window shows where a call went and gives the one-click ways out. It does not
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W12.1 | Hand-off status line: export path, hook results, webhook result | done | DESIGN 7 | Existing tests | has |
-| W12.2 | Copy transcript so far: `Mod+Shift+C`, palette, header menu | P0 | REQ F1.42 marks it carried from hark (`y`), and it is not built; Granola, Fathom, Buzz | During a call, the clipboard gets the transcript rendered as the export's `## Transcript` section; after the final pass, the final layer | partial: key and header button; the palette entry comes with W14.5 |
+| W12.2 | Copy transcript so far: `Mod+Shift+C`, palette, a button in the call header | P0 | REQ F1.42 marks it carried from hark (`y`), and it is not built; Granola, Fathom, Buzz | During a call, the clipboard gets the transcript rendered as the export's `## Transcript` section; after the final pass, the final layer | partial: the key and the call header's button; the palette entry comes with W14.5 |
 | W12.3 | Copy the whole call as Markdown (the export render) | P1 | Wispr, Granola | The clipboard equals the export file body for that call | missing |
 | W12.4 | Reveal the export in the file manager; open it in the default app | P1 | Desktop craft | Native smoke: the button opens the folder with the file selected | missing |
 | W12.5 | Re-run hooks and re-export from the window | P2 | Audit: CLI-only | Buttons call the hooks route; a `hook.done` appears | missing |
@@ -428,7 +432,7 @@ Rules for every screen: every control reachable and usable by keyboard alone; fo
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W15.1 | Focus-visible outlines, tab keyboard navigation, native `<dialog>` | done | built | Existing tests | has |
-| W15.2 | Contrast: `--faint` and the dark-theme Record button meet AA (today 2.83:1 dark, 2.33:1 light, white on dark accent 2.43:1) | P1 | Audit (ratios computed from `theme.css`) | The token contrast test in TESTING TS-15b passes in both themes; it fails on today's tokens | partial |
+| W15.2 | Contrast: `--faint` meets AA (today 2.83:1 dark, 2.33:1 light). The one accent fill, the welcome's Download, already does: 7.86:1 dark, 5.73:1 light | P1 | Audit (ratios computed from `theme.css`) | The token contrast test in TESTING TS-15b passes in both themes; it fails on today's tokens | partial |
 | W15.3 | `prefers-reduced-motion`: no pulse, rise or flash; a fade at most | P1 | Apple HIG; audit: none today | With reduced motion emulated, no element has a running animation (TS-15b) | missing |
 | W15.4 | Screen-reader announcements for new lines: all, other speakers only, or off (`a11y.announceLines`); the provisional row is not announced; an answer is announced once when it ends | P2 | Apple HIG; audit | With "others only", a mic line adds no live-region text; a streamed answer changes the live region once | partial |
 | W15.5 | Automated accessibility scan with axe-core, a dev-only dependency, on every screen in both themes | P1 | Testing; the ARIA checks in W2.2 and W8.2 need a real scanner, which token parsing cannot replace | The UI suite runs axe on idle, recording, each tab, Settings, first run and each dialog; zero serious or critical findings. A positive control removes a label from one control and the scan fails | missing |
@@ -455,16 +459,16 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 
 | Place | Empty | Loading | Error |
 |---|---|---|---|
-| Transcript, no call | "No call yet. Press Record, or start one from your agent with `akou start`." (hark-viewer text) | n/a | n/a |
-| Transcript, call with no lines | "Listening. Lines appear about a second after someone finishes a sentence." | provisional row | dead-capture banner (red) with the channel named |
+| Transcript, no call | "Press Record to start a call." (hark-viewer's text) | n/a | n/a |
+| Transcript, call with no lines | live: "Listening. A line appears each time someone pauses."; saved: "No transcript lines in this call." | provisional row | dead-capture banner (red) with the channel named |
 | Transcript, echo | n/a | n/a | amber banner when `health {state: echo}` holds: "The microphone hears the call. Headphones fix this." Echo lines stay hidden (W17.3) |
-| Recording, disk | n/a | n/a | amber banner at the low-disk threshold: "Disk almost full: about N minutes left", then the stop reason `low-disk` in the header if it runs out |
-| Calls list | "Your calls will be listed here." | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
-| Notes | the input placeholder with the markers | n/a | save failed: the line stays in the input with "Not saved. Retry" |
-| Ask | presets only | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has) |
-| Enhanced | "Enhance turns your notes and the transcript into clean notes." | progress with the template name | the reason, the previous revision still shown |
+| Recording, disk | n/a | n/a | amber banner at the low-disk threshold: "Disk almost full: about N minutes left", then the stop reason `low-disk` in the call header if it runs out |
+| Calls list | the default workspace with "No calls yet"; a search that matches nothing says so | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
+| Notes | the input's placeholder, "Type a note, Enter to add it", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
+| Ask | the input with its presets menu, and the call's last answered question if it has one | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has) |
+| Enhanced | "No enhanced notes yet." with the template select and Enhance | "Writing the notes…" | the reason, the previous revision still shown |
 | Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
-| Models | the welcome with each model, the size and Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
+| Models | the welcome with each model, its size and the one Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
 | Settings | n/a | n/a | the registry's refusal per key (has) |
 | Page lost the app | n/a | "Reconnecting…" | after 10 s: "akou is not running. Open it with `akou open`." Never `akou start`, which records (CLI.md rule 4) |
 
