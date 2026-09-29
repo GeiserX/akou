@@ -302,7 +302,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "server.max_upload_mb": { label: "Largest upload", unit: "MB" },
   "server.dictation_slots": {
     label: "Dictations at once for other computers",
-    help: "0 turns dictation off for them.",
+    help: "0: their dictations wait in the queue like any job.",
     unit: "at once",
   },
   "server.dictation_engine": {
@@ -500,8 +500,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "dictation.formatTimeoutSeconds": {
     label: "Wait for the AI tidy up to",
-    help: "Then the text goes in as you said it. 0 waits 15 seconds for Claude Code, 4 for an API.",
-    unit: "seconds",
+    help: "Then the text goes in as you said it. Automatic waits 15 seconds for Claude Code, 4 for an API.",
   },
   "asr.qwenIdleMinutes": {
     label: "Unload Best after",

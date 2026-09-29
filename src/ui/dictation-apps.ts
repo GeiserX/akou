@@ -14,6 +14,8 @@
  * dictation in the dictation log and adds a rule for the app it went to (`nextDictatedApp`).
  */
 
+import { QWEN_LANGUAGE_CODES } from "../main/asr/llama-catalog.ts";
+import { languageName } from "./dictation-languages.ts";
 import { h } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Reply, Transport } from "./protocol.ts";
@@ -67,7 +69,11 @@ export const APP_RULE_FIELDS: readonly {
       ["remote", "Another computer"],
     ],
   },
-  { name: "language", label: "Language", values: null },
+  {
+    name: "language",
+    label: "Language",
+    values: QWEN_LANGUAGE_CODES.map((c) => [c, languageName(c)] as const),
+  },
   {
     name: "format",
     label: "Tidy the text with AI",
@@ -88,7 +94,7 @@ export function ruleSummary(rule: Readonly<Record<string, string>>): string {
     if (!v) return null;
     const f = APP_RULE_FIELDS.find((x) => x.name === name);
     const named = f?.values?.find(([x]) => x === v)?.[1];
-    if (name === "language") return `in ${v}`;
+    if (name === "language") return `in ${named ?? v}`;
     if (name === "engine") return named ? `${named.toLowerCase()} engine` : v;
     if (name === "format") return v === "provider" ? "tidied with AI" : "never tidied";
     if (name === "sendKey") return v === "none" ? "never sends" : `sends with ${named ?? v}`;
@@ -235,7 +241,7 @@ export function appsEditor(
       type: "text",
       class: "pg-input",
       value: String(rule.app ?? ""),
-      placeholder: "The app's id, such as com.example.chat",
+      placeholder: "Such as com.example.chat",
       attrs: { "data-field": "app", "aria-label": "App" },
       on: { change: changed },
     });
@@ -305,7 +311,7 @@ export function appsEditor(
       row(
         {
           label: "App",
-          help: "Its id: a bundle id on a Mac, the program's name on Windows, the window class on Linux.",
+          help: "Use the app I dictate into next fills this in.",
         },
         app,
       ),

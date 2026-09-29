@@ -392,7 +392,7 @@ export class KeyRecorder {
     const only = this.ctx.chordsOnly();
     if (only && isAlone(value)) {
       this.say(
-        `${keycaps(value, this.ctx.platform).join(" ")} alone cannot be bound: ${only}`,
+        `${keycaps(value, this.ctx.platform).join(" ")} alone cannot be bound. ${only}`,
         true,
       );
       return;

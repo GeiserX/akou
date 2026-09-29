@@ -1257,6 +1257,12 @@ describe("DC-U1: the Dictation page in the window", () => {
         "Must be at most 60",
       );
       expect(f.patches.at(-1)).toEqual({ "dictation.maxMinutes": 90 });
+      // Off or On is a switch, saved in the setting's own words.
+      expect(await page.getAttribute("#set-dictation-glossary", "role")).toBe("switch");
+      const before = f.patches.length;
+      await page.click("#set-dictation-glossary");
+      await until(() => f.patches.length === before + 1, 5000, "the switch saved");
+      expect(f.patches.at(-1)).toEqual({ "dictation.glossary": "on" });
 
       // Delete all asks once more before it acts.
       await page.click("#dictations-delete");
@@ -1292,6 +1298,10 @@ describe("DC-U1: the Dictation page in the window", () => {
       const main = await keys();
       await page.click("#dictation-advanced");
       await page.waitForSelector("#page-dictation .pg-back");
+      // The tidy's wait shows its default by name, never a bare 0.
+      expect(await text(page, `${on("dictation.formatTimeoutSeconds")} option:checked`)).toBe(
+        "Automatic",
+      );
       const all = [...main, ...(await keys())];
       // Settings hides every dictation key, so each must be here, and the page names none the
       // registry lacks.
@@ -1376,6 +1386,28 @@ describe("DC-U1: the Dictation page in the window", () => {
       await page.click("#settings-open");
       await page.waitForSelector("#page-settings .pg-row[data-key]");
       expect(await page.$("#page-settings [data-key^='dictation.']")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a settings read that fails says why where the settings go, not that there are none",
+    async () => {
+      const page = await rig.open(undefined, {
+        before: (p) =>
+          p.route(
+            (u) => u.pathname === "/api/v1/config",
+            (route) =>
+              route.request().method() === "GET"
+                ? route.fulfill({ status: 500, json: { error: "internal", message: "disk gone" } })
+                : route.continue(),
+          ),
+      });
+      await page.click("#dictation-open");
+      await page.waitForSelector("#page-dictation [data-empty]");
+      expect(await text(page, "#page-dictation [data-empty]")).toBe(
+        "The dictation settings could not be read: disk gone",
+      );
     },
     UI_TIMEOUT,
   );
@@ -1847,15 +1879,21 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
 
       // The registry's validator has the last word, shown beside the setting.
       f.refuse.set("dictation.apps", "rule 1: language must be auto or an ISO 639 code");
-      await page.fill(cell(1, "language"), "english");
-      await page.press(cell(1, "language"), "Tab");
+      await page.selectOption(cell(1, "language"), "en");
       await page.waitForSelector("#page-dictation div.pg-apps.refused[data-key='dictation.apps']");
       expect(
         await text(page, "#page-dictation div.pg-apps.refused[data-key='dictation.apps'] .issue"),
       ).toBe("Rule 1: language must be auto or an ISO 639 code");
+      // The reason ends the panel, never inside a rule's header button.
+      expect(
+        await page.$eval(
+          "#page-dictation div.pg-apps.refused[data-key='dictation.apps'] .issue",
+          (el) => el.parentElement?.matches("div.pg-apps") && el.closest("button") === null,
+        ),
+      ).toBe(true);
       expect(f.patches).toHaveLength(4);
       expect(f.patches[3]).toEqual({
-        "dictation.apps": [{ app: "com.example.chat", language: "english" }],
+        "dictation.apps": [{ app: "com.example.chat", language: "en" }],
       });
     },
     UI_TIMEOUT,
@@ -2249,7 +2287,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       await step(page, "key");
       const key = "#page-dictation .dictation-setup input[data-key='dictation.hotkey']";
       expect(await page.inputValue(key)).toBe("Control+Shift+Space");
-      expect(await text(page, "#dictation-setup-note")).toContain("takes chords only");
+      expect(await text(page, "#dictation-setup-note")).toContain("must be a combination");
       await page.click("#page-dictation .dictation-setup button.record-key");
       await page.keyboard.down("MetaRight");
       await page.waitForTimeout(HOLD_ALONE_MS + 100);
@@ -2975,12 +3013,14 @@ describe("DC-U3: the dictation key recorder", () => {
     async () => {
       const { page, fx } = await openPage({ grants: { mic: "granted", accessibility: "denied" } });
       await page.click(record("dictation.hotkey"));
-      expect(await note(page, "dictation.hotkey")).toContain("takes chords only");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Without Accessibility access the key must be a combination, such as Control+Shift+Space.",
+      );
       await page.keyboard.down("MetaRight");
       await page.waitForTimeout(HOLD_ALONE_MS + 100);
       await page.keyboard.up("MetaRight");
       expect(await note(page, "dictation.hotkey")).toBe(
-        "Right ⌘ alone cannot be bound: without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.",
+        "Right ⌘ alone cannot be bound. Without Accessibility access the key must be a combination, such as Control+Shift+Space.",
       );
       expect(fx.patches).toEqual([]);
       await page.keyboard.press("Control+Shift+Space");
@@ -3067,7 +3107,10 @@ describe("DC-U3: the dictation key recorder", () => {
           5000,
           "the close stopped the recorder",
         );
-        expect(w.requests.at(-1)?.params).toEqual({ on: false });
+        // Leaving a page also reads the live model menu again, so the last helper request counts.
+        expect(w.requests.filter((r) => r.name === "recordDictationKeys").at(-1)?.params).toEqual({
+          on: false,
+        });
         await w.send("dictationKey", { name: "Fn" });
         expect(w.patches).toHaveLength(1);
       } finally {
@@ -3150,9 +3193,14 @@ describe("DC-L2: the read-back waits for the Accessibility grant on macOS", () =
       const box = "#page-dictation input[data-key='dictation.readField']";
       const learn = (v: string) =>
         `#page-dictation div.pg-row[data-key='dictation.learn'] label:has(input[data-value='${v}'])`;
+      const help =
+        "#page-dictation div.pg-row[data-key='dictation.readField'] .pg-lbl > div.pg-help";
       expect(await note.count()).toBe(1);
+      // One line of help at most: the note replaces the help.
+      expect(await page.isVisible(help)).toBe(false);
       await page.click(box);
       expect(await note.count()).toBe(0);
+      expect(await page.isVisible(help)).toBe(true);
       await page.click(box);
       expect(await note.count()).toBe(1);
       await page.click(learn("off"));
@@ -3333,9 +3381,14 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
         );
       expect(fx.settings["dictation.sounds"]).toBe("auto");
       expect(fx.settings["dictation.pill"]).toBe("bottom");
-      expect(await now()).toBe("Now silent, since the pill shows.");
+      // Silent while the pill shows is what the help says: no second line.
+      const help = "#page-dictation div.pg-row[data-key='dictation.sounds'] .pg-lbl > div.pg-help";
+      expect(await now()).toBe("");
+      expect(await page.isVisible(help)).toBe(true);
       await pick("dictation.pill", "off");
       expect(await now()).toBe("Now soft sounds, since the pill is off.");
+      // One line of help at most: the news replaces the help.
+      expect(await page.isVisible(help)).toBe(false);
       await pick("dictation.sounds", "off");
       expect(await now()).toBe("Now a dictation neither shows nor sounds.");
       await pick("dictation.sounds", "click");

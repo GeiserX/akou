@@ -2702,9 +2702,12 @@ input.pg-switch:disabled {
   outline: 2px solid var(--fg);
   outline-offset: 1px;
 }
+/* A resting choice keeps the dim colour, never fainter: the chosen one loses its bright text. */
 .pg-seg label:has(input:disabled) {
   cursor: default;
-  opacity: 0.6;
+}
+.pg-seg label:has(input:disabled:checked) {
+  color: var(--dim);
 }
 select.pg-select,
 .pg-row .language-chips + select,
@@ -3230,6 +3233,45 @@ meter.pg-lvl::-webkit-meter-even-less-good-value {
 .pg-setup {
   margin-top: 16px;
   padding: 4px 16px 16px;
+}
+.pg-setup h4 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+}
+.pg-setup p:not(.issue) {
+  margin: 4px 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+/* The setup's buttons sit in a row with a gap, never touching. */
+.pg-setup button {
+  margin: 12px 8px 0 0;
+}
+.pg-setup meter {
+  display: block;
+  width: 240px;
+  height: 3px;
+  margin: 10px 0;
+  appearance: none;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line2);
+}
+.pg-setup meter::-webkit-meter-bar {
+  height: 3px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line2);
+}
+.pg-setup meter::-webkit-meter-optimum-value,
+.pg-setup meter::-webkit-meter-suboptimum-value,
+.pg-setup meter::-webkit-meter-even-less-good-value {
+  border-radius: 2px;
+  background: var(--ok);
+}
+.pg-setup meter::-moz-meter-bar {
+  border-radius: 2px;
+  background: var(--ok);
 }
 .dictation-server {
   margin: -8px 0 12px;

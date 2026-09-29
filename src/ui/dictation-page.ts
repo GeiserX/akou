@@ -90,6 +90,7 @@ const LEARN_KEY = "dictation.learn";
 const ENGINE_KEY = "dictation.engine";
 const FORMAT_KEY = "dictation.format";
 const PROMPT_KEY = "dictation.formatPrompt";
+const FORMAT_WAIT_KEY = "dictation.formatTimeoutSeconds";
 
 /** The rows that only apply while dictation goes to another computer. */
 const REMOTE_KEYS = [
@@ -166,7 +167,7 @@ export const DICTATION_GROUPS: readonly DictationGroup[] = [
 /** The Advanced page: what it holds, as its row says it, and its sections. */
 export const ADVANCED_PAGE = {
   title: "Advanced",
-  help: "Stop after silence, longest dictation, how long the mic stays open, one fixed language, context words, time limits, how long history is kept.",
+  help: "Silence and length, the mic, one fixed language, context words, time limits, history and its audio, Delete all.",
   groups: [
     {
       title: "Listening",
@@ -223,6 +224,33 @@ type Status = {
   provider?: { id?: string; harness?: string };
 };
 
+/** How long the AI tidy may take: Automatic (0) by name, never a bare 0, then whole seconds. */
+function formatWait(
+  id: string,
+  label: string,
+  spec: SchemaEntry,
+  value: unknown,
+): HTMLSelectElement {
+  const min = spec.min ?? 0;
+  const max = spec.max ?? 60;
+  const steps = [2, 4, 6, 8, 10, 15, 20, 30, 45, 60].filter(
+    (n) => n >= Math.max(min, 1) && n <= max,
+  );
+  return selectBox({
+    id,
+    label,
+    options: [
+      ...(min <= 0 ? [["0", "Automatic"] as const] : []),
+      ...steps.map((n) => [String(n), `${n} seconds`] as const),
+    ],
+    value: String(value ?? 0),
+  });
+}
+/** One line of help at most: while `now` says something, the row's own help steps aside. */
+function helpGives(now: HTMLElement): void {
+  const help = now.parentElement?.querySelector<HTMLElement>(":scope > div.pg-help");
+  if (help) help.hidden = !now.hidden && now.textContent !== "";
+}
 export class DictationPage {
   readonly name = "dictation" as const;
   readonly title = "Dictation";
@@ -264,6 +292,10 @@ export class DictationPage {
   private sub = false;
   /** "Use another computer" was turned on before an address was saved: the address turns it on. */
   private remotePending = false;
+  /** Why `GET /config` failed, said where the settings would be; null once it answers. */
+  private readError: string | null = null;
+  /** Automatic, Fast or Best: what the engine goes back to when another computer is turned off. */
+  private localEngine = "auto";
 
   constructor(
     private readonly t: Transport,
@@ -330,6 +362,7 @@ export class DictationPage {
     if (read !== this.reads) return;
     // "Use another computer" turned on with no address saved is forgotten with the page.
     this.remotePending = false;
+    this.issues = new Map();
     this.review = review;
     this.status = status && status.status < 400 ? (status.body ?? {}) : {};
     this.platform = String(this.status.app?.platform ?? "");
@@ -337,15 +370,22 @@ export class DictationPage {
     this.lost = lostOf(dictation);
     this.mics = mics;
     this.served = server?.body?.dictation?.served_last_hour;
+    this.readError = null;
     if (cfg.status !== 200) {
       this.schema = {};
       this.settings = {};
+      this.readError = `The dictation settings could not be read: ${message(cfg.body, `HTTP ${cfg.status}`)}`;
       toast(message(cfg.body, "the settings could not be read"));
       return;
     }
     this.schema = cfg.body.schema;
     this.settings = { ...cfg.body.settings };
     this.issues = new Map(cfg.body.issues.map((i) => [i.key, i.message]));
+    const engine = this.settings[ENGINE_KEY];
+    if (typeof engine === "string" && engine !== "remote") this.localEngine = engine;
+    // The file asks for another computer but has no address, so the registry uses the default
+    // engine: the switch is on and waits for the address, as if turned on here.
+    this.remotePending = this.remoteAsked();
   }
 
   /** `GET /dictation`, or null where the app says nothing. */
@@ -414,7 +454,8 @@ export class DictationPage {
         ? h(
             "p",
             { class: "pg-sechelp", attrs: { "data-empty": "" } },
-            "This akou has no dictation settings yet.",
+            // A read that failed says why, not that there is nothing to set.
+            this.readError ?? "This akou has no dictation settings yet.",
           )
         : null,
     );
@@ -488,6 +529,7 @@ export class DictationPage {
       help = this.engineHelp();
     } else if (key === FORMAT_KEY) controls = [this.formatControl(id, String(value ?? "off"))];
     else if (key === PROMPT_KEY) controls = [this.promptControl(id, String(value ?? "default"))];
+    else if (key === FORMAT_WAIT_KEY) controls = [formatWait(id, w.label, spec, value)];
     else if (key === "dictation.language")
       controls = [
         selectBox({
@@ -532,9 +574,11 @@ export class DictationPage {
     const issue = this.issues.get(key);
     if (issue) {
       r.classList.add("refused");
-      r.querySelector(".pg-lbl")?.append(
-        h("small", { class: "issue" }, inWords(issue, this.keys())),
-      );
+      const said =
+        key === ENGINE_KEY && this.remoteAsked()
+          ? "Another computer is on, but it has no address yet."
+          : inWords(issue, this.keys());
+      r.querySelector(".pg-lbl")?.append(h("small", { class: "issue" }, said));
     }
     if (REMOTE_KEYS.includes(key)) r.hidden = !this.remoteOn();
     if (key === PROMPT_KEY) r.hidden = this.settings[FORMAT_KEY] !== "provider";
@@ -545,6 +589,7 @@ export class DictationPage {
     if (key === READ_FIELD_KEY) {
       const waiting = this.readWaits();
       if (waiting) r.querySelector(".pg-lbl")?.append(waiting);
+      if (waiting) helpGives(waiting);
     }
     if (key === "dictation.remote.timeoutSeconds" && this.mode === "app") {
       const parts = remoteParts(
@@ -571,6 +616,18 @@ export class DictationPage {
       spec.values?.map((v) => [v, v] as const);
     if (spec.type === "string" && choices && !spec.secret) {
       const v = String(value ?? "");
+      // Off or On is a switch; the setting keeps its words, carried by a hidden input.
+      if (choices.length === 2 && choices.every(([c]) => c === "off" || c === "on")) {
+        const sw = toggle({ id, checked: v === "on", label: w.label });
+        const held = h("input", { type: "hidden", value: v });
+        held.dataset.key = key;
+        sw.addEventListener("change", (e) => {
+          e.stopPropagation();
+          held.value = sw.checked ? "on" : "off";
+          held.dispatchEvent(new Event("change", { bubbles: true }));
+        });
+        return [sw, held];
+      }
       const short = choices.reduce((n, [, l]) => n + l.length, 0) <= 40;
       if (choices.length <= 5 && short && choices.some(([c]) => c === v)) {
         const seg = segmented({ id, label: w.label, options: choices, value: v });
@@ -826,7 +883,7 @@ export class DictationPage {
     if (!this.mac || this.grants?.accessibility !== "denied") return null;
     // A grant taken back after the start leaves the tap dead, not the Carbon fallback (DC-N1).
     if (this.lost.includes("accessibility")) return null;
-    return "without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.";
+    return "Without Accessibility access the key must be a combination, such as Control+Shift+Space.";
   }
 
   /**
@@ -899,10 +956,13 @@ export class DictationPage {
   private remoteOn(): boolean {
     // The file may ask for the remote while the registry refuses it (no address yet, so the
     // engine is the default): its rows show then, with the refusal on the engine's row.
+    return this.settings[ENGINE_KEY] === "remote" || this.remotePending;
+  }
+
+  /** The file asks for another computer while the registry refuses it, for want of an address. */
+  private remoteAsked(): boolean {
     return (
-      this.settings[ENGINE_KEY] === "remote" ||
-      /\bremote\b/.test(this.issues.get(ENGINE_KEY) ?? "") ||
-      this.remotePending
+      this.settings[ENGINE_KEY] !== "remote" && /\bremote\b/.test(this.issues.get(ENGINE_KEY) ?? "")
     );
   }
 
@@ -918,7 +978,7 @@ export class DictationPage {
       id,
       label: w.label,
       options: local,
-      value: remote ? "auto" : value,
+      value: remote ? this.localEngine : value,
     });
     seg.input.value = value;
     seg.input.dataset.key = ENGINE_KEY;
@@ -976,7 +1036,16 @@ export class DictationPage {
     this.remotePending = false;
     const local =
       engine.parentElement?.querySelector<HTMLInputElement>("input[type=radio]:checked")?.value ??
-      "auto";
+      this.localEngine;
+    if (!on && this.remoteAsked()) {
+      // The file still asks for another computer: saying the local engine is what turns it off.
+      this.issues.delete(ENGINE_KEY);
+      void this.saveValue(ENGINE_KEY, local).then((why) => {
+        if (why) toast(`${wordsFor(ENGINE_KEY).label} was not saved: ${why}`);
+        else if (this.root.isConnected) this.redraw();
+      });
+      return;
+    }
     engine.value = on ? "remote" : local;
     engine.dispatchEvent(new Event("change", { bubbles: true }));
   }
@@ -1203,15 +1272,15 @@ export class DictationPage {
     const sounds = now(SOUNDS_KEY);
     const pill = now(PILL_KEY);
     const style = cueStyle(sounds, pill);
+    // Only what the help does not already say: silent while the pill shows is Automatic's help.
     out.textContent =
       sounds === "off" && pill === "off"
         ? "Now a dictation neither shows nor sounds."
-        : sounds === "off" || sounds === "soft" || sounds === "click"
-          ? ""
-          : style
-            ? "Now soft sounds, since the pill is off."
-            : "Now silent, since the pill shows.";
+        : sounds === "auto" && style
+          ? "Now soft sounds, since the pill is off."
+          : "";
     out.hidden = out.textContent === "";
+    helpGives(out);
   }
 
   /**
@@ -1233,14 +1302,17 @@ export class DictationPage {
     return h(
       "span",
       { id: "dictation-read-waiting", class: "pg-help" },
-      "Waits for Accessibility access: until then akou learns only from the draft box.",
+      "Waits for Accessibility access.",
     );
   }
 
   private redrawReadWaits(): void {
     this.col.querySelector("#dictation-read-waiting")?.remove();
+    const lbl = this.rowOf(READ_FIELD_KEY)?.querySelector(".pg-lbl");
     const waiting = this.readWaits();
-    if (waiting) this.rowOf(READ_FIELD_KEY)?.querySelector(".pg-lbl")?.append(waiting);
+    if (waiting) lbl?.append(waiting);
+    const help = lbl?.querySelector<HTMLElement>(":scope > div.pg-help");
+    if (help) help.hidden = waiting !== null;
   }
 
   private serverNotes(): HTMLElement {
@@ -1257,6 +1329,11 @@ export class DictationPage {
         typeof served === "number"
           ? `Dictation requests served in the last hour: ${served}`
           : "This server does not report dictation requests yet.",
+      ),
+      h(
+        "p",
+        { id: "dictation-jobs-key", class: "pg-sechelp" },
+        "Other computers dictate with a jobs key from the Keys page.",
       ),
     );
   }
@@ -1341,7 +1418,9 @@ export class DictationPage {
     const text = why.charAt(0).toUpperCase() + why.slice(1);
     r.classList.add("refused");
     r.querySelector(".issue")?.remove();
-    (r.querySelector(".pg-lbl") ?? r).append(h("small", { class: "issue" }, text));
+    // The rules per app have no label of their own: the reason ends their panel, as on load.
+    const at = r.classList.contains("pg-apps") ? r : (r.querySelector(".pg-lbl") ?? r);
+    at.append(h("small", { class: "issue" }, text));
     toast(`${wordsFor(keys[0] ?? "").label} was not saved: ${why}`);
   }
 
@@ -1363,6 +1442,8 @@ export class DictationPage {
 
   private saved(key: string, value: unknown): void {
     this.settings[key] = value;
+    if (key === ENGINE_KEY && typeof value === "string" && value !== "remote")
+      this.localEngine = value;
     this.shown[key] = shownValue(this.schema[key], value);
   }
 

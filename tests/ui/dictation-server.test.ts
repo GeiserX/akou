@@ -101,6 +101,10 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
       expect(await page.textContent("#dictation-served")).toBe(
         "Dictation requests served in the last hour: 3",
       );
+      // What a client needs, since the page has no row for it.
+      expect(await page.textContent("#dictation-jobs-key")).toBe(
+        "Other computers dictate with a jobs key from the Keys page.",
+      );
       // Loopback is a secure context: no notice.
       expect(await page.$("#dictation-no-mic")).toBeNull();
 

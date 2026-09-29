@@ -34,12 +34,12 @@ export function remoteStanding(reply: RemoteReply | null, fallbackSetting: unkno
   if (remote.down) {
     const why = remote.error ? `: ${remote.error}` : "";
     lines.push(
-      `The remote akou is down: ${remote.failures} dictations in a row failed${why}. akou checks it every 30 s and clears this once it answers.`,
+      `The other computer is down: ${remote.failures} dictations in a row failed${why}. akou checks it every 30 s and clears this once it answers.`,
     );
   }
   if (reply?.fallback === "error" && fallbackSetting === "local") {
     lines.push(
-      "No local model is installed, so a dictation the remote akou does not answer ends in an error instead of falling back.",
+      "No local model is installed, so a dictation the other computer does not answer ends in an error instead of falling back.",
     );
   }
   return lines.length > 0 ? lines.join(" ") : null;
@@ -63,7 +63,9 @@ export function remoteParts(
   const standing = h("p", { id: "dictation-remote-standing", class: "issue", hidden: true });
   const readStanding = async () => {
     const r = await t.request<RemoteReply>("GET", "/dictation");
-    const line = r.status < 400 ? remoteStanding(r.body ?? null, fallbackSetting()) : null;
+    const said = r.status < 400 ? remoteStanding(r.body ?? null, fallbackSetting()) : null;
+    // The reason comes from akou and may name a setting by its key.
+    const line = said === null ? null : words(said);
     standing.textContent = line ?? "";
     standing.hidden = line === null;
   };

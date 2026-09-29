@@ -380,7 +380,7 @@ export const DICTATION_SCHEMA: Schema = {
   "dictation.spokenSend": bool("A spoken send."),
   "dictation.format": pick(["off", "provider"], "Cleans up with your provider."),
   "dictation.formatPrompt": str("The formatting prompt."),
-  "dictation.formatTimeoutSeconds": int(1, 60, "How long formatting may take."),
+  "dictation.formatTimeoutSeconds": int(0, 60, "How long formatting may take; 0 is automatic."),
   "dictation.muteMedia": bool("Pauses other media while listening."),
   "dictation.learn": pick(["off", "ask", "auto"], "Suggests words to learn."),
   "dictation.readField": bool("Reads the field you dictated into."),
