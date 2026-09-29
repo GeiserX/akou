@@ -291,6 +291,8 @@ export class DictationService {
   private stops = 0;
   /** The Dictation page's key recorder while it is open (DC-U3). */
   private recorder: ((name: string) => void) | null = null;
+  /** The Dictation page's meter is on (DC-U4, DC-N3). */
+  private metering = false;
   /** The last probe's grants and when it ran. */
   private probed: { at: number; grants: Promise<Grants | null> } | null = null;
 
@@ -745,6 +747,7 @@ export class DictationService {
       onCue: (m) => this.o.cue?.(m),
       onRecordedKey: (name) => this.recorder?.(name),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
+      metering: () => this.metering,
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -810,6 +813,16 @@ export class DictationService {
     if (!s?.ready) return false;
     this.recorder = fn;
     return s.recordKeys(fn !== null);
+  }
+
+  /**
+   * The Dictation page's meter (DC-U4, DC-N3): on, the helper keeps the mic open and its `level`
+   * reaches every follower with no session; a helper started again meanwhile gets it on too.
+   * False with no helper ready, so the page's meter stays still.
+   */
+  watchMic(on: boolean): boolean {
+    this.metering = on;
+    return this.helper?.session.meter(on) ?? false;
   }
 
   /** `dictation.mic` or `dictation.preferBuiltInOverBluetooth` changed: the helper opens it now. */

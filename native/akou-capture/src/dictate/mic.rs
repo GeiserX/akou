@@ -12,6 +12,9 @@
 //! - The readiness gate: when the stream opens at key-down, `Started` waits for the first real
 //!   sample, never a timer, so the pill says `listening` only once audio arrives.
 //! - Capture runs `POST_ROLL_MS` past the release; a cancel ends at once.
+//! - The meter (DC-U4, DC-N3): while the app asks for it (`meter {on}`), the stream stays open
+//!   and `level` comes 20 times a second with no session, for the Dictation page's meter and the
+//!   setup's microphone step. Turning it off closes the stream unless `always` keeps it warm.
 //!
 //! Times are nanoseconds on one monotonic timeline (the host clock, or the file under
 //! `--from-wav`); audio is 16 kHz mono.
@@ -91,6 +94,10 @@ pub struct Mic {
     hold_from: Option<u64>,
     session: Option<Session>,
     close_at: Option<u64>,
+    /// The app's meter is on: the stream stays open and levels come with no session.
+    meter: bool,
+    meter_sq: f64,
+    meter_n: usize,
 }
 
 impl Mic {
@@ -106,6 +113,9 @@ impl Mic {
             hold_from: None,
             session: None,
             close_at: None,
+            meter: false,
+            meter_sq: 0.0,
+            meter_n: 0,
         }
     }
 
@@ -134,6 +144,23 @@ impl Mic {
         }
     }
 
+    /// The app's meter turned on or off (DC-U4, DC-N3). On, the stream opens now and levels come
+    /// with no session; off, a stream no session or press holds closes, unless `always` keeps it
+    /// warm: the meter never leaves the mic open after the page that asked for it closed.
+    pub fn set_meter(&mut self, on: bool, t_ns: u64, out: &mut Vec<MicEvent>) {
+        self.meter = on;
+        self.meter_sq = 0.0;
+        self.meter_n = 0;
+        if self.session.is_some() || self.hold_from.is_some() {
+            return;
+        }
+        if on || (self.warm == Warm::Always && self.keeps_warm()) {
+            self.idle(t_ns, out);
+        } else {
+            self.close(out);
+        }
+    }
+
     fn open(&mut self, out: &mut Vec<MicEvent>) {
         self.close_at = None;
         if !self.open {
@@ -156,6 +183,10 @@ impl Mic {
 
     /// What the stream does with no session and no press: the warm policy.
     fn idle(&mut self, t_ns: u64, out: &mut Vec<MicEvent>) {
+        if self.meter {
+            self.open(out);
+            return;
+        }
         match self.warm {
             Warm::Always if self.keeps_warm() => self.open(out),
             Warm::Auto if self.keeps_warm() && self.open => {
@@ -287,6 +318,21 @@ impl Mic {
             .min(self.ring_end.saturating_sub(self.ring_ns));
         let drop = (keep_from.saturating_sub(self.ring_start()) / NS_PER_FRAME) as usize;
         self.ring.drain(..drop.min(self.ring.len()));
+
+        // The meter with no session listening; a session's own levels come from `send`.
+        if self.meter && !self.session.as_ref().is_some_and(|s| s.started) {
+            for &x in samples {
+                self.meter_sq += f64::from(x) * f64::from(x);
+                self.meter_n += 1;
+                if self.meter_n == LEVEL_FRAMES {
+                    out.push(MicEvent::Level(
+                        (self.meter_sq / LEVEL_FRAMES as f64).sqrt(),
+                    ));
+                    self.meter_sq = 0.0;
+                    self.meter_n = 0;
+                }
+            }
+        }
 
         let Some(s) = self.session.as_ref() else {
             return;
@@ -596,6 +642,68 @@ mod tests {
         b.act(600, |m, out| m.end(600 * MS, "release", out));
         b.run(600, 1000);
         assert!(b.when(|e| *e == MicEvent::Stream(false)).is_empty());
+    }
+
+    fn levels(w: &World) -> Vec<u64> {
+        w.when(|e| matches!(e, MicEvent::Level(_)))
+    }
+
+    /// DC-U4, DC-N3: the meter opens a closed stream and sends 20 levels a second with no session;
+    /// with it off the same idle second sends none (the control). Off, it closes the stream at
+    /// once under `auto`, and leaves it open under `always`.
+    #[test]
+    fn dc_u4_the_meter_sends_levels_with_no_session() {
+        let mut w = World::new(Warm::Auto, false, RING_MS, (0, 10_000));
+        w.run(0, 1000);
+        assert!(w.events.is_empty(), "no meter, no session: nothing opens");
+        w.act(1000, |m, out| m.set_meter(true, 1000 * MS, out));
+        assert_eq!(w.when(|e| *e == MicEvent::Stream(true)), vec![1000]);
+        w.run(1000, 2000);
+        let got = levels(&w);
+        assert_eq!(got.len(), 20, "20 levels in the metered second");
+        assert!(w.events.iter().all(|(_, e)| match e {
+            MicEvent::Level(r) => (*r - f64::from(WORD_AMP)).abs() < 1e-6,
+            MicEvent::Audio { .. } | MicEvent::Started { .. } => false,
+            _ => true,
+        }));
+        w.act(2000, |m, out| m.set_meter(false, 2000 * MS, out));
+        assert_eq!(
+            w.when(|e| *e == MicEvent::Stream(false)),
+            vec![2000],
+            "auto closes a stream only the meter held"
+        );
+        w.run(2000, 3000);
+        assert_eq!(levels(&w).len(), 20, "no level after the meter went off");
+
+        let mut a = World::new(Warm::Always, false, RING_MS, (0, 10_000));
+        a.act(0, |m, out| m.set_meter(true, 0, out));
+        a.run(0, 500);
+        a.act(500, |m, out| m.set_meter(false, 500 * MS, out));
+        a.run(500, 1000);
+        assert!(a.when(|e| *e == MicEvent::Stream(false)).is_empty());
+        assert_eq!(
+            levels(&a).len(),
+            10,
+            "always stays open, with no level once off"
+        );
+    }
+
+    /// DC-U4: a session while the meter is on sends one level per 50 ms, not two, and the stream
+    /// is still open for the meter after the session ends.
+    #[test]
+    fn dc_u4_a_session_under_the_meter_sends_each_level_once() {
+        let mut w = World::new(Warm::Off, false, RING_MS, (0, 10_000));
+        w.act(0, |m, out| m.set_meter(true, 0, out));
+        w.run(0, 500);
+        w.act(500, |m, out| m.start(500 * MS, out));
+        w.run(500, 1500);
+        w.act(1500, |m, out| m.end(1500 * MS, "release", out));
+        w.run(1500, 2500);
+        assert_eq!(levels(&w).len(), 50, "2.5 s at 20 a second");
+        assert!(
+            w.when(|e| *e == MicEvent::Stream(false)).is_empty(),
+            "off does not close a stream the meter holds"
+        );
     }
 
     #[test]
