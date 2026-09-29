@@ -210,6 +210,8 @@ export interface FakeOptions {
   liveTierMs?: number;
   /** Loading a streaming engine throws (a missing or broken model). */
   liveFails?: boolean;
+  /** `release` takes this long before it lets go of the models, ms. */
+  releaseMs?: number;
 }
 
 export interface DecodeCall {
@@ -455,6 +457,8 @@ export class FakeModels implements ModelSet {
   private rec: FakeRecognizer | null = null;
   /** Terms the loaded recognizer's hotword file covers (sherpa-onnx fixes it at load). */
   private covered = new Set<string>();
+  /** Finished `release` calls. */
+  releases = 0;
 
   constructor(readonly o: FakeOptions = {}) {
     this.recognizerModel = o.model ?? "fake-parakeet";
@@ -537,6 +541,13 @@ export class FakeModels implements ModelSet {
     this.liveEngines.push(e);
     this.count(id);
     return e;
+  }
+
+  async release(): Promise<void> {
+    await Bun.sleep(this.o.releaseMs ?? 0);
+    this.rec = null;
+    this.covered.clear();
+    this.releases++;
   }
 
   diarizer(): Diarizer {

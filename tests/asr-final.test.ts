@@ -18,7 +18,15 @@ import { GREEDY_NO_HOTWORDS } from "../src/main/asr/sherpa.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { buildDecodeList } from "../src/main/vocab/decode-list.ts";
 import { logOf, ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
-import { concat, FakeModels, MemoryAudio, RATE, silence, speak } from "./fixtures/asr-fake.ts";
+import {
+  concat,
+  created,
+  FakeModels,
+  MemoryAudio,
+  RATE,
+  silence,
+  speak,
+} from "./fixtures/asr-fake.ts";
 import { stereoWav } from "./fixtures/audio.ts";
 import { LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
 
@@ -559,5 +567,31 @@ describe("after Stop, through the call's writer", () => {
     });
     expect(out.ok).toBe(false);
     expect(c.view.final.state).toBe("failed");
+  });
+
+  test("a pass lets go of its models before it answers: the Worker it ends in frees none", async () => {
+    const r = callRig();
+    r.engine.onStart = (s) => s.capturing();
+    const res = await r.mgr.start({ workspace: "work" });
+    if (!res.ok) throw new Error(res.error);
+    await r.mgr.stop();
+    const c = r.mgr.controller(res.call);
+    if (!c) throw new Error("no controller");
+    const heard = () => concat(silence(0.4), speak(["hello"]), silence(0.4));
+    const before = created.length;
+    const out = await finalizeCall(c, {
+      // A slow release: an answer sent before it finishes would find it unfinished.
+      models: spec({ releaseMs: 50 }),
+      audio: {
+        kind: "module",
+        path: FAKE,
+        options: { parts: { 1: { mic: heard(), call: heard() } } },
+      },
+      inThread: true,
+    });
+    expect(out.ok).toBe(true);
+    expect(out.loads["fake-parakeet"]).toBe(1);
+    expect(created.length).toBe(before + 1);
+    expect(created.at(-1)?.releases).toBe(1);
   });
 });

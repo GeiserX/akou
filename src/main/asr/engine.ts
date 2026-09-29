@@ -228,6 +228,13 @@ export interface ModelSet {
   liveEngine?(id: string): LiveEngine;
   /** Model loads so far, by model. */
   readonly loads: Readonly<Record<string, number>>;
+  /**
+   * Lets go of every model the set holds and collects them until their native memory is freed; a
+   * later use loads them again. sherpa-onnx frees a model only in its finalizer, and a Worker that
+   * is terminated before its finalizers run never runs them: a final pass that ended in `terminate`
+   * without this kept about 2.7 GB for the life of the app, one more set per pass.
+   */
+  release?(): Promise<void>;
 }
 
 /**
