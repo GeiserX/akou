@@ -1816,13 +1816,13 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
           async (rig) => {
             const page = await rig.open();
             await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
-            // No transcript, tabs or player: they carry hidden, and the watch checks that hidden
+            // No transcript, notes or player: they carry hidden, and the watch checks that hidden
             // means hidden. The sidebar stays, with its empty workspace, and its readiness row
             // says what is missing; the Models row carries the amber dot.
             for (const sel of ["#scroller", "#side"]) {
               expect(await page.getAttribute(sel, "hidden")).toBe("");
             }
-            expect(await page.isVisible("#tab-notes")).toBe(false);
+            expect(await page.isVisible("#notes-title")).toBe(false);
             expect(await page.isVisible("#player-bar")).toBe(false);
             expect(await page.isVisible("#sidebar")).toBe(true);
             expect(await text(page, "#calls .none")).toBe("No calls yet");
@@ -1915,7 +1915,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             for (const sel of ["#scroller", "#side"]) {
               expect(await page.getAttribute(sel, "hidden")).toBeNull();
             }
-            expect(await page.isVisible("#tab-notes")).toBe(true);
+            expect(await page.isVisible("#notes-title")).toBe(true);
             expect(await text(page, "#readiness-text")).toBe("Ready");
             expect(await page.getAttribute("#readiness", "data-state")).toBe("ready");
             expect(await text(page, "#state")).toBe("ready");
