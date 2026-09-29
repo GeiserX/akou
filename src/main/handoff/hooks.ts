@@ -24,7 +24,7 @@ import type { EventDraft } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { EVENTS_FILE } from "../../core/log/writer.ts";
 import { HOOK_TIMEOUT_DEFAULT, type HookConfig, type HookStage } from "../config/schema.ts";
-import { type CallMeta, callMeta, exportBaseName } from "./export.ts";
+import { attachmentsName, type CallMeta, callMeta } from "./export.ts";
 
 export const HOOK_LOG = "logs/hooks.log";
 /** Output kept per run; the rest is dropped with a marker. */
@@ -93,7 +93,9 @@ export function buildPayload(o: {
         .filter((p) => existsSync(p)),
       exportMd: o.exportMd,
       exportAttachments:
-        o.exportMd === null ? null : join(dirname(o.exportMd), "attachments", exportBaseName(v)),
+        o.exportMd === null
+          ? null
+          : join(dirname(o.exportMd), "attachments", attachmentsName(v, dirname(o.exportMd))),
     },
     transcript: v.lines("best").map((l) => ({
       id: l.id,

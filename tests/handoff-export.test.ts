@@ -27,6 +27,7 @@ import {
   safeFileTitle,
   yamlScalar,
 } from "../src/main/handoff/export.ts";
+import { buildPayload } from "../src/main/handoff/hooks.ts";
 import { fakeOpus } from "./fixtures/opus.ts";
 import { jsonl, LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
 
@@ -364,6 +365,15 @@ describe("re-export", () => {
       const md = readFileSync(second.path, "utf8");
       expect(md).toContain("title: Q3 planning");
       expect(md).toContain(`attachments/${BASE}/part-001.opus`);
+      // A hook is handed the same folder, so it commits the attachments that exist.
+      const payload = buildPayload({
+        stage: "final.done",
+        view: fold(r.events),
+        dir: r.dir,
+        version: "0.1.0",
+        exportMd: second.path,
+      });
+      expect(payload.paths.exportAttachments).toBe(first.attachments);
     } finally {
       r.cleanup();
     }
