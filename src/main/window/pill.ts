@@ -28,9 +28,10 @@
  *   the draft box (DC-S1), so it offers none yet.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
  * - `notice` for `NOTICE_MS` when the dictation key does nothing (macOS): the helper lost the
- *   Accessibility grant (DC-N1), with a button to its pane; or Secure Input turned on while the key
- *   is a keyed chord, which the OS then keeps from the tap (DC-A2), at most once per
- *   `SECURE_REPEAT_MS`, and only with nothing else showing. Secure Input off takes it down.
+ *   Accessibility grant (DC-N1), with a button to its pane, shown once the island is free, so a
+ *   session keeps its Stop and its outcome; or Secure Input turned on while the key is a keyed
+ *   chord, which the OS then keeps from the tap (DC-A2), at most once per `SECURE_REPEAT_MS`, and
+ *   only with nothing else showing. Secure Input off takes it down.
  * - the learn chip (DC-L4) for a fix made in the app's field after a direct insert (DC-L2): shown
  *   with the window, whatever the state, until it is answered, and after Learn for its Undo line;
  *   a page that never answers is taken as ignoring it after `CHIP_WAIT_MS`. The chip carries only
@@ -68,7 +69,13 @@ export interface PillSend {
 
 /** Dictation as the pill sees it: the app's `DictationService` behind the shell. */
 export interface PillDictation {
-  status(): { state: string; loading: boolean; swallow_keys: boolean | null };
+  status(): {
+    state: string;
+    loading: boolean;
+    swallow_keys: boolean | null;
+    /** The grants the running helper lost (DC-N1); absent, none. */
+    lost?: readonly string[];
+  };
   /**
    * The log's events, the mic level and the engine's notices, from now on; the session's partials
    * while `partials` answers true (DC-E5).
@@ -208,10 +215,23 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   let forced: string | null = null;
   /** When the last Secure Input notice showed. */
   let secureAt = Number.NEGATIVE_INFINITY;
+  /**
+   * The grant was lost while the island showed something else (DC-N1): a session's island keeps
+   * its Stop, the only way out of a latched session with a dead tap, and its outcome its time. The
+   * notice shows when the island would hide, if the grant is still lost then.
+   */
+  let grantPending = false;
 
   const visible = () => shown.state !== "hidden" || chipUp !== null;
 
   const put = (s: PillState) => {
+    if (s.state === "hidden" && grantPending) {
+      grantPending = false;
+      if (d.status().lost?.includes("accessibility") ?? true) {
+        showNotice("grant-lost");
+        return;
+      }
+    }
     shown = s;
     send().state(s);
     o.onVisible(visible());
@@ -254,6 +274,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       case "transcribing":
       case "inserting":
         if (shown.state === "transcribing") return;
+        // Whatever was due to hide the island must not hide the session's.
+        cancelHide();
         put({
           state: "transcribing",
           since: o.now(),
@@ -334,7 +356,13 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       return;
     }
     // Only when it matters (a keyed chord), with nothing else on the island, and not every time.
-    if (o.platform !== "darwin" || !keyedChord(o.hotkey()) || shown.state !== "hidden") return;
+    if (
+      o.platform !== "darwin" ||
+      !keyedChord(o.hotkey()) ||
+      shown.state !== "hidden" ||
+      chipUp !== null
+    )
+      return;
 
     if (o.now() - secureAt < SECURE_REPEAT_MS) return;
     secureAt = o.now();
@@ -389,7 +417,9 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       }
       if (m.kind === "grant-lost") {
         // The words and the pane are macOS's; elsewhere the Dictation page says it.
-        if (m.name === "accessibility" && o.platform === "darwin") showNotice("grant-lost");
+        if (m.name !== "accessibility" || o.platform !== "darwin") return;
+        if (shown.state === "hidden" || shown.state === "notice") showNotice("grant-lost");
+        else grantPending = true;
         return;
       }
       if (m.kind === "secure-input") {

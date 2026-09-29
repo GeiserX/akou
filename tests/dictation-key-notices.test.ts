@@ -11,10 +11,12 @@ import { afterEach, describe, expect, test } from "bun:test";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { KeyInput } from "../src/core/dictation/activation.ts";
+import type { DictationDraft, DictationEvent } from "../src/core/dictation/events.ts";
 import { REGRANT_POLL_MS } from "../src/main/dictation/service.ts";
 import { Bridge } from "../src/main/window/bridge.ts";
 import { hotkeyLabel } from "../src/main/window/hotkey.ts";
 import {
+  DONE_MS,
   keyedChord,
   NOTICE_MS,
   type PillDictation,
@@ -22,6 +24,7 @@ import {
   pillRpc,
   SECURE_REPEAT_MS,
 } from "../src/main/window/pill.ts";
+import { type WindowSend, windowRpc } from "../src/main/window/rpc.ts";
 import { appForShell, type NativeUi, Shell } from "../src/main/window/shell.ts";
 import type { PillState } from "../src/ui/pill-protocol.ts";
 import { type AppRig, appRig } from "./api-helpers.ts";
@@ -40,10 +43,15 @@ type Follow = Parameters<PillDictation["follow"]>[0];
 
 /** The pill's main side over a dictation driven by hand, its timers and clock run by the test. */
 function pill(o: { platform?: string; hotkey?: string; grant?: boolean } = {}) {
-  const st = { state: "idle" };
+  const st: { state: string; lost?: string[] } = { state: "idle" };
   const followers = new Set<Follow>();
   const d: PillDictation = {
-    status: () => ({ state: st.state, loading: false, swallow_keys: true }),
+    status: () => ({
+      state: st.state,
+      loading: false,
+      swallow_keys: true,
+      ...(st.lost ? { lost: st.lost } : {}),
+    }),
     follow: (fn) => {
       followers.add(fn);
       return () => followers.delete(fn);
@@ -95,8 +103,15 @@ function pill(o: { platform?: string; hotkey?: string; grant?: boolean } = {}) {
     st.state = state;
     p.update();
   };
-  return { p, tell, states, run, clock, panes, visible, to };
+  let seq = 0;
+  const event = (draft: DictationDraft) =>
+    tell({ kind: "event", e: { ...draft, v: 1, seq: ++seq, t: seq } as DictationEvent });
+  /** Timers still due: what would fire if the test ran them. */
+  const pending = () => due.filter((t) => t.live).map((t) => t.ms);
+  return { p, tell, states, run, clock, panes, visible, to, st, event, pending };
 }
+
+const TARGET = { app: "com.example.editor", pid: 1, window: "w1", field: "editable" } as const;
 
 describe("DC-N1: the Accessibility grant lost after the start", () => {
   test("the island says the key does nothing, with the pane's button, for its time", async () => {
@@ -117,6 +132,50 @@ describe("DC-N1: the Accessibility grant lost after the start", () => {
     f.run(NOTICE_MS);
     expect(f.p.shown()).toEqual({ state: "hidden" });
     expect(f.visible.at(-1)).toBe(false);
+  });
+
+  test("over a session the island keeps its Stop and its outcome; the notice shows once it is free", () => {
+    const f = pill({ hotkey: "RightCommand" });
+    f.to("listening");
+    f.tell({ kind: "grant-lost", name: "accessibility" });
+    // With a dead tap, the listening island's Stop is the only way out of a latched session.
+    expect(f.p.shown().state).toBe("listening");
+    expect(f.pending()).toEqual([]);
+    f.event({ type: "dictation.started", id: "d1", target: TARGET, engine: "fast", by: "user" });
+    f.to("transcribing");
+    expect(f.p.shown().state).toBe("transcribing");
+    // Nothing is due to hide the island under the session.
+    expect(f.pending()).toEqual([]);
+    f.event({ type: "dictation.inserted", id: "d1", method: "paste", receipt_ms: 5 });
+    f.to("idle");
+    expect(f.p.shown()).toEqual({ state: "done", how: "inserted" });
+    f.run(DONE_MS);
+    expect(f.p.shown()).toMatchObject({
+      state: "notice",
+      reason: "grant-lost",
+      actions: ["grant"],
+    });
+    expect(f.visible.at(-1)).toBe(true);
+    f.run(NOTICE_MS);
+    expect(f.p.shown()).toEqual({ state: "hidden" });
+  });
+
+  test("a session cancelled shows it at once; a grant back by then shows nothing", () => {
+    const f = pill();
+    f.to("listening");
+    f.tell({ kind: "grant-lost", name: "accessibility" });
+    f.to("idle");
+    expect(f.p.shown()).toMatchObject({ state: "notice", reason: "grant-lost" });
+
+    // The app read the grant back and started the helper again while the session ran.
+    const back = pill();
+    back.st.lost = ["accessibility"];
+    back.to("listening");
+    back.tell({ kind: "grant-lost", name: "accessibility" });
+    back.st.lost = [];
+    back.to("idle");
+    expect(back.p.shown()).toEqual({ state: "hidden" });
+    expect(back.states.map((s) => s.state)).toEqual(["listening", "hidden"]);
   });
 
   test("its button opens the pane and takes the notice down; with nothing up it does nothing", async () => {
@@ -199,6 +258,27 @@ describe("DC-A2: Secure Input keeps a keyed chord from the tap", () => {
     const linux = pill({ platform: "linux" });
     linux.tell({ kind: "secure-input", on: true });
     expect(linux.states).toEqual([]);
+  });
+
+  test("a session that comes straight to transcribing is not hidden by the notice's timer", () => {
+    const f = pill();
+    f.tell({ kind: "secure-input", on: true });
+    expect(f.p.shown().state).toBe("notice");
+    // A tap too short for the watch to see it listening: the session is transcribing next.
+    f.to("transcribing");
+    f.run(NOTICE_MS);
+    expect(f.p.shown().state).toBe("transcribing");
+    expect(f.visible.at(-1)).toBe(true);
+  });
+
+  test("never over a learn chip, which keeps the island to itself", () => {
+    const f = pill();
+    f.tell({
+      kind: "chip",
+      chip: { id: "d1", candidates: [{ term: "Kubernetes", heard: "kubernetis" }], mode: "ask" },
+    });
+    f.tell({ kind: "secure-input", on: true });
+    expect(f.states).toEqual([]);
   });
 });
 
@@ -340,6 +420,15 @@ describe("DC-N1 over a whole app: the grant taken back and given again", () => {
     const d = a.r.app.dictation();
     const before = d?.session();
     expect(d?.status().lost).toEqual([]);
+    // The key recorder's `Use Fn` asks whether the helper hears keys (DC-N2).
+    const win = windowRpc(
+      { app: { dictation: () => d }, watchLifecycle: () => () => {} } as unknown as Bridge,
+      () => ({ dictationKey: () => {} }) as unknown as WindowSend,
+      async () => false,
+    );
+    cleanups.push(() => win.close());
+    const hears = () => win.handlers.recordDictationKeys({ on: true });
+    expect(await hears()).toBe(true);
 
     // The OS takes the grant back: the fake says `grant.lost`, as the real helper does on wake.
     writeFileSync(grants, "mic");
@@ -353,6 +442,8 @@ describe("DC-N1 over a whole app: the grant taken back and given again", () => {
       grants: { mic: "granted", accessibility: "denied" },
       lost: ["accessibility"],
     });
+    // The dead tap hears no Fn: the recorder must not blame the keyboard.
+    expect(await hears()).toBe(false);
     // Its button reaches the Accessibility pane through the app (spied on here).
     expect(await a.control("grant")).toBe(true);
     expect(a.panes).toEqual(["accessibility"]);
@@ -374,5 +465,6 @@ describe("DC-N1 over a whole app: the grant taken back and given again", () => {
     expect(a.r.logs.some((l) => l.msg.includes("a grant arrived since the helper started"))).toBe(
       true,
     );
+    expect(await hears()).toBe(true);
   }, 30_000);
 });

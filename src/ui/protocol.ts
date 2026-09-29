@@ -101,9 +101,10 @@ export interface Transport {
    * The dictation helper's own key names while the page records a dictation key
    * (docs/ux/DICTATION.md DC-U3): the webview never sees Fn or Globe on macOS, the helper does.
    * The helper streams every key; the recorder takes only `Fn` and `Globe` from here. Absent where
-   * the page cannot hear the helper (a browser).
+   * the page cannot hear the helper (a browser). `hearing` resolves false when no helper hears
+   * keys now: dictation off, or its key tap dead without Accessibility (DC-N2).
    */
-  dictationKeys?(fn: (name: string) => void): { close(): void };
+  dictationKeys?(fn: (name: string) => void): { close(): void; hearing?: Promise<boolean> };
   /**
    * The dictation mic's level in dBFS (-60 to 0) while dictation's setup shows its meter
    * (DC-N3), proving audio arrives, and while the Dictation page shows the microphone picker

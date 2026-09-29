@@ -257,6 +257,8 @@ export class DictationSettings {
             this.field(ENABLE_KEY),
             // The setup's microphone step says it, and knows when the grant arrives.
             this.setup ? null : this.offReason(),
+            // At the top, where it is seen: the key does nothing until the grant is back.
+            this.setup ? null : this.grantLost(),
           )
         : null;
     if (this.setup) {
@@ -293,7 +295,6 @@ export class DictationSettings {
             "This akou has no dictation settings yet.",
           )
         : null,
-      top ? this.grantLost() : null,
       top ? this.permissions() : null,
     );
     this.soundsNow();

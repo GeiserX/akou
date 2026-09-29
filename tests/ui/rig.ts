@@ -870,6 +870,8 @@ export async function windowPage(
     grants?: DictationGrants;
     /** The grants the running helper lost since it started, on `GET /dictation` (DC-N1). */
     lost?: string[];
+    /** The answer to `recordDictationKeys`: false, no helper hears keys (DC-N2). */
+    hearing?: boolean;
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
     devices?: DevicesFixture;
@@ -927,7 +929,9 @@ export async function windowPage(
           ? status()
           : name === "follow"
             ? { ok: false }
-            : undefined,
+            : name === "recordDictationKeys"
+              ? (o.hearing ?? true)
+              : undefined,
   });
   await v.page.waitForFunction(() => document.body.dataset.transport === "window");
   return { ...v, patches };

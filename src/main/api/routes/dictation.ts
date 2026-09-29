@@ -357,7 +357,8 @@ export function dictationRoutes(r: Router<ApiApp>): void {
             }
           : null,
         grants,
-        lost: st.lost,
+        // Read after `grants()`, which may have started the helper again for a grant now back.
+        lost: svc.status().lost,
         backend: st.backend,
         swallow_keys: st.swallow_keys,
       });

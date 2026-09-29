@@ -12,7 +12,7 @@ import type { Page } from "playwright-core";
 import { hotkeyLabel } from "../../src/main/window/hotkey.ts";
 import { pillRpc } from "../../src/main/window/pill.ts";
 import { PILL_SIZE } from "../../src/main/window/shell.ts";
-import { FN_TEST_MS, NO_FN } from "../../src/ui/dictation-recorder.ts";
+import { FN_TEST_MS, NO_FN, NO_HELPER } from "../../src/ui/dictation-recorder.ts";
 import type { PillState } from "../../src/ui/pill-protocol.ts";
 import { tempDir } from "../helpers.ts";
 import {
@@ -202,6 +202,17 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
           "Accessibility lost: macOS took the grant back, so the dictation key does nothing.",
         );
         expect(await text(p, "#dictation-permissions")).toContain("Accessibility lost");
+        // At the top, in the switch's block that styles its issues, before the first group.
+        expect(
+          await p.$eval("#dictation-grant-lost", (e) => {
+            const first = document.querySelector("#dictation fieldset");
+            return (
+              e.closest(".dictation-enable") !== null &&
+              first !== null &&
+              (e.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
+            );
+          }),
+        ).toBe(true);
         expect(await text(p, "#dictation-permissions")).not.toContain("clipboard only");
         w.requests.length = 0;
         await p.click("#dictation-grant-lost-open");
@@ -279,6 +290,30 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
         await until(async () => (await note(p, "dictation.hotkey")) === clash, 5000, "the clash");
         await p.waitForTimeout(FN_TEST_MS + 300);
         expect(await note(p, "dictation.hotkey")).toBe(clash);
+        expect(w.patches).toEqual([]);
+      } finally {
+        await w.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with no helper hearing keys, Use Fn says so at once and never blames the keyboard",
+    async () => {
+      // Dictation off (its default), or its key tap dead: the main side answers false.
+      const w = await windowPage(rig, { platform: "darwin", hearing: false });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.click(useFn("dictation.hotkey"));
+        await until(
+          async () => (await note(p, "dictation.hotkey")) === NO_HELPER,
+          FN_TEST_MS - 500,
+          "the no-helper note before the Fn wait ends",
+        );
+        await p.waitForTimeout(FN_TEST_MS + 300);
+        expect(await note(p, "dictation.hotkey")).toBe(NO_HELPER);
         expect(w.patches).toEqual([]);
       } finally {
         await w.close();
