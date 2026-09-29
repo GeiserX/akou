@@ -6,14 +6,14 @@
 #
 # The container binds 0.0.0.0, which server mode refuses until `server.behind_proxy` is true
 # (SV-P5): the operator states it with AKOU_BEHIND_PROXY=true (SV-P11), the image never does
-# (docs/install.md, "The server"). A /data or /models uid 1000 cannot write stops it with exit 77.
+# (docs/getting-started.md, "The server"). A /data or /models uid 1000 cannot write stops it with exit 77.
 #   docker run --rm -v akou-data:/data -v akou-models:/models drumsergio/akou:<version> models pull fast
 #
 # Built for linux/amd64 and linux/arm64, each on its own runner (release.yml), and tagged with the
 # release's version only: there is never a `latest` tag. Both base images are pinned by digest.
 # Speech models are never in the image: they live on the /models volume (`akou models pull`).
 #
-# One Dockerfile, three variants by ACCELERATOR (akou-5an.94, docs/install.md "A GPU"): each carries
+# One Dockerfile, three variants by ACCELERATOR (akou-5an.94, docs/getting-started.md "A GPU"): each carries
 # the pinned llama-server build for its backend in /opt/llama, fetched and checked against its
 # SHA-256 by akou's own table (src/main/asr/llama-builds.ts), and falls back to the CPU with it.
 #   cpu     drumsergio/akou:<version>          no GPU

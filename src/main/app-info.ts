@@ -11,7 +11,7 @@ export const RUNTIME_FILE = "runtime.json";
  * The macOS bundle id, stable across updates (DESIGN section 9). Once the app is signed with a
  * Developer ID, that keeps the microphone and system-audio grants across updates; while it is ad-hoc
  * signed, macOS keys a grant on each build's own signature, so an update may ask again
- * (docs/install.md, "Permissions"). The capture helper excludes every process this bundle is responsible for,
+ * (docs/getting-started.md, "Permissions"). The capture helper excludes every process this bundle is responsible for,
  * the WebKit GPU helper that plays the window's audio included (DESIGN 2.3).
  */
 export const BUNDLE_ID = "io.github.geiserx.akou";
