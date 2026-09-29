@@ -1110,6 +1110,9 @@ describe("renaming a call from its title (WINDOW 3.1)", () => {
           await page.keyboard.press("Enter");
           await page.waitForSelector("#title-input:focus");
           await page.keyboard.type(" and nothing else");
+          // An Enter that confirms an IME candidate neither saves nor closes the field.
+          await page.dispatchEvent("#title-input", "keydown", { key: "Enter", isComposing: true });
+          expect(await page.locator("#title-input").count()).toBe(1);
           await page.keyboard.press("Escape");
           await page.click("#title-text");
           await page.fill("#title-input", "   ");

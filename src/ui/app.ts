@@ -541,6 +541,8 @@ class App {
       if (document.activeElement === document.body) shown.focus();
     };
     input.addEventListener("keydown", (e) => {
+      // Enter or Escape inside an IME composition belongs to the composition, not the edit.
+      if (e.isComposing || e.keyCode === 229) return;
       if (e.key !== "Enter" && e.key !== "Escape") return;
       e.preventDefault();
       e.stopPropagation();
