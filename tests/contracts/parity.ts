@@ -312,7 +312,9 @@ export const PARITY: readonly Row[] = [
     cli: { none: "missing: PG-F3" },
     api: ["GET /templates"],
     mcp: { none: "missing: PG-F3" },
-    window: [app('"GET", "/templates"')],
+    window: {
+      none: "the template picker lived on the Enhanced tab, which is hidden from the window on purpose",
+    },
   },
   {
     action: "Settings",
