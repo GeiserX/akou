@@ -23,6 +23,7 @@ import {
   ERROR_MS,
   LOADING_NOTE,
   levelDb,
+  NOTICE_MS,
   type PillDictation,
   type PillSend,
   pillRpc,
@@ -288,6 +289,66 @@ describe("DC-O1: the pill's states from the session", () => {
     f.event({ type: "dictation.cancelled", id: "d3" });
     f.to("idle");
     expect(f.states().at(-1)).toEqual({ state: "hidden" });
+  });
+
+  test("an error's buttons: what the dictation offers, each run for it, and the island steps aside or comes back", async () => {
+    const f = pill();
+    const ran: string[] = [];
+    let answer = true;
+    let offered: ("retry" | "copy" | "open-draft")[] = ["retry", "copy", "open-draft"];
+    f.d.errorActions = () => ({ actions: offered, retryLabel: "Retry locally" });
+    f.d.errorAction = async (id, a) => {
+      ran.push(`${id}:${a}`);
+      return answer;
+    };
+    const fail = (id: string) => {
+      f.to("listening");
+      spoken(f, id);
+      f.to("transcribing");
+      f.event({ type: "dictation.failed", id, error: "remote akou not reachable" });
+      f.to("idle");
+    };
+    fail("d1");
+    const error: PillState = {
+      state: "error",
+      message: "remote akou not reachable",
+      actions: ["retry", "copy", "open-draft"],
+      retryLabel: "Retry locally",
+    };
+    expect(f.states().at(-1)).toEqual(error);
+    // With buttons to reach, it stays as long as a notice.
+    expect(f.t.pending()).toEqual([NOTICE_MS]);
+    // Retry: transcribing while it decodes, then the island makes way for the draft box.
+    expect(await f.p.handlers.control({ action: "retry" })).toBe(true);
+    expect(f.states().slice(-2)).toEqual([
+      { state: "transcribing", since: 1000 },
+      { state: "hidden" },
+    ]);
+    expect(f.t.pending()).toEqual([]);
+
+    // A button that could not do it brings the error back for its time.
+    fail("d2");
+    answer = false;
+    expect(await f.p.handlers.control({ action: "copy" })).toBe(false);
+    expect(f.states().at(-1)).toEqual(error);
+    expect(f.t.pending()).toEqual([NOTICE_MS]);
+    answer = true;
+    expect(await f.p.handlers.control({ action: "copy" })).toBe(true);
+    expect(f.states().at(-1)).toEqual({ state: "done", how: "copied", note: "⌘V" });
+    expect(f.t.pending()).toEqual([DONE_MS]);
+
+    fail("d3");
+    expect(await f.p.handlers.control({ action: "open-draft" })).toBe(true);
+    expect(f.states().at(-1)).toEqual({ state: "hidden" });
+    expect(ran).toEqual(["d1:retry", "d2:copy", "d2:copy", "d3:open-draft"]);
+
+    // Positive controls: a button the error does not offer, or no error up, runs nothing.
+    offered = ["copy"];
+    fail("d4");
+    expect(await f.p.handlers.control({ action: "retry" })).toBe(false);
+    f.t.run(NOTICE_MS);
+    expect(await f.p.handlers.control({ action: "copy" })).toBe(false);
+    expect(ran).toHaveLength(4);
   });
 
   test("a new press drops the last outcome at once, and its timer can no longer hide the pill", () => {

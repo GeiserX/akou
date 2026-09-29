@@ -1,11 +1,14 @@
 /**
  * Dictation's setup (docs/ux/DICTATION.md DC-N3), run by the master switch when a grant is
- * missing (DC-U2) or by the page's "Run the setup again". Four steps:
+ * missing (DC-U2) or by the page's "Run the setup again". Five steps:
  *
  * 1. The microphone, with a live meter that proves audio arrives.
  * 2. Accessibility, on macOS only, with a button that opens its pane.
- * 3. The dictation key, with the recorder (DC-U3) and the current key filled in.
- * 4. "Try it": dictation is turned on, and a field in the page takes the first dictation.
+ * 3. The languages the user speaks (akou-5v8), as chips: `dictation.languages`, which `auto`
+ *    chooses among and the language chip moves between, so nobody picks one before speaking. It
+ *    starts from the saved list, else the languages of calls, else the interface's language.
+ * 4. The dictation key, with the recorder (DC-U3) and the current key filled in.
+ * 5. "Try it": dictation is turned on, and a field in the page takes the first dictation.
  *
  * The page never asks the OS for a grant. It reads what the helper reports (`GET /dictation`,
  * from the helper's own checks, which never prompt) once a second while a grant step waits, and
@@ -15,12 +18,13 @@
  * key held alone becomes `Control+Shift+Space`.
  */
 
+import { firstLanguages, LanguageList } from "./dictation-languages.ts";
 import type { DictationGrants } from "./dictation-page.ts";
 import { isAlone, keycaps } from "./dictation-recorder.ts";
 import { h, replace, toast } from "./dom.ts";
 import type { Transport } from "./protocol.ts";
 
-export type SetupStep = "mic" | "accessibility" | "key" | "try";
+export type SetupStep = "mic" | "accessibility" | "languages" | "key" | "try";
 
 /** How often a waiting grant step reads the grants again. */
 export const GRANT_POLL_MS = 1000;
@@ -104,28 +108,30 @@ export class DictationSetup {
     const g = await this.host.readGrants();
     if (!this.timer || !g) return;
     if (this.step === "mic" && grantOk(g.mic) !== grantOk(before?.mic)) this.draw();
-    if (this.step === "accessibility" && grantOk(g.accessibility)) this.go("key");
+    if (this.step === "accessibility" && grantOk(g.accessibility)) this.go("languages");
   }
 
-  /** The step after the microphone: Accessibility where macOS asks for it, else the key. */
+  /** The step after the microphone: Accessibility where macOS asks for it, else the languages. */
   private afterMic(): void {
     const a = this.host.grants()?.accessibility;
-    this.go(this.mac && !grantOk(a) ? "accessibility" : "key");
+    this.go(this.mac && !grantOk(a) ? "accessibility" : "languages");
   }
 
   private draw(): void {
-    const n = { mic: 1, accessibility: 2, key: 3, try: 4 }[this.step];
+    const n = { mic: 1, accessibility: 2, languages: 3, key: 4, try: 5 }[this.step];
     const body =
       this.step === "mic"
         ? this.micStep()
         : this.step === "accessibility"
           ? this.accessibilityStep()
-          : this.step === "key"
-            ? this.keyStep()
-            : this.tryStep();
+          : this.step === "languages"
+            ? this.languagesStep()
+            : this.step === "key"
+              ? this.keyStep()
+              : this.tryStep();
     replace(
       this.root,
-      h("h3", {}, `Set up dictation, step ${n} of 4`),
+      h("h3", {}, `Set up dictation, step ${n} of 5`),
       ...body,
       this.step === "try"
         ? null
@@ -255,12 +261,63 @@ export class DictationSetup {
           on: {
             click: () => {
               this.clipboardOnly = true;
-              this.go("key");
+              this.go("languages");
             },
           },
         },
         "Use clipboard only",
       ),
+    ];
+  }
+
+  /**
+   * The languages the user speaks. Continue saves `dictation.languages` when it changed; at least
+   * one is needed, since an empty list would follow the languages of calls instead.
+   */
+  private languagesStep(): HTMLElement[] {
+    const strings = (v: unknown) =>
+      Array.isArray(v) ? v.filter((x): x is string => typeof x === "string") : [];
+    const saved = strings(this.host.setting("dictation.languages"));
+    const start = firstLanguages(
+      saved,
+      strings(this.host.setting("asr.languages")),
+      typeof navigator === "undefined" ? "en" : navigator.language,
+    );
+    const next = h(
+      "button",
+      { type: "button", class: "go", id: "dictation-setup-next" },
+      "Continue",
+    );
+    const list = new LanguageList(start, (l) => {
+      next.disabled = l.length === 0;
+    });
+    const issue = h("p", { id: "dictation-setup-issue", class: "issue", attrs: { role: "alert" } });
+    issue.hidden = true;
+    next.addEventListener("click", () => {
+      const l = list.value();
+      if (l.length === 0) return;
+      const same = l.length === saved.length && l.every((c, i) => c === saved[i]);
+      void (same ? Promise.resolve(null) : this.host.save("dictation.languages", l)).then(
+        (wrong) => {
+          if (wrong) {
+            issue.textContent = wrong;
+            issue.hidden = false;
+            return;
+          }
+          this.go("key");
+        },
+      );
+    });
+    return [
+      h("h4", {}, "Your languages"),
+      h(
+        "p",
+        { id: "dictation-setup-note" },
+        "akou listens for these without asking which one before you speak, and shows the one it heard. Add every language you dictate in.",
+      ),
+      list.root,
+      issue,
+      next,
     ];
   }
 

@@ -289,8 +289,22 @@ describe("DC-G1, DC-G3: a dictation's audio and Retry over the API and the CLI",
       const retry = await r.api("POST", `/dictations/${id}/retry`, { engine: "fast" });
       expect(retry.status).toBe(200);
       expect(retry.body).toMatchObject({ id, text: "hello", engine: "fast" });
+      // Without a language the answer says none was asked (positive control for the next one).
+      expect(retry.body.language_forced).toBeUndefined();
       const run = await rigCli(r)(["dictations", "retry", id, "--engine", "fast"]);
       expect([run.code, run.out]).toEqual([0, "hello"]);
+      // A language reaches the decode; fast picks its own, so the answer says it was not forced.
+      const es = await rigCli(r)([
+        "dictations",
+        "retry",
+        id,
+        "--engine",
+        "fast",
+        "--language",
+        "es",
+        "--json",
+      ]);
+      expect([es.code, es.json?.language_forced]).toEqual([0, false]);
       // Neither retry changed the dictation.
       expect((await r.api("GET", `/dictations/${id}`)).body).toMatchObject({
         state: "inserted",
@@ -317,6 +331,15 @@ describe("DC-G1, DC-G3: a dictation's audio and Retry over the API and the CLI",
       expect([bad.status, bad.body.error]).toEqual([422, "bad_field"]);
       const remote = await r.api("POST", `/dictations/${clip}/retry`, { engine: "remote" });
       expect([remote.status, remote.body.error]).toEqual([422, "bad_field"]);
+      const lang = await r.api("POST", `/dictations/${clip}/retry`, {
+        engine: "fast",
+        language: "spanish please",
+      });
+      expect([lang.status, lang.body.error, lang.body.field]).toEqual([
+        422,
+        "bad_field",
+        "language",
+      ]);
       const cli = await rigCli(r)(["dictations", "retry", clip]);
       expect(cli.code).toBe(64);
       expect(cli.err).toContain("--engine");

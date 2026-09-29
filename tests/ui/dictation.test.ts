@@ -741,6 +741,44 @@ describe("DC-S1: the draft box", () => {
   );
 
   test(
+    "akou-5v8: the language chip decodes the reading again in the next language, and is a plain label otherwise",
+    async () => {
+      const p = v.page;
+      v.requests.length = 0;
+      await v.send("open", draft({ id: "l1", languageSwitch: true }));
+      expect(await p.$eval("#draft-lang", (e) => e.tagName)).toBe("BUTTON");
+      expect(await p.getAttribute("#draft-lang", "aria-label")).toBe("Switch language, now ES");
+      expect(await p.getAttribute("#draft-lang", "data-forced")).toBeNull();
+      await p.click("#draft-lang");
+      expect(v.requests).toEqual([{ name: "language", params: { id: "l1" } }]);
+      // One decode at a time: the chip waits for the new reading.
+      expect(await p.isDisabled("#draft-lang")).toBe(true);
+      await v.send(
+        "open",
+        draft({
+          id: "l1",
+          text: "Tell the team",
+          words: [],
+          language: "en",
+          languageSwitch: true,
+          languageForced: true,
+          focus: false,
+        }),
+      );
+      expect(await value(p)).toBe("Tell the team");
+      expect(await text(p, "#draft-lang")).toBe("EN");
+      expect(await p.getAttribute("#draft-lang", "data-forced")).toBe("");
+      expect(await p.isDisabled("#draft-lang")).toBe(false);
+      // Positive control: without the switch the chip is a label, and a click asks for nothing.
+      await v.send("open", draft({ id: "l2" }));
+      expect(await p.$eval("#draft-lang", (e) => e.tagName)).toBe("SPAN");
+      await p.click("#draft-lang");
+      expect(v.requests).toHaveLength(1);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "DC-U9: a box a draft-send rule opened sends on Enter, and Insert still inserts alone",
     async () => {
       const p = v.page;
@@ -946,6 +984,37 @@ describe("DC-U1: the Dictation page in the window", () => {
     await rig?.close();
     t?.cleanup();
   });
+
+  test(
+    "akou-5v8: the languages are chips with a list to add one, and each change saves the whole list",
+    async () => {
+      let fx: DictationFixture | null = null;
+      const page = await rig.open(undefined, {
+        before: async (p) => {
+          fx = await dictationFixture(p);
+          fx.settings["dictation.languages"] = ["en"];
+        },
+      });
+      const f = fx as unknown as DictationFixture;
+      await page.click("#dictation-open");
+      await page.waitForSelector("#dictation fieldset[data-group='Engine'] #dictation-languages");
+      const chips = () =>
+        page.$$eval("#dictation-languages .language-chip", (l) =>
+          l.map((x) => (x as HTMLElement).dataset.code),
+        );
+      expect(await chips()).toEqual(["en"]);
+      // The text box stays the saved value, out of sight.
+      expect(await page.isHidden("#dictation textarea[data-key='dictation.languages']")).toBe(true);
+      await page.selectOption("#dictation-languages-add", "es");
+      await until(() => f.patches.length === 1, 5000, "the added language saved");
+      expect(f.patches).toEqual([{ "dictation.languages": ["en", "es"] }]);
+      await page.click("#dictation-languages button[aria-label='Remove English']");
+      await until(() => f.patches.length === 2, 5000, "the removed language saved");
+      expect(f.patches[1]).toEqual({ "dictation.languages": ["es"] });
+      expect(await chips()).toEqual(["es"]);
+    },
+    UI_TIMEOUT,
+  );
 
   test(
     "shows every group, saves one key per change, and shows a refusal beside its key",
@@ -1710,12 +1779,17 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
   const toggle = "#dictation .dictation-enable input[data-key='dictation.enabled']";
   const step = (page: Page, s: string) =>
     page.waitForSelector(`#dictation .dictation-setup[data-step='${s}']`);
-  const browserPage = async (grants: DictationGrants, platform = "darwin") => {
+  const browserPage = async (
+    grants: DictationGrants,
+    platform = "darwin",
+    settings: Record<string, unknown> = {},
+  ) => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
       before: async (p) => {
         fx = await dictationFixture(p, { platform, grants });
         fx.settings["dictation.hotkey"] = "RightCommand";
+        Object.assign(fx.settings, settings);
       },
     });
     await page.click("#dictation-open");
@@ -1778,17 +1852,40 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         await until(() => asked("openSettingsPane").length === 2, 5000, "the Accessibility pane");
         expect(asked("openSettingsPane")[1]).toEqual({ pane: "accessibility" });
         grants.accessibility = "granted";
+        // The languages (akou-5v8): the interface's to start with, one more added, then saved.
+        await step(p, "languages");
+        const chips = () =>
+          p.$$eval("#dictation-languages .language-chip", (l) =>
+            l.map((x) => (x as HTMLElement).dataset.code),
+          );
+        expect(await chips()).toEqual(["en"]);
+        await p.selectOption("#dictation-languages-add", "es");
+        expect(await chips()).toEqual(["en", "es"]);
+        expect(await text(p, "#dictation-languages .language-chip[data-code='es'] span")).toBe(
+          "Spanish",
+        );
+        // With none left there is nothing to listen for, so Continue waits.
+        await p.click("#dictation-languages button[aria-label='Remove English']");
+        await p.click("#dictation-languages button[aria-label='Remove Spanish']");
+        expect(await p.isDisabled("#dictation-setup-next")).toBe(true);
+        await p.selectOption("#dictation-languages-add", "en");
+        await p.selectOption("#dictation-languages-add", "es");
+        expect(w.patches).toEqual([]);
+        await p.click("#dictation-setup-next");
         await step(p, "key");
+        expect(w.patches).toEqual([{ "dictation.languages": ["en", "es"] }]);
         expect(
           await p.$$eval("#dictation .dictation-setup .keycaps kbd", (k) =>
             k.map((x) => x.textContent),
           ),
         ).toEqual(["Right ⌘"]);
-        expect(w.patches).toEqual([]);
 
         await p.click("#dictation-setup-next");
         await step(p, "try");
-        expect(w.patches).toEqual([{ "dictation.enabled": true }]);
+        expect(w.patches).toEqual([
+          { "dictation.languages": ["en", "es"] },
+          { "dictation.enabled": true },
+        ]);
         expect(await text(p, "#dictation-setup-note")).toContain("hold Right ⌘, say a few words");
         await p.click("#dictation-try");
         await p.keyboard.type("ok");
@@ -1812,7 +1909,11 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
   test(
     "Accessibility refused: clipboard only, the key becomes a chord, and a key alone is refused",
     async () => {
-      const { page, fx } = await browserPage({ mic: "granted", accessibility: "denied" });
+      const { page, fx } = await browserPage(
+        { mic: "granted", accessibility: "denied" },
+        "darwin",
+        { "dictation.languages": ["es", "en"] },
+      );
       expect(await text(page, "#dictation-permissions")).toBe(
         "Permissions: Microphone ok, Accessibility not granted (clipboard only). Run the setup again",
       );
@@ -1833,6 +1934,14 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       }
 
       await page.click("#dictation-setup-clipboard");
+      // Languages saved already are kept in the user's order, and Continue writes nothing.
+      await step(page, "languages");
+      expect(
+        await page.$$eval("#dictation-languages .language-chip", (l) =>
+          l.map((x) => (x as HTMLElement).dataset.code),
+        ),
+      ).toEqual(["es", "en"]);
+      await page.click("#dictation-setup-next");
       await step(page, "key");
       const key = "#dictation .dictation-setup input[data-key='dictation.hotkey']";
       expect(await page.inputValue(key)).toBe("Control+Shift+Space");
@@ -2025,7 +2134,13 @@ describe("DC-H1: the History page", () => {
     async () => {
       const { page, fx } = await openHistory([
         dictationRow(1),
-        dictationRow(2, { state: "cancelled", app: null, engine: "best", ms: 640 }),
+        dictationRow(2, {
+          state: "cancelled",
+          app: null,
+          engine: "best",
+          ms: 640,
+          language: "es",
+        }),
         dictationRow(3, { state: "failed", text: null, error: "remote akou not reachable" }),
       ]);
       expect(
@@ -2033,7 +2148,10 @@ describe("DC-H1: the History page", () => {
       ).toEqual(["d001", "d002", "d003"]);
       expect(await text(page, `${row("d001")} .text`)).toBe("dictation number 1");
       const meta = await text(page, `${row("d002")} .meta`);
-      expect(meta).toContain("no app · best 0.6 s");
+      expect(meta).toContain("no app · best 0.6 s · ES · cancelled");
+      // A dictation with no language named says none (positive control).
+      expect(await text(page, `${row("d001")} .meta`)).not.toContain(" · EN");
+      expect(await page.$(`${row("d001")} .language`)).toBeNull();
       expect(await text(page, `${row("d002")} .state`)).toBe("cancelled");
       expect(await text(page, `${row("d003")} .issue`)).toBe("remote akou not reachable");
       // Nothing to insert, copy or fix in a dictation with no text; Retry still decodes its audio.

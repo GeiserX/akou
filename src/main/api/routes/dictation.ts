@@ -7,8 +7,8 @@
  *   spoken dictation is: `{id, text, raw, language, words, engine, model, ms, state}`.
  * - `GET /dictations`, `GET /dictations/{id}`: the dictation log, newest first.
  * - `GET /dictations/{id}/audio`: a spoken dictation's kept audio, a 16 kHz WAV (DC-H2).
- * - `POST /dictations/{id}/retry {engine}`: that audio decoded again with another engine, answered
- *   beside the dictation, which is not changed.
+ * - `POST /dictations/{id}/retry {engine, language?}`: that audio decoded again with another engine,
+ *   or forced into another language, answered beside the dictation, which is not changed.
  * - `POST /dictations/{id}/insert {text?, fix?}`: the draft box opened on it in the desktop
  *   window, where the user reads it and presses Enter; the API never pastes by itself (DC-N9).
  * - `DELETE /dictations/{id}`, `DELETE /dictations`: one dictation, or all, deleted with their
@@ -37,6 +37,8 @@ export const MAX_CLIP_SECONDS = 60 * 60;
 /** The engines a clip can name; `auto` is `dictation.engine`. */
 const ENGINES = ["auto", "fast", "best", "remote"];
 const FIELDS = new Set(["file", "engine", "language"]);
+/** A retry's `language`: auto, or a BCP-47 tag, as `language` on dictations.create. */
+const RETRY_LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
 
 function service(c: RouteContext<ApiApp>): DictationService {
   const d = c.app.dictation?.();
@@ -227,18 +229,24 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations/:id/retry",
     {
       id: "dictations.retry",
-      doc: "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
+      doc: "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. `language` (a BCP-47 tag, or auto for `dictation.language`) forces the decode into it on best and a remote akou, as the draft box's language chip does; fast detects the language itself. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
       access: "admin",
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
-      body: { engine: "string" },
+      body: { engine: "string", "language?": "string" },
       ok: 200,
     },
     async (c) => {
       const id = c.params.id as string;
       const d = service(c);
-      const b = await c.body<{ engine: string }>();
+      const b = await c.body<{ engine: string; language?: string }>();
       const engine = b.engine.trim();
+      const language = b.language?.trim() || "auto";
+      if (!RETRY_LANGUAGE.test(language)) {
+        throw new HttpError(422, "bad_field", "language is a BCP-47 tag, or auto", {
+          field: "language",
+        });
+      }
       if (!ENGINES.includes(engine)) {
         throw new HttpError(422, "bad_field", `engine is one of ${ENGINES.join(", ")}`, {
           field: "engine",
@@ -250,7 +258,10 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         });
       }
       c.timeout?.(0);
-      const r = await d.retry(id, engine === "auto" ? {} : { engine });
+      const r = await d.retry(id, {
+        ...(engine === "auto" ? {} : { engine }),
+        ...(language === "auto" ? {} : { language }),
+      });
       if (r.ok) return json(200, r.answer);
       const status = {
         not_found: 404,

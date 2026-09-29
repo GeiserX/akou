@@ -17,6 +17,10 @@
  *   `dictation.discarded` for a dictation that never reached the app; one already inserted keeps
  *   its state. **Copy** goes through the helper's clipboard-only insert. **Retry** decodes the kept
  *   audio again and shows the new reading in the box.
+ * - **The language chip** (akou-5v8) says the reading's language. With two or more of the user's
+ *   languages and an engine that takes a forced one, a click decodes the kept audio again forced
+ *   into the next of them, on the reading's own engine when it takes one (`best`, `remote`), else
+ *   the first installed engine that does; the new reading replaces the text in the box.
  * - **Learning.** On Enter, Ctrl/Cmd+Enter and Copy, the field is diffed against the text the box
  *   opened with (DC-L3). Each candidate is written `proposed`; the chip goes under the field only
  *   the first time a fix is seen and once more at its third time, never after Not a word (DC-L4).
@@ -32,6 +36,7 @@ import type { DictationItem, Target } from "../../core/dictation/events.ts";
 import type { Redecode } from "../../core/dictation/learn.ts";
 import type { DraftOpen, DraftRpc, DraftWord } from "../../ui/dictation-protocol.ts";
 import type { Chip } from "../../ui/pill-protocol.ts";
+import { forcesLanguage } from "./engines.ts";
 import { Learner } from "./learner.ts";
 import type { SendKey } from "./protocol.ts";
 import type { DictationSession, DraftRule } from "./session.ts";
@@ -55,6 +60,8 @@ export interface DraftWindow {
 /** A new reading of a dictation's audio, as `DictationService.retry` answers it. */
 export interface RetryReading {
   text: string;
+  /** The language the engine heard or was forced into, when it names one. */
+  language?: string | null;
   words: DictationItem["words"];
   engine: string;
   model: string | null;
@@ -72,9 +79,13 @@ export interface DraftBoxOptions {
   learnMode(): string;
   /** The engines a retry can use, from the installed ones. */
   engines(): string[];
+  /** The user's languages the chip moves between: `dictation.languages`, else `asr.languages`. */
+  languages?(): readonly string[];
+  /** Decodes the kept audio again on `engine`, forced into `language` when one is given. */
   retry(
     id: string,
     engine: string,
+    language?: string,
   ): Promise<{ ok: true; answer: RetryReading } | { ok: false; message: string }>;
   /** Reads the vocabulary: whether it maps `heard` to `term` already. */
   knownPairs?(): Promise<(heard: string, term: string) => boolean>;
@@ -105,7 +116,7 @@ export type DraftOpenResult =
 export { LEARNED_MS } from "./learner.ts";
 
 /** The target of a dictation that went to no app: the helper's own word for "nothing known". */
-const NO_TARGET: Target = { app: "", pid: 0, window: "", field: "unknown" };
+export const NO_TARGET: Target = { app: "", pid: 0, window: "", field: "unknown" };
 
 interface Open {
   id: string;
@@ -116,6 +127,10 @@ interface Open {
   /** The words of `base` with their confidences, when the engine gave any. */
   words: DictationItem["words"];
   language: string | null;
+  /** The engine of the reading shown (`best`), which a language switch decodes on when it can. */
+  engine: string;
+  /** The language chip chose `language`. */
+  forced: boolean;
   target: Target | null;
   /** Enter, Escape or a refused insert answered it; the box waits to be hidden or reopened. */
   answered: boolean;
@@ -154,6 +169,7 @@ export class DraftBox {
       discard: async (p) => this.discard(p.id),
       copy: (p) => this.copy(p.id, p.text),
       retry: (p) => this.retry(p.id, p.engine),
+      language: (p) => this.switchLanguage(p.id),
       chip: (a) => this.learner.answer(a),
     };
   }
@@ -180,18 +196,20 @@ export class DraftBox {
   /**
    * Opens the box on dictation `id`: `focus` for a deliberate open, which takes the keyboard;
    * `fix` for teaching only; `text` for another reading of it (a retry's, from history) in place
-   * of the one in the log.
+   * of the one in the log; `reading` for a new decode with its engine, time and language (the
+   * pill's Retry after an error).
    */
   open(
     id: string,
-    o: { focus: boolean; fix?: boolean; text?: string; rule?: DraftRule },
+    o: { focus: boolean; fix?: boolean; text?: string; reading?: RetryReading; rule?: DraftRule },
   ): DraftOpenResult {
     const w = this.win;
     if (!w)
       return { ok: false, code: "no_draft_box", message: "the draft box needs the desktop window" };
     const it = this.o.log.item(id);
     if (!it) return { ok: false, code: "not_found", message: `no dictation ${id}` };
-    const base = o.text ?? it.text ?? "";
+    const r = o.reading;
+    const base = r?.text ?? o.text ?? it.text ?? "";
     if (base === "")
       return { ok: false, code: "no_text", message: `dictation ${id} has no text to show` };
     if (!o.fix && it.target === null) {
@@ -205,7 +223,15 @@ export class DraftBox {
       focus: o.focus,
       ...(o.fix ? { fix: true } : {}),
       base,
-      words: o.text === undefined ? it.words : [],
+      words: r ? r.words : o.text === undefined ? it.words : [],
+      ...(r
+        ? {
+            engine: r.model ? `${r.engine} (${r.model})` : r.engine,
+            engineName: r.engine,
+            ms: r.ms,
+            language: r.language ?? it.language,
+          }
+        : {}),
       ...(o.rule ? { rule: o.rule } : {}),
     });
     return { ok: true };
@@ -221,7 +247,12 @@ export class DraftBox {
       base: string;
       words: DictationItem["words"];
       engine?: string;
+      /** The reading's engine by name (`best`), when it is not the dictation's own. */
+      engineName?: string;
       ms?: number | null;
+      /** The reading's language, when it is not the dictation's own. */
+      language?: string | null;
+      forced?: boolean;
       rule?: DraftRule | null;
     },
   ): void {
@@ -229,12 +260,17 @@ export class DraftBox {
     const prev = this.cur;
     if (prev && prev.id !== it.id && !prev.answered && !this.learner.has(prev.id))
       this.o.closeLearnWindow?.(prev.id);
+    const language = o.language !== undefined ? o.language : it.language;
+    const forced = o.forced === true;
+    const engineName = o.engineName ?? it.engine;
     this.cur = {
       id: it.id,
       fix: o.fix === true,
       base: o.base,
       words: o.words,
-      language: it.language,
+      language,
+      engine: engineName,
+      forced,
       target: it.target,
       answered: false,
       rule: o.rule ?? null,
@@ -250,7 +286,9 @@ export class DraftBox {
       ms: o.ms ?? it.ms ?? 0,
       local: !engine.startsWith("remote"),
       ...(it.seconds ? { seconds: it.seconds } : {}),
-      ...(it.language ? { language: it.language } : {}),
+      ...(language ? { language } : {}),
+      ...(this.switchEngine(engineName) ? { languageSwitch: true } : {}),
+      ...(forced && language ? { languageForced: true } : {}),
       engines: this.o.engines(),
       focus: o.focus,
       platform: this.o.platform,
@@ -310,6 +348,9 @@ export class DraftBox {
       text,
       base: c.base,
       words: c.words,
+      engineName: c.engine,
+      language: c.language,
+      forced: c.forced,
       rule: c.rule,
     });
   }
@@ -337,11 +378,39 @@ export class DraftBox {
     return r.ok;
   }
 
-  private async retry(id: string, engine: string): Promise<boolean> {
+  private retry(id: string, engine: string): Promise<boolean> {
+    return this.redecode(id, engine);
+  }
+
+  /**
+   * The engine a language switch decodes on: the reading's own when it takes a forced language,
+   * else the first installed one that does; null when none can or the user has fewer than two
+   * languages, and then the chip only says what was heard.
+   */
+  private switchEngine(engine: string): string | null {
+    if ((this.o.languages?.() ?? []).length < 2) return null;
+    if (forcesLanguage(engine)) return engine;
+    return this.o.engines().find(forcesLanguage) ?? null;
+  }
+
+  /** The language chip's click: the same audio again, in the next of the user's languages. */
+  private switchLanguage(id: string): Promise<boolean> {
+    const c = this.cur;
+    if (!c || c.id !== id || c.answered) return Promise.resolve(false);
+    const engine = this.switchEngine(c.engine);
+    if (!engine) return Promise.resolve(false);
+    const langs = this.o.languages?.() ?? [];
+    // A language outside the list (or none heard) moves to the first of them.
+    const next = langs[(langs.indexOf(c.language ?? "") + 1) % langs.length] as string;
+    return this.redecode(id, engine, next);
+  }
+
+  /** Decodes the kept audio again and shows the new reading in place of the text in the box. */
+  private async redecode(id: string, engine: string, language?: string): Promise<boolean> {
     const c = this.cur;
     const w = this.win;
     if (!c || c.id !== id || !w) return false;
-    const r = await this.o.retry(id, engine);
+    const r = await this.o.retry(id, engine, language);
     const it = this.o.log.item(id);
     // Enter or Escape during a slow retry answered this draft: the new reading comes too late.
     if (!r.ok || !it || r.answer.text === "" || this.cur !== c || c.answered) return false;
@@ -352,7 +421,10 @@ export class DraftBox {
       base: a.text,
       words: a.words,
       engine: a.model ? `${a.engine} (${a.model})` : a.engine,
+      engineName: a.engine,
       ms: a.ms,
+      language: a.language ?? language ?? it.language,
+      forced: language !== undefined,
       rule: c.rule,
     });
     return true;
