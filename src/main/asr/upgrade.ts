@@ -9,7 +9,7 @@
  * both ends. Parakeet on each line read 16.63 % WER on 20 FLEURS English clips against 7.34 for
  * the stream, and 5.62 on the whole clips.
  *
- * The utterance's new words are then cut back into its lines by text, not by time: they are
+ * Qwen's words for the utterance are then cut back into its lines by text, not by time: they are
  * aligned with the stream's words (rover.ts's `build`), and each goes to the line of the stream
  * word it aligns with. A word the stream did not have goes with the word before it, or to the
  * first line when none comes before it.

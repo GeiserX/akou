@@ -7,8 +7,8 @@
  * |------------|--------------------------------------------------------------|---------|
  * | `parakeet` | Parakeet re-decoding each pause-cut window (words move back)  | 36.17   |
  * | `nemotron` | streaming Nemotron (a word shown is never taken back)         | 18.80   |
- * | `upgrade`  | streaming Nemotron, each closed line rewritten by Parakeet    | 13.31   |
- * |            | and then by Qwen fused with it                               |         |
+ * | `upgrade`  | streaming Nemotron, each closed utterance's lines rewritten   | not run |
+ * |            | once by Qwen (FLEURS: en 7.34 to 4.75, es 4.87 to 2.75)       |         |
  * | `voxtral`  | listed only: unavailable, with its reason                    |         |
  *
  * `auto` picks `nemotron` when a streaming model is on disk, else `parakeet`. It never picks
@@ -119,28 +119,26 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
     },
   },
   upgrade: {
-    title: "Nemotron, each line upgraded",
-    what: "Streaming Nemotron writes the words; when the speaker stops, Parakeet rewrites the lines about 0.2 s later and Qwen fused with Parakeet about 1.5 to 2.5 s later",
+    title: "Nemotron, each line rewritten by Qwen",
+    what: "Streaming Nemotron writes the words; when the speaker stops, Qwen rewrites the lines once, about 1 s after the utterance closes",
     accuracy: {
-      metric: "call-wer",
-      value: 13.31,
-      what: "AMI meetings, each Nemotron line rewritten by ROVER over Qwen and Parakeet: 13.31 % WER, against 13.80 for Qwen after the call",
-      source: UPGRADE,
+      notMeasured:
+        "not run on AMI meetings; on 20 FLEURS clips per language, Qwen's rewrite takes the stream from 7.34 to 4.75 % WER in English and from 4.87 to 2.75 in Spanish",
     },
     latency: {
       metric: "seconds",
       value: 0.46,
-      what: "the words show as Nemotron's (0.46 s p50); the Parakeet line lands 0.18 s (p50) after the line closes, the Qwen line 1.43 s with one channel and 2.56 s with two",
+      what: "the words show as Nemotron's (0.46 s p50); Qwen's rewrite lands 0.74 to 1.04 s (p50) after the utterance closes on 20 FLEURS clips per language, 2.1 to 2.8 s (p95)",
       source: UPGRADE,
     },
     cores: {
       notMeasured:
-        "Nemotron's 0.39 cores per channel plus a Parakeet and a Qwen decode per line; the three together were not timed",
+        "Nemotron's 0.39 cores per channel plus a Qwen decode per utterance; the two together were not timed",
     },
     memory: {
       metric: "gb",
       value: 13,
-      what: "live Nemotron 2.25 GB, Parakeet 2.7 GB and Qwen 4.9 to 7.8 GB: about 10 to 13 GB during a call (the bar takes 13)",
+      what: "live Nemotron 2.25 GB, Parakeet 2.7 GB (loaded on every setup) and Qwen 4.9 to 7.8 GB: about 10 to 13 GB during a call (the bar takes 13)",
       source: UPGRADE,
     },
   },
@@ -197,7 +195,7 @@ export function setupModels(id: LiveSetupId, c: LiveSetupContext): string[] {
     case "nemotron":
       return [nemotron()];
     case "upgrade":
-      return [nemotron(), RECOGNIZER, QWEN_ASR, ...(c.runtime ? [c.runtime] : [])];
+      return [nemotron(), QWEN_ASR, ...(c.runtime ? [c.runtime] : [])];
     case "voxtral":
       return [];
   }

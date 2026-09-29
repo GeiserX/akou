@@ -105,12 +105,7 @@ describe("[akou-chp.23] the live setup the next call runs", () => {
   test("the models each setup loads here", () => {
     expect(setupModels("parakeet", ctx())).toEqual([RECOGNIZER]);
     expect(setupModels("nemotron", ctx({ languages: ["es"] }))).toEqual(["nemotron-3.5-1120"]);
-    expect(setupModels("upgrade", ctx())).toEqual([
-      "nemotron-en-560",
-      RECOGNIZER,
-      QWEN_ASR,
-      RUNTIME,
-    ]);
+    expect(setupModels("upgrade", ctx())).toEqual(["nemotron-en-560", QWEN_ASR, RUNTIME]);
     expect(setupModels("voxtral", ctx())).toEqual([]);
   });
 });
@@ -131,7 +126,8 @@ describe("[akou-chp.23] what GET /models and the Models page show of each setup"
       (["accuracy", "latency", "cores", "memory"] as const).map((k) => by[id]?.[k].score);
     expect(bars("parakeet")).toEqual([28, 61, 53, 78]);
     expect(bars("nemotron")).toEqual([62, 77, 81, 86]);
-    expect(bars("upgrade")).toEqual([73, 77, null, 19]);
+    // The upgrade's one Qwen rewrite was measured on FLEURS, not on AMI meetings: no accuracy bar.
+    expect(bars("upgrade")).toEqual([null, 77, null, 19]);
     expect(bars("voxtral")).toEqual([null, null, null, null]);
     expect(by.upgrade?.models.filter((m) => m.state === "missing").map((m) => m.id)).toEqual([
       QWEN_ASR,

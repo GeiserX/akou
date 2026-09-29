@@ -222,8 +222,8 @@ const REBIND_ANSWER_MS = 3_000;
 /** How often dictation looks whether a final pass still holds the GPU `best` gave way to (DC-E2). */
 export const BEST_REWARM_MS = 5_000;
 /**
- * One Qwen request of the in-call upgrade. A line takes 1.5 to 2.5 s; one past this keeps
- * Parakeet's text, so a stuck server never holds the lines behind it for long.
+ * One Qwen request of the in-call upgrade. A line takes 1.5 to 2.5 s; one past this keeps the
+ * streaming text, so a stuck server never holds the lines behind it for long.
  */
 export const LIVE_QWEN_TIMEOUT_MS = 30_000;
 /**
@@ -795,8 +795,8 @@ export class AkouApp implements ApiApp {
   /**
    * Qwen for a call's in-call upgrade (ASR-7): the server dictation keeps warm when one runs, so
    * one Qwen serves both, else one of its own. Its own gives way to a final pass on Metal instead
-   * of stopping it: the lines keep Parakeet's text meanwhile. A request never starts or restarts a
-   * server someone else owns or that was let go of: that process would run untracked.
+   * of stopping it: the lines keep the streaming text meanwhile. A request never starts or
+   * restarts a server someone else owns or that was let go of: that process would run untracked.
    */
   private liveUpgrader(): LineUpgrader {
     const gone = () => Promise.reject(new Error("its llama-server was stopped"));
