@@ -26,16 +26,16 @@ export function workspaceRoutes(r: Router<ApiApp>): void {
     "/workspaces",
     {
       id: "workspaces.add",
-      doc: "Make a workspace's folder, so it exists before its first call. `name` is letters, digits, dot, dash or underscore. A workspace that exists already answers 200 with `created: false`; a new one 201.",
+      doc: "Make a workspace's folder, so it exists before its first call. `name` is letters, digits, dot, dash or underscore. Answers `created: true` for a new folder and `created: false` for a workspace that exists already, under its folder's spelling, so adding one twice is safe.",
       access: "admin",
       modes: ["app"],
       body: { name: "string" },
-      ok: 201,
+      ok: 200,
     },
     async (c) => {
       const b = await c.body<{ name: string }>();
       const res = c.app.manager.addWorkspace(b.name.trim());
-      return outcome(res, res.ok && !res.created ? 200 : 201);
+      return outcome(res);
     },
   );
 }

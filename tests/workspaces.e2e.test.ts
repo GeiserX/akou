@@ -59,9 +59,9 @@ describe("workspaces over the API and the CLI", () => {
     expect(await names()).toEqual(["work 1"]);
   });
 
-  test("POST makes the folder: 201 when new, 200 when it exists, nothing on a bad name", async () => {
+  test("POST makes the folder: created when new, not when it exists, nothing on a bad name", async () => {
     const r = await rig.api("POST", "/workspaces", { name: " Personal " });
-    expect([r.status, r.body]).toEqual([201, { ok: true, workspace: "Personal", created: true }]);
+    expect([r.status, r.body]).toEqual([200, { ok: true, workspace: "Personal", created: true }]);
     expect(statSync(join(root, "Personal")).isDirectory()).toBe(true);
     // An empty workspace is listed, with no calls.
     expect(await names()).toEqual(["Personal 0", "work 1"]);
@@ -123,6 +123,28 @@ describe("workspaces over the API and the CLI", () => {
       await rig.api("POST", "/calls/live/stop");
       expect((await rig.api("GET", `/calls/${id}`)).body.workspace).toBe("Personal");
       expect(await names()).toEqual(["clients 0", "Personal 1", "work 1"]);
+    },
+    LONG,
+  );
+
+  test(
+    "a disk that ignores case keeps one workspace under its folder's spelling; one that keeps case keeps two",
+    async () => {
+      const folded = existsSync(join(root, "PERSONAL"));
+      const add = await rig.api("POST", "/workspaces", { name: "PERSONAL" });
+      expect(add.body).toEqual(
+        folded
+          ? { ok: true, workspace: "Personal", created: false }
+          : { ok: true, workspace: "PERSONAL", created: true },
+      );
+      const id = await rig.startCall({ workspace: "personal", title: "Second" });
+      await rig.api("POST", "/calls/live/stop");
+      expect((await rig.api("GET", `/calls/${id}`)).body.workspace).toBe("personal");
+      expect(await names()).toEqual(
+        folded
+          ? ["clients 0", "Personal 2", "work 1"]
+          : ["clients 0", "personal 1", "Personal 1", "PERSONAL 0", "work 1"],
+      );
     },
     LONG,
   );

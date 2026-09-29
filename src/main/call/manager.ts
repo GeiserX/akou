@@ -198,13 +198,12 @@ export class CallManager {
    * out, as `calls()` leaves them out).
    */
   workspaces(): { name: string; calls: number }[] {
-    const count = new Map<string, number>();
-    if (existsSync(this.o.root) && statSync(this.o.root).isDirectory()) {
-      for (const d of readdirSync(this.o.root, { withFileTypes: true })) {
-        if (d.isDirectory() && checkWorkspace(d.name) === null) count.set(d.name, 0);
-      }
+    const folders = this.folders();
+    const count = new Map<string, number>(folders.map((f) => [f, 0]));
+    for (const c of this.calls()) {
+      const name = this.spelling(c.workspace, folders);
+      count.set(name, (count.get(name) ?? 0) + 1);
     }
-    for (const c of this.calls()) count.set(c.workspace, (count.get(c.workspace) ?? 0) + 1);
     return [...count]
       .map(([name, calls]) => ({ name, calls }))
       .sort((a, b) => a.name.localeCompare(b.name));
@@ -212,7 +211,8 @@ export class CallManager {
 
   /**
    * Makes a workspace's folder, so an empty workspace survives a restart. One that exists already
-   * is left as it is (`created: false`); the name follows `checkWorkspace`.
+   * is left as it is (`created: false`), under the spelling its folder has; the name follows
+   * `checkWorkspace`.
    */
   addWorkspace(name: string): Outcome<{ workspace: string; created: boolean }> {
     const bad = checkWorkspace(name);
@@ -227,7 +227,25 @@ export class CallManager {
       );
     }
     mkdirSync(dir, { recursive: true });
-    return { ok: true, workspace: name, created: !had };
+    return { ok: true, workspace: had ? this.spelling(name, this.folders()) : name, created: !had };
+  }
+
+  /** The folders under the root that are workspaces. */
+  private folders(): string[] {
+    if (!existsSync(this.o.root) || !statSync(this.o.root).isDirectory()) return [];
+    return readdirSync(this.o.root, { withFileTypes: true })
+      .filter((d) => d.isDirectory() && checkWorkspace(d.name) === null)
+      .map((d) => d.name);
+  }
+
+  /**
+   * The folder a workspace name lands in. A disk that ignores case (a Mac's, by default) puts
+   * `work` into an existing `Work`: that is one workspace, under the folder's spelling. A disk
+   * that keeps case finds no `work` there, so the two stay apart.
+   */
+  private spelling(name: string, folders: readonly string[]): string {
+    if (folders.includes(name) || !existsSync(join(this.o.root, name))) return name;
+    return folders.find((f) => f.toLowerCase() === name.toLowerCase()) ?? name;
   }
 
   private lastSummary(): CallSummary | null {

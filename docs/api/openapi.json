@@ -1103,7 +1103,7 @@
         "tags": [
           "workspaces"
         ],
-        "description": "Make a workspace's folder, so it exists before its first call. `name` is letters, digits, dot, dash or underscore. A workspace that exists already answers 200 with `created: false`; a new one 201.",
+        "description": "Make a workspace's folder, so it exists before its first call. `name` is letters, digits, dot, dash or underscore. Answers `created: true` for a new folder and `created: false` for a workspace that exists already, under its folder's spelling, so adding one twice is safe.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1124,8 +1124,8 @@
           }
         },
         "responses": {
-          "201": {
-            "description": "Created",
+          "200": {
+            "description": "OK",
             "content": {
               "application/json": {
                 "schema": {
