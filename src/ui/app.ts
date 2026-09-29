@@ -862,7 +862,10 @@ class App {
           : this.groupEl({ workspace: "default", calls: [] }, 0, "", now, tz),
       );
     } else {
-      replace(list, ...groups.map((g, i) => this.groupEl(g, i, query, now, tz, live)));
+      replace(
+        list,
+        ...groups.map((g, i) => this.groupEl(g, i, query, now, tz, live, groups.length)),
+      );
     }
     if (focus === undefined) return;
     for (const el of list.querySelectorAll<HTMLElement>("button[data-ws], button[data-id]")) {
@@ -881,6 +884,7 @@ class App {
     now: number,
     tz: string,
     live: string | null = null,
+    of = 1,
   ): HTMLElement {
     // A search shows every call it finds, folded or not.
     const open = !this.folded.has(g.workspace) || query.trim() !== "";
@@ -908,10 +912,11 @@ class App {
       },
       chevron,
       h("span", { class: "ws-name" }, g.workspace),
-      g.calls.length > 0 && h("span", { class: "cnt" }, String(g.calls.length)),
+      (g.calls.length > 0 || of > 1) && h("span", { class: "cnt" }, String(g.calls.length)),
     );
+    // Only a lone empty workspace says "No calls yet"; beside others, its header with 0 is enough.
     const body =
-      g.calls.length === 0
+      g.calls.length === 0 && of === 1
         ? h("p", { class: "none", id, hidden: !open }, "No calls yet")
         : h(
             "ul",

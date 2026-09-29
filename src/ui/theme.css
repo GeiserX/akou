@@ -347,6 +347,11 @@ body.welcoming #composer #controls {
   color: var(--fg);
   border-color: var(--faint);
 }
+@media (max-width: 1200px) {
+  #workspace {
+    max-width: 8em;
+  }
+}
 #workspace-name {
   overflow: hidden;
   text-overflow: ellipsis;
@@ -466,13 +471,13 @@ body.welcoming #composer #controls {
   border: 0;
   border-radius: 6px;
   background: transparent;
-  color: var(--faint);
+  color: var(--dim);
   font-size: 12px;
   font-weight: 400;
   text-align: left;
 }
 #sidebar .side-new:hover {
-  color: var(--dim);
+  color: var(--fg);
 }
 #sidebar .side-new .ico {
   width: 12px;
@@ -487,7 +492,7 @@ body.welcoming #composer #controls {
 }
 #newtitle {
   flex: 1;
-  min-width: 0;
+  min-width: 9em;
   height: 28px;
   padding: 0 6px;
   border: 0;

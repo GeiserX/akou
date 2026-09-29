@@ -1121,7 +1121,7 @@ describe("the workspace menu (WINDOW 3.1)", () => {
     );
 
   test(
-    "a click opens every workspace with a check on the chosen one; a pick, a new one and the call on screen each move the chip",
+    "a click opens every workspace with a check on the chosen one; a pick and a new one move the chip, and opening another call does not",
     async () => {
       const ids = { work: "01J8Z6Q4M2VX0K7B3D4E5WSWORK", hiring: "01J8Z6Q4M2VX0K7B3D4E5WSHIRE" };
       await withRig(
@@ -1192,27 +1192,93 @@ describe("the workspace menu (WINDOW 3.1)", () => {
           expect(await chip(page)).toBe("Personal");
           const all = (await rig.api("GET", "/workspaces")).body.workspaces as { name: string }[];
           expect(all.map((w) => w.name)).toContain("Personal");
-          // The sidebar shows it at once, as an empty group.
+          // The sidebar shows it at once, as an empty group: beside other groups, its header with
+          // a count of 0, no "No calls yet" box.
           await page.waitForSelector('#calls .ws-group[data-workspace="Personal"]');
-          expect(await text(page, '#calls .ws-group[data-workspace="Personal"] .none')).toBe(
-            "No calls yet",
-          );
-          expect(await text(page, '#calls .ws-group[data-workspace="clients"] .none')).toBe(
-            "No calls yet",
-          );
+          for (const w of ["Personal", "clients"]) {
+            expect(await text(page, `#calls .ws-group[data-workspace="${w}"] .cnt`)).toBe("0");
+            expect(
+              await page.locator(`#calls .ws-group[data-workspace="${w}"] .none`).count(),
+            ).toBe(0);
+          }
 
-          // Another call on screen brings its own workspace; the header shows the call's own.
+          // Opening another call to read it keeps the pick; the header shows the call's own.
           await page.click(`#calls li[data-id="${ids.hiring}"] button`);
-          await until(async () => (await chip(page)) === "hiring", 5000, "the other call's");
-          expect(await text(page, "#meta")).toContain(" · hiring");
+          await until(
+            async () => ((await text(page, "#meta")) ?? "").includes(" · hiring"),
+            5000,
+            "open",
+          );
+          expect(await chip(page)).toBe("Personal");
           await page.click(`#calls li[data-id="${ids.work}"] button`);
-          await until(async () => (await chip(page)) === "work", 5000, "back");
-          expect(await text(page, "#meta")).toContain(" · work");
+          await until(
+            async () => ((await text(page, "#meta")) ?? "").includes(" · work"),
+            5000,
+            "back",
+          );
+          expect(await chip(page)).toBe("Personal");
+          // And so does a restart, which opens the last call again.
+          await page.reload();
+          await until(
+            async () => ((await text(page, "#meta")) ?? "").includes(" · "),
+            5000,
+            "reopened",
+          );
+          expect(await chip(page)).toBe("Personal");
+          // The keyboard leaving the open menu closes it.
+          await page.click("#workspace");
+          await page.waitForSelector("#workspace-menu", { state: "visible" });
+          await page.focus("#newtitle");
+          await page.waitForSelector("#workspace-menu", { state: "hidden" });
+          expect(await page.getAttribute("#workspace", "aria-expanded")).toBe("false");
           // A click outside closes an open menu.
           await page.click("#workspace");
           await page.waitForSelector("#workspace-menu", { state: "visible" });
           await page.mouse.click(700, 500);
           await page.waitForSelector("#workspace-menu", { state: "hidden" });
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "under a full list, the sidebar field's refusal is on screen, in plain words",
+    async () => {
+      await withRig(
+        {
+          seed: (home) => {
+            for (let i = 0; i < 18; i++) {
+              const id = `01J8Z6Q4M2VX0K7B3D4E5WS${String(i).padStart(3, "0")}`;
+              seedCall(home, (b) =>
+                b.created({ id, workspace: i % 2 ? "work" : "hiring", title: `Call ${i}` }, T0 + i),
+              );
+            }
+          },
+        },
+        async (rig) => {
+          const page = await rig.open();
+          await page.setViewportSize({ width: 1024, height: 700 });
+          await page.waitForSelector("#calls li >> nth=17");
+          await page.click("#workspace-new");
+          const field = page.locator("#sidebar .ws-name-input");
+          await field.waitFor();
+          expect(await field.getAttribute("placeholder")).toBe("Name, Enter to add it");
+          await field.fill("Acme Corp");
+          await field.press("Enter");
+          const problem = page.locator("#sidebar .ws-problem");
+          expect(await problem.textContent()).toBe("No spaces. Try Acme-Corp.");
+          // The line is what the user sees at its own spot, not a row drawn over it.
+          await until(
+            () =>
+              problem.evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                const at = document.elementFromPoint(r.left + 8, r.top + r.height / 2);
+                return at === el || el.contains(at);
+              }),
+            3000,
+            "the refusal on screen",
+          );
         },
       );
     },

@@ -4,9 +4,9 @@
  * "New workspace…" turns into a name field in place (Enter creates, Escape cancels). The sidebar's
  * "New workspace" opens the same field under the groups.
  *
- * Which one is chosen: the one the user picked since the call on screen changed, else the
- * workspace of the call on screen, else the last one used (kept in the page's storage), else
- * "default". Creating one makes its folder through `POST /workspaces`, so an empty workspace is
+ * Which one is chosen: the last one the user picked or recorded in (kept in the page's storage, so
+ * it holds across restarts and while other calls are opened to read), else the workspace of the
+ * call on screen, else "default". The header of a call shows that call's own workspace. Creating one makes its folder through `POST /workspaces`, so an empty workspace is
  * still there after a restart; the list is `GET /workspaces` with the calls' own workspaces.
  */
 
@@ -47,7 +47,7 @@ export class WorkspacePicker {
   private readonly sideNew = byId<HTMLButtonElement>("workspace-new");
   /** The folders `GET /workspaces` listed. */
   private known: string[] = [];
-  /** The user's pick since the call on screen last changed. */
+  /** The user's pick, for a page whose storage is refused. */
   private picked: string | null = null;
   /** The call on screen and its workspace, as the page last drew them. */
   private onScreen: { call: string | null; workspace: string | undefined } = {
@@ -82,6 +82,12 @@ export class WorkspacePicker {
         items[(at + step + items.length) % items.length]?.focus();
       }
     });
+    // The keyboard leaving the menu (Tab) closes it, as a click outside does.
+    this.button.parentElement?.addEventListener("focusout", (e) => {
+      const to = e.relatedTarget as Node | null;
+      if (this.menuBox.hidden || !to) return;
+      if (!this.menuBox.contains(to) && !this.button.contains(to)) this.menu(false);
+    });
     document.addEventListener("pointerdown", (e) => {
       const inside =
         this.menuBox.contains(e.target as Node) || this.button.contains(e.target as Node);
@@ -99,8 +105,7 @@ export class WorkspacePicker {
         return null;
       }
     })();
-    if (this.picked !== null) return this.picked;
-    return defaultWorkspace(this.onScreen.workspace, last);
+    return defaultWorkspace(this.picked ?? last, this.onScreen.workspace);
   }
 
   /** Every workspace: the folders, the calls' own, and the chosen one. */
@@ -113,10 +118,8 @@ export class WorkspacePicker {
     return this.known;
   }
 
-  /** The call on screen, drawn each paint: a new call brings its own workspace to the chip. */
+  /** The call on screen, drawn each paint: its workspace counts only until the user picks one. */
   follow(call: string | null, workspace: string | undefined): void {
-    // A pick holds until another call is on screen; that call's workspace takes over then.
-    if (call !== this.onScreen.call) this.picked = null;
     this.onScreen = { call, workspace };
     this.paint();
   }
@@ -246,7 +249,7 @@ export class WorkspacePicker {
   private nameField(o: { done(): void; cancel(): void }): HTMLElement {
     const input = h("input", {
       class: "ws-name-input",
-      placeholder: "Workspace name",
+      placeholder: "Name, Enter to add it",
       attrs: {
         "aria-label": "New workspace name",
         maxlength: "64",
@@ -272,13 +275,13 @@ export class WorkspacePicker {
       const name = input.value.trim();
       const bad = workspaceNameProblem(name, this.names());
       if (bad) {
-        problem.textContent = bad;
+        this.say(problem, bad);
         return;
       }
       busy = true;
       void this.create(name).then((err) => {
         busy = false;
-        if (err) problem.textContent = err;
+        if (err) this.say(problem, err);
         else o.done();
       });
     });
@@ -296,6 +299,12 @@ export class WorkspacePicker {
       }
     });
     return box;
+  }
+
+  /** Why the name was refused, scrolled into view: in the sidebar it sits under a long list. */
+  private say(problem: HTMLElement, why: string): void {
+    problem.textContent = why;
+    problem.scrollIntoView({ block: "nearest" });
   }
 
   /** Makes the folder, then picks it. Returns what went wrong, or null. */

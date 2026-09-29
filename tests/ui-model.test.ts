@@ -702,10 +702,10 @@ describe("[W5.3] the player's position is a wall time", () => {
 });
 
 describe("the workspace a new call goes in (WINDOW section 3.1)", () => {
-  test("the call on screen's, else the last one used, else default", () => {
-    expect(defaultWorkspace("work", "Personal")).toBe("work");
-    expect(defaultWorkspace(undefined, "Personal")).toBe("Personal");
-    expect(defaultWorkspace(undefined, null)).toBe("default");
+  test("the last one picked holds over the call on screen; with none, the call's, else default", () => {
+    expect(defaultWorkspace("Personal", "work")).toBe("Personal");
+    expect(defaultWorkspace(null, "work")).toBe("work");
+    expect(defaultWorkspace(null, undefined)).toBe("default");
     expect(defaultWorkspace("", "")).toBe("default");
   });
 
@@ -716,6 +716,8 @@ describe("the workspace a new call goes in (WINDOW section 3.1)", () => {
       "work",
     ]);
     expect(workspaceNames([], "Personal")).toEqual(["Personal"]);
+    // Once in any case, under the folder's spelling (the folders come first).
+    expect(workspaceNames(["Work", "hiring", "work"], "WORK")).toEqual(["hiring", "Work"]);
   });
 
   test("a new name: not empty, no slash, unique in any case, one folder name", () => {
@@ -729,11 +731,18 @@ describe("the workspace a new call goes in (WINDOW section 3.1)", () => {
     expect(workspaceNameProblem("personal", known)).toBe(
       "There is a workspace called Personal already.",
     );
-    for (const bad of [".hidden", "with space", "café"]) {
-      expect(workspaceNameProblem(bad, known)).toBe(
-        "Use letters, digits, dots, dashes or underscores, starting with a letter or digit.",
-      );
-    }
+    // Refused in plain words, with the nearest name that works.
+    expect(workspaceNameProblem("Acme Corp", known)).toBe("No spaces. Try Acme-Corp.");
+    expect(workspaceNameProblem("Café  Río", known)).toBe("No spaces. Try Cafe-Rio.");
+    expect(workspaceNameProblem("café", known)).toBe(
+      "Only letters, digits, dots, dashes and underscores. Try cafe.",
+    );
+    expect(workspaceNameProblem(".hidden", known)).toBe(
+      "Only letters, digits, dots, dashes and underscores. Try hidden.",
+    );
+    expect(workspaceNameProblem("!!", known)).toBe(
+      "Only letters, digits, dots, dashes and underscores, starting with a letter or digit.",
+    );
     expect(workspaceNameProblem("x".repeat(65), known)).toBe("Keep it to 64 characters.");
     expect(workspaceNameProblem("x".repeat(64), known)).toBeNull();
   });
@@ -788,6 +797,13 @@ describe("the calls list (WINDOW section 13)", () => {
     ]);
     expect(shape(groupCalls(calls, "sync", null, empty))).toEqual(["work: a"]);
     expect(shape(groupCalls([], "", null, ["Personal"]))).toEqual(["Personal: "]);
+    // A Mac's disk does not tell Work from work: a folder a call fills in another case is that
+    // call's group, not a second, empty one.
+    expect(shape(groupCalls(calls, "", null, ["WORK", "Hiring", "clients", "CLIENTS"]))).toEqual([
+      "work: c a",
+      "hiring: b",
+      "clients: ",
+    ]);
   });
 
   test("the day: Today, Yesterday, the weekday within a week, then the date", () => {

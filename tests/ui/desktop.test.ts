@@ -361,7 +361,7 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
             const box = await page.locator("#composer").boundingBox();
             if (!box) throw new Error("no composer");
             await page.mouse.dblclick(box.x + 4, box.y + 4);
-            await page.dblclick("#workspace");
+            await page.dblclick("#newtitle");
             if (platform === "darwin") {
               expect(s.inset).toBe(true);
               // The traffic lights take the top 28 px of the window; nothing is drawn under them.
@@ -376,7 +376,7 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
               expect(`${platform}: ${s.inset} ${s.drag}`).toBe(`${platform}: false `);
               expect(Math.max(s.tops.wordmark, s.tops.record, s.tops.ask)).toBeLessThan(28);
             }
-            // The field's double-click selects its word; only the strip zooms.
+            // The title field's double-click selects its word; only the strip zooms.
             await new Promise((r) => setTimeout(r, 200));
             expect(`${platform}: ${zooms()}`).toBe(`${platform}: ${platform === "darwin" ? 1 : 0}`);
             // A page's header, on the page and on a page under it, starts under the strip too.
