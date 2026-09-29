@@ -146,10 +146,22 @@ const NO_DRAG = "electrobun-webkit-app-region-no-drag";
 function titleBar(inset: boolean): void {
   if (document.body.classList.contains("inset") === inset) return;
   document.body.classList.toggle("inset", inset);
-  for (const el of document.querySelectorAll("#sidebar .brand, #composer, #ask-row"))
-    el.classList.toggle(DRAG, inset);
-  for (const el of document.querySelectorAll("#controls > *, #ask-form"))
-    el.classList.toggle(NO_DRAG, inset);
+  dragRegions();
+}
+
+/**
+ * Marks the strip's rows as drag regions and their controls as not, while the window is inset. A
+ * page's strip (`.pg-bar`) and its header (`pageHead` in rows.ts: the back link and the title row)
+ * are among them; a page draws its header again as it changes, so the page host calls this on
+ * every change under it.
+ */
+function dragRegions(): void {
+  const inset = document.body.classList.contains("inset");
+  const regions = "#sidebar .brand, #composer, #ask-row, #pages > .pg-bar, #pages .pg-top";
+  for (const el of document.querySelectorAll(regions)) el.classList.toggle(DRAG, inset);
+  const controls =
+    "#controls > *, #ask-form, #pages .pg-top :is(button, input, select, a, .pg-find)";
+  for (const el of document.querySelectorAll(controls)) el.classList.toggle(NO_DRAG, inset);
 }
 
 /** True when the event lands in a drag region and not on a control inside it. */
@@ -290,6 +302,7 @@ class App {
     document.addEventListener("dblclick", (e) => {
       if (onTitleBar(e)) this.t.zoomWindow?.();
     });
+    new MutationObserver(dragRegions).observe(byId("pages"), { childList: true, subtree: true });
     this.wireControls();
     this.wireSidebar();
     byId("title-text").addEventListener("click", () => this.editTitle());

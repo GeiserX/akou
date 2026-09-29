@@ -66,7 +66,7 @@ Columns:
 
 Below 1248 px wide the sidebar narrows to 10 rem and the side column to 18 rem, so the transcript keeps at least half the window. The calls column collapsing under 900 px and the side column becoming a drawer under 640 px are W1.3, not built.
 
-On macOS the window draws no title bar ([DESKTOP](DESKTOP.md) DK-M7): the traffic lights sit over the sidebar's top, and the sidebar, the composer row and the ask row start 28 px down. That strip and those rows move the window and a double-click on them zooms it; the controls in them do not. Windows and Linux keep their native frame and this spacing.
+On macOS the window draws no title bar ([DESKTOP](DESKTOP.md) DK-M7): the traffic lights sit over the sidebar's top, and the sidebar, the composer row, the ask row and a page's header start 28 px down; a page keeps that strip at its top as it scrolls. That strip and those rows move the window and a double-click on them zooms it; the controls in them do not. Windows and Linux keep their native frame and this spacing.
 
 One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Enhance, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The selected Notes | Enhanced tab, the open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
 

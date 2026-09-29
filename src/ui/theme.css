@@ -2601,6 +2601,16 @@ dialog {
   max-width: 680px;
   margin: 0 auto;
 }
+/* The page's own title-bar strip: in the macOS window (body.inset) it stays at the top of the
+   scrolling page, --titlebar high and the page's colour, so no row sits under the traffic lights
+   and the strip moves the window (app.ts titleBar). Elsewhere it has no height. */
+#pages > .pg-bar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  height: var(--titlebar, 0px);
+  background: var(--bg);
+}
 .pg-head {
   display: flex;
   align-items: flex-start;

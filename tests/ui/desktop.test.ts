@@ -315,6 +315,30 @@ function titleBarState(page: Page) {
   });
 }
 
+/** The page's own strip and header: their heights, tops, drag regions and loose controls. */
+function pageTitleBar(page: Page) {
+  return page.evaluate(() => {
+    const DRAG = "electrobun-webkit-app-region-drag";
+    const NO_DRAG = "electrobun-webkit-app-region-no-drag";
+    const controls = "input, select, button, textarea, a, [tabindex]";
+    const inPages = [...document.querySelectorAll(`#pages .${DRAG}`)];
+    return {
+      bar: Math.round(
+        document.querySelector("#pages > .pg-bar")?.getBoundingClientRect().height ?? -1,
+      ),
+      title: Math.round(
+        document.querySelector("#page-settings .pg-top h1")?.getBoundingClientRect().top ?? -1,
+      ),
+      drag: inPages.map((el) => el.className.split(" ")[0]).sort(),
+      controls: inPages.flatMap((el) => [...el.querySelectorAll(controls)]).length,
+      loose: inPages
+        .flatMap((el) => [...el.querySelectorAll(controls)])
+        .filter((el) => !el.closest(`.${NO_DRAG}`))
+        .map((el) => el.id || el.tagName),
+    };
+  });
+}
+
 describe("[DK-M7] the macOS window's title bar strip", () => {
   test(
     "on macOS the top rows start under the traffic lights and drag; Windows, Linux and a browser keep their spacing",
@@ -322,6 +346,8 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
       const t = tempDir("akou-ui-titlebar-");
       const rig = await uiRig({ home: t.dir });
       try {
+        // The page header's tops on macOS, which the other platforms draw 28 px higher.
+        const onMac: number[] = [];
         for (const platform of ["darwin", "win32", "linux"]) {
           const w = await windowPage(rig, { platform });
           const { page } = w;
@@ -342,7 +368,7 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
               expect(Math.min(s.tops.wordmark, s.tops.record, s.tops.ask)).toBeGreaterThanOrEqual(
                 28,
               );
-              expect(s.drag.sort()).toEqual(["ask-row", "brand", "composer"]);
+              expect(s.drag.sort()).toEqual(["ask-row", "brand", "composer", "pg-bar"]);
               expect(s.controls).toBeGreaterThan(5);
               expect(s.loose).toEqual([]);
               await until(() => zooms() === 1, 5000, "the zoom");
@@ -353,6 +379,48 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
             // The field's double-click selects its word; only the strip zooms.
             await new Promise((r) => setTimeout(r, 200));
             expect(`${platform}: ${zooms()}`).toBe(`${platform}: ${platform === "darwin" ? 1 : 0}`);
+            // A page's header, on the page and on a page under it, starts under the strip too.
+            await page.click("#settings-open");
+            await page.waitForSelector("#page-settings .pg-top h1");
+            const home = await pageTitleBar(page);
+            // A double-click on the header's empty middle zooms; one on its search box does not.
+            const gap = await page.evaluate(() => {
+              const h1 = document
+                .querySelector("#page-settings .pg-head h1")
+                ?.getBoundingClientRect();
+              const find = document
+                .querySelector("#page-settings .pg-find")
+                ?.getBoundingClientRect();
+              return h1 && find
+                ? { x: (h1.right + find.left) / 2, y: h1.top + h1.height / 2 }
+                : null;
+            });
+            if (!gap) throw new Error("no page header");
+            await page.mouse.dblclick(gap.x, gap.y);
+            await page.dblclick("#page-settings .pg-find .ico");
+            await page.click("#page-settings button.pg-link[id^='settings-go-']");
+            await page.waitForSelector("#page-settings .pg-back");
+            // The click scrolled the link into view; the page under it opens at its top, smoothly.
+            await page.waitForFunction(() => document.getElementById("pages")?.scrollTop === 0);
+            const sub = await pageTitleBar(page);
+            await new Promise((r) => setTimeout(r, 200));
+            if (platform === "darwin") {
+              for (const p of [home, sub]) {
+                expect(p.bar).toBe(28);
+                expect(p.title).toBeGreaterThanOrEqual(28 + 28);
+                expect(p.drag).toEqual(["pg-bar", "pg-top"]);
+                expect(p.controls).toBeGreaterThan(0);
+                expect(p.loose).toEqual([]);
+              }
+              expect(zooms()).toBe(2);
+              onMac.push(home.title, sub.title);
+            } else {
+              for (const p of [home, sub])
+                expect(`${platform}: ${p.bar} ${p.drag}`).toBe(`${platform}: 0 `);
+              // The same header, without the strip above it.
+              expect([home.title, sub.title]).toEqual(onMac.map((top) => top - 28));
+              expect(`${platform}: ${zooms()}`).toBe(`${platform}: 0`);
+            }
           } finally {
             await w.close();
           }

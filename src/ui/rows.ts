@@ -39,11 +39,18 @@ export const ICONS = {
   folder: ["M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"],
 };
 
-/** The page's title row: the title, and what sits at its right (the search). */
-export function pageHead(title: string, ...right: Child[]): HTMLElement {
+/**
+ * The page's header: the way back from a page under another (`backLink`), then the title row with
+ * what sits at its right (the search). In the macOS window its empty parts move the window, as a
+ * title bar does, and its controls stay controls (`titleBar` in app.ts).
+ */
+export function pageHead(
+  title: string,
+  o: { back?: HTMLButtonElement; right?: Child[] } = {},
+): HTMLElement {
   const head = h("div", { class: "pg-head" }, h("h1", {}, title), h("span", { class: "grow" }));
-  append(head, ...right);
-  return head;
+  append(head, ...(o.right ?? []));
+  return h("div", { class: "pg-top" }, o.back ?? null, head);
 }
 
 /** "‹ Settings": the way back from a page under another. */

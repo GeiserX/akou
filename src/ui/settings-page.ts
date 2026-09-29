@@ -454,9 +454,11 @@ export class SettingsPage {
         return rows.length > 0 ? section(s.title, ...rows) : null;
       })
       .filter((x): x is HTMLElement => x !== null);
-    return [pageHead("Settings", find), ...sections, this.hooks.server ? null : this.foot()].filter(
-      (x): x is HTMLElement => x !== null,
-    );
+    return [
+      pageHead("Settings", { right: [find] }),
+      ...sections,
+      this.hooks.server ? null : this.foot(),
+    ].filter((x): x is HTMLElement => x !== null);
   }
 
   private drawSub(p: SubPage): HTMLElement[] {
@@ -470,12 +472,13 @@ export class SettingsPage {
       })
       .filter((x): x is HTMLElement => x !== null);
     return [
-      backLink("Settings", () => {
-        this.leave();
-        this.sub = null;
-        this.draw();
+      pageHead(p.title, {
+        back: backLink("Settings", () => {
+          this.leave();
+          this.sub = null;
+          this.draw();
+        }),
       }),
-      pageHead(p.title),
       ...sections,
       this.foot(),
     ];
