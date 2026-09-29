@@ -47,9 +47,13 @@ export interface AskSink {
   error(data: { error: string; message: string }): void;
 }
 
-/** Event types after which the page reads the app's status again: a call began or ended. */
+/**
+ * Event types after which the page reads the app's status again: a call began, ended or was
+ * renamed.
+ */
 const LIFECYCLE: ReadonlySet<string> = new Set([
   "call.created",
+  "call.renamed",
   "call.ended",
   "call.failed",
   "part.started",

@@ -88,6 +88,7 @@ export const TOOL_ARGS: Record<string, Record<string, unknown>> = {
   akou_enhance_context: {},
   akou_enhanced_put: { markdown: "- Ship it [#l000001]", coversSeq: 4 },
   akou_enhance: {},
+  akou_rename_call: { title: "Q3 planning" },
   akou_list_calls: {},
   akou_get_call: { call: "last" },
   akou_export: { call: "last" },
@@ -175,6 +176,9 @@ export function sampleApi(n = 3): ApiClient {
     }
     if (path.endsWith("/ask")) return { answered: true, text: say(0) };
     if (path === "/calls/live/speakers") return { spk: "c2", name: "Ben" };
+    if (path === "/calls/live" && method === "PATCH") {
+      return { ok: true, call: "c1", title: String((o.body as { title?: string }).title), seq: 9 };
+    }
     if (path.endsWith("/speakers/merge")) return { from: "c3", into: "c2" };
     if (path.endsWith("/speakers/unmerge")) return { ok: true };
     if (path === "/calls/live/notes" && method === "POST") return { note: { id: "n0001" } };

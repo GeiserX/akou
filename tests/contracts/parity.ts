@@ -288,6 +288,13 @@ export const PARITY: readonly Row[] = [
     window: [app('"/calls?limit=200"')],
   },
   {
+    action: "Rename a call",
+    cli: ["calls"],
+    api: ["PATCH /calls/:id"],
+    mcp: ["akou_rename_call"],
+    window: [app('"PATCH", `/calls/#{encodeURIComponent(id)}`')],
+  },
+  {
     action: "Share a live link",
     cli: ["share"],
     api: ["GET /share", "POST /share", "DELETE /share"],

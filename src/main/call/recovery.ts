@@ -121,7 +121,8 @@ export function summarize(
     id: first.id,
     dir,
     workspace,
-    title: first.title,
+    // The latest `call.renamed` over the first title.
+    title: view.call?.title ?? first.title,
     createdAt: first.t,
     state: view.state,
     endedAt,
