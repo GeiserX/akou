@@ -258,14 +258,22 @@ export interface LlamaServerOptions {
    * server kept warm for dictation (DC-E2) sets it, so a dictation never kills a call's final pass.
    */
   yieldMetal?: boolean;
+  /**
+   * Keeps llama-server's own prompt cache (no `--cache-ram 0`). Only the nightly's failing control
+   * sets it, to show that cache still grows with every request (scripts/eval/nightly.ts).
+   */
+  promptCache?: boolean;
   /** Told of every process started (`true`) and ended (`false`), so a host can kill orphans. */
   onChild?(pid: number, alive: boolean): void;
   log?(level: "info" | "warn" | "error", msg: string): void;
 }
 
-/** The arguments llama-server starts with: loopback only, no prompt cache, one slot, no web UI. */
+/** The arguments llama-server starts with: loopback only, no prompt cache unless `promptCache` (the nightly's control), one slot, no web UI. */
 export function llamaArgs(
-  o: Pick<LlamaServerOptions, "model" | "mmproj" | "accelerator" | "threads" | "gpuLayers"> & {
+  o: Pick<
+    LlamaServerOptions,
+    "model" | "mmproj" | "accelerator" | "threads" | "gpuLayers" | "promptCache"
+  > & {
     command: readonly string[];
   },
   port: number,
@@ -280,8 +288,7 @@ export function llamaArgs(
     "127.0.0.1",
     "--port",
     String(port),
-    "--cache-ram",
-    "0",
+    ...(o.promptCache ? [] : ["--cache-ram", "0"]),
     "-c",
     "4096",
     "-np",

@@ -21,8 +21,8 @@
  * sets the per-token log-prob of the words decoded in that language (default -0.05);
  * `--fake-die-after N` exits 70 after answering N completions; `--fake-die-on N` exits 70 on
  * receiving its Nth completion, with no answer (a server that dies mid-request); `--fake-hang` never
- * answers a completion; `--fake-hang-context` never answers one that carries a context (a system
- * message, as an audio check's); `--fake-500 N` answers the first N
+ * answers a completion; `--fake-hang-context` never answers one that carries a context (a non-empty
+ * system message, as an audio check's); `--fake-500 N` answers the first N
  * completions with HTTP 500 (a Metal out-of-memory server), counted across restarts; `--fake-loading-ms` answers 503 on
  * `/health` for that long; `--fake-refuse-cache` exits 64 unless started with `--cache-ram 0`.
  */
@@ -158,7 +158,7 @@ Bun.serve({
       const body = (await req.json()) as { messages: Message[]; logprobs?: boolean };
       log({ body: { ...body, messages: body.messages.map(redactAudio) } });
       if (++received >= dieOn) process.exit(70);
-      if (hang || (hangContext && body.messages.some((m) => m.role === "system")))
+      if (hang || (hangContext && body.messages.some((m) => m.role === "system" && m.content)))
         return await new Promise<Response>(() => {});
       if (takeFailure()) {
         return Response.json(

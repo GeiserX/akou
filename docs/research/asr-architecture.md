@@ -121,6 +121,8 @@ N-way by construction: `asr.final.engines` is a list, the final pass runs every 
 | **llama-server** (llama.cpp; measured on b11166, pinned at b11200 when ASR-5 shipped) | One binary per OS and accelerator, downloaded like a model into `<models>/runtimes/`, run as a child process under a supervisor | Metal on macOS; CPU, CUDA or Vulkan on Windows and Linux | Qwen3-ASR-1.7B (Q8_0 GGUF + mmproj) | Measured: macOS Metal bf16 3.79 / 2.89 and Linux arm64 CPU Q8_0 3.76 / 2.81 (fleurs_en / fleurs_es), 150/150 clips each; token log-probs returned on both. Windows binaries exist, unmeasured |
 | **transcribe-cpp 0.2.4** (MIT, npm, koffi FFI) | npm with per-platform packages: `darwin-arm64-metal`, `darwin-x64-cpu`, `linux-x64-cpu-vulkan`, `linux-arm64-cpu-vulkan`, `win32-x64-cpu-vulkan` (registry read) | Metal, Vulkan or CPU | Whisper large-v3, Cohere Transcribe, Canary-1b-v2, Voxtral-3B, and more | Measured from Bun on macOS (0.2.3): loaded next to sherpa in one process, correct text from both. Windows and Linux not run |
 
+llama-server needs the model card's system turn on every request, empty when there is no glossary. Without one, llama.cpp's template leaves the turn out, and on non-speech Qwen names a language (Chinese "嗯", Portuguese "Sim") instead of None, which lidc then forces into words: 78 words on the 25 silent clips (b11200, Q8_0, Metal), none with the empty turn. The nightly checks it.
+
 Why not one runtime:
 
 - sherpa cannot run Qwen at full accuracy. The only 1.7B export loses 2 to 4 points ([k2-fsa/sherpa-onnx#3535](https://github.com/k2-fsa/sherpa-onnx/issues/3535), open).
@@ -350,7 +352,7 @@ The default download on macOS is about 8.7 GB: Parakeet 2.55, live models 0.94, 
 
 ## 9. Plan
 
-Ordered by risk removed per PR. Model-gated tests skip loudly on PRs and belong in `models-nightly` ([TESTING.md](../TESTING.md) TS-19, [CI-CD.md](../CI-CD.md)), which does not exist yet; ASR-11 builds its speech half. This is the engine design that [TESTING.md section 4.5](../TESTING.md#45-speech-many-engines-fusion-streaming-language-diarization) waits for: TS-16 to TS-18 take their details from it.
+Ordered by risk removed per PR. Model-gated tests skip loudly on PRs and belong in `models-nightly` ([TESTING.md](../TESTING.md) TS-19, [CI-CD.md](../CI-CD.md)). It scores the default recognizer and, for ASR-5, Qwen on macOS and Linux (`scripts/eval/nightly.ts`); ASR-11 brings the benchmark harness. This is the engine design that [TESTING.md section 4.5](../TESTING.md#45-speech-many-engines-fusion-streaming-language-diarization) waits for: TS-16 to TS-18 take their details from it.
 
 | Id | Feature | P | Depends on | Acceptance |
 |---|---|---|---|---|
