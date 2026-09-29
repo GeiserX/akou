@@ -603,6 +603,20 @@ export class SherpaModels implements ModelSet {
     return s;
   }
 
+  async release(): Promise<void> {
+    this.rec = null;
+    this.emb = null;
+    this.dia = null;
+    this.live = null;
+    // Bun runs a collected object's native finalizer on a later turn of the event loop, and what
+    // one finalizer lets go of waits for the next collection: on Bun 1.4.2 the first collection
+    // freed under a quarter of a pass's memory and the second the rest. Four leave room.
+    for (let i = 0; i < 4; i++) {
+      Bun.gc(true);
+      await Bun.sleep(0);
+    }
+  }
+
   diarizer(): Diarizer {
     if (!this.dia && this.diarizerKind === "nemotron") {
       this.dia = new NemotronDiarizer(this.nemotron(), () => this.count(NEMOTRON));
