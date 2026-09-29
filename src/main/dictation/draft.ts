@@ -9,10 +9,12 @@
  *   box for teaching only: Enter learns and inserts nothing, so the app the dictation went into is
  *   left alone.
  * - **Per-app rules** (DC-U9) open it too, taking the keyboard, for an app whose rule has `mode`
- *   `draft` or `draft-send`; with `draft-send` Enter presses the send key as Ctrl/Cmd+Enter does,
- *   and the rule's `sendKey` stands in for `dictation.sendKey`.
- * - **Enter** hides the box, has the helper bring the captured target forward and pastes there
- *   (DC-N9), pressing `dictation.sendKey` after the receipt for Ctrl/Cmd+Enter (DC-S2). A refused
+ *   `draft` or `draft-send`; with `draft-send` Enter presses the send key as Ctrl/Cmd+Enter does.
+ *   In every box a session opened (a rule's, Shift+Enter's, the focus guard's) the rule's `sendKey`
+ *   and `insert` stand in for `dictation.sendKey` and `dictation.insert`.
+ * - **Enter** hides the box, has the helper bring the captured target forward and inserts there
+ *   (DC-N9) as `dictation.insert` says (the clipboard only while the helper has no Accessibility
+ *   grant, DC-N3), pressing `dictation.sendKey` after the receipt for Ctrl/Cmd+Enter (DC-S2). A refused
  *   insert opens the box again with the user's text, without the keyboard. **Escape** writes
  *   `dictation.discarded` for a dictation that never reached the app; one already inserted keeps
  *   its state. **Copy** goes through the helper's clipboard-only insert. **Retry** decodes the kept
@@ -436,7 +438,7 @@ export class DraftBox {
     // The keyboard goes back to the target, so the box steps aside first.
     this.hide();
     const sendKey = c.rule?.sendKey ?? this.o.sendKey();
-    const r = await s.insertText(id, text, c.target, send ? sendKey : "none");
+    const r = await s.insertText(id, text, c.target, send ? sendKey : "none", c.rule?.insert);
     // A refused insert reopens at once: another dictation's draft may take the box during the check.
     if (!r.ok) this.reopen(c, text, r.reason);
     const chip = await learning;

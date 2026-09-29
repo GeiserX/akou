@@ -35,6 +35,8 @@ afterEach(async () => {
 const CHAT: Target = { app: "com.example.chat", pid: 7, window: "w7", field: "editable" };
 const TERM: Target = { app: "com.example.term", pid: 8, window: "w8", field: "editable" };
 const OTHER: Target = { app: "com.example.notes", pid: 9, window: "w9", field: "editable" };
+/** A terminal whose rule types. */
+const RULES_TYPE: AppRule[] = [{ app: TERM.app, insert: "type" }];
 
 const packet = (): Packet => ({
   ch: "mic",
@@ -53,6 +55,8 @@ interface Rig {
   decodes: DecodeRequest[];
   formats: (string | undefined)[];
   drafts: { id: string; reason: string; focus: boolean; rule?: DraftRule }[];
+  /** The engines whose request was opened at the press (DC-R6), in order. */
+  opened: string[];
   /** One dictation into `target`, with `key` pressed while listening; resolves with its insert. */
   dictate(target: Target, key?: string): Promise<Extract<AppToHelper, { type: "insert" }> | null>;
 }
@@ -64,6 +68,9 @@ function rig(
     text?: string;
     language?: string;
     draftOpens?: boolean;
+    /** The engine the settings pick (`dictation.engine`); `remote` takes the audio at the press. */
+    globalEngine?: string;
+    accessibility?: "granted" | "denied";
   } = {},
 ): Rig {
   const t = tempDir("akou-dict-rules-");
@@ -75,23 +82,35 @@ function rig(
   const decodes: DecodeRequest[] = [];
   const formats: (string | undefined)[] = [];
   const drafts: Rig["drafts"] = [];
+  const opened: string[] = [];
   const s = new DictationSession({
     log,
     engine: (name) => {
       engines.push(name);
+      const engine = name ?? o.globalEngine ?? "fast";
+      const decode = async (d: DecodeRequest): Promise<Decoded> => {
+        decodes.push(d);
+        return {
+          text: o.text ?? "Hello there.",
+          words: [],
+          language: null,
+          model: "m",
+          ms: 1,
+          spans: 1,
+        };
+      };
       return {
-        name: name ?? "fast",
-        decode: async (_s, d): Promise<Decoded> => {
-          decodes.push(d);
-          return {
-            text: o.text ?? "Hello there.",
-            words: [],
-            language: null,
-            model: "m",
-            ms: 1,
-            spans: 1,
-          };
-        },
+        name: engine,
+        decode: (_s, d) => decode(d),
+        // Only the remote takes the audio during the hold (DC-R6).
+        ...(engine === "remote"
+          ? {
+              open: (d: DecodeRequest) => {
+                opened.push(engine);
+                return { push: () => {}, decode: () => decode(d), cancel: () => {} };
+              },
+            }
+          : {}),
       };
     },
     send: (c) => sent.push(c),
@@ -119,7 +138,7 @@ function rig(
     type: "ready",
     protocol: "akou-dictate/1",
     version: "0",
-    grants: { mic: "granted", accessibility: "granted" },
+    grants: { mic: "granted", accessibility: o.accessibility ?? "granted" },
     backend: "fake",
     swallow_keys: true,
   });
@@ -132,6 +151,7 @@ function rig(
     decodes,
     formats,
     drafts,
+    opened,
     dictate: async (target, key) => {
       const id = String(++n);
       const before = sent.length;
@@ -209,6 +229,40 @@ describe("DC-U9: the rule for the app at the press", () => {
     expect(r.decodes).toEqual([{}]);
   });
 
+  test("the rule's engine is the one opened at the press, not the global remote (DC-R6)", async () => {
+    const r = rig({ rules: [{ app: TERM.app, engine: "fast" }], globalEngine: "remote" });
+    const engineOf = (t: Target) => r.log.items().find((i) => i.target?.app === t.app)?.engine;
+    await r.dictate(TERM);
+    expect(r.opened).toEqual([]);
+    expect(engineOf(TERM)).toBe("fast");
+    // Positive control: an app with no rule opens the global remote at its press.
+    await r.dictate(OTHER);
+    expect(r.opened).toEqual(["remote"]);
+    expect(engineOf(OTHER)).toBe("remote");
+  });
+
+  test("Shift+Enter's draft box carries the rule's send key and insert method, never Enter sends", async () => {
+    const r = rig({ rules: RULES });
+    expect(await r.dictate(CHAT, "Shift+Enter")).toBeNull();
+    expect(await r.dictate(TERM, "Shift+Enter")).toBeNull();
+    expect(r.drafts.map((d) => [d.reason, d.rule])).toEqual([
+      ["key", { enterSends: false, sendKey: "Cmd+Enter" }],
+      ["key", { enterSends: false, insert: "type" }],
+    ]);
+  });
+
+  test("the focus guard's draft box carries the rule too; a dictation with no rule carries none", async () => {
+    const r = rig({ rules: RULES });
+    for (const target of [TERM, OTHER]) {
+      const ins = await r.dictate(target);
+      r.s.onMessage({ type: "insert.failed", id: ins?.id as string, reason: "focus-changed" });
+    }
+    expect(r.drafts.map((d) => [d.reason, d.focus, d.rule])).toEqual([
+      ["focus-changed", false, { enterSends: false, insert: "type" }],
+      ["focus-changed", false, undefined],
+    ]);
+  });
+
   test("positive control: an app with no rule uses the globals", async () => {
     const r = rig({ rules: RULES, language: "en" });
     const ins = await r.dictate(OTHER, "Enter");
@@ -221,17 +275,65 @@ describe("DC-U9: the rule for the app at the press", () => {
   });
 });
 
+describe("DC-N3: no Accessibility grant, the clipboard only", () => {
+  test("every insert is clipboard only and sends nothing, a rule's type and Enter included", async () => {
+    const r = rig({ rules: RULES_TYPE, accessibility: "denied" });
+    const a = await r.dictate(OTHER, "Enter");
+    expect([a?.method, a?.send_key]).toEqual(["clipboard", "none"]);
+    const b = await r.dictate(TERM);
+    expect(b?.method).toBe("clipboard");
+    // The draft box's insert too.
+    void r.s.insertText("x", "hi", OTHER, "Enter", "type");
+    expect(r.sent.at(-1)).toMatchObject({ type: "insert", method: "clipboard", send_key: "none" });
+  });
+
+  test("positive control: with the grant the same dictations paste, type and send", async () => {
+    const r = rig({ rules: RULES_TYPE });
+    const a = await r.dictate(OTHER, "Enter");
+    expect([a?.method, a?.send_key]).toEqual(["paste", "Enter"]);
+    expect((await r.dictate(TERM))?.method).toBe("type");
+    void r.s.insertText("x", "hi", OTHER, "Enter", "type");
+    expect(r.sent.at(-1)).toMatchObject({ type: "insert", method: "type", send_key: "Enter" });
+  });
+
+  test("a grant taken back turns the next insert to the clipboard (DC-N1)", async () => {
+    const r = rig();
+    expect((await r.dictate(OTHER))?.method).toBe("paste");
+    r.s.onMessage({ type: "grant.lost", name: "accessibility" });
+    expect((await r.dictate(OTHER))?.method).toBe("clipboard");
+  });
+});
+
+describe("DC-U9: the draft box's own insert", () => {
+  test("follows dictation.insert, pastes a line break, and a rule's method wins", async () => {
+    const r = rig({ policy: { ...DEFAULT_INSERT, method: "type" } });
+    const last = () => r.sent.at(-1) as Extract<AppToHelper, { type: "insert" }>;
+    void r.s.insertText("x", "hi", OTHER, "none");
+    expect(last().method).toBe("type");
+    void r.s.insertText("x", "one\ntwo", OTHER, "none");
+    expect(last().method).toBe("paste");
+    void r.s.insertText("x", "hi", OTHER, "none", "clipboard");
+    expect(last().method).toBe("clipboard");
+  });
+});
+
 describe("DC-U9: the draft box a rule opened", () => {
   function box() {
     const t = tempDir("akou-dict-rules-box-");
     cleanups.push(t.cleanup);
     const log = new DictationLog(t.dir, () => 1000);
     cleanups.push(() => log.close());
-    const inserts: { text: string; sendKey: string }[] = [];
+    const inserts: { text: string; sendKey: string; insert?: string }[] = [];
     const opens: DraftOpen[] = [];
     const session = {
-      insertText: async (id: string, text: string, _t: unknown, sendKey: string) => {
-        inserts.push({ text, sendKey });
+      insertText: async (
+        id: string,
+        text: string,
+        _t: unknown,
+        sendKey: string,
+        insert?: string,
+      ) => {
+        inserts.push({ text, sendKey, ...(insert ? { insert } : {}) });
         log.append({ type: "dictation.inserted", id, method: "paste", receipt_ms: 5 });
         return { ok: true, method: "paste" };
       },
@@ -280,6 +382,13 @@ describe("DC-U9: the draft box a rule opened", () => {
     // The page's Enter in such a box asks for the send.
     expect(await b.handlers.insert({ id, text: "see you", send: true })).toBe(true);
     expect(inserts).toEqual([{ text: "see you", sendKey: "Cmd+Enter" }]);
+  });
+
+  test("a rule's insert method goes with the box's Enter", async () => {
+    const { b, id, inserts } = box();
+    b.open(id, { focus: false, rule: { enterSends: false, insert: "type" } });
+    await b.handlers.insert({ id, text: "see you", send: false });
+    expect(inserts).toEqual([{ text: "see you", sendKey: "none", insert: "type" }]);
   });
 
   test("positive control: a box no rule opened sends with dictation.sendKey and says nothing of Enter", async () => {
