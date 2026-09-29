@@ -273,7 +273,7 @@ body:not(.busy) #composer .busy {
 }
 
 /* The composer row (WINDOW section 3.1): the status word, the workspace chip inside the title
-   field, the template, two thin meters and the round red Record. While a call records, the same
+   field, the live model, two thin meters and the round red Record. While a call records, the same
    spot holds the elapsed time, Stop in the same round form, and Mute and Pause as quiet icons.
    Record is the one strong colour on the idle screen. */
 #composer {
@@ -347,9 +347,10 @@ body.welcoming #composer #controls {
   color: var(--fg);
   border-color: var(--faint);
 }
+/* A small window: a shorter chip, so the title field keeps room beside the live model. */
 @media (max-width: 1200px) {
   #workspace {
-    max-width: 8em;
+    max-width: 6.5em;
   }
 }
 #workspace-name {
@@ -492,12 +493,139 @@ body.welcoming #composer #controls {
 }
 #newtitle {
   flex: 1;
-  min-width: 9em;
+  min-width: 0;
   height: 28px;
   padding: 0 6px;
   border: 0;
   background: transparent;
   font-size: 13px;
+}
+/* The live model the next call runs (WINDOW W3.19): "Live: <choice>" and a chevron, opening a
+   menu of the setups downloaded here, each with one plain line. Disabled while a call records. */
+#live-pick {
+  position: relative;
+  flex: 0 1 auto;
+  min-width: 6.5rem;
+  display: flex;
+}
+#live-pick[hidden] {
+  display: none;
+}
+#live {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 15rem;
+  height: 32px;
+  padding: 0 6px 0 10px;
+  border-radius: 8px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+#live .live-key {
+  flex: none;
+  color: var(--dim);
+}
+#live-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#live:hover:not(:disabled),
+#live[aria-expanded="true"] {
+  border-color: var(--faint);
+}
+#live:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
+#live-pick[data-state="none"] #live-name {
+  color: var(--dim);
+}
+#composer #live .ico {
+  width: 12px;
+  height: 12px;
+  color: var(--dim);
+}
+#live-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  width: 300px;
+  padding: 4px;
+  border: 1px solid var(--line2);
+  border-radius: 8px;
+  background: var(--raised);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.45);
+}
+#live-menu[hidden] {
+  display: none;
+}
+#live-menu .live-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  text-align: left;
+}
+#live-menu .live-item:hover,
+#live-menu .live-item:focus-visible {
+  background: var(--line2);
+  outline: none;
+}
+#live-menu .ico {
+  width: 14px;
+  height: 14px;
+  margin-top: 1px;
+  color: var(--dim);
+}
+#live-menu .live-item[aria-checked="false"] .check {
+  visibility: hidden;
+}
+#live-menu .live-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+#live-menu .live-title {
+  font-size: 12.5px;
+  font-weight: 500;
+}
+#live-menu .live-line {
+  color: var(--dim);
+  font-size: 11.5px;
+  font-weight: 400;
+  line-height: 1.4;
+  white-space: normal;
+}
+#live-menu .live-note {
+  margin: 6px 8px 4px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+#live-menu .live-none {
+  margin: 6px 8px 8px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.4;
+}
+#live-menu .live-get {
+  align-self: flex-start;
+  margin: 0 8px 6px;
 }
 #composer #meters {
   flex: none;

@@ -65,13 +65,14 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           await page.waitForSelector("#lines .row >> nth=3");
           expect(await page.locator("#dot").count()).toBe(1);
           expect(await text(page, "#state")).toBe("saved");
-          // The composer row: the workspace chip inside the title field, the Mic and Call meters
-          // with their health dots, and Record, all on screen at once. No template picker: notes
-          // pick their template automatically.
+          // The composer row: the workspace chip inside the title field, the live model, the Mic
+          // and Call meters with their health dots, and Record, all on screen at once. No template
+          // picker here or on the Enhanced tab: notes pick their template automatically.
           expect(await page.locator("#template, #enhance-template").count()).toBe(0);
           for (const c of [
             "#composer .title-field #workspace",
             "#composer .title-field #newtitle",
+            "#composer #live",
             "#composer #meter-mic",
             "#composer #meter-call",
             "#composer #health-mic",

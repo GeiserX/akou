@@ -2311,7 +2311,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             // that word never says ready while nothing can record.
             expect(await page.isVisible("#state")).toBe(true);
             expect(await text(page, "#state")).toBe("setup");
-            for (const sel of ["#record", "#newtitle", "#workspace", "#meters"]) {
+            for (const sel of ["#record", "#newtitle", "#workspace", "#live", "#meters"]) {
               expect(await page.isVisible(sel)).toBe(false);
             }
 

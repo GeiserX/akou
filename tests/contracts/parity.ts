@@ -351,7 +351,12 @@ export const PARITY: readonly Row[] = [
     cli: ["config", "start", "models", "status"],
     api: ["PATCH /config", "POST /calls", "GET /models", "GET /status"],
     mcp: ["akou_status"],
-    window: [ui("models-page.ts", 'this.patch("asr.live"'), app("`live: #{setup}`")],
+    window: [
+      ui("models-page.ts", 'this.patch("asr.live"'),
+      ui("live-picker.ts", '"PATCH", "/config", { "asr.live": id }'),
+      app("...(live ? { live } : {})"),
+      app("`Live: #{liveTitle(setup)}`"),
+    ],
     note: "MCP only reads it (akou_status names the live call's setup): the choice is the user's, from the window, `akou config set asr.live`, `akou start --live`, `PATCH /config` or `POST /calls {live}`",
   },
   {

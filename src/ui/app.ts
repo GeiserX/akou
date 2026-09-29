@@ -19,6 +19,8 @@ import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
+import { liveTitle } from "./live-options.ts";
+import { LivePicker } from "./live-picker.ts";
 import { SmoothMeters } from "./meter.ts";
 import {
   banner,
@@ -183,10 +185,14 @@ class App {
   private readonly player: Player;
   /** The workspace the next call goes in: the Record row's menu and the sidebar's New workspace. */
   private readonly workspace: WorkspacePicker;
+  /** The live model the next call runs: the Record row's "Live:" menu. */
+  private readonly livePicker: LivePicker;
   private readonly levels = new SmoothMeters((ch, db) => {
     byId<HTMLMeterElement>(`meter-${ch}`).value = db;
   });
   private blobs = new Map<string, string>();
+  /** What the live menu last read its models for, from the status push. */
+  private liveKey = "";
   /** A start is on its way: Record waits for the answer. */
   private starting = false;
   /** The calls as `GET /calls` last listed them, and the workspaces the user folded. */
@@ -247,7 +253,11 @@ class App {
       openDictionary: () => void dictation.dictionary.open(),
     });
     const models = new ModelsPage(t, false);
-    this.pages = new Pages(byId("pages"), { settings, models }, () => this.drawCalls());
+    this.pages = new Pages(byId("pages"), { settings, models }, () => {
+      this.drawCalls();
+      // Back from a page (a download, a delete or Use for calls on Models): the menu reads again.
+      if (!this.pages?.open) void this.livePicker?.load();
+    });
     const openSettings = (key?: string) => void this.pages.show("settings", key);
     byId("settings-open").addEventListener("click", () => openSettings());
     byId("models-open").addEventListener("click", () => openModels());
@@ -263,6 +273,7 @@ class App {
       openAgentSettings: () => openSettings("provider.kind"),
       mac: this.platform === "mac",
     });
+    this.livePicker = new LivePicker({ t, openModels: () => openModels() });
     this.enhanced = new EnhancedPane({
       t,
       call,
@@ -316,6 +327,13 @@ class App {
     this.status = s;
     titleBar(this.t.kind === "window" && s.app.platform === "darwin");
     this.modelsCard.update(s.models, true);
+    this.livePicker.follow(s.live);
+    // The live menu reads its models again when the speech models or the live call change.
+    const liveKey = JSON.stringify([s.models?.state, s.live?.call, s.live?.setup]);
+    if (liveKey !== this.liveKey) {
+      this.liveKey = liveKey;
+      void this.livePicker.load();
+    }
     const live = s.live?.call ?? null;
     const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
     if (live) this.seenLive = live;
@@ -656,7 +674,7 @@ class App {
     const setup = running && running.call === this.callId ? running.setup : null;
     const livePill = byId("pill-live");
     livePill.hidden = !setup;
-    livePill.textContent = setup ? `live: ${setup}` : "";
+    livePill.textContent = setup ? `Live: ${liveTitle(setup)}` : "";
     livePill.title = setup && running?.engine ? running.engine : "";
     const share = this.status?.share.shares?.find((x) => x.call === this.callId);
     const pill = byId("pill-share");
@@ -1012,11 +1030,13 @@ class App {
     this.paint();
     // Notes pick their template automatically (the API still takes one, for scripts).
     const workspace = this.workspace.value();
+    const live = await this.livePicker.value();
     let r: Reply<{ call?: string; error?: string }>;
     try {
       r = await this.t.request("POST", "/calls", {
         workspace,
         title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
+        ...(live ? { live } : {}),
       });
     } finally {
       this.starting = false;
