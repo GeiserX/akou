@@ -28,11 +28,14 @@
 //! | `stopped` | `reason` |
 //!
 //! App to helper: `rebind {hotkey, activation, draft, fixLast, pasteLast}`, `insert {id, text,
-//! method, send_key, target, restore, read_field}` (`method` `paste`, `type` or `clipboard`,
-//! default `paste`; `send_key` `Enter`, `Ctrl+Enter`, `Cmd+Enter`, `Shift+Enter` or `none`, the
-//! default; `restore` is `dictation.restoreClipboard`, default true; `read_field` is
-//! `dictation.readField` for this insert, default false, so an app that never sends it never
-//! causes a read; any other value is refused), `settled {id}` (the session will not be inserted: empty, drafted or
+//! method, send_key, target, restore, read_field, smart_spacing, trailing_space}` (`method`
+//! `paste`, `type` or `clipboard`, default `paste`; `send_key` `Enter`, `Ctrl+Enter`, `Cmd+Enter`,
+//! `Shift+Enter` or `none`, the default; `restore` is `dictation.restoreClipboard`, default true;
+//! `read_field` is `dictation.readField` for this insert, default false, so an app that never
+//! sends it never causes a read; `smart_spacing` reads the field before the insert and fits the
+//! text to it (DC-S4), default false, and like `read_field` never reads where DC-L2 forbids it;
+//! `trailing_space` ends the text with a space where the field was not read, default false; any
+//! other value is refused), `settled {id}` (the session will not be inserted: empty, drafted or
 //! cancelled while transcribing), `focus {target}`, `session.start`, `session.stop`,
 //! `session.cancel` (the tray's and the CLI's door), `rebuild_mic {device, prefer_built_in}`
 //! (`device` is `dictation.mic`, `default` when empty; `prefer_built_in` is
@@ -240,6 +243,10 @@ pub enum Command {
         target: Option<Target>,
         restore: bool,
         read_field: bool,
+        /// `dictation.smartSpacing` with `dictation.readField` (DC-S4).
+        smart_spacing: bool,
+        /// `dictation.trailingSpace` (DC-S4).
+        trailing_space: bool,
     },
     Settled {
         id: String,
@@ -270,6 +277,14 @@ pub enum Command {
         on: bool,
     },
     Stop,
+}
+
+/// An optional true-or-false field of a command, false when absent.
+fn flag(v: &Value, key: &str) -> Result<bool, String> {
+    match v.get(key) {
+        None => Ok(false),
+        Some(b) => b.as_bool().ok_or(format!("{key} must be true or false")),
+    }
 }
 
 impl Command {
@@ -310,10 +325,9 @@ impl Command {
                         None => true,
                         Some(r) => r.as_bool().ok_or("restore must be true or false")?,
                     },
-                    read_field: match v.get("read_field") {
-                        None => false,
-                        Some(r) => r.as_bool().ok_or("read_field must be true or false")?,
-                    },
+                    read_field: flag(&v, "read_field")?,
+                    smart_spacing: flag(&v, "smart_spacing")?,
+                    trailing_space: flag(&v, "trailing_space")?,
                 }
             }
             "settled" => Command::Settled { id: need("id")? },
@@ -611,10 +625,12 @@ mod tests {
                     }),
                     restore: true,
                     read_field: false,
+                    smart_spacing: false,
+                    trailing_space: false,
                 },
             ),
             (
-                r#"{"type":"insert","id":"4","text":"x","restore":false,"read_field":true}"#,
+                r#"{"type":"insert","id":"4","text":"x","restore":false,"read_field":true,"smart_spacing":true,"trailing_space":true}"#,
                 Command::Insert {
                     id: "4".into(),
                     text: "x".into(),
@@ -623,6 +639,8 @@ mod tests {
                     target: None,
                     restore: false,
                     read_field: true,
+                    smart_spacing: true,
+                    trailing_space: true,
                 },
             ),
             (
@@ -694,6 +712,8 @@ mod tests {
             r#"{"type":"insert","id":"1","text":"x","method":"drop"}"#,
             r#"{"type":"insert","id":"1","text":"x","restore":"no"}"#,
             r#"{"type":"insert","id":"1","text":"x","read_field":1}"#,
+            r#"{"type":"insert","id":"1","text":"x","smart_spacing":"yes"}"#,
+            r#"{"type":"insert","id":"1","text":"x","trailing_space":0}"#,
             "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
         ] {
             assert!(Command::parse(bad).is_err(), "{bad}");
@@ -848,6 +868,8 @@ mod tests {
                     target: Some(t),
                     restore: true,
                     read_field: true,
+                    smart_spacing: false,
+                    trailing_space: false,
                 },
                 Command::Settled { id: "1".into() },
                 Command::Focus { target: secure },

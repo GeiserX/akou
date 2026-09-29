@@ -57,6 +57,7 @@ pub mod selection;
 pub mod session;
 #[cfg(feature = "simulate")]
 pub mod sim;
+pub mod spacing;
 pub mod tap;
 #[cfg(target_os = "windows")]
 pub mod win;

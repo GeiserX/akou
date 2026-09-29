@@ -277,6 +277,17 @@ describe("DC-L2: the field's hunks rebuild the text the user left", () => {
     ).toBeNull();
   });
 
+  test("DC-S4: a first word the helper lower-cased still matches, and only the first", () => {
+    // The log keeps the engine's `Cooper`; the helper inserted `cooper` mid-sentence.
+    const logged = "Cooper netties team";
+    const edited = applyHunks(logged, [{ inserted: "cooper netties", now: "Kubernetes", at: 0 }]);
+    expect(edited).toBe("Kubernetes team");
+    // Positive control: a changed case anywhere else is another text.
+    expect(
+      applyHunks("tell Cooper now", [{ inserted: "cooper", now: "Kubernetes", at: 1 }]),
+    ).toBeNull();
+  });
+
   test("the rebuilt text yields the candidate a draft-box fix would", () => {
     const edited = applyHunks(SAID, [{ inserted: "cooper netties", now: "Kubernetes", at: 2 }]);
     expect(pairs(edit(SAID, edited ?? ""))).toEqual([["cooper netties", "Kubernetes"]]);

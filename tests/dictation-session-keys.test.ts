@@ -409,10 +409,12 @@ describe("DC-S2: the send key after the paste receipt", () => {
     expect(r.inserts().map((l) => l.type)).toEqual(["insert", "send"]);
   });
 
-  test("dictation.restoreClipboard reaches the helper; type pastes until DC-N7", async () => {
+  test("dictation.restoreClipboard reaches the helper; type types a text with no line break", async () => {
     const r = rig(HOLD, { insert: { ...SEND_ENTER, method: "type", restore: false } });
     await r.settled();
-    expect(r.inserts()[0]).toMatchObject({ method: "paste", restore: false });
+    // A line break would be typed as Return, so only such a text is pasted (tested with the rules
+    // in tests/dictation-app-rules.test.ts).
+    expect(r.inserts()[0]).toMatchObject({ method: "type", restore: false });
   });
 
   test("positive control: the default restores, so the insert carries no restore", async () => {
