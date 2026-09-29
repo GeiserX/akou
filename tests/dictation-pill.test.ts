@@ -752,11 +752,12 @@ describe("DC-O1: the island at rest from the key-down", () => {
     const t = manualLater();
     const visible: boolean[] = [];
     const moves: unknown[] = [];
+    const clock = { now: 1000 };
     const p = pillRpc(f.d, () => r.send, {
       platform: "darwin",
       hotkey: () => "RightCommand",
       label: hotkeyLabel,
-      now: () => 1000,
+      now: () => clock.now,
       onVisible: (v) => visible.push(v),
       preview: { setting: () => false },
       later: t.later,
@@ -767,7 +768,7 @@ describe("DC-O1: the island at rest from the key-down", () => {
       f.st.state = state;
       p.update();
     };
-    return { ...f, ...r, t, p, visible, moves, to };
+    return { ...f, ...r, t, p, visible, moves, to, clock };
   }
   const FRAME = { x: 1600, y: 200, width: 900, height: 700 };
 
@@ -823,6 +824,50 @@ describe("DC-O1: the island at rest from the key-down", () => {
     expect(f.states().at(-1)).toEqual({ state: "pressed" });
     // The outcome's timer no longer hides the island; the press's own does.
     expect(f.t.pending()).toEqual([PRESS_MS]);
+  });
+
+  test("the dictation key in a shortcut gives the error back with its buttons and the time it had left", async () => {
+    const f = placed();
+    const ran: string[] = [];
+    f.d.errorActions = () => ({ actions: ["retry", "copy", "open-draft"] });
+    f.d.errorAction = async (id, action) => {
+      ran.push(`${id}:${action}`);
+      return true;
+    };
+    f.to("listening");
+    spoken(f, "d1");
+    f.to("transcribing");
+    f.event({ type: "dictation.failed", id: "d1", error: "remote akou not reachable" });
+    f.to("idle");
+    const error = f.states().at(-1);
+    expect(error).toMatchObject({ state: "error", actions: ["retry", "copy", "open-draft"] });
+    // Right ⌘+C 4 s into the error's 10 s: a press, then dropped by the C.
+    f.clock.now += 4000;
+    f.tell({ kind: "press", on: true, frame: FRAME });
+    expect(f.states().at(-1)).toEqual({ state: "pressed" });
+    f.tell({ kind: "press", on: false, frame: null });
+    expect(f.states().at(-1)).toEqual(error);
+    expect(f.visible.at(-1)).toBe(true);
+    expect(f.t.pending()).toEqual([NOTICE_MS - 4000]);
+    expect(await f.p.handlers.control({ action: "retry" })).toBe(true);
+    expect(ran).toEqual(["d1:retry"]);
+
+    // The done island comes back the same way; one whose time ran out under the dot does not.
+    f.to("listening");
+    spoken(f, "d2");
+    f.to("transcribing");
+    f.event({ type: "dictation.inserted", id: "d2", method: "paste", receipt_ms: 5 });
+    f.to("idle");
+    const done = f.states().at(-1);
+    expect(done).toEqual({ state: "done", how: "inserted" });
+    f.tell({ kind: "press", on: true, frame: null });
+    f.tell({ kind: "press", on: false, frame: null });
+    expect(f.states().at(-1)).toEqual(done);
+    f.tell({ kind: "press", on: true, frame: null });
+    f.clock.now += DONE_MS;
+    f.tell({ kind: "press", on: false, frame: null });
+    expect(f.states().at(-1)).toEqual({ state: "hidden" });
+    expect(f.visible.at(-1)).toBe(false);
   });
 });
 

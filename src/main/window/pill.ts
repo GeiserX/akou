@@ -34,7 +34,8 @@
  * - `pressed`, the island at rest, from the dictation key's down until the press is a session
  *   (a modifier held under the hold time, a mic still opening) or is dropped (another key during
  *   a modifier-only hold), at most `PRESS_MS`. Before it shows, the shell moves the window to the
- *   display of the window with the keyboard, when the helper can tell.
+ *   display of the window with the keyboard, when the helper can tell. A dropped press gives back
+ *   the outcome or notice it took the island from, for the time that had left.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
  * - `notice` for `NOTICE_MS` when the dictation key does nothing (macOS): the helper lost the
  *   Accessibility grant (DC-N1), with a button to its pane, shown once the island is free, so a
@@ -257,6 +258,13 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
    * notice shows when the island would hide, if the grant is still lost then.
    */
   let grantPending = false;
+  /** When the island's hide timer is due, so a press can hand an outcome back its time. */
+  let hideAt = Number.POSITIVE_INFINITY;
+  /**
+   * The outcome or notice a press took the island from, and when it was due to hide: the dictation
+   * key used in a shortcut (Right ⌘+C) is a dropped press, and gives it back.
+   */
+  let underPress: { s: PillState; until: number } | null = null;
 
   const visible = () => shown.state !== "hidden" || chipUp !== null;
 
@@ -268,6 +276,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         return;
       }
     }
+    if (s.state !== "pressed") underPress = null;
     shown = s;
     send().state(s);
     o.onVisible(visible());
@@ -283,6 +292,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
 
   const hideAfter = (ms: number) => {
     cancelHide();
+    hideAt = o.now() + ms;
     cancelHide = later(ms, () => put({ state: "hidden" }));
   };
 
@@ -393,6 +403,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   /** Secure Input changed: a keyed chord is dead while it is on (DC-A2). */
   const secureInput = (on: boolean) => {
     if (!on) {
+      if (underPress?.s.state === "notice" && underPress.s.reason === "secure-input")
+        underPress = null;
       if (shown.state === "notice" && shown.reason === "secure-input") {
         cancelHide();
         put({ state: "hidden" });
@@ -416,20 +428,35 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   /**
    * The dictation key went down: the island at rest, on the display of the window with the
    * keyboard, until the session shows or the press is dropped (DC-O1). A press takes the island
-   * from an outcome or a notice; a session's island is the session's.
+   * from an outcome or a notice, and a dropped one gives it back for the time it had left, with its
+   * buttons; a session's island is the session's.
    */
   const pressed = (on: boolean, frame: Frame | null) => {
     if (!on) {
-      if (shown.state !== "pressed") return;
-      cancelHide();
-      put({ state: "hidden" });
+      if (shown.state === "pressed") unpress();
       return;
     }
     if (shown.state === "listening" || shown.state === "transcribing") return;
+    if (shown.state === "done" || shown.state === "error" || shown.state === "notice")
+      underPress = { s: shown, until: hideAt };
     cancelHide();
     o.place?.(frame);
     put({ state: "pressed" });
-    hideAfter(PRESS_MS);
+    cancelHide = later(PRESS_MS, unpress);
+  };
+
+  /** The dot goes: back to what it took the island from, if that still has time, else hidden. */
+  const unpress = () => {
+    const under = underPress;
+    underPress = null;
+    cancelHide();
+    const left = under ? under.until - o.now() : 0;
+    if (!under || left <= 0) {
+      put({ state: "hidden" });
+      return;
+    }
+    put(under.s);
+    hideAfter(left);
   };
 
   /** A partial's words to the ticker, as the preview's rule allows, with its settled start. */
