@@ -61,7 +61,7 @@ export function micPicker(
 ): HTMLSelectElement {
   const def = inputs.find((d) => d.default);
   const options = [
-    h("option", { value: "" }, def ? `System default (${label(def)})` : "System default"),
+    h("option", { value: "" }, def ? `System default, ${def.name}` : "System default"),
     ...inputs.map((d) => h("option", { value: d.id }, label(d))),
   ];
   if (saved !== "" && !inputs.some((d) => d.id === saved))

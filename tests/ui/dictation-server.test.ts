@@ -70,7 +70,7 @@ async function dictationPage(
   await page.waitForSelector("#login", { state: "visible" });
   await page.fill("#login-secret", PASSWORD);
   await page.click("#login-go");
-  await page.waitForSelector("#page-dictation fieldset[data-group='Server']", {
+  await page.waitForSelector("#page-dictation section[data-section='For other computers']", {
     state: "visible",
   });
   return { page, fx };
@@ -78,17 +78,19 @@ async function dictationPage(
 
 describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
   test(
-    "shows the Server group and the count only, saves one key, and needs no microphone",
+    "shows the dictations for other computers and the count only, saves one key, and needs no microphone",
     async () => {
       const { page, fx } = await dictationPage();
       if (!fx) throw new Error("the fixture is on unless turned off");
       expect(await page.getAttribute("#server-nav [aria-current='page']", "data-page")).toBe(
         "dictation",
       );
-      const groups = await page.$$eval("#page-dictation fieldset", (g) =>
-        g.map((x) => x.getAttribute("data-group")),
+      const groups = await page.$$eval("#page-dictation section.pg-section", (g) =>
+        g.map((x) => x.getAttribute("data-section")),
       );
-      expect(groups).toEqual(["Server"]);
+      expect(groups).toEqual(["For other computers"]);
+      // The same rows as the window's pages: a label in words, never the key.
+      expect(await page.textContent("#page-dictation")).not.toContain("server.dictation");
       const keys = await page.$$eval("#page-dictation [data-key]:not(div)", (e) =>
         e.map((x) => (x as HTMLElement).dataset.key),
       );
@@ -119,7 +121,7 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
   );
 
   test(
-    "on the real registry and GET /v1/server: the Server group, the count, and one key saved",
+    "on the real registry and GET /v1/server: the section for other computers, the count, and one key saved",
     async () => {
       const { page } = await dictationPage(undefined, { fixture: false });
       const patches: unknown[] = [];
@@ -127,10 +129,10 @@ describe("DC-U1, DC-G6: the Dictation page in server mode", () => {
         if (r.method() === "PATCH" && r.url().endsWith("/config")) patches.push(r.postDataJSON());
       });
       expect(
-        await page.$$eval("#page-dictation fieldset", (g) =>
-          g.map((x) => x.getAttribute("data-group")),
+        await page.$$eval("#page-dictation section.pg-section", (g) =>
+          g.map((x) => x.getAttribute("data-section")),
         ),
-      ).toEqual(["Server"]);
+      ).toEqual(["For other computers"]);
       const keys = await page.$$eval("#page-dictation [data-key]:not(div)", (e) =>
         e.map((x) => (x as HTMLElement).dataset.key),
       );

@@ -6,6 +6,7 @@
 
 import { describe, expect, test } from "bun:test";
 import { SETTINGS } from "../../src/main/config/schema.ts";
+import { dictationKeys, SERVER_GROUPS } from "../../src/ui/dictation-page.ts";
 import { WORDS } from "../../src/ui/settings-labels.ts";
 import { placedKeys, settingsKeys } from "../../src/ui/settings-page.ts";
 
@@ -20,6 +21,14 @@ describe("the Settings page's words", () => {
     expect(home.filter((k) => !WORDS[k] && !drawn.has(k))).toEqual([]);
     const placed = placedKeys();
     expect(home.filter((k) => !placed.has(k))).toEqual([]);
+  });
+
+  test("every key the Dictation page and its server mode show has a label", () => {
+    const shown = [...dictationKeys(), ...SERVER_GROUPS.flatMap((g) => g.keys)];
+    expect(shown.length).toBeGreaterThan(40);
+    expect(shown.filter((k) => !WORDS[k])).toEqual([]);
+    // Every dictation key the registry has is on the page or its Advanced page.
+    expect(keys.filter((k) => k.startsWith("dictation.") && !shown.includes(k))).toEqual([]);
   });
 
   test("no label, help or choice quotes a key or a value in code quotes", () => {

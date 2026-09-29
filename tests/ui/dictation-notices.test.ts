@@ -181,10 +181,10 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
     await rig?.close();
     t?.cleanup();
   });
-  const record = (key: string) => `#dictation button.record-key[data-for='${key}']`;
-  const useFn = (key: string) => `#dictation button.record-fn[data-for='${key}']`;
+  const record = (key: string) => `#page-dictation button.record-key[data-for='${key}']`;
+  const useFn = (key: string) => `#page-dictation button.record-fn[data-for='${key}']`;
   const note = (page: Page, key: string) =>
-    text(page, `#dictation div.setting[data-key='${key}'] .recorder-note`);
+    text(page, `#page-dictation div.pg-row[data-key='${key}'] .recorder-note`);
 
   test(
     "the Accessibility grant taken back: the page says it is lost, not clipboard only, with the pane's button",
@@ -198,22 +198,19 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
         const p = w.page;
         await p.click("#dictation-open");
         await p.waitForSelector("#dictation-grant-lost");
-        expect(await text(p, "#dictation-grant-lost")).toContain(
-          "Accessibility lost: macOS took the grant back, so the dictation key does nothing.",
+        expect(await text(p, "#dictation-grant-lost")).toBe(
+          "macOS took it back, so the dictation key does nothing. It works again once you allow it.",
         );
-        expect(await text(p, "#dictation-permissions")).toContain("Accessibility lost");
-        // At the top, in the switch's block that styles its issues, before the first group.
+        // At the top, on the Accessibility row of the first panel, before the Keys.
         expect(
-          await p.$eval("#dictation-grant-lost", (e) => {
-            const first = document.querySelector("#dictation fieldset");
-            return (
-              e.closest(".dictation-enable") !== null &&
-              first !== null &&
-              (e.compareDocumentPosition(first) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0
-            );
-          }),
+          await p.$eval(
+            "#dictation-grant-lost",
+            (e) =>
+              e.closest("#dictation-grant-accessibility") !== null &&
+              e.closest("section.pg-section")?.getAttribute("data-section") === "",
+          ),
         ).toBe(true);
-        expect(await text(p, "#dictation-permissions")).not.toContain("clipboard only");
+        expect(await text(p, "#dictation-grant-accessibility")).not.toContain("copied");
         w.requests.length = 0;
         await p.click("#dictation-grant-lost-open");
         await until(
@@ -241,10 +238,10 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
       try {
         const p = w.page;
         await p.click("#dictation-open");
-        await p.waitForSelector("#dictation-permissions");
+        await p.waitForSelector("#dictation-grant-accessibility");
         expect(await p.locator("#dictation-grant-lost").count()).toBe(0);
-        expect(await text(p, "#dictation-permissions")).toContain(
-          "Accessibility not granted (clipboard only)",
+        expect(await text(p, "#dictation-grant-accessibility .pg-help")).toBe(
+          "Not allowed, so dictations are copied and you paste them.",
         );
       } finally {
         await w.close();
@@ -275,8 +272,9 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
         await p.waitForTimeout(FN_TEST_MS + 300);
         expect(await note(p, "dictation.hotkey")).toBe(NO_FN);
         expect(
-          await p.$eval(`#dictation div.setting[data-key='dictation.hotkey'] .recorder-note`, (e) =>
-            e.classList.contains("issue"),
+          await p.$eval(
+            `#page-dictation div.pg-row[data-key='dictation.hotkey'] .recorder-note`,
+            (e) => e.classList.contains("issue"),
           ),
         ).toBe(true);
         // The recorder stays open for another key.
@@ -286,7 +284,7 @@ describe("DC-N1, DC-N2: the Dictation page in the window", () => {
         // Fn heard in time is answered, even when it is refused: here the draft key has it.
         await p.click(useFn("dictation.hotkey"));
         await w.send("dictationKey", { name: "Fn" });
-        const clash = "fn is already the draft key (dictation.hotkeyDraft).";
+        const clash = "fn is already the draft key.";
         await until(async () => (await note(p, "dictation.hotkey")) === clash, 5000, "the clash");
         await p.waitForTimeout(FN_TEST_MS + 300);
         expect(await note(p, "dictation.hotkey")).toBe(clash);

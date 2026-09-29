@@ -155,11 +155,11 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       const { page, v } = await openPage(pairs());
       await page.click("#dictation-open");
       await page.waitForSelector("#dictation-review-row");
-      expect(await text(page, "#dictation-review-row")).toBe("Words to review (2) Open");
-      // It sits in the Learning group, as the section 6 mockup has it.
+      expect(await text(page, "#dictation-review-count")).toBe("2 waiting");
+      // It sits in the Learning section.
       expect(
         await page
-          .locator("#dictation fieldset[data-group='Learning'] #dictation-review-open")
+          .locator("#page-dictation section[data-section='Learning'] #dictation-review-open")
           .count(),
       ).toBe(1);
 
@@ -235,9 +235,7 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       // Back on the Dictation page, the count follows the answers.
       await page.click("#review-close");
       await page.waitForFunction(
-        () =>
-          document.querySelector("#dictation-review-row")?.textContent ===
-          "Words to review (0) Open",
+        () => document.querySelector("#dictation-review-count")?.textContent === "None waiting",
       );
     },
     UI_TIMEOUT,
@@ -352,14 +350,14 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
     async () => {
       const { page } = await openPage();
       await page.click("#dictation-open");
-      await page.waitForSelector("#dictation fieldset[data-group='Learning']");
+      await page.waitForSelector("#page-dictation section[data-section='Learning']");
       // A count, not `page.$(...)` with toBeNull: that passed here with the row on the page.
       expect(await page.locator("#dictation-review-row").count()).toBe(0);
       // Positive control: the same page with the list shows the row.
       const withList = await openPage([]);
       await withList.page.click("#dictation-open");
       await withList.page.waitForSelector("#dictation-review-row");
-      expect(await text(withList.page, "#dictation-review-row")).toBe("Words to review (0) Open");
+      expect(await text(withList.page, "#dictation-review-count")).toBe("None waiting");
     },
     UI_TIMEOUT,
   );

@@ -1,6 +1,6 @@
 /**
- * The remote akou on the Dictation page (docs/ux/DICTATION.md section 7.2), drawn under the Engine
- * group in app mode:
+ * The remote akou on the Dictation page (docs/ux/DICTATION.md section 7.2), drawn in the Engine
+ * section in app mode while "Use another computer running akou" is on:
  *
  * - DC-R4, the Test button: `GET /dictation/remote-test` asks the remote in `dictation.remote.url`
  *   with the saved key, and its one summary line is shown as it came: `ok, best on cpu, no
@@ -45,9 +45,21 @@ export function remoteStanding(reply: RemoteReply | null, fallbackSetting: unkno
   return lines.length > 0 ? lines.join(" ") : null;
 }
 
-/** The Test button, its result and the remote's standing. */
-export function remotePanel(t: Transport, fallbackSetting: () => unknown): HTMLElement {
-  const result = h("output", { id: "dictation-remote-result", attrs: { role: "status" } });
+/**
+ * The Test button, its result and the remote's standing, for the page to place: the button beside
+ * the time limit, the result and the standing under it.
+ */
+export function remoteParts(
+  t: Transport,
+  fallbackSetting: () => unknown,
+  /** Text from akou in the page's words: a setting it names by its key gets its label. */
+  words: (text: string) => string = (x) => x,
+): { test: HTMLButtonElement; result: HTMLElement; standing: HTMLElement } {
+  const result = h("output", {
+    id: "dictation-remote-result",
+    class: "pg-help",
+    attrs: { role: "status" },
+  });
   const standing = h("p", { id: "dictation-remote-standing", class: "issue", hidden: true });
   const readStanding = async () => {
     const r = await t.request<RemoteReply>("GET", "/dictation");
@@ -55,43 +67,39 @@ export function remotePanel(t: Transport, fallbackSetting: () => unknown): HTMLE
     standing.textContent = line ?? "";
     standing.hidden = line === null;
   };
-  const button = h(
+  const test = h(
     "button",
     {
       type: "button",
       id: "dictation-remote-test",
+      class: "pg-btn",
       on: {
         click: async () => {
-          button.disabled = true;
-          result.className = "hint";
-          replace(result, "Testing the remote akou...");
+          test.disabled = true;
+          result.className = "pg-help";
+          replace(result, "Testing the other computer...");
           try {
             const r = await t.request<RemoteTest>("GET", "/dictation/remote-test");
             const ok = r.status === 200 && r.body?.ok === true;
-            result.className = ok ? "hint" : "issue";
+            result.className = ok ? "pg-help" : "issue";
             replace(
               result,
-              r.status === 200 && typeof r.body?.summary === "string"
-                ? r.body.summary
-                : message(r.body, `the test could not run (HTTP ${r.status})`),
+              words(
+                r.status === 200 && typeof r.body?.summary === "string"
+                  ? r.body.summary
+                  : message(r.body, `the test could not run (HTTP ${r.status})`),
+              ),
             );
             // A test that reached the remote is as fresh as the standing gets.
             void readStanding();
           } finally {
-            button.disabled = false;
+            test.disabled = false;
           }
         },
       },
     },
-    "Test the remote akou",
+    "Test",
   );
   void readStanding();
-  return h(
-    "div",
-    { id: "dictation-remote", class: "dictation-remote" },
-    button,
-    " ",
-    result,
-    standing,
-  );
+  return { test, result, standing };
 }

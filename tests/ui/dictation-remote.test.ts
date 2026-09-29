@@ -69,9 +69,12 @@ async function openPage(
     if (new URL(r.url()).pathname === "/api/v1/dictation") n++;
   });
   await page.click("#dictation-open");
-  await page.waitForSelector("#dictation fieldset[data-group='Engine'] #dictation-remote-test", {
-    state: "visible",
-  });
+  await page.waitForSelector(
+    "#page-dictation section[data-section='Engine'] #dictation-remote-test",
+    {
+      state: "visible",
+    },
+  );
   return page;
 }
 
@@ -123,7 +126,7 @@ describe("DC-R4: the Test button on the real app", () => {
 
       const ok = await runTest(page);
       expect(ok.line).toMatch(/^ok, best on cpu, no biasing, \d+ ms$/);
-      expect(ok.cls).toBe("hint");
+      expect(ok.cls).toBe("pg-help");
       expect(remote.seen).toEqual(["/v1/server", "/v1/keys/me"]);
 
       // A wrong key: the refusal's status, and no trace of the key on the page.
@@ -148,7 +151,7 @@ describe("DC-R4: the Test button on the real app", () => {
       // One with the lane switched off (server.dictation_slots: 0) says that instead.
       remote.state.caps = { interactive: false };
       expect((await runTest(page)).line).toEndWith(
-        "this akou has no dictation slots (server.dictation_slots); dictation will queue",
+        "this akou has no dictation slots (Dictations at once for other computers); dictation will queue",
       );
 
       expect([...browserHosts]).not.toContain(new URL(remote.url).host);
@@ -254,7 +257,8 @@ describe("DC-R3: the remote's standing on the page", () => {
       expect(await colour(page, "#dictation-remote-standing")).toBe(await colour(page, null));
       // No address set: the app's refusal, not a test result.
       const r = await runTest(page);
-      expect(r.line).toBe("dictation.remote.url is empty: set the akou to test");
+      // In the page's words: the setting is named by its label, never its key.
+      expect(r.line).toBe("Address is empty: set the akou to test");
       expect(r.cls).toBe("issue");
     },
     UI_TIMEOUT,

@@ -1,53 +1,63 @@
 /**
- * The Dictation page (docs/ux/DICTATION.md section 6, DC-U1, DC-G6): one component drawn in both
- * modes. In the desktop window (and the app's browser page) it is the `#dictation` dialog beside
- * Settings, with every group of the section 6 mockup; in server mode it is the Dictation page
- * beside Jobs, Models, Keys and Settings, with the Server group and the count of dictation requests
- * served in the last hour only, since a server has no keyboard to type into.
+ * The Dictation page (docs/ux/design-explorations/sd-a-dictation.html, docs/ux/DICTATION.md
+ * section 6, DC-U1): a page of the main window, opened from the sidebar like Settings and Models,
+ * not a dialog over the call. One scrolling column of sections, each a rounded panel of rows with
+ * a human label, one short line of help at most and its control on the right; a default shows as
+ * its value, and nothing on the page names a key, a file or a value in code quotes (the words are
+ * in `settings-labels.ts`). The settings a person rarely changes are on its Advanced page, whose
+ * row names what it holds.
  *
- * Fields come from the one settings registry (`GET /config`) through the flat pane's field code
- * (`settings.ts`), grouped by the lists below until the registry carries a `group` of its own. A
- * key this version does not have is left out, so a group grows as its settings land. Changing a
- * value saves that key alone through `PATCH /config`; a refusal shows beside it.
+ * The same component draws server mode's Dictation page (SV-U2): only what a server has, the
+ * dictations it serves other computers, since a server has no keyboard to type into.
+ *
+ * Each change saves that key alone through `PATCH /config`; a refusal shows under the row's label.
+ * A field being typed into saves when it is left, and leaving the page saves what is still in one.
  *
  * `dictation.remote.url` decides where dictation audio goes, so it is written from the desktop
  * window (its RPC) or the config file only, never over the HTTP API, the same rule as `webhook.url`
- * and `server.remotes`: a browser page shows it and cannot change it, and server mode does not show
- * it at all.
+ * and `server.remotes`: a browser page shows it and cannot change it.
  *
  * The page never records: a browser page served over plain http from another machine has no
  * microphone at all (no `getUserMedia` outside a secure context), and says so rather than failing.
  */
 
+import { QWEN_LANGUAGE_CODES } from "../main/asr/llama-catalog.ts";
 import type { Grant } from "../main/dictation/protocol.ts";
-import { hotkeyFor } from "../main/window/hotkey.ts";
-import { nextDictatedApp } from "./dictation-apps.ts";
+import { dictationHotkeyDefault, fixLastDefault, hotkeyFor } from "../main/window/hotkey.ts";
+import { appsEditor, nextDictatedApp } from "./dictation-apps.ts";
 import { cueStyle } from "./dictation-cues.ts";
-import { mountDictionaryDialog } from "./dictation-dictionary.ts";
-import { mountHistoryDialog } from "./dictation-history.ts";
-import { LanguageList } from "./dictation-languages.ts";
+import { LanguageList, languageName } from "./dictation-languages.ts";
 import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
-import { remotePanel } from "./dictation-remote.ts";
+import { remoteParts } from "./dictation-remote.ts";
 import { type DictationReview, readDictationReview, waitingTerms } from "./dictation-review.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
-import { closable, h, openModal, replace, toast } from "./dom.ts";
+import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
-import { type ServerScreen, section, twoStep } from "./server-common.ts";
 import {
-  type ConfigReply,
-  changedSettings,
-  type SchemaEntry,
-  settingField,
-  shownValue,
-  showRefusals,
-} from "./settings.ts";
+  backLink,
+  button,
+  field,
+  icon,
+  keycaps,
+  linkRow,
+  pageHead,
+  row,
+  section,
+  segmented,
+  selectBox,
+  toggle,
+  unit,
+} from "./rows.ts";
+import { twoStep } from "./server-common.ts";
+import { type ConfigReply, changedSettings, type SchemaEntry, shownValue } from "./settings.ts";
+import { inWords, wordsFor } from "./settings-labels.ts";
 
+/** A section of the page: its title and what it shows, a key or a row drawn by hand (`#`). */
 export interface DictationGroup {
   title: string;
   keys: readonly string[];
-  hint?: string;
 }
 
 /** The grants the dictation helper reports (`GET /dictation`, DC-G1), as its `ready` names them. */
@@ -56,8 +66,19 @@ export interface DictationGrants {
   accessibility: Grant;
 }
 
-/** What `GET /dictation` says about the grants, and the ones the running helper lost (DC-N1). */
-type GrantsReply = { grants?: DictationGrants; lost?: unknown };
+/** What `GET /dictation` says: the grants, the ones the running helper lost (DC-N1), the engine. */
+type DictationReply = {
+  grants?: DictationGrants;
+  lost?: unknown;
+  engine?: string | null;
+  swallow_keys?: boolean;
+};
+
+/** The master switch, the first row. */
+export const ENABLE_KEY = "dictation.enabled";
+
+/** Where dictation audio goes: the desktop window or the config file only. */
+export const REMOTE_URL_KEY = "dictation.remote.url";
 
 /** The sounds and the pill: together they decide what `auto` plays now (DC-O3). */
 const SOUNDS_KEY = "dictation.sounds";
@@ -66,54 +87,58 @@ const PILL_KEY = "dictation.pill";
 /** Reading the field back (DC-L2), which on macOS waits for the Accessibility grant. */
 const READ_FIELD_KEY = "dictation.readField";
 const LEARN_KEY = "dictation.learn";
+const ENGINE_KEY = "dictation.engine";
+const FORMAT_KEY = "dictation.format";
+const PROMPT_KEY = "dictation.formatPrompt";
 
-/** The user's languages, drawn as chips with an add list (akou-5v8). */
-const LANGUAGES_KEY = "dictation.languages";
+/** The rows that only apply while dictation goes to another computer. */
+const REMOTE_KEYS = [
+  REMOTE_URL_KEY,
+  "dictation.remote.key",
+  "dictation.remote.fallback",
+  "dictation.remote.timeoutSeconds",
+];
 
-/** The master switch, drawn above the groups. */
-export const ENABLE_KEY = "dictation.enabled";
+/** The rows drawn by hand. */
+const MIC_GRANT = "#mic-grant";
+const A11Y_GRANT = "#accessibility-grant";
+const SETUP = "#setup";
+const WHILE = "#while-listening";
+const WORDS = "#words";
+const HISTORY = "#history";
+const REMOTE = "#remote";
+const REVIEW = "#review";
+const DELETE_ALL = "#delete-all";
+const ADVANCED = "#advanced";
 
-/** Where dictation audio goes: the desktop window or the config file only. */
-export const REMOTE_URL_KEY = "dictation.remote.url";
-
-/** The groups of the app-mode page, in the order of the section 6 mockup. */
+/** The sections of the app-mode page, in the mockup's order. */
 export const DICTATION_GROUPS: readonly DictationGroup[] = [
+  { title: "", keys: [ENABLE_KEY, MIC_GRANT, A11Y_GRANT, SETUP] },
   {
     title: "Keys",
-    hint: "Hold the dictation key to talk and release it to insert; a short tap latches it. While listening, where akou can hold the keys: Esc cancels, Enter sends, Shift+Enter opens the draft.",
     keys: [
       "dictation.hotkey",
       "dictation.activation",
-      "dictation.hotkeyDraft",
+      WHILE,
       "dictation.hotkeyFixLast",
+      "dictation.hotkeyDraft",
       "dictation.hotkeyPasteLast",
-      "dictation.silenceStopSeconds",
-      "dictation.maxMinutes",
     ],
   },
   {
-    title: "Microphone",
-    keys: ["dictation.mic", "dictation.preferBuiltInOverBluetooth", "dictation.warmMic"],
-  },
-  {
-    title: "Engine",
-    hint: "fast picks the language itself; a fixed language applies to best and to a remote akou. A remote akou needs no local model.",
+    title: "Voice",
     keys: [
-      "dictation.engine",
-      "dictation.localTimeoutSeconds",
-      REMOTE_URL_KEY,
-      "dictation.remote.key",
-      "dictation.remote.fallback",
-      "dictation.remote.timeoutSeconds",
-      "asr.qwenIdleMinutes",
-      "dictation.language",
       "dictation.languages",
-      "dictation.glossary",
-      "dictation.glossaryMax",
+      MIC_KEY,
+      "dictation.preferBuiltInOverBluetooth",
+      "dictation.muteMedia",
     ],
   },
+  { title: "Words and history", keys: [WORDS, HISTORY] },
+  { title: "Rules per app", keys: ["dictation.apps"] },
+  { title: "Engine", keys: [ENGINE_KEY, REMOTE, ...REMOTE_KEYS] },
   {
-    title: "Insert",
+    title: "Inserting",
     keys: [
       "dictation.insert",
       "dictation.sendKey",
@@ -121,69 +146,109 @@ export const DICTATION_GROUPS: readonly DictationGroup[] = [
       "dictation.restoreClipboard",
       "dictation.smartSpacing",
       "dictation.trailingSpace",
-      "dictation.spokenPunctuation",
-      "dictation.fillers",
-      "dictation.spokenSend",
-      "dictation.format",
-      "dictation.formatPrompt",
-      "dictation.formatTimeoutSeconds",
-      "dictation.muteMedia",
     ],
   },
   {
-    title: "Learning",
-    hint: "Reading the field you dictated into serves both smart spacing and learning. Nothing is learned without your yes unless you choose automatic.",
-    keys: ["dictation.learn", "dictation.readField", "dictation.learn.audioCheck"],
+    title: "Cleaning up",
+    keys: [
+      "dictation.fillers",
+      "dictation.spokenPunctuation",
+      "dictation.spokenSend",
+      FORMAT_KEY,
+      PROMPT_KEY,
+    ],
   },
-  {
-    title: "Per app",
-    hint: "A rule applies when you dictate into that app; a field left on global follows the settings above. Name the app by its bundle id on macOS, its program name on Windows (chat.exe) or its window class on Linux.",
-    keys: ["dictation.apps"],
-  },
-  {
-    title: "Pill and sounds",
-    hint: "The pill shows a level meter, never your words, unless you turn the preview on. Sounds on auto play while the pill is off.",
-    keys: ["dictation.pill", "dictation.pillPreview", "dictation.sounds"],
-  },
-  {
-    title: "Privacy",
-    hint: "History and audio stay on this machine.",
-    keys: ["dictation.retainDays", "dictation.keepAudio"],
-  },
+  { title: "Learning", keys: [LEARN_KEY, READ_FIELD_KEY, "dictation.learn.audioCheck", REVIEW] },
+  { title: "Pill and sounds", keys: [PILL_KEY, "dictation.pillPreview", SOUNDS_KEY] },
+  { title: "Advanced", keys: [ADVANCED] },
 ];
 
-/** The one group of server mode: what the server does for dictating clients. */
-export const SERVER_GROUP: DictationGroup = {
-  title: "Server",
-  hint: "Dictating clients send their audio with a jobs key, listed on the Keys page with its last use.",
-  keys: ["server.dictation_slots", "server.dictation_engine"],
+/** The Advanced page: what it holds, as its row says it, and its sections. */
+export const ADVANCED_PAGE = {
+  title: "Advanced",
+  help: "Stop after silence, longest dictation, how long the mic stays open, one fixed language, context words, time limits, how long history is kept.",
+  groups: [
+    {
+      title: "Listening",
+      keys: ["dictation.silenceStopSeconds", "dictation.maxMinutes", "dictation.warmMic"],
+    },
+    {
+      title: "Language",
+      keys: ["dictation.language", "dictation.glossary", "dictation.glossaryMax"],
+    },
+    {
+      title: "Time limits",
+      keys: [
+        "dictation.localTimeoutSeconds",
+        "dictation.formatTimeoutSeconds",
+        "asr.qwenIdleMinutes",
+      ],
+    },
+    { title: "History", keys: ["dictation.retainDays", "dictation.keepAudio", DELETE_ALL] },
+  ] as readonly DictationGroup[],
 };
 
-/** A key the Dictation page shows, so the flat Settings list leaves it out. */
+/** Server mode: what the server does for dictating clients. */
+export const SERVER_GROUPS: readonly DictationGroup[] = [
+  { title: "For other computers", keys: ["server.dictation_slots", "server.dictation_engine"] },
+];
+
+/** Every key the app-mode page and its Advanced page place. */
+export function dictationKeys(): string[] {
+  return [...DICTATION_GROUPS, ...ADVANCED_PAGE.groups]
+    .flatMap((g) => g.keys)
+    .filter((k) => !k.startsWith("#"));
+}
+
+/** A key the Dictation page shows, so the Settings page leaves it out. */
 export function onDictationPage(key: string): boolean {
-  return key.startsWith("dictation.") || DICTATION_GROUPS.some((g) => g.keys.includes(key));
+  return key.startsWith("dictation.") || dictationKeys().includes(key);
 }
 
 /** The words the server-mode page shows instead of a record button when it has no microphone. */
 export const NO_MIC_NOTICE =
-  "This page is served over plain http from another machine, so the browser gives it no microphone. Dictate from the akou app, with this server as its remote akou.";
+  "This page is served over plain http from another computer, so the browser gives it no microphone. Dictate from the akou app, with this server as the other computer it uses.";
 
-export class DictationSettings {
-  readonly root = h("div", { class: "dictation-settings" });
+export interface DictationHooks {
+  /** Opens the words to review, whose Dictation heading lists them (DC-L5). */
+  openReview?: () => Promise<void>;
+  /** Opens the words and replacements (DC-U5). */
+  openWords?: () => void;
+  /** Opens the history (DC-H1). */
+  openHistory?: () => void;
+}
+
+type Status = {
+  app?: { platform?: string };
+  provider?: { id?: string; harness?: string };
+};
+
+export class DictationPage {
+  readonly name = "dictation" as const;
+  readonly title = "Dictation";
+  readonly root = h("section", {
+    id: "page-dictation",
+    class: "pg",
+    attrs: { "aria-label": "Dictation" },
+  });
+  private readonly col = h("div", { class: "pg-col" });
   private schema: Record<string, SchemaEntry> = {};
   private settings: Record<string, unknown> = {};
   private issues = new Map<string, string>();
+  /** What each key's control held when drawn, so a save sends only an edit. */
   private shown: Record<string, string> = {};
   private reads = 0;
+  private shows = 0;
   private readonly armed = new Map<string, number>();
   /** The OS akou runs on, from its status: the recorder's keycaps and warnings follow it. */
   private platform = "";
-  /** What `GET /dictation` says about the grants; null where it says nothing. */
-  private grants: DictationGrants | null = null;
+  private status: Status = {};
+  /** What `GET /dictation` says; null where it says nothing (server mode, an older app). */
+  private dictation: DictationReply | null = null;
   /** The grants the running helper lost since it started (DC-N1): its key does nothing now. */
   private lost: string[] = [];
   private recorders: KeyRecorder[] = [];
-  /** Dictation's setup (DC-N3), drawn instead of the groups while it runs. */
+  /** Dictation's setup (DC-N3), drawn instead of the sections while it runs. */
   private setup: DictationSetup | null = null;
   /** The inputs `GET /devices` lists for the microphone picker (DC-U4); null in server mode. */
   private mics: MicList | null = null;
@@ -191,233 +256,428 @@ export class DictationSettings {
   private meter: { close(): void } | null = null;
   /** The wait for the next dictation's app, for a per-app rule (DC-U9). */
   private waitApp: { stop(): void } | null = null;
-  /** The words fixed while dictating, for the Learning group's count (DC-L5); null in server mode. */
+  /** The words fixed while dictating, for the Learning section's count (DC-L5). */
   private review: DictationReview | null = null;
+  /** Dictations served in the last hour, in server mode. */
+  private served: number | undefined;
+  /** The Advanced page is on screen instead of the page itself. */
+  private sub = false;
+  /** "Use another computer" was turned on before an address was saved: the address turns it on. */
+  private remotePending = false;
 
   constructor(
     private readonly t: Transport,
     private readonly mode: "app" | "server",
-    /** Opens the words to review, whose Dictation heading lists them (DC-L5). */
-    private readonly openReview?: () => Promise<void>,
-  ) {}
+    private readonly hooks: DictationHooks = {},
+  ) {
+    this.root.append(this.col);
+    this.root.addEventListener("change", (e) => this.changed(e.target as HTMLElement));
+  }
 
-  async load(): Promise<void> {
+  /** Reads everything and draws the page; on `key`, goes to that setting. */
+  async show(key?: string): Promise<void> {
+    const shown = ++this.shows;
+    await this.saveTyped();
+    if (shown !== this.shows) return;
+    replace(this.col, h("p", { class: "pg-reading" }, "Reading the dictation settings…"));
+    await this.load();
+    if (shown !== this.shows) return;
+    this.sub = key ? ADVANCED_PAGE.groups.some((g) => g.keys.includes(key)) : false;
+    this.draw();
+    if (key) this.focusRow(key);
+  }
+
+  /** Reads everything again and draws the page, saving nothing first. */
+  private async reread(): Promise<void> {
+    const shown = ++this.shows;
+    await this.load();
+    if (shown !== this.shows) return;
+    this.draw();
+  }
+
+  /** The page is left: what is typed is saved; no recorder, meter, wait or setup outlives it. */
+  leave(): void {
+    this.shows++;
+    void this.saveTyped();
+    this.close();
+  }
+
+  /** Server mode's name for leaving. */
+  hide(): void {
+    this.leave();
+  }
+
+  /** Stops what listens: the key recorders, the level, the wait for an app, a setup half way. */
+  private close(): void {
+    this.stopRecording();
+    this.stopMeter();
+    this.stopNextApp();
+    this.setup?.stop();
+    this.setup = null;
+  }
+
+  private async load(): Promise<void> {
     const read = ++this.reads;
     const app = this.mode === "app";
-    const [cfg, server, status, grants, mics, review] = await Promise.all([
+    const [cfg, server, status, dictation, mics, review] = await Promise.all([
       this.t.request<ConfigReply>("GET", "/config"),
-      app
-        ? Promise.resolve(null)
-        : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
-      app ? this.t.request<{ app?: { platform?: string } }>("GET", "/status") : null,
-      app ? this.readGrants() : { grants: null, lost: [] },
+      app ? null : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
+      app ? this.t.request<Status>("GET", "/status") : null,
+      app ? this.readDictation() : null,
       app ? readMics(this.t) : null,
-      app && this.openReview ? readDictationReview(this.t) : null,
+      app && this.hooks.openReview ? readDictationReview(this.t) : null,
     ]);
     if (read !== this.reads) return;
+    // "Use another computer" turned on with no address saved is forgotten with the page.
+    this.remotePending = false;
     this.review = review;
-    this.platform = String(status?.body?.app?.platform ?? "");
-    this.grants = grants.grants;
-    this.lost = grants.lost;
+    this.status = status && status.status < 400 ? (status.body ?? {}) : {};
+    this.platform = String(this.status.app?.platform ?? "");
+    this.dictation = dictation;
+    this.lost = lostOf(dictation);
     this.mics = mics;
+    this.served = server?.body?.dictation?.served_last_hour;
     if (cfg.status !== 200) {
-      this.close();
-      replace(
-        this.root,
-        h("p", { class: "hint" }, message(cfg.body, "the settings could not be read")),
-      );
+      this.schema = {};
+      this.settings = {};
+      toast(message(cfg.body, "the settings could not be read"));
       return;
     }
     this.schema = cfg.body.schema;
     this.settings = { ...cfg.body.settings };
     this.issues = new Map(cfg.body.issues.map((i) => [i.key, i.message]));
-    this.draw(server?.body?.dictation?.served_last_hour);
   }
 
-  /**
-   * The grants the helper reports, as they are now, null where the app says nothing; and the ones
-   * the running helper lost since it started.
-   */
-  private async readGrants(): Promise<{ grants: DictationGrants | null; lost: string[] }> {
-    const r = await this.t.request<GrantsReply>("GET", "/dictation");
-    if (r.status >= 400) return { grants: null, lost: [] };
-    const lost = Array.isArray(r.body?.lost)
-      ? r.body.lost.filter((x): x is string => typeof x === "string")
-      : [];
-    return { grants: r.body?.grants ?? null, lost };
+  /** `GET /dictation`, or null where the app says nothing. */
+  private async readDictation(): Promise<DictationReply | null> {
+    const r = await this.t.request<DictationReply>("GET", "/dictation");
+    return r.status >= 400 ? null : (r.body ?? null);
   }
 
-  private draw(served?: number): void {
+  private get grants(): DictationGrants | null {
+    return this.dictation?.grants ?? null;
+  }
+
+  private get mac(): boolean {
+    return this.platform === "darwin";
+  }
+
+  private get here(): string {
+    return this.mac ? "this Mac" : "this computer";
+  }
+
+  // -------------------------------------------------------------------------
+  // Drawing
+
+  private draw(): void {
     this.stopRecording();
     this.stopMeter();
     this.stopNextApp();
     this.recorders = [];
     this.shown = {};
-    const top =
-      this.mode === "app" && ENABLE_KEY in this.schema
-        ? h(
-            "div",
-            { class: "dictation-enable" },
-            this.field(ENABLE_KEY),
-            // The setup's microphone step says it, and knows when the grant arrives.
-            this.setup ? null : this.offReason(),
-            // At the top, where it is seen: the key does nothing until the grant is back.
-            this.setup ? null : this.grantLost(),
-          )
-        : null;
     if (this.setup) {
-      replace(this.root, top, this.setup.root);
+      // The switch stays above the setup, which turns it on at its end.
+      replace(
+        this.col,
+        pageHead("Dictation"),
+        section("", this.keyRow(ENABLE_KEY)),
+        h("div", { class: "pg-grp pg-setup" }, this.setup.root),
+      );
       return;
     }
-    const groups = this.mode === "server" ? [SERVER_GROUP] : DICTATION_GROUPS;
-    const drawn = groups
-      .map((g) => ({ g, keys: g.keys.filter((k) => k in this.schema) }))
-      .filter((x) => x.keys.length > 0)
-      .map(({ g, keys }) =>
-        h(
-          "fieldset",
-          { attrs: { "data-group": g.title } },
-          h("legend", {}, g.title),
-          g.hint ? h("p", { class: "hint" }, g.hint) : null,
-          ...keys.map((k) => this.field(k)),
-          g.title === "Privacy" ? this.deleteAll() : null,
-          keys.includes(REMOTE_URL_KEY)
-            ? remotePanel(this.t, () => this.settings["dictation.remote.fallback"])
-            : null,
-          g.title === "Learning" ? this.reviewRow() : null,
-        ),
-      );
+    const groups =
+      this.mode === "server" ? SERVER_GROUPS : this.sub ? ADVANCED_PAGE.groups : DICTATION_GROUPS;
+    // An akou whose registry has none of the page's keys has no dictation to set.
+    const any = groups.some((g) => g.keys.some((k) => k in this.schema));
+    const sections = (any ? groups : [])
+      .map((g) => {
+        const rows = g.keys.map((k) => this.item(k)).filter((x): x is HTMLElement => x !== null);
+        return rows.length > 0 ? section(g.title, ...rows) : null;
+      })
+      .filter((x): x is HTMLElement => x !== null);
+    const head = this.sub
+      ? pageHead(ADVANCED_PAGE.title, {
+          back: backLink("Dictation", () => {
+            void this.saveTyped();
+            this.sub = false;
+            this.draw();
+            this.col.querySelector<HTMLElement>("#dictation-advanced")?.focus();
+          }),
+        })
+      : pageHead("Dictation");
     replace(
-      this.root,
-      this.mode === "server" ? this.serverNotes(served) : null,
-      top,
-      ...drawn,
-      drawn.length === 0 && !top
+      this.col,
+      head,
+      this.mode === "server" ? this.serverNotes() : null,
+      ...sections,
+      sections.length === 0
         ? h(
             "p",
-            { class: "hint", attrs: { "data-empty": "" } },
+            { class: "pg-sechelp", attrs: { "data-empty": "" } },
             "This akou has no dictation settings yet.",
           )
         : null,
-      top ? this.permissions() : null,
     );
     this.soundsNow();
+    this.root.parentElement?.scrollTo?.({ top: 0 });
   }
 
-  /** One key's row, saving that key alone on change; the dictation keys get their recorder. */
-  private field(key: string): HTMLElement {
-    const f = settingField(
-      key,
-      this.schema[key] as SchemaEntry,
-      this.settings[key],
-      this.issues.get(key),
-      this.schema[key]?.type === "apps"
-        ? { nextApp: (found, failed) => this.nextApp(found, failed) }
-        : {},
+  private item(item: string): HTMLElement | null {
+    switch (item) {
+      case MIC_GRANT:
+        return this.micGrant();
+      case A11Y_GRANT:
+        return this.accessibilityGrant();
+      case SETUP:
+        return this.grants
+          ? linkRow({ label: "Run the setup again", id: "dictation-setup-open" }, () =>
+              this.runSetup(),
+            )
+          : null;
+      case WHILE:
+        return this.whileListening();
+      case WORDS:
+        return this.hooks.openWords
+          ? linkRow(
+              {
+                label: "Words and replacements",
+                help: "Names and terms spelled your way.",
+                id: "dictation-dictionary-open",
+              },
+              () => {
+                // A live recorder would take every key typed into the words' fields.
+                this.stopRecording();
+                this.hooks.openWords?.();
+              },
+            )
+          : null;
+      case HISTORY:
+        return this.hooks.openHistory ? this.historyRow() : null;
+      case REMOTE:
+        return this.remoteRow();
+      case REVIEW:
+        return this.reviewRow();
+      case DELETE_ALL:
+        return this.mode === "app" ? this.deleteAll() : null;
+      case ADVANCED:
+        return this.advancedRow();
+      default:
+        return this.keyRow(item);
+    }
+  }
+
+  /** One key's row, its control chosen by the key; null when this akou has no such key. */
+  private keyRow(key: string): HTMLElement | null {
+    const spec = this.schema[key];
+    if (!spec) return null;
+    const w = wordsFor(key);
+    const value = this.settings[key];
+    const id = `set-${key.replace(/[^a-z0-9]/gi, "-")}`;
+    const inWindow = this.t.kind === "window";
+    // The remote's address is the window's to write, never an HTTP client's (the owner's rule).
+    const fileOnly = spec.apiWritable === false && !(key === REMOTE_URL_KEY && inWindow);
+    this.shown[key] = spec.secret ? "" : shownValue(spec, value);
+    let help: string | undefined = w.help;
+    let controls: (Node | null)[];
+    if (key === "dictation.apps") return this.appsRows(key, spec, value);
+    if (key in KEY_SETTINGS) controls = this.keyControls(key, id, String(value ?? ""));
+    else if (key === "dictation.languages") controls = [this.languagesControl(id, value)];
+    else if (key === MIC_KEY) controls = this.micControls(id, String(value ?? ""));
+    else if (key === ENGINE_KEY) {
+      controls = [this.engineControl(id, String(value ?? "auto"))];
+      help = this.engineHelp();
+    } else if (key === FORMAT_KEY) controls = [this.formatControl(id, String(value ?? "off"))];
+    else if (key === PROMPT_KEY) controls = [this.promptControl(id, String(value ?? "default"))];
+    else if (key === "dictation.language")
+      controls = [
+        selectBox({
+          id,
+          label: w.label,
+          options: [
+            ["auto", "Automatic, from your languages"],
+            ...QWEN_LANGUAGE_CODES.map((c) => [c, languageName(c)] as const),
+          ],
+          value: String(value ?? "auto"),
+        }),
+      ];
+    else controls = this.control(id, key, spec, value);
+    if (key === ENABLE_KEY) help = this.offReason() ?? help;
+    if (key === REMOTE_URL_KEY && !inWindow)
+      help = "Set in the akou app, since it decides where your voice goes.";
+    const els = controls.filter((c): c is HTMLElement => c instanceof HTMLElement);
+    const all = (sel: string) =>
+      els.flatMap((el) => [
+        ...(el.matches(sel) ? [el] : []),
+        ...el.querySelectorAll<HTMLElement>(sel),
+      ]);
+    if (all("[data-key]").length === 0) {
+      const input = all("input, select, textarea")[0];
+      if (input) input.dataset.key = key;
+    }
+    if (fileOnly)
+      for (const x of all("input, select, textarea, button"))
+        (x as HTMLInputElement).disabled = true;
+    const r = row(
+      { label: w.label, help, key, for: controlId(controls) ?? undefined },
+      ...controls,
     );
-    this.shown[key] = f.shown;
-    if (key === REMOTE_URL_KEY) this.remoteUrl(f.input, f.row);
-    if (key in KEY_SETTINGS && f.input instanceof HTMLInputElement) {
-      const r = new KeyRecorder(key, f.input, this.t, {
-        platform: this.platform,
-        chordsOnly: () => this.chordsOnly(),
-        others: (k) => this.otherKeys(k),
-        started: (me) => {
-          for (const o of this.recorders) if (o !== me) o.stop();
-        },
-      });
-      this.recorders.push(r);
-      f.input.after(r.root);
+    if (key === ENABLE_KEY && this.offReason())
+      r.querySelector(".pg-help")?.setAttribute("id", "dictation-off-reason");
+    // Why akou lists no microphones goes under the label, as help does.
+    const note = r.querySelector<HTMLElement>(".pg-ctl #dictation-mic-note");
+    if (note) {
+      note.className = "pg-help";
+      r.querySelector(".pg-lbl")?.append(note);
     }
-    let input = f.input;
-    if (key === MIC_KEY && input instanceof HTMLInputElement) input = this.micField(input);
-    if (key === LANGUAGES_KEY && input instanceof HTMLTextAreaElement && !input.disabled)
-      languageChips(input);
-    if (key === SOUNDS_KEY) input.after(h("small", { id: "dictation-sounds-now", class: "hint" }));
-    const waiting = key === READ_FIELD_KEY ? this.readWaits(input) : null;
-    if (waiting) input.after(waiting);
-    input.addEventListener("change", () => {
-      if (key === SOUNDS_KEY || key === PILL_KEY) this.soundsNow();
-      if (key === READ_FIELD_KEY || key === LEARN_KEY) this.redrawReadWaits();
-      // The switch turned on with a grant missing runs the setup instead (DC-U2, DC-N3).
-      if (key === ENABLE_KEY && input instanceof HTMLInputElement && input.checked) {
-        if (this.missingGrant()) {
-          input.checked = false;
-          this.runSetup();
-          return;
-        }
+    const issue = this.issues.get(key);
+    if (issue) {
+      r.classList.add("refused");
+      r.querySelector(".pg-lbl")?.append(
+        h("small", { class: "issue" }, inWords(issue, this.keys())),
+      );
+    }
+    if (REMOTE_KEYS.includes(key)) r.hidden = !this.remoteOn();
+    if (key === PROMPT_KEY) r.hidden = this.settings[FORMAT_KEY] !== "provider";
+    if (key === SOUNDS_KEY)
+      r.querySelector(".pg-lbl")?.append(
+        h("span", { id: "dictation-sounds-now", class: "pg-help" }),
+      );
+    if (key === READ_FIELD_KEY) {
+      const waiting = this.readWaits();
+      if (waiting) r.querySelector(".pg-lbl")?.append(waiting);
+    }
+    if (key === "dictation.remote.timeoutSeconds" && this.mode === "app") {
+      const parts = remoteParts(
+        this.t,
+        () => this.settings["dictation.remote.fallback"],
+        (x) => inWords(x, this.keys()),
+      );
+      r.querySelector(".pg-ctl")?.append(parts.test);
+      r.querySelector(".pg-lbl")?.append(parts.result, parts.standing);
+    }
+    return r;
+  }
+
+  private keys(): string[] {
+    return Object.keys(this.schema);
+  }
+
+  /** The control for a key of any other type, from its words and the registry. */
+  private control(id: string, key: string, spec: SchemaEntry, value: unknown): (Node | null)[] {
+    const w = wordsFor(key);
+    if (spec.type === "boolean") return [toggle({ id, checked: value === true, label: w.label })];
+    const choices =
+      w.choices?.filter(([v]) => !spec.values || spec.values.includes(v)) ??
+      spec.values?.map((v) => [v, v] as const);
+    if (spec.type === "string" && choices && !spec.secret) {
+      const v = String(value ?? "");
+      const short = choices.reduce((n, [, l]) => n + l.length, 0) <= 40;
+      if (choices.length <= 5 && short && choices.some(([c]) => c === v)) {
+        const seg = segmented({ id, label: w.label, options: choices, value: v });
+        seg.input.dataset.key = key;
+        return [seg.root];
       }
-      void this.save(f.row);
-    });
-    return f.row;
-  }
-
-  /**
-   * The microphone's picker from `GET /devices` in place of the text box, or the reason akou gave
-   * no list beside it, and the live level while the page is open (DC-U4).
-   */
-  private micField(input: HTMLInputElement): HTMLInputElement | HTMLSelectElement {
-    let field: HTMLInputElement | HTMLSelectElement = input;
-    let note: HTMLElement | null = null;
-    if (this.mics && "inputs" in this.mics && !input.disabled) {
-      field = micPicker(input, input.value, this.mics.inputs);
-      input.replaceWith(field);
-    } else if (this.mics && "error" in this.mics) {
-      note = micNote(this.mics.error);
+      return [selectBox({ id, label: w.label, options: choices, value: v })];
     }
-    // A refused microphone has no level to show; the setup's own step says so.
-    const meter = this.grants && !grantOk(this.grants.mic) ? null : micMeter(this.t);
-    this.meter = meter;
-    field.after(...[meter?.root, note].filter((x): x is HTMLElement => !!x));
-    return field;
-  }
-
-  /**
-   * Waits for the next dictation's app for the per-app rules (DC-U9). With dictation off no
-   * dictation comes, so the page says so rather than wait for nothing.
-   */
-  private nextApp(found: (app: string) => void, failed: (why: string) => void): { stop(): void } {
-    this.stopNextApp();
-    const on =
-      this.root.querySelector<HTMLInputElement>(`input[data-key="${ENABLE_KEY}"]`)?.checked ??
-      this.settings[ENABLE_KEY] === true;
-    if (!on) {
-      failed("Turn dictation on first: the app comes from your next dictation.");
-      return { stop: () => {} };
+    if (spec.type === "integer" || spec.type === "number") {
+      const f = field({
+        id,
+        label: w.label,
+        value: String(value ?? ""),
+        type: "number",
+        width: "narrow",
+      });
+      if (spec.min !== undefined) f.min = String(spec.min);
+      if (spec.max !== undefined) f.max = String(spec.max);
+      f.step = spec.type === "integer" ? "1" : "any";
+      return [f, w.unit ? unit(w.unit) : null];
     }
-    const w = nextDictatedApp(this.t, found, failed);
-    this.waitApp = w;
-    return w;
+    return [
+      field({
+        id,
+        label: w.label,
+        type: spec.secret ? "password" : "text",
+        value: spec.secret ? "" : String(value ?? ""),
+        placeholder: spec.secret
+          ? value
+            ? "Set, type to replace"
+            : (w.empty ?? "Not set")
+          : (w.empty ?? ""),
+      }),
+    ];
   }
 
-  private stopNextApp(): void {
-    this.waitApp?.stop();
-    this.waitApp = null;
+  // -------------------------------------------------------------------------
+  // The grants and the setup
+
+  /** "Stays off": the microphone is refused, so the switch cannot turn dictation on (DC-N3). */
+  private offReason(): string | null {
+    const g = this.grants;
+    // The setup's microphone step says it, and knows when the grant arrives.
+    if (!g || grantOk(g.mic) || this.settings[ENABLE_KEY] === true || this.setup) return null;
+    return "Stays off until akou may use the microphone.";
   }
 
-  private stopMeter(): void {
-    this.meter?.close();
-    this.meter = null;
+  private micGrant(): HTMLElement | null {
+    const g = this.grants?.mic;
+    if (!g) return null;
+    const linux = this.platform === "linux";
+    const r = row(
+      {
+        label: "Microphone access",
+        help:
+          grantOk(g) || g === "not-asked"
+            ? undefined
+            : linux
+              ? "akou cannot open the microphone. Check that a microphone is connected."
+              : "Not allowed, so dictation stays off.",
+        id: "dictation-grant-mic",
+      },
+      grantOk(g) || g === "not-asked" || linux ? grantState(g) : this.paneButton("microphone"),
+    );
+    return r;
   }
 
-  /** What the sounds do now, since `auto` follows the pill (DC-O3). */
-  private soundsNow(): void {
-    const out = this.root.querySelector<HTMLElement>("#dictation-sounds-now");
-    if (!out) return;
-    const now = (k: string) =>
-      this.root.querySelector<HTMLSelectElement>(`select[data-key="${k}"]`)?.value ??
-      this.settings[k];
-    const sounds = now(SOUNDS_KEY);
-    const pill = now(PILL_KEY);
-    const style = cueStyle(sounds, pill);
-    out.textContent =
-      sounds === "off" && pill === "off"
-        ? " Now: a dictation neither shows nor sounds."
-        : sounds === "off" || sounds === "soft" || sounds === "click"
-          ? ""
-          : style
-            ? " Now: soft sounds, since the pill is off."
-            : " Now: silent, since the pill shows.";
+  private accessibilityGrant(): HTMLElement | null {
+    const g = this.grants?.accessibility;
+    if (!g || !this.mac) return null;
+    const lost = this.lost.includes("accessibility");
+    if (lost)
+      return row(
+        {
+          label: "Accessibility access",
+          help: h(
+            "span",
+            { id: "dictation-grant-lost" },
+            "macOS took it back, so the dictation key does nothing. It works again once you allow it.",
+          ),
+          id: "dictation-grant-accessibility",
+        },
+        this.paneButton("accessibility", "dictation-grant-lost-open"),
+      );
+    const ok = grantOk(g);
+    return row(
+      {
+        label: "Accessibility access",
+        help: ok
+          ? "Lets akou put the words in for you."
+          : "Not allowed, so dictations are copied and you paste them.",
+        id: "dictation-grant-accessibility",
+      },
+      ok ? grantState(g) : this.paneButton("accessibility"),
+    );
+  }
+
+  /** A button that opens a privacy pane, or says to open it by hand where this page cannot. */
+  private paneButton(pane: "microphone" | "accessibility", id?: string): HTMLButtonElement {
+    return button(
+      pane === "microphone" ? "Open Microphone settings" : "Open Accessibility settings",
+      () =>
+        void this.t.openSettingsPane(pane).then((ok) => {
+          if (!ok) toast("Open the privacy settings yourself: this window cannot open them here.");
+        }),
+      id ?? `dictation-grant-open-${pane}`,
+    );
   }
 
   /**
@@ -427,75 +687,7 @@ export class DictationSettings {
   private missingGrant(): boolean {
     const g = this.grants;
     if (!g) return false;
-    return !grantOk(g.mic) || (this.platform === "darwin" && !grantOk(g.accessibility));
-  }
-
-  /** Why the switch stays off: the microphone is refused (DC-N3). */
-  private offReason(): HTMLElement | null {
-    if (!this.grants || grantOk(this.grants.mic) || this.settings[ENABLE_KEY] === true) return null;
-    return h(
-      "small",
-      { id: "dictation-off-reason", class: "issue" },
-      "Dictation stays off: akou has no access to the microphone.",
-    );
-  }
-
-  /**
-   * The Accessibility grant the running helper lost (DC-N1): on macOS its key tap is dead until the
-   * grant is back, when the app starts the helper again by itself.
-   */
-  private grantLost(): HTMLElement | null {
-    if (this.platform !== "darwin" || !this.lost.includes("accessibility")) return null;
-    return h(
-      "p",
-      { id: "dictation-grant-lost", class: "issue" },
-      "Accessibility lost: macOS took the grant back, so the dictation key does nothing. Turn akou on under Accessibility and dictation starts again by itself. ",
-      h(
-        "button",
-        {
-          type: "button",
-          id: "dictation-grant-lost-open",
-          on: {
-            click: () =>
-              void this.t.openSettingsPane("accessibility").then((ok) => {
-                if (!ok)
-                  toast("Open the privacy settings yourself: this window cannot open them here.");
-              }),
-          },
-        },
-        "Open Accessibility settings",
-      ),
-    );
-  }
-
-  /** The grants as the helper reports them, and the way back into the setup. */
-  private permissions(): HTMLElement | null {
-    const g = this.grants;
-    if (!g) return null;
-    const word = (x: string) =>
-      x === "granted"
-        ? "ok"
-        : x === "not-needed"
-          ? "not needed"
-          : x === "not-asked"
-            ? "not asked yet"
-            : "not granted";
-    return h(
-      "p",
-      { id: "dictation-permissions", class: "hint" },
-      `Permissions: Microphone ${word(g.mic)}`,
-      this.platform === "darwin"
-        ? this.lost.includes("accessibility")
-          ? ", Accessibility lost"
-          : `, Accessibility ${word(g.accessibility)}${grantOk(g.accessibility) ? "" : " (clipboard only)"}`
-        : "",
-      ". ",
-      h(
-        "button",
-        { type: "button", id: "dictation-setup-open", on: { click: () => this.runSetup() } },
-        "Run the setup again",
-      ),
-    );
+    return !grantOk(g.mic) || (this.mac && !grantOk(g.accessibility));
   }
 
   private runSetup(): void {
@@ -506,20 +698,29 @@ export class DictationSettings {
       grants: () => this.grants,
       setting: (k) => this.settings[k],
       readGrants: async () => {
-        const { grants: g, lost } = await this.readGrants();
-        if (g) this.grants = g;
-        this.lost = lost;
-        return g;
+        const d = await this.readDictation();
+        if (d?.grants) this.dictation = { ...this.dictation, ...d };
+        this.lost = lostOf(d);
+        return d?.grants ?? null;
       },
       keyRow: () => {
-        const row = this.field("dictation.hotkey");
-        return { row, input: row.querySelector("input") as HTMLInputElement };
+        const input = h("input", { type: "text", hidden: true });
+        const controls = this.keyControls(
+          "dictation.hotkey",
+          "setup-dictation-hotkey",
+          String(this.settings["dictation.hotkey"] ?? ""),
+          input,
+        );
+        const r = row({ label: wordsFor("dictation.hotkey").label }, ...controls);
+        return { row: r, input };
       },
       stopKeys: () => this.stopRecording(),
       save: (k, v) => this.saveValue(k, v),
       finish: () => {
         if (this.setup === setup) this.setup = null;
-        void this.load();
+        // Read again, not shown again: the setup saved its own keys, and the switch drawn above
+        // it still holds what it held before, which a save of typed fields would send back.
+        void this.reread();
       },
     });
     this.setup = setup;
@@ -527,100 +728,94 @@ export class DictationSettings {
     setup.start();
   }
 
+  // -------------------------------------------------------------------------
+  // Keys
+
   /**
-   * `Words to review (N) [Open]` in the Learning group: N terms fixed while dictating still wait
-   * for an answer (DC-L5, and DC-O4's count with the pill off). Left out where akou keeps no list.
+   * A dictation key as keycaps (its default where it has one, "Not set" where it has none), Change
+   * or Set to record another with the recorder (DC-U3), and a way back to the default or to none.
    */
-  private reviewRow(): HTMLElement | null {
-    const r = this.review;
-    const open = this.openReview;
-    if (!r || !open || ("pairs" in r && r.pairs === null)) return null;
-    if ("error" in r)
-      return h("p", { id: "dictation-review-row", class: "hint" }, `Words to review: ${r.error}`);
-    const n = waitingTerms(r.pairs ?? []);
-    return h(
-      "p",
-      { id: "dictation-review-row" },
-      `Words to review (${n}) `,
+  private keyControls(
+    key: string,
+    id: string,
+    value: string,
+    given?: HTMLInputElement,
+  ): (Node | null)[] {
+    const input = given ?? h("input", { id, type: "text", hidden: true });
+    input.value = value;
+    input.dataset.key = key;
+    const fallback =
+      key === "dictation.hotkey"
+        ? dictationHotkeyDefault(this.platform)
+        : key === "dictation.hotkeyFixLast"
+          ? fixLastDefault(
+              String(this.settings["dictation.hotkey"] || dictationHotkeyDefault(this.platform)),
+            )
+          : undefined;
+    const r = new KeyRecorder(key, input, this.t, {
+      platform: this.platform,
+      button: "Change",
+      setButton: "Set",
+      unset: "Not set",
+      fallback,
+      label: wordsFor(key).label.toLowerCase(),
+      // Fn reaches any key's recorder; the dictation key's row alone offers it as a button.
+      fnButton: key === "dictation.hotkey",
+      chordsOnly: () => this.chordsOnly(),
+      others: (k) => this.otherKeys(k),
+      started: (me) => {
+        for (const o of this.recorders) if (o !== me) o.stop();
+      },
+    });
+    this.recorders.push(r);
+    r.warnSaved();
+    const reset = button(fallback ? "Use default" : "Remove", () => {
+      input.value = "";
+      input.dispatchEvent(new Event("input"));
+      input.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    reset.classList.add("ghost", "key-reset");
+    reset.dataset.for = key;
+    // Nothing to go back to when the key is its default already.
+    const follow = () => {
+      reset.hidden = input.value === "" || input.value === fallback;
+    };
+    input.addEventListener("input", follow);
+    input.addEventListener("change", follow);
+    follow();
+    return [r.root, reset, input];
+  }
+
+  /** What the keys do while a dictation listens (DC-S1), where akou can hold them. */
+  private whileListening(): HTMLElement | null {
+    if (this.mode !== "app") return null;
+    const esc = this.mac ? "esc" : "Esc";
+    const enter = this.mac ? "↵" : "Enter";
+    const shift = this.mac ? "⇧" : "Shift";
+    const held = this.dictation?.swallow_keys !== false;
+    return row(
+      {
+        label: "While listening",
+        help: held ? undefined : "This computer does not let akou hold these keys yet.",
+        id: "dictation-while-listening",
+      },
       h(
-        "button",
+        "span",
         {
-          type: "button",
-          id: "dictation-review-open",
-          on: {
-            click: () => {
-              // A live recorder would take every key pressed over the list.
-              this.stopRecording();
-              void open();
-            },
+          class: "pg-while",
+          attrs: {
+            role: "note",
+            "aria-label": "Escape cancels, Enter sends, Shift and Enter edit before inserting",
           },
         },
-        "Open",
+        keycaps([esc]),
+        h("span", { class: "pg-value" }, "cancel"),
+        keycaps([enter]),
+        h("span", { class: "pg-value" }, "send"),
+        keycaps([shift, enter]),
+        h("span", { class: "pg-value" }, "edit before inserting"),
       ),
     );
-  }
-
-  /** Reads the count again, after the words to review answered some, and redraws its row alone. */
-  async refreshReview(): Promise<void> {
-    if (this.mode !== "app" || !this.openReview) return;
-    const reads = this.reads;
-    const review = await readDictationReview(this.t);
-    // A load since then has read its own.
-    if (reads !== this.reads) return;
-    this.review = review;
-    const row = this.reviewRow();
-    const old = this.root.querySelector("#dictation-review-row");
-    if (old && row) old.replaceWith(row);
-    else if (old) old.remove();
-    else if (row) this.root.querySelector("fieldset[data-group='Learning']")?.append(row);
-  }
-
-  /** Stops any key recording: the dialog closed or the page redrew. */
-  stopRecording(): void {
-    for (const r of this.recorders) r.stop();
-  }
-
-  /** The page closed: no recorder holds the keys, and a setup left half way is dropped. */
-  close(): void {
-    this.stopRecording();
-    this.stopMeter();
-    this.stopNextApp();
-    this.setup?.stop();
-    this.setup = null;
-  }
-
-  /**
-   * DC-L2: on macOS the helper reads no field without the Accessibility grant, so a read-back
-   * that is on says it waits for it rather than looking as if it worked.
-   */
-  private readWaits(readInput?: HTMLElement): HTMLElement | null {
-    const g = this.grants?.accessibility;
-    if (this.platform !== "darwin" || !g || g === "granted" || g === "not-needed") return null;
-    // The fields as they stand, so a toggle updates the note before the save comes back.
-    const read =
-      readInput instanceof HTMLInputElement
-        ? readInput.checked
-        : this.settings[READ_FIELD_KEY] === true;
-    if (!read) return null;
-    // With learning off main asks for no field read at all, so there is nothing to wait for.
-    const learn =
-      this.root.querySelector<HTMLInputElement | HTMLSelectElement>(
-        `[data-key="${LEARN_KEY}"]:not(div)`,
-      )?.value ?? this.settings[LEARN_KEY];
-    if (learn === "off") return null;
-    return h(
-      "small",
-      { id: "dictation-read-waiting", class: "hint" },
-      " Waiting for the Accessibility grant: until you give it, akou reads no field and learns only from the draft box.",
-    );
-  }
-
-  /** Puts the DC-L2 note back after the read-back or learning setting changed on the page. */
-  private redrawReadWaits(): void {
-    this.root.querySelector("#dictation-read-waiting")?.remove();
-    const input = this.root.querySelector<HTMLInputElement>(`input[data-key="${READ_FIELD_KEY}"]`);
-    const waiting = input ? this.readWaits(input) : null;
-    if (input && waiting) input.after(waiting);
   }
 
   /**
@@ -628,54 +823,437 @@ export class DictationSettings {
    * in the clipboard-only fallback with a Carbon hotkey, which binds chords only (DC-N3).
    */
   private chordsOnly(): string | null {
-    if (this.platform !== "darwin" || this.grants?.accessibility !== "denied") return null;
+    if (!this.mac || this.grants?.accessibility !== "denied") return null;
     // A grant taken back after the start leaves the tap dead, not the Carbon fallback (DC-N1).
     if (this.lost.includes("accessibility")) return null;
     return "without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.";
   }
 
   /**
-   * The bindings a dictation key must not take: the recording hotkey and the other dictation
-   * keys, as their fields hold them, or as saved where the setup shows one key alone.
+   * The bindings a dictation key must not take: the record shortcut and the other dictation keys,
+   * as their rows hold them, or as saved where the setup shows one key alone.
    */
   private otherKeys(key: string): [string, string][] {
     const appHotkey = this.settings["app.hotkey"];
     const out: [string, string][] = [
       [
-        "the recording hotkey (app.hotkey)",
+        "the record shortcut",
         hotkeyFor(typeof appHotkey === "string" ? appHotkey : "", this.platform),
       ],
     ];
     for (const [k, words] of Object.entries(KEY_SETTINGS)) {
       if (k === key) continue;
-      const el = this.root.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(k)}"]`);
+      const el = this.col.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(k)}"]`);
       const v = el ? el.value : this.settings[k];
-      if (typeof v === "string") out.push([`${words} (${k})`, v]);
+      if (typeof v === "string") out.push([words, v]);
     }
     return out;
   }
 
-  /** In a browser the remote's address is shown, never changed (the owner's rule). */
-  private remoteUrl(
-    input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
-    row: HTMLElement,
-  ): void {
-    const window = this.t.kind === "window";
-    input.disabled = !window;
-    input.title = window ? "" : "set from the akou window or the config file";
-    if (!window) row.append(h("small", {}, " (set from the akou window or the config file)"));
+  // -------------------------------------------------------------------------
+  // Voice
+
+  /** The languages as chips with a list to add one (akou-5v8); each change saves the whole list. */
+  private languagesControl(id: string, value: unknown): HTMLElement {
+    const list = Array.isArray(value) ? (value as string[]) : [];
+    const hidden = h("textarea", { id, hidden: true });
+    hidden.value = list.join("\n");
+    hidden.dataset.key = "dictation.languages";
+    const chips = new LanguageList(
+      list,
+      (l) => {
+        hidden.value = l.join("\n");
+        hidden.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      "dictation-languages",
+      wordsFor("dictation.languages").empty,
+    );
+    return h("div", { class: "pg-chips" }, chips.root, hidden);
   }
 
-  private serverNotes(served: number | undefined): HTMLElement {
+  /**
+   * The microphone picked from the inputs `GET /devices` lists, with its live level (DC-U4); where
+   * akou gives no list, a field for the device's id and the reason under the label.
+   */
+  private micControls(id: string, value: string): (Node | null)[] {
+    const mics = this.mics;
+    // A refused microphone has no level to show; its grant row says why.
+    const meter = this.grants && !grantOk(this.grants.mic) ? null : micMeter(this.t);
+    this.meter = meter;
+    meter?.root.classList.add("pg-lvl");
+    if (mics && "inputs" in mics) {
+      const probe = h("input", { id });
+      const select = micPicker(probe, value, mics.inputs);
+      select.classList.add("pg-select");
+      select.setAttribute("aria-label", "Microphone");
+      return [meter?.root ?? null, select];
+    }
+    const typed = field({ id, label: "Microphone", value, placeholder: "System default" });
+    return [meter?.root ?? null, typed, mics && "error" in mics ? micNote(mics.error) : null];
+  }
+
+  // -------------------------------------------------------------------------
+  // Engine
+
+  /** True while dictation goes to another computer, or is about to once its address is saved. */
+  private remoteOn(): boolean {
+    // The file may ask for the remote while the registry refuses it (no address yet, so the
+    // engine is the default): its rows show then, with the refusal on the engine's row.
+    return (
+      this.settings[ENGINE_KEY] === "remote" ||
+      /\bremote\b/.test(this.issues.get(ENGINE_KEY) ?? "") ||
+      this.remotePending
+    );
+  }
+
+  /**
+   * Speed or accuracy: Automatic, Fast or Best, as segments. While another computer turns the
+   * voice into text the segments rest, dimmed, and the saved value is the switch's.
+   */
+  private engineControl(id: string, value: string): HTMLElement {
+    const w = wordsFor(ENGINE_KEY);
+    const local = (w.choices ?? []).filter(([v]) => v !== "remote");
+    const remote = value === "remote";
+    const seg = segmented({
+      id,
+      label: w.label,
+      options: local,
+      value: remote ? "auto" : value,
+    });
+    seg.input.value = value;
+    seg.input.dataset.key = ENGINE_KEY;
+    for (const r of seg.root.querySelectorAll<HTMLInputElement>("input[type=radio]"))
+      r.disabled = remote;
+    return seg.root;
+  }
+
+  private engineHelp(): string {
+    if (this.settings[ENGINE_KEY] === "remote")
+      return "The other computer turns your voice into text while it is on.";
+    const now = this.dictation?.engine;
+    const picks = now === "best" ? "Best" : now === "fast" ? "Fast" : null;
+    return `Fast is instant. Best makes fewer mistakes.${picks ? ` Automatic picks ${picks} on ${this.here}.` : ""}`;
+  }
+
+  /** "Use another computer running akou": the engine is `remote` while it is on. */
+  private remoteRow(): HTMLElement | null {
+    if (this.mode !== "app" || !(ENGINE_KEY in this.schema)) return null;
+    if (!this.schema[ENGINE_KEY]?.values?.includes("remote")) return null;
+    const sw = toggle({
+      id: "dictation-remote-on",
+      checked: this.remoteOn(),
+      label: "Use another computer running akou",
+    });
+    sw.addEventListener("change", (e) => {
+      e.stopPropagation();
+      this.remoteSwitch(sw.checked);
+    });
+    return row(
+      {
+        label: "Use another computer running akou",
+        help: "Your voice goes to it instead of being turned into text here.",
+        for: "dictation-remote-on",
+        id: "dictation-remote-row",
+      },
+      sw,
+    );
+  }
+
+  private remoteSwitch(on: boolean): void {
+    const engine = this.col.querySelector<HTMLInputElement>(`input[data-key="${ENGINE_KEY}"]`);
+    const url = String(this.settings[REMOTE_URL_KEY] ?? "").trim();
+    for (const k of REMOTE_KEYS) {
+      const r = this.rowOf(k);
+      if (r) r.hidden = !on;
+    }
+    if (!engine) return;
+    if (on && url === "") {
+      // The registry refuses `remote` with no address: the address comes first and turns it on.
+      this.remotePending = true;
+      this.rowOf(REMOTE_URL_KEY)?.querySelector<HTMLElement>("input:not([disabled])")?.focus();
+      return;
+    }
+    this.remotePending = false;
+    const local =
+      engine.parentElement?.querySelector<HTMLInputElement>("input[type=radio]:checked")?.value ??
+      "auto";
+    engine.value = on ? "remote" : local;
+    engine.dispatchEvent(new Event("change", { bubbles: true }));
+  }
+
+  /** Tidy the text with AI: off, or with the assistant set on the Settings page, named. */
+  private formatControl(id: string, value: string): HTMLSelectElement {
+    const p = this.status.provider;
+    const who =
+      p?.id === "harness"
+        ? p.harness === "codex"
+          ? "Codex"
+          : p.harness === "claude"
+            ? "Claude Code"
+            : "Claude Code or Codex"
+        : p?.id === "anthropic"
+          ? "the Anthropic API"
+          : p?.id === "openai-compatible"
+            ? "your OpenAI-compatible server"
+            : "your assistant";
+    return selectBox({
+      id,
+      label: wordsFor(FORMAT_KEY).label,
+      options: [
+        ["off", "Off"],
+        ["provider", `With ${who}`],
+      ],
+      value,
+    });
+  }
+
+  /** The instructions the tidy follows: Standard, or your own by name. */
+  private promptControl(id: string, value: string): HTMLElement {
+    const options: [string, string][] = [["default", "Standard"]];
+    if (value !== "default") options.push([value, value]);
+    const select = selectBox({ id, label: "Instructions", options, value });
+    select.append(h("option", { value: "~" }, "Your own, by name…"));
+    const typed = field({
+      id: `${id}-name`,
+      label: "The instructions' name",
+      value: "",
+      placeholder: "Their name",
+    });
+    typed.hidden = true;
+    const hidden = h("input", { type: "hidden", value });
+    hidden.dataset.key = PROMPT_KEY;
+    const write = (v: string) => {
+      if (!v || v === hidden.value) return;
+      hidden.value = v;
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    select.addEventListener("change", (e) => {
+      e.stopPropagation();
+      typed.hidden = select.value !== "~";
+      if (select.value === "~") {
+        typed.focus();
+        return;
+      }
+      write(select.value);
+    });
+    typed.addEventListener("change", (e) => {
+      e.stopPropagation();
+      write(typed.value.trim());
+    });
+    return h("span", { class: "pg-ctl-group" }, typed, select, hidden);
+  }
+
+  // -------------------------------------------------------------------------
+  // Rules per app, words, history, review
+
+  /** The rules per app as rows of their panel, with the next dictation's app (DC-U9). */
+  private appsRows(key: string, spec: SchemaEntry, value: unknown): HTMLElement {
+    const e = appsEditor("set-dictation-apps", value, spec.apiWritable === false, (found, failed) =>
+      this.nextApp(found, failed),
+    );
+    e.input.dataset.key = key;
+    this.shown[key] = e.shown;
+    const holder = h("div", { class: "pg-apps", attrs: { "data-key": key } }, e.root);
+    const issue = this.issues.get(key);
+    if (issue) {
+      holder.classList.add("refused");
+      holder.append(h("small", { class: "issue" }, inWords(issue, this.keys())));
+    }
+    return holder;
+  }
+
+  /**
+   * Waits for the next dictation's app for the per-app rules (DC-U9). With dictation off no
+   * dictation comes, so the page says so rather than wait for nothing.
+   */
+  private nextApp(found: (app: string) => void, failed: (why: string) => void): { stop(): void } {
+    this.stopNextApp();
+    const on =
+      this.col.querySelector<HTMLInputElement>(`input[data-key="${ENABLE_KEY}"]`)?.checked ??
+      this.settings[ENABLE_KEY] === true;
+    if (!on) {
+      failed("Turn dictation on first: the app comes from your next dictation.");
+      return { stop: () => {} };
+    }
+    const w = nextDictatedApp(this.t, found, failed);
+    this.waitApp = w;
+    return w;
+  }
+
+  private historyRow(): HTMLElement {
+    const days = this.settings["dictation.retainDays"];
+    const value =
+      typeof days !== "number"
+        ? undefined
+        : days === 0
+          ? "Only the last one kept"
+          : `Kept ${days} day${days === 1 ? "" : "s"}`;
+    return linkRow(
+      {
+        label: "History",
+        help: "Your dictations, to copy or insert again.",
+        value,
+        id: "dictation-history-open",
+      },
+      () => {
+        // A live recorder would take every key typed into the history's search.
+        this.stopRecording();
+        this.hooks.openHistory?.();
+      },
+    );
+  }
+
+  /**
+   * "Words to review": N words fixed while dictating still wait for an answer (DC-L5, and DC-O4's
+   * count with the pill off). Left out where akou keeps no list.
+   */
+  private reviewRow(): HTMLElement | null {
+    const r = this.review;
+    const open = this.hooks.openReview;
+    if (!r || !open || ("pairs" in r && r.pairs === null)) return null;
+    if ("error" in r)
+      return row({ label: "Words to review", help: r.error, id: "dictation-review-row" });
+    const n = waitingTerms(r.pairs ?? []);
+    return row(
+      {
+        label: "Words to review",
+        help: "Words you fixed while dictating, waiting for your answer.",
+        id: "dictation-review-row",
+      },
+      h(
+        "span",
+        { class: "pg-value", id: "dictation-review-count" },
+        n === 0 ? "None waiting" : `${n} waiting`,
+      ),
+      button(
+        "Open",
+        () => {
+          // A live recorder would take every key pressed over the list.
+          this.stopRecording();
+          void open();
+        },
+        "dictation-review-open",
+      ),
+    );
+  }
+
+  /** Reads the count again, after the words to review answered some, and redraws its row alone. */
+  async refreshReview(): Promise<void> {
+    if (this.mode !== "app" || !this.hooks.openReview) return;
+    const reads = this.reads;
+    const review = await readDictationReview(this.t);
+    // A load since then has read its own.
+    if (reads !== this.reads) return;
+    this.review = review;
+    const r = this.reviewRow();
+    const old = this.col.querySelector("#dictation-review-row");
+    if (old && r) old.replaceWith(r);
+    else if (old) old.remove();
+    else if (r) this.col.querySelector("section[data-section='Learning'] .pg-grp")?.append(r);
+  }
+
+  private advancedRow(): HTMLElement | null {
+    const n = ADVANCED_PAGE.groups.flatMap((g) => g.keys).filter((k) => k in this.schema).length;
+    if (n === 0) return null;
+    return linkRow(
+      {
+        label: "Advanced",
+        help: ADVANCED_PAGE.help,
+        value: `${n} setting${n === 1 ? "" : "s"}`,
+        id: "dictation-advanced",
+      },
+      () => {
+        void this.saveTyped();
+        this.sub = true;
+        this.draw();
+        this.col.querySelector<HTMLElement>(".pg-back")?.focus();
+      },
+    );
+  }
+
+  private deleteAll(): HTMLElement {
+    const b = twoStep(
+      {
+        class: "pg-btn",
+        label: "Delete all",
+        confirm: "Delete every dictation and its audio?",
+        id: "dictations-delete",
+        armed: this.armed,
+      },
+      () =>
+        void this.t.request("DELETE", "/dictations").then((r) => {
+          if (r.status >= 400)
+            toast(message(r.body, `the dictations were not deleted (HTTP ${r.status})`));
+          else toast("Every dictation is deleted.", "info");
+        }),
+    );
+    b.id = "dictations-delete";
+    return row({ label: "Delete all dictations", help: "Their text and their audio, now." }, b);
+  }
+
+  // -------------------------------------------------------------------------
+  // Notes that follow the settings
+
+  /** What the sounds do now, since `auto` follows the pill (DC-O3). */
+  private soundsNow(): void {
+    const out = this.col.querySelector<HTMLElement>("#dictation-sounds-now");
+    if (!out) return;
+    const now = (k: string) =>
+      this.col.querySelector<HTMLInputElement>(`input[data-key="${k}"]`)?.value ?? this.settings[k];
+    const sounds = now(SOUNDS_KEY);
+    const pill = now(PILL_KEY);
+    const style = cueStyle(sounds, pill);
+    out.textContent =
+      sounds === "off" && pill === "off"
+        ? "Now a dictation neither shows nor sounds."
+        : sounds === "off" || sounds === "soft" || sounds === "click"
+          ? ""
+          : style
+            ? "Now soft sounds, since the pill is off."
+            : "Now silent, since the pill shows.";
+    out.hidden = out.textContent === "";
+  }
+
+  /**
+   * DC-L2: on macOS the helper reads no field without the Accessibility grant, so a read-back
+   * that is on says it waits for it rather than looking as if it worked.
+   */
+  private readWaits(): HTMLElement | null {
+    const g = this.grants?.accessibility;
+    if (!this.mac || !g || g === "granted" || g === "not-needed") return null;
+    // The controls as they stand, so a change updates the note before the save comes back.
+    const readEl = this.col.querySelector<HTMLInputElement>(`input[data-key="${READ_FIELD_KEY}"]`);
+    const read = readEl ? readEl.checked : this.settings[READ_FIELD_KEY] === true;
+    if (!read) return null;
+    // With learning off main asks for no field read at all, so there is nothing to wait for.
+    const learn =
+      this.col.querySelector<HTMLInputElement>(`input[data-key="${LEARN_KEY}"]`)?.value ??
+      this.settings[LEARN_KEY];
+    if (learn === "off") return null;
+    return h(
+      "span",
+      { id: "dictation-read-waiting", class: "pg-help" },
+      "Waits for Accessibility access: until then akou learns only from the draft box.",
+    );
+  }
+
+  private redrawReadWaits(): void {
+    this.col.querySelector("#dictation-read-waiting")?.remove();
+    const waiting = this.readWaits();
+    if (waiting) this.rowOf(READ_FIELD_KEY)?.querySelector(".pg-lbl")?.append(waiting);
+  }
+
+  private serverNotes(): HTMLElement {
+    const served = this.served;
     return h(
       "div",
       { class: "dictation-server" },
       window.isSecureContext
         ? null
-        : h("p", { id: "dictation-no-mic", class: "notice", role: "note" }, NO_MIC_NOTICE),
+        : h("p", { id: "dictation-no-mic", class: "pg-sechelp" }, NO_MIC_NOTICE),
       h(
         "p",
-        { id: "dictation-served", attrs: { role: "status" } },
+        { id: "dictation-served", class: "pg-sechelp", attrs: { role: "status" } },
         typeof served === "number"
           ? `Dictation requests served in the last hour: ${served}`
           : "This server does not report dictation requests yet.",
@@ -683,58 +1261,103 @@ export class DictationSettings {
     );
   }
 
-  private deleteAll(): HTMLElement {
-    return h(
-      "div",
-      { class: "bar" },
-      twoStep(
-        {
-          class: "stop",
-          label: "Delete all dictations now",
-          confirm: "Delete every dictation and its audio?",
-          id: "dictations-delete",
-          armed: this.armed,
-        },
-        () =>
-          void this.t.request("DELETE", "/dictations").then((r) => {
-            if (r.status >= 400)
-              toast(message(r.body, `the dictations were not deleted (HTTP ${r.status})`));
-            else toast("Every dictation is deleted.", "info");
-          }),
-      ),
+  // -------------------------------------------------------------------------
+  // Saving
+
+  private rowOf(key: string): HTMLElement | null {
+    return this.col.querySelector<HTMLElement>(`div[data-key="${CSS.escape(key)}"]`);
+  }
+
+  /** A control changed: what follows it on the page, then the save of its key alone. */
+  private changed(el: HTMLElement): void {
+    const key = el.dataset?.key;
+    if (!key) return;
+    const holder = this.rowOf(key);
+    if (!holder) return;
+    if (key === SOUNDS_KEY || key === PILL_KEY) this.soundsNow();
+    if (key === READ_FIELD_KEY || key === LEARN_KEY) this.redrawReadWaits();
+    if (key === FORMAT_KEY) {
+      const prompt = this.rowOf(PROMPT_KEY);
+      if (prompt) prompt.hidden = (el as HTMLSelectElement).value !== "provider";
+    }
+    // The switch turned on with a grant missing runs the setup instead (DC-U2, DC-N3).
+    if (key === ENABLE_KEY && el instanceof HTMLInputElement && el.checked && this.missingGrant()) {
+      el.checked = false;
+      this.runSetup();
+      return;
+    }
+    void this.save(holder);
+  }
+
+  /** Saves each row whose control holds what the file does not: the page is left. */
+  private async saveTyped(): Promise<void> {
+    this.stopRecording();
+    const rows = [...this.col.querySelectorAll<HTMLElement>("div[data-key]")].filter(
+      (r) => Object.keys(changedSettings(r, this.schema, this.shown)).length > 0,
     );
+    await Promise.all(rows.map((r) => this.save(r)));
   }
 
   /** Saves the one key of this row. */
-  private async save(row: HTMLElement): Promise<void> {
-    const patch = changedSettings(row, this.schema, this.shown);
-    if (Object.keys(patch).length === 0) return;
-    const r = await this.t.request<{ note?: string }>("PATCH", "/config", patch);
-    if (r.status >= 400) {
-      showRefusals(this.root, r.body);
+  private async save(r: HTMLElement): Promise<void> {
+    const patch = changedSettings(r, this.schema, this.shown);
+    const keys = Object.keys(patch);
+    if (keys.length === 0) return;
+    const res = await this.t.request("PATCH", "/config", patch);
+    if (res.status >= 400) {
+      this.refused(r, keys, res.body);
       return;
     }
     for (const [k, v] of Object.entries(patch)) {
       this.saved(k, v);
+      this.issues.delete(k);
       if (!this.schema[k]?.secret) continue;
-      // akou has the secret now; the page keeps no copy of it, as Settings does by reloading.
-      const input = row.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(k)}"]`);
+      // akou has the secret now; the page keeps no copy of it.
+      const input = r.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(k)}"]`);
       if (input) {
         input.value = "";
-        input.placeholder = v ? "set (hidden); type to replace" : "not set";
+        input.placeholder = v ? "Set, type to replace" : (wordsFor(k).empty ?? "Not set");
       }
       this.shown[k] = "";
     }
-    row.classList.remove("refused");
-    row.querySelector(".issue")?.remove();
+    r.classList.remove("refused");
+    r.querySelector(".issue")?.remove();
+    // A dictation setting applies at once: the reply's note about restarting is not about it.
     toast("Saved.", "info");
+    // The address is saved: "Use another computer", turned on before it, now turns it on.
+    if (keys.includes(REMOTE_URL_KEY) && this.remotePending && String(patch[REMOTE_URL_KEY]).trim())
+      this.remoteSwitch(true);
+    if (keys.includes(ENGINE_KEY) && this.root.isConnected) this.redraw();
   }
 
-  /** Saves one key the setup set, not a field: null, or the refusal's words. */
+  /** A refused change: the reason under the row's label, in words, and the same in a toast. */
+  private refused(r: HTMLElement, keys: string[], body: unknown): void {
+    const errors = (body as { errors?: string[] }).errors ?? [message(body, "refused")];
+    const lines = errors.map((e) => {
+      const key = keys.find((k) => e.startsWith(`${k}:`));
+      return key ? e.slice(key.length + 1).trim() : e;
+    });
+    const why = inWords(lines[0] ?? "", this.keys());
+    const text = why.charAt(0).toUpperCase() + why.slice(1);
+    r.classList.add("refused");
+    r.querySelector(".issue")?.remove();
+    (r.querySelector(".pg-lbl") ?? r).append(h("small", { class: "issue" }, text));
+    toast(`${wordsFor(keys[0] ?? "").label} was not saved: ${why}`);
+  }
+
+  /** Saves one key the setup set, not a control: null, or the refusal's words. */
   private async saveValue(key: string, value: unknown): Promise<string | null> {
     const r = await this.t.request<{ errors?: string[] }>("PATCH", "/config", { [key]: value });
-    if (r.status >= 400) return (r.body?.errors ?? []).join("; ") || message(r.body, "refused");
+    if (r.status >= 400)
+      return inWords((r.body?.errors ?? []).join("; ") || message(r.body, "refused"), this.keys());
     this.saved(key, value);
+    // The switch drawn above the setup follows, so leaving the page saves nothing back.
+    for (const el of this.col.querySelectorAll<HTMLInputElement>(
+      `input[data-key="${CSS.escape(key)}"]`,
+    )) {
+      if (el.type === "checkbox") el.checked = value === true;
+      else if (typeof value === "string") el.value = value;
+    }
     return null;
   }
 
@@ -742,95 +1365,76 @@ export class DictationSettings {
     this.settings[key] = value;
     this.shown[key] = shownValue(this.schema[key], value);
   }
+
+  /** Draws again where the page is, keeping the focus where it was. */
+  private redraw(): void {
+    const active = document.activeElement as HTMLElement | null;
+    const id = active && this.col.contains(active) ? active.id : "";
+    const key = (active?.closest?.("div[data-key]") as HTMLElement | null)?.dataset.key;
+    const top = this.root.parentElement?.scrollTop ?? 0;
+    this.draw();
+    this.root.parentElement?.scrollTo?.({ top });
+    const same = id ? document.getElementById(id) : null;
+    if (same && this.col.contains(same)) same.focus();
+    else if (key) this.focusRow(key, false);
+  }
+
+  private focusRow(key: string, flash = true): void {
+    const r = this.rowOf(key);
+    if (!r) return;
+    if (flash) {
+      r.scrollIntoView({ block: "center" });
+      r.classList.add("pg-flash");
+      setTimeout(() => r.classList.remove("pg-flash"), 1200);
+    }
+    r.querySelector<HTMLElement>(
+      ".pg-ctl input:not([type=hidden]):not([hidden]):not(:disabled), .pg-ctl select, .pg-ctl button",
+    )?.focus();
+  }
+
+  /** Stops any key recording: the page redrew, or something else wants the keys. */
+  stopRecording(): void {
+    for (const r of this.recorders) r.stop();
+  }
+
+  private stopMeter(): void {
+    this.meter?.close();
+    this.meter = null;
+  }
+
+  private stopNextApp(): void {
+    this.waitApp?.stop();
+    this.waitApp = null;
+  }
 }
 
-/**
- * `dictation.languages` as chips with an add list in place of its text box, which stays the value
- * the page saves: each change writes the list into it, one code a line, and saves.
- */
-function languageChips(input: HTMLTextAreaElement): void {
-  const list = new LanguageList(
-    input.value
-      .split("\n")
-      .map((c) => c.trim())
-      .filter((c) => c !== ""),
-    (l) => {
-      input.value = l.join("\n");
-      input.dispatchEvent(new Event("change"));
-    },
+/** A grant as its row says it: "Allowed", "Not asked yet", "Not needed". */
+function grantState(g: Grant): HTMLElement {
+  const ok = g === "granted" || g === "not-needed";
+  return h(
+    "span",
+    { class: `pg-state${ok ? " ok" : ""}` },
+    g === "granted" ? icon("m3.5 8.5 3 3 6-7") : null,
+    g === "granted"
+      ? "Allowed"
+      : g === "not-needed"
+        ? "Not needed"
+        : g === "not-asked"
+          ? "Not asked yet"
+          : "Not allowed",
   );
-  input.hidden = true;
-  input.after(list.root);
 }
 
-/**
- * The window's `#dictation` dialog, opened by its button, by `#dictation` in the address, or by
- * Settings; its History button opens the history (DC-H1) over it, and Dictionary the dictionary
- * and replacements (DC-U5).
- */
-export function mountDictationDialog(
-  t: Transport,
-  /** The workspace of the call the window shows, whose words the dictionary lists read only. */
-  workspace?: () => string | undefined,
-  /** Opens the words to review (`review.ts`), whose Dictation heading lists dictation's words. */
-  openReview?: () => Promise<void>,
-): {
-  open(): Promise<void>;
-  /** The dictionary editor (DC-U5), which Settings opens too. */
-  dictionary: { open(): Promise<void> };
-} {
-  const dialog = document.getElementById("dictation") as HTMLDialogElement;
-  const body = document.getElementById("dictation-fields") as HTMLElement;
-  const page = new DictationSettings(t, "app", openReview);
-  body.append(page.root);
-  // An answer given in the words to review changes the count on this page.
-  document.getElementById("review")?.addEventListener("close", () => {
-    if (dialog.open) void page.refreshReview();
-  });
-  const open = async () => {
-    await page.load();
-    openModal(dialog);
-  };
-  closable(dialog);
-  // A recorder left open would keep every key press of the window, and a setup its grant reads.
-  dialog.addEventListener("close", () => page.close());
-  document.getElementById("dictation-open")?.addEventListener("click", () => void open());
-  document.getElementById("dictation-close")?.addEventListener("click", () => dialog.close());
-  const history = mountHistoryDialog(t);
-  document.getElementById("dictation-history-open")?.addEventListener("click", () => {
-    // A live recorder would take every key typed into the history's search.
-    page.stopRecording();
-    void history.open();
-  });
-  const dictionary = mountDictionaryDialog(t, workspace);
-  document.getElementById("dictation-dictionary-open")?.addEventListener("click", () => {
-    // A live recorder would take every key typed into the dictionary's fields.
-    page.stopRecording();
-    void dictionary.open();
-  });
-  const fromHash = () => {
-    if (location.hash === "#dictation") void open();
-  };
-  window.addEventListener("hashchange", fromHash);
-  fromHash();
-  return { open, dictionary };
+function lostOf(d: DictationReply | null): string[] {
+  return Array.isArray(d?.lost) ? d.lost.filter((x): x is string => typeof x === "string") : [];
 }
 
-/** Server mode's Dictation page. */
-export class DictationPage implements ServerScreen {
-  readonly name = "dictation" as const;
-  readonly title = "Dictation";
-  readonly root: HTMLElement;
-  private readonly page: DictationSettings;
-
-  constructor(t: Transport) {
-    this.page = new DictationSettings(t, "server");
-    this.root = section("Dictation", this.page.root);
+/** The id of the first control a label can name, for its `for`. */
+function controlId(controls: (Node | null)[]): string | null {
+  for (const c of controls) {
+    if (!(c instanceof HTMLElement)) continue;
+    if (c.matches("input:not([type=hidden]):not([hidden]), select, textarea:not([hidden])"))
+      return c.id || null;
   }
-
-  show(): void {
-    void this.page.load();
-  }
-
-  hide(): void {}
+  return null;
 }
