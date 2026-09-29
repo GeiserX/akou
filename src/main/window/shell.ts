@@ -322,7 +322,7 @@ export const DEFAULT_WINDOW = { width: 1280, height: 820 } as const;
 /** No window is restored smaller than this. */
 const MIN_WINDOW = { width: 480, height: 360 } as const;
 /** The floating indicator's size: one row, never resized. */
-export const INDICATOR_SIZE = { width: 330, height: 40 } as const;
+export const INDICATOR_SIZE = { width: 480, height: 40 } as const;
 /** Its distance from the work area's edge the first time it shows. */
 const INDICATOR_MARGIN = 16;
 /**

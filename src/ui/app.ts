@@ -19,6 +19,7 @@ import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
+import { SmoothMeters } from "./meter.ts";
 import {
   banner,
   type CallSummary,
@@ -136,8 +137,8 @@ class App {
   callId: string | null = null;
   /** The user picked the call on screen; otherwise the window follows the live or last call. */
   private chosen = false;
-  /** The call this window started, so the window follows it even when another was picked. */
-  private startedHere: string | null = null;
+  /** The last live call the window saw, so each new one takes the window over once. */
+  private seenLive: string | null = null;
   private follower: Follower | null = null;
   private hues = new HueBook();
   private disconnectedSince: number | null = null;
@@ -154,6 +155,9 @@ class App {
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
+  private readonly levels = new SmoothMeters((ch, db) => {
+    byId<HTMLMeterElement>(`meter-${ch}`).value = db;
+  });
   private blobs = new Map<string, string>();
   /** A start is on its way: Record waits for the answer. */
   private starting = false;
@@ -260,14 +264,24 @@ class App {
     this.paint();
   }
 
+  /**
+   * A live call the window has not shown yet takes it over, whichever door started it (the window,
+   * the CLI, an agent, the hotkey, the API) and whatever call the user picked before (W3.17). The
+   * user may pick another call afterwards; the next new live call takes over again, and a call that
+   * ends stays on screen. The one exception is a call already live when the page opens on a call it
+   * was asked for (`akou open CALL`, `?call=`): the page keeps what it was asked to show.
+   */
   private onStatus(s: AppStatus): void {
-    const wasLive = this.status?.live?.call ?? null;
+    const first = this.status === null;
     this.status = s;
     this.modelsCard.update(s.models, true);
     const live = s.live?.call ?? null;
-    if (!this.chosen || (live && live !== wasLive && this.startedHere === live)) {
+    const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
+    if (live) this.seenLive = live;
+    if (fresh || !this.chosen) {
       const target = live ?? this.callId ?? s.last?.call ?? null;
       if (target && target !== this.callId) this.openCall(target, false);
+      else if (fresh) this.chosen = false;
     }
     void this.loadCalls();
     this.paint();
@@ -697,10 +711,10 @@ class App {
       this.levelAt = now;
       if (l.call > HEARD_DBFS) this.callHeardAt = now;
     }
+    if (l) this.levels.set(l);
+    else this.levels.reset();
     for (const ch of ["mic", "call"] as const) {
-      const m = byId<HTMLMeterElement>(`meter-${ch}`);
-      m.value = l ? Math.max(-60, Math.min(0, l[ch])) : -60;
-      m.title = l ? `${ch}: ${Math.round(l[ch])} dBFS` : `${ch}: no level`;
+      byId(`meter-${ch}`).title = l ? `${ch}: ${Math.round(l[ch])} dBFS` : `${ch}: no level`;
     }
     this.drawHealth(this.view());
   }
@@ -956,7 +970,6 @@ class App {
     const call = r.body.call;
     if (r.status === 201 && call) {
       byId<HTMLInputElement>("newtitle").value = "";
-      this.startedHere = call;
       this.openCall(call, false);
       this.consent();
       return;

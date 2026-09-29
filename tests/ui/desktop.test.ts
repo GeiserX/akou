@@ -138,6 +138,35 @@ describe("[DK-F1] the floating indicator", () => {
   );
 });
 
+describe("[DK-F1] Open transcript on the indicator", () => {
+  test(
+    "a call started outside the window opens no window; Open transcript shows it on the live call",
+    async () => {
+      await withDesktop(async (rig) => {
+        const id = await rig.startCall({ title: "Sync" });
+        const page = await indicatorPage(rig);
+        const button = page.locator("#show");
+        expect(await button.textContent()).toBe("Open transcript");
+        expect(await button.isEnabled()).toBe(true);
+        // The start raised nothing: only the indicator is up.
+        await Bun.sleep(300);
+        expect(rig.main()).toBeNull();
+        await button.click();
+        await until(() => rig.main() !== null, 10_000, "the main window");
+        const main = rig.main() as Page;
+        await main.waitForFunction(
+          (call) =>
+            document.querySelector<HTMLElement>('#calls button[aria-current="true"]')?.dataset
+              .id === call,
+          id,
+          { timeout: 10_000 },
+        );
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("[DK-M3] the quit question is asked in the window", () => {
   test(
     "Cancel has the focus: Return and Escape keep the call; Stop and quit quits",
