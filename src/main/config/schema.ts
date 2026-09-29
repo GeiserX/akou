@@ -729,7 +729,7 @@ export const SETTINGS = {
     type: "string",
     values: DICTATION_INSERTS,
     default: "paste",
-    doc: "How the text goes in: `paste` through the clipboard, which comes back afterwards; `type` as key presses, for remote desktops and fields that refuse a paste; `clipboard` only, and you paste.",
+    doc: "How the text goes in: `paste` through the clipboard, which comes back afterwards; `type` as key presses, for remote desktops and fields that refuse a paste (a text with a line break is pasted, so no Return is pressed); `clipboard` only, and you paste.",
   },
   "dictation.sendKey": {
     type: "string",
@@ -818,7 +818,7 @@ export const SETTINGS = {
   "dictation.apps": {
     type: "apps",
     default: [],
-    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); a field left out follows the global setting.',
+    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); a field left out follows the global setting. `mode`: `draft` opens the draft box instead of inserting, `draft-send` too with Enter there pressing the send key.',
   },
   "dictation.pill": {
     type: "string",

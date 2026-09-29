@@ -18,7 +18,8 @@ use super::keys::Hotkey;
 use super::media::Media;
 use super::mic::{Mic, MicEvent, Warm};
 use super::protocol::{self as p, Command, Target};
-use super::readback::Watch;
+use super::readback::{ANCHOR, Field, Watch};
+use super::spacing;
 use super::tap::{Gate, Note, TapEvent};
 use crate::protocol::{Ch, encode_packet};
 
@@ -311,12 +312,7 @@ impl Dictate {
     /// DC-L2's snapshot. Every insert the app asked to read back that landed gets exactly one
     /// `edit` or `edit.unreadable`; this one says `not-read` where the helper will not read.
     fn start_watch(&mut self, r: Reading, t_ns: u64, out: &mut dyn Out) {
-        let readable = self.accessibility != "denied"
-            && r.target.field == "editable"
-            && !r.secure_input
-            && !self.targets.secure_input()
-            && !is_terminal(self.os, &r.target.app);
-        if !readable {
+        if !self.readable(&r.target, r.secure_input) {
             out.line(p::edit_unreadable(&r.id, "not-read"));
             return;
         }
@@ -325,6 +321,56 @@ impl Dictate {
             Ok(w) => self.watch = Some(w),
             Err(reason) => out.line(p::edit_unreadable(&r.id, reason)),
         }
+    }
+
+    /// Whether the field of `target` may be read (DC-L2, DC-S4): never without the grant, a
+    /// field that is not a plain editable one, under Secure Input or in a terminal.
+    fn readable(&mut self, target: &Target, secure_input: bool) -> bool {
+        self.accessibility != "denied"
+            && target.field == "editable"
+            && !secure_input
+            && !self.targets.secure_input()
+            && !is_terminal(self.os, &target.app)
+    }
+
+    /// DC-S4: the text fitted to what sits around the cursor, read just before the insert when
+    /// `smart` and the rules allow it; else only the trailing space, when asked. A clipboard-only
+    /// insert lands wherever the user pastes it, so its field is never read.
+    fn spaced(
+        &mut self,
+        text: String,
+        cap: &Captured,
+        method: &str,
+        smart: bool,
+        trailing: bool,
+    ) -> String {
+        if (!smart && !trailing) || cap.target.field == "secure" || cap.secure_input {
+            return text;
+        }
+        let field =
+            (smart && method != "clipboard" && self.readable(&cap.target, cap.secure_input))
+                .then(|| self.targets.read_field(&cap.target));
+        let around = match &field {
+            Some(Field::Text { value, caret }) => {
+                let before_start = caret.saturating_sub(ANCHOR);
+                let before: String = value
+                    .chars()
+                    .skip(before_start)
+                    .take(caret - before_start)
+                    .collect();
+                let after = value.chars().nth(*caret);
+                Some((before, after))
+            }
+            _ => None,
+        };
+        spacing::apply(
+            around.as_ref().map(|(before, after)| spacing::Around {
+                before,
+                after: *after,
+            }),
+            &text,
+            trailing,
+        )
     }
 
     /// DC-L2's second read, and the hunks out.
@@ -400,6 +446,8 @@ impl Dictate {
                 target,
                 restore,
                 read_field,
+                smart_spacing,
+                trailing_space,
             } => {
                 // A paste still waiting settles first, so its answer (and its read-back) is not
                 // lost when this insert takes the slot.
@@ -430,6 +478,7 @@ impl Dictate {
                 if let Some(t) = target {
                     cap.target = t;
                 }
+                let text = self.spaced(text, &cap, &method, smart_spacing, trailing_space);
                 self.reading = read_field.then(|| Reading {
                     id: id.clone(),
                     text: text.clone(),
@@ -1183,6 +1232,67 @@ mod tests {
             .filter(|l| l.contains(r#""type":"edit"#) && l.contains(r#""id":"1""#))
             .collect();
         assert_eq!(answers.len(), 1, "{:?}", out.lines);
+    }
+
+    /// DC-S4: one insert of "Maybe later." into a field holding "I think" before the cursor
+    /// and "x" after it; answers what went on the clipboard and how many reads were made.
+    fn spaced_insert(w: &Shared, fields: &str) -> (String, usize) {
+        let (mut d, mut out) = ended_session(w);
+        w.borrow_mut().field = Some(Field::Text {
+            value: "I thinkx".into(),
+            caret: 7,
+        });
+        let insert = format!(r#"{{"type":"insert","id":"1","text":"Maybe later."{fields}}}"#);
+        d.command(Command::parse(&insert).unwrap(), 400 * MS, &mut out);
+        let w = w.borrow();
+        let text = w
+            .board
+            .iter()
+            .find(|(k, _)| k == "text")
+            .map(|(_, v)| String::from_utf8(v.clone()).unwrap())
+            .unwrap_or_default();
+        (text, w.field_reads.len())
+    }
+
+    /// DC-S4 through the protocol: with `smart_spacing` the field is read once before the insert
+    /// and the text fits it; without it nothing is read and only `trailing_space` applies; a
+    /// terminal, a password field and a clipboard-only insert are never read.
+    #[test]
+    fn dc_s4_the_text_fits_the_field_read_before_the_insert() {
+        let w = World::new();
+        assert_eq!(
+            spaced_insert(&w, r#","smart_spacing":true"#),
+            (" maybe later. ".into(), 1)
+        );
+        // `dictation.readField` off: the app sends no `smart_spacing`, and nothing is read.
+        let w = World::new();
+        assert_eq!(
+            spaced_insert(&w, r#","trailing_space":true"#),
+            ("Maybe later. ".into(), 0)
+        );
+        let w = World::new();
+        assert_eq!(spaced_insert(&w, ""), ("Maybe later.".into(), 0));
+        // A terminal: no read, only the trailing space.
+        let w = World::new();
+        w.borrow_mut().target.app = "com.apple.Terminal".into();
+        assert_eq!(
+            spaced_insert(&w, r#","smart_spacing":true,"trailing_space":true"#),
+            ("Maybe later. ".into(), 0)
+        );
+        // A clipboard-only insert: no read.
+        let w = World::new();
+        let (_, reads) = spaced_insert(
+            &w,
+            r#","method":"clipboard","smart_spacing":true,"trailing_space":true"#,
+        );
+        assert_eq!(reads, 0);
+        // A password field: no read and nothing added.
+        let w = World::new();
+        w.borrow_mut().target.field = "secure".into();
+        assert_eq!(
+            spaced_insert(&w, r#","smart_spacing":true,"trailing_space":true"#),
+            ("Maybe later.".into(), 0)
+        );
     }
 
     const BEFORE: &str = "Hi team, ";

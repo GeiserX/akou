@@ -127,6 +127,14 @@ export type AppToHelper =
        * `edit` or `edit.unreadable`. Absent, nothing is read.
        */
       read_field?: boolean;
+      /**
+       * `dictation.smartSpacing` with `dictation.readField` (DC-S4): the helper reads the field
+       * just before the insert and fits the text to it (spaces, the first word's case). Absent,
+       * nothing is read for it.
+       */
+      smart_spacing?: boolean;
+      /** `dictation.trailingSpace` (DC-S4): a space after the text where the field was not read. */
+      trailing_space?: boolean;
     }
   /** This session will not be inserted: the helper stops holding Escape and Enter now. */
   | { type: "settled"; id: string }

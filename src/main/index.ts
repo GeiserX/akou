@@ -2078,11 +2078,11 @@ export class AkouApp implements ApiApp {
       fillers: () => this.cfg.settings["dictation.fillers"],
       punctuation: () =>
         this.cfg.settings["dictation.spokenPunctuation"] ? loadPunctuation(this.configDir) : null,
-      format: (text) =>
+      format: (text, mode) =>
         formatPass(
           text,
           {
-            format: this.cfg.settings["dictation.format"],
+            format: mode ?? this.cfg.settings["dictation.format"],
             prompt: this.cfg.settings["dictation.formatPrompt"],
             timeoutSeconds: this.cfg.settings["dictation.formatTimeoutSeconds"],
           },
@@ -2113,10 +2113,14 @@ export class AkouApp implements ApiApp {
           sendKey: c["dictation.sendKey"] as SendKey,
           sendAlways: c["dictation.sendAlways"],
           restore: c["dictation.restoreClipboard"],
-          // The field is read back only to learn from a fix there (DC-L2) until DC-S4 reads it too.
+          // The field is read back after the insert to learn from a fix there (DC-L2), and
+          // before it for the spacing (DC-S4); `dictation.readField` gates both reads.
           readField: c["dictation.readField"] && c["dictation.learn"] !== "off",
+          smartSpacing: c["dictation.readField"] && c["dictation.smartSpacing"],
+          trailingSpace: c["dictation.trailingSpace"],
         };
       },
+      apps: () => this.cfg.settings["dictation.apps"],
       draft: {
         platform: process.platform,
         sendKey: () => this.cfg.settings["dictation.sendKey"] as SendKey,

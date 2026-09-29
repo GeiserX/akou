@@ -41,6 +41,8 @@ export interface DraftOpen {
   focus: boolean;
   /** The machine's OS, from the main process: Cmd+Enter sends on macOS, Ctrl+Enter elsewhere. */
   platform: string;
+  /** A per-app rule's `draft-send` (DC-U9): Enter inserts and presses the send key. */
+  enterSends?: boolean;
 }
 
 export interface DraftRpc {
