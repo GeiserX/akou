@@ -36,6 +36,9 @@ import {
   type Diarizer,
   type DiarizerKind,
   type Embedder,
+  type LiveEngine,
+  type LiveStream,
+  type LiveToken,
   type ModelSet,
   type ParakeetDecoding,
   type PreparedHotwords,
@@ -46,6 +49,7 @@ import {
   type Vad,
   type WordHyp,
 } from "./engine.ts";
+import { isLiveEngine, LIVE_ENGINES, type LiveEngineInfo } from "./live-engines.ts";
 import { modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
 import { DIARIZE_HELPER_NAME, NemotronDiarizer, NemotronStream } from "./nemotron.ts";
 
@@ -259,6 +263,186 @@ export function recognizerConfig(
   };
 }
 
+// ---------------------------------------------------------------------------
+// Streaming Nemotron, the live pass (docs/research/asr-architecture.md section 3.1)
+
+/** Silence pushed behind the audio on a flush, beyond the engine's chunk, seconds. */
+const FLUSH_EXTRA_SECONDS = 1;
+/**
+ * A stream's result holds every token since its last reset and is read as JSON after each decode,
+ * so it is reset at a pause once it holds this many: one reset every few minutes of speech. The
+ * encoder's state carries across a reset; only the decoder's context starts over.
+ */
+const RESET_TOKENS = 400;
+/** Blank frames at the end of the result that make a pause safe to reset at. */
+const RESET_BLANKS = 8;
+/** How much of its own audio a ready stream waits for the other channel's chunk. */
+export const BATCH_WAIT_SECONDS = 0.25;
+
+/** The sherpa-onnx config of a streaming Nemotron (int8, greedy, no endpointing). */
+export function onlineConfig(
+  file: (name: string) => string,
+  threads: number,
+): Record<string, unknown> {
+  return {
+    featConfig: { sampleRate: ASR_RATE, featureDim: 128 },
+    modelConfig: {
+      transducer: {
+        encoder: file("encoder.int8.onnx"),
+        decoder: file("decoder.int8.onnx"),
+        joiner: file("joiner.int8.onnx"),
+      },
+      tokens: file("tokens.txt"),
+      numThreads: threads,
+      provider: "cpu",
+      debug: 0,
+    },
+    decodingMethod: "greedy_search",
+    enableEndpoint: 0,
+  };
+}
+
+interface OnlineResult {
+  tokens?: readonly string[];
+  /** Seconds from `start_time`, one per token. */
+  timestamps?: readonly number[];
+  /** Natural log-probability of each token. */
+  ys_probs?: readonly number[];
+  start_time?: number;
+  num_trailing_blanks?: number;
+}
+
+/**
+ * One `OnlineRecognizer` shared by the call's streams. The channels' audio arrives interleaved,
+ * so a stream whose chunk is ready waits for the other's, and both decode in one batch
+ * (`decodeStreams`): two channels cost less than two. A stream waits at most `BATCH_WAIT_SECONDS`
+ * of its own audio for a stream that has stopped sending.
+ */
+export class SherpaLiveEngine implements LiveEngine {
+  readonly tierMs: number;
+  readonly languages: readonly string[];
+  private readonly streams = new Set<SherpaLiveStream>();
+
+  constructor(
+    readonly id: string,
+    private readonly rec: Sherpa,
+    private readonly info: LiveEngineInfo,
+  ) {
+    this.tierMs = info.tierMs;
+    this.languages = info.languages;
+  }
+
+  open(lang: string): LiveStream {
+    const s = this.rec.createStream();
+    if (this.info.multilingual && lang !== "auto") s.setOption("language", lang);
+    const ls = new SherpaLiveStream(this, this.rec, s);
+    this.streams.add(ls);
+    return ls;
+  }
+
+  /**
+   * Decodes the ready streams together once every open stream is ready, or once one has waited
+   * `BATCH_WAIT_SECONDS`; `all` (a flush) decodes whatever is ready now.
+   */
+  decodeReady(all = false): void {
+    const wait = Math.round(BATCH_WAIT_SECONDS * ASR_RATE);
+    for (;;) {
+      const open = [...this.streams];
+      const ready = open.filter((x) => this.rec.isReady(x.s));
+      if (ready.length === 0) return;
+      for (const x of ready) x.readyAt ??= x.pushed;
+      const waited = ready.some((x) => x.pushed - (x.readyAt as number) >= wait);
+      if (!all && ready.length < open.length && !waited) return;
+      if (ready.length === 1) this.rec.decode((ready[0] as SherpaLiveStream).s);
+      else this.rec.decodeStreams(ready.map((x) => x.s));
+      for (const x of ready) {
+        x.dirty = true;
+        x.readyAt = null;
+      }
+    }
+  }
+
+  forget(s: SherpaLiveStream): void {
+    this.streams.delete(s);
+  }
+}
+
+class SherpaLiveStream implements LiveStream {
+  dirty = false;
+  /** `pushed` when this stream last found a chunk ready and undecoded, else null. */
+  readyAt: number | null = null;
+  /** Tokens of the current result already returned. */
+  private seen = 0;
+  /** Samples the caller pushed, and samples the stream holds (the caller's plus flush padding). */
+  pushed = 0;
+  private held = 0;
+  /** Flush padding: `len` samples at `at` on the stream, at `caller` on the caller's timeline. */
+  private readonly pads: { at: number; len: number; caller: number }[] = [];
+
+  constructor(
+    private readonly engine: SherpaLiveEngine,
+    private readonly rec: Sherpa,
+    readonly s: Sherpa,
+  ) {}
+
+  push(samples: Float32Array): LiveToken[] {
+    this.s.acceptWaveform({ samples, sampleRate: ASR_RATE });
+    this.pushed += samples.length;
+    this.held += samples.length;
+    this.engine.decodeReady();
+    return this.collect();
+  }
+
+  flush(): LiveToken[] {
+    const len = Math.round((this.engine.tierMs / 1000 + FLUSH_EXTRA_SECONDS) * ASR_RATE);
+    this.s.acceptWaveform({ samples: new Float32Array(len), sampleRate: ASR_RATE });
+    this.pads.push({ at: this.held, len, caller: this.pushed });
+    this.held += len;
+    this.engine.decodeReady(true);
+    this.dirty = true;
+    return this.collect();
+  }
+
+  close(): void {
+    this.engine.forget(this);
+  }
+
+  /** Seconds on the stream to seconds on the caller's timeline: padding takes no caller time. */
+  private callerTime(seconds: number): number {
+    const x = Math.round(seconds * ASR_RATE);
+    let shift = 0;
+    for (const p of this.pads) {
+      if (x >= p.at + p.len) shift += p.len;
+      else if (x >= p.at) return p.caller / ASR_RATE;
+      else break;
+    }
+    return (x - shift) / ASR_RATE;
+  }
+
+  private collect(): LiveToken[] {
+    if (!this.dirty) return [];
+    this.dirty = false;
+    const r = this.rec.getResult(this.s) as OnlineResult;
+    const tokens = r.tokens ?? [];
+    const out: LiveToken[] = [];
+    for (let i = this.seen; i < tokens.length; i++) {
+      const t = (r.start_time ?? 0) + (r.timestamps?.[i] ?? 0);
+      const lp = r.ys_probs?.[i];
+      out.push({
+        text: tokens[i] as string,
+        t: this.callerTime(t),
+        conf: lp === undefined ? 1 : Math.exp(Math.min(0, lp)),
+      });
+    }
+    this.seen = tokens.length;
+    if (tokens.length >= RESET_TOKENS && (r.num_trailing_blanks ?? 0) >= RESET_BLANKS) {
+      this.rec.reset(this.s);
+      this.seen = 0;
+    }
+    return out;
+  }
+}
+
 export class SherpaModels implements ModelSet {
   readonly recognizerModel = RECOGNIZER;
   readonly loads: Record<string, number> = {};
@@ -267,6 +451,7 @@ export class SherpaModels implements ModelSet {
   private tokens: Set<string> | null = null;
   private emb: SherpaEmbedder | null = null;
   private dia: Diarizer | null = null;
+  private live: SherpaLiveEngine | null = null;
   private readonly threads: number;
   readonly diarizerKind: DiarizerKind;
   readonly decoding: ParakeetDecoding;
@@ -395,6 +580,20 @@ export class SherpaModels implements ModelSet {
       this.count("titanet-small");
     }
     return this.emb;
+  }
+
+  liveEngine(id: string): LiveEngine {
+    if (this.live?.id === id) return this.live;
+    if (!isLiveEngine(id)) throw new Error(`no live engine is called ${id}`);
+    // Drop the previous engine before loading the next, so two never sit in memory at once.
+    this.live = null;
+    Bun.gc(true);
+    const rec = new (sherpa().OnlineRecognizer)(
+      onlineConfig((name) => this.file(id, name), this.threads),
+    );
+    this.count(id);
+    this.live = new SherpaLiveEngine(id, rec, LIVE_ENGINES[id]);
+    return this.live;
   }
 
   streamDiarizer(listener: StreamListener): StreamDiarizer | null {

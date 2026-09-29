@@ -84,6 +84,46 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
       source: `${ARCH}#4-final-pass-default-engines-and-what-n-engines-buy`,
     },
   },
+  "nemotron-en-560": {
+    accuracy: {
+      metric: "wer",
+      value: 9.3,
+      what: "FLEURS, 150 English clips through the live path (an English-only model: no Spanish figure): 9.30 %",
+      source: `${ARCH}#31-what-replaces-the-12-s-windows`,
+    },
+    speed: {
+      metric: "rtfx",
+      value: Math.round((1 / 0.067) * 10) / 10,
+      what: `the benchmark's streaming Nemotron at 560 ms: real-time factor 0.067 at 4 threads, one channel, the first 600 s of an Earnings-22 call, on the ${REFERENCE_MACHINE}`,
+      source: `${ARCH}#31-what-replaces-the-12-s-windows`,
+    },
+  },
+  "nemotron-3.5-560": {
+    accuracy: {
+      metric: "wer",
+      value: (10.16 + 6.31) / 2,
+      what: "FLEURS, 150 English and 150 Spanish clips through the live path, language auto: 10.16 % and 6.31 %",
+      source: `${ARCH}#31-what-replaces-the-12-s-windows`,
+    },
+    speed: {
+      metric: "rtfx",
+      value: Math.round((1 / 0.067) * 10) / 10,
+      what: `the benchmark's streaming Nemotron at 560 ms: real-time factor 0.067 at 4 threads, one channel, the first 600 s of an Earnings-22 call, on the ${REFERENCE_MACHINE}`,
+      source: `${ARCH}#31-what-replaces-the-12-s-windows`,
+    },
+  },
+  "nemotron-3.5-1120": {
+    accuracy: {
+      metric: "wer",
+      value: (9.99 + 6.36) / 2,
+      what: "FLEURS, 150 English (language auto) and 150 Spanish (language es) clips through the live path: 9.99 % and 6.36 %",
+      source: `${ARCH}#31-what-replaces-the-12-s-windows`,
+    },
+    speed: {
+      notMeasured:
+        "the benchmark timed the 560 ms tier only; the 1120 ms tier decodes the same model in larger chunks",
+    },
+  },
   "nemotron-3-diarization": {
     accuracy: {
       metric: "der",

@@ -78,6 +78,12 @@ export interface CatalogEntry extends ModelSpecEntry {
 const PARAKEET_LANGUAGES: readonly string[] =
   "bg cs da de el en es et fi fr hr hu it lt lv mt nl pl pt ro ru sk sl sv uk".split(" ");
 
+/** Nemotron 3.5's languages, from its model card. */
+export const NEMOTRON_35_LANGUAGES: readonly string[] =
+  "en es de fr it ar ja ko pt ru hi zh vi he nl cs da pl no sv th tr bg el et fi hr hu lt lv ro sk uk mt sl".split(
+    " ",
+  );
+
 /** Every model today runs on the CPU on every released platform. */
 const EVERYWHERE = { platforms: PLATFORMS, accelerators: ["cpu"] } as const;
 
@@ -93,6 +99,113 @@ const GH = "https://github.com/k2-fsa/sherpa-onnx/releases/download";
 // on 99.98 to 100 % of 10 ms frames.
 const HF_NEMOTRON =
   "https://huggingface.co/altunenes/parakeet-rs/resolve/4d2a8bc71f5c896ec40faa59732e6716295edaf2/nemotron-3-diarization";
+
+// sherpa-onnx's int8 exports of the streaming Nemotron models, one repository per chunk size.
+const HF_NEMOTRON_EN_560 =
+  "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-speech-streaming-en-0.6b-560ms-int8-2026-04-25/resolve/52056fdc070914a48dcd68b31b44d6a6f5b85902";
+const HF_NEMOTRON_35_560 =
+  "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-560ms-int8-2026-06-11/resolve/ab43d895f5985b1bbab8b6eac8607fcdc05343f3";
+const HF_NEMOTRON_35_1120 =
+  "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-1120ms-int8-2026-06-11/resolve/cba1c96ca5ef0e8393b50584ae153a79145dc492";
+
+/** A streaming Nemotron's symbol table (sherpa-onnx names it tokens.txt). */
+const SYMBOLS_FILE = "tokens.txt";
+
+/** One file of a streaming Nemotron export. */
+function liveFile(
+  base: string,
+  name: string,
+  pin: { sha256: string; size: number },
+): ModelFileSpec {
+  return { name, url: `${base}/${name}`, ...pin };
+}
+
+/** The decoder, joiner and symbol table the two Nemotron 3.5 tiers share, byte for byte. */
+function nemotron35Shared(base: string): ModelFileSpec[] {
+  return [
+    liveFile(base, "decoder.int8.onnx", {
+      sha256: "19f9c98fc6d0a2c33a65a43b36fdb2e914c26c0aa9764be3aebc502a1e982fb0",
+      size: 14978075,
+    }),
+    liveFile(base, "joiner.int8.onnx", {
+      sha256: "4101c7c679a0bc30483794b27a059e34e79232aa2068d78d51231a22c8b0d7ce",
+      size: 9504438,
+    }),
+    liveFile(base, SYMBOLS_FILE, {
+      sha256: "729cc103155bafa785f9cd45746cd41cabe97eab7182fc04d594129587958f8a",
+      size: 131440,
+    }),
+  ];
+}
+
+/** The live pass's streaming engines (live-engines.ts): fetched when a call's setting needs one. */
+const LIVE_MODELS: readonly CatalogEntry[] = [
+  {
+    id: "nemotron-en-560",
+    job: "live recognition, English, streaming at 560 ms (asr.live.engine)",
+    licence: "NVIDIA Open Model License",
+    source: "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
+    serves: ["live"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: ["en"],
+    onDemand: true,
+    files: [
+      liveFile(HF_NEMOTRON_EN_560, "encoder.int8.onnx", {
+        sha256: "7d932213491ad355c6e5576705dc3494731a52af87d7a1b954559340147909d8",
+        size: 652916849,
+      }),
+      liveFile(HF_NEMOTRON_EN_560, "decoder.int8.onnx", {
+        sha256: "0be9702c2f427a2b6bb241d298e0d3836a558de1f5b9fd3018f1cce6e2b3fa98",
+        size: 7257753,
+      }),
+      liveFile(HF_NEMOTRON_EN_560, "joiner.int8.onnx", {
+        sha256: "a35eac38a22ebceb04d230ed7afe0d68f446ba6914a036b97f14fece95967e23",
+        size: 1735862,
+      }),
+      liveFile(HF_NEMOTRON_EN_560, SYMBOLS_FILE, {
+        sha256: "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+        size: 8952,
+      }),
+    ],
+  },
+  {
+    id: "nemotron-3.5-560",
+    job: "live recognition, 35 languages and switching between them, streaming at 560 ms (asr.live.engine)",
+    licence: "OpenMDW-1.1",
+    source: "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+    serves: ["live"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: NEMOTRON_35_LANGUAGES,
+    onDemand: true,
+    files: [
+      liveFile(HF_NEMOTRON_35_560, "encoder.int8.onnx", {
+        sha256: "012e9321373af99021415e0b0eb3ec827b4be3153be6f30d9b448fe65e896e68",
+        size: 657601403,
+      }),
+      ...nemotron35Shared(HF_NEMOTRON_35_560),
+    ],
+  },
+  {
+    id: "nemotron-3.5-1120",
+    job: "live recognition, 35 languages, streaming at 1120 ms: the Spanish default (asr.live.engine)",
+    licence: "OpenMDW-1.1",
+    source: "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+    serves: ["live"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: NEMOTRON_35_LANGUAGES,
+    onDemand: true,
+    files: [
+      liveFile(HF_NEMOTRON_35_1120, "encoder.int8.onnx", {
+        sha256: "2fff2166acaa535bd969fb223c1f0783d71029f143cb298bc54c2afe85abf772",
+        size: 657601521,
+      }),
+      ...nemotron35Shared(HF_NEMOTRON_35_1120),
+    ],
+  },
+];
 
 /**
  * The full-precision (fp32) export: a third fewer word errors in English and a fifth fewer in Spanish
@@ -232,6 +345,7 @@ export const MODELS: readonly CatalogEntry[] = [
       },
     ],
   },
+  ...LIVE_MODELS,
   ...LLAMA_CATALOG,
 ];
 

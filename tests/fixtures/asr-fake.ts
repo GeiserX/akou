@@ -19,6 +19,9 @@ import type {
   DiarizedSpan,
   Diarizer,
   Embedder,
+  LiveEngine,
+  LiveStream,
+  LiveToken,
   ModelSet,
   PreparedHotwords,
   Recognizer,
@@ -203,6 +206,10 @@ export interface FakeOptions {
    * sentence on noise, as Qwen3, Moonshine and Cohere did before sherpa-onnx 1.13.8 (SV-R5).
    */
   hallucinate?: string;
+  /** The fake streaming engine's chunk, ms: how long after a word ends it is emitted (560). */
+  liveTierMs?: number;
+  /** Loading a streaming engine throws (a missing or broken model). */
+  liveFails?: boolean;
 }
 
 export interface DecodeCall {
@@ -444,6 +451,7 @@ export class FakeModels implements ModelSet {
   readonly embedders: FakeEmbedder[] = [];
   readonly diarizers: FakeDiarizer[] = [];
   readonly streams: FakeStreamDiarizer[] = [];
+  readonly liveEngines: FakeLiveEngine[] = [];
   private rec: FakeRecognizer | null = null;
   /** Terms the loaded recognizer's hotword file covers (sherpa-onnx fixes it at load). */
   private covered = new Set<string>();
@@ -521,6 +529,16 @@ export class FakeModels implements ModelSet {
     return d;
   }
 
+  liveEngine(id: string): LiveEngine {
+    const had = this.liveEngines.find((e) => e.id === id);
+    if (had) return had;
+    if (this.o.liveFails) throw new Error(`fake: no model files for ${id}`);
+    const e = new FakeLiveEngine(id, this.o.liveTierMs ?? 560);
+    this.liveEngines.push(e);
+    this.count(id);
+    return e;
+  }
+
   diarizer(): Diarizer {
     const d = new FakeDiarizer(this.o.diarizeMs);
     this.diarizers.push(d);
@@ -572,4 +590,91 @@ export function createAudio(o: {
   hangMs?: number;
 }) {
   return new MemoryAudio(o.parts, o.hangMs);
+}
+
+// ---------------------------------------------------------------------------
+// A streaming engine in the shape of Nemotron live
+
+/** The tone word of a burst, or null for a sound that is no word (as the fake recognizer rules). */
+function toneWord(x: Float32Array, a: number, b: number): string | null {
+  const freqs = WORDS.map((_, i) => wordFreq(i));
+  const k = argmax(x, a, b, freqs);
+  let energy = 0;
+  for (let i = a; i < b; i++) energy += (x[i] as number) ** 2;
+  if (goertzel(x, a, b, freqs[k] as number) / (energy * ((b - a) / 2)) < 0.3) return null;
+  return (WORDS[k] as (typeof WORDS)[number]).sound;
+}
+
+/**
+ * One stream: a word is emitted once its burst has ended and the engine's chunk has passed, with
+ * the burst's start as its time and a leading space, as sherpa-onnx gives Nemotron's tokens. A
+ * token, once returned, is never returned again or changed.
+ */
+export class FakeLiveStream implements LiveStream {
+  private held: Float32Array[] = [];
+  private heldStart = 0;
+  private pos = 0;
+  /** Everything before this is decided. */
+  private doneTo = 0;
+  readonly tokens: LiveToken[] = [];
+  closed = false;
+
+  constructor(
+    private readonly tierSeconds: number,
+    readonly lang: string,
+  ) {}
+
+  push(samples: Float32Array): LiveToken[] {
+    this.held.push(samples.slice());
+    this.pos += samples.length;
+    return this.decide(this.pos - Math.round(this.tierSeconds * RATE), false);
+  }
+
+  flush(): LiveToken[] {
+    return this.decide(this.pos, true);
+  }
+
+  close(): void {
+    this.closed = true;
+  }
+
+  private decide(limit: number, all: boolean): LiveToken[] {
+    if (limit <= this.heldStart) return [];
+    const buf = concat(...this.held);
+    const out: LiveToken[] = [];
+    // A burst still sounding at `limit` waits: it may go on.
+    let keep = all ? this.pos : Math.max(this.heldStart, limit - Math.round(0.1 * RATE));
+    for (const [a, b] of bursts(buf)) {
+      const from = this.heldStart + a;
+      const to = this.heldStart + b;
+      if (from < this.doneTo) continue;
+      if (!all && to >= limit) {
+        keep = Math.min(keep, from);
+        break;
+      }
+      const w = toneWord(buf, a, b);
+      this.doneTo = to;
+      if (!w) continue;
+      out.push({ text: ` ${w}`, t: from / RATE, conf: 1 });
+    }
+    this.held = [buf.subarray(keep - this.heldStart).slice()];
+    this.heldStart = keep;
+    this.tokens.push(...out);
+    return out;
+  }
+}
+
+export class FakeLiveEngine implements LiveEngine {
+  readonly languages = ["en"];
+  readonly streams: FakeLiveStream[] = [];
+  constructor(
+    readonly id: string,
+    readonly tierMs: number,
+  ) {}
+
+  open(lang: string): LiveStream {
+    const s = new FakeLiveStream(this.tierMs / 1000, lang);
+    this.streams.push(s);
+    return s;
+  }
 }
