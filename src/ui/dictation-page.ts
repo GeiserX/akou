@@ -25,6 +25,7 @@ import { nextDictatedApp } from "./dictation-apps.ts";
 import { cueStyle } from "./dictation-cues.ts";
 import { mountDictionaryDialog } from "./dictation-dictionary.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
+import { LanguageList } from "./dictation-languages.ts";
 import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { remotePanel } from "./dictation-remote.ts";
@@ -55,9 +56,19 @@ export interface DictationGrants {
   accessibility: Grant;
 }
 
+/** What `GET /dictation` says about the grants, and the ones the running helper lost (DC-N1). */
+type GrantsReply = { grants?: DictationGrants; lost?: unknown };
+
 /** The sounds and the pill: together they decide what `auto` plays now (DC-O3). */
 const SOUNDS_KEY = "dictation.sounds";
 const PILL_KEY = "dictation.pill";
+
+/** Reading the field back (DC-L2), which on macOS waits for the Accessibility grant. */
+const READ_FIELD_KEY = "dictation.readField";
+const LEARN_KEY = "dictation.learn";
+
+/** The user's languages, drawn as chips with an add list (akou-5v8). */
+const LANGUAGES_KEY = "dictation.languages";
 
 /** The master switch, drawn above the groups. */
 export const ENABLE_KEY = "dictation.enabled";
@@ -169,6 +180,8 @@ export class DictationSettings {
   private platform = "";
   /** What `GET /dictation` says about the grants; null where it says nothing. */
   private grants: DictationGrants | null = null;
+  /** The grants the running helper lost since it started (DC-N1): its key does nothing now. */
+  private lost: string[] = [];
   private recorders: KeyRecorder[] = [];
   /** Dictation's setup (DC-N3), drawn instead of the groups while it runs. */
   private setup: DictationSetup | null = null;
@@ -197,14 +210,15 @@ export class DictationSettings {
         ? Promise.resolve(null)
         : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
       app ? this.t.request<{ app?: { platform?: string } }>("GET", "/status") : null,
-      app ? this.readGrants() : null,
+      app ? this.readGrants() : { grants: null, lost: [] },
       app ? readMics(this.t) : null,
       app && this.openReview ? readDictationReview(this.t) : null,
     ]);
     if (read !== this.reads) return;
     this.review = review;
     this.platform = String(status?.body?.app?.platform ?? "");
-    this.grants = grants;
+    this.grants = grants.grants;
+    this.lost = grants.lost;
     this.mics = mics;
     if (cfg.status !== 200) {
       this.close();
@@ -220,10 +234,17 @@ export class DictationSettings {
     this.draw(server?.body?.dictation?.served_last_hour);
   }
 
-  /** The grants the helper reports, as they are now; null where the app says nothing. */
-  private async readGrants(): Promise<DictationGrants | null> {
-    const r = await this.t.request<{ grants?: DictationGrants }>("GET", "/dictation");
-    return r.status < 400 ? (r.body?.grants ?? null) : null;
+  /**
+   * The grants the helper reports, as they are now, null where the app says nothing; and the ones
+   * the running helper lost since it started.
+   */
+  private async readGrants(): Promise<{ grants: DictationGrants | null; lost: string[] }> {
+    const r = await this.t.request<GrantsReply>("GET", "/dictation");
+    if (r.status >= 400) return { grants: null, lost: [] };
+    const lost = Array.isArray(r.body?.lost)
+      ? r.body.lost.filter((x): x is string => typeof x === "string")
+      : [];
+    return { grants: r.body?.grants ?? null, lost };
   }
 
   private draw(served?: number): void {
@@ -240,6 +261,8 @@ export class DictationSettings {
             this.field(ENABLE_KEY),
             // The setup's microphone step says it, and knows when the grant arrives.
             this.setup ? null : this.offReason(),
+            // At the top, where it is seen: the key does nothing until the grant is back.
+            this.setup ? null : this.grantLost(),
           )
         : null;
     if (this.setup) {
@@ -308,9 +331,14 @@ export class DictationSettings {
     }
     let input = f.input;
     if (key === MIC_KEY && input instanceof HTMLInputElement) input = this.micField(input);
+    if (key === LANGUAGES_KEY && input instanceof HTMLTextAreaElement && !input.disabled)
+      languageChips(input);
     if (key === SOUNDS_KEY) input.after(h("small", { id: "dictation-sounds-now", class: "hint" }));
+    const waiting = key === READ_FIELD_KEY ? this.readWaits(input) : null;
+    if (waiting) input.after(waiting);
     input.addEventListener("change", () => {
       if (key === SOUNDS_KEY || key === PILL_KEY) this.soundsNow();
+      if (key === READ_FIELD_KEY || key === LEARN_KEY) this.redrawReadWaits();
       // The switch turned on with a grant missing runs the setup instead (DC-U2, DC-N3).
       if (key === ENABLE_KEY && input instanceof HTMLInputElement && input.checked) {
         if (this.missingGrant()) {
@@ -412,18 +440,54 @@ export class DictationSettings {
     );
   }
 
+  /**
+   * The Accessibility grant the running helper lost (DC-N1): on macOS its key tap is dead until the
+   * grant is back, when the app starts the helper again by itself.
+   */
+  private grantLost(): HTMLElement | null {
+    if (this.platform !== "darwin" || !this.lost.includes("accessibility")) return null;
+    return h(
+      "p",
+      { id: "dictation-grant-lost", class: "issue" },
+      "Accessibility lost: macOS took the grant back, so the dictation key does nothing. Turn akou on under Accessibility and dictation starts again by itself. ",
+      h(
+        "button",
+        {
+          type: "button",
+          id: "dictation-grant-lost-open",
+          on: {
+            click: () =>
+              void this.t.openSettingsPane("accessibility").then((ok) => {
+                if (!ok)
+                  toast("Open the privacy settings yourself: this window cannot open them here.");
+              }),
+          },
+        },
+        "Open Accessibility settings",
+      ),
+    );
+  }
+
   /** The grants as the helper reports them, and the way back into the setup. */
   private permissions(): HTMLElement | null {
     const g = this.grants;
     if (!g) return null;
     const word = (x: string) =>
-      x === "granted" ? "ok" : x === "not-needed" ? "not needed" : "not granted";
+      x === "granted"
+        ? "ok"
+        : x === "not-needed"
+          ? "not needed"
+          : x === "not-asked"
+            ? "not asked yet"
+            : "not granted";
     return h(
       "p",
       { id: "dictation-permissions", class: "hint" },
       `Permissions: Microphone ${word(g.mic)}`,
       this.platform === "darwin"
-        ? `, Accessibility ${word(g.accessibility)}${grantOk(g.accessibility) ? "" : " (clipboard only)"}`
+        ? this.lost.includes("accessibility")
+          ? ", Accessibility lost"
+          : `, Accessibility ${word(g.accessibility)}${grantOk(g.accessibility) ? "" : " (clipboard only)"}`
         : "",
       ". ",
       h(
@@ -442,8 +506,9 @@ export class DictationSettings {
       grants: () => this.grants,
       setting: (k) => this.settings[k],
       readGrants: async () => {
-        const g = await this.readGrants();
+        const { grants: g, lost } = await this.readGrants();
         if (g) this.grants = g;
+        this.lost = lost;
         return g;
       },
       keyRow: () => {
@@ -525,11 +590,47 @@ export class DictationSettings {
   }
 
   /**
+   * DC-L2: on macOS the helper reads no field without the Accessibility grant, so a read-back
+   * that is on says it waits for it rather than looking as if it worked.
+   */
+  private readWaits(readInput?: HTMLElement): HTMLElement | null {
+    const g = this.grants?.accessibility;
+    if (this.platform !== "darwin" || !g || g === "granted" || g === "not-needed") return null;
+    // The fields as they stand, so a toggle updates the note before the save comes back.
+    const read =
+      readInput instanceof HTMLInputElement
+        ? readInput.checked
+        : this.settings[READ_FIELD_KEY] === true;
+    if (!read) return null;
+    // With learning off main asks for no field read at all, so there is nothing to wait for.
+    const learn =
+      this.root.querySelector<HTMLInputElement | HTMLSelectElement>(
+        `[data-key="${LEARN_KEY}"]:not(div)`,
+      )?.value ?? this.settings[LEARN_KEY];
+    if (learn === "off") return null;
+    return h(
+      "small",
+      { id: "dictation-read-waiting", class: "hint" },
+      " Waiting for the Accessibility grant: until you give it, akou reads no field and learns only from the draft box.",
+    );
+  }
+
+  /** Puts the DC-L2 note back after the read-back or learning setting changed on the page. */
+  private redrawReadWaits(): void {
+    this.root.querySelector("#dictation-read-waiting")?.remove();
+    const input = this.root.querySelector<HTMLInputElement>(`input[data-key="${READ_FIELD_KEY}"]`);
+    const waiting = input ? this.readWaits(input) : null;
+    if (input && waiting) input.after(waiting);
+  }
+
+  /**
    * Why the recorder takes chords only: on macOS without the Accessibility grant, dictation runs
    * in the clipboard-only fallback with a Carbon hotkey, which binds chords only (DC-N3).
    */
   private chordsOnly(): string | null {
     if (this.platform !== "darwin" || this.grants?.accessibility !== "denied") return null;
+    // A grant taken back after the start leaves the tap dead, not the Carbon fallback (DC-N1).
+    if (this.lost.includes("accessibility")) return null;
     return "without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.";
   }
 
@@ -641,6 +742,25 @@ export class DictationSettings {
     this.settings[key] = value;
     this.shown[key] = shownValue(this.schema[key], value);
   }
+}
+
+/**
+ * `dictation.languages` as chips with an add list in place of its text box, which stays the value
+ * the page saves: each change writes the list into it, one code a line, and saves.
+ */
+function languageChips(input: HTMLTextAreaElement): void {
+  const list = new LanguageList(
+    input.value
+      .split("\n")
+      .map((c) => c.trim())
+      .filter((c) => c !== ""),
+    (l) => {
+      input.value = l.join("\n");
+      input.dispatchEvent(new Event("change"));
+    },
+  );
+  input.hidden = true;
+  input.after(list.root);
 }
 
 /**

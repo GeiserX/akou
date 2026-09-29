@@ -32,16 +32,20 @@ import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
 import { applyHunks, type Redecode } from "../../core/dictation/learn.ts";
-import type { Chip, ChipAnswer } from "../../ui/pill-protocol.ts";
+import type { CueMoment } from "../../ui/dictation-cues.ts";
+import type { Chip, ChipAnswer, PillAction } from "../../ui/pill-protocol.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
+import type { AppRule } from "../config/schema.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
-import { DraftBox, type DraftBoxOptions } from "./draft.ts";
+import { DraftBox, type DraftBoxOptions, NO_TARGET } from "./draft.ts";
+import { forcesLanguage } from "./engines.ts";
 import { Learner } from "./learner.ts";
 import {
   type Bindings,
   type EditHunk,
   encodeCommand,
+  type Frame,
   type Grant,
   parseHelperLine,
 } from "./protocol.ts";
@@ -52,6 +56,7 @@ import {
   DictationSession,
   decodeDictation,
   type InsertPolicy,
+  type PreviewDecode,
   type RebindAnswer,
   type SessionState,
   type TextRules,
@@ -61,6 +66,26 @@ import { DICTATION_DIR, DictationLog, expiredDictations, FINAL, newDictationId }
 
 /** How long `stop` waits for the helper to exit before it is killed. */
 const STOP_MS = 2000;
+
+/**
+ * How long the grants a probe read are reused (DC-U2, DC-N3): the setup reads them once a second
+ * while a grant step waits, so each read runs at most one probe.
+ */
+export const PROBE_MS = 1000;
+
+/** A probe that has not printed its `ready` line by then answers nothing. */
+const PROBE_DEADLINE_MS = 5000;
+
+/**
+ * How often the grants are read again after the helper lost one (DC-N1), so the key works again
+ * soon after the user gives it back, with no page open to ask.
+ */
+export const REGRANT_POLL_MS = 2000;
+
+export type Grants = { mic: Grant; accessibility: Grant };
+
+/** A grant dictation can work with: given, one the OS does not ask for, or one not asked yet. */
+const grantOk = (g: Grant) => g !== "denied";
 
 /** How often `dictation.retainDays` is applied while the app runs. */
 const SWEEP_MS = 60 * 60 * 1000;
@@ -118,6 +143,9 @@ export type RetryResult =
 /** The session commands of the tray and the CLI (DC-G1). */
 export type ControlAction = "start" | "stop" | "cancel";
 
+/** The buttons of the pill's error sheet (DC-O1, DC-R3). */
+export type ErrorAction = Extract<PillAction, "retry" | "copy" | "open-draft">;
+
 /** Why a session command was refused: the code the API answers with, and a sentence. */
 export type ControlResult =
   | { ok: true; state: DictationStatus["state"] }
@@ -141,6 +169,15 @@ export interface DictationServiceOptions extends TextRules {
   loading?(): boolean;
   /** The remote engine's standing while `dictation.engine` is `remote`, else null (DC-R3). */
   remote?(): DictationRemoteStatus | null;
+  /**
+   * The helper's `dictate --probe` command, which prints the `ready` line with the grants read
+   * without asking and exits (DC-U2, DC-N3). Absent, the grants are known only while it runs.
+   */
+  probe?(): readonly string[];
+  /** Plays the cue for a moment of a spoken dictation, or nothing, as the settings say (DC-O3). */
+  cue?(moment: CueMoment): void;
+  /** `dictation.mic` and `dictation.preferBuiltInOverBluetooth`, for `rebuild_mic` (DC-U4). */
+  mic?(): { device: string; preferBuiltIn: boolean };
   /** `dictation.retainDays` as it is now; absent, nothing is ever deleted by age. */
   retainDays?(): number;
   /** `dictation.keepAudio` as it is now; absent, the audio is kept. */
@@ -154,6 +191,8 @@ export interface DictationServiceOptions extends TextRules {
    * `dictation.sendAlways`, `dictation.restoreClipboard`. Absent: paste, and never a send key.
    */
   insert?(): InsertPolicy;
+  /** `dictation.apps`, the per-app rules (DC-U9); absent, none. */
+  apps?(): readonly AppRule[];
   /** `dictation.silenceStopSeconds` and `dictation.maxMinutes` (DC-A3); absent, never. */
   autoStop?(): AutoStop;
   /** `dictation.spokenSend` (DC-S5); absent, off. */
@@ -203,7 +242,9 @@ export interface DictationStatus {
   verdict: string | null;
   /** The engine is loading its model: a press now is kept and decoded once it is ready. */
   loading: boolean;
-  grants: { mic: Grant; accessibility: Grant } | null;
+  grants: Grants | null;
+  /** The grants the running helper lost since it started (DC-N1): its key does nothing now. */
+  lost: string[];
   backend: string | null;
   /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
   swallow_keys: boolean | null;
@@ -224,15 +265,33 @@ export type DictationFollow =
   /** A line for the pill while listening (`1 minute left`, DC-A3), never written anywhere. */
   | { kind: "warning"; note: string }
   /**
+   * The words heard so far in the session listening and their language (DC-E5), produced only
+   * while a follower asks for them, never written anywhere and never inserted.
+   */
+  | { kind: "partial"; text: string; language: string | null }
+  /**
    * The learn chip for a fix made in the app's field after a direct insert (DC-L2, DC-L4): the
    * pill shows it, or with the pill off the shell notifies and releases it (DC-O4).
    */
-  | { kind: "chip"; chip: Chip };
+  | { kind: "chip"; chip: Chip }
+  /** The helper lost a grant it started with (DC-N1): on macOS the key tap is dead. */
+  | { kind: "grant-lost"; name: string }
+  /** macOS Secure Input turned on or off: a keyed chord cannot reach the helper while it is on. */
+  | { kind: "secure-input"; on: boolean }
+  /**
+   * The dictation key went down, with the frame of the window that has the keyboard where the
+   * helper can read it, or the press was dropped before it became a session (DC-O1).
+   */
+  | { kind: "press"; on: boolean; frame: Frame | null };
 
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
   session: DictationSession;
   exited: Promise<void>;
+  /** Started again because a grant arrived: it is not started again for one more. */
+  regranted?: boolean;
+  /** Reads the grants while one is lost, until it is back or this helper stops (DC-N1). */
+  regrant?: ReturnType<typeof setInterval>;
 }
 
 export class DictationService {
@@ -252,11 +311,23 @@ export class DictationService {
   private wanted: { argv: readonly string[]; bindings: () => Bindings } | null = null;
   /** The keys of the last start, for the pill's hint. */
   private keys: (() => Bindings) | null = null;
+  /** The command of the last start, to start it again when a grant arrives. */
+  private argv: readonly string[] | null = null;
+  /** Counts the stops, so a start again after a grant does not undo a stop asked meanwhile. */
+  private stops = 0;
+  /** The Dictation page's key recorder while it is open (DC-U3). */
+  private recorder: ((name: string) => void) | null = null;
+  /** The Dictation page's meter is on (DC-U4, DC-N3). */
+  private metering = false;
+  /** The last probe's grants and when it ran. */
+  private probed: { at: number; grants: Promise<Grants | null> } | null = null;
 
   /** Where `POST /v1/dictations` spools a clip while it is decoded; emptied at every start. */
   readonly uploadDir: string;
   private readonly watchers = new Set<(state: DictationStatus["state"]) => void>();
   private readonly followers = new Set<(m: DictationFollow) => void>();
+  /** The followers that asked for partials, each with its own say on whether it wants them now. */
+  private readonly partialWants = new Map<(m: DictationFollow) => void, () => boolean>();
   private readonly sweeper: ReturnType<typeof setInterval>;
 
   constructor(private readonly o: DictationServiceOptions) {
@@ -271,8 +342,12 @@ export class DictationService {
       sendKey: d.sendKey ?? (() => "none"),
       learnMode: d.learnMode ?? (() => "off"),
       engines: d.engines ?? (() => []),
-      retry: async (id, engine) => {
-        const r = await this.retry(id, engine === "auto" ? {} : { engine });
+      languages: () => this.o.languages?.() ?? [],
+      retry: async (id, engine, language) => {
+        const r = await this.retry(id, {
+          ...(engine === "auto" ? {} : { engine }),
+          ...(language ? { language } : {}),
+        });
         return r.ok ? r : { ok: false, message: r.message };
       },
       ...(d.knownPairs ? { knownPairs: d.knownPairs } : {}),
@@ -456,6 +531,70 @@ export class DictationService {
   }
 
   /**
+   * What the pill's error sheet offers for failed dictation `id` (DC-O1, DC-R3): Retry where its
+   * audio is kept and an engine can decode it (`Retry locally` when the remote's decode failed),
+   * Copy where it has text and a helper runs to copy it, Open draft where it has text.
+   */
+  errorActions(id: string): { actions: ErrorAction[]; retryLabel?: string } {
+    const it = this.log.item(id);
+    if (!it) return { actions: [] };
+    const actions: ErrorAction[] = [];
+    const engine = this.retryEngineFor(it);
+    if (engine && this.audio.has(id)) actions.push("retry");
+    if (it.text && this.session()) actions.push("copy");
+    if (it.text) actions.push("open-draft");
+    const local = actions.includes("retry") && remoteDecodeFailed(it);
+    return { actions, ...(local ? { retryLabel: "Retry locally" } : {}) };
+  }
+
+  /**
+   * An error sheet's button for dictation `id`. Retry decodes its kept audio again and opens the
+   * draft box on the new reading, where Enter inserts into the app captured at the press; Open
+   * draft opens it on the text it has; Copy puts that text on the clipboard. Nothing is pasted from
+   * here, since the user's focus may have moved since the press.
+   */
+  async errorAction(id: string, action: ErrorAction): Promise<boolean> {
+    const it = this.log.item(id);
+    if (!it) return false;
+    if (action === "open-draft") return it.text ? this.draft.open(id, { focus: true }).ok : false;
+    if (action === "copy") {
+      const s = this.session();
+      if (!it.text || !s) return false;
+      const r = await s.copyText(it.text, it.target ?? NO_TARGET);
+      return r.ok;
+    }
+    const engine = this.retryEngineFor(it);
+    if (!engine) return false;
+    // A language the user chose for the dictation's session (the pill's chip, the door) holds for
+    // its retry too; one `dictation.language` set is the retry's own default anyway.
+    const chosen = this.session()?.chosenLanguage(id) ?? null;
+    const r = await this.retry(id, { engine, ...(chosen ? { language: chosen } : {}) });
+    if (!r.ok) {
+      this.o.onLog?.("warn", `dictation ${id}: the retry failed (${r.message})`);
+      return false;
+    }
+    if (r.answer.text === "") return false;
+    // A new dictation started while this one decoded: the box must not take its keyboard (DC-S1).
+    const s = this.session()?.state;
+    const busy = s === "listening" || s === "transcribing" || s === "inserting";
+    return this.draft.open(id, {
+      focus: !busy,
+      reading: r.answer,
+      ...(chosen && r.answer.language_forced ? { forced: true } : {}),
+    }).ok;
+  }
+
+  /**
+   * The engine an error's Retry decodes on: a local one after the remote's decode failed (best
+   * when it runs here, else fast), else the one that read it.
+   */
+  private retryEngineFor(it: { engine: string; text: string | null }): string | null {
+    const here = (this.o.draft?.engines?.() ?? []).filter((e) => e !== "remote");
+    if (remoteDecodeFailed(it)) return here.includes("best") ? "best" : (here[0] ?? null);
+    return ["fast", "best", "remote"].includes(it.engine) ? it.engine : (here[0] ?? null);
+  }
+
+  /**
    * The chip for dictation `id` has nowhere to show (the pill is off): it is over with nothing
    * written, so its pairs wait in the words to review (DC-O4, DC-L5).
    */
@@ -476,9 +615,10 @@ export class DictationService {
   /**
    * Decodes a dictation's kept audio again with `engine` (DC-G1, DC-H1): the same guards and text
    * rules as a new dictation, answered beside the first reading. The dictation and its log are not
-   * changed.
+   * changed. `language` forces one on an engine that takes it, as the language chip does (akou-5v8);
+   * absent, `dictation.language` as for a new dictation.
    */
-  async retry(id: string, o: { engine?: string } = {}): Promise<RetryResult> {
+  async retry(id: string, o: { engine?: string; language?: string } = {}): Promise<RetryResult> {
     if (!this.log.item(id)) return { ok: false, code: "not_found", message: `no dictation ${id}` };
     const samples = await this.audio.read(id);
     if (!samples) {
@@ -490,7 +630,7 @@ export class DictationService {
     }
     const engine = this.o.engine(o.engine);
     if (!engine) return { ok: false, code: "models_missing", message: "no speech model is loaded" };
-    const language = this.o.language?.();
+    const language = o.language ?? this.o.language?.();
     try {
       const r = await decodeDictation(this.o, engine, samples, language);
       if (r.kind === "empty") {
@@ -526,11 +666,58 @@ export class DictationService {
 
   /**
    * Called with every event the log appends and every mic level, from now on (DC-G2). Returns the
-   * unsubscribe.
+   * unsubscribe. `partials`: while it answers true, the session listening is decoded again for the
+   * words as you speak (DC-E5); with no follower asking, no partial is ever decoded.
    */
-  follow(fn: (m: DictationFollow) => void): () => void {
+  follow(fn: (m: DictationFollow) => void, o: { partials?: () => boolean } = {}): () => void {
     this.followers.add(fn);
-    return () => this.followers.delete(fn);
+    if (o.partials) this.partialWants.set(fn, o.partials);
+    return () => {
+      this.followers.delete(fn);
+      this.partialWants.delete(fn);
+    };
+  }
+
+  /**
+   * The preview's decoder (DC-E5): the local `fast` engine, which decodes a few seconds in a
+   * fraction of a second, whatever engine the dictation's own text comes from. Parakeet names no
+   * language, so its partials carry none. Null while no follower wants partials or no local model
+   * is loaded.
+   */
+  private previewDecode(): PreviewDecode | null {
+    if (![...this.partialWants.values()].some((wants) => wants())) return null;
+
+    const fast = this.o.engine("fast");
+    if (!fast) return null;
+    return (samples) => fast.decode(samples, {});
+  }
+
+  /**
+   * The languages the pill's chip moves between (akou-5v8): `dictation.languages`, else
+   * `asr.languages`; `switchable` when there are two or more and the engine takes a forced one
+   * (`fast` picks its own, DC-E4); `language`, the one a session asks for before the chip moves
+   * it: `dictation.language`, else null (the engine chooses); `chosen`, the one chosen for the
+   * session listening (the door's `start` with a language, or the chip), else null.
+   */
+  languageChoice(): {
+    languages: readonly string[];
+    switchable: boolean;
+    language: string | null;
+    chosen: string | null;
+  } {
+    const languages = this.o.languages?.() ?? [];
+    const engine = this.o.engine()?.name ?? "fast";
+    return {
+      languages,
+      switchable: languages.length >= 2 && forcesLanguage(engine),
+      language: this.o.language?.() ?? null,
+      chosen: this.session()?.listeningLanguage() ?? null,
+    };
+  }
+
+  /** Forces `language` for the session listening, from the pill's chip; false with none. */
+  setLanguage(language: string): boolean {
+    return this.helper?.session.setLanguage(language) ?? false;
   }
 
   private tell(m: DictationFollow): void {
@@ -551,9 +738,14 @@ export class DictationService {
   /**
    * The tray's and the CLI's door (DC-G1, DC-O4): `start` a latched session as if the key were
    * tapped, `stop` it (its audio is transcribed and inserted), or `cancel` it (nothing is). Resolves
-   * once the helper acted; a helper that did not act within `CONTROL_MS` is a refusal.
+   * once the helper acted; a helper that did not act within `CONTROL_MS` is a refusal. `language`
+   * forces one for the session `start` opens, as a click on the pill's chip does (akou-5v8).
    */
-  async control(action: ControlAction, waitMs = CONTROL_MS): Promise<ControlResult> {
+  async control(
+    action: ControlAction,
+    waitMs = CONTROL_MS,
+    o: { language?: string } = {},
+  ): Promise<ControlResult> {
     const s = this.helper?.session;
     if (!s)
       return { ok: false, code: "dictation_off", message: "dictation is off (dictation.enabled)" };
@@ -565,7 +757,7 @@ export class DictationService {
     if (action !== "start" && s.state !== "listening") {
       return { ok: false, code: "not_dictating", message: "no dictation is listening" };
     }
-    s.command(action);
+    s.command(action, action === "start" && o.language ? { language: o.language } : {});
     const done = () => (action === "start" ? s.state !== "idle" : s.state !== "listening");
     const t0 = Date.now();
     while (!done() && Date.now() - t0 < waitMs) await Bun.sleep(10);
@@ -601,6 +793,7 @@ export class DictationService {
       verdict: this.o.verdict?.() ?? null,
       loading: this.o.loading?.() ?? false,
       grants: s?.ready?.grants ?? null,
+      lost: s ? [...s.lost] : [],
       backend: s?.ready?.backend ?? null,
       swallow_keys: s?.ready?.swallow_keys ?? null,
       remote: this.o.remote?.() ?? null,
@@ -626,6 +819,8 @@ export class DictationService {
       return;
     }
     this.keys = bindings;
+    this.argv = argv;
+    this.recorder = null;
     let proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
     try {
       proc = Bun.spawn([...argv], { stdin: "pipe", stdout: "pipe", stderr: "pipe" });
@@ -644,13 +839,24 @@ export class DictationService {
       onLevel: (rms) => this.tell({ kind: "level", rms }),
       onNotice: (id, notice) => this.tell({ kind: "notice", id, notice }),
       saveAudio: (id, samples) => this.audio.write(id, samples),
-      onDraft: (id, _reason, focus) => this.draft.open(id, { focus }).ok,
+      onDraft: (id, _reason, focus, rule) =>
+        this.draft.open(id, { focus, ...(rule ? { rule } : {}) }).ok,
       ...(this.o.insert ? { insertPolicy: this.o.insert } : {}),
+      appRule: (app) => this.o.apps?.().find((r) => r.app === app),
       onBusy: () => this.tell({ kind: "busy" }),
       onWarning: (note) => this.tell({ kind: "warning", note }),
       ...(this.o.autoStop ? { autoStop: this.o.autoStop } : {}),
       ...(this.o.spokenSend ? { spokenSend: this.o.spokenSend } : {}),
       onEdit: (id, hunks) => void this.fromField(id, hunks),
+      preview: () => this.previewDecode(),
+      onPartial: (p) => this.tell({ kind: "partial", ...p }),
+      onCue: (m) => this.o.cue?.(m),
+      onRecordedKey: (name) => this.recorder?.(name),
+      onGrantLost: (name) => this.grantLost(h, name),
+      onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
+      onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
+      ...(this.o.mic ? { mic: this.o.mic } : {}),
+      metering: () => this.metering,
       send: (c) => {
         try {
           proc.stdin.write(encodeCommand(c));
@@ -688,6 +894,7 @@ export class DictationService {
     h.exited = (async () => {
       await proc.exited;
       await Promise.all([out, err]);
+      clearInterval(h.regrant);
       session.helperGone();
       if (this.helper === h) {
         this.helper = null;
@@ -707,8 +914,132 @@ export class DictationService {
     return this.helper?.session.rebind(b) ?? Promise.resolve({ ok: true });
   }
 
+  /**
+   * Opens the Dictation page's key recorder (DC-U3), which gets every key the helper sees, Fn
+   * included, while no session can start; null closes it. False with no helper ready.
+   */
+  recordKeys(fn: ((name: string) => void) | null): boolean {
+    const s = this.helper?.session;
+    if (!s?.ready) return false;
+    this.recorder = fn;
+    return s.recordKeys(fn !== null);
+  }
+
+  /**
+   * The Dictation page's meter (DC-U4, DC-N3): on, the helper keeps the mic open and its `level`
+   * reaches every follower with no session; a helper started again meanwhile gets it on too.
+   * False with no helper ready, so the page's meter stays still.
+   */
+  watchMic(on: boolean): boolean {
+    this.metering = on;
+    return this.helper?.session.meter(on) ?? false;
+  }
+
+  /** `dictation.mic` or `dictation.preferBuiltInOverBluetooth` changed: the helper opens it now. */
+  rebuildMic(): void {
+    this.helper?.session.rebuildMic();
+  }
+
+  /**
+   * The grants as the OS holds them now (DC-U2, DC-N3). The running helper's, while each is given;
+   * else a probe's, read without asking, so the setup sees a grant arrive and the switch sees one
+   * missing before any helper starts. A helper that started without a grant the probe now finds
+   * is started again once idle, since the macOS key tap is made at the start. Null when nothing
+   * can say.
+   */
+  async grants(): Promise<Grants | null> {
+    const h = this.helper;
+    const ready = h?.session.ready?.grants ?? null;
+    if (ready && grantOk(ready.mic) && grantOk(ready.accessibility)) return ready;
+    const fresh = await this.probeGrants();
+    if (!fresh) return ready;
+    if (
+      h &&
+      ready &&
+      this.helper === h &&
+      !h.regranted &&
+      h.session.state === "idle" &&
+      ((!grantOk(ready.mic) && grantOk(fresh.mic)) ||
+        (!grantOk(ready.accessibility) && grantOk(fresh.accessibility)))
+    ) {
+      this.restartForGrant(h);
+    }
+    return fresh;
+  }
+
+  private probeGrants(): Promise<Grants | null> {
+    const argv = this.o.probe?.();
+    if (!argv) return Promise.resolve(null);
+    const at = Date.now();
+    if (this.probed && at - this.probed.at < PROBE_MS) return this.probed.grants;
+    const grants = (async (): Promise<Grants | null> => {
+      let proc: Bun.Subprocess<"ignore", "ignore", "pipe">;
+      try {
+        proc = Bun.spawn([...argv], { stdin: "ignore", stdout: "ignore", stderr: "pipe" });
+      } catch (err) {
+        this.o.onLog?.("warn", `dictation probe did not start: ${(err as Error).message}`);
+        return null;
+      }
+      const r = await withDeadline(realClock, new Response(proc.stderr).text(), PROBE_DEADLINE_MS);
+      if (!r.ok) {
+        proc.kill("SIGKILL");
+        return null;
+      }
+      for (const line of r.value.split("\n")) {
+        const m = parseHelperLine(line);
+        if (m.kind === "msg" && m.msg.type === "ready") return m.msg.grants;
+      }
+      return null;
+    })();
+    this.probed = { at, grants };
+    return grants;
+  }
+
+  /**
+   * Helper `h` lost grant `name` it started with (DC-N1). The followers hear it (the pill says so
+   * with the button to the pane), and the grants are read again every `REGRANT_POLL_MS` until the
+   * grant is back, which starts the helper again, since the tap is only made at a start.
+   */
+  private grantLost(h: Helper, name: string): void {
+    if (this.helper !== h) return;
+    // A helper started again for an earlier grant may be started again for this one.
+    h.regranted = false;
+    this.tell({ kind: "grant-lost", name });
+
+    if (h.regrant) return;
+    h.regrant = setInterval(() => {
+      if (this.helper !== h || h.session.lost.size === 0) {
+        clearInterval(h.regrant);
+        return;
+      }
+      void this.grants();
+    }, REGRANT_POLL_MS);
+  }
+
+  /** Stops helper `h` and starts it again with the same command and keys, unless stopped meanwhile. */
+  private restartForGrant(h: Helper): void {
+    const argv = this.argv;
+    const keys = this.keys;
+    if (!argv || !keys) return;
+    this.o.onLog?.(
+      "info",
+      "dictation: a grant arrived since the helper started; starting it again",
+    );
+    h.regranted = true;
+    const stop = this.stop();
+    const mine = this.stops;
+    void stop.then(() => {
+      if (this.stops !== mine || this.helper) return;
+      this.start(argv, keys);
+      // `start` sets the helper; the check above narrowed it to null.
+      const started = this.helper as Helper | null;
+      if (started) started.regranted = true;
+    });
+  }
+
   /** Stops the helper: `stop`, then a kill if it has not exited within 2 s. */
   async stop(): Promise<void> {
+    this.stops++;
     this.wanted = null;
     const h = this.helper;
     if (!h) return this.stopping ?? undefined;
@@ -779,6 +1110,14 @@ export class DictationService {
 }
 
 /** The text rules the service hands each session (DC-E6, DC-L6, DC-S7, DC-S6). */
+/**
+ * The remote's decode failed, so it has no text: a remote reading whose insert failed has its text
+ * and needs no local retry.
+ */
+function remoteDecodeFailed(it: { engine: string; text: string | null }): boolean {
+  return it.engine === "remote" && !it.text;
+}
+
 function textRules(o: TextRules): TextRules {
   const r: TextRules = {};
   if (o.correct) r.correct = o.correct;

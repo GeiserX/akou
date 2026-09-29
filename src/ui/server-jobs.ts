@@ -1,7 +1,9 @@
 /**
  * The Jobs page of server mode (docs/ux/SERVER.md SV-U4), the page the server opens on: queued and
  * running jobs with their elapsed time, done and failed ones with their error, filtered by key and
- * state; open one to read its fields and its transcript; cancel or delete one.
+ * state; open one to read its fields and its transcript; cancel or delete one. A job is shown by
+ * its title with its id dim beside it, and the search keeps the jobs whose title, id or state
+ * holds the text (SV-J10), as the server's `q` finds them, so it reaches past the rows shown.
  *
  * It reads `GET /v1/jobs` twice a second while it is shown, so a job submitted from outside shows
  * within a second. The event feed (SV-E1) carries outcomes only, not a job starting, so it cannot
@@ -22,6 +24,7 @@ const STATES = ["queued", "running", "done", "failed", "cancelled"] as const;
 
 interface JobView {
   id: string;
+  title?: string | null;
   status: (typeof STATES)[number];
   key_id?: string;
   created_at: string;
@@ -48,6 +51,29 @@ function errorText(e: JobView["error"]): string {
   return [e.code, e.message].filter(Boolean).join(": ");
 }
 
+/** The job's name cell: its title with the id dim beside it, or the id alone. */
+function nameOf(j: JobView): (HTMLElement | string)[] {
+  if (!j.title) return [j.id];
+  return [h("span", { class: "job-title" }, j.title), " ", h("span", { class: "job-id" }, j.id)];
+}
+
+/** The magnifier of the desktop sidebar's search (index.html), drawn without markup. */
+function searchIcon(): SVGSVGElement {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("class", "ico");
+  svg.setAttribute("viewBox", "0 0 16 16");
+  svg.setAttribute("aria-hidden", "true");
+  const circle = document.createElementNS(ns, "circle");
+  circle.setAttribute("cx", "7");
+  circle.setAttribute("cy", "7");
+  circle.setAttribute("r", "4.5");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute("d", "m10.5 10.5 3 3");
+  svg.append(circle, path);
+  return svg;
+}
+
 export class JobsPage implements ServerScreen {
   readonly name = "jobs" as const;
   readonly title = "Jobs";
@@ -63,6 +89,16 @@ export class JobsPage implements ServerScreen {
     { id: "jobs-key", attrs: { "aria-label": "Key" } },
     h("option", { value: "" }, "every key"),
   );
+  private readonly search = h("input", {
+    id: "jobs-search",
+    type: "search",
+    placeholder: "Search jobs",
+    attrs: {
+      "aria-label": "Search jobs by title, id or state",
+      autocomplete: "off",
+      spellcheck: "false",
+    },
+  });
   private readonly body = h("tbody");
   private readonly count = h("span", { class: "hint", attrs: { role: "status" } });
   private readonly detail = h("section", { id: "job-detail", hidden: true });
@@ -70,12 +106,21 @@ export class JobsPage implements ServerScreen {
   private names = new Map<string, string>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private inFlight = false;
+  /** A filter changed while a read was out: read again when it answers. */
+  private again = false;
   private selected: { id: string; status: string } | null = null;
 
   constructor(private readonly t: Transport) {
     this.root = section(
       "Jobs",
-      h("div", { class: "bar" }, this.status, this.key, this.count),
+      h(
+        "div",
+        { class: "bar" },
+        h("label", { class: "search" }, searchIcon(), this.search),
+        this.status,
+        this.key,
+        this.count,
+      ),
       h(
         "table",
         { id: "jobs-table" },
@@ -105,6 +150,13 @@ export class JobsPage implements ServerScreen {
     );
     this.status.addEventListener("change", () => void this.read());
     this.key.addEventListener("change", () => void this.read());
+    this.search.addEventListener("input", () => void this.read());
+    this.search.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape" || !this.search.value) return;
+      e.preventDefault();
+      this.search.value = "";
+      void this.read();
+    });
   }
 
   show(): void {
@@ -133,12 +185,17 @@ export class JobsPage implements ServerScreen {
 
   /** One read of the list; a tick is skipped while the last is unanswered. */
   private async read(): Promise<void> {
-    if (this.inFlight) return;
+    if (this.inFlight) {
+      this.again = true;
+      return;
+    }
     this.inFlight = true;
     try {
       const q = new URLSearchParams({ limit: "100" });
       if (this.status.value) q.set("status", this.status.value);
       if (this.key.value) q.set("key", this.key.value);
+      const text = this.search.value.trim();
+      if (text) q.set("q", text);
       const r = await this.t.request<{ jobs: JobView[] }>("GET", `/jobs?${q}`);
       if (r.status !== 200) {
         this.count.textContent = message(r.body, `the jobs could not be read (HTTP ${r.status})`);
@@ -149,6 +206,10 @@ export class JobsPage implements ServerScreen {
       // The next tick asks again.
     } finally {
       this.inFlight = false;
+      if (this.again) {
+        this.again = false;
+        void this.read();
+      }
     }
   }
 
@@ -161,13 +222,22 @@ export class JobsPage implements ServerScreen {
       const cells = this.cells(j);
       // A running job's elapsed time changes every read and is written in place; the row is
       // drawn again only when the job, or its button's state, changes.
-      const stamp = JSON.stringify([cells.filter((_, i) => i !== TOOK), this.armed.has(j.id)]);
+      const stamp = JSON.stringify([
+        j.title ?? null,
+        cells.filter((_, i) => i !== TOOK),
+        this.armed.has(j.id),
+      ]);
       if (!tr) {
         tr = h("tr", { attrs: { "data-id": j.id } });
         tr.dataset.stamp = "";
       }
       if (tr.dataset.stamp !== stamp) {
-        replace(tr, ...cells.map((c) => h("td", {}, c)), h("td", {}, ...this.actions(j)));
+        replace(
+          tr,
+          h("td", { class: "job-name" }, ...nameOf(j)),
+          ...cells.slice(1).map((c) => h("td", {}, c)),
+          h("td", {}, ...this.actions(j)),
+        );
         tr.dataset.stamp = stamp;
       } else {
         const td = tr.children[TOOK];
@@ -272,7 +342,7 @@ export class JobsPage implements ServerScreen {
       h(
         "div",
         { class: "bar" },
-        h("h3", {}, `Job ${j.id}`),
+        h("h3", {}, j.title ? `${j.title} (${j.id})` : `Job ${j.id}`),
         h(
           "button",
           {

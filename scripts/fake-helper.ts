@@ -45,12 +45,31 @@
  *   --speed X               0 = as fast as possible (default); 1 = key times in real time
  *   --grants LIST           the grants `ready` reports as `granted`: `mic,accessibility`
  *                           (default), or fewer; the others are `denied`
+ *   --not-asked LIST        of the grants not given, those reported as `not-asked` instead of
+ *                           `denied`, as a macOS microphone never asked for (DC-N3)
  *   --backend NAME          the key source `ready` reports (default `fake`)
+ *   --probe                 prints the `ready` line and exits, as `akou-capture dictate --probe`
+ *   --probe-grants LIST     the grants `--probe` reports instead of `--grants`: a grant given
+ *                           after the helper started (DC-U2, DC-N3)
+ *   --grants-file FILE      the grants as the OS holds them now, a line like `--grants` takes, read
+ *                           for `ready` and by `--probe` instead of `--grants`; while the fake runs
+ *                           it reads the file every 100 ms and says `grant.lost` once for a grant
+ *                           `ready` reported that the file no longer names, as the real helper does
+ *                           on wake and when a session fails to start (DC-N1)
+ *   --secure-input-at MS    macOS Secure Input turns on at key time MS: `secure_input {on: true}`,
+ *                           and from then on every key that is not a modifier is lost before the
+ *                           activation rule, as macOS hands the tap no keyed event while a password
+ *                           field holds the keyboard; a modifier alone still arrives (DC-A2)
+ *   --recorder-keys LIST    the keys reported as `key` when `record_keys {on: true}` arrives, as
+ *                           the helper reports every key while the recorder is open (DC-U3)
+ *
  *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4): Escape
  *                           and Enter never reach the activation rule, so they pass through to
  *                           the app and are never reported
  *   --field KIND            the target field: editable (default), not-editable, unknown, secure
  *   --target-app ID         the target app (default `com.example.editor`)
+ *   --target-frame X,Y,W,H  the frame of the window with the keyboard, sent with `press` at each
+ *                           key-down (DC-O1); without it `press` carries no frame, as on Linux
  *   --ax FILE               the scripted accessibility tree, the same lines as the real helper's
  *                           `--ax fake FILE`: `<ms> {"app","pid","window","field"}` per line, the
  *                           last line at or before a moment being what has the keyboard then (at
@@ -74,6 +93,10 @@
  *   --refuse-hotkey KEY     a `rebind` to this hotkey is refused; the binding in force stays (DC-A7)
  *   --play-after-rebinds N  the scripted keys play after the Nth `rebind` (default 1), refused or
  *                           not, so a test can change the key first and then press it
+ *
+ * `meter {on: true}` (the Dictation page's meter, DC-U4 and DC-N3) sends `level` every 50 ms in
+ * real time with no session, the RMS of the next 50 ms of the `--wav` mic from its start, round
+ * and round (silence without one), until `meter {on: false}` or the end.
  *
  * The traps (DC-T1), one switch each:
  *
@@ -109,6 +132,7 @@ import {
   type Activation,
   ActivationMachine,
   type ActivationOut,
+  isModifier,
   type KeyInput,
   parseBinding,
 } from "../src/core/dictation/activation.ts";
@@ -390,7 +414,16 @@ async function runDictate(): Promise<void> {
   const log = (file: string | undefined, o: unknown) => {
     if (file) appendFileSync(file, `${JSON.stringify(o)}\n`);
   };
-  const grants = (opt("--grants") ?? "mic,accessibility").split(",");
+  const grantsFile = opt("--grants-file");
+  /** The grants the OS holds now: the file's line when there is one. */
+  const osGrants = (): string[] =>
+    grantsFile
+      ? readFileSync(grantsFile, "utf8")
+          .trim()
+          .split(",")
+          .map((g) => g.trim())
+      : (opt("--grants") ?? "mic,accessibility").split(",");
+  const grants = osGrants();
   const field = (opt("--field") ?? "editable") as FieldKind;
   const target: Target = {
     app: opt("--target-app") ?? "com.example.editor",
@@ -398,6 +431,12 @@ async function runDictate(): Promise<void> {
     window: "w1",
     field,
   };
+  /** The frame of the window with the keyboard, `--target-frame X,Y,W,H` (DC-O1). */
+  const frameArg = opt("--target-frame")?.split(",").map(Number);
+  const frame =
+    frameArg?.length === 4 && frameArg.every(Number.isFinite)
+      ? { x: frameArg[0], y: frameArg[1], width: frameArg[2], height: frameArg[3] }
+      : null;
   const axFile = opt("--ax");
   const ax = axFile ? parseAx(readFileSync(axFile, "utf8")) : null;
   /** What has the keyboard at key time `ms`: the tree's last line at or before it. */
@@ -413,6 +452,8 @@ async function runDictate(): Promise<void> {
   const slowMic = num("--slow-mic") ?? 0;
   const tapDisabledAt = num("--tap-disabled-at");
   let tapDisabled = tapDisabledAt !== undefined;
+  const secureAt = num("--secure-input-at");
+  let secure = false;
   let played = false;
   let rebinds = 0;
   const playAfter = num("--play-after-rebinds") ?? 1;
@@ -449,6 +490,8 @@ async function runDictate(): Promise<void> {
   };
 
   let machine: ActivationMachine | null = null;
+  /** The page's meter while it is on. */
+  let meter: ReturnType<typeof setInterval> | undefined;
   let open: { id: string; at: number } | null = null;
   /** A session started by `session.start`: its key time, and the real time it began. */
   let started: { at: number; real: number } | null = null;
@@ -457,6 +500,8 @@ async function runDictate(): Promise<void> {
   const act = async (outs: ActivationOut[]) => {
     for (const o of outs) {
       if (o.type === "key") say({ type: "key", name: o.name });
+      else if (o.type === "arm") say({ type: "press", on: true, ...(frame ? { frame } : {}) });
+      else if (o.type === "disarm") say({ type: "press", on: false });
       else if (o.type === "start") {
         if (slowMic > 0) await sleep(slowMic);
         open = { id: String(++sessions), at: o.at };
@@ -488,6 +533,15 @@ async function runDictate(): Promise<void> {
         // The event that finds the tap disabled is lost; the callback re-enables the tap.
         tapDisabled = false;
         log(opt("--tap-log"), { key: k.key, down: k.down, lost: true });
+        continue;
+      }
+      if (secureAt !== undefined && !secure && k.at >= secureAt) {
+        secure = true;
+        say({ type: "secure_input", on: true });
+      }
+      // Secure Input: macOS hands the tap no keyed event, only the modifiers' flags (DC-A2).
+      if (secure && !isModifier(k.key)) {
+        log(opt("--tap-log"), { key: k.key, down: k.down, lost: "secure-input" });
         continue;
       }
       // A key source that cannot swallow never shows the rule Escape or Enter (DC-A4).
@@ -534,12 +588,34 @@ async function runDictate(): Promise<void> {
       case "settled":
         machine?.settled();
         return;
+      case "meter": {
+        clearInterval(meter);
+        meter = undefined;
+        if (!c.on) return;
+        let at = 0;
+        const n = CAPTURE_RATE / 20;
+        meter = setInterval(() => {
+          let s2 = 0;
+          for (let i = 0; i < n && mic.length > 0; i++) {
+            const x = mic[(at + i) % mic.length] ?? 0;
+            s2 += x * x;
+          }
+          at = mic.length > 0 ? (at + n) % mic.length : 0;
+          say({ type: "level", rms: Math.sqrt(s2 / n) });
+        }, 50);
+        return;
+      }
+      case "record_keys":
+        if (c.on)
+          for (const name of opt("--recorder-keys")?.split(",") ?? []) say({ type: "key", name });
+        return;
       case "focus":
         focused = c.target;
         return;
       case "insert": {
         log(opt("--inserter-log"), { ...c, at: now() });
-        if (flag("--no-receipt")) {
+        // A clipboard-only insert pastes nothing, so it waits for no receipt.
+        if (flag("--no-receipt") && c.method !== "clipboard") {
           // The real inserter gives up on a target that never read: no send key, then the failure.
           setTimeout(() => {
             machine?.settled();
@@ -607,7 +683,11 @@ async function runDictate(): Promise<void> {
     }
   };
 
-  const grant = (name: string) => (grants.includes(name) ? "granted" : "denied");
+  const given =
+    flag("--probe") && !grantsFile ? (opt("--probe-grants")?.split(",") ?? grants) : grants;
+  const notAsked = opt("--not-asked")?.split(",") ?? [];
+  const grant = (name: string) =>
+    given.includes(name) ? "granted" : notAsked.includes(name) ? "not-asked" : "denied";
   say({
     type: "ready",
     protocol: DICTATE_PROTOCOL,
@@ -616,6 +696,20 @@ async function runDictate(): Promise<void> {
     swallow_keys: !flag("--no-swallow"),
     grants: { mic: grant("mic"), accessibility: grant("accessibility") },
   });
+  if (flag("--probe")) process.exit(EXIT.ok);
+  // A grant `ready` reported taken back while the fake runs: said once, as the real helper does.
+  const gone = new Set<string>();
+  const lostWatch = grantsFile
+    ? setInterval(() => {
+        const now = osGrants();
+        for (const name of ["mic", "accessibility"]) {
+          if (given.includes(name) && !now.includes(name) && !gone.has(name)) {
+            gone.add(name);
+            say({ type: "grant.lost", name });
+          }
+        }
+      }, 100)
+    : undefined;
   const dec = new TextDecoder();
   let rest = "";
   for await (const chunk of Bun.stdin.stream()) {
@@ -639,6 +733,8 @@ async function runDictate(): Promise<void> {
     if (stopping) break;
   }
   // Closing stdin means stop. Inserts still waiting for their receipt are let go.
+  clearInterval(meter);
+  clearInterval(lostWatch);
   stdout.flush();
   say({ type: "stopped", reason: "stop" });
   process.exit(EXIT.ok);

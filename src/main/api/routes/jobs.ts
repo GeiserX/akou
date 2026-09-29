@@ -2,14 +2,16 @@
  * The job routes of server mode (docs/ux/SERVER.md sections 5 and 6). Any key reaches them and
  * sees its own jobs and events only; an admin sees every key's.
  *
- * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `preset`, `model`, `language`,
+ * - `POST /v1/jobs`, multipart (SV-J1, SV-J2): `file`, `title`, `preset`, `model`, `language`,
  *   `keywords[]`, `diarize`, `callback_url`, `metadata`, `priority`, and the `Idempotency-Key`
  *   header. 202 with the new job, 200 with the existing one for a repeated key, file and options,
  *   422 `idempotency_conflict` for the same key with another file or options, 429 `queue_full`
  *   with `Retry-After` past a queue limit (SV-Q3), answered before the upload is read. The model is the request's, else `server.default_model`, else the hardware's
  *   (SV-S1); a missing one is downloaded while the job waits (SV-M1).
  * - `GET /v1/jobs/{id}?wait=0..60` (SV-J3): the job, after holding the request until it ends.
- * - `GET /v1/jobs?status=&cursor=&limit=`: the key's jobs, newest first.
+ * - `GET /v1/jobs?status=&q=&cursor=&limit=`: the key's jobs, newest first; `q` finds them by
+ *   title, id or state (SV-J10).
+ * - `PATCH /v1/jobs/{id}` `{title}` (SV-J10): names or renames a job, in any state.
  * - `GET /v1/jobs/{id}/result` (SV-J4): the result of a done job.
  * - `DELETE /v1/jobs/{id}` (SV-J6).
  * - `GET /v1/events?after=&limit=&wait=0..60` (SV-E1): the key's outcomes after the cursor, oldest
@@ -35,6 +37,7 @@ import {
 } from "../http.ts";
 import { readMultipart, type SpooledFile, type StreamedForm } from "../multipart.ts";
 import type { ApiApp } from "../server.ts";
+import { checkTitle } from "./calls.ts";
 import { KEEPALIVE_MS, lastEventId } from "./follow.ts";
 
 export const MAX_WAIT_SECONDS = 60;
@@ -207,6 +210,7 @@ function priorityOf(form: Form): number {
 
 const JOB_FIELDS = new Set([
   "file",
+  "title",
   "priority",
   "preset",
   "model",
@@ -245,7 +249,13 @@ function callbackOf(app: ApiApp, who: Identity, url: string | undefined): string
   return u;
 }
 
-function metadataOf(form: Form): unknown {
+/** The `title` field: one line, trimmed; absent or blank, the job has none (SV-J10). */
+function titleOf(form: Form): string | null {
+  const t = textField(form, "title");
+  return t === undefined || t.trim() === "" ? null : checkTitle(t);
+}
+
+export function metadataOf(form: Form): unknown {
   const m = textField(form, "metadata");
   if (m === undefined) return null;
   if (Buffer.byteLength(m) > MAX_METADATA_BYTES) {
@@ -297,6 +307,8 @@ async function submit(c: RouteContext<ApiApp>): Promise<Response> {
     };
     const job: Omit<NewJob, "file_sha256" | "audio"> = {
       key_id: who.id,
+      // A name only: not compared on a repeated Idempotency-Key, like `metadata`.
+      title: titleOf(form),
       preset: presetName,
       model: null,
       model_source: null,
@@ -387,11 +399,12 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.create",
-      doc: "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
+      doc: "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
       ...JOB_ROUTE,
       body: {
         multipart: {
           file: "file",
+          "title?": "string",
           "preset?": "string",
           "model?": "string",
           "language?": "string",
@@ -413,10 +426,14 @@ export function jobRoutes(r: Router<ApiApp>): void {
     "/jobs",
     {
       id: "jobs.list",
-      doc: "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+      doc: "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `q` keeps the jobs whose title, id or state contains it, in any case; `cursor` pages on from the last job's `seq`.",
       ...JOB_ROUTE,
       query: {
         status: { type: "string", values: JOB_STATES, doc: "Only jobs in this state." },
+        q: {
+          type: "string",
+          doc: "Only jobs whose title, id or state contains this text, in any case.",
+        },
         key: {
           type: "string",
           doc: "Only the jobs of this key id. A key that is not admin sees its own jobs only.",
@@ -445,6 +462,7 @@ export function jobRoutes(r: Router<ApiApp>): void {
       const list = jobs.list(caller(c), {
         key,
         status: status as JobStatus | undefined,
+        q: c.query.raw("q") || undefined,
         before,
         limit,
       });
@@ -473,6 +491,27 @@ export function jobRoutes(r: Router<ApiApp>): void {
       if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
       // A job deleted while the request waited answers its final state, once.
       return json(200, "seq" in j ? jobs.view(j) : { id: j.id, status: j.status });
+    },
+  );
+
+  r.add(
+    "PATCH",
+    "/jobs/:id",
+    {
+      id: "jobs.rename",
+      doc: "Name or rename a job, in any state: `title` is what the lists, their search and the Jobs page show from now on. The result, the event feed and a webhook do not carry it. An empty title answers 422 and the old name stays.",
+      ...JOB_ROUTE,
+      params: { id: JOB_ID },
+      body: { title: "string" },
+      ok: 200,
+    },
+    async (c) => {
+      const jobs = jobsOf(c);
+      const b = await c.body<{ title: string }>();
+      const title = checkTitle(b.title);
+      const j = jobs.rename(caller(c), c.params.id as string, title);
+      if (!j) throw new HttpError(404, "not_found", `no job ${c.params.id}`);
+      return json(200, jobs.view(j));
     },
   );
 

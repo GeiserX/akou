@@ -26,6 +26,8 @@ import { join } from "node:path";
 import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
+import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
+import { LIVE_SETTINGS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
@@ -453,6 +455,18 @@ export const SETTINGS = {
     apiWritable: false,
     doc: "Command that starts the diarization helper, before its own arguments. Empty: the akou-diarize bundled with the app, else the one on PATH.",
   },
+  "asr.live": {
+    type: "string",
+    values: LIVE_SETTINGS,
+    default: "auto",
+    doc: "What writes the live transcript of a call. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `upgrade`: Nemotron, then, each time the speaker stops, the lines rewritten during the call by Parakeet (about 0.2 s later) and by Qwen voting with Parakeet (1.5 to 2.5 s later); about 10 to 13 GB while a call runs. `auto` picks `nemotron` when its model is downloaded, else `parakeet`; it never picks `upgrade`, which runs only when named, since the accurate transcript is the final pass after the call. A setup whose models are missing never runs. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its setup.",
+  },
+  "asr.live.engine": {
+    type: "string",
+    values: LIVE_ENGINE_SETTINGS,
+    default: "auto",
+    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron` or `upgrade`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
+  },
   "asr.segmentPause": {
     type: "number",
     min: 0.2,
@@ -729,7 +743,7 @@ export const SETTINGS = {
     type: "string",
     values: DICTATION_INSERTS,
     default: "paste",
-    doc: "How the text goes in: `paste` through the clipboard, which comes back afterwards; `type` as key presses, for remote desktops and fields that refuse a paste; `clipboard` only, and you paste.",
+    doc: "How the text goes in: `paste` through the clipboard, which comes back afterwards; `type` as key presses, for remote desktops and fields that refuse a paste (a text with a line break is pasted, so no Return is pressed); `clipboard` only, and you paste.",
   },
   "dictation.sendKey": {
     type: "string",
@@ -818,22 +832,18 @@ export const SETTINGS = {
   "dictation.apps": {
     type: "apps",
     default: [],
-    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); a field left out follows the global setting.',
+    doc: 'Per-app dictation rules, matched on the app that had the keyboard: `[{"app": "com.example.chat", "mode": "draft-send", "insert": "paste", "sendKey": "Enter", "engine": "auto", "language": "en", "format": "off"}]`. `app` is a bundle id (macOS), an executable name (Windows) or a window class (Linux); a field left out follows the global setting. `mode`: `draft` opens the draft box instead of inserting, `draft-send` too with Enter there pressing the send key.',
   },
   "dictation.pill": {
     type: "string",
-    values: ["bottom", "top", "left", "right", "off"],
-    default: process.platform === "linux" ? "off" : "bottom",
-    doc: "Where the dictation pill shows `listening` and `transcribing`. Off by default on Linux, where a compositor may give the pill the keyboard and the text would land in it, so turn it on there knowingly; the tray and the sounds carry the state instead.",
+    values: ["top", "bottom", "left", "right", "off"],
+    default: process.platform === "linux" ? "off" : "top",
+    doc: "Where the dictation pill shows `listening` and `transcribing`: `top` is the island at the top centre of the display. Off by default on Linux, where a compositor may give the pill the keyboard and the text would land in it, so turn it on there knowingly; the tray and the sounds carry the state instead.",
   },
   "dictation.pillPreview": {
     type: "boolean",
-    default: false,
-    check: (v) =>
-      v === true
-        ? "needs akou's windows hidden from screen capture (app.hideFromCapture, DK-P3), which this version does not have, so the pill never shows your words"
-        : null,
-    doc: "Show the words recognised so far in the pill during a latched dictation. Stays off until akou can hide its windows from screen capture (DK-P3), so a screen share never shows what you dictate.",
+    default: true,
+    doc: "Show the words as you speak on the pill's island. akou cannot hide its windows from screen capture yet (DK-P3), so a screen share shows them too: turn this off before sharing your screen if that matters.",
   },
   "dictation.sounds": {
     type: "string",

@@ -51,6 +51,7 @@ import {
   processAlive,
   readLock,
 } from "../core/log/writer.ts";
+import { Cues } from "../ui/dictation-cues.ts";
 import {
   ensureToken,
   type Guard,
@@ -76,9 +77,28 @@ import {
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
-import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
+import {
+  chooseLiveSetup,
+  type LiveSetupChoice,
+  type LiveSetupContext,
+  type LiveView,
+  liveView,
+  setupModels,
+} from "./asr/live-setups.ts";
+import {
+  type CallAccess,
+  type LineUpgrader,
+  LiveAsr,
+  type VocabSource,
+} from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
-import { type LlamaPlan, llamaPlan, metalHolder } from "./asr/llama-server.ts";
+import {
+  createLlamaServer,
+  type LlamaPlan,
+  type LlamaServer,
+  llamaPlan,
+  metalHolder,
+} from "./asr/llama-server.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -93,6 +113,7 @@ import {
   RECOGNIZER,
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
+import { QwenEngine } from "./asr/qwen.ts";
 import type { CallController, StartOk } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartRequest } from "./call/manager.ts";
@@ -113,6 +134,7 @@ import {
   type SettingValue,
 } from "./config/schema.ts";
 import { BestEngine } from "./dictation/best.ts";
+import { SystemCuePlayer } from "./dictation/cues.ts";
 import {
   dictationLanguages,
   type EngineVerdict,
@@ -200,6 +222,11 @@ const REBIND_ANSWER_MS = 3_000;
 /** How often dictation looks whether a final pass still holds the GPU `best` gave way to (DC-E2). */
 export const BEST_REWARM_MS = 5_000;
 /**
+ * One Qwen request of the in-call upgrade. A line takes 1.5 to 2.5 s; one past this keeps
+ * Parakeet's text, so a stuck server never holds the lines behind it for long.
+ */
+export const LIVE_QWEN_TIMEOUT_MS = 30_000;
+/**
  * The settings that decide which engine a dictation runs and how `best`'s server starts and idles
  * (DC-E2, DC-E3): a changed idle time arms its timer now, not after the next dictation.
  */
@@ -265,8 +292,8 @@ export interface AppOptions {
    */
   modelRegistry?: readonly ModelSpecEntry[];
   /**
-   * Where the final pass reads a call's audio, or null when it cannot. By default a part is read
-   * from a 16-bit WAV beside its Opus file (`part-001.wav`); the app cannot decode Opus yet.
+   * Where the final pass reads a call's audio, or null when it cannot. By default a part's Opus
+   * file, decoded by the capture helper, or a 16-bit WAV beside it (`partsAudio`).
    */
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   /** The window. None means headless. */
@@ -418,16 +445,28 @@ function finalCurrent(v: CallView): boolean {
   return done !== null && v.parts().every((p) => p.startSeq < done);
 }
 
-/** The default final-pass audio: a WAV beside every part's Opus file, or nothing. */
-function wavBesideParts(call: { dir: string; parts: number[] }): FinalAudioSpec | null {
+/**
+ * The default final-pass audio (SV-P10): a 16-bit WAV beside every part's Opus file when each has
+ * one (hark and the fake helper write them), else every part's Opus file decoded by the capture
+ * helper. Null when a part has neither, when its Opus file is empty (a helper that never wrote a
+ * header), or when the helper is not there.
+ */
+export function partsAudio(
+  call: { dir: string; parts: number[] },
+  helper: { command: string[]; found: string | null },
+): FinalAudioSpec | null {
   if (call.parts.length === 0) return null;
-  const files: Record<number, string> = {};
+  const opus: Record<number, string> = {};
+  const wav: Record<number, string> = {};
   for (const p of call.parts) {
-    const wav = join(call.dir, partFile(p).replace(/\.opus$/, ".wav"));
-    if (!existsSync(wav)) return null;
-    files[p] = wav;
+    opus[p] = join(call.dir, partFile(p));
+    const w = (opus[p] as string).replace(/\.opus$/, ".wav");
+    if (existsSync(w)) wav[p] = w;
   }
-  return { kind: "wav", files };
+  if (Object.keys(wav).length === call.parts.length) return { kind: "wav", files: wav };
+  if (!helper.found) return null;
+  for (const f of Object.values(opus)) if (!existsSync(f) || statSync(f).size === 0) return null;
+  return { kind: "opus", command: helper.command, files: opus };
 }
 
 export class AkouApp implements ApiApp {
@@ -474,6 +513,8 @@ export class AkouApp implements ApiApp {
   private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
   private readonly queries = new WeakMap<object, CallQuery>();
   private readonly vocabCache = new Map<string, VocabSource>();
+  /** The live setup each call runs, chosen once when it first takes the recognizer. */
+  private readonly liveRan = new Map<string, LiveSetupChoice>();
   /** Workspaces whose vocabulary files could not be read; retried when the vocabulary changes. */
   private readonly vocabFailed = new Set<string>();
   /** Reads of a workspace's vocabulary files in flight, so two readers share one. */
@@ -523,6 +564,11 @@ export class AkouApp implements ApiApp {
   private bestDictation: BestEngine | null = null;
   /** The next look at whether `best` may be warmed again, while it gives way to the GPU's holder. */
   private bestRewarm: unknown = null;
+  /**
+   * Qwen's llama-server for the in-call upgrade when dictation keeps none warm, with the spec it
+   * was made from. It gives way to a final pass on Metal, and stops when its call ends.
+   */
+  private liveQwen: { server: LlamaServer; key: string } | null = null;
   /** The machine that detection read: its env names the image's llama-server. */
   private accelProbe: Probe | null = null;
 
@@ -722,6 +768,104 @@ export class AkouApp implements ApiApp {
     return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
+  /** What the next call's live setup depends on here: the settings, memory and models on disk. */
+  private liveContext(setting?: string): LiveSetupContext {
+    const s = this.cfg.settings;
+    const catalog = this.o.modelRegistry ?? MODELS;
+    return {
+      setting: setting ?? s["asr.live"],
+      engine: s["asr.live.engine"],
+      languages: s["asr.languages"],
+      present: (id) => {
+        const m = catalog.find((x) => x.id === id);
+        return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
+      },
+      runtime: this.llamaPlan().build?.id ?? null,
+    };
+  }
+
+  /**
+   * The live setup a call runs (`asr.live`, or the call's own `live`), only ever one whose model
+   * files are here: its streaming engine, or null for the recognizer's VAD windows.
+   */
+  private liveChoice(setting?: string): LiveSetupChoice {
+    return chooseLiveSetup(this.liveContext(setting));
+  }
+
+  /**
+   * Qwen for a call's in-call upgrade (ASR-7): the server dictation keeps warm when one runs, so
+   * one Qwen serves both, else one of its own. Its own gives way to a final pass on Metal instead
+   * of stopping it: the lines keep Parakeet's text meanwhile. A request never starts or restarts a
+   * server someone else owns or that was let go of: that process would run untracked.
+   */
+  private liveUpgrader(): LineUpgrader {
+    const gone = () => Promise.reject(new Error("its llama-server was stopped"));
+    return {
+      decode: (samples, o) => {
+        const spec = this.llamaSpec(QWEN_ASR);
+        const langs = this.cfg.settings["asr.languages"];
+        const warm = this.bestDictation?.warmServer() ?? null;
+        const own = warm ? null : this.liveQwenServer(spec);
+        const server = warm
+          ? {
+              url: () => (this.bestDictation?.warmServer() === warm ? warm.url() : gone()),
+              // Dictation's server is dictation's to restart.
+              restart: gone,
+            }
+          : {
+              url: () => (this.liveQwen?.server === own ? (own as LlamaServer).url() : gone()),
+              restart: () =>
+                this.liveQwen?.server === own ? (own as LlamaServer).restart() : gone(),
+            };
+        const qwen = new QwenEngine({
+          id: spec.engine,
+          server,
+          allowed: langs,
+          timeoutMs: LIVE_QWEN_TIMEOUT_MS,
+          signal: o.signal,
+          log: (level, msg) => this.log(level, `live upgrade: ${msg}`),
+        });
+        const [only] = langs;
+        return qwen.decode({
+          samples,
+          lang: langs.length === 1 && only ? only : "auto",
+          glossary: o.glossary,
+        });
+      },
+    };
+  }
+
+  /** The in-call upgrade's own llama-server for this spec, made on first use. */
+  private liveQwenServer(spec: LlamaEngineSpec): LlamaServer {
+    const key = JSON.stringify(spec);
+    if (this.liveQwen?.key === key) return this.liveQwen.server;
+    this.stopLiveQwen();
+    const server = createLlamaServer(spec, {
+      yieldMetal: true,
+      log: (level, msg) => this.log(level, `live upgrade: ${msg}`),
+    });
+    this.liveQwen = { server, key };
+    return server;
+  }
+
+  private stopLiveQwen(): void {
+    const q = this.liveQwen;
+    this.liveQwen = null;
+    void q?.server.stop();
+  }
+
+  /** The Live section of `GET /models`: each setup, the one the next call runs and the live call's. */
+  liveModels(): LiveView | null {
+    if (this.runMode === "server") return null;
+    const live = this.manager.live();
+    const running = live ? (this.liveRan.get(live.id)?.setup ?? null) : null;
+    const shelf = this.shelf;
+    const ctx = this.liveContext();
+    return liveView(ctx, running, (id) =>
+      shelf ? shelf.state(id) : ctx.present(id) ? "ready" : "missing",
+    );
+  }
+
   /** The real engines on the models folder, with the speaker-label engine the settings choose. */
   private sherpaSpec(
     s: Settings,
@@ -869,6 +1013,30 @@ export class AkouApp implements ApiApp {
           const ws = this.manager.controller(callId)?.view.call?.workspace ?? "";
           return this.vocabCache.get(ws) ?? { entries: [], files: [] };
         },
+        liveEngine: (callId) => {
+          let ran = this.liveRan.get(callId);
+          if (!ran) {
+            ran = this.liveChoice(this.manager.controller(callId)?.liveAsked);
+            this.liveRan.set(callId, ran);
+            this.log(
+              "info",
+              `asr: call ${callId} runs the ${ran.setup} live setup${ran.choice ? ` (${ran.choice.engine})` : ""}${ran.note ? `: ${ran.note}` : ""}`,
+            );
+            // The status names the live call's setup: the window's pill reads it from the push.
+            for (const fn of this.statusWatchers) fn();
+          }
+          // A live model a call loads counts as used, so the sweep keeps it.
+          if (ran.choice) {
+            this.shelf?.touch(
+              ran.setup === "upgrade"
+                ? setupModels("upgrade", this.liveContext())
+                : [ran.choice.engine],
+            );
+          }
+          return ran.choice;
+        },
+        upgrade: (callId) =>
+          this.liveRan.get(callId)?.setup === "upgrade" ? this.liveUpgrader() : null,
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
       },
@@ -911,6 +1079,11 @@ export class AkouApp implements ApiApp {
     if (e.type === "final.done") queueMicrotask(() => void this.reEnhance(id));
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
+      // The final pass takes the GPU next; a later call that upgrades starts Qwen again. A call
+      // that started while this one was stopping and upgrades too keeps it.
+      const next = this.manager.live();
+      const nextUpgrades = next && next.id !== id && this.liveRan.get(next.id)?.setup === "upgrade";
+      if (this.liveRan.get(id)?.setup === "upgrade" && !nextUpgrades) this.stopLiveQwen();
       // After the event is out, so the pass starts from a log that has it.
       queueMicrotask(() => this.finalAtEnd(id));
     }
@@ -1487,6 +1660,12 @@ export class AkouApp implements ApiApp {
     if (before["dictation.enabled"] !== after["dictation.enabled"]) this.applyDictation();
     else if (after["dictation.enabled"] && WARM_KEYS.some((k) => !sameValue(before[k], after[k])))
       this.warmDictation();
+    if (
+      before["dictation.mic"] !== after["dictation.mic"] ||
+      before["dictation.preferBuiltInOverBluetooth"] !==
+        after["dictation.preferBuiltInOverBluetooth"]
+    )
+      this.dictationSvc?.rebuildMic();
     // Fewer days, or the audio no longer kept: what is past it goes now, not at the next sweep.
     if (
       before["dictation.retainDays"] !== after["dictation.retainDays"] ||
@@ -1601,6 +1780,8 @@ export class AkouApp implements ApiApp {
     // A start reads the files again when they could not be read before.
     this.vocabFailed.delete(ws);
     await this.loadVocab(ws);
+    // The call's own live setup rides on its controller (`liveAsked`), never a shared slot: a
+    // concurrent start that is refused cannot touch the call that is starting.
     return this.manager.start(req);
   }
 
@@ -1686,6 +1867,9 @@ export class AkouApp implements ApiApp {
             parts: live.view.parts().length,
             health: live.view.health().map((h) => ({ ch: h.ch, state: h.state, detail: h.detail })),
             lag: live.view.asrLag?.seconds ?? 0,
+            // The live setup and streaming engine this call runs; null before audio reaches the recognizer.
+            setup: this.liveRan.get(live.id)?.setup ?? null,
+            engine: this.liveRan.get(live.id)?.choice?.engine ?? null,
             levels: this.levels(live.id),
           }
         : null,
@@ -1766,6 +1950,12 @@ export class AkouApp implements ApiApp {
     return this.sherpaSpec(this.cfg.settings, this.runningDiarizer(), this.runningDecoding());
   }
 
+  /** Where the final pass reads a call's audio: the test's choice, or `partsAudio`. */
+  private finalAudio(call: { id: string; dir: string; parts: number[] }): FinalAudioSpec | null {
+    if (this.o.finalAudio) return this.o.finalAudio(call);
+    return partsAudio(call, findHelper(this.cfg.settings["capture.helper"]));
+  }
+
   /**
    * Starts the final pass in the background. Returns null once started, or why it cannot run;
    * `unavailable` when the call lacks what the pass needs (readable audio, the models).
@@ -1777,10 +1967,10 @@ export class AkouApp implements ApiApp {
     if (!c || c.live) return { why: "the call is not ended" };
     if (!force && finalCurrent(c.view)) return { why: "the final pass already ran" };
     const parts = c.view.parts().map((p) => p.part);
-    const audio = (this.o.finalAudio ?? wavBesideParts)({ id, dir: c.dir, parts });
+    const audio = this.finalAudio({ id, dir: c.dir, parts });
     if (!audio)
       return {
-        why: "the final pass cannot read this call's audio yet (Opus decoding is not built)",
+        why: "the final pass cannot read this call's audio: a part has no audio file, or the capture helper that decodes it is not there",
         unavailable: true,
       };
     const models = this.finalModels();
@@ -1816,7 +2006,10 @@ export class AkouApp implements ApiApp {
     shelf.recordRun(RECOGNIZER, audioS, decodeS);
   }
 
-  /** Calls that ended while akou was not running and have no final layer yet. */
+  /**
+   * Calls that ended while akou was not running and have no final layer yet, one pass at a time:
+   * each pass loads its own models, and a backlog run side by side would hold them all at once.
+   */
   private async catchUpFinals(): Promise<void> {
     for (const s of this.manager.calls()) {
       if (this.quitting) return;
@@ -1826,9 +2019,9 @@ export class AkouApp implements ApiApp {
         const v = fold(events);
         if (finalCurrent(v)) continue;
         const parts = v.parts().map((p) => p.part);
-        if (!(this.o.finalAudio ?? wavBesideParts)({ id: s.id, dir: s.dir, parts })) continue;
+        if (!this.finalAudio({ id: s.id, dir: s.dir, parts })) continue;
         const c = await this.manager.open(s.id);
-        if (c) this.runFinal(s.id, false);
+        if (c && this.runFinal(s.id, false) === null) await this.finals.get(s.id);
       } catch (err) {
         this.log("warn", `final catch-up for ${s.id}: ${(err as Error).message}`);
       }
@@ -2027,6 +2220,13 @@ export class AkouApp implements ApiApp {
    */
   private startDictation(): void {
     if (this.runMode !== "app") return;
+    const cues = new Cues(
+      new SystemCuePlayer({ onLog: (level, msg) => this.log(level, msg) }),
+      () => ({
+        sounds: this.cfg.settings["dictation.sounds"],
+        pill: this.cfg.settings["dictation.pill"],
+      }),
+    );
     this.dictationSvc ??= new DictationService({
       configDir: this.configDir,
       now: () => this.clock.now(),
@@ -2042,11 +2242,11 @@ export class AkouApp implements ApiApp {
       fillers: () => this.cfg.settings["dictation.fillers"],
       punctuation: () =>
         this.cfg.settings["dictation.spokenPunctuation"] ? loadPunctuation(this.configDir) : null,
-      format: (text) =>
+      format: (text, mode) =>
         formatPass(
           text,
           {
-            format: this.cfg.settings["dictation.format"],
+            format: mode ?? this.cfg.settings["dictation.format"],
             prompt: this.cfg.settings["dictation.formatPrompt"],
             timeoutSeconds: this.cfg.settings["dictation.formatTimeoutSeconds"],
           },
@@ -2077,10 +2277,14 @@ export class AkouApp implements ApiApp {
           sendKey: c["dictation.sendKey"] as SendKey,
           sendAlways: c["dictation.sendAlways"],
           restore: c["dictation.restoreClipboard"],
-          // The field is read back only to learn from a fix there (DC-L2) until DC-S4 reads it too.
+          // The field is read back after the insert to learn from a fix there (DC-L2), and
+          // before it for the spacing (DC-S4); `dictation.readField` gates both reads.
           readField: c["dictation.readField"] && c["dictation.learn"] !== "off",
+          smartSpacing: c["dictation.readField"] && c["dictation.smartSpacing"],
+          trailingSpace: c["dictation.trailingSpace"],
         };
       },
+      apps: () => this.cfg.settings["dictation.apps"],
       draft: {
         platform: process.platform,
         sendKey: () => this.cfg.settings["dictation.sendKey"] as SendKey,
@@ -2106,6 +2310,16 @@ export class AkouApp implements ApiApp {
           health: this.remoteDictation?.health() ?? null,
         };
       },
+      probe: () => [
+        ...locateHelper(this.cfg.settings["capture.helper"]).command,
+        "dictate",
+        "--probe",
+      ],
+      cue: (moment) => cues.cue(moment),
+      mic: () => ({
+        device: this.cfg.settings["dictation.mic"],
+        preferBuiltIn: this.cfg.settings["dictation.preferBuiltInOverBluetooth"],
+      }),
       onLog: (level, msg) => this.log(level, msg),
     });
     // Qwen landing while `best` waits for it: it is warmed at once (DC-E3).
@@ -2454,8 +2668,10 @@ export class AkouApp implements ApiApp {
     const jobs = this.jobService;
     if (jobs) return jobs.held();
     if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
+    const ctx = this.liveContext();
+    const live = setupModels(chooseLiveSetup(ctx).setup, ctx);
     return {
-      defaults: new Set(this.registry().map((m) => m.id)),
+      defaults: new Set([...this.registry().map((m) => m.id), ...live]),
       inUse:
         this.asr !== null || this.finals.size > 0 || this.modelsPull.running
           ? new Set(this.runningSet().map((m) => m.id))
@@ -2695,6 +2911,9 @@ export class AkouApp implements ApiApp {
       this.remoteDictation?.close();
       if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
       await this.bestDictation?.stop();
+      const liveQwen = this.liveQwen;
+      this.liveQwen = null;
+      await liveQwen?.server.stop();
       await this.asr?.close();
       await this.page?.stop();
       await this.server?.stop();

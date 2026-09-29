@@ -7,8 +7,8 @@
  *   spoken dictation is: `{id, text, raw, language, words, engine, model, ms, state}`.
  * - `GET /dictations`, `GET /dictations/{id}`: the dictation log, newest first.
  * - `GET /dictations/{id}/audio`: a spoken dictation's kept audio, a 16 kHz WAV (DC-H2).
- * - `POST /dictations/{id}/retry {engine}`: that audio decoded again with another engine, answered
- *   beside the dictation, which is not changed.
+ * - `POST /dictations/{id}/retry {engine, language?}`: that audio decoded again with another engine,
+ *   or forced into another language, answered beside the dictation, which is not changed.
  * - `POST /dictations/{id}/insert {text?, fix?}`: the draft box opened on it in the desktop
  *   window, where the user reads it and presses Enter; the API never pastes by itself (DC-N9).
  * - `DELETE /dictations/{id}`, `DELETE /dictations`: one dictation, or all, deleted with their
@@ -37,6 +37,11 @@ export const MAX_CLIP_SECONDS = 60 * 60;
 /** The engines a clip can name; `auto` is `dictation.engine`. */
 const ENGINES = ["auto", "fast", "best", "remote"];
 const FIELDS = new Set(["file", "engine", "language"]);
+/**
+ * A retry's or a started session's `language`: auto, or a BCP-47 tag, as `language` on
+ * dictations.create.
+ */
+const RETRY_LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
 
 function service(c: RouteContext<ApiApp>): DictationService {
   const d = c.app.dictation?.();
@@ -227,18 +232,24 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations/:id/retry",
     {
       id: "dictations.retry",
-      doc: "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
+      doc: "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. `language` (a BCP-47 tag, or auto for `dictation.language`) forces the decode into it on best and a remote akou, as the draft box's language chip does; fast detects the language itself. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
       access: "admin",
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },
-      body: { engine: "string" },
+      body: { engine: "string", "language?": "string" },
       ok: 200,
     },
     async (c) => {
       const id = c.params.id as string;
       const d = service(c);
-      const b = await c.body<{ engine: string }>();
+      const b = await c.body<{ engine: string; language?: string }>();
       const engine = b.engine.trim();
+      const language = b.language?.trim() || "auto";
+      if (!RETRY_LANGUAGE.test(language)) {
+        throw new HttpError(422, "bad_field", "language is a BCP-47 tag, or auto", {
+          field: "language",
+        });
+      }
       if (!ENGINES.includes(engine)) {
         throw new HttpError(422, "bad_field", `engine is one of ${ENGINES.join(", ")}`, {
           field: "engine",
@@ -250,7 +261,10 @@ export function dictationRoutes(r: Router<ApiApp>): void {
         });
       }
       c.timeout?.(0);
-      const r = await d.retry(id, engine === "auto" ? {} : { engine });
+      const r = await d.retry(id, {
+        ...(engine === "auto" ? {} : { engine }),
+        ...(language === "auto" ? {} : { language }),
+      });
       if (r.ok) return json(200, r.answer);
       const status = {
         not_found: 404,
@@ -328,13 +342,17 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictation",
     {
       id: "dictation.status",
-      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied or not-needed), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
+      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper starts again by itself once it is), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
       access: "admin",
       modes: ["app"],
       ok: 200,
     },
-    (c) => {
-      const st = service(c).status();
+    async (c) => {
+      const svc = service(c);
+      const st = svc.status();
+      // While dictation is off no helper runs, so a probe reads them: the switch knows what the
+      // setup must ask for before it starts one (DC-U2, DC-N3).
+      const grants = await svc.grants();
       const r = st.remote;
       return json(200, {
         enabled: c.app.config().settings["dictation.enabled"] === true,
@@ -352,7 +370,9 @@ export function dictationRoutes(r: Router<ApiApp>): void {
               probing: r.health?.probing ?? false,
             }
           : null,
-        grants: st.grants,
+        grants,
+        // Read after `grants()`, which may have started the helper again for a grant now back.
+        lost: svc.status().lost,
         backend: st.backend,
         swallow_keys: st.swallow_keys,
       });
@@ -360,7 +380,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
   );
   const CONTROL: Record<ControlAction, string> = {
     start:
-      "Start a latched dictation, as a tap of the dictation key: it listens until `dictation/stop`, a tap of the key, Escape, or silence. The text goes where the keyboard is when it ends. Answers once the helper is listening.",
+      "Start a latched dictation, as a tap of the dictation key: it listens until `dictation/stop`, a tap of the key, Escape, or silence. The text goes where the keyboard is when it ends. `language` (a BCP-47 tag, or auto for `dictation.language`) forces this dictation into it on best and a remote akou, as a click on the pill's language chip does; fast detects the language itself. Answers once the helper is listening.",
     stop: "End the dictation that is listening: its audio is transcribed and inserted where it began, as a tap of the key would.",
     cancel:
       "Cancel the dictation that is listening: nothing is transcribed or inserted, and history keeps it as cancelled.",
@@ -369,9 +389,30 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     r.add(
       "POST",
       `/dictation/${action}`,
-      { id: `dictation.${action}`, doc: CONTROL[action], access: "admin", modes: ["app"], ok: 200 },
+      {
+        id: `dictation.${action}`,
+        doc: CONTROL[action],
+        access: "admin",
+        modes: ["app"],
+        ...(action === "start" ? { body: { "language?": "string" } } : {}),
+        ok: 200,
+      },
       async (c) => {
-        const res = await service(c).control(action);
+        let language = "auto";
+        if (action === "start") {
+          const b = await c.body<{ language?: string }>();
+          language = b.language?.trim() || "auto";
+          if (!RETRY_LANGUAGE.test(language)) {
+            throw new HttpError(422, "bad_field", "language is a BCP-47 tag, or auto", {
+              field: "language",
+            });
+          }
+        }
+        const res = await service(c).control(
+          action,
+          undefined,
+          language === "auto" ? {} : { language },
+        );
         if (!res.ok) {
           const status = res.code === "dictation_starting" ? 503 : 409;
           throw new HttpError(status, res.code, res.message);
@@ -417,7 +458,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictation/stream",
     {
       id: "dictation.stream",
-      doc: "The dictation log as server-sent events: every event after the cursor (`event`, its `seq` as the id), then each new one as it is written, and the mic's `level` (`{rms}`, 20 a second) while a dictation listens, which is never stored. A reconnecting client sends `Last-Event-ID` and resumes after it; a deleted dictation shows only its tombstone.",
+      doc: "The dictation log as server-sent events: every event after the cursor (`event`, its `seq` as the id), then each new one as it is written, and the mic's `level` (`{rms}`, 20 a second) while a dictation listens or the Dictation page's meter is on, which is never stored. A reconnecting client sends `Last-Event-ID` and resumes after it; a deleted dictation shows only its tombstone.",
       access: "admin",
       modes: ["app"],
       query: {

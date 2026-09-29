@@ -45,9 +45,20 @@ export type SendKey = (typeof SEND_KEYS)[number];
 
 export { ACTIVATIONS, type Activation } from "../../core/dictation/activation.ts";
 
-/** A grant as `ready` reports it; `not-needed` where the OS asks for none (Windows). */
-export const GRANTS = ["granted", "denied", "not-needed"] as const;
+/**
+ * A grant as `ready` reports it; `not-needed` where the OS asks for none (Windows), `not-asked`
+ * where macOS has never asked for the microphone, which it does when the device first opens.
+ */
+export const GRANTS = ["granted", "denied", "not-asked", "not-needed"] as const;
 export type Grant = (typeof GRANTS)[number];
+
+/** A window's frame in screen points, from the top left of the primary display (DC-O1). */
+export interface Frame {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
 
 /** One hunk of an edit read back from the field (DC-L2): only the text around the insert. */
 export interface EditHunk {
@@ -73,6 +84,13 @@ export type HelperToApp =
       /** False on the portal and CLI backends: no key but the hotkey does anything (DC-A4). */
       swallow_keys: boolean;
     }
+  /**
+   * The dictation key went down and the press may become a session (`on`), with the frame of the
+   * window that has the keyboard where the backend can read it, so the pill shows its dot on that
+   * display (DC-O1); or the press was dropped before it became one (`on` false). A press that
+   * becomes a session says no more: `session.started` follows.
+   */
+  | { type: "press"; on: boolean; frame?: Frame }
   /** The answer to `rebind`; on a refusal the old binding stays (DC-A7). */
   | { type: "rebound"; hotkey: string }
   | { type: "rebind.failed"; hotkey: string; reason: string }
@@ -124,6 +142,14 @@ export type AppToHelper =
        * `edit` or `edit.unreadable`. Absent, nothing is read.
        */
       read_field?: boolean;
+      /**
+       * `dictation.smartSpacing` with `dictation.readField` (DC-S4): the helper reads the field
+       * just before the insert and fits the text to it (spaces, the first word's case). Absent,
+       * nothing is read for it.
+       */
+      smart_spacing?: boolean;
+      /** `dictation.trailingSpace` (DC-S4): a space after the text where the field was not read. */
+      trailing_space?: boolean;
     }
   /** This session will not be inserted: the helper stops holding Escape and Enter now. */
   | { type: "settled"; id: string }
@@ -132,9 +158,18 @@ export type AppToHelper =
   | { type: "session.start" }
   | { type: "session.stop" }
   | { type: "session.cancel" }
-  | { type: "rebuild_mic"; device: string }
+  /**
+   * The microphone (DC-U4, DC-N5): `device` is `dictation.mic`, `default` when empty;
+   * `prefer_built_in` is `dictation.preferBuiltInOverBluetooth`, true when absent.
+   */
+  | { type: "rebuild_mic"; device: string; prefer_built_in?: boolean }
   | { type: "warm"; mode: "off" | "auto" | "always" }
   | { type: "record_keys"; on: boolean }
+  /**
+   * The Dictation page's meter (DC-U4, DC-N3): while on, the helper keeps the mic open and sends
+   * `level` 20 times a second with no session.
+   */
+  | { type: "meter"; on: boolean }
   | { type: "stop" };
 
 export function encodeCommand(c: AppToHelper): string {
@@ -161,6 +196,14 @@ function isTarget(v: unknown): v is Target {
   );
 }
 
+function isFrame(v: unknown): v is Frame {
+  if (typeof v !== "object" || v === null) return false;
+  const f = v as Record<string, unknown>;
+  return (
+    isNum(f.x) && isNum(f.y) && isNum(f.width) && isNum(f.height) && f.width > 0 && f.height > 0
+  );
+}
+
 function isHunk(v: unknown): v is EditHunk {
   if (typeof v !== "object" || v === null) return false;
   const h = v as Record<string, unknown>;
@@ -182,6 +225,8 @@ export function checkHelperMessage(o: Record<string, unknown>): string | null {
         ? null
         : "ready";
     }
+    case "press":
+      return isBool(o.on) && (o.frame === undefined || isFrame(o.frame)) ? null : "press";
     case "rebound":
       return isStr(o.hotkey) ? null : "rebound";
     case "rebind.failed":

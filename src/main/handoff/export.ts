@@ -13,6 +13,8 @@
  *   disk, nothing is written and no `export.done` is due. Otherwise the revision goes up by one.
  * - **Found by `akou_id`.** A re-export looks for the file by the id in its frontmatter, so a file
  *   the user renamed is still found.
+ * - **Attachments keep their first name.** The folder takes the title the call had at its first
+ *   export there, so renaming the call later does not start a second folder.
  * - **Never over the user's edits.** A file whose SHA-256 is not one akou wrote (every `export.done`
  *   records it) was edited, so the new version goes beside it as `… (akou update).md`.
  * - **Atomic.** Every file is written to a temporary name and renamed into place.
@@ -125,11 +127,21 @@ export function safeFileTitle(title: string): string {
 }
 
 /** `2026-09-23 1536 Weekly sync`, from the local start time, so a late call files under its day. */
-export function exportBaseName(view: CallView): string {
+export function exportBaseName(view: CallView, title = view.call?.title ?? ""): string {
   const tz = view.call?.tz ?? "UTC";
   const start = callStart(view);
   const hhmm = formatWall(start, tz, { seconds: false }).replace(":", "");
-  return `${formatLocalDate(start, tz)} ${hhmm} ${safeFileTitle(view.call?.title ?? "")}`;
+  return `${formatLocalDate(start, tz)} ${hhmm} ${safeFileTitle(title)}`;
+}
+
+/**
+ * The name of the call's `attachments/<name>/` folder in export folder `folder`: the base name
+ * with the title of its first export there, so a call renamed after it was exported keeps one
+ * folder and its file keeps linking into it.
+ */
+export function attachmentsName(view: CallView, folder: string): string {
+  const first = view.handoff().exports.find((e) => dirname(e.path) === folder);
+  return first ? exportBaseName(view, view.titleAt(first.seq)) : exportBaseName(view);
 }
 
 // ---------------------------------------------------------------------------
@@ -482,11 +494,11 @@ export function exportCall(o: ExportOptions): ExportResult {
   if (!c) throw new Error("the call has no call.created");
   const warn = o.onWarn ?? (() => {});
   const folder = join(o.root, c.workspace);
-  const base = exportBaseName(view);
-  const attachments = join(folder, "attachments", base);
   const known = view.handoff().exports;
   const ours = new Set(known.map((e) => e.sha256));
-  const target = pickTarget(folder, base, c.id, ours);
+  const target = pickTarget(folder, exportBaseName(view), c.id, ours);
+  const base = attachmentsName(view, folder);
+  const attachments = join(folder, "attachments", base);
 
   // Attachments: the log, then the audio parts that exist.
   mkdirSync(attachments, { recursive: true });

@@ -8,8 +8,9 @@
  * The cues are rendered here, as 16-bit mono WAV bytes a player hands to the system's output,
  * which follows the system's choice of device. This module plays nothing itself: the caller gives
  * it a `CuePlayer`, and tests give it one that keeps the bytes, so no test opens an output. The
- * session plays the start cue before its readiness gate opens and the stop cue after the post-roll,
- * so the recognizer never hears them.
+ * session plays the stop cue after the post-roll, so the recognizer never hears it. The start cue
+ * plays once the session opened, after its readiness gate, so the microphone can pick it up; nothing
+ * trims it yet (DC-O3).
  *
  * Pure code with no DOM: the main side imports it, and the Dictation page reads `cueStyle` to say
  * what `auto` does right now.

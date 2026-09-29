@@ -7,6 +7,12 @@
  * own key names (`Transport.dictationKeys`, the window only). The helper streams every key, but
  * any other name is left to the page, which alone applies the 400 ms rule and sees each chord once.
  *
+ * Fn has a test of its own (DC-N2): many keyboards not made by Apple keep Fn to themselves and send
+ * the Mac nothing, so on macOS `Use Fn` opens the recorder and waits `FN_TEST_MS` for the helper to
+ * report Fn; with none by then the note says to pick another key. With no helper hearing keys
+ * (dictation off, or its key tap dead without Accessibility) it says that instead, since no
+ * keyboard's Fn could reach akou then.
+ *
  * Refused inline, with nothing saved: a binding the recording hotkey (`app.hotkey`) or another
  * dictation key already has, and, in the clipboard-only fallback of DC-N3 (no Accessibility grant,
  * so a Carbon hotkey that takes chords only), any modifier alone. The platform warnings of
@@ -27,6 +33,17 @@ export const KEY_SETTINGS: Record<string, string> = {
 
 /** How long a modifier is held alone before it counts as the key (DC-U3). */
 export const HOLD_ALONE_MS = 400;
+
+/** How long `Use Fn` waits for the helper to hear Fn before it says the keyboard sends none (DC-N2). */
+export const FN_TEST_MS = 2000;
+
+/** What the recorder says when no Fn press reached the helper in `FN_TEST_MS`. */
+export const NO_FN =
+  "No Fn press reached akou in 2 seconds. Keyboards not made by Apple often keep Fn to themselves; pick another key, such as Right ⌘.";
+
+/** What `Use Fn` says when no helper hears keys: the keyboard is not the one to blame then. */
+export const NO_HELPER =
+  "Only akou's dictation helper hears Fn, and it is not listening now. Turn dictation on, with the Accessibility grant, then try again.";
 
 /** The helper's key names the page takes: the keys the webview never sees (DC-U3). */
 const HELPER_ONLY = /^(fn|globe)$/i;
@@ -140,7 +157,9 @@ export class KeyRecorder {
   private readonly caps = h("span", { class: "keycaps", attrs: { "aria-hidden": "true" } });
   private readonly note = h("small", { class: "recorder-note", attrs: { role: "status" } });
   private readonly button: HTMLButtonElement;
-  private live: { close(): void } | null = null;
+  private live: { close(): void; hearing?: Promise<boolean> } | null = null;
+  /** The Fn test's timer while it waits (DC-N2). */
+  private fnWait: ReturnType<typeof setTimeout> | undefined;
   /** The modifier held alone, since when; cleared once another key goes down. */
   private alone: { code: string; at: number } | null = null;
 
@@ -160,7 +179,21 @@ export class KeyRecorder {
       },
       "Record",
     );
-    this.root = h("span", { class: "recorder" }, this.caps, this.button, this.note);
+    // Fn reaches akou only through the helper, which the window alone hears (DC-N2).
+    const fn =
+      ctx.platform === "darwin" && t.dictationKeys
+        ? h(
+            "button",
+            {
+              class: "record-fn",
+              type: "button",
+              attrs: { "data-for": key },
+              on: { click: () => this.testFn() },
+            },
+            "Use Fn",
+          )
+        : null;
+    this.root = h("span", { class: "recorder" }, this.caps, this.button, fn, this.note);
     this.input.addEventListener("input", () => this.draw());
     this.draw();
   }
@@ -189,9 +222,14 @@ export class KeyRecorder {
     window.addEventListener("keydown", this.down, true);
     window.addEventListener("keyup", this.up, true);
     const helper = this.t.dictationKeys?.((name) => {
-      if (HELPER_ONLY.test(name.trim())) this.take(name.trim());
+      if (!HELPER_ONLY.test(name.trim())) return;
+      // Fn reached akou: the test is answered, whatever `take` makes of it.
+      clearTimeout(this.fnWait);
+      this.fnWait = undefined;
+      this.take(name.trim());
     });
     this.live = {
+      ...(helper?.hearing ? { hearing: helper.hearing } : {}),
       close: () => {
         window.removeEventListener("keydown", this.down, true);
         window.removeEventListener("keyup", this.up, true);
@@ -200,7 +238,33 @@ export class KeyRecorder {
     };
   }
 
+  /**
+   * Opens the recorder for Fn alone and waits `FN_TEST_MS` for the helper to hear it; a keyboard
+   * that sends none gets `NO_FN` and the recorder stays open for another key (DC-N2).
+   */
+  testFn(): void {
+    this.start();
+    const live = this.live;
+    if (!live) return;
+    this.say("Press Fn now.");
+    clearTimeout(this.fnWait);
+    const wait = setTimeout(() => {
+      this.fnWait = undefined;
+      if (this.live) this.say(NO_FN, true);
+    }, FN_TEST_MS);
+    this.fnWait = wait;
+    // No helper hears keys: say so now rather than blame the keyboard in 2 s.
+    void live.hearing?.then((ok) => {
+      if (ok || this.fnWait !== wait || this.live !== live) return;
+      clearTimeout(wait);
+      this.fnWait = undefined;
+      this.say(NO_HELPER, true);
+    });
+  }
+
   stop(): void {
+    clearTimeout(this.fnWait);
+    this.fnWait = undefined;
     this.live?.close();
     this.live = null;
     this.alone = null;

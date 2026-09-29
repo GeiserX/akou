@@ -124,8 +124,29 @@ describe("[SV-U6] the 0 to 100 scores follow the stated formulas", () => {
     expect(score(m("rtfx", 0.5))).toBe(0);
   });
 
+  test("the live setups' bars: AMI WER, seconds, cores and GB, each at the anchor its words state", () => {
+    expect(score(m("call-wer", 0))).toBe(100);
+    expect(score(m("call-wer", 18.8))).toBe(62);
+    expect(score(m("call-wer", 50))).toBe(0);
+    expect(score(m("seconds", 0.5))).toBe(75);
+    expect(score(m("seconds", 2))).toBe(0);
+    expect(score(m("cores", 1))).toBe(50);
+    expect(score(m("cores", 2))).toBe(0);
+    expect(score(m("gb", 8))).toBe(50);
+    expect(score(m("gb", 16))).toBe(0);
+    expect(score(m("gb", 32))).toBe(0);
+  });
+
   test("each formula is stated in words for the page", () => {
-    expect(Object.keys(FORMULAS).sort()).toEqual(["der", "rtfx", "wer"]);
+    expect(Object.keys(FORMULAS).sort()).toEqual([
+      "call-wer",
+      "cores",
+      "der",
+      "gb",
+      "rtfx",
+      "seconds",
+      "wer",
+    ]);
   });
 
   test("the shipped recognizers: Qwen is the more accurate, Parakeet the faster", () => {

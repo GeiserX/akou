@@ -19,6 +19,7 @@ import { byId, h, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
+import { SmoothMeters } from "./meter.ts";
 import {
   banner,
   type CallSummary,
@@ -28,6 +29,7 @@ import {
   formatDuration,
   groupCalls,
   HueBook,
+  hasRecording,
   languages,
   recordKey,
   speakerTotals,
@@ -135,8 +137,8 @@ class App {
   callId: string | null = null;
   /** The user picked the call on screen; otherwise the window follows the live or last call. */
   private chosen = false;
-  /** The call this window started, so the window follows it even when another was picked. */
-  private startedHere: string | null = null;
+  /** The last live call the window saw, so each new one takes the window over once. */
+  private seenLive: string | null = null;
   private follower: Follower | null = null;
   private hues = new HueBook();
   private disconnectedSince: number | null = null;
@@ -153,6 +155,9 @@ class App {
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
+  private readonly levels = new SmoothMeters((ch, db) => {
+    byId<HTMLMeterElement>(`meter-${ch}`).value = db;
+  });
   private blobs = new Map<string, string>();
   /** A start is on its way: Record waits for the answer. */
   private starting = false;
@@ -161,6 +166,10 @@ class App {
   private folded = new Set<string>();
   /** What the calls list was last drawn from, so an unchanged list is not redrawn. */
   private drawnCalls = "";
+  /** The title is being edited: the header leaves it alone until the edit closes. */
+  private renaming = false;
+  /** Closes the open title field without saving; null when none is open. */
+  private closeTitle: (() => void) | null = null;
 
   constructor(readonly t: Transport) {
     const view = () => this.view();
@@ -238,6 +247,7 @@ class App {
     document.body.dataset.transport = this.t.kind;
     this.wireControls();
     this.wireSidebar();
+    byId("title-text").addEventListener("click", () => this.editTitle());
     this.wireTabs();
     this.wirePopover();
     const pinned = new URLSearchParams(location.search).get("call");
@@ -254,14 +264,24 @@ class App {
     this.paint();
   }
 
+  /**
+   * A live call the window has not shown yet takes it over, whichever door started it (the window,
+   * the CLI, an agent, the hotkey, the API) and whatever call the user picked before (W3.17). The
+   * user may pick another call afterwards; the next new live call takes over again, and a call that
+   * ends stays on screen. The one exception is a call already live when the page opens on a call it
+   * was asked for (`akou open CALL`, `?call=`): the page keeps what it was asked to show.
+   */
   private onStatus(s: AppStatus): void {
-    const wasLive = this.status?.live?.call ?? null;
+    const first = this.status === null;
     this.status = s;
     this.modelsCard.update(s.models, true);
     const live = s.live?.call ?? null;
-    if (!this.chosen || (live && live !== wasLive && this.startedHere === live)) {
+    const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
+    if (live) this.seenLive = live;
+    if (fresh || !this.chosen) {
       const target = live ?? this.callId ?? s.last?.call ?? null;
       if (target && target !== this.callId) this.openCall(target, false);
+      else if (fresh) this.chosen = false;
     }
     void this.loadCalls();
     this.paint();
@@ -275,6 +295,10 @@ class App {
       this.paint();
       return;
     }
+    // A title being edited is saved to its own call before another one is shown, and the field
+    // closes, so it can never rename this call while another one is on screen.
+    document.getElementById("title-input")?.blur();
+    this.closeTitle?.();
     this.follower?.stop();
     this.callId = id;
     this.hues = new HueBook();
@@ -301,6 +325,7 @@ class App {
         this.transcript.update(done ? { all: true, ids: [] } : c, animate);
         let notes = c.all;
         let speakers = c.all;
+        let asked = c.all;
         for (const e of c.events) {
           // A line arriving now counts from now (the page's clock); the backlog from when it was
           // written.
@@ -309,12 +334,14 @@ class App {
           }
           if (e.type === "note" || e.type === "note.del") notes = true;
           if (e.type.startsWith("speaker.")) speakers = true;
+          if (e.type === "ask" || e.type === "answer") asked = true;
           if (e.type === "enhanced") this.enhanced.refresh();
           // Notes written before the final layer may now be offered a re-enhance.
           if (e.type === "final.done") void this.enhanced.load();
         }
         if (notes) this.notepad.render();
         if (speakers) this.askPane.renderPresets();
+        if (asked) this.askPane.restore();
         // The talk times follow the lines and the names, not the one-second tick.
         const lines = c.events.some((e) => e.type === "seg" || e.type.startsWith("final."));
         if (speakers || lines) this.drawPeople(f.view);
@@ -366,6 +393,7 @@ class App {
       followedAt: this.followedAt,
       reopen: suggestReopen(this.t.kind, this.disconnectedSince, now),
       lines: this.transcript.count,
+      setup: this.welcoming(),
     });
     const body = document.body;
     for (const c of ["ready", "recording", "paused", "saved", "offline", "failed", "other"]) {
@@ -400,13 +428,23 @@ class App {
    * anyway (one started without models from the CLI) keeps the workspace, so it is never hidden,
    * and so does a call the user picked from the list; the readiness row brings the welcome back.
    */
+  private welcoming(): boolean {
+    return this.modelsCard.missing && !this.status?.live && !this.chosen;
+  }
+
   private welcome(): void {
     const missing = this.modelsCard.missing;
-    const on = missing && !this.status?.live && !this.chosen;
+    const on = this.welcoming();
     byId("welcome").hidden = !on;
     for (const id of ["scroller", "side"]) byId(id).hidden = on;
     // The transcript header goes with the transcript, and needs a call to describe.
     byId("call-head").hidden = on || !this.view()?.call;
+    // The player exists only when the open call has a recording to play (WINDOW section 5). A bar
+    // that goes away takes its audio with it: Restart on a saved call must not leave it playing.
+    const bar = byId("player-bar");
+    const noBar = on || !hasRecording(this.view());
+    if (noBar && !bar.hidden) this.player.stop();
+    bar.hidden = noBar;
     document.body.classList.toggle("welcoming", on);
     // The readiness row (WINDOW section 13): what is missing, and the page that fixes it.
     const s = this.status;
@@ -433,7 +471,7 @@ class App {
    */
   private callHead(v: CallView | null, now: number, note: string): void {
     const call = v?.call;
-    byId("title").textContent = call ? call.title || "Untitled call" : "";
+    if (!this.renaming) byId("title-text").textContent = call ? call.title || "Untitled call" : "";
     const meta = byId("meta");
     if (!v || !call) {
       meta.textContent = "";
@@ -460,6 +498,71 @@ class App {
     ]
       .filter(Boolean)
       .join("\n");
+  }
+
+  /**
+   * Renaming the open call from its title (WINDOW 3.1), live or saved, the way a note is edited:
+   * a click or Enter opens the field, Enter or leaving it saves, Escape keeps the old name. An
+   * empty or unchanged title saves nothing. The save is a `call.renamed` through `PATCH`; the
+   * header, the sidebar row, its search and the window title follow from the log and the status
+   * push that event causes, from this window or any other door.
+   */
+  private editTitle(): void {
+    const id = this.callId;
+    const call = this.view()?.call;
+    if (!id || !call || this.renaming) return;
+    const shown = byId("title-text");
+    const old = call.title;
+    const input = h("input", {
+      id: "title-input",
+      value: old,
+      attrs: { "aria-label": "Call title", maxlength: "200", autocomplete: "off" },
+    });
+    shown.hidden = true;
+    shown.after(input);
+    input.focus();
+    input.select();
+    this.renaming = true;
+    let open = true;
+    const close = () => {
+      open = false;
+      if (this.closeTitle === close) this.closeTitle = null;
+      this.renaming = false;
+      input.remove();
+      shown.hidden = false;
+    };
+    this.closeTitle = close;
+    const done = async (keep: boolean) => {
+      if (!open) return;
+      open = false;
+      const title = input.value.replace(/\s+/g, " ").trim();
+      if (keep && title !== "" && title !== old) {
+        const r = await this.t
+          .request<{ title?: string }>("PATCH", `/calls/${encodeURIComponent(id)}`, { title })
+          .catch(() => null);
+        if (!r || r.status >= 400) toast(message(r?.body, "the call was not renamed"));
+        // Another call was opened meanwhile, which closed this field: nothing left to show.
+        if (!input.isConnected) return;
+        if (!r || r.status >= 400) {
+          // The field stays open with its text, to try again.
+          open = true;
+          return;
+        }
+        // Shown at once; the event on the stream brings the same title a moment later.
+        shown.textContent = r.body.title ?? title;
+      }
+      close();
+      if (document.activeElement === document.body) shown.focus();
+    };
+    input.addEventListener("keydown", (e) => {
+      // Enter or Escape inside an IME composition belongs to the composition, not the edit.
+      if (e.isComposing || e.keyCode === 229) return;
+      if (e.key !== "Enter" && e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      void done(e.key === "Enter");
+    });
+    input.addEventListener("blur", () => void done(true));
   }
 
   /** The speaker chips under the title: each voice's colour and its time, the most first. */
@@ -502,6 +605,13 @@ class App {
     const lang = byId("pill-lang");
     lang.hidden = langs.length === 0;
     lang.textContent = `languages: ${langs.join(", ")}`;
+    // The live setup this call runs (asr.live), while it records.
+    const running = this.status?.live;
+    const setup = running && running.call === this.callId ? running.setup : null;
+    const livePill = byId("pill-live");
+    livePill.hidden = !setup;
+    livePill.textContent = setup ? `live: ${setup}` : "";
+    livePill.title = setup && running?.engine ? running.engine : "";
     const share = this.status?.share.shares?.find((x) => x.call === this.callId);
     const pill = byId("pill-share");
     pill.hidden = !share;
@@ -601,10 +711,10 @@ class App {
       this.levelAt = now;
       if (l.call > HEARD_DBFS) this.callHeardAt = now;
     }
+    if (l) this.levels.set(l);
+    else this.levels.reset();
     for (const ch of ["mic", "call"] as const) {
-      const m = byId<HTMLMeterElement>(`meter-${ch}`);
-      m.value = l ? Math.max(-60, Math.min(0, l[ch])) : -60;
-      m.title = l ? `${ch}: ${Math.round(l[ch])} dBFS` : `${ch}: no level`;
+      byId(`meter-${ch}`).title = l ? `${ch}: ${Math.round(l[ch])} dBFS` : `${ch}: no level`;
     }
     this.drawHealth(this.view());
   }
@@ -860,7 +970,6 @@ class App {
     const call = r.body.call;
     if (r.status === 201 && call) {
       byId<HTMLInputElement>("newtitle").value = "";
-      this.startedHere = call;
       this.openCall(call, false);
       this.consent();
       return;
@@ -968,7 +1077,7 @@ class App {
   }
 
   // ---------------------------------------------------------------------------
-  // Tabs: Notes, Ask, Enhanced
+  // Tabs: Notes and Enhanced. Ask sits above them and is never a tab (WINDOW section 6).
 
   private wireTabs(): void {
     const tabs = [...document.querySelectorAll<HTMLButtonElement>("[role=tab]")];
@@ -1022,9 +1131,15 @@ class App {
   }
 
   private mayPlay(): boolean {
-    if (this.platform === "linux" && this.view()?.live) {
-      // PipeWire cannot keep the window's audio out of the recording (DESIGN 2.3).
-      toast("akou does not play audio while a call is recording on Linux.");
+    if (this.view()?.live) {
+      // A recording call has no player (WINDOW section 5), so nothing may start audio it could not
+      // pause. On Linux there is a second reason: PipeWire cannot keep the window's audio out of
+      // the recording (DESIGN 2.3).
+      toast(
+        this.platform === "linux"
+          ? "akou does not play audio while a call is recording on Linux."
+          : "Audio plays once the call is saved.",
+      );
       return false;
     }
     return true;

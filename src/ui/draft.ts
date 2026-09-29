@@ -1,8 +1,15 @@
 /**
  * The draft box (docs/ux/DICTATION.md section 5.2, DC-S1): where a dictation lands when you want to
  * read it before it goes anywhere. Enter inserts into the app captured when the session began,
- * Ctrl+Enter (Cmd+Enter on macOS) inserts and presses the send key, Shift+Enter is a newline, and
- * Escape discards. Copy and Retry with another engine sit below.
+ * Ctrl+Enter (Cmd+Enter on macOS) inserts and presses the send key (and so does Enter in a box a
+ * per-app rule opened with `draft-send`), Shift+Enter is a newline, and
+ * Escape discards. Discard, Retry with another engine, Copy, Insert and Send sit below as buttons.
+ * It is drawn as a sheet dropped from the island at the top (docs/ux/design-explorations/README.md):
+ * the island says `Draft` and the audio's length, the sheet holds the field, where the text goes,
+ * and the engine, where it ran, how long it took, the audio's length and the language. With two or
+ * more of the user's languages and an engine that takes a forced one, the language chip is a
+ * button: a click decodes the same audio again in the next language (akou-5v8), and the new reading
+ * comes back as a new open, the chip ringed as one the user chose.
  *
  * Words the engine was unsure of are underlined, from its word confidences; an engine that gives
  * none gets the note `no confidence from this engine` and no underline. A click on an underlined
@@ -27,6 +34,8 @@ export interface DraftTransport {
   discard(p: Params<"discard">): void;
   copy(p: Params<"copy">): void;
   retry(p: Params<"retry">): void;
+  /** The chip's click; false when no new reading comes, and the chip takes clicks again. */
+  language(p: Params<"language">): Promise<boolean>;
   chip(a: ChipAnswer): void;
 }
 
@@ -48,18 +57,40 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
   return e as T;
 }
 
-/** The low-confidence words, found in order in the text. */
+/**
+ * The low-confidence words, found in order in the text. Words next to each other that the other
+ * engine heard as one stretch carry the same alternative (`cooper netties` for `Kubernetes`): they
+ * are one mark when any of them is unsure, so picking the alternative replaces the whole stretch.
+ */
 export function lowMarks(text: string, words: DraftOpen["words"]): Mark[] {
-  const out: Mark[] = [];
+  const found: { start: number; end: number; low: boolean; alt: string[] }[] = [];
   let at = 0;
   for (const w of words ?? []) {
     if (!w.w) continue;
     const i = text.indexOf(w.w, at);
     if (i < 0) continue;
     at = i + w.w.length;
-    if (typeof w.c === "number" && w.c < LOW_CONFIDENCE) {
-      out.push({ start: i, end: at, alt: (w.alt ?? []).filter((a) => a && a !== w.w) });
+    const low = typeof w.c === "number" && w.c < LOW_CONFIDENCE;
+    found.push({ start: i, end: at, low, alt: (w.alt ?? []).filter(Boolean) });
+  }
+  const key = (x: { alt: string[] }) => (x.alt.length > 0 ? JSON.stringify(x.alt) : null);
+  const out: Mark[] = [];
+  for (let k = 0; k < found.length; ) {
+    const first = found[k] as (typeof found)[number];
+    let e = k;
+    const same = key(first);
+    while (same !== null) {
+      const next = found[e + 1];
+      if (!next || key(next) !== same) break;
+      if (text.slice((found[e] as (typeof found)[number]).end, next.start).trim() !== "") break;
+      e++;
     }
+    const run = found.slice(k, e + 1);
+    k = e + 1;
+    if (!run.some((x) => x.low)) continue;
+    const end = (run.at(-1) as (typeof found)[number]).end;
+    const said = text.slice(first.start, end);
+    out.push({ start: first.start, end, alt: first.alt.filter((a) => a !== said) });
   }
   return out;
 }
@@ -82,6 +113,55 @@ export function shiftMarks(marks: readonly Mark[], before: string, after: string
     else if (m.start >= oldEnd) out.push({ ...m, start: m.start + delta, end: m.end + delta });
   }
   return out;
+}
+
+/** The audio's length as `0:14`. */
+function clock(seconds: number): string {
+  const s = Math.max(0, Math.round(seconds));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+}
+
+/**
+ * The language chip: the tag in capitals, a button only when a click can decode the audio again
+ * in another language, ringed when the user chose it.
+ */
+function languageChip(d: DraftOpen, onSwitch: () => Promise<boolean>): HTMLElement {
+  const tag = (d.language ?? "").split("-")[0]?.toUpperCase() ?? "";
+  if (d.languageSwitch !== true)
+    return h("span", { id: "draft-lang", class: "lang", attrs: { title: "Language heard" } }, tag);
+  const b = h(
+    "button",
+    {
+      id: "draft-lang",
+      class: "lang",
+      type: "button",
+      attrs: { title: "Switch language", "aria-label": `Switch language, now ${tag}` },
+    },
+    tag,
+  );
+  b.toggleAttribute("data-switchable", true);
+  b.toggleAttribute("data-forced", d.languageForced === true);
+  b.addEventListener("click", () => {
+    // One decode at a time: the next open draws a new chip, and a switch that failed frees it.
+    b.disabled = true;
+    void onSwitch().then((ok) => {
+      if (!ok) b.disabled = false;
+    });
+  });
+  return b;
+}
+
+/** The engine line: `fast (Parakeet) on this Mac · took 0.3 s · 0:14 of audio · EN`. */
+function metaLine(d: DraftOpen, onSwitch: () => Promise<boolean>): (string | HTMLElement)[] {
+  const dot = () => h("span", { class: "dot", attrs: { "aria-hidden": "true" } });
+  const here = d.platform === "darwin" ? "on this Mac" : "on this computer";
+  const parts: (string | HTMLElement)[][] = [
+    [h("b", {}, d.engine), d.local === true ? ` ${here}` : ""],
+    ["took ", h("b", {}, `${(d.ms / 1000).toFixed(1)} s`)],
+  ];
+  if (typeof d.seconds === "number" && d.seconds > 0) parts.push([`${clock(d.seconds)} of audio`]);
+  if (d.language) parts.push([languageChip(d, onSwitch)]);
+  return parts.flatMap((p, i) => (i === 0 ? p : [dot(), ...p]));
 }
 
 export function mountDraft(t: DraftTransport): DraftSink {
@@ -141,7 +221,8 @@ export function mountDraft(t: DraftTransport): DraftSink {
     const other = mac() ? e.ctrlKey : e.metaKey;
     if (other) return;
     e.preventDefault();
-    insert(mod);
+    // A per-app rule's `draft-send` (DC-U9): Enter sends as well.
+    insert(mod || d?.enterSends === true);
   });
   field.addEventListener("click", () => {
     const at = field.selectionStart;
@@ -175,6 +256,13 @@ export function mountDraft(t: DraftTransport): DraftSink {
     alts.hidden = false;
   });
   el("draft-close").addEventListener("click", discard);
+  el("draft-insert").addEventListener("click", () => insert(false));
+  el("draft-send").addEventListener("click", () => insert(true));
+  const retryWith = () => {
+    const engine = el<HTMLSelectElement>("draft-retry-engine").value;
+    el("draft-retry").textContent = engine ? `↻ Retry with ${engine}` : "";
+  };
+  el("draft-retry-engine").addEventListener("change", retryWith);
   el("draft-copy").addEventListener("click", () => {
     if (d) t.copy({ id: d.id, text: field.value });
   });
@@ -194,17 +282,27 @@ export function mountDraft(t: DraftTransport): DraftSink {
       const scored = (next.words ?? []).some((w) => typeof w.c === "number");
       el("draft-noconf").hidden = scored;
       alts.hidden = true;
-      el("draft-to").textContent = next.to ? `to: ${next.to}` : "";
-      el("draft-engine").textContent = `${next.engine} ${(next.ms / 1000).toFixed(1)} s`;
+      el("draft-to").hidden = !next.to;
+      el("draft-app").textContent = next.to ?? "";
+      el("draft-app-icon").textContent = (next.to ?? "").charAt(0).toUpperCase();
+      el("draft-length").textContent =
+        typeof next.seconds === "number" && next.seconds > 0 ? `· ${clock(next.seconds)}` : "";
       replace(
-        el("draft-retry-engine"),
-        ...next.engines.map((e) => h("option", { value: e }, `Retry with ${e}`)),
+        el("draft-meta"),
+        ...metaLine(next, () =>
+          d === next && !done ? t.language({ id: next.id }) : Promise.resolve(false),
+        ),
       );
-      el("draft-retry-engine").hidden = next.engines.length === 0;
-      el("draft-retry").hidden = next.engines.length === 0;
-      const m = mac() ? "Cmd" : "Ctrl";
-      el("draft-keys").textContent =
-        `Enter: insert · ${m}+Enter: insert and send · Shift+Enter: newline · Esc: discard`;
+      replace(el("draft-retry-engine"), ...next.engines.map((e) => h("option", { value: e }, e)));
+      el("draft-retry-group").hidden = next.engines.length === 0;
+      el("draft-retry-pick").hidden = next.engines.length < 2;
+      retryWith();
+      const sendMod = mac() ? "Cmd+Enter" : "Ctrl+Enter";
+      el("draft-send-key").textContent = next.enterSends ? "↵" : mac() ? "⌘↵" : "Ctrl ↵";
+      el("draft-send").title = next.enterSends
+        ? `Insert and send (Enter or ${sendMod})`
+        : `Insert and send (${sendMod})`;
+      el("draft-insert").title = next.enterSends ? "Insert without sending" : "Insert (Enter)";
       el("draft").hidden = false;
       paintMarks();
       if (next.focus) {

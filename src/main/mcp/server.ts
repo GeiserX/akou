@@ -201,6 +201,7 @@ const OUT = {
   }),
   ask: z.object({ answered: z.boolean(), callText: CALL_TEXT }),
   speaker: z.object({ spk: z.string(), name: z.string() }),
+  rename: z.object({ call: z.string(), title: z.string() }),
   merge: z.object({ from: z.string(), into: z.string() }),
   unmerge: z.object({ spk: z.string() }),
   id: z.object({ id: z.string() }),
@@ -337,6 +338,7 @@ export const TOOLS: Readonly<Record<string, { title: string; hints: Hints; less?
   },
   akou_enhanced_put: { title: "Save enhanced notes", hints: WRITE },
   akou_enhance: { title: "Enhance notes with akou's provider", hints: PROVIDER },
+  akou_rename_call: { title: "Rename a call", hints: IDEMPOTENT },
   akou_list_calls: { title: "List past calls", hints: READ },
   akou_get_call: { title: "Read a named call", hints: READ },
   akou_export: { title: "Export a call", hints: WRITE },
@@ -452,7 +454,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_status",
     {
       description:
-        "Whether a call is recording, its health and recognizer lag, the models and provider in use, and sharing. Read models and provider from here, never from memory. Not needed before akou_start.",
+        "Whether a call is recording, its health, recognizer lag and live setup (`live.setup`: parakeet, nemotron or upgrade, and `live.engine`), the models and provider in use, and sharing. Read models and provider from here, never from memory. Not needed before akou_start.",
       inputSchema: z.object({}),
       outputSchema: OUT.body,
     },
@@ -1003,6 +1005,26 @@ export function createMcpServer(o: McpOptions): McpServer {
   );
 
   // --- past calls -------------------------------------------------------------------------------
+
+  tool(
+    "akou_rename_call",
+    {
+      description:
+        'Rename a call, live or saved, when the user gives it a name ("call this the Q3 planning"). `call` is `live` (default), `last` or an id from akou_list_calls. Every list and search shows the new title at once.',
+      inputSchema: z.object({
+        call: z.string().default("live"),
+        title: z.string().min(1).max(200),
+      }),
+      outputSchema: OUT.rename,
+    },
+    async (a) => {
+      const r = await req("PATCH", `/calls/${id(a.call)}`, { body: { title: a.title } });
+      return asResult(r, (b) => ({
+        text: `${b.call} is now "${b.title}"`,
+        data: { call: String(b.call), title: String(b.title) },
+      }));
+    },
+  );
 
   tool(
     "akou_list_calls",

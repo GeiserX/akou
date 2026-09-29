@@ -83,6 +83,8 @@ export function electrobunUi(): NativeUi {
           showCall: (m) => defined.send.showCall(m),
           showSettings: (m) => defined.send.showSettings(m),
           askQuit: (m) => defined.send.askQuit(m),
+          dictationKey: (m) => defined.send.dictationKey(m),
+          dictationLevel: (m) => defined.send.dictationLevel(m),
         },
       };
     },
@@ -153,6 +155,7 @@ export function electrobunUi(): NativeUi {
       win.setVisibleOnAllWorkspaces(true);
       return {
         window: {
+          setFrame: (f) => win.setFrame(f.x, f.y, f.width, f.height),
           showInactive: () => win.showInactive(),
           hide: () => win.hide(),
           close: () => win.close(),
@@ -174,14 +177,15 @@ export function electrobunUi(): NativeUi {
         handlers: { requests: handlers, messages: {} },
       });
       // Hidden until a draft opens, and never activated by being shown: an automatic open must
-      // not take the keyboard from the app the user is typing in. The page draws its own title
-      // row (a drag region) and close.
+      // not take the keyboard from the app the user is typing in. The page draws its own island
+      // and sheet (drag regions) and Discard; the rest of the window is transparent.
       const win = new BrowserWindow({
         title: "akou draft",
         url,
         rpc: defined,
         frame,
         titleBarStyle: "hidden",
+        transparent: true,
         hidden: true,
         activate: false,
       });

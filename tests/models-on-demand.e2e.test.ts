@@ -469,6 +469,7 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
       job: "test",
       languages: null,
       streaming: false,
+      after_call: true,
       from: [`127.0.0.1:${reg.port}/b.onnx`],
       state: "ready",
       bytes: 4096,

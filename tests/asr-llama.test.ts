@@ -356,6 +356,13 @@ describe("the supervisor", () => {
     expect(r.exitCode).toBe(64);
   });
 
+  test("only the nightly's control keeps the prompt cache: promptCache drops --cache-ram 0", () => {
+    const base = { command: ["x"], model: "m", mmproj: "p", accelerator: "cpu" as const };
+    expect(llamaArgs(base, 1)).toContain("--cache-ram");
+    expect(llamaArgs({ ...base, promptCache: false }, 1)).toContain("--cache-ram");
+    expect(llamaArgs({ ...base, promptCache: true }, 1)).not.toContain("--cache-ram");
+  });
+
   test("a CPU build is told to keep every layer off the GPU; a GPU build offloads", () => {
     const base = { command: ["x"], model: "m", mmproj: "p" };
     const cpu = llamaArgs({ ...base, accelerator: "cpu" }, 1);
@@ -509,14 +516,17 @@ describe("the Qwen engine's protocol", () => {
     expect(h.text).toBe("");
     const sent = bodies(log());
     expect(sent).toHaveLength(1);
-    expect((sent[0]?.messages ?? []).map((m) => (m as { role: string }).role)).toEqual(["user"]);
+    expect((sent[0]?.messages ?? []).map((m) => (m as { role: string }).role)).toEqual([
+      "system",
+      "user",
+    ]);
   });
 
   test("a language Qwen does not know is decoded as auto, not forced", async () => {
     const { server, log } = fakeServer();
     await new QwenEngine({ id: QWEN_ASR, server }).decode(unit(["hello"], "eu"));
     const msgs = bodies(log())[0]?.messages ?? [];
-    expect(msgs.map((m) => (m as { role: string }).role)).toEqual(["user"]);
+    expect(msgs.map((m) => (m as { role: string }).role)).toEqual(["system", "user"]);
   });
 
   test("the glossary is the system prompt, and fixes the word the engine mishears", async () => {
@@ -527,6 +537,18 @@ describe("the Qwen engine's protocol", () => {
     expect(h.text).toBe("Hetzner");
     const sys = bodies(log())[1]?.messages[0];
     expect(sys).toEqual({ role: "system", content: "Hetzner, Kubernetes" });
+  });
+
+  test("the system turn is always sent, empty with no glossary: without it Qwen answers a language on silence", async () => {
+    const { server, log } = fakeServer();
+    const engine = new QwenEngine({ id: QWEN_ASR, server, allowed: ["en", "es"] });
+    await engine.decode(unit(["hello"]));
+    await engine.decode(unit(["hello"], "en"));
+    // Forced: the auto decode answers English, so Spanish takes a second request.
+    await engine.decode(unit(["hello"], "es"));
+    const sent = bodies(log());
+    expect(sent).toHaveLength(4);
+    for (const b of sent) expect(b.messages[0]).toEqual({ role: "system", content: "" });
   });
 
   test("a 'None' answer is kept: no speech is empty text, never a forced sentence", async () => {

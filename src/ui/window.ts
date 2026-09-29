@@ -139,11 +139,15 @@ class RpcTransport implements Transport {
     return (await rpc.request.openSettingsPane({ pane })) as boolean;
   }
 
-  dictationKeys(fn: (name: string) => void): { close(): void } {
+  dictationKeys(fn: (name: string) => void): { close(): void; hearing: Promise<boolean> } {
     keyWatchers.add(fn);
     // An app without the recorder's main side answers nothing; the page still records chords.
-    void rpc.request.recordDictationKeys({ on: true }).catch(() => {});
+    const hearing = rpc.request.recordDictationKeys({ on: true }).then(
+      (ok) => ok === true,
+      () => false,
+    );
     return {
+      hearing,
       close: () => {
         if (keyWatchers.delete(fn) && keyWatchers.size === 0)
           void rpc.request.recordDictationKeys({ on: false }).catch(() => {});

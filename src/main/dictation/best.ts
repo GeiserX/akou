@@ -101,6 +101,16 @@ export class BestEngine implements DictationEngine {
     return this.server?.pid() ?? null;
   }
 
+  /**
+   * The warm server as the settings name it now, once it answered its health check; else null.
+   * A call's in-call upgrade sends Qwen its lines here, so one Qwen serves both on the GPU.
+   */
+  warmServer(): BestServer | null {
+    const s = this.server;
+    if (!s || s !== this.healthy || this.making || this.starting) return null;
+    return this.made === JSON.stringify(this.o.spec()) ? s : null;
+  }
+
   /** Starts the server now, so the next dictation finds it warm. A failure is only logged. */
   warm(): void {
     void this.ensure().then(

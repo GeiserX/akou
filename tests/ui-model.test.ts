@@ -5,6 +5,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
 import { formatWall } from "../src/core/log/clock.ts";
 import { fold } from "../src/core/log/fold.ts";
 import {
@@ -18,6 +19,7 @@ import {
   groupCalls,
   HUES,
   HueBook,
+  hasRecording,
   languages,
   playingLine,
   positionText,
@@ -79,6 +81,51 @@ describe("speaker hues (hark-viewer parity)", () => {
     for (let i = 1; i <= 8; i++) h.hue(`c${i}`);
     expect(h.hue("c9")).toBe(HUES[0]);
   });
+
+  test("no speaker hue sits within 30 degrees of the accent, in dark or light", () => {
+    const css = readFileSync(new URL("../src/ui/theme.css", import.meta.url), "utf8");
+    const accents = [...css.matchAll(/--accent:\s*#([0-9a-f]{6})/gi)].map((m) =>
+      hexHue(m[1] ?? ""),
+    );
+    expect(accents.length).toBe(2);
+    const far = (hues: readonly number[]) =>
+      hues.every((h) =>
+        accents.every((a) => Math.min(Math.abs(h - a), 360 - Math.abs(h - a)) >= 30),
+      );
+    expect(far(HUES)).toBe(true);
+    // Positive control: a hue on the accent's own (you were 214 before) fails the check.
+    expect(far([...HUES, 214])).toBe(false);
+  });
+});
+
+/** The hue in degrees of a `rrggbb` colour. */
+function hexHue(hex: string): number {
+  const [r, g, b] = [0, 2, 4].map((i) => Number.parseInt(hex.slice(i, i + 2), 16) / 255) as [
+    number,
+    number,
+    number,
+  ];
+  const max = Math.max(r, g, b);
+  const d = max - Math.min(r, g, b);
+  if (d === 0) return 0;
+  const h = max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+  return (h * 60 + 360) % 360;
+}
+
+describe("the player bar exists only with a recording (WINDOW section 5)", () => {
+  test("no call, a live call and a call with no part have no player; a saved call with a part has one", () => {
+    expect(hasRecording(null)).toBe(false);
+    expect(hasRecording(live())).toBe(false);
+    const saved = live((b) => {
+      b.partEnded(1, "stop");
+      b.add({ type: "call.ended", reason: "stop" });
+    });
+    expect(hasRecording(saved)).toBe(true);
+    const noPart = new LogBuilder();
+    noPart.created();
+    noPart.add({ type: "call.failed", stage: "open", error: "permission denied" });
+    expect(hasRecording(fold(noPart.events))).toBe(false);
+  });
 });
 
 describe("[T3.9] Offsets shown as times of day", () => {
@@ -111,6 +158,22 @@ describe("the state label (hark-viewer's states)", () => {
     expect(stateLabel({ ...base, view: null, status: status(null) }).label).toBe("ready");
     expect(stateLabel({ ...base, view: null, status: status("x") }).label).toBe(
       "another call is recording",
+    );
+  });
+
+  test("setup, never ready, while the welcome shows because the speech models are missing", () => {
+    const setup = { ...base, view: null, status: status(null), setup: true };
+    expect(stateLabel(setup).label).toBe("setup");
+    // A call recording elsewhere still says so.
+    expect(stateLabel({ ...setup, status: status("x") }).label).toBe("another call is recording");
+    // The last saved call opens behind the welcome; the word follows the welcome, not that call.
+    const ended = live((b) => {
+      b.partEnded(1, "stop");
+      b.add({ type: "call.ended", reason: "stop" });
+    });
+    expect(stateLabel({ ...setup, view: ended, lines: 3 }).label).toBe("setup");
+    expect(stateLabel({ ...base, view: ended, status: status(null), lines: 3 }).label).toBe(
+      "saved",
     );
   });
 

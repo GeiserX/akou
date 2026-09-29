@@ -260,6 +260,61 @@ describe("following a live call", () => {
   );
 });
 
+/** The call the sidebar marks as the one on screen. */
+const shown = (page: Page) =>
+  page.evaluate(
+    () =>
+      document.querySelector<HTMLElement>('#calls button[data-id][aria-current="true"]')?.dataset
+        .id ?? null,
+  );
+
+describe("[W3.17] a new live call takes the window over, from any door", () => {
+  test(
+    "a call started from the CLI replaces a call the user picked; a picked call holds until the next one; an ended call stays",
+    async () => {
+      let old = "";
+      await withRig({ seed: (home) => (old = seedCall(home, standardCall).id) }, async (rig) => {
+        // The user opened an old call: the window shows it as picked.
+        const page = await rig.open(old);
+        await until(async () => (await shown(page)) === old, 5000, "the old call on screen");
+        // `akou start` from a terminal or an agent: not the window's own start.
+        const cli = { "x-akou-client": "cli" };
+        const first = await rig.api("POST", "/calls", { workspace: "work", title: "One" }, cli);
+        expect(first.status).toBe(201);
+        const one = first.body.call as string;
+        await until(async () => (await shown(page)) === one, 5000, "the CLI's call on screen");
+        await until(async () => (await text(page, "#state")) === "rec", 5000, "recording");
+        // The user picks the old call to read it while the call runs: it holds.
+        await page.click(`#calls button[data-id="${old}"]`);
+        await until(async () => (await shown(page)) === old, 5000, "the old call picked again");
+        // A window opened on the old call while one is live (`akou open OLD`) shows what it was
+        // asked for.
+        const asked = await rig.open(old);
+        await until(async () => (await shown(asked)) === old, 5000, "the asked-for call");
+        await Bun.sleep(1500);
+        expect(await shown(page)).toBe(old);
+        expect(await shown(asked)).toBe(old);
+        expect((await rig.api("POST", `/calls/${one}/stop`, {}, cli)).status).toBeLessThan(300);
+        // The next new live call takes the window over again.
+        const second = await rig.api("POST", "/calls", { workspace: "work", title: "Two" }, cli);
+        expect(second.status).toBe(201);
+        const two = second.body.call as string;
+        await until(async () => (await shown(page)) === two, 5000, "the second call on screen");
+        // It ends: the window stays on it.
+        expect((await rig.api("POST", `/calls/${two}/stop`, {}, cli)).status).toBeLessThan(300);
+        await until(
+          async () => (await rig.api("GET", "/status")).body?.live === null,
+          5000,
+          "no live call",
+        );
+        await Bun.sleep(500);
+        expect(await shown(page)).toBe(two);
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("XSS: every text from a transcript, a note, a name or an answer renders inert", () => {
   test(
     "a payload in a line, a speaker name, a note, a title and an answer stays text",
@@ -300,7 +355,6 @@ describe("XSS: every text from a transcript, a note, a name or an answer renders
         async (rig) => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=1");
-          await page.click("#tab-ask");
           await page.fill("#ask-input", "what about the build");
           await page.keyboard.press("Enter");
           await page.waitForSelector("#ask-out .answer button.cite");
@@ -361,8 +415,12 @@ describe("keyboard access", () => {
         );
         expect(outline).not.toBe("none");
         await page.keyboard.press("ArrowRight");
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-ask");
-        expect(await page.locator("#pane-ask").isVisible()).toBe(true);
+        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-enhanced");
+        expect(await page.locator("#pane-enhanced").isVisible()).toBe(true);
+        // Two tabs: the arrow wraps back to Notes.
+        await page.keyboard.press("ArrowRight");
+        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-notes");
+        expect(await page.locator("#pane-notes").isVisible()).toBe(true);
       });
     },
     UI_TIMEOUT,
@@ -371,15 +429,31 @@ describe("keyboard access", () => {
 
 describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
   test(
-    "[W1.1] for each tab, the other two panes have computed display none and are skipped by Tab",
+    "[W1.1] for each tab, the other pane has computed display none and is skipped by Tab",
     async () => {
       let id = "";
       await withRig(
-        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
+        {
+          seed: (home) =>
+            (id = seedCall(home, (b) => {
+              standardCall(b);
+              // A note, so the Notes pane has its own controls to reach with Tab.
+              b.add({
+                type: "note",
+                id: "n0001",
+                rev: 1,
+                text: "budget review",
+                w: T0 + 2000,
+                afterSeq: 3,
+                by: "user",
+              });
+            }).id),
+        },
         async (rig) => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
-          const panes = ["notes", "ask", "enhanced"];
+          await page.waitForSelector("#notes li.note");
+          const panes = ["notes", "enhanced"];
           for (const tab of panes) {
             await page.click(`#tab-${tab}`);
             const display = await page.evaluate(
@@ -439,8 +513,8 @@ describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
               }
             }, on);
           await force(true);
-          expect(await hiddenOffenders(page)).toEqual(["#pane-ask shows", "#pane-enhanced shows"]);
-          await page.click("#tab-ask");
+          expect(await hiddenOffenders(page)).toEqual(["#pane-enhanced shows"]);
+          await page.click("#tab-enhanced");
           expect(await watchedOffenders(page, { clear: true })).toEqual(
             expect.arrayContaining(["#pane-notes shows", "#pane-enhanced shows"]),
           );
@@ -566,6 +640,22 @@ describe("the notepad (DESIGN 5.1)", () => {
           expect(Math.abs(note.w - typed)).toBeLessThan(5000);
           expect(note.afterSeq).toBeGreaterThan(0);
           expect(await page.locator("#notes li.note.action").count()).toBe(1);
+          // The marker is drawn as a glyph, not as text; an edit starts from the whole line.
+          expect(await text(page, "#notes li.note.action .note-text")).toBe("move the build");
+          await page.click("#notes li.note.action .edit");
+          expect(await page.inputValue("#notes li.note.action .note-edit")).toBe(
+            "[] move the build",
+          );
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("#notes .note-edit", { state: "detached" });
+          await page.click("#note-input");
+          // Edit and delete hidden until hover take no width: the text runs to the row's edge.
+          const gap = await page.evaluate(() => {
+            const row = document.querySelector("#notes li.note.action") as HTMLElement;
+            const t = row.querySelector(".note-text") as HTMLElement;
+            return row.getBoundingClientRect().right - t.getBoundingClientRect().right;
+          });
+          expect(gap).toBeLessThan(16);
           // A pause of 2 s saves the line too, and later keystrokes edit it (rev + 1).
           await page.keyboard.type("? who owns it");
           await until(
@@ -834,7 +924,12 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           // The answer cites the line the way the pack teaches a model to: [HH:MM Name].
           const minute = formatWall(T0 + 3000, TZ, { seconds: false });
           provider.answer = () => `Ben said to move the build [${minute} Ben].`;
-          await page.click("#tab-ask");
+          // Ask is always on screen, above Notes: no tab to open first.
+          expect(await page.locator("#ask-input").isVisible()).toBe(true);
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          // The presets are a menu on the input.
+          await page.click("#ask-presets-open");
+          expect(await page.getAttribute("#ask-presets-open", "aria-expanded")).toBe("true");
           expect(await page.locator("#ask-presets .preset").allTextContents()).toEqual([
             "Catch me up",
             "Was my name mentioned?",
@@ -842,7 +937,27 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
             "Action items",
             "What did Ben say?",
           ]);
+          // Escape closes it, with the focus in the menu or back in the input.
+          await page.keyboard.press("Escape");
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          await page.click("#ask-presets-open");
+          await page.click("#ask-input");
+          await page.keyboard.press("Escape");
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          // The chevron closes an open menu too.
+          await page.click("#ask-presets-open");
+          await page.click("#ask-presets-open");
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          await page.click("#ask-presets-open");
+          // WebKit does not focus a clicked button: the preset blurs to nothing before its click
+          // lands. The menu has to survive that, or the click asks nothing. Blurring by hand does
+          // the same thing in every engine.
+          await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+          expect(await page.locator("#ask-presets").isVisible()).toBe(true);
           await page.click("#ask-presets >> text=What did Ben say?");
+          // Picking one closes the menu.
+          expect(await page.locator("#ask-presets").isVisible()).toBe(false);
+          expect(await page.getAttribute("#ask-presets-open", "aria-expanded")).toBe("false");
           await page.waitForSelector("#ask-out .card");
           // The tokens stream: the first half shows before the answer is complete.
           await page.waitForSelector("#ask-out .answer.streaming");
@@ -863,6 +978,275 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           expect((asked[0] as { by: string }).by).toBe("user");
         },
       );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a saved call opens on its last answered question, citations live; a question asked here replaces it",
+    async () => {
+      let id = "";
+      const provider = new FakeProvider();
+      await withRig(
+        {
+          provider,
+          seed: (home) => {
+            id = seedCall(home, (b) => {
+              standardCall(b);
+              b.add({ type: "ask", id: "q1", q: "who spoke first?", by: "user" });
+              b.add({
+                type: "answer",
+                ask: "q1",
+                text: "An older answer.",
+                cites: [],
+                model: "fake/1.0",
+                pack: { mode: "whole-call", tokens: 10 },
+              });
+              b.add({ type: "ask", id: "q2", q: "what about the build?", by: "agent:codex" });
+              b.add({
+                type: "answer",
+                ask: "q2",
+                text: "Move it to the new box [#l000002].",
+                cites: ["l000002"],
+                model: "fake/1.0",
+                pack: { mode: "whole-call", tokens: 10 },
+              });
+              // Asked, never answered: not what the column shows.
+              b.add({ type: "ask", id: "q3", q: "still thinking?", by: "user" });
+            }).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await page.waitForSelector("#ask-out .a-card .answer button.cite");
+          expect(await page.locator("#ask-out .qa").count()).toBe(1);
+          expect(await text(page, "#ask-out .question")).toBe("what about the build?");
+          expect(await text(page, "#ask-out .answer")).toContain("Move it to the new box");
+          expect(await text(page, "#ask-out .ask-status")).toBe(
+            "asked by agent codex · answered by fake/1.0",
+          );
+          await page.click("#ask-out .answer button.cite");
+          await page.waitForSelector('#lines .row.flash[data-id="l000002"]');
+          // A question asked here is the one on screen, and one is all the column holds.
+          provider.answer = () => "Ana spoke first.";
+          await page.fill("#ask-input", "who spoke first, again?");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await text(page, "#ask-out .answer")) === "Ana spoke first.",
+            5000,
+            "the new answer",
+          );
+          expect(await page.locator("#ask-out .qa").count()).toBe(1);
+          expect(await text(page, "#ask-out .question")).toBe("who spoke first, again?");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the side column (WINDOW section 6)", () => {
+  test(
+    "Ask on top, Notes under it, the note input at the foot with its markers as hints, during a call and after",
+    async () => {
+      const t = tempDir("akou-wav-");
+      const provider = new FakeProvider();
+      await withRig({ provider, helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const id = await rig.startCall({ title: "Column" });
+        const page = await rig.open(id);
+        await page.setViewportSize({ width: 1440, height: 900 });
+        await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
+        await until(async () => (await rowIds(page)).length === 1, 5000, "the row");
+        // Top to bottom: the ask row, the Notes header with its toggle, the note input.
+        const tops = await page.evaluate(() =>
+          ["ask-row", "notes-head", "compose"].map(
+            (x) => (document.getElementById(x) as HTMLElement).getBoundingClientRect().top,
+          ),
+        );
+        expect(tops).toEqual([...tops].sort((a, b) => a - b));
+        expect(await page.getAttribute("#note-input", "placeholder")).toBe(
+          "Type a note, Enter to add it",
+        );
+        // The markers are text under the field, never in its placeholder.
+        expect(await text(page, "#note-hints")).toBe("- bullet [] action ? question # section");
+        const field = await page.locator("#note-input").boundingBox();
+        const hints = await page.locator("#note-hints").boundingBox();
+        expect(hints && field && hints.y >= field.y + field.height).toBe(true);
+        expect(await page.locator("[role=tab]").count()).toBe(2);
+        // Whichever pane is selected, Ask and the note input stay on screen.
+        for (const tab of ["tab-enhanced", "tab-notes"]) {
+          await page.click(`#${tab}`);
+          expect(await page.locator("#ask-input").isVisible()).toBe(true);
+          expect(await page.locator("#note-input").isVisible()).toBe(true);
+        }
+        // A note from the foot, while the Enhanced pane is open, lands in the Notes count.
+        await page.click("#tab-enhanced");
+        await page.click("#note-input");
+        await page.keyboard.type("- budget first");
+        await page.keyboard.press("Enter");
+        await until(async () => (await text(page, "#notes-count")) === "1", 5000, "the count");
+        // Ask works during the call...
+        provider.answer = () => "Move the build.";
+        await page.fill("#ask-input", "what did they say?");
+        await page.keyboard.press("Enter");
+        await until(
+          async () => (await text(page, "#ask-out .a-card .answer")) === "Move the build.",
+          5000,
+          "the answer during the call",
+        );
+        // ...and after it.
+        await rig.api("POST", "/calls/live/stop");
+        await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
+        provider.answer = () => "Still the build.";
+        await page.fill("#ask-input", "and now?");
+        await page.keyboard.press("Enter");
+        await until(
+          async () => (await text(page, "#ask-out .a-card .answer")) === "Still the build.",
+          5000,
+          "the answer after the call",
+        );
+        expect(await hiddenOffenders(page)).toEqual([]);
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("renaming a call from its title (WINDOW 3.1)", () => {
+  test(
+    "A live call and a saved one renamed from the header: the header, the sidebar row, its search and the window title follow without a reload, from this window or another door",
+    async () => {
+      const t = tempDir("akou-wav-");
+      let saved = "";
+      await withRig(
+        {
+          helperArgs: ["--wav", silentWav(t.dir)],
+          seed: (home) => {
+            saved = seedCall(home, (b) => standardCall(b, "01J8Z6Q4M2VX0K7B3D4E5SAVED0")).id;
+          },
+        },
+        async (rig) => {
+          const live = await rig.startCall({ title: "Standup" });
+          const page = await rig.open(live);
+          await until(async () => (await text(page, "#state")) === "rec", 5000, "recording");
+          const row = (id: string) => page.locator(`#calls li[data-id="${id}"] .what`);
+          await until(async () => (await row(saved).count()) === 1, 5000, "the saved row");
+          await page.evaluate(() => {
+            (window as unknown as { marker: number }).marker = 7;
+          });
+          const renames = async (id: string) =>
+            (await events(rig, id)).filter((e) => e.type === "call.renamed").length;
+
+          // The live call: a click opens the field on the old name, Enter saves.
+          await page.click("#title-text");
+          expect(await page.inputValue("#title-input")).toBe("Standup");
+          await page.fill("#title-input", "Standup with design");
+          await page.press("#title-input", "Enter");
+          await until(
+            async () => (await row(live).textContent()) === "Standup with design",
+            5000,
+            "the live row follows",
+          );
+          expect(await text(page, "#title-text")).toBe("Standup with design");
+          expect(await page.locator("#title-input").count()).toBe(0);
+          await until(
+            async () => (await page.title()) === "Standup with design · akou",
+            5000,
+            "the window title",
+          );
+          expect((await rig.api("GET", "/status")).body.live.title).toBe("Standup with design");
+          expect(await renames(live)).toBe(1);
+
+          // From the keyboard: Enter on the title opens it; Escape keeps the old name, and an
+          // empty title saves nothing.
+          await page.focus("#title-text");
+          await page.keyboard.press("Enter");
+          await page.waitForSelector("#title-input:focus");
+          await page.keyboard.type(" and nothing else");
+          // An Enter that confirms an IME candidate neither saves nor closes the field.
+          await page.dispatchEvent("#title-input", "keydown", { key: "Enter", isComposing: true });
+          expect(await page.locator("#title-input").count()).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.click("#title-text");
+          await page.fill("#title-input", "   ");
+          await page.press("#title-input", "Enter");
+          expect(await page.locator("#title-input").count()).toBe(0);
+          expect(await text(page, "#title-text")).toBe("Standup with design");
+          expect(await renames(live)).toBe(1);
+
+          // The saved call, picked in the sidebar and renamed the same way; leaving the field saves.
+          await page.click(`#calls li[data-id="${saved}"] button`);
+          await until(
+            async () => (await text(page, "#title-text")) === "Weekly sync",
+            5000,
+            "switched",
+          );
+          await page.click("#title-text");
+          await page.fill("#title-input", "Q3 planning");
+          await page.locator("#title-input").blur();
+          await until(
+            async () => (await row(saved).textContent()) === "Q3 planning",
+            5000,
+            "the saved row follows",
+          );
+          expect(await text(page, "#title-text")).toBe("Q3 planning");
+          expect(await renames(saved)).toBe(1);
+
+          // The search finds the call by its new name, and no longer by the old one.
+          const search = page.locator("#calls-search");
+          const items = page.locator("#calls li");
+          await search.fill("q3");
+          await until(async () => (await items.count()) === 1, 5000, "found by the new name");
+          expect(await page.locator("#calls li .what").allTextContents()).toEqual(["Q3 planning"]);
+          await search.fill("weekly");
+          await until(async () => (await items.count()) === 0, 5000, "not by the old one");
+          await search.fill("");
+          await until(async () => (await items.count()) === 2, 5000, "cleared");
+
+          // Another door (the CLI, an agent) renames the live call, which is not the one on
+          // screen: its sidebar row follows too.
+          expect(
+            (await rig.api("PATCH", `/calls/${live}`, { title: "Standup, agreed" })).status,
+          ).toBe(200);
+          await until(
+            async () => (await row(live).textContent()) === "Standup, agreed",
+            5000,
+            "renamed by another door",
+          );
+          // A save that fails leaves the field open to try again; opening another call closes
+          // it, so Enter can never rename the call that was on screen before.
+          await page.route("**/api/v1/calls/*", (route) =>
+            route.request().method() === "PATCH"
+              ? route.fulfill({ status: 409, json: { error: "conflict", message: "try later" } })
+              : route.fallback(),
+          );
+          await page.click("#title-text");
+          await page.fill("#title-input", "Never saved");
+          await page.locator("#title-input").blur();
+          await until(async () => (await text(page, "#toast")) === "try later", 5000, "refused");
+          expect(await page.inputValue("#title-input")).toBe("Never saved");
+          await page.unroute("**/api/v1/calls/*");
+          await page.click(`#calls li[data-id="${live}"] button`);
+          await until(
+            async () => (await text(page, "#title-text")) === "Standup, agreed",
+            5000,
+            "switched back",
+          );
+          expect(await page.locator("#title-input").count()).toBe(0);
+          expect(await page.locator("#title-text").isVisible()).toBe(true);
+          expect(await renames(saved)).toBe(1);
+          expect(await renames(live)).toBe(2);
+
+          // No reload happened on the way.
+          expect(await page.evaluate(() => (window as unknown as { marker: number }).marker)).toBe(
+            7,
+          );
+          await rig.api("POST", "/calls/live/stop");
+        },
+      );
+      t.cleanup();
     },
     UI_TIMEOUT,
   );
@@ -1279,9 +1663,9 @@ describe("playback and Fix this word", () => {
           expect(await page.inputValue("#note-input")).toBe("a b");
           expect((await player()).paused).toBe(false);
           // On any other button, Space presses that button and leaves the audio alone.
-          await page.focus("#tab-ask");
+          await page.focus("#tab-enhanced");
           await page.keyboard.press("Space");
-          expect(await page.getAttribute("#tab-ask", "aria-selected")).toBe("true");
+          expect(await page.getAttribute("#tab-enhanced", "aria-selected")).toBe("true");
           expect((await player()).paused).toBe(false);
         },
       );
@@ -1785,8 +2169,10 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.getAttribute("#record", "title")).toBe(
               "Record needs the speech models: download them first.",
             );
-            // No workspace means no composer controls: the row keeps only its state word.
+            // No workspace means no composer controls: the row keeps only its state word, and
+            // that word never says ready while nothing can record.
             expect(await page.isVisible("#state")).toBe(true);
+            expect(await text(page, "#state")).toBe("setup");
             for (const sel of ["#record", "#newtitle", "#template", "#meters"]) {
               expect(await page.isVisible(sel)).toBe(false);
             }
@@ -1833,6 +2219,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.isVisible("#tab-notes")).toBe(true);
             expect(await text(page, "#readiness-text")).toBe("Ready");
             expect(await page.getAttribute("#readiness", "data-state")).toBe("ready");
+            expect(await text(page, "#state")).toBe("ready");
             expect(await page.isVisible("#models-pip")).toBe(false);
             expect(await page.isVisible("#readiness-setup")).toBe(false);
             expect(await page.isDisabled("#record")).toBe(false);
@@ -1873,10 +2260,13 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
         async (rig) => {
           const page = await rig.open();
           await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
+          // The saved call opens behind the welcome on its own; the word still follows the welcome.
+          expect(await text(page, "#state")).toBe("setup");
           // The saved call is listed while the welcome shows, and one click opens it.
           await page.click(`#calls li[data-id="${id}"] button`);
           await page.waitForSelector("#welcome", { state: "hidden" });
           await page.waitForSelector("#lines .row >> nth=3");
+          expect(await text(page, "#state")).toBe("saved");
           expect(await page.getAttribute("#scroller", "hidden")).toBeNull();
           expect(await text(page, "#readiness-text")).toBe("Models missing");
           // Setup 1 of 3 goes back to the welcome, on its download.

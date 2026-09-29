@@ -460,7 +460,9 @@ export function reviewPairs(
  * hunks: each hunk's words put in place of the inserted words it names, from its word `at` over
  * the inserted text's words (split on whitespace, as the helper counts them). The words come back
  * joined by one space; `candidates` compares words, so the spacing does not matter. Null when a
- * hunk does not match the inserted text, so an edit of another text teaches nothing.
+ * hunk does not match the inserted text, so an edit of another text teaches nothing. The first
+ * word matches in any case: the helper lower-cases it mid-sentence (DC-S4), so the field held
+ * `maybe` where the log says `Maybe`.
  */
 export function applyHunks(
   inserted: string,
@@ -468,6 +470,8 @@ export function applyHunks(
 ): string | null {
   const words = inserted.split(/\s+/).filter((w) => w !== "");
   const split = (s: string) => s.split(/\s+/).filter((w) => w !== "");
+  const same = (i: number, w: string) =>
+    words[i] === w || (i === 0 && words[0]?.toLowerCase() === w.toLowerCase());
   const placed: { at: number; from: string[]; to: string[] }[] = [];
   let from = 0;
   for (const h of hunks) {
@@ -477,7 +481,7 @@ export function applyHunks(
       // No index: the first place at or after the last hunk where its words stand.
       at = -1;
       for (let i = from; i + a.length <= words.length; i++) {
-        if (a.every((w, k) => words[i + k] === w)) {
+        if (a.every((w, k) => same(i + k, w))) {
           at = i;
           break;
         }
@@ -485,7 +489,7 @@ export function applyHunks(
       if (at < 0) return null;
     }
     if (at < from || at + a.length > words.length) return null;
-    if (!a.every((w, k) => words[(at as number) + k] === w)) return null;
+    if (!a.every((w, k) => same((at as number) + k, w))) return null;
     placed.push({ at, from: a, to: split(h.now) });
     from = at + a.length;
   }

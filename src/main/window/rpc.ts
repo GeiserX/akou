@@ -12,6 +12,7 @@
 import type { AkouRpc, AppStatus, Method } from "../../ui/protocol.ts";
 import type { Bridge } from "./bridge.ts";
 import type { SettingsPane } from "./page-server.ts";
+import { levelDb } from "./pill.ts";
 
 type Messages = AkouRpc["webview"]["messages"];
 
@@ -23,6 +24,10 @@ export interface WindowSend {
   showCall(m: Messages["showCall"]): void;
   showSettings(m: Messages["showSettings"]): void;
   askQuit(m: Messages["askQuit"]): void;
+  /** A key the dictation helper reported while the page's recorder is open (DC-U3). */
+  dictationKey?(m: Messages["dictationKey"]): void;
+  /** The dictation mic's level while the page's meter is on (DC-U4, DC-N3). */
+  dictationLevel?(m: Messages["dictationLevel"]): void;
 }
 
 export interface WindowRpc {
@@ -58,6 +63,15 @@ export function windowRpc(
 ): WindowRpc {
   const follows = new Map<string, () => void>();
   const asks = new Map<string, AbortController>();
+  /** The page's dictation key recorder holds the helper's keys (DC-U3). */
+  let recording = false;
+  /** The page's mic meter: the service it turned on, and the follow of its levels. */
+  let meter: { svc: { watchMic(on: boolean): boolean }; stop: () => void } | null = null;
+  const stopMeter = () => {
+    meter?.stop();
+    meter?.svc.watchMic(false);
+    meter = null;
+  };
   const unwatch = bridge.watchLifecycle(() => {
     void (bridge.app.status() as Promise<unknown>).then((s) => send().status(s as AppStatus));
   });
@@ -151,14 +165,40 @@ export function windowRpc(
         return true;
       },
 
-      // The dictation helper is not wired yet (docs/ux/DICTATION.md DC-U3): no helper keys, so the
-      // recorder takes what the page itself sees.
-      recordDictationKeys: async () => false,
-      // Nor its mic level (DC-N3): the setup's meter stays still and the setup goes on.
-      watchDictationMic: async () => false,
+      // The helper reports every key while the recorder is open, Fn and Globe included, which the
+      // webview never sees (DC-U3). False with dictation off: the recorder takes what the page sees.
+      // False too while its key tap is dead (Accessibility denied or taken back): it hears no key,
+      // so `Use Fn` must not blame the keyboard (DC-N2).
+      recordDictationKeys: async ({ on }) => {
+        const d = bridge.app.dictation?.();
+        if (!d) return false;
+        const ok = d.recordKeys(on ? (name) => send().dictationKey?.({ name }) : null);
+        recording = on && ok;
+        const st = d.status();
+        return ok && st.grants?.accessibility !== "denied" && !st.lost.includes("accessibility");
+      },
+      // The helper's mic level while the page shows a meter (DC-U4, DC-N3), in dBFS. False while
+      // no helper is up: the meter stays still and the setup goes on. The meter is kept on all
+      // the same, so a helper that starts while the page shows it (the setup turning dictation
+      // on) moves it, and the page closing still turns it off.
+      watchDictationMic: async ({ on }) => {
+        stopMeter();
+        if (!on) return true;
+        const d = bridge.app.dictation?.();
+        if (!d) return false;
+        const ok = d.watchMic(true);
+        const stop = d.follow((m) => {
+          if (m.kind === "level") send().dictationLevel?.({ db: levelDb(m.rms) });
+        });
+        meter = { svc: d, stop };
+        return ok;
+      },
     },
     close: () => {
       unwatch();
+      if (recording) bridge.app.dictation?.()?.recordKeys(null);
+      recording = false;
+      stopMeter();
       for (const s of [...follows.keys()]) stopFollow(s);
       for (const a of asks.values()) a.abort();
       asks.clear();

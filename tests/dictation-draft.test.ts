@@ -8,7 +8,14 @@
 import { afterEach, describe, expect, test } from "bun:test";
 import type { DictationDraft } from "../src/core/dictation/events.ts";
 import { pairHistory, shouldAsk } from "../src/core/dictation/learn.ts";
-import { DraftBox, type DraftBoxOptions, LEARNED_MS } from "../src/main/dictation/draft.ts";
+import {
+  ALT_MAX_WORDS,
+  alternatives,
+  DraftBox,
+  type DraftBoxOptions,
+  LEARNED_MS,
+  type RetryReading,
+} from "../src/main/dictation/draft.ts";
 import type { InsertOutcome } from "../src/main/dictation/session.ts";
 import { DictationLog } from "../src/main/dictation/store.ts";
 import { knowsPair, learnPair, unlearnPair } from "../src/main/dictation/vocab.ts";
@@ -220,6 +227,25 @@ describe("DC-S1: the draft box's keys", () => {
     expect(f.opens.at(-1)).toMatchObject({ id: b, text: FIXED, engine: "best (q)", ms: 9 });
   });
 
+  test("the box hears the audio's length, its language and where the engine ran; a remote retry is not local", async () => {
+    const f = box({
+      retry: async () => ({
+        ok: true,
+        answer: { text: FIXED, words: [], engine: "remote", model: null, ms: 400 },
+      }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: false });
+    expect(f.opens.at(-1)).toMatchObject({ seconds: 2, language: "en", local: true });
+    expect(await f.b.handlers.retry({ id: a, engine: "remote" })).toBe(true);
+    expect(f.opens.at(-1)).toMatchObject({
+      engine: "remote",
+      local: false,
+      seconds: 2,
+      language: "en",
+    });
+  });
+
   test("a draft answered while its retry decodes is not shown again, so it is never inserted twice", async () => {
     let decoded: () => void = () => {};
     const f = box({
@@ -270,6 +296,104 @@ describe("DC-S1: the draft box's keys", () => {
     f.b.attach(null);
     const a = f.dictation();
     expect(f.b.open(a, { focus: true })).toMatchObject({ ok: false, code: "no_draft_box" });
+  });
+});
+
+describe("akou-5v8: the draft box's language chip", () => {
+  /** A box whose retry answers in the language asked for, recording each ask. */
+  const bilingual = (o: Partial<DraftBoxOptions> = {}) => {
+    const asked: { engine: string; language: string | undefined }[] = [];
+    const f = box({
+      languages: () => ["en", "es"],
+      retry: async (_id, engine, language) => {
+        asked.push({ engine, language });
+        return {
+          ok: true,
+          answer: {
+            text: language === "es" ? "dile al equipo" : "tell the team",
+            language: language ?? "en",
+            words: [],
+            engine,
+            model: "q",
+            ms: 12,
+          },
+        };
+      },
+      ...o,
+    });
+    return { ...f, asked };
+  };
+
+  test("a click decodes the same audio again in the next language, on an engine that takes one, and the text is replaced", async () => {
+    const f = bilingual();
+    const a = f.dictation();
+    f.b.open(a, { focus: false });
+    // The reading came from fast, which picks its own language: the switch runs on best.
+    expect(f.opens.at(-1)).toMatchObject({ language: "en", languageSwitch: true });
+    expect(f.opens.at(-1)?.languageForced).toBeUndefined();
+    expect(await f.b.handlers.language({ id: a })).toBe(true);
+    expect(f.asked).toEqual([{ engine: "best", language: "es" }]);
+    expect(f.opens.at(-1)).toMatchObject({
+      id: a,
+      text: "dile al equipo",
+      language: "es",
+      languageForced: true,
+      languageSwitch: true,
+      engine: "best (q)",
+      focus: true,
+    });
+    // The next click goes round to the first language, on the reading's own engine.
+    expect(await f.b.handlers.language({ id: a })).toBe(true);
+    expect(f.asked[1]).toEqual({ engine: "best", language: "en" });
+    expect(f.opens.at(-1)).toMatchObject({ text: "tell the team", language: "en" });
+    // Enter inserts the reading shown, and the edit is diffed against it, not the first one.
+    expect(await f.b.handlers.insert({ id: a, text: "tell the team", send: false })).toBe(true);
+    expect(f.inserts).toEqual([{ id: a, text: "tell the team", sendKey: "none" }]);
+    expect(f.learnEvents()).toEqual([]);
+  });
+
+  test("positive controls: one language, or no engine that takes a forced one, leaves the chip read-only", async () => {
+    const one = bilingual({ languages: () => ["en"] });
+    const a = one.dictation();
+    one.b.open(a, { focus: false });
+    expect(one.opens.at(-1)?.language).toBe("en");
+    expect(one.opens.at(-1)?.languageSwitch).toBeUndefined();
+    expect(await one.b.handlers.language({ id: a })).toBe(false);
+
+    const fastOnly = bilingual({ engines: () => ["fast"] });
+    const b = fastOnly.dictation();
+    fastOnly.b.open(b, { focus: false });
+    expect(fastOnly.opens.at(-1)?.languageSwitch).toBeUndefined();
+    expect(await fastOnly.b.handlers.language({ id: b })).toBe(false);
+    expect([...one.asked, ...fastOnly.asked]).toEqual([]);
+  });
+
+  test("a draft answered while the switch decodes is not shown again", async () => {
+    let decoded: () => void = () => {};
+    const f = bilingual({
+      retry: () =>
+        new Promise((res) => {
+          decoded = () =>
+            res({
+              ok: true,
+              answer: {
+                text: "hola",
+                language: "es",
+                words: [],
+                engine: "best",
+                model: null,
+                ms: 1,
+              },
+            });
+        }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: false });
+    const switched = f.b.handlers.language({ id: a });
+    expect(await f.b.handlers.discard({ id: a })).toBe(true);
+    decoded();
+    expect(await switched).toBe(false);
+    expect(f.opens).toHaveLength(1);
   });
 });
 
@@ -647,5 +771,122 @@ describe("DC-S1: the shell's draft window", () => {
     fire();
     expect(calls.at(-1)).toBe("close");
     expect(attached.at(-1)).toBeNull();
+  });
+});
+
+describe("DC-S1, akou-w51.81: the other engine's reading under an unsure word", () => {
+  test("each word of a stretch the two readings heard differently gets the other's words there", () => {
+    expect(
+      alternatives(["ship", "it", "to", "grafanna", "today"], "Ship it to Grafana today."),
+    ).toEqual([undefined, undefined, undefined, "Grafana", undefined]);
+    // A stretch of two words heard as one: both carry it, so the page marks them as one.
+    expect(
+      alternatives(["tell", "the", "cooper", "netties", "team"], "tell the Kubernetes team"),
+    ).toEqual([undefined, undefined, "Kubernetes", "Kubernetes", undefined]);
+    // A word only one reading has is offered nothing: there is nothing to put in its place.
+    expect(alternatives(["deploy", "it", "now"], "deploy now")).toEqual([
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    // Positive control: readings that agree, bar case and punctuation, offer nothing.
+    expect(alternatives(["Hello,", "world"], "hello world!")).toEqual([undefined, undefined]);
+    // Past the cap nothing is compared.
+    const long = Array.from({ length: ALT_MAX_WORDS + 1 }, () => "a");
+    expect(alternatives(long, "b").every((x) => x === undefined)).toBe(true);
+  });
+
+  /** A dictation `best` read as text only, as its engine gives no words, drafted by the guard. */
+  const bestDictation = (f: ReturnType<typeof box>, text: string, language = "en") => {
+    const id = "b1";
+    f.log.append({ type: "dictation.started", id, target: TARGET, engine: "best", by: "user" });
+    f.log.append({ type: "dictation.ended", id, reason: "release", seconds: 2 });
+    f.log.append({
+      type: "dictation.text",
+      id,
+      raw: text,
+      text,
+      language,
+      words: [],
+      engine: "best",
+      model: "qwen",
+      ms: 300,
+    });
+    f.log.append({ type: "dictation.drafted", id, reason: "focus-changed" });
+    return id;
+  };
+  /** `fast`'s reading of the same audio: unsure of `grafanna`. */
+  const fastReading = (language: string | null = "en"): RetryReading => ({
+    text: "ship it to grafanna today",
+    language,
+    words: [
+      { w: "ship", s: 0, e: 0.3, c: 0.97 },
+      { w: "it", s: 0.3, e: 0.4, c: 0.95 },
+      { w: "to", s: 0.4, e: 0.5, c: 0.93 },
+      { w: "grafanna", s: 0.5, e: 1, c: 0.21 },
+      { w: "today", s: 1, e: 1.4, c: 0.9 },
+    ],
+    engine: "fast",
+    model: "parakeet",
+    ms: 40,
+  });
+  const altsOf = (d: DraftOpen | undefined) =>
+    (d?.words ?? []).filter((w) => w.alt).map((w) => [w.w, w.alt]);
+
+  test("a retry on another engine sends each word what the first reading heard there", async () => {
+    const f = box({ retry: async () => ({ ok: true, answer: fastReading() }) });
+    const id = bestDictation(f, "Ship it to Grafana today.");
+    f.b.open(id, { focus: false });
+    expect(f.opens.at(-1)?.words).toEqual([]);
+    expect(await f.b.handlers.retry({ id, engine: "fast" })).toBe(true);
+    const shown = f.opens.at(-1);
+    expect(shown?.text).toBe("ship it to grafanna today");
+    expect(altsOf(shown)).toEqual([["grafanna", ["Grafana"]]]);
+    expect(shown?.words?.find((w) => w.w === "grafanna")?.c).toBe(0.21);
+  });
+
+  test("the error's Retry on another engine opens the box with the first reading as the other", () => {
+    const f = box();
+    const id = bestDictation(f, "Ship it to Grafana today.");
+    expect(f.b.open(id, { focus: true, reading: fastReading() })).toEqual({ ok: true });
+    expect(altsOf(f.opens.at(-1))).toEqual([["grafanna", ["Grafana"]]]);
+  });
+
+  test("positive controls: the same engine again, or a reading in another language, offers nothing", async () => {
+    const same = box({
+      retry: async () => ({ ok: true, answer: { ...fastReading(), engine: "fast" } }),
+    });
+    const a = same.dictation("ship it to Grafana today");
+    same.b.open(a, { focus: false });
+    expect(await same.b.handlers.retry({ id: a, engine: "fast" })).toBe(true);
+    expect(same.opens.at(-1)?.text).toBe("ship it to grafanna today");
+    expect(altsOf(same.opens.at(-1))).toEqual([]);
+
+    const other = box({ retry: async () => ({ ok: true, answer: fastReading("es") }) });
+    const b = bestDictation(other, "Ship it to Grafana today.", "en");
+    other.b.open(b, { focus: false });
+    expect(await other.b.handlers.retry({ id: b, engine: "fast" })).toBe(true);
+    expect(altsOf(other.opens.at(-1))).toEqual([]);
+  });
+
+  test("a refused insert reopens the user's text with no words, and a later retry still compares", async () => {
+    let n = 0;
+    const f = box({
+      outcome: { ok: false, reason: "the target is gone" },
+      retry: async () => {
+        n++;
+        return { ok: true, answer: fastReading() };
+      },
+    });
+    const id = bestDictation(f, "Ship it to Grafana today.");
+    f.b.open(id, { focus: false });
+    await f.b.handlers.retry({ id, engine: "fast" });
+    await f.b.handlers.insert({ id, text: "ship it to Grafana today", send: false });
+    expect(f.opens.at(-1)?.text).toBe("ship it to Grafana today");
+    expect(f.opens.at(-1)?.words).toEqual([]);
+    expect(await f.b.handlers.retry({ id, engine: "fast" })).toBe(true);
+    // The box read fast already, and before it best: the same engine again keeps best as the other.
+    expect(altsOf(f.opens.at(-1))).toEqual([["grafanna", ["Grafana"]]]);
+    expect(n).toBe(2);
   });
 });

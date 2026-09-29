@@ -77,7 +77,8 @@ function serve(body: Uint8Array, o: { cutAt?: number; ignoreRange?: boolean } = 
 
 describe("the registry", () => {
   test("every file has an https URL pinned to a revision, a SHA-256, a size and a licence", () => {
-    // The five sherpa and helper models, then Qwen and its llama-server builds (asr-llama.test.ts).
+    // The five sherpa and helper models, then on demand the three streaming Nemotron models of
+    // the live path, Qwen and its llama-server builds (asr-llama.test.ts).
     expect(MODELS.filter((m) => !m.onDemand).map((m) => m.id)).toEqual([
       RECOGNIZER,
       "silero-vad",
@@ -85,9 +86,15 @@ describe("the registry", () => {
       "pyannote-segmentation-3.0",
       "titanet-small",
     ]);
-    expect(MODELS.filter((m) => m.onDemand)[0]?.id).toBe("qwen3-asr-1.7b");
+    expect(
+      MODELS.filter((m) => m.onDemand)
+        .slice(0, 4)
+        .map((m) => m.id),
+    ).toEqual(["nemotron-en-560", "nemotron-3.5-560", "nemotron-3.5-1120", "qwen3-asr-1.7b"]);
     for (const m of MODELS) {
-      expect(m.licence).toMatch(/^(MIT|CC-BY-4\.0|Apache-2\.0|OpenMDW-1\.1)$/);
+      expect(m.licence).toMatch(
+        /^(MIT|CC-BY-4\.0|Apache-2\.0|OpenMDW-1\.1|NVIDIA Open Model License)$/,
+      );
       expect(m.source).toMatch(/^https:\/\//);
       for (const f of m.files) {
         expect(f.url).toMatch(/^https:\/\//);

@@ -172,6 +172,7 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
       "mic",
       "vocab",
       "withoutModels",
+      "live",
     ]);
     expect(schema?.additionalProperties).toBe(false);
   });
@@ -460,6 +461,7 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
         "jobs.delete",
         "jobs.get",
         "jobs.list",
+        "jobs.rename",
         "jobs.result",
         "keys.me",
         "server.get",
@@ -641,6 +643,7 @@ describe("[SI-2] an operation takes the verb the other doors already use (PRINCI
     ["akou_search", "GET /v1/calls/{id}/search"],
     ["akou_export", "POST /v1/calls/{id}/export"],
     ["akou_list_calls", "GET /v1/calls"],
+    ["akou_rename_call", "PATCH /v1/calls/{id}"],
     ["akou_add_note", "POST /v1/calls/{id}/notes"],
     ["akou_name_speaker", "POST /v1/calls/{id}/speakers"],
     ["akou_merge_speakers", "POST /v1/calls/{id}/speakers/merge"],

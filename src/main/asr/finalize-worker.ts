@@ -86,11 +86,12 @@ export interface FinalAudio {
 }
 
 /**
- * Where the Worker reads audio. The helper's Ogg Opus files need a decoder the app does not have
- * yet; until the helper can decode its own files, a part is read from a 16-bit stereo WAV at 16 kHz
- * (what hark and the fake helper produce) or through a module (tests).
+ * Where the Worker reads audio: a part's Ogg Opus file decoded by the capture helper
+ * (`akou-capture decode`, SV-P10), a 16-bit stereo WAV at 16 kHz beside it (what hark and the fake
+ * helper produce), or a module (tests).
  */
 export type FinalAudioSpec =
+  | { kind: "opus"; command: string[]; files: Record<number, string> }
   | { kind: "wav"; files: Record<number, string> }
   | { kind: "module"; path: string; options?: unknown };
 
@@ -195,7 +196,88 @@ export class WavParts implements FinalAudio {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Opus parts, decoded by the capture helper
+
+/**
+ * A part's Ogg Opus file, decoded by the helper that wrote it: `decode --info` for the length,
+ * `decode --from F --frames N` for a range, stereo f32 at 16 kHz on stdout. The app has no Opus
+ * decoder of its own and writes no WAV (SV-P10). A read decodes only its range, so the energy scan
+ * never holds a whole part. The last range decoded is kept, both channels, and each read is a fresh
+ * array. A part within one chunk is decoded once, since every later read asks for that same range.
+ * A longer part is read one channel at a time (the energy check per channel, the speaker labels the
+ * whole call, the text the whole mic and then the whole call), so the cache rarely hits and the part
+ * is decoded up to three times.
+ */
+export class OpusParts implements FinalAudio {
+  private readonly lengths = new Map<number, number>();
+  /** The last range decoded, both channels interleaved. */
+  private last: { part: number; from: number; n: number; stereo: Float32Array } | null = null;
+
+  constructor(
+    private readonly command: readonly string[],
+    private readonly files: Record<number, string>,
+  ) {}
+
+  private run(part: number, args: string[]): Uint8Array {
+    const file = this.files[part] as string;
+    const r = Bun.spawnSync([...this.command, "decode", "--in", file, ...args], {
+      stdin: "ignore",
+      stdout: "pipe",
+      stderr: "pipe",
+    });
+    if (r.exitCode !== 0) {
+      const lines = r.stderr.toString().trim().split("\n");
+      let why = lines.at(-1) || `exit ${r.exitCode}`;
+      try {
+        why = (JSON.parse(why) as { msg?: string }).msg ?? why;
+      } catch {}
+      throw new Error(`the capture helper could not decode part ${part}: ${why}`);
+    }
+    return r.stdout;
+  }
+
+  length(part: number): number {
+    if (!this.files[part]) return 0;
+    let n = this.lengths.get(part);
+    if (n === undefined) {
+      const line = new TextDecoder().decode(this.run(part, ["--info"])).trim();
+      n = Number((JSON.parse(line) as { frames?: unknown }).frames);
+      if (!Number.isSafeInteger(n) || n < 0)
+        throw new Error(`part ${part}: bad decode info ${line}`);
+      this.lengths.set(part, n);
+    }
+    return n;
+  }
+
+  read(part: number, ch: Channel, from: number, n: number): Float32Array {
+    let l = this.last;
+    if (!l || l.part !== part || l.from !== from || l.n !== n) {
+      const count = Math.max(0, Math.min(n, this.length(part) - from));
+      const raw =
+        count > 0
+          ? this.run(part, ["--from", String(from), "--frames", String(count)])
+          : new Uint8Array(0);
+      // A pipe's bytes need not sit on a 4-byte boundary; copied only when they do not.
+      const bytes = raw.byteOffset % 4 === 0 ? raw : new Uint8Array(raw);
+      const frames = Math.min(count, raw.length >> 3);
+      l = { part, from, n, stereo: new Float32Array(bytes.buffer, bytes.byteOffset, frames * 2) };
+      this.last = l;
+    }
+    const out = new Float32Array(l.stereo.length >> 1);
+    // Channel by index: left (0) is the mic, right (1) is the call.
+    const off = ch === "mic" ? 0 : 1;
+    for (let i = 0; i < out.length; i++) out[i] = l.stereo[2 * i + off] as number;
+    return out;
+  }
+
+  close(): void {
+    this.last = null;
+  }
+}
+
 export async function openFinalAudio(spec: FinalAudioSpec): Promise<FinalAudio> {
+  if (spec.kind === "opus") return new OpusParts(spec.command, spec.files);
   if (spec.kind === "wav") return new WavParts(spec.files);
   const mod = (await import(spec.path)) as { createAudio(o: unknown): FinalAudio };
   return mod.createAudio(spec.options);

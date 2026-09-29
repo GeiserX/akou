@@ -4,10 +4,12 @@
  * browser.
  */
 
+import type { LiveSetupView, LiveView } from "../main/asr/live-setups.ts";
 import type { ModelView, ScoreView } from "../main/server/model-store.ts";
 import { when } from "./server-text.ts";
 
 export type ModelRow = ModelView;
+export type { LiveSetupView, LiveView };
 
 export const SORTS = [
   { by: "accuracy", label: "Accuracy" },
@@ -76,13 +78,15 @@ export function languagesText(r: ModelRow): string {
 /** What the model is for, in one line: its job, languages, and whether it streams. */
 export function purposeText(r: ModelRow): string {
   const langs = r.kind === "speech" ? languagesText(r) : "";
-  return [
-    r.job,
-    langs,
-    r.kind === "speech" ? (r.streaming ? "live and after the call" : "after the call only") : "",
-  ]
+  return [r.job, langs, r.kind === "speech" ? reachText(r) : ""]
     .filter((x) => x !== "")
     .join(" · ");
+}
+
+/** When a speech model transcribes: live, after the call, or both. An older app sends no `after_call`. */
+function reachText(r: ModelRow): string {
+  if (!r.streaming) return "after the call only";
+  return r.after_call === false ? "live only" : "live and after the call";
 }
 
 /** One bar: the 0 to 100 value or null, the short label beside it, and the full source text. */
@@ -96,6 +100,10 @@ const METRIC: Record<string, (v: number) => string> = {
   wer: (v) => `WER ${v} %`,
   der: (v) => `DER ${v} %`,
   rtfx: (v) => `${v}x real time`,
+  "call-wer": (v) => `WER ${v} % on meetings`,
+  seconds: (v) => `${v} s`,
+  cores: (v) => `${v} cores`,
+  gb: (v) => `${v} GB`,
 };
 
 export function bar(s: ScoreView): Bar {
@@ -137,4 +145,41 @@ export function deleteRefusal(r: ModelRow): string | null {
 /** Percent of a download, rounded down. */
 export function percent(r: ModelRow): number {
   return r.size > 0 ? Math.floor((100 * r.bytes) / r.size) : 0;
+}
+
+// ---------------------------------------------------------------------------
+// The Live section: the live setups (`asr.live`)
+
+/** The four bars of a live setup, in the order the page draws them. */
+export const LIVE_BARS = [
+  { side: "accuracy", label: "Accuracy" },
+  { side: "latency", label: "Latency" },
+  { side: "cores", label: "Cores" },
+  { side: "memory", label: "Memory" },
+] as const;
+
+/** The line under the section's title: the setting, what the next call runs, and when a change applies. */
+export function liveHint(v: LiveView): string {
+  const next = v.setups.find((s) => s.id === v.next)?.title ?? v.next;
+  const setting =
+    v.setting === "auto" ? "Auto" : (v.setups.find((s) => s.id === v.setting)?.title ?? v.setting);
+  // The note is the log's, written for a terminal: the page shows its words without backticks.
+  const why = v.note ? ` (${v.note.replaceAll("`", "")})` : "";
+  return `What writes the transcript while a call runs. Chosen: ${setting}; the next call runs ${next}${why}. A change applies from the next call; a running call keeps its setup.`;
+}
+
+/** The models a setup needs that are not on disk yet. */
+export function liveMissing(s: LiveSetupView): string[] {
+  return s.models.filter((m) => m.state === "missing").map((m) => m.id);
+}
+
+/** What the setup loads here, and which of those are missing. */
+export function liveModelsText(s: LiveSetupView): string {
+  if (s.models.length === 0) return "";
+  const names = s.models.map((m) =>
+    m.state === "ready"
+      ? m.id
+      : `${m.id} (${m.state === "downloading" ? "downloading" : "not downloaded"})`,
+  );
+  return `Runs on ${names.join(", ")}`;
 }

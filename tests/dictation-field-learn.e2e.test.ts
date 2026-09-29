@@ -152,6 +152,7 @@ describe("DC-L2: a fix in the app's field is offered like one in the draft box",
     const insert = g.commands().find((c) => c.type === "insert");
     expect(insert).toBeDefined();
     expect(insert).not.toHaveProperty("read_field");
+    expect(insert).not.toHaveProperty("smart_spacing");
     expect(g.d.log.events().some((e) => e.type === "dictation.edit")).toBe(false);
     expect(learnEvents(g.d)).toEqual([]);
     expect(g.chips).toEqual([]);

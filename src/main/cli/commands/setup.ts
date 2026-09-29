@@ -11,6 +11,7 @@ import { copyFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:
 import { join } from "node:path";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
+import { type LiveSetupContext, liveView } from "../../asr/live-setups.ts";
 import { llamaRuntime } from "../../asr/llama-server.ts";
 import { score as scoreOf, scoresOf } from "../../asr/model-scores.ts";
 import {
@@ -244,6 +245,34 @@ function pullPlan(
   };
 }
 
+/**
+ * The live setups (`asr.live`) as this machine would run them: each one's bars, the models it
+ * needs and their state, and the one the next call runs. No app is asked, so no call is running.
+ */
+function liveRows(ctx: Ctx, dir: string) {
+  const settings = loadConfig(ctx.io.env).settings;
+  const all = ctx.models ?? MODELS;
+  const detected = detectAccelerator(
+    settings["asr.accelerator"] as AcceleratorSetting,
+    hostProbe(ctx.io.env),
+  );
+  const state = (id: string) => {
+    const m = all.find((x) => x.id === id);
+    return m && quickState(dir, m) === "present" ? "ready" : "missing";
+  };
+  const c: LiveSetupContext = {
+    setting: settings["asr.live"],
+    engine: settings["asr.live.engine"],
+    languages: settings["asr.languages"],
+    present: (id) => state(id) === "ready",
+    runtime: llamaRuntime(settings, hostPlatform(), all as readonly CatalogEntry[], {
+      image: ctx.io.env.AKOU_LLAMA_SERVER,
+      detected,
+    }),
+  };
+  return liveView(c, null, state);
+}
+
 /** A model's 0 to 100 score for one side, or null when nobody measured it (model-scores.ts). */
 function scoreFor(m: ModelSpecEntry, side: "accuracy" | "speed"): number | null {
   const s = scoresOf(m)?.[side];
@@ -278,7 +307,8 @@ const models: Command = {
         accuracy: scoreFor(m, "accuracy"),
         speed: scoreFor(m, "speed"),
       }));
-      if (ctx.json) ctx.io.out(JSON.stringify({ dir, models: rows }));
+      const live = liveRows(ctx, dir);
+      if (ctx.json) ctx.io.out(JSON.stringify({ dir, models: rows, live }));
       else {
         ctx.io.out(`# ${dir}`);
         const shown = (n: number | null) => (n === null ? "-" : String(n));
@@ -286,6 +316,21 @@ const models: Command = {
           ctx.io.out(
             `${r.id}  ${r.state}  ${(r.bytes / 1e6).toFixed(0)} MB  accuracy ${shown(r.accuracy)}  speed ${shown(r.speed)}  ${r.licence}  (${r.job})`,
           );
+        }
+        ctx.io.out(
+          `# live setups (asr.live ${live.setting}; the next call runs ${live.next}${live.note ? `: ${live.note}` : ""})`,
+        );
+        for (const l of live.setups) {
+          const bars = (["accuracy", "latency", "cores", "memory"] as const)
+            .map((side) => `${side} ${shown(l[side].score)}`)
+            .join("  ");
+          const missing = l.models.filter((m) => m.state !== "ready").map((m) => m.id);
+          const where = l.unavailable
+            ? `unavailable: ${l.unavailable}`
+            : missing.length > 0
+              ? `needs ${missing.join(", ")}`
+              : "ready";
+          ctx.io.out(`${l.id}${l.selected ? " *" : ""}  ${bars}  ${where}`);
         }
       }
       return EXIT.ok;

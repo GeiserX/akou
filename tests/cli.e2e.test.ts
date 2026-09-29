@@ -332,7 +332,7 @@ describe("following and questioning", () => {
     expect(show.out).toMatch(/\d\d:\d\d:\d\d Ana: hello world/);
     const fin = await run(["finalize"]);
     expect(fin.code).toBe(EXIT.unavailable);
-    expect(fin.err).toContain("Opus decoding is not built");
+    expect(fin.err).toContain("cannot read this call's audio");
     // No export folder is set: a usage problem, with what to set or pass.
     const exp = await run(["export"]);
     expect(exp.code).toBe(EXIT.usage);

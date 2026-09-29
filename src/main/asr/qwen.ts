@@ -17,7 +17,9 @@
  * - **"None" is kept.** A unit with no speech answers `language None`; forcing a language there wrote
  *   31 words on 25 silent clips, so a None answer is empty text and is never re-decoded.
  * - **The glossary is the system prompt** (the model card's "context"): with the decode list there,
- *   name hits rose from 47 to 64 of 67 with no false insertion.
+ *   name hits rose from 47 to 64 of 67 with no false insertion. With no glossary the system turn is
+ *   still sent, empty: without it Qwen names a language (Chinese "嗯", Portuguese "Sim") on
+ *   silence instead of None, and lidc forces those into words.
  * - **Word confidence** is exp of the lowest log-probability of the word's tokens, as for sherpa.
  *   Qwen gives no word times.
  *
@@ -229,9 +231,10 @@ export class QwenEngine implements FinalEngine {
   /** One decode, forced into `forced` (Qwen's name) or auto. Retried once on a fresh server. */
   private async ask(unit: FinalUnit, forced?: string): Promise<Answer> {
     const seconds = unit.samples.length / ASR_RATE;
-    const messages: unknown[] = [];
-    if (unit.glossary.length > 0)
-      messages.push({ role: "system", content: unit.glossary.join(", ") });
+    // The system turn is always sent, empty with no glossary, as the model card's template has it.
+    // Without it llama.cpp's template drops the turn, and on non-speech Qwen stops answering None:
+    // 78 words on the benchmark's 25 silent AMI clips on b11200 Q8_0, and none with the empty turn.
+    const messages: unknown[] = [{ role: "system", content: unit.glossary.join(", ") }];
     messages.push({
       role: "user",
       content: [

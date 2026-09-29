@@ -97,6 +97,8 @@ export interface ApiApp {
   pullModels(): ModelsStatus;
   /** Every catalog model with its state, scores and last use (SV-M6); both modes. */
   modelRows?(): import("../server/model-store.ts").ModelView[];
+  /** The live setups for `GET /models`: each with its bars and models, and which one runs. Null in server mode. */
+  liveModels?(): import("../asr/live-setups.ts").LiveView | null;
   /** Fetches one catalog model on purpose. Throws `ModelRefused`. */
   pullModel?(id: string): import("../server/model-store.ts").ModelView;
   /** Deletes one model under the sweep's rules. Throws `ModelRefused`. */

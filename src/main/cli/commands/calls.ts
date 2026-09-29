@@ -1,7 +1,7 @@
 /**
  * Starting, controlling and listing calls, and the app itself (docs/DESIGN.md sections 1.5 and 6.1):
- * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls`,
- * `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
+ * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls` and
+ * `calls rename`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
 import { bool, int, list, str } from "../args.ts";
@@ -24,7 +24,7 @@ const start: Command = {
   name: "start",
   summary: "Start a call; answers once audio is being written",
   usage:
-    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--without-models] [--json]",
+    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live SETUP] [--without-models] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the call goes in" },
     title: { type: "string", short: "t", value: "TITLE", desc: "the call's title" },
@@ -37,13 +37,21 @@ const start: Command = {
     },
     mic: { type: "string", value: "ID", desc: "the microphone: a device id or none" },
     vocab: { type: "string", value: "A,B", desc: "words for this call only, comma-separated" },
+    live: {
+      type: "string",
+      value: "SETUP",
+      desc: "the live transcript for this call only: auto, parakeet, nemotron or upgrade (default: asr.live)",
+    },
     // Audio only, before `akou models pull` has run: nothing is transcribed live.
     "without-models": {
       type: "boolean",
       desc: "record audio now and transcribe later, before the models are downloaded",
     },
   },
-  examples: ['akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform'],
+  examples: [
+    'akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform',
+    "akou start --live nemotron",
+  ],
   run: async (ctx, p) => {
     // `-t Weekly sync` and `-t "Weekly sync"` both work: loose words after the flags join the title.
     const title = [str(p, "title"), ...p.positional].filter((x) => x !== undefined).join(" ");
@@ -56,6 +64,7 @@ const start: Command = {
         mic: str(p, "mic"),
         vocab: list(p, "vocab"),
         withoutModels: bool(p, "without-models") || undefined,
+        live: str(p, "live"),
       },
     });
     return finish(
@@ -105,7 +114,7 @@ function statusText(s: Body, color = false): string {
   const live = s.live;
   if (live) {
     out.push(
-      `Live: "${live.title}" in ${live.workspace}, ${live.state}${live.muted ? ", muted" : ""}, ${live.parts} part${live.parts === 1 ? "" : "s"}, recognizer lag ${live.lag} s (${live.call})`,
+      `Live: "${live.title}" in ${live.workspace}, ${live.state}${live.muted ? ", muted" : ""}, ${live.parts} part${live.parts === 1 ? "" : "s"}, recognizer lag ${live.lag} s${live.setup ? `, live setup ${live.setup}${live.engine ? ` (${live.engine})` : ""}` : ""} (${live.call})`,
     );
     for (const h of live.health ?? []) {
       out.push(`  ${h.ch}: ${healthWord(color, h.state)}${h.detail ? ` (${h.detail})` : ""}`);
@@ -170,15 +179,35 @@ function minutes(from: number, to: number | null): string {
 
 const calls: Command = {
   name: "calls",
-  summary: "List calls by date, title and duration (no content search)",
-  usage: "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json]",
+  summary: "List calls by date, title and duration (no content search), or rename one",
+  usage:
+    "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls rename CALL TITLE… [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "only calls in this workspace" },
     limit: { type: "string", value: "N", desc: "at most N calls, newest first" },
     failed: { type: "boolean", desc: "only calls whose capture or final pass failed" },
+    call: callFlag("none; name one"),
   },
-  examples: ["akou calls -w work --limit 5"],
+  examples: ["akou calls -w work --limit 5", "akou calls rename last Weekly sync"],
   run: async (ctx, p) => {
+    const [sub, ...rest] = p.positional;
+    if (sub === "rename") {
+      // The call is `-c CALL` or the first word; every word after it is the title.
+      const call = str(p, "call") ?? rest.shift();
+      const title = rest.join(" ").trim();
+      if (!call || title === "") {
+        return usage(ctx, "calls rename needs a call and a title: calls rename last Weekly sync");
+      }
+      if (str(p, "workspace") !== undefined) {
+        return usage(ctx, "calls rename changes the title only; -w does not move a call");
+      }
+      const r = await api(ctx, "PATCH", `/calls/${enc(call)}`, { body: { title } });
+      return finish(ctx, r, (b) => `${b.call} is now "${b.title}"`);
+    }
+    if (sub !== undefined) return usage(ctx, `calls has no ${sub}; try: calls rename CALL TITLE`);
+    if (str(p, "call") !== undefined) {
+      return usage(ctx, "-c names the call to rename: calls rename -c CALL TITLE");
+    }
     const r = await api(ctx, "GET", "/calls", {
       query: {
         workspace: str(p, "workspace"),

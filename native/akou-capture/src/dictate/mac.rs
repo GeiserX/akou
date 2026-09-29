@@ -49,13 +49,13 @@ use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXVal
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFMachPort, CFNumber, CFPreferencesAppSynchronize,
     CFPreferencesCopyAppValue, CFPreferencesSetAppValue, CFRange, CFRetained, CFRunLoop, CFString,
-    CFType, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
+    CFType, CGPoint, CGSize, ConcreteType, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventMask, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
     CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
-    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowLayer,
-    kCGWindowNumber, kCGWindowOwnerPID,
+    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowBounds,
+    kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID,
 };
 use objc2_foundation::NSString;
 
@@ -101,8 +101,7 @@ pub fn trusted() -> bool {
     unsafe { AXIsProcessTrusted() }
 }
 
-/// The microphone grant without asking: `AVAuthorizationStatusAuthorized` is 3. Not asked yet
-/// reads `denied` until the protocol has a word for it; opening the device asks.
+/// The microphone grant without asking (DC-N3).
 fn mic_grant() -> &'static str {
     autoreleasepool(|_| {
         let Some(cls) = AnyClass::get(c"AVCaptureDevice") else {
@@ -111,8 +110,19 @@ fn mic_grant() -> &'static str {
         let media = NSString::from_str("soun");
         // SAFETY: a class method taking an NSString and returning an NSInteger.
         let status: isize = unsafe { msg_send![cls, authorizationStatusForMediaType: &*media] };
-        if status == 3 { "granted" } else { "denied" }
+        mic_word(status)
     })
+}
+
+/// An `AVAuthorizationStatus` as `ready` names it: 3 (authorized) is `granted`, 0 (not
+/// determined) is `not-asked`, since macOS asks when the device first opens and lists akou in the
+/// Microphone pane only after that; 1 (restricted) and 2 (denied) are `denied`.
+fn mic_word(status: isize) -> &'static str {
+    match status {
+        3 => "granted",
+        0 => "not-asked",
+        _ => "denied",
+    }
 }
 
 /// `(mic, accessibility)` as `ready` names them.
@@ -176,23 +186,47 @@ fn front_pid(sys: &AXUIElement) -> Option<i32> {
             return Some(pid);
         }
     }
-    windows().into_iter().next().map(|(pid, _)| pid)
+    windows().into_iter().next().map(|w| w.pid)
 }
 
-/// On-screen normal windows, front to back, as `(owner pid, window number)`. Neither needs the
-/// screen-recording grant (only window names do).
-fn windows() -> Vec<(i32, i64)> {
+/// An on-screen normal window: its owner, its number and its bounds.
+struct Window {
+    pid: i32,
+    number: i64,
+    frame: Option<p::Frame>,
+}
+
+/// On-screen normal windows, front to back, with their bounds (`kCGWindowBounds`, points from the
+/// top left of the primary display). None of it needs the screen-recording grant (only window
+/// names do).
+fn windows() -> Vec<Window> {
     let opts = CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let Some(list) = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) else {
         return Vec::new();
     };
-    let num = |d: &CFDictionary, k: &CFString| -> Option<i64> {
+    /// The value of `k` in `d` as `T`, borrowed from the dictionary.
+    fn get<'a, T: ConcreteType>(d: &'a CFDictionary, k: &CFString) -> Option<&'a T> {
         // SAFETY: the key is a CFString and the dictionary's values are CF objects.
         let v = unsafe { d.value((k as *const CFString).cast()) };
         let v = NonNull::new(v as *mut CFType)?;
         // SAFETY: a borrowed CF object from a live dictionary.
-        let v: &CFType = unsafe { v.as_ref() };
-        v.downcast_ref::<CFNumber>()?.as_i64()
+        let v: &'a CFType = unsafe { v.as_ref() };
+        v.downcast_ref::<T>()
+    }
+    let num = |d: &CFDictionary, k: &CFString| get::<CFNumber>(d, k)?.as_i64();
+    let bounds = |d: &CFDictionary| -> Option<p::Frame> {
+        // SAFETY: the window-list key is a CFString constant.
+        let b = get::<CFDictionary>(d, unsafe { kCGWindowBounds })?;
+        let n = |k: &str| {
+            let v = get::<CFNumber>(b, &CFString::from_str(k))?.as_f64()?;
+            v.is_finite().then(|| v.round() as i64)
+        };
+        Some(p::Frame {
+            x: n("X")?,
+            y: n("Y")?,
+            width: n("Width")?,
+            height: n("Height")?,
+        })
     };
     let mut out = Vec::new();
     for i in 0..list.count() {
@@ -210,7 +244,11 @@ fn windows() -> Vec<(i32, i64)> {
             )
         };
         if let (Some(pid), Some(0), Some(n)) = (owner, layer, number) {
-            out.push((pid as i32, n));
+            out.push(Window {
+                pid: pid as i32,
+                number: n,
+                frame: bounds(d),
+            });
         }
     }
     out
@@ -240,6 +278,37 @@ fn focused(pid: i32) -> Option<CFRetained<AXUIElement>> {
     attr_element(&app, "AXFocusedUIElement")
 }
 
+/// An accessibility value of `el` of type `ty` (a point, a size, a range), read into `T`.
+fn ax_value<T: Copy>(el: &AXUIElement, name: &str, ty: AXValueType, empty: T) -> Option<T> {
+    let v = attr(el, name)?.downcast::<AXValue>().ok()?;
+    let mut out = empty;
+    // SAFETY: `out` is a `T`, the Core Foundation type `ty` names.
+    let ok = unsafe { v.value(ty, NonNull::from(&mut out).cast::<c_void>()) };
+    ok.then_some(out)
+}
+
+/// The frame of the window with the keyboard in application `pid`: its `AXFocusedWindow`'s
+/// position and size, in the same top-left points as `kCGWindowBounds`.
+fn focused_window_frame(pid: i32) -> Option<p::Frame> {
+    // SAFETY: any pid; returns a +1 reference.
+    let app = unsafe { AXUIElement::new_application(pid) };
+    let win = attr_element(&app, "AXFocusedWindow")?;
+    let at = ax_value(
+        &win,
+        "AXPosition",
+        AXValueType::CGPoint,
+        CGPoint::new(0.0, 0.0),
+    )?;
+    let size = ax_value(&win, "AXSize", AXValueType::CGSize, CGSize::new(0.0, 0.0))?;
+    let n = |v: f64| v.is_finite().then(|| v.round() as i64);
+    Some(p::Frame {
+        x: n(at.x)?,
+        y: n(at.y)?,
+        width: n(size.width)?,
+        height: n(size.height)?,
+    })
+}
+
 pub struct Screen;
 
 impl Targets for Screen {
@@ -250,8 +319,8 @@ impl Targets for Screen {
         };
         let window = windows()
             .into_iter()
-            .find(|(owner, _)| *owner == pid)
-            .map(|(_, n)| n.to_string())
+            .find(|w| w.pid == pid)
+            .map(|w| w.number.to_string())
             .unwrap_or_default();
         let field = match focused(pid) {
             Some(el) => field_kind(
@@ -267,6 +336,15 @@ impl Targets for Screen {
             window,
             field: field.into(),
         }
+    }
+
+    /// The window with the keyboard, where the pill shows: the focused application's
+    /// `AXFocusedWindow`, else (no grant, a dormant tree) its frontmost normal window.
+    fn frame(&mut self) -> Option<p::Frame> {
+        let pid = front_pid(&system_wide())?;
+        focused_window_frame(pid)
+            .filter(|f| f.width > 0 && f.height > 0)
+            .or_else(|| windows().into_iter().find(|w| w.pid == pid)?.frame)
     }
 
     fn secure_input(&mut self) -> bool {
@@ -684,5 +762,15 @@ mod tests {
         assert_eq!(field_kind(Some("AXWebArea"), None, true), "editable");
         assert_eq!(field_kind(Some("AXButton"), None, false), "not-editable");
         assert_eq!(field_kind(None, None, false), "unknown");
+    }
+
+    /// DC-N3: a microphone never asked for is not a refusal, so the switch can start the helper
+    /// and opening the device asks.
+    #[test]
+    fn the_mic_grant_tells_never_asked_from_refused() {
+        assert_eq!(mic_word(3), "granted");
+        assert_eq!(mic_word(0), "not-asked");
+        assert_eq!(mic_word(1), "denied");
+        assert_eq!(mic_word(2), "denied");
     }
 }

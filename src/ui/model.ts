@@ -16,7 +16,11 @@ import type { AppStatus } from "./protocol.ts";
 // ---------------------------------------------------------------------------
 // Speaker hues
 
-/** You are always blue; everyone else gets the next hue in order of first appearance. */
+/**
+ * Everyone but you gets the next hue in order of first appearance, and none of them sits on the
+ * accent's hue (WINDOW section 8). You keep a hue of your own for the log's sake, but the window
+ * draws you in a neutral grey (`--you` in theme.css), so the accent stays for the one primary action.
+ */
 export const YOU_HUE = 214;
 export const HUES = [36, 145, 285, 5, 178, 58, 325, 100] as const;
 
@@ -36,6 +40,14 @@ export class HueBook {
     this.hues.set(spk, h);
     return h;
   }
+}
+
+/**
+ * The player bar has something to play (WINDOW section 5): a saved call with at least one recorded
+ * part. With no call, or while the call is live, there is no bar at all.
+ */
+export function hasRecording(v: CallView | null): boolean {
+  return !!v?.call && !v.live && v.parts().length > 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -88,6 +100,11 @@ export interface StateInput {
    */
   reopen?: boolean;
   lines: number;
+  /**
+   * The welcome is on screen (WINDOW section 10): the speech models are missing, so nothing can
+   * record, and the state word must not say ready.
+   */
+  setup?: boolean;
 }
 
 /** Channel health states that mean nothing is being recorded on that side. */
@@ -142,6 +159,11 @@ export function stateLabel(i: StateInput): StateLabel {
         ? "akou is not answering; retrying. If this stays, close this window and open it again"
         : "akou is not answering; retrying",
     };
+  }
+  // The welcome covers the page even when the last saved call sits open behind it, so the word
+  // follows the welcome, not that call. A call recording elsewhere still says so.
+  if (i.setup && !liveId) {
+    return { cls: "ready", label: "setup", meta: "the speech models are not here yet" };
   }
   if (!v?.call) {
     if (liveId) return { cls: "other", label: "another call is recording", meta: "" };

@@ -18,7 +18,8 @@ use super::keys::Hotkey;
 use super::media::Media;
 use super::mic::{Mic, MicEvent, Warm};
 use super::protocol::{self as p, Command, Target};
-use super::readback::Watch;
+use super::readback::{ANCHOR, Field, Watch};
+use super::spacing;
 use super::tap::{Gate, Note, TapEvent};
 use crate::protocol::{Ch, encode_packet};
 
@@ -311,12 +312,7 @@ impl Dictate {
     /// DC-L2's snapshot. Every insert the app asked to read back that landed gets exactly one
     /// `edit` or `edit.unreadable`; this one says `not-read` where the helper will not read.
     fn start_watch(&mut self, r: Reading, t_ns: u64, out: &mut dyn Out) {
-        let readable = self.accessibility != "denied"
-            && r.target.field == "editable"
-            && !r.secure_input
-            && !self.targets.secure_input()
-            && !is_terminal(self.os, &r.target.app);
-        if !readable {
+        if !self.readable(&r.target, r.secure_input) {
             out.line(p::edit_unreadable(&r.id, "not-read"));
             return;
         }
@@ -325,6 +321,56 @@ impl Dictate {
             Ok(w) => self.watch = Some(w),
             Err(reason) => out.line(p::edit_unreadable(&r.id, reason)),
         }
+    }
+
+    /// Whether the field of `target` may be read (DC-L2, DC-S4): never without the grant, a
+    /// field that is not a plain editable one, under Secure Input or in a terminal.
+    fn readable(&mut self, target: &Target, secure_input: bool) -> bool {
+        self.accessibility != "denied"
+            && target.field == "editable"
+            && !secure_input
+            && !self.targets.secure_input()
+            && !is_terminal(self.os, &target.app)
+    }
+
+    /// DC-S4: the text fitted to what sits around the cursor, read just before the insert when
+    /// `smart` and the rules allow it; else only the trailing space, when asked. A clipboard-only
+    /// insert lands wherever the user pastes it, so its field is never read.
+    fn spaced(
+        &mut self,
+        text: String,
+        cap: &Captured,
+        method: &str,
+        smart: bool,
+        trailing: bool,
+    ) -> String {
+        if (!smart && !trailing) || cap.target.field == "secure" || cap.secure_input {
+            return text;
+        }
+        let field =
+            (smart && method != "clipboard" && self.readable(&cap.target, cap.secure_input))
+                .then(|| self.targets.read_field(&cap.target));
+        let around = match &field {
+            Some(Field::Text { value, caret }) => {
+                let before_start = caret.saturating_sub(ANCHOR);
+                let before: String = value
+                    .chars()
+                    .skip(before_start)
+                    .take(caret - before_start)
+                    .collect();
+                let after = value.chars().nth(*caret);
+                Some((before, after))
+            }
+            _ => None,
+        };
+        spacing::apply(
+            around.as_ref().map(|(before, after)| spacing::Around {
+                before,
+                after: *after,
+            }),
+            &text,
+            trailing,
+        )
     }
 
     /// DC-L2's second read, and the hunks out.
@@ -400,6 +446,8 @@ impl Dictate {
                 target,
                 restore,
                 read_field,
+                smart_spacing,
+                trailing_space,
             } => {
                 // A paste still waiting settles first, so its answer (and its read-back) is not
                 // lost when this insert takes the slot.
@@ -430,6 +478,7 @@ impl Dictate {
                 if let Some(t) = target {
                     cap.target = t;
                 }
+                let text = self.spaced(text, &cap, &method, smart_spacing, trailing_space);
                 self.reading = read_field.then(|| Reading {
                     id: id.clone(),
                     text: text.clone(),
@@ -471,6 +520,11 @@ impl Dictate {
                     self.media_resume();
                 }
             }
+            Command::Meter { on } => {
+                let mut ev = Vec::new();
+                self.mic.set_meter(on, t_ns, &mut ev);
+                self.mic_events(ev, out);
+            }
             // The device is chosen per OS (DC-N5); a file mic has nothing to rebuild.
             Command::RebuildMic { .. } => {}
         }
@@ -482,8 +536,16 @@ impl Dictate {
         for (t_ns, note) in notes {
             let mut ev = Vec::new();
             match note {
-                Note::Act(Action::Arm { t_ns: at }) => self.mic.arm(at, &mut ev),
-                Note::Act(Action::Disarm) => self.mic.disarm(t_ns, &mut ev),
+                Note::Act(Action::Arm { t_ns: at }) => {
+                    // Before the mic: the pill shows its dot on the target's display at once.
+                    let frame = self.targets.frame();
+                    out.line(p::press(true, frame.as_ref()));
+                    self.mic.arm(at, &mut ev);
+                }
+                Note::Act(Action::Disarm) => {
+                    out.line(p::press(false, None));
+                    self.mic.disarm(t_ns, &mut ev);
+                }
                 Note::Act(Action::Start { t_ns: at }) => {
                     let id = self.next_id.to_string();
                     self.next_id += 1;
@@ -616,7 +678,8 @@ mod tests {
                     .unwrap()
                     .to_string()
             })
-            .filter(|t| t != "level")
+            // `press` has its own tests (`dc_o1_*`); the others follow the session.
+            .filter(|t| t != "level" && t != "press")
             .collect()
     }
 
@@ -668,16 +731,13 @@ mod tests {
             types(&out),
             ["ready", "mic", "session.started", "session.ended"]
         );
-        assert!(
-            out.lines[2].contains(r#""target":{"app":"Slack""#),
-            "{}",
-            out.lines[2]
-        );
-        assert!(
-            out.lines[2].contains(r#""capture_ns":"500000000""#),
-            "{}",
-            out.lines[2]
-        );
+        let started = out
+            .lines
+            .iter()
+            .find(|l| l.contains(r#""type":"session.started""#))
+            .unwrap();
+        assert!(started.contains(r#""target":{"app":"Slack""#), "{started}");
+        assert!(started.contains(r#""capture_ns":"500000000""#), "{started}");
         let ended = out
             .lines
             .iter()
@@ -899,6 +959,43 @@ mod tests {
             "{}",
             ended[1]
         );
+    }
+
+    /// DC-U4, DC-N3: `meter {on}` opens the mic with no session and levels come 20 a second;
+    /// `meter {off}` closes it and the levels stop. The control: the same idle time with the
+    /// meter off opens nothing and sends no level.
+    #[test]
+    fn dc_u4_the_meter_command_sends_levels_with_no_session() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        let parse = |l: &str| Command::parse(l).unwrap();
+        d.command(parse(r#"{"type":"warm","mode":"off"}"#), 0, &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        let levels = |out: &Rec| {
+            out.lines
+                .iter()
+                .filter(|l| l.contains(r#""type":"level""#))
+                .count()
+        };
+        assert!(!d.mic_open(), "off with no meter: the mic is closed");
+        assert_eq!(levels(&out), 0);
+        let mics = |out: &Rec| types(out).iter().filter(|t| *t == "mic").count();
+        let before = mics(&out);
+
+        d.command(parse(r#"{"type":"meter","on":true}"#), 1000 * MS, &mut out);
+        assert!(d.mic_open());
+        run(&mut d, &mut out, 1000, 2000);
+        assert_eq!(levels(&out), 20);
+        assert!(out.packets.is_empty(), "the meter sends no audio");
+        assert!(!types(&out).iter().any(|t| t.starts_with("session")));
+
+        d.command(parse(r#"{"type":"meter","on":false}"#), 2000 * MS, &mut out);
+        assert!(!d.mic_open());
+        run(&mut d, &mut out, 2000, 3000);
+        assert_eq!(levels(&out), 20);
+        assert_eq!(mics(&out) - before, 2, "one open, one close");
     }
 
     /// DC-N1: the tap answers while the worker is stuck inside an insert. The fake sink blocks in
@@ -1141,6 +1238,67 @@ mod tests {
             .filter(|l| l.contains(r#""type":"edit"#) && l.contains(r#""id":"1""#))
             .collect();
         assert_eq!(answers.len(), 1, "{:?}", out.lines);
+    }
+
+    /// DC-S4: one insert of "Maybe later." into a field holding "I think" before the cursor
+    /// and "x" after it; answers what went on the clipboard and how many reads were made.
+    fn spaced_insert(w: &Shared, fields: &str) -> (String, usize) {
+        let (mut d, mut out) = ended_session(w);
+        w.borrow_mut().field = Some(Field::Text {
+            value: "I thinkx".into(),
+            caret: 7,
+        });
+        let insert = format!(r#"{{"type":"insert","id":"1","text":"Maybe later."{fields}}}"#);
+        d.command(Command::parse(&insert).unwrap(), 400 * MS, &mut out);
+        let w = w.borrow();
+        let text = w
+            .board
+            .iter()
+            .find(|(k, _)| k == "text")
+            .map(|(_, v)| String::from_utf8(v.clone()).unwrap())
+            .unwrap_or_default();
+        (text, w.field_reads.len())
+    }
+
+    /// DC-S4 through the protocol: with `smart_spacing` the field is read once before the insert
+    /// and the text fits it; without it nothing is read and only `trailing_space` applies; a
+    /// terminal, a password field and a clipboard-only insert are never read.
+    #[test]
+    fn dc_s4_the_text_fits_the_field_read_before_the_insert() {
+        let w = World::new();
+        assert_eq!(
+            spaced_insert(&w, r#","smart_spacing":true"#),
+            (" maybe later. ".into(), 1)
+        );
+        // `dictation.readField` off: the app sends no `smart_spacing`, and nothing is read.
+        let w = World::new();
+        assert_eq!(
+            spaced_insert(&w, r#","trailing_space":true"#),
+            ("Maybe later. ".into(), 0)
+        );
+        let w = World::new();
+        assert_eq!(spaced_insert(&w, ""), ("Maybe later.".into(), 0));
+        // A terminal: no read, only the trailing space.
+        let w = World::new();
+        w.borrow_mut().target.app = "com.apple.Terminal".into();
+        assert_eq!(
+            spaced_insert(&w, r#","smart_spacing":true,"trailing_space":true"#),
+            ("Maybe later. ".into(), 0)
+        );
+        // A clipboard-only insert: no read.
+        let w = World::new();
+        let (_, reads) = spaced_insert(
+            &w,
+            r#","method":"clipboard","smart_spacing":true,"trailing_space":true"#,
+        );
+        assert_eq!(reads, 0);
+        // A password field: no read and nothing added.
+        let w = World::new();
+        w.borrow_mut().target.field = "secure".into();
+        assert_eq!(
+            spaced_insert(&w, r#","smart_spacing":true,"trailing_space":true"#),
+            ("Maybe later.".into(), 0)
+        );
     }
 
     const BEFORE: &str = "Hi team, ";
@@ -1439,5 +1597,85 @@ mod tests {
         assert_eq!(board.calls(), ["pause music"]);
         assert!(!d.command(Command::Stop, 1500 * MS, &mut out));
         assert_eq!(board.calls(), ["pause music", "play music"]);
+    }
+
+    /// The `press` lines of `out`, in order.
+    fn presses(out: &Rec) -> Vec<String> {
+        out.lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"press""#))
+            .cloned()
+            .collect()
+    }
+
+    /// DC-O1: the dictation key going down says so before anything else, with the frame of the
+    /// window that has the keyboard, so the pill shows its dot on that display; the press that
+    /// becomes a session says nothing more, and `session.started` follows it.
+    #[test]
+    fn dc_o1_a_key_down_says_press_with_the_targets_frame_before_the_session() {
+        let w = World::new();
+        w.borrow_mut().frame = Some(p::Frame {
+            x: -1440,
+            y: 120,
+            width: 900,
+            height: 700,
+        });
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        assert_eq!(
+            presses(&out),
+            [r#"{"type":"press","on":true,"frame":{"x":-1440,"y":120,"width":900,"height":700}}"#]
+        );
+        run(&mut d, &mut out, 1000, 2000);
+        d.key(false, "RightCommand", 2000 * MS, &mut out);
+        run(&mut d, &mut out, 2000, 2500);
+        let at = |t: &str| out.lines.iter().position(|l| l.contains(t)).unwrap();
+        assert!(at(r#""type":"press""#) < at(r#""type":"session.started""#));
+        assert_eq!(
+            presses(&out).len(),
+            1,
+            "a press that became a session says no more"
+        );
+    }
+
+    /// DC-O1: a modifier-only press that another key interrupts was never a dictation: `press`
+    /// off, and no session. A backend that cannot tell the window sends no frame.
+    #[test]
+    fn dc_o1_an_interrupted_press_says_press_off_and_starts_nothing() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        d.key(true, "C", 1050 * MS, &mut out);
+        d.key(false, "C", 1080 * MS, &mut out);
+        d.key(false, "RightCommand", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1100, 2000);
+        assert_eq!(
+            presses(&out),
+            [
+                r#"{"type":"press","on":true}"#,
+                r#"{"type":"press","on":false}"#
+            ]
+        );
+        assert!(!types(&out).contains(&"session.started".to_string()));
+    }
+
+    /// DC-O1: the door's `session.start` is a press too, so the pill's dot comes first there as
+    /// well; with no key and no door, nothing is said.
+    #[test]
+    fn dc_o1_the_door_says_press_and_an_idle_helper_says_nothing() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        assert!(presses(&out).is_empty());
+        d.command(Command::SessionStart, 1000 * MS, &mut out);
+        assert_eq!(presses(&out), [r#"{"type":"press","on":true}"#]);
     }
 }

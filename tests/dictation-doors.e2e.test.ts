@@ -74,15 +74,23 @@ describe("DC-G1: GET /v1/dictation", () => {
       fallback: null,
       remote: null,
       grants: { mic: "granted", accessibility: "granted" },
+      lost: [],
       backend: "fake",
       swallow_keys: true,
     });
   });
 
-  test("off: enabled false, state off, no grants", async () => {
-    const r = await rig({ "dictation.enabled": false });
+  test("off: enabled false, state off, and the grants a probe of the helper reads (DC-U2)", async () => {
+    const r = await rig({ "dictation.enabled": false }, ["--grants", "mic"]);
     const res = await r.api("GET", "/dictation");
-    expect(res.body).toMatchObject({ enabled: false, state: "off", grants: null });
+    expect(res.body).toMatchObject({
+      enabled: false,
+      state: "off",
+      grants: { mic: "granted", accessibility: "denied" },
+    });
+    // The probe started no helper: dictation is still off and no key is taken.
+    expect(r.app.dictation()?.status()).toMatchObject({ enabled: false, state: "off" });
+    expect(existsSync(r.commands)).toBe(false);
   });
 
   test("the remote engine shows its fallback and standing", async () => {
@@ -163,6 +171,40 @@ describe("DC-G3: akou dictate start|stop|toggle|cancel", () => {
     expect(await items(r)).toHaveLength(1);
     const starts = lines(r.commands).filter((c) => c.type === "session.start");
     expect(starts).toHaveLength(1);
+  });
+
+  test("start --language forces the session into it, as the pill's chip does (akou-5v8)", async () => {
+    const r = await rig();
+    const run = rigCli(r);
+    const start = await run(["dictate", "start", "--language", "es"]);
+    expect([start.code, start.out]).toEqual([0, "dictation listening"]);
+    // The pill reads the session's language from here, and shows it as chosen.
+    expect(r.app.dictation()?.languageChoice().chosen).toBe("es");
+    await Bun.sleep(1000);
+    expect((await run(["dictate", "stop"])).code).toBe(0);
+    await until(async () => (await items(r))[0]?.state === "inserted", 10_000, "the insert");
+    // The decode was asked for es; the fake engine is fast, which picks its own, so it says it
+    // did not force it. Without a language the item carries no language_forced at all.
+    expect((await items(r))[0].language_forced).toBe(false);
+    expect(r.app.dictation()?.languageChoice().chosen).toBeNull();
+    const plain = await rig();
+    expect((await plain.api("POST", "/dictation/start")).status).toBe(200);
+    expect(plain.app.dictation()?.languageChoice().chosen).toBeNull();
+    await Bun.sleep(1000);
+    expect((await plain.api("POST", "/dictation/stop")).status).toBe(200);
+    await until(async () => (await items(plain))[0]?.state === "inserted", 10_000, "the insert");
+    expect((await items(plain))[0].language_forced).toBeUndefined();
+  }, 30_000);
+
+  test("--language is refused on stop and cancel, and a tag that is not one is a 422", async () => {
+    const r = await rig();
+    const run = rigCli(r);
+    const stop = await run(["dictate", "stop", "--language", "es"]);
+    expect(stop.code).toBe(64);
+    expect(stop.err).toContain("--language goes with start or toggle");
+    const bad = await r.api("POST", "/dictation/start", { language: "not a tag" });
+    expect([bad.status, bad.body.error]).toEqual([422, "bad_field"]);
+    expect(r.app.dictation()?.status().state).toBe("idle");
   });
 
   test("with dictation.enabled false, start exits 78 naming the setting", async () => {
@@ -281,8 +323,22 @@ describe("DC-G1, DC-G3: a dictation's audio and Retry over the API and the CLI",
       const retry = await r.api("POST", `/dictations/${id}/retry`, { engine: "fast" });
       expect(retry.status).toBe(200);
       expect(retry.body).toMatchObject({ id, text: "hello", engine: "fast" });
+      // Without a language the answer says none was asked (positive control for the next one).
+      expect(retry.body.language_forced).toBeUndefined();
       const run = await rigCli(r)(["dictations", "retry", id, "--engine", "fast"]);
       expect([run.code, run.out]).toEqual([0, "hello"]);
+      // A language reaches the decode; fast picks its own, so the answer says it was not forced.
+      const es = await rigCli(r)([
+        "dictations",
+        "retry",
+        id,
+        "--engine",
+        "fast",
+        "--language",
+        "es",
+        "--json",
+      ]);
+      expect([es.code, es.json?.language_forced]).toEqual([0, false]);
       // Neither retry changed the dictation.
       expect((await r.api("GET", `/dictations/${id}`)).body).toMatchObject({
         state: "inserted",
@@ -309,6 +365,15 @@ describe("DC-G1, DC-G3: a dictation's audio and Retry over the API and the CLI",
       expect([bad.status, bad.body.error]).toEqual([422, "bad_field"]);
       const remote = await r.api("POST", `/dictations/${clip}/retry`, { engine: "remote" });
       expect([remote.status, remote.body.error]).toEqual([422, "bad_field"]);
+      const lang = await r.api("POST", `/dictations/${clip}/retry`, {
+        engine: "fast",
+        language: "spanish please",
+      });
+      expect([lang.status, lang.body.error, lang.body.field]).toEqual([
+        422,
+        "bad_field",
+        "language",
+      ]);
       const cli = await rigCli(r)(["dictations", "retry", clip]);
       expect(cli.code).toBe(64);
       expect(cli.err).toContain("--engine");

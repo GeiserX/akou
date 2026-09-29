@@ -75,6 +75,12 @@ export interface StartRequest {
    * live. Without it a start answers `503 models_missing` (the app checks, not the manager).
    */
   withoutModels?: boolean;
+  /**
+   * This call's live setup (`asr.live`'s values), instead of the setting. Kept on the call's
+   * controller (`liveAsked`) before the helper spawns; the app reads it there when the call's audio
+   * first reaches the recognizer.
+   */
+  live?: string;
 }
 
 export type CallRef = string;
@@ -289,6 +295,7 @@ export class CallManager {
         },
       );
     }
+    c.liveAsked = req.live;
     this.controllers.set(id, c);
     this.o.onOpen?.(c);
     this.onEvent(id, workspace, c.view.call as LogEvent);

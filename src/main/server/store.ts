@@ -40,6 +40,11 @@ export interface Job {
   seq: number;
   /** The key that submitted it (`app` for the app's token). */
   key_id: string;
+  /**
+   * The name the client gave it, at submit or later with `PATCH /v1/jobs/{id}`; null for none.
+   * It names the job in the lists and their search, and changes nothing in the result.
+   */
+  title: string | null;
   status: JobStatus;
   preset: string;
   /** The recognizer id the job runs (SV-S1); null for a job from before the field existed. */
@@ -193,7 +198,8 @@ CREATE TABLE IF NOT EXISTS jobs (
   remote_job TEXT,
   priority INTEGER NOT NULL DEFAULT 0,
   request TEXT,
-  interactive INTEGER NOT NULL DEFAULT 0
+  interactive INTEGER NOT NULL DEFAULT 0,
+  title TEXT
 );
 CREATE UNIQUE INDEX IF NOT EXISTS jobs_idempotency ON jobs (key_id, idempotency_key)
   WHERE idempotency_key IS NOT NULL;
@@ -229,6 +235,7 @@ function jobOf(r: Row): Job {
     id: r.id as string,
     seq: r.seq as number,
     key_id: r.key_id as string,
+    title: (r.title as string | null) ?? null,
     status: r.status as JobStatus,
     preset: r.preset as string,
     model: (r.model as string | null) ?? null,
@@ -285,6 +292,8 @@ function deliveryOf(r: Row): Delivery {
 
 export interface NewJob {
   key_id: string;
+  /** The job's name, or none. */
+  title?: string | null;
   preset: string;
   /** The recognizer the job runs (SV-S1); absent, the server's default at run time. */
   model?: string | null;
@@ -334,7 +343,16 @@ export class JobStore {
     const cols = new Set(
       (this.db.query("PRAGMA table_info(jobs)").all() as { name: string }[]).map((c) => c.name),
     );
-    for (const c of ["model", "model_source", "route", "remote", "remote_job", "request"]) {
+    // One from before job names gains the title column; its jobs have none.
+    for (const c of [
+      "model",
+      "model_source",
+      "route",
+      "remote",
+      "remote_job",
+      "request",
+      "title",
+    ]) {
       if (!cols.has(c)) this.db.run(`ALTER TABLE jobs ADD COLUMN ${c} TEXT`);
     }
     // A jobs.db from before SV-Q2 gains the priority column; its jobs are priority 0.
@@ -372,13 +390,14 @@ export class JobStore {
       const id = `job_${ulid(now)}`;
       this.db
         .query(
-          `INSERT INTO jobs (id, key_id, status, preset, model, model_source, route, priority, interactive,
+          `INSERT INTO jobs (id, key_id, title, status, preset, model, model_source, route, priority, interactive,
             language, keywords, diarize, callback_url, metadata, idempotency_key, request, file_sha256, audio, created_at)
-           VALUES (?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+           VALUES (?, ?, ?, 'queued', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           id,
           j.key_id,
+          j.title ?? null,
           j.preset,
           j.model ?? null,
           j.model_source ?? null,
@@ -471,6 +490,11 @@ export class JobStore {
     this.db
       .query("UPDATE jobs SET remote = ?, remote_job = ? WHERE id = ?")
       .run(remote, remoteJob, id);
+  }
+
+  /** A job's new name, in any state. False when there is no such job. */
+  rename(id: string, title: string): boolean {
+    return this.db.query("UPDATE jobs SET title = ? WHERE id = ?").run(title, id).changes === 1;
   }
 
   /** A job a remote refused runs here from now on, and is never forwarded again. */
@@ -582,8 +606,17 @@ export class JobStore {
     })();
   }
 
-  /** The key's jobs (every key's for null), newest first, before the cursor. */
-  list(o: { key: string | null; status?: JobStatus; before?: number; limit: number }): Job[] {
+  /**
+   * The key's jobs (every key's for null), newest first, before the cursor. `q` keeps the jobs
+   * whose title, id or state holds it, in any case.
+   */
+  list(o: {
+    key: string | null;
+    status?: JobStatus;
+    q?: string;
+    before?: number;
+    limit: number;
+  }): Job[] {
     const where: string[] = [];
     const args: (string | number)[] = [];
     if (o.key !== null) {
@@ -598,8 +631,30 @@ export class JobStore {
       where.push("seq < ?");
       args.push(o.before);
     }
-    const sql = `SELECT * FROM jobs ${where.length ? `WHERE ${where.join(" AND ")}` : ""} ORDER BY seq DESC LIMIT ?`;
-    return (this.db.query(sql).all(...args, o.limit) as Row[]).map(jobOf);
+    const filter = where.length ? `WHERE ${where.join(" AND ")}` : "";
+    const q = o.q?.trim().toLowerCase();
+    if (!q) {
+      const sql = `SELECT * FROM jobs ${filter} ORDER BY seq DESC LIMIT ?`;
+      return (this.db.query(sql).all(...args, o.limit) as Row[]).map(jobOf);
+    }
+    // The match is made here, as the desktop sidebar's search makes it: SQLite's lower() and LIKE
+    // fold ASCII letters only, so "ÁNGEL" would miss "Ángel". The scan reads four short columns,
+    // never a result.
+    const seqs: number[] = [];
+    const light = this.db
+      .query(`SELECT seq, id, title, status FROM jobs ${filter} ORDER BY seq DESC`)
+      .all(...args) as Row[];
+    for (const r of light) {
+      if (!`${r.title ?? ""}\n${r.id}\n${r.status}`.toLowerCase().includes(q)) continue;
+      seqs.push(r.seq as number);
+      if (seqs.length === o.limit) break;
+    }
+    if (seqs.length === 0) return [];
+    return (
+      this.db
+        .query("SELECT * FROM jobs WHERE seq IN (SELECT value FROM json_each(?)) ORDER BY seq DESC")
+        .all(JSON.stringify(seqs)) as Row[]
+    ).map(jobOf);
   }
 
   /** Every job created before `t`: what `server.retain_days` removes. */

@@ -11,7 +11,7 @@ Versions read for this: sherpa-onnx-node 1.13.8 (`package.json:27`), llama.cpp r
 - **The benchmark holds, with two corrections that change the defaults.** The fusion gains were measured against a Qwen that did not know the call's language, which flatters fusion by about 0.25 points pooled and 2.3 on code-switched speech. And the LLM rewriter beats confidence voting only on read speech. On the four conversational sets it is equal or worse, and it invents words.
 - **Three runtimes, no Python.** sherpa-onnx (in the app) runs the live streaming engines and Parakeet. llama-server (a child process) runs Qwen3-ASR-1.7B. transcribe-cpp (npm) runs Whisper, Cohere and Canary. Three interfaces sit over them, `FinalEngine`, `LiveEngine` and `Fuser`, and `asr.final.engines` takes any number of engines.
 - **Live:** streaming Nemotron, the English model or Nemotron 3.5 depending on the call's language. A word shows 0.46 s after it is spoken, nothing is ever taken back, and it costs 0.39 cores.
-- **During the call:** each finished utterance is upgraded twice, by Parakeet at about 0.2 s and by a confidence vote of Qwen and Parakeet at 1.5 to 2.5 s.
+- **During the call, when chosen (`asr.live upgrade`):** each finished utterance is upgraded twice, by Parakeet at about 0.2 s and by a confidence vote of Qwen and Parakeet at 1.5 to 2.5 s. It is off by default: the final pass is the accurate transcript, and the upgrade keeps the GPU busy for the whole call.
 - **Final pass:** Qwen + Parakeet + Whisper, fused by confidence ROVER. Pooled WER 7.97 to 7.98, against 8.63 for Qwen alone with the language set and 11.23 for akou today.
 - **LLM fusion is off by default.** It is available as `pick` or `free` through the existing providers, and the pass keeps the vote when the provider is `none` or fails.
 - **Change now:** Parakeet decodes greedy. Beam search empties whole meeting chunks, and hotwords at boost 3 insert false names.
@@ -121,6 +121,8 @@ N-way by construction: `asr.final.engines` is a list, the final pass runs every 
 | **llama-server** (llama.cpp; measured on b11166, pinned at b11200 when ASR-5 shipped) | One binary per OS and accelerator, downloaded like a model into `<models>/runtimes/`, run as a child process under a supervisor | Metal on macOS; CPU, CUDA or Vulkan on Windows and Linux | Qwen3-ASR-1.7B (Q8_0 GGUF + mmproj) | Measured: macOS Metal bf16 3.79 / 2.89 and Linux arm64 CPU Q8_0 3.76 / 2.81 (fleurs_en / fleurs_es), 150/150 clips each; token log-probs returned on both. Windows binaries exist, unmeasured |
 | **transcribe-cpp 0.2.4** (MIT, npm, koffi FFI) | npm with per-platform packages: `darwin-arm64-metal`, `darwin-x64-cpu`, `linux-x64-cpu-vulkan`, `linux-arm64-cpu-vulkan`, `win32-x64-cpu-vulkan` (registry read) | Metal, Vulkan or CPU | Whisper large-v3, Cohere Transcribe, Canary-1b-v2, Voxtral-3B, and more | Measured from Bun on macOS (0.2.3): loaded next to sherpa in one process, correct text from both. Windows and Linux not run |
 
+llama-server needs the model card's system turn on every request, empty when there is no glossary. Without one, llama.cpp's template leaves the turn out, and on non-speech Qwen names a language (Chinese "嗯", Portuguese "Sim") instead of None, which lidc then forces into words: 78 words on the 25 silent clips (b11200, Q8_0, Metal), none with the empty turn. The nightly checks it.
+
 Why not one runtime:
 
 - sherpa cannot run Qwen at full accuracy. The only 1.7B export loses 2 to 4 points ([k2-fsa/sherpa-onnx#3535](https://github.com/k2-fsa/sherpa-onnx/issues/3535), open).
@@ -160,6 +162,22 @@ Latency and cost, first 600 s of e22, alone on the M4:
 
 So the new path shows words sooner, closes lines sooner, costs less, and never retracts.
 
+**Measured in akou's own live path (ASR-4).** Each FLEURS clip ran as one call through `LivePipeline` (the causal gain, one stream, the line cutter, the flush at the end) on the reference Mac mini, 150 clips per language, scored with the repository's normalizer (`scripts/eval/score.ts`, which does not normalize numbers). "Engine alone" is the same engine decoding each whole clip, gained by `prepareSpan`:
+
+| Engine | Stream language | fleurs_en | fleurs_es | Engine alone (en / es) |
+|---|---|---|---|---|
+| `nemotron-en-560` | `en` | 9.30 | | 9.30 |
+| `nemotron-3.5-560` | `auto` | 10.16 | 6.31 | 10.10 / 6.39 |
+| `nemotron-3.5-1120` | `auto` (en), `es` (es) | 9.99 | 6.36 | 9.96 / 6.54 |
+
+- The live path costs nothing against the engine alone: at most 0.06 worse on any row, and up to 0.18 better.
+- Number-normalized (Whisper's English normalizer, `text2num` for Spanish), Spanish reads 4.60 to 4.65 against the benchmark's 4.75. English reads 9.58 (`nemotron-en-560`) and 10.59 (both 3.5 tiers) against the benchmark's 8.15, a gap we have not explained. The benchmark harness is not in the repository yet (ASR-11). Part of the English errors are words spoken in a clip beyond its reference sentence, and one clip loops on a syllable under greedy decoding (15 errors).
+- A word shows 0.70 s (p50) after the audio at its token time reached the app, with both channels fed at real time; the same feed held back 1.5 s reads 2.24 s. This was measured while other jobs loaded the machine, and from the token's time rather than from the end of the word as in the table above.
+- One stream over many utterances loses words that a fresh stream per clip keeps. The first 40 English clips joined into one call with 0.9 s gaps read 12.84, against 8.05 for the same clips run one call each; whole sentences go missing, with or without the gain. That is the engine, not the line cutter, but the gated test runs each clip as its own call and so cannot see it. A multi-utterance case (a few minutes of e22 or ami, or the joined clips) belongs in that test, with a bound taken from the single-stream figures above.
+- Lines in Chinese, Japanese and Thai break before a token that starts with one of those scripts, since their tokens rarely carry a leading space. Any line a second past the window breaks before the next token, word start or not.
+- The Parakeet path stays. It runs a call when no streaming model is on disk (the first-run download does not include one yet), and it is the `parakeet` setup of the live choice (`asr.live`, akou-chp.23).
+- The live choice is `asr.live`: `parakeet`, `nemotron` or `upgrade`, and `auto`. The Models page lists each setup with four bars from the numbers above and in 3.2: accuracy `100 - 2 x` AMI WER (Parakeet 28, Nemotron 62, upgrade 73), latency `100 - 50 x` seconds to a shown word (61, 77, 77), cores `100 - 50 x` cores per channel (53, 81, not measured for the upgrade) and memory `100 - 6.25 x` GB (78, 86, 19). A change applies from the next call; `akou start --live` sets it for one call.
+
 Options behind the same setting, all measured:
 
 - Kroko es: Spanish only; its licence and training data must be cleared first.
@@ -186,6 +204,26 @@ Each utterance the live segmenter closes (0.7 s of silence, at most 30 s) is re-
 When the upgraded line lands, alone on the M4, first 80 utterances: Parakeet 0.18 s (p50) / 0.58 s (p95) after the utterance closes; Qwen 1.43 / 4.33 s with one channel and 2.56 / 7.82 s with two. So the line is rewritten twice: by Parakeet at about 0.2 s, which is cheap and removes the streaming model's errors, then by ROVER(Q,P) at about 1.5 to 2.5 s. The utterance closes 0.5 s after speech ends.
 
 Memory while a call runs: live 2.25 GB, Parakeet 2.7 GB, and Qwen (MLX peaked at 7.8 GB in the benchmark; llama-server Q8_0 sat at 4.9 to 5.2 GB on Linux), about 10 to 13 GB in all. That needs a memory guard (`asr.memoryBudgetMb`, section 6), and it is why the upgrade is a setting.
+
+**Built (ASR-7).** The `upgrade` setup of `asr.live` runs it, in `src/main/asr/live-worker.ts` and `src/main/asr/upgrade.ts`:
+
+- **The unit is an utterance:** the streaming lines from one stop of the speaker to the next, at most 30 s. The speaker stopped when the stream heard nothing new for the pause plus the engine's chunk (section 3.1), or at a flush. A single line is too short a unit. The line cutter breaks at a 0.7 s gap between tokens, which falls inside sentences, and a token's time trails its audio, so a line's audio cuts words at both ends. On 20 FLEURS English clips, Parakeet on each line read 16.63 against 7.34 for the stream.
+- **Parakeet.** Right after the utterance's last line is written, the live Worker decodes the utterance's audio with Parakeet, gained and padded by `prepareSpan`. A call line waiting for its speaker label is decoded right after it, never before.
+- **Qwen.** The host sends the same audio to Qwen, one utterance at a time. The glossary is the call's decode list, and the language is `asr.languages` (forced when it names one). The host then writes `ROVER(Qwen, Parakeet)`, `model: rover-conf(qwen3-asr-1.7b,<parakeet>)`. Qwen comes first, so it breaks ties.
+- **Back into lines.** Each stage's words go back into the utterance's lines by text, not by time. They are aligned with the stream's words, and each word goes to the line of the stream word it matches. A word the stream did not have goes with the word before it. Each line gets its share as its next revision. A reader following the call (`akou_read`) gets the line again with its new text and model.
+- **Limits.** At most 6 utterances wait for Qwen. Past that, the oldest keeps Parakeet's text, so a slow Qwen upgrades the newest lines instead of falling behind. A request past 30 s, or a Qwen that fails, leaves the lines with Parakeet's text, and the failure is logged once.
+- **What never changes.** A line a person edited or retracted keeps their text, and so does a line that gets no words from a stage. `call.ended` gives up the request in flight, and anything that answers later is dropped, since the final pass covers the call.
+- **One Qwen.** Qwen runs on the llama-server dictation keeps warm when there is one, so one Qwen serves both. Otherwise the upgrade starts its own, which gives way to a final pass on Metal instead of stopping it, and stops when its call ends.
+- **No key of its own.** The plan named `asr.live.upgrade`. The upgrade is instead the `upgrade` value of `asr.live`.
+
+Measured on the reference Mac mini, 20 FLEURS clips per language, each clip one call through the live pipeline with the real models (`tests/live-upgrade-qwen.test.ts`; the repository's scorer, which does not normalize numbers):
+
+| Language (stream model) | Stream | After Parakeet | After ROVER(Q,P) | Parakeet lands (p50 / p95) | Qwen answers (p50 / p95) |
+|---|---|---|---|---|---|
+| en (`nemotron-en-560`) | 7.34 | 7.13 | **5.18** | 0.22 / 0.74 s | 0.79 / 2.17 s |
+| es (`nemotron-3.5-1120`) | 4.87 | 4.45 | **3.60** | 0.20 / 0.52 s | 1.05 / 2.76 s |
+
+The same vote with Qwen's words reversed, the failing control, reads 74.51 and 41.10.
 
 An LLM per utterance was measured on 20 utterances per set: −1 to −6 errors against ROVER(Q,P) with Opus, +4 / −2 with Sonnet, 3 to 13 s of extra wall time, $0.009 per utterance. The sample is too small to show a gain, and the LLM is too slow for the live view. It is not in the design.
 
@@ -237,7 +275,7 @@ The gain flattens after three engines. Frequency (majority) ROVER gets worse wit
 
 Does the LLM adjudicator beat confidence voting by enough to justify it? **Not on calls.** Pooled it looks 0.15 to 0.3 better than confidence ROVER, but all of that comes from FLEURS, CS-FLEURS and the parliament set. On the four conversational sets it is equal or worse, and it invents words. With a local model (gemma-4-12B through llama-server, an earlier research run) the 5-way gain was −0.12 in English and −0.23 in Spanish, with 0 invented words, at 0.7x real time. So:
 
-- `asr.fusion` is `rover-conf` by default, N-way, with no provider needed.
+- `asr.fusion` is `rover-conf` by default, N-way, with no provider needed. The port's `build` and `vote` (`src/main/asr/rover.ts`) return the benchmark's fused words on all 2,222 units of the eight sets, for five engines, for Q+P and for the frequency vote, given the benchmark's normalized words and default confidences; the `Fuser` around them uses the benchmark's word key but decides the default confidence per hypothesis, not per set. With two engines every `alpha` below 1 gives the same words, since each candidate in a disputed column has one vote, so the in-call ROVER(Q,P) needs no `alpha` of its own; the empty-slot score (0.5) and the default confidence (0.7) still decide its disputed columns.
 - `asr.fusion.llm` is `none`, `pick` or `free`, default `none`. When set, it runs through akou's existing `Provider` (`src/main/llm/provider.ts:19`: `harness` by default, `openai-compatible` for a local llama-server or Ollama, `anthropic`, `none`). With provider `none`, or when the provider is unavailable, times out (the 60 s rule of [DESIGN 5.3](../DESIGN.md#53-the-provider-the-users-own-harness-by-default)) or returns bad JSON, the pass keeps the ROVER output and writes `final.done` with `fusion: rover-conf (llm unavailable: <reason>)`. It is never silently retried.
 - The variant to measure before any LLM default: free rewriting **only inside disagreement regions**, with the glossary. The prompt already splits agreed text from regions. It would keep agreed words fixed (pick's safety) and allow new spellings inside a region (free's gain). Unmeasured.
 
@@ -254,8 +292,8 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | Key | Values | Default | Measured basis |
 |---|---|---|---|
 | `asr.language` | `auto`, an ISO code, or a list (the languages Qwen may choose from) | `auto`. A user who speaks English and Spanish sets `["en","es"]` | `lidc` −0.26 on edacc; forced `es` on code-switched clips 8.06 against 10.34 |
-| `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120`, `kroko-es`, `off` | `auto` (by language, section 3.1) | Live table |
-| `asr.live.upgrade` | `off`, `parakeet`, `parakeet+qwen` | `parakeet+qwen` on 16 GB or more, `parakeet` below | Upgrade table; memory |
+| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `nemotron` when its model is downloaded, else `parakeet`; never `upgrade`, which runs only when named (the final pass after the call is the accurate transcript, and the upgrade keeps the GPU busy all call); never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; the upgrade itself (ASR-7) in `src/main/asr/live-worker.ts` |
+| `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120` (`kroko-es` later) | `auto` (by language, section 3.1) | Live table |
 | `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4 |
 | `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5 |
 | `asr.fusion.llm` | `none`, `pick`, `free` | `none` | Section 5 |
@@ -267,7 +305,7 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 
 Out of the box:
 
-- **A 16 GB Apple Silicon Mac:** live nemotron-en or Nemotron 3.5 by language, upgrade `parakeet+qwen`, final Q+P+W with confidence ROVER, no LLM, greedy Parakeet.
+- **A 16 GB Apple Silicon Mac:** live nemotron-en or Nemotron 3.5 by language, no in-call upgrade unless chosen, final Q+P+W with confidence ROVER, no LLM, greedy Parakeet.
 - **Windows x64 and Linux x64 with a Vulkan or CUDA GPU:** the same set. Extrapolated from the release assets; on Linux only Qwen on the CPU is measured.
 - **CPU-only x64:** live as above (sherpa runs on the CPU; RTF extrapolated), final Q+P (Qwen on the CPU measured at RTF 0.08 to 0.10 on a 6-vCPU arm64 VM; x64 unmeasured), Whisper off unless the user adds it.
 
@@ -314,14 +352,14 @@ The default download on macOS is about 8.7 GB: Parakeet 2.55, live models 0.94, 
 
 ## 9. Plan
 
-Ordered by risk removed per PR. Model-gated tests skip loudly on PRs and belong in `models-nightly` ([TESTING.md](../TESTING.md) TS-19, [CI-CD.md](../CI-CD.md)), which does not exist yet; ASR-11 builds its speech half. This is the engine design that [TESTING.md section 4.5](../TESTING.md#45-speech-many-engines-fusion-streaming-language-diarization) waits for: TS-16 to TS-18 take their details from it.
+Ordered by risk removed per PR. Model-gated tests skip loudly on PRs and belong in `models-nightly` ([TESTING.md](../TESTING.md) TS-19, [CI-CD.md](../CI-CD.md)). It scores the default recognizer and, for ASR-5, Qwen on macOS and Linux (`scripts/eval/nightly.ts`); ASR-11 brings the benchmark harness. This is the engine design that [TESTING.md section 4.5](../TESTING.md#45-speech-many-engines-fusion-streaming-language-diarization) waits for: TS-16 to TS-18 take their details from it.
 
 | Id | Feature | P | Depends on | Acceptance |
 |---|---|---|---|---|
 | ASR-1 | **fix(asr): Parakeet decodes greedy; hotwords only with beam, at 1.5.** `src/main/asr/sherpa.ts:227-229`, the boost constant in `src/main/vocab/decode-list.ts:30`, and the DESIGN 3 text. Also files the sherpa-onnx issue with the chunk | P0 | | Settings validation. A model-gated regression decodes a public ami chunk that returns empty under beam and asserts non-empty text under greedy. Positive control: the same chunk under beam must still return empty, or the test cannot fail. The vocabulary evaluation planned in TS-19 takes its insertion ceiling at the new boost |
 | ASR-2 | **feat(asr): engine registry and interfaces.** `engine.ts` gains `FinalEngine`, `LiveEngine`, `Fuser` and `Hypothesis`. `models.ts` becomes `catalog.ts` with platform and runtime fields. `SherpaRecognizer` becomes the first `FinalEngine`, returning tokens, `ys_log_probs` and timestamps as `words[]`. No behaviour change | P0 | | Registry invariants: every entry has platforms, a licence and a job. `modelsFor(settings, platform)`. Word confidence derived from sherpa's per-token log-probs, checked against a fixture from the benchmark's greedy Parakeet output |
 | ASR-3 | **feat(asr): confidence ROVER fuser.** Port the benchmark's ROVER (`build`, `vote`, `regions`) to TypeScript with the tuned constants | P0 | ASR-2 | A fixture of 5 hypotheses from the e22 fusion inputs, with the expected fused words from the benchmark. N=1 is the identity. Agreed columns never change. Positive control: a mutated `alpha` must change the output |
-| ASR-4 | **feat(live): streaming Nemotron in the live Worker.** Causal gain, one `OnlineRecognizer` per channel, `decodeStreams` for both, a line cutter, `seg` written at line close, the language-to-model map, and `asr.live.engine`. The old path is deleted, not kept | P0 | ASR-2 | A CI fake `LiveEngine` for the segmentation and no-retraction invariants. Model-gated: 20 FLEURS clips within +0.5 of the benchmark's 8.15 / 4.75; shown-latency p50 under 1 s at 1x, with a deliberately delayed feed as the failing control |
+| ASR-4 | **feat(live): streaming Nemotron in the live Worker.** Causal gain, one shared `OnlineRecognizer` with one stream per channel, both streams batched through `decodeStreams`, a line cutter, `seg` written at line close, the language-to-model map, and `asr.live.engine`. The Parakeet path stays: it runs a call when no streaming model is on disk, and it is one of the live choices (akou-chp.23) | P0 | ASR-2 | A CI fake `LiveEngine` for the segmentation and no-retraction invariants. Model-gated: 20 FLEURS clips within +0.5 of the benchmark's 8.15 / 4.75; shown-latency p50 under 1 s at 1x, with a deliberately delayed feed as the failing control |
 | ASR-5 | **feat(asr): llama-server runtime and the Qwen engine.** A downloader for the pinned binary per OS and accelerator. A supervisor: start with `--cache-ram 0`, health check, restart on a dropped connection, one Metal engine at a time. Requests with `logprobs`. Strip the `language X<asr_text>` prefix. `lidc`: accept the answer if its language is in `asr.language`, else the higher-scoring forced decode; keep "None" answers. The glossary goes in the system prompt | P1 | ASR-2 | A CI fake HTTP server for the protocol, restart and prefix stripping. Nightly on macOS and Linux runners: 30 FLEURS clips within +0.5 of 3.79 / 2.89, 0 words on the 25 silent clips, RSS flat over 150 requests (the out-of-memory trap, with the default `--cache-ram` as the failing control) |
 | ASR-6 | **feat(final): N-engine final pass.** `finalize-worker.ts` runs the engine list over the units, fuses, writes `seg final` with `model: rover-conf(<ids>)` and `final.done` with the engines and the dropped ones. Memory budget; a failing engine is isolated | P0 | ASR-2, ASR-3 | Fakes with 1 to 5 engines, one that crashes mid-pass, one over budget; the `final.done` fields |
 | ASR-7 | **feat(live): in-call upgrade.** An utterance closes, then Parakeet writes rev+1 and ROVER(Q,P) writes rev+2 on the same `seg` id; never after `call.ended`; `asr.live.upgrade` | P1 | ASR-3, ASR-4, ASR-5 | Revision order under a slow fake Qwen. A result arriving after `call.ended` is dropped. The pack marks lines by the model of their highest revision |
@@ -353,6 +391,6 @@ Each is cheap once the harness is in the repo (ASR-11):
 
 - The benchmark holds, with two corrections that change the defaults: fusion gains were measured against a Qwen that did not know the call language (about 0.25 pooled, 2.3 on code-switching), and the LLM rewriter's advantage over confidence ROVER exists only on read speech.
 - Three runtimes: sherpa-onnx in the app for live streaming and Parakeet, llama-server as a child process for Qwen3-ASR-1.7B, transcribe-cpp from npm for Whisper, Cohere and Canary. One registry with `FinalEngine`, `LiveEngine` and `Fuser`; any number of engines in `asr.final.engines`.
-- Defaults: live nemotron-en or Nemotron 3.5 by language; each utterance upgraded by Parakeet at about 0.2 s and ROVER(Qwen, Parakeet) at 1.5 to 2.5 s; final pass Qwen + Parakeet + Whisper with confidence ROVER (pooled 7.97 to 7.98, against 8.63 for Qwen with the language set and 11.23 for akou today); LLM fusion off.
+- Defaults: live nemotron-en or Nemotron 3.5 by language; the in-call upgrade (Parakeet at about 0.2 s, ROVER(Qwen, Parakeet) at 1.5 to 2.5 s) only when chosen; final pass Qwen + Parakeet + Whisper with confidence ROVER (pooled 7.97 to 7.98, against 8.63 for Qwen with the language set and 11.23 for akou today); LLM fusion off.
 - Change now: Parakeet to greedy (ASR-1).
 - Impossible only where Apple hardware is the substrate. Windows is unmeasured, and ASR-12 gates its defaults.

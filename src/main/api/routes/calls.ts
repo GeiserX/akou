@@ -3,10 +3,12 @@
  *
  * `POST /calls` answers `201` only once the helper reports `capturing`, which is before any model
  * loads; `409 already_recording {call}`, `403 permission`, `503 capture_failed {stage}` otherwise.
- * The live controls refuse `last` with 400; `restart` accepts it.
+ * The live controls refuse `last` with 400; `restart` and a rename accept it. `PATCH /calls/{id}`
+ * renames a call at any time, live or saved, with a `call.renamed` event.
  */
 
 import { formatWall } from "../../../core/log/clock.ts";
+import { isLiveSetting, LIVE_SETTINGS } from "../../asr/live-setups.ts";
 import type { CallController } from "../../call/call.ts";
 import { LIVE_CONTROLS } from "../../call/manager.ts";
 import { validateTerm } from "../../vocab/files.ts";
@@ -70,6 +72,23 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
   };
 }
 
+/** The longest title a rename takes. */
+const MAX_TITLE = 200;
+
+/** A new title: one line, trimmed; empty or too long is refused with 422 and changes nothing. */
+export function checkTitle(raw: string): string {
+  const title = raw.replace(/\s+/g, " ").trim();
+  if (title === "") {
+    throw new HttpError(422, "bad_field", "the title is empty", { field: "title" });
+  }
+  if (title.length > MAX_TITLE) {
+    throw new HttpError(422, "bad_field", `the title is over ${MAX_TITLE} characters`, {
+      field: "title",
+    });
+  }
+  return title;
+}
+
 const CONTROL_DOCS: Record<(typeof LIVE_CONTROLS)[number], string> = {
   stop: "Stop recording the live call. The final pass runs after it on its own.",
   pause: "Pause the live call: nothing is recorded until resume.",
@@ -84,7 +103,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded. One call at a time: a second start answers 409.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live setup (`auto`, `parakeet`, `nemotron`, `upgrade`) instead of `asr.live`. One call at a time: a second start answers 409.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -95,6 +114,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         "mic?": "string",
         "vocab?": "string[]",
         "withoutModels?": "boolean",
+        "live?": "string",
       },
       ok: 201,
     },
@@ -107,7 +127,13 @@ export function callRoutes(r: Router<ApiApp>): void {
         mic?: string;
         vocab?: string[];
         withoutModels?: boolean;
+        live?: unknown;
       }>();
+      if (b.live !== undefined && (typeof b.live !== "string" || !isLiveSetting(b.live))) {
+        throw new HttpError(422, "bad_field", `live is one of ${LIVE_SETTINGS.join(", ")}`, {
+          field: "live",
+        });
+      }
       const vocab = [];
       for (const term of b.vocab ?? []) {
         const bad = validateTerm(term);
@@ -123,6 +149,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         vocab,
         by: c.by,
         withoutModels: b.withoutModels,
+        live: b.live as string | undefined,
       });
       if (!res.ok) return outcome(res);
       return json(201, {
@@ -183,6 +210,32 @@ export function callRoutes(r: Router<ApiApp>): void {
     async (c) => {
       const call = await callOf(c);
       return json(200, callDetail(call, c.app, c.app.now()));
+    },
+  );
+
+  r.add(
+    "PATCH",
+    "/calls/:id",
+    {
+      id: "calls.rename",
+      doc: "Rename a call, live or saved: `title` becomes the name every list, search, header and share shows from now on. The rename is a new `call.renamed` event; the folder keeps the name it was created with. Also takes `last`. An empty title answers 422 and the old name stays.",
+      access: "admin",
+      modes: ["app"],
+      params: { id: CALL_ID },
+      body: { title: "string" },
+      ok: 200,
+    },
+    async (c) => {
+      const b = await c.body<{ title: string }>();
+      const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
+      const title = checkTitle(b.title);
+      const e = await c.app.write(id, (call) => ({
+        type: "call.renamed",
+        rev: call.view.titleRev + 1,
+        title,
+        by: c.by,
+      }));
+      return json(200, { ok: true, call: id, title, seq: e.seq });
     },
   );
 

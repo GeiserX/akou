@@ -288,6 +288,13 @@ export const PARITY: readonly Row[] = [
     window: [app('"/calls?limit=200"')],
   },
   {
+    action: "Rename a call",
+    cli: ["calls"],
+    api: ["PATCH /calls/:id"],
+    mcp: ["akou_rename_call"],
+    window: [app('"PATCH", `/calls/#{encodeURIComponent(id)}`')],
+  },
+  {
     action: "Share a live link",
     cli: ["share"],
     api: ["GET /share", "POST /share", "DELETE /share"],
@@ -322,6 +329,14 @@ export const PARITY: readonly Row[] = [
       ui("models-page.ts", '"DELETE",'),
       ui("models-page.ts", '"GET", "/models"'),
     ],
+  },
+  {
+    action: "Choose the live transcript's setup (asr.live), and see the one a call runs",
+    cli: ["config", "start", "models", "status"],
+    api: ["PATCH /config", "POST /calls", "GET /models", "GET /status"],
+    mcp: ["akou_status"],
+    window: [ui("models-page.ts", '"asr.live": value'), app("`live: #{setup}`")],
+    note: "MCP only reads it (akou_status names the live call's setup): the choice is the user's, from the window, `akou config set asr.live`, `akou start --live`, `PATCH /config` or `POST /calls {live}`",
   },
   {
     action: "Open the window",
@@ -394,6 +409,20 @@ export const PARITY: readonly Row[] = [
       ui("server-jobs.ts", '"GET", `/jobs?#{q}`'),
       ui("server-jobs.ts", '"DELETE", `/jobs/#{encodeURIComponent(id)}`'),
     ],
+  },
+  {
+    action: "Name or rename a job (server mode)",
+    cli: {
+      none: "a program names the jobs it submits, at submit or with PATCH; `akou jobs list` shows the name",
+    },
+    api: ["PATCH /jobs/:id"],
+    mcp: {
+      none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
+    },
+    // SERVER.md SV-J10: the Jobs page shows the name and searches it; the program names the job.
+    window: {
+      none: "the Jobs page shows each job's name and finds jobs by it; the program that submitted a job names it",
+    },
   },
   {
     action: "Run the server in the foreground (server mode)",

@@ -105,6 +105,8 @@ declare module "electrobun/main" {
     setAlwaysOnTop(on: boolean): void;
     setVisibleOnAllWorkspaces(on: boolean): void;
     getFrame(): { x: number; y: number; width: number; height: number };
+    /** Moves and sizes the window, in the same screen points as `getFrame` and `Screen`. */
+    setFrame(x: number, y: number, width: number, height: number): void;
     on(
       event: "close" | "will-close" | "focus" | "blur" | "move" | "resize",
       fn: (e: unknown) => void,

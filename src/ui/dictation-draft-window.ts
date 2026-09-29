@@ -28,5 +28,6 @@ sink = mountDraft({
   discard: (p) => quiet(rpc.request.discard(p)),
   copy: (p) => quiet(rpc.request.copy(p)),
   retry: (p) => quiet(rpc.request.retry(p)),
+  language: (p) => rpc.request.language(p).catch(() => false),
   chip: (a) => quiet(rpc.request.chip(a)),
 });

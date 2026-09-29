@@ -21,10 +21,24 @@
  * inserts nothing. Once the text went to the helper it is too late for either. The dictation key
  * pressed while transcribing starts nothing (the helper refuses it) and flashes the pill.
  *
- * How the text goes in (DC-S2): `dictation.insert` picks paste or the clipboard only (`type`
- * pastes until DC-N7); the send key goes with the insert, and the helper presses it only after the target read the
- * clipboard, never on a timer. Nothing is sent after a clipboard-only insert, since nothing was
- * pasted.
+ * How the text goes in (DC-S2): `dictation.insert` picks paste, typing (DC-N7) or the clipboard
+ * only. A text holding a line break is pasted even under `type`, since a typed line break is a
+ * Return key press, which sends in a chat app and runs a line in a terminal. The send key goes
+ * with the insert, and the helper presses it only after the target read the clipboard, never on
+ * a timer. Nothing is sent after a clipboard-only insert, since nothing was pasted. While the helper
+ * has no Accessibility grant (refused at the setup, DC-N3, or taken back, DC-N1) it can post no
+ * paste and no key, so every insert, the draft box's too, is clipboard only.
+ *
+ * Spacing and case (DC-S4): with `smartSpacing` in the insert policy the helper reads the field
+ * just before the insert and fits the text to what sits around the cursor; with
+ * `trailingSpace`, a text whose field was not read ends in a space. Never for a password field.
+ *
+ * Per-app rules (DC-U9): the rule for the app captured at the press (`dictation.apps`) picks the
+ * session's engine, language and formatting pass, how its text goes in and its send key, and
+ * with `mode` `draft` or `draft-send` sends the text to the draft box instead of the app, where
+ * Enter inserts (and with `draft-send` presses the send key). A field the rule leaves out follows
+ * the global setting. A draft box the session opens for another reason (Shift+Enter, the focus
+ * guard) still inserts with the rule's method and send key.
  *
  * The focus guard (DC-N9): when the helper refuses an insert because the keyboard moved
  * (`focus-changed`) or the field cannot take it (`not-editable`, `field-unknown`), the text goes to
@@ -52,6 +66,18 @@
  * `session.stop`, and the dictation is logged as ended by `max` or `silence`; its audio is
  * transcribed like any other. A session is latched when the tray or the CLI started it, when
  * `dictation.activation` is `toggle`, or when the helper says so (`latched`).
+ *
+ * The words as you speak (DC-E5): while a session listens and someone wants them (`preview`), the
+ * last `PREVIEW_TAIL_SECONDS` of its audio are decoded again every `PREVIEW_EVERY_SECONDS` on the
+ * preview engine, one decode at a time, and each answer goes out as a partial (`onPartial`) while
+ * the same session still listens. A partial is only ever shown: the inserted text is the decode of
+ * the whole buffer at the release. A password field's session has no partials (DC-N8).
+ *
+ * The session's language (DC-E4, akou-5v8): the pill's language chip forces one for the session
+ * listening (`setLanguage`), and so does `command("start", { language })` for the session it opens
+ * (`akou dictate start --language`); its decode at the release asks for that one instead of
+ * `dictation.language`. The last dictation decoded in a chosen language keeps it
+ * (`chosenLanguage`), so the error's Retry decodes it in that language again.
  */
 
 import { isEcho } from "../../core/dictation/echo.ts";
@@ -59,14 +85,17 @@ import type { DictationDraft, Target } from "../../core/dictation/events.ts";
 import { removeFillers } from "../../core/dictation/fillers.ts";
 import { type PunctuationLists, spokenPunctuation } from "../../core/dictation/punctuation.ts";
 import { spokenSend } from "../../core/dictation/send.ts";
+import type { CueMoment } from "../../ui/dictation-cues.ts";
 import type { Decoded } from "../asr/live-worker.ts";
 import { CAPTURE_RATE, type Packet } from "../capture/protocol.ts";
+import type { AppRule } from "../config/schema.ts";
 import { forcesLanguage } from "./engines.ts";
 import type {
   AppToHelper,
   Bindings,
   EditHunk,
   EndReason,
+  Frame,
   HelperToApp,
   InsertMethod,
   SendKey,
@@ -139,8 +168,12 @@ export interface TextRules {
   /**
    * `dictation.format: provider` (DC-U6): the text to insert through the user's provider, after
    * every other rule; the raw text and why when the pass was skipped; null while it is off.
+   * `mode`, from a per-app rule (DC-U9), stands in for `dictation.format`.
    */
-  format?(text: string): Promise<{ text: string; skipped: string | null } | null>;
+  format?(
+    text: string,
+    mode?: AppRule["format"],
+  ): Promise<{ text: string; skipped: string | null } | null>;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
 
@@ -164,6 +197,13 @@ export interface InsertPolicy {
    * back after a paste, and the fix the user makes there can be learned. Absent, nothing is read.
    */
   readField?: boolean;
+  /**
+   * `dictation.smartSpacing` while `dictation.readField` is on (DC-S4): the helper reads the field
+   * before the insert and fits the text's spaces and first letter to it.
+   */
+  smartSpacing?: boolean;
+  /** `dictation.trailingSpace` (DC-S4): a space after the text where the field was not read. */
+  trailingSpace?: boolean;
 }
 
 /** With no settings: paste, restore the clipboard, and never a send key. */
@@ -189,8 +229,11 @@ const KEY_ASKS: Readonly<Record<string, Asked>> = {
 
 export interface SessionOptions extends TextRules {
   log: DictationLog;
-  /** The engine now, or null when none is loaded (the models are missing). */
-  engine(): DictationEngine | null;
+  /**
+   * The engine now (`dictation.engine`, or the one a per-app rule names), or null when none is
+   * loaded (the models are missing).
+   */
+  engine(name?: string): DictationEngine | null;
   send(c: AppToHelper): void;
   bindings(): Bindings;
   now(): number;
@@ -211,9 +254,11 @@ export interface SessionOptions extends TextRules {
    * helper refused its insert for the focus guard (DC-N9), taking it (`focus`) for Shift+Enter
    * (DC-A4). False: the dictation fails.
    */
-  onDraft?(id: string, reason: string, focus: boolean): boolean;
+  onDraft?(id: string, reason: string, focus: boolean, rule?: DraftRule): boolean;
   /** How the text goes in (DC-S2); `DEFAULT_INSERT` when absent. */
   insertPolicy?(): InsertPolicy;
+  /** The per-app rule for `app` (DC-U9), from `dictation.apps`; none, the globals apply. */
+  appRule?(app: string): AppRule | undefined;
   /** The dictation key was pressed while a dictation is still transcribing: refused (DC-A4). */
   onBusy?(): void;
   /**
@@ -231,7 +276,90 @@ export interface SessionOptions extends TextRules {
    * `dictation.edit` is written.
    */
   onEdit?(id: string, hunks: EditHunk[] | null): void;
+  /**
+   * The decoder for the words as you speak (DC-E5), or null when nobody wants them now or no
+   * engine can give them. Asked before each partial, so a setting changed mid-session applies.
+   */
+  preview?(): PreviewDecode | null;
+  /** A partial of the session listening: shown, never inserted (DC-E5). */
+  onPartial?(p: PreviewPartial): void;
+  /**
+   * A moment of a spoken dictation for its cue (DC-O3): `start` when its audio starts, `stop` once
+   * the post-roll ended and it goes to the engine, `cancel` when it is dropped, `done` when its text
+   * went in.
+   */
+  onCue?(moment: CueMoment): void;
+  /** A key the helper reported while the Dictation page's recorder is open (DC-U3). */
+  onRecordedKey?(name: string): void;
+  /**
+   * A grant `ready` reported is gone (DC-N1): on macOS a revoked Accessibility grant kills the key
+   * tap without a word, so the dictation key does nothing until the grant is back.
+   */
+  onGrantLost?(name: string): void;
+  /**
+   * macOS Secure Input turned on or off (DC-N1, DC-A2): while it is on the OS hands no keyed chord
+   * to the tap, and only a modifier alone still reaches it.
+   */
+  onSecureInput?(on: boolean): void;
+  /**
+   * The dictation key went down (`on`), with the frame of the window that has the keyboard where
+   * the helper can read it, or the press was dropped before it became a session (DC-O1): the
+   * pill's dot, on the target's display.
+   */
+  onPress?(on: boolean, frame: Frame | null): void;
+  /**
+   * `dictation.mic` (`default` when empty) and `dictation.preferBuiltInOverBluetooth`, sent as
+   * `rebuild_mic` after `ready` (DC-U4, DC-N5); absent, the helper keeps its default.
+   */
+  mic?(): { device: string; preferBuiltIn: boolean };
+  /**
+   * Whether the Dictation page's meter is on (DC-U4, DC-N3): sent as `meter` after `ready`, so a
+   * helper started again while the page shows its meter keeps it moving.
+   */
+  metering?(): boolean;
 }
+
+/** A decode of the end of the audio so far, for the preview only. */
+export type PreviewDecode = (samples: Float32Array) => Promise<Pick<Decoded, "text" | "language">>;
+
+/** The words heard so far in the session listening, and the language the engine heard them in. */
+export interface PreviewPartial {
+  text: string;
+  language: string | null;
+}
+
+/**
+ * What a per-app rule (DC-U9) asks of a draft box its session opens: Enter presses the send key
+ * too (`draft-send`), and the rule's send key and insert method in place of `dictation.sendKey`
+ * and `dictation.insert`. A box Shift+Enter or the focus guard opened carries the rule's send key
+ * and insert method too, never `enterSends`.
+ */
+export interface DraftRule {
+  enterSends: boolean;
+  sendKey?: SendKey;
+  insert?: InsertMethod;
+}
+
+/** What the rule of a session carries into a draft box it opens; none when it changes nothing. */
+function draftRule(rule: AppRule | null, enterSends: boolean): DraftRule | undefined {
+  if (!rule) return undefined;
+  const d: DraftRule = {
+    enterSends,
+    ...(rule.sendKey ? { sendKey: rule.sendKey as SendKey } : {}),
+    ...(rule.insert ? { insert: rule.insert as InsertMethod } : {}),
+  };
+  return d.enterSends || d.sendKey || d.insert ? d : undefined;
+}
+
+/** How often a listening session's audio is decoded again for the preview (DC-E5). */
+export const PREVIEW_EVERY_SECONDS = 0.5;
+/**
+ * How much of the end of the audio each preview decode takes. The pill's ticker shows one line, the
+ * newest words, so the start of a long dictation is never decoded again and a decode stays short:
+ * it shares the live Worker with the release's whole-buffer decode and a recorded call's segments,
+ * which wait behind the one in flight.
+ */
+export const PREVIEW_TAIL_SECONDS = 8;
 
 /** When a session ends by itself (DC-A3). */
 export interface AutoStop {
@@ -277,8 +405,11 @@ interface Listening {
   samples: number;
   /** Secure Input was on at the start, or the field is a password field (DC-N8). */
   secure: boolean;
-  /** The engine picked at the press, and its request opened then (DC-R6); null for the others. */
-  hold: { engine: DictationEngine; request: EngineHold } | null;
+  /**
+   * The engine picked at the press, its request opened then (DC-R6), and the language that request
+   * asked for; null for the others.
+   */
+  hold: { engine: DictationEngine; request: EngineHold; language: string | undefined } | null;
   /** Set by `session.ended`: the reason, and the timer that waits for the pipe to drain. */
   end: { reason: EndReason; timer: ReturnType<typeof setTimeout> } | null;
   /** What the keys during the session, or while it transcribes, asked for (DC-A4). */
@@ -298,6 +429,13 @@ interface Listening {
   heard: number;
   /** The VAD's verdicts run one at a time, in order. */
   vad: Promise<void>;
+  /** The samples the last preview decode took, and whether one is running (DC-E5). */
+  previewAt: number;
+  previewing: boolean;
+  /** The language the pill's chip forced for this session, else null (akou-5v8). */
+  language: string | null;
+  /** The per-app rule for the app captured at the press (DC-U9), or null. */
+  rule: AppRule | null;
 }
 
 /**
@@ -327,10 +465,17 @@ export class DictationSession {
   private early: Early = { chunks: [], samples: 0 };
   /** macOS Secure Input, as the helper last reported it. */
   private secureInput = false;
+  /** The grants the helper said were taken back since its `ready` (DC-N1). */
+  readonly lost = new Set<string>();
   /** Dictations waiting for their insert's result, by the helper's session id. */
   private readonly inserts = new Map<string, string>();
   /** Dictations whose field the helper reads back after the insert (DC-L2), by its session id. */
   private readonly reads = new Map<string, string>();
+  /**
+   * The per-app rule of a dictation waiting for its insert (DC-U9), by the helper's session id, for
+   * the draft box the focus guard may open on it.
+   */
+  private readonly insertRules = new Map<string, DraftRule>();
   /** The draft box's inserts and copies waiting for the helper's answer, by the id sent. */
   private readonly explicit = new Map<string, Explicit>();
   private explicitSeq = 0;
@@ -347,6 +492,12 @@ export class DictationSession {
   private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
   /** When the tray or the CLI last asked for `session.start`: its session is latched (DC-A3). */
   private doorAt = Number.NEGATIVE_INFINITY;
+  /** The language the door's `session.start` asked for, for the session it opens. */
+  private doorLanguage: string | null = null;
+  /** The last dictation decoded in a language the user chose for its session, and that language. */
+  private chosen: { id: string; language: string } | null = null;
+  /** The recorder is open: the helper reports every key and starts no session (DC-U3). */
+  private recording = false;
 
   constructor(private readonly o: SessionOptions) {}
 
@@ -384,28 +535,105 @@ export class DictationSession {
   }
 
   /**
+   * Opens or closes the Dictation page's key recorder (DC-U3): while it is open the helper reports
+   * every key it sees, Fn included, and starts no session. False before `ready`.
+   */
+  recordKeys(on: boolean): boolean {
+    if (!this.ready) return false;
+    this.recording = on;
+    this.o.send({ type: "record_keys", on });
+    return true;
+  }
+
+  /**
+   * Turns the Dictation page's meter on or off (DC-U4, DC-N3): while it is on the helper keeps
+   * the mic open and sends `level` with no session. False before `ready`.
+   */
+  meter(on: boolean): boolean {
+    if (!this.ready) return false;
+    this.o.send({ type: "meter", on });
+    return true;
+  }
+
+  /** Sends the helper the microphone the settings pick (DC-U4, DC-N5); nothing before `ready`. */
+  rebuildMic(): void {
+    const m = this.o.mic?.();
+    if (!this.ready || !m) return;
+    this.o.send({
+      type: "rebuild_mic",
+      device: m.device === "" ? "default" : m.device,
+      prefer_built_in: m.preferBuiltIn,
+    });
+  }
+
+  /**
    * The tray's and the CLI's door (DC-G1): `session.start`, `session.stop` or `session.cancel`. The
    * helper answers with `session.started` and `session.ended` as for a key.
    */
-  command(action: "start" | "stop" | "cancel"): void {
-    if (action === "start") this.doorAt = this.o.now();
+  command(action: "start" | "stop" | "cancel", o: { language?: string } = {}): void {
+    if (action === "start") {
+      this.doorAt = this.o.now();
+      this.doorLanguage = o.language ?? null;
+    }
     this.o.send({ type: `session.${action}` });
+  }
+
+  /** The language chosen for the session listening (the pill's chip, the door), else null. */
+  listeningLanguage(): string | null {
+    const c = this.cur;
+    return c && !c.end ? c.language : null;
+  }
+
+  /** The language dictation `id` was decoded in when the user chose it for its session, else null. */
+  chosenLanguage(id: string): string | null {
+    return this.chosen?.id === id ? this.chosen.language : null;
   }
 
   /**
    * Inserts `text` where dictation `id` was going (the draft box's Enter, DC-S1): the helper first
-   * brings `target` forward (DC-N9), then pastes there and presses `sendKey` after the receipt.
-   * Writes `dictation.inserted` when it lands; a refusal writes nothing and is answered, so the
-   * caller can open the box again with the user's text.
+   * brings `target` forward (DC-N9), then inserts there the way `insert` (a per-app rule's, DC-U9)
+   * or `dictation.insert` says, and presses `sendKey` after the receipt. Writes `dictation.inserted`
+   * when it lands; a refusal writes nothing and is answered, so the caller can open the box again
+   * with the user's text.
    */
-  insertText(id: string, text: string, target: Target, sendKey: SendKey): Promise<InsertOutcome> {
+  insertText(
+    id: string,
+    text: string,
+    target: Target,
+    sendKey: SendKey,
+    insert?: InsertMethod,
+  ): Promise<InsertOutcome> {
     if (!this.ready)
       return Promise.resolve({ ok: false, reason: "the dictation helper is not up" });
+    const p = this.o.insertPolicy?.() ?? DEFAULT_INSERT;
+    const method = this.method(insert ?? p.method, text, false);
     const hid = `draft-${++this.explicitSeq}`;
     const done = new Promise<InsertOutcome>((resolve) => this.explicit.set(hid, { id, resolve }));
     this.o.send({ type: "focus", target });
-    this.o.send({ type: "insert", id: hid, text, method: "paste", send_key: sendKey, target });
+    this.o.send({
+      type: "insert",
+      id: hid,
+      text,
+      method,
+      // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
+      send_key: method === "clipboard" ? "none" : sendKey,
+      target,
+      ...spacing(p),
+    });
     return done;
+  }
+
+  /**
+   * How a text goes in (DC-S2, DC-N3, DC-N7, DC-N8): the clipboard only for a password field, for
+   * `clipboard`, and while the helper has no Accessibility grant, since without it the helper can
+   * post no paste and no key (the no-grant fallback of DC-N3, and a grant taken back, DC-N1). A
+   * line break is never typed: the typed path turns it into a Return key press (DC-N7), which would
+   * send in a chat app or run a line in a terminal, so such a text is pasted.
+   */
+  private method(wanted: InsertMethod, text: string, secure: boolean): InsertMethod {
+    if (secure || wanted === "clipboard" || this.ready?.grants.accessibility === "denied")
+      return "clipboard";
+    return wanted === "type" && !text.includes("\n") ? "type" : "paste";
   }
 
   /**
@@ -432,8 +660,12 @@ export class DictationSession {
     switch (m.type) {
       case "ready":
         this.ready = m;
+        this.lost.clear();
+        this.recording = false;
         this.set("idle");
         void this.rebind();
+        this.rebuildMic();
+        if (this.o.metering?.()) this.meter(true);
         return;
       case "rebound":
         this.rebinds.shift()?.({ ok: true });
@@ -442,9 +674,26 @@ export class DictationSession {
         this.o.onLog?.("warn", `dictation key ${m.hotkey} not bound: ${m.reason}`);
         this.rebinds.shift()?.({ ok: false, reason: m.reason });
         return;
-      case "secure_input":
-        this.secureInput = m.on;
+      case "press":
+        this.o.onPress?.(m.on, m.frame ?? null);
         return;
+      case "secure_input":
+        if (m.on === this.secureInput) return;
+        this.secureInput = m.on;
+        this.o.onSecureInput?.(m.on);
+        return;
+      case "grant.lost": {
+        const r = this.ready;
+        if (this.lost.has(m.name)) return;
+        this.lost.add(m.name);
+        // `ready` said granted: from now on the grant reads as the OS holds it, so a probe that
+        // finds it given again starts the helper again (the tap is made at the start).
+        if (r && (m.name === "mic" || m.name === "accessibility"))
+          this.ready = { ...r, grants: { ...r.grants, [m.name]: "denied" } };
+        this.o.onLog?.("warn", `dictation: the ${m.name} grant was taken back`);
+        this.o.onGrantLost?.(m.name);
+        return;
+      }
       case "warn":
         this.o.onLog?.("warn", `dictation helper: ${m.code}: ${m.msg}`);
         return;
@@ -452,7 +701,8 @@ export class DictationSession {
         this.o.onLevel?.(m.rms);
         return;
       case "key":
-        this.key(m.name);
+        if (this.recording) this.o.onRecordedKey?.(m.name);
+        else this.key(m.name);
         return;
       case "session.started": {
         // The last session is still draining its pipe: it ends now, with the audio it has, since
@@ -463,13 +713,16 @@ export class DictationSession {
         else this.cur?.hold?.request.cancel();
         const door = this.o.now() - this.doorAt <= DOOR_MS;
         this.doorAt = Number.NEGATIVE_INFINITY;
+        const chosen = door ? this.doorLanguage : null;
+        this.doorLanguage = null;
+        const rule = (m.target.app !== "" && this.o.appRule?.(m.target.app)) || null;
         const c: Listening = {
           helperId: m.id,
           target: m.target,
           chunks: [],
           samples: 0,
           secure: this.secureInput || m.target.field === "secure",
-          hold: this.open(),
+          hold: this.open(rule, chosen),
           end: null,
           asked: "insert",
           latched: door || this.o.bindings().activation === "toggle",
@@ -480,11 +733,16 @@ export class DictationSession {
           judged: 0,
           heard: 0,
           vad: Promise.resolve(),
+          previewAt: 0,
+          previewing: false,
+          language: chosen,
+          rule,
         };
         this.cur = c;
         const early = this.early.chunks;
         this.early = { chunks: [], samples: 0 };
         this.set("listening");
+        this.o.onCue?.("start");
         for (const chunk of early) this.take(c, chunk);
         return;
       }
@@ -516,6 +774,7 @@ export class DictationSession {
         const id = this.inserts.get(m.id);
         if (!id) return;
         this.inserts.delete(m.id);
+        this.insertRules.delete(m.id);
         // Nothing was pasted after a clipboard-only insert, so nothing is read back.
         if (m.method === "clipboard") this.reads.delete(m.id);
         this.write({
@@ -524,6 +783,7 @@ export class DictationSession {
           method: m.method,
           receipt_ms: m.receipt_ms,
         });
+        this.o.onCue?.("done");
         this.settle();
         return;
       }
@@ -552,10 +812,13 @@ export class DictationSession {
         }
         const id = this.inserts.get(m.id);
         if (!id) return;
+        const rule = this.insertRules.get(m.id);
         this.inserts.delete(m.id);
         this.reads.delete(m.id);
-        // The keyboard moved or the field cannot take it: the text waits in the draft box.
-        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason, false)) {
+        this.insertRules.delete(m.id);
+        // The keyboard moved or the field cannot take it: the text waits in the draft box, whose
+        // Enter goes in as the session's rule said (DC-U9).
+        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason, false, rule)) {
           this.write({ type: "dictation.drafted", id, reason: m.reason });
         } else {
           this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
@@ -564,7 +827,7 @@ export class DictationSession {
         return;
       }
       default:
-        // grant.lost, mic, stopped: the pill's, in later items.
+        // mic, stopped: nothing for the app to do.
         return;
     }
   }
@@ -614,12 +877,24 @@ export class DictationSession {
     if (c.end) c.end.timer.refresh();
   }
 
+  /**
+   * Forces `language` for the session listening, from the pill's chip (akou-5v8): its decode at the
+   * release asks for it. False with no session listening.
+   */
+  setLanguage(language: string): boolean {
+    const c = this.cur;
+    if (!c || c.end) return false;
+    c.language = language;
+    return true;
+  }
+
   /** A session's audio: kept, sent on to a request opened at the press, and watched (DC-A3). */
   private take(c: Listening, samples: Float32Array): void {
     c.chunks.push(samples);
     c.samples += samples.length;
     c.hold?.request.push(samples);
     if (c.end || c.stopping) return;
+    this.previewTick(c);
     const a = this.o.autoStop?.();
     if (!a) return;
     const limit = a.maxMinutes * 60 * CAPTURE_RATE;
@@ -646,6 +921,31 @@ export class DictationSession {
       const end = c.judged;
       c.vad = c.vad.then(() => this.judge(c, window, end, a.silenceSeconds));
     }
+  }
+
+  /**
+   * The next partial of the session listening (DC-E5), once `PREVIEW_EVERY_SECONDS` more audio came
+   * in and the last decode answered. An answer that comes after the session stopped listening is
+   * dropped, so a partial never outlives it; a failed one costs only that partial.
+   */
+  private previewTick(c: Listening): void {
+    if (c.secure || c.previewing) return;
+    if (c.samples - c.previewAt < PREVIEW_EVERY_SECONDS * CAPTURE_RATE) return;
+    const decode = this.o.preview?.();
+    if (!decode) return;
+    c.previewAt = c.samples;
+    c.previewing = true;
+    const tail = lastSamples(c.chunks, c.samples, PREVIEW_TAIL_SECONDS * CAPTURE_RATE);
+    void decode(tail)
+      .then((d) => {
+        if (this.cur !== c || c.end || c.stopping) return;
+        const text = d.text.trim();
+        if (text !== "") this.o.onPartial?.({ text, language: d.language });
+      })
+      .catch((err) => this.o.onLog?.("info", `dictation preview: ${(err as Error).message}`))
+      .finally(() => {
+        c.previewing = false;
+      });
   }
 
   /**
@@ -698,6 +998,7 @@ export class DictationSession {
     }
     this.inserts.clear();
     this.reads.clear();
+    this.insertRules.clear();
     for (const x of this.explicit.values())
       x.resolve({ ok: false, reason: "the dictation helper stopped" });
     this.explicit.clear();
@@ -714,7 +1015,7 @@ export class DictationSession {
     const reason = c.end.reason;
     const id = newDictationId(this.o.now());
     // A request opened at the press is decoded by the engine that opened it.
-    const engine = c.hold?.engine ?? this.o.engine();
+    const engine = c.hold?.engine ?? this.o.engine(c.rule?.engine);
     const seconds = Math.round((c.samples / 16000) * 1000) / 1000;
     this.write({
       type: "dictation.started",
@@ -736,9 +1037,12 @@ export class DictationSession {
     if (reason === "cancel" || reason === "stop") {
       c.hold?.request.cancel();
       this.write({ type: "dictation.cancelled", id });
+      // The app stopping the helper (dictation turned off) is not the user's cancel.
+      if (reason === "cancel") this.o.onCue?.("cancel");
       this.settle();
       return;
     }
+    this.o.onCue?.("stop");
     this.decoding++;
     this.latest = c;
     this.set("transcribing");
@@ -750,12 +1054,12 @@ export class DictationSession {
    * the engine the settings pick now; null for any other engine, or when opening it fails, and the
    * buffer then goes at release.
    */
-  private open(): Listening["hold"] {
-    const engine = this.o.engine();
+  private open(rule: AppRule | null, chosen: string | null): Listening["hold"] {
+    const engine = this.o.engine(rule?.engine);
     if (!engine?.open) return null;
-    const language = this.o.language?.();
+    const language = chosen ?? this.language(rule);
     try {
-      return { engine, request: engine.open(language ? { language } : {}) };
+      return { engine, request: engine.open(language ? { language } : {}), language };
     } catch (err) {
       this.o.onLog?.(
         "warn",
@@ -763,6 +1067,16 @@ export class DictationSession {
       );
       return null;
     }
+  }
+
+  /**
+   * The language a session asks for before the chip moves it: the per-app rule's (`auto` lets the
+   * engine choose), else `dictation.language` (DC-E4, DC-U9).
+   */
+  private language(rule: AppRule | null): string | undefined {
+    const l = rule?.language;
+    if (l === undefined) return this.o.language?.();
+    return l === "auto" ? undefined : l;
   }
 
   /** Hands the audio to be kept, never a password field's (DC-N8); a failure costs only Retry. */
@@ -798,11 +1112,20 @@ export class DictationSession {
       });
       return;
     }
-    const language = this.o.language?.();
+    const language = c.language ?? this.language(c.rule);
+    if (c.language !== null) this.chosen = { id, language: c.language };
+    // A request opened at the press asked for the language of then: a different language chosen
+    // since on the chip drops it, and the buffer goes whole with the new one.
+    let hold = c.hold?.request;
+    if (hold && c.language !== null && c.language !== c.hold?.language) {
+      hold.cancel();
+      hold = undefined;
+    }
     let r: DictationResult;
     try {
-      r = await decodeDictation(this.o, engine, samples, language, c.secure, c.hold?.request, {
+      r = await decodeDictation(this.o, engine, samples, language, c.secure, hold, {
         spokenSend: this.o.spokenSend?.() ?? false,
+        ...(c.rule?.format ? { format: c.rule.format } : {}),
       });
     } catch (err) {
       this.notInserted(c, { type: "dictation.failed", id, error: (err as Error).message });
@@ -820,11 +1143,12 @@ export class DictationSession {
     // Escape while it transcribed: the text stays in history, and nothing goes in (DC-A4).
     if (c.asked === "cancel") {
       this.notInserted(c, { type: "dictation.cancelled", id });
+      this.o.onCue?.("cancel");
       return;
     }
     // Shift+Enter: the draft box, taking the keyboard. Never a password field's text in it.
     if (c.asked === "draft" && !c.secure) {
-      const opened = this.o.onDraft?.(id, "key", true) ?? false;
+      const opened = this.o.onDraft?.(id, "key", true, draftRule(c.rule, false)) ?? false;
       this.notInserted(
         c,
         opened
@@ -834,10 +1158,30 @@ export class DictationSession {
       return;
     }
     const p = this.o.insertPolicy?.() ?? DEFAULT_INSERT;
-    // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only. `type`
-    // pastes until DC-N7 lands: its typed Return for every `\n` of a spoken `new line` (DC-S6)
-    // would press send in a chat app.
-    const method: InsertMethod = c.secure || p.method === "clipboard" ? "clipboard" : "paste";
+    const rule = c.rule;
+    const sendKey = (rule?.sendKey as SendKey | undefined) ?? p.sendKey;
+    // A per-app rule's draft box (DC-U9), taking the keyboard as Shift+Enter's does. A key the
+    // user pressed during the session (Enter, Escape) still wins over the rule.
+    if (
+      c.asked === "insert" &&
+      !c.secure &&
+      (rule?.mode === "draft" || rule?.mode === "draft-send")
+    ) {
+      const opened =
+        this.o.onDraft?.(id, "rule", true, {
+          ...draftRule(rule, false),
+          enterSends: rule.mode === "draft-send",
+        }) ?? false;
+      this.notInserted(
+        c,
+        opened
+          ? { type: "dictation.drafted", id, reason: "rule" }
+          : { type: "dictation.failed", id, error: "the draft box needs the desktop window" },
+      );
+      return;
+    }
+    // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.
+    const method = this.method(rule?.insert ?? p.method, r.text, c.secure);
     // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
     const send = method !== "clipboard" && (c.asked === "send" || p.sendAlways || spoken);
     // DC-L2: the helper reads the field back after a paste; never a password field's.
@@ -846,16 +1190,20 @@ export class DictationSession {
     if (this.latest === c) this.latest = null;
     this.inserts.set(c.helperId, id);
     if (read) this.reads.set(c.helperId, id);
+    const kept = draftRule(rule, false);
+    if (kept) this.insertRules.set(c.helperId, kept);
     this.settle();
     this.o.send({
       type: "insert",
       id: c.helperId,
       text: r.text,
       method,
-      send_key: send ? p.sendKey : "none",
+      send_key: send ? sendKey : "none",
       target: c.target,
       ...(p.restore ? {} : { restore: false }),
       ...(read ? { read_field: true } : {}),
+      // A password field gets its text exactly as heard (DC-N8).
+      ...(c.secure ? {} : spacing(p)),
     });
   }
 }
@@ -883,7 +1231,7 @@ export async function decodeDictation(
   language: string | undefined,
   secure = false,
   hold?: EngineHold,
-  x: { spokenSend?: boolean } = {},
+  x: { spokenSend?: boolean; format?: AppRule["format"] } = {},
 ): Promise<DictationResult> {
   if ((await hearsSpeech(o, samples)) === false) {
     hold?.cancel();
@@ -910,7 +1258,7 @@ export async function decodeDictation(
   if (lists) text = spokenPunctuation(text, d.words, langs, lists);
   let send = false;
   if (x.spokenSend) ({ text, send } = spokenSend(text));
-  const f = await formatted(o, text);
+  const f = await formatted(o, text, x.format);
   if (f?.skipped)
     d = { ...d, notice: d.notice ? `${d.notice}; ${FORMAT_SKIPPED}` : FORMAT_SKIPPED };
   return { kind: "text", d, text: f?.text ?? text, echoRetry, ...(send ? { send } : {}) };
@@ -923,10 +1271,11 @@ export const FORMAT_SKIPPED = "formatting skipped";
 async function formatted(
   o: TextRules,
   text: string,
+  mode?: AppRule["format"],
 ): Promise<{ text: string; skipped: string | null } | null> {
   if (!o.format || text.trim() === "") return null;
   try {
-    return await o.format(text);
+    return await (mode ? o.format(text, mode) : o.format(text));
   } catch (err) {
     o.onLog?.("warn", `format.skipped: ${(err as Error).message}`);
     return { text, skipped: (err as Error).message };
@@ -955,6 +1304,14 @@ async function hearsSpeech(o: TextRules, samples: Float32Array): Promise<boolean
     );
     return null;
   }
+}
+
+/** The insert's spacing fields (DC-S4) from the policy. */
+function spacing(p: InsertPolicy): { smart_spacing?: true; trailing_space?: true } {
+  return {
+    ...(p.smartSpacing ? { smart_spacing: true as const } : {}),
+    ...(p.trailingSpace ? { trailing_space: true as const } : {}),
+  };
 }
 
 /** The log's `dictation.text` for a decoded dictation. */
@@ -1007,6 +1364,20 @@ export function languageForced(
   engine: string,
 ): { language_forced?: boolean } {
   return language ? { language_forced: forcesLanguage(engine) } : {};
+}
+
+/** The last `n` of the `total` samples in `chunks` (all of them when there are fewer). */
+function lastSamples(chunks: readonly Float32Array[], total: number, n: number): Float32Array {
+  if (total <= n) return concat(chunks, total);
+  const out = new Float32Array(n);
+  let end = n;
+  for (let i = chunks.length - 1; i >= 0 && end > 0; i--) {
+    const ch = chunks[i] as Float32Array;
+    const take = Math.min(ch.length, end);
+    out.set(ch.subarray(ch.length - take), end - take);
+    end -= take;
+  }
+  return out;
 }
 
 function concat(chunks: readonly Float32Array[], n: number): Float32Array {
