@@ -3223,7 +3223,23 @@
         "tags": [
           "dictation"
         ],
-        "description": "Start a latched dictation, as a tap of the dictation key: it listens until `dictation/stop`, a tap of the key, Escape, or silence. The text goes where the keyboard is when it ends. Answers once the helper is listening.",
+        "description": "Start a latched dictation, as a tap of the dictation key: it listens until `dictation/stop`, a tap of the key, Escape, or silence. The text goes where the keyboard is when it ends. `language` (a BCP-47 tag, or auto for `dictation.language`) forces this dictation into it on best and a remote akou, as a click on the pill's language chip does; fast detects the language itself. Answers once the helper is listening.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "language": {
+                    "type": "string"
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",

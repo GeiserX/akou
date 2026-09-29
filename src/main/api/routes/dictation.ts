@@ -37,7 +37,10 @@ export const MAX_CLIP_SECONDS = 60 * 60;
 /** The engines a clip can name; `auto` is `dictation.engine`. */
 const ENGINES = ["auto", "fast", "best", "remote"];
 const FIELDS = new Set(["file", "engine", "language"]);
-/** A retry's `language`: auto, or a BCP-47 tag, as `language` on dictations.create. */
+/**
+ * A retry's or a started session's `language`: auto, or a BCP-47 tag, as `language` on
+ * dictations.create.
+ */
 const RETRY_LANGUAGE = /^(auto|[A-Za-z]{2,3}(-[A-Za-z0-9]{2,8})*)$/;
 
 function service(c: RouteContext<ApiApp>): DictationService {
@@ -377,7 +380,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
   );
   const CONTROL: Record<ControlAction, string> = {
     start:
-      "Start a latched dictation, as a tap of the dictation key: it listens until `dictation/stop`, a tap of the key, Escape, or silence. The text goes where the keyboard is when it ends. Answers once the helper is listening.",
+      "Start a latched dictation, as a tap of the dictation key: it listens until `dictation/stop`, a tap of the key, Escape, or silence. The text goes where the keyboard is when it ends. `language` (a BCP-47 tag, or auto for `dictation.language`) forces this dictation into it on best and a remote akou, as a click on the pill's language chip does; fast detects the language itself. Answers once the helper is listening.",
     stop: "End the dictation that is listening: its audio is transcribed and inserted where it began, as a tap of the key would.",
     cancel:
       "Cancel the dictation that is listening: nothing is transcribed or inserted, and history keeps it as cancelled.",
@@ -386,9 +389,30 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     r.add(
       "POST",
       `/dictation/${action}`,
-      { id: `dictation.${action}`, doc: CONTROL[action], access: "admin", modes: ["app"], ok: 200 },
+      {
+        id: `dictation.${action}`,
+        doc: CONTROL[action],
+        access: "admin",
+        modes: ["app"],
+        ...(action === "start" ? { body: { "language?": "string" } } : {}),
+        ok: 200,
+      },
       async (c) => {
-        const res = await service(c).control(action);
+        let language = "auto";
+        if (action === "start") {
+          const b = await c.body<{ language?: string }>();
+          language = b.language?.trim() || "auto";
+          if (!RETRY_LANGUAGE.test(language)) {
+            throw new HttpError(422, "bad_field", "language is a BCP-47 tag, or auto", {
+              field: "language",
+            });
+          }
+        }
+        const res = await service(c).control(
+          action,
+          undefined,
+          language === "auto" ? {} : { language },
+        );
         if (!res.ok) {
           const status = res.code === "dictation_starting" ? 503 : 409;
           throw new HttpError(status, res.code, res.message);

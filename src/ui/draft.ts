@@ -57,18 +57,40 @@ function el<T extends HTMLElement = HTMLElement>(id: string): T {
   return e as T;
 }
 
-/** The low-confidence words, found in order in the text. */
+/**
+ * The low-confidence words, found in order in the text. Words next to each other that the other
+ * engine heard as one stretch carry the same alternative (`cooper netties` for `Kubernetes`): they
+ * are one mark when any of them is unsure, so picking the alternative replaces the whole stretch.
+ */
 export function lowMarks(text: string, words: DraftOpen["words"]): Mark[] {
-  const out: Mark[] = [];
+  const found: { start: number; end: number; low: boolean; alt: string[] }[] = [];
   let at = 0;
   for (const w of words ?? []) {
     if (!w.w) continue;
     const i = text.indexOf(w.w, at);
     if (i < 0) continue;
     at = i + w.w.length;
-    if (typeof w.c === "number" && w.c < LOW_CONFIDENCE) {
-      out.push({ start: i, end: at, alt: (w.alt ?? []).filter((a) => a && a !== w.w) });
+    const low = typeof w.c === "number" && w.c < LOW_CONFIDENCE;
+    found.push({ start: i, end: at, low, alt: (w.alt ?? []).filter(Boolean) });
+  }
+  const key = (x: { alt: string[] }) => (x.alt.length > 0 ? JSON.stringify(x.alt) : null);
+  const out: Mark[] = [];
+  for (let k = 0; k < found.length; ) {
+    const first = found[k] as (typeof found)[number];
+    let e = k;
+    const same = key(first);
+    while (same !== null) {
+      const next = found[e + 1];
+      if (!next || key(next) !== same) break;
+      if (text.slice((found[e] as (typeof found)[number]).end, next.start).trim() !== "") break;
+      e++;
     }
+    const run = found.slice(k, e + 1);
+    k = e + 1;
+    if (!run.some((x) => x.low)) continue;
+    const end = (run.at(-1) as (typeof found)[number]).end;
+    const said = text.slice(first.start, end);
+    out.push({ start: first.start, end, alt: first.alt.filter((a) => a !== said) });
   }
   return out;
 }

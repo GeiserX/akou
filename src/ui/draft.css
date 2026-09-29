@@ -11,6 +11,7 @@
   --field: rgba(0, 0, 0, 0.03);
   --field-ring: rgba(0, 0, 0, 0.2);
   --btn: rgba(0, 0, 0, 0.07);
+  --btn-hover: rgba(0, 0, 0, 0.15);
   --key: rgba(0, 0, 0, 0.08);
   --pri-bg: #0b0b0c;
   --pri-fg: #f5f5f7;
@@ -27,6 +28,7 @@
     --field: rgba(255, 255, 255, 0.05);
     --field-ring: rgba(255, 255, 255, 0.22);
     --btn: rgba(255, 255, 255, 0.11);
+    --btn-hover: rgba(255, 255, 255, 0.2);
     --key: rgba(255, 255, 255, 0.14);
     --pri-bg: #f5f5f7;
     --pri-fg: #0b0b0c;
@@ -234,9 +236,15 @@ select:focus-visible {
   background: var(--btn);
   color: var(--strong);
 }
-/* A click decodes the audio again in the next language (akou-5v8). */
-button.lang[data-switchable]:hover {
-  box-shadow: inset 0 0 0 1px var(--muted);
+/*
+ * A click decodes the audio again in the next language (akou-5v8). The hover darkens the fill, so
+ * it never looks like the ring of a language the user chose.
+ */
+button.lang[data-switchable] {
+  cursor: pointer;
+}
+button.lang[data-switchable]:hover:not(:disabled) {
+  background: var(--btn-hover);
 }
 /* A language the user chose, rather than the one the engine heard, wears a thin ring. */
 button.lang[data-forced] {

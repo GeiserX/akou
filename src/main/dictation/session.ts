@@ -71,8 +71,10 @@
  * the whole buffer at the release. A password field's session has no partials (DC-N8).
  *
  * The session's language (DC-E4, akou-5v8): the pill's language chip forces one for the session
- * listening (`setLanguage`), and its decode at the release asks for that one instead of
- * `dictation.language`.
+ * listening (`setLanguage`), and so does `command("start", { language })` for the session it opens
+ * (`akou dictate start --language`); its decode at the release asks for that one instead of
+ * `dictation.language`. The last dictation decoded in a chosen language keeps it
+ * (`chosenLanguage`), so the error's Retry decodes it in that language again.
  */
 
 import { isEcho } from "../../core/dictation/echo.ts";
@@ -461,6 +463,10 @@ export class DictationSession {
   private readonly rebinds: ((a: RebindAnswer) => void)[] = [];
   /** When the tray or the CLI last asked for `session.start`: its session is latched (DC-A3). */
   private doorAt = Number.NEGATIVE_INFINITY;
+  /** The language the door's `session.start` asked for, for the session it opens. */
+  private doorLanguage: string | null = null;
+  /** The last dictation decoded in a language the user chose for its session, and that language. */
+  private chosen: { id: string; language: string } | null = null;
   /** The recorder is open: the helper reports every key and starts no session (DC-U3). */
   private recording = false;
 
@@ -535,9 +541,23 @@ export class DictationSession {
    * The tray's and the CLI's door (DC-G1): `session.start`, `session.stop` or `session.cancel`. The
    * helper answers with `session.started` and `session.ended` as for a key.
    */
-  command(action: "start" | "stop" | "cancel"): void {
-    if (action === "start") this.doorAt = this.o.now();
+  command(action: "start" | "stop" | "cancel", o: { language?: string } = {}): void {
+    if (action === "start") {
+      this.doorAt = this.o.now();
+      this.doorLanguage = o.language ?? null;
+    }
     this.o.send({ type: `session.${action}` });
+  }
+
+  /** The language chosen for the session listening (the pill's chip, the door), else null. */
+  listeningLanguage(): string | null {
+    const c = this.cur;
+    return c && !c.end ? c.language : null;
+  }
+
+  /** The language dictation `id` was decoded in when the user chose it for its session, else null. */
+  chosenLanguage(id: string): string | null {
+    return this.chosen?.id === id ? this.chosen.language : null;
   }
 
   /**
@@ -638,6 +658,8 @@ export class DictationSession {
         else this.cur?.hold?.request.cancel();
         const door = this.o.now() - this.doorAt <= DOOR_MS;
         this.doorAt = Number.NEGATIVE_INFINITY;
+        const chosen = door ? this.doorLanguage : null;
+        this.doorLanguage = null;
         const rule = (m.target.app !== "" && this.o.appRule?.(m.target.app)) || null;
         const c: Listening = {
           helperId: m.id,
@@ -645,7 +667,7 @@ export class DictationSession {
           chunks: [],
           samples: 0,
           secure: this.secureInput || m.target.field === "secure",
-          hold: this.open(rule),
+          hold: this.open(rule, chosen),
           end: null,
           asked: "insert",
           latched: door || this.o.bindings().activation === "toggle",
@@ -658,7 +680,7 @@ export class DictationSession {
           vad: Promise.resolve(),
           previewAt: 0,
           previewing: false,
-          language: null,
+          language: chosen,
           rule,
         };
         this.cur = c;
@@ -972,10 +994,10 @@ export class DictationSession {
    * the engine the settings pick now; null for any other engine, or when opening it fails, and the
    * buffer then goes at release.
    */
-  private open(rule: AppRule | null): Listening["hold"] {
+  private open(rule: AppRule | null, chosen: string | null): Listening["hold"] {
     const engine = this.o.engine(rule?.engine);
     if (!engine?.open) return null;
-    const language = this.language(rule);
+    const language = chosen ?? this.language(rule);
     try {
       return { engine, request: engine.open(language ? { language } : {}), language };
     } catch (err) {
@@ -1031,6 +1053,7 @@ export class DictationSession {
       return;
     }
     const language = c.language ?? this.language(c.rule);
+    if (c.language !== null) this.chosen = { id, language: c.language };
     // A request opened at the press asked for the language of then: a different language chosen
     // since on the chip drops it, and the buffer goes whole with the new one.
     let hold = c.hold?.request;

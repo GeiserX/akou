@@ -17,6 +17,10 @@
  *   `dictation.discarded` for a dictation that never reached the app; one already inserted keeps
  *   its state. **Copy** goes through the helper's clipboard-only insert. **Retry** decodes the kept
  *   audio again and shows the new reading in the box.
+ * - **The other engine's reading** (DC-S1): once two engines read the dictation (a Retry on another
+ *   engine, or the error's Retry after the first one failed to insert), each word of the reading
+ *   shown carries what the other heard where the two differ (`alternatives`), so a click on an
+ *   underlined word offers it. Readings in different languages are never compared.
  * - **The language chip** (akou-5v8) says the reading's language. With two or more of the user's
  *   languages and an engine that takes a forced one, a click decodes the kept audio again forced
  *   into the next of them, on the reading's own engine when it takes one (`best`, `remote`), else
@@ -118,6 +122,79 @@ export { LEARNED_MS } from "./learner.ts";
 /** The target of a dictation that went to no app: the helper's own word for "nothing known". */
 export const NO_TARGET: Target = { app: "", pid: 0, window: "", field: "unknown" };
 
+/** Readings longer than this are not compared: the alignment is quadratic in their words. */
+export const ALT_MAX_WORDS = 400;
+
+/** Punctuation at a word's edges, which two engines write differently for the same word. */
+const EDGES = /^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu;
+
+/** A word as two readings are compared on: lower case, without the punctuation at its edges. */
+function plain(w: string): string {
+  return w.toLowerCase().replace(EDGES, "");
+}
+
+/**
+ * What another reading heard in place of each of `words` (DC-S1, akou-w51.81). The two are aligned
+ * word by word on their longest common run; each word of a stretch where they differ gets the other
+ * reading's words over that stretch, and a word both heard gets none. A stretch only one reading
+ * has (a word the other dropped or added) gets none either: there is nothing to offer in its place.
+ */
+export function alternatives(words: readonly string[], other: string): (string | undefined)[] {
+  const b = other.split(/\s+/).filter(Boolean);
+  const out: (string | undefined)[] = words.map(() => undefined);
+  const n = words.length;
+  const m = b.length;
+  if (n === 0 || m === 0 || n > ALT_MAX_WORDS || m > ALT_MAX_WORDS) return out;
+  const pa = words.map(plain);
+  const pb = b.map(plain);
+  // run[i][j]: the longest common run of pa[i..] and pb[j..].
+  const run = Array.from({ length: n + 1 }, () => new Uint16Array(m + 1));
+  const at = (i: number, j: number) => (run[i] as Uint16Array)[j] as number;
+  for (let i = n - 1; i >= 0; i--) {
+    for (let j = m - 1; j >= 0; j--) {
+      (run[i] as Uint16Array)[j] =
+        pa[i] === pb[j] ? at(i + 1, j + 1) + 1 : Math.max(at(i + 1, j), at(i, j + 1));
+    }
+  }
+  let i = 0;
+  let j = 0;
+  let i0 = 0;
+  let j0 = 0;
+  // The stretch since the last word both heard: pa[i0..i) against pb[j0..j).
+  const stretch = () => {
+    if (i === i0 || j === j0) return;
+    const alt = b.slice(j0, j).join(" ").replace(EDGES, "");
+    if (alt) for (let k = i0; k < i; k++) out[k] = alt;
+  };
+  while (i < n && j < m) {
+    if (pa[i] === pb[j]) {
+      stretch();
+      i++;
+      j++;
+      i0 = i;
+      j0 = j;
+    } else if (at(i + 1, j) >= at(i, j + 1)) i++;
+    else j++;
+  }
+  i = n;
+  j = m;
+  stretch();
+  return out;
+}
+
+/** Another engine's reading of the dictation, which the words shown are compared with. */
+interface OtherReading {
+  engine: string;
+  text: string;
+  language: string | null;
+}
+
+/** Whether two readings can be compared: the same language, or one of them names none. */
+function sameLanguage(a: string | null, b: string | null): boolean {
+  if (!a || !b) return true;
+  return a.split("-")[0]?.toLowerCase() === b.split("-")[0]?.toLowerCase();
+}
+
 interface Open {
   id: string;
   /** Teaching only: Enter learns and inserts nothing. */
@@ -136,6 +213,8 @@ interface Open {
   answered: boolean;
   /** The per-app rule that opened it (DC-U9), or null. */
   rule: DraftRule | null;
+  /** Another engine's reading of the dictation, whose words the ones shown are offered. */
+  other: OtherReading | null;
 }
 
 export class DraftBox {
@@ -201,7 +280,15 @@ export class DraftBox {
    */
   open(
     id: string,
-    o: { focus: boolean; fix?: boolean; text?: string; reading?: RetryReading; rule?: DraftRule },
+    o: {
+      focus: boolean;
+      fix?: boolean;
+      text?: string;
+      reading?: RetryReading;
+      /** The reading's language was the user's choice (the pill's chip), not the engine's. */
+      forced?: boolean;
+      rule?: DraftRule;
+    },
   ): DraftOpenResult {
     const w = this.win;
     if (!w)
@@ -230,6 +317,11 @@ export class DraftBox {
             engineName: r.engine,
             ms: r.ms,
             language: r.language ?? it.language,
+            ...(o.forced ? { forced: true } : {}),
+            other:
+              it.text && it.engine !== r.engine
+                ? { engine: it.engine, text: it.text, language: it.language }
+                : null,
           }
         : {}),
       ...(o.rule ? { rule: o.rule } : {}),
@@ -254,6 +346,7 @@ export class DraftBox {
       language?: string | null;
       forced?: boolean;
       rule?: DraftRule | null;
+      other?: OtherReading | null;
     },
   ): void {
     // Another dictation's draft left unanswered in the box: its learn window closes with it.
@@ -263,6 +356,10 @@ export class DraftBox {
     const language = o.language !== undefined ? o.language : it.language;
     const forced = o.forced === true;
     const engineName = o.engineName ?? it.engine;
+    const other =
+      o.other && o.other.engine !== engineName && sameLanguage(o.other.language, language)
+        ? o.other
+        : null;
     this.cur = {
       id: it.id,
       fix: o.fix === true,
@@ -274,13 +371,28 @@ export class DraftBox {
       target: it.target,
       answered: false,
       rule: o.rule ?? null,
+      other,
     };
+    // The user's own text has no engine words; a reading's words carry the other's where they differ.
+    const alts =
+      other && o.text === undefined
+        ? alternatives(
+            o.words.map((x) => x.w),
+            other.text,
+          )
+        : [];
     const engine = o.engine ?? it.engine;
     const model = o.engine ? null : it.model;
     const d: DraftOpen = {
       id: it.id,
       text: o.text ?? o.base,
-      words: o.text === undefined ? o.words.map((x): DraftWord => ({ w: x.w, c: x.c })) : [],
+      words:
+        o.text === undefined
+          ? o.words.map((x, k): DraftWord => {
+              const alt = alts[k];
+              return { w: x.w, c: x.c, ...(alt && alt !== x.w ? { alt: [alt] } : {}) };
+            })
+          : [],
       ...(it.target?.app ? { to: it.target.app } : {}),
       engine: model ? `${engine} (${model})` : engine,
       ms: o.ms ?? it.ms ?? 0,
@@ -352,6 +464,7 @@ export class DraftBox {
       language: c.language,
       forced: c.forced,
       rule: c.rule,
+      other: c.other,
     });
   }
 
@@ -415,6 +528,10 @@ export class DraftBox {
     // Enter or Escape during a slow retry answered this draft: the new reading comes too late.
     if (!r.ok || !it || r.answer.text === "" || this.cur !== c || c.answered) return false;
     const a = r.answer;
+    // The reading replaced is the other engine's, unless the same engine read it again (a language
+    // switch): then the one before it, if any, still is.
+    const other: OtherReading | null =
+      c.engine !== a.engine ? { engine: c.engine, text: c.base, language: c.language } : c.other;
     this.show(w, it, {
       focus: true,
       fix: c.fix,
@@ -426,6 +543,7 @@ export class DraftBox {
       language: a.language ?? language ?? it.language,
       forced: language !== undefined,
       rule: c.rule,
+      other,
     });
     return true;
   }

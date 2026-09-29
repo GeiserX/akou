@@ -548,6 +548,58 @@ describe("DC-O1, DC-R3: the buttons of the pill's error sheet", () => {
     if (session) session.state = "idle";
   });
 
+  test("a language chosen for the session holds for the error's Retry (akou-5v8)", async () => {
+    const fast = fastEngine();
+    const remote: DictationEngine = {
+      name: "remote",
+      decode: async () => {
+        throw new Error("remote akou not reachable");
+      },
+    };
+    /**
+     * A failed remote dictation retried on best. The session is started from the door, in `es`
+     * when `language` is given: the same session language a click on the pill's chip sets.
+     */
+    const run = async (language?: string) => {
+      const asked: (string | undefined)[] = [];
+      const best: DictationEngine = {
+        name: "best",
+        decode: async (s, o) => {
+          asked.push(o.language);
+          return {
+            ...(await fast.decode(s, o)),
+            engine: "best",
+            model: "qwen",
+            language: o.language ?? "en",
+          };
+        },
+      };
+      const r = rig([], {
+        engine: (name) => (name === "best" ? best : name === "fast" ? fast : remote),
+        languages: () => ["en", "es"],
+        draft: { engines: () => ["fast", "best", "remote"] },
+      });
+      const opens = drafts(r);
+      await until(() => r.svc.status().state === "idle", 10_000, "the helper ready");
+      const start = await r.svc.control("start", undefined, language ? { language } : {});
+      expect(start.ok).toBe(true);
+      // The fake's mic runs in real time: let "hello" (from 1 s) be spoken before the stop.
+      await Bun.sleep(2000);
+      expect((await r.svc.control("stop")).ok).toBe(true);
+      await settledAs(r, "failed");
+      expect(await r.svc.errorAction(first(r), "retry")).toBe(true);
+      return { asked, open: opens.at(-1) };
+    };
+    const chosen = await run("es");
+    expect(chosen.asked).toEqual(["es"]);
+    expect(chosen.open).toMatchObject({ language: "es", languageForced: true });
+    // Positive control: with no language chosen the retry asks for none, and nothing is ringed.
+    const plain = await run();
+    expect(plain.asked).toEqual([undefined]);
+    expect(plain.open?.language).toBe("en");
+    expect(plain.open?.languageForced).toBeUndefined();
+  });
+
   test("positive control: a failure with no text and no audio kept offers nothing", async () => {
     const remote: DictationEngine = {
       name: "remote",
