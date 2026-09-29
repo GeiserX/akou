@@ -732,8 +732,9 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
   let result: FinalResult;
   let loads: Record<string, number> = {};
   const emit = (draft: EventDraft) => reply({ type: "event", draft });
+  let models: ModelSet | undefined;
   try {
-    const models = await loadModelSet(m.models);
+    models = await loadModelSet(m.models);
     const audio = await openFinalAudio(m.audio);
     try {
       result = await runFinalPass(
@@ -758,6 +759,9 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
     emit({ type: "final.failed", step: "start", error });
     result = { ok: false, parts: [], skipped: [], error };
   }
+  // Before the answer: the host terminates this Worker on it, and a terminated Worker never frees
+  // a model still waiting on its finalizer (`ModelSet.release`).
+  await models?.release?.();
   reply({ type: "done", result, loads });
 }
 
