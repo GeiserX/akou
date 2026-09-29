@@ -55,6 +55,9 @@ export interface DictationGrants {
   accessibility: Grant;
 }
 
+/** What `GET /dictation` says about the grants, and the ones the running helper lost (DC-N1). */
+type GrantsReply = { grants?: DictationGrants; lost?: unknown };
+
 /** The sounds and the pill: together they decide what `auto` plays now (DC-O3). */
 const SOUNDS_KEY = "dictation.sounds";
 const PILL_KEY = "dictation.pill";
@@ -232,10 +235,7 @@ export class DictationSettings {
    * the running helper lost since it started.
    */
   private async readGrants(): Promise<{ grants: DictationGrants | null; lost: string[] }> {
-    const r = await this.t.request<{ grants?: DictationGrants; lost?: unknown }>(
-      "GET",
-      "/dictation",
-    );
+    const r = await this.t.request<GrantsReply>("GET", "/dictation");
     if (r.status >= 400) return { grants: null, lost: [] };
     const lost = Array.isArray(r.body?.lost)
       ? r.body.lost.filter((x): x is string => typeof x === "string")
