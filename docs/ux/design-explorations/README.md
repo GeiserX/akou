@@ -57,6 +57,7 @@ The four apps closest to akou on a Mac handle the same screens like this. None o
 - **H-3, the sounds** (#148): the island itself does not change. With the island off, a soft cue plays at start, stop, cancel and done, so a dictation is never both silent and invisible.
 - **WR-4, the right column** (#144): Ask on top with its presets in a menu and the last question's cited answer as a card, Notes under it with a Notes and Enhanced toggle, and the note input at the foot with its markers as hints under the field ([ready](built/wr4-ready-dark.png), [light](built/wr4-ready-light.png), [presets](built/wr4-presets-dark.png), [enhanced](built/wr4-enhanced-dark.png)).
 - **WR-5, one accent** (#146): the player is a slim bar under the transcript and exists only for a saved call with a recording; the accent fill is the welcome's Download alone, other primary buttons are a neutral fill, the line being played and the menus use neutral fills, citation chips and info glyphs are teal, speaker colours stay off the accent and you are a neutral grey, in dark and light ([ready](built/wr5-ready-dark.png), [light](built/wr5-ready-light.png), [welcome](built/wr5-welcome-dark.png), [welcome light](built/wr5-welcome-light.png)).
+- **WR-6, the docs** (#149): WINDOW.md, DESKTOP.md section 11 and the DESIGN 7 parity rows describe this shell as shipped, and the composer row says "setup" instead of "ready" while the welcome waits for the models ([welcome](built/wr6-welcome-dark.png), [light](built/wr6-welcome-light.png)).
 
 ## The dictation pill: the island at the top
 

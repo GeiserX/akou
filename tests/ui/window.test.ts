@@ -1976,8 +1976,10 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.getAttribute("#record", "title")).toBe(
               "Record needs the speech models: download them first.",
             );
-            // No workspace means no composer controls: the row keeps only its state word.
+            // No workspace means no composer controls: the row keeps only its state word, and
+            // that word never says ready while nothing can record.
             expect(await page.isVisible("#state")).toBe(true);
+            expect(await text(page, "#state")).toBe("setup");
             for (const sel of ["#record", "#newtitle", "#template", "#meters"]) {
               expect(await page.isVisible(sel)).toBe(false);
             }
@@ -2024,6 +2026,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.isVisible("#tab-notes")).toBe(true);
             expect(await text(page, "#readiness-text")).toBe("Ready");
             expect(await page.getAttribute("#readiness", "data-state")).toBe("ready");
+            expect(await text(page, "#state")).toBe("ready");
             expect(await page.isVisible("#models-pip")).toBe(false);
             expect(await page.isVisible("#readiness-setup")).toBe(false);
             expect(await page.isDisabled("#record")).toBe(false);
@@ -2064,10 +2067,13 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
         async (rig) => {
           const page = await rig.open();
           await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
+          // The saved call opens behind the welcome on its own; the word still follows the welcome.
+          expect(await text(page, "#state")).toBe("setup");
           // The saved call is listed while the welcome shows, and one click opens it.
           await page.click(`#calls li[data-id="${id}"] button`);
           await page.waitForSelector("#welcome", { state: "hidden" });
           await page.waitForSelector("#lines .row >> nth=3");
+          expect(await text(page, "#state")).toBe("saved");
           expect(await page.getAttribute("#scroller", "hidden")).toBeNull();
           expect(await text(page, "#readiness-text")).toBe("Models missing");
           // Setup 1 of 3 goes back to the welcome, on its download.

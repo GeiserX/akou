@@ -370,6 +370,7 @@ class App {
       followedAt: this.followedAt,
       reopen: suggestReopen(this.t.kind, this.disconnectedSince, now),
       lines: this.transcript.count,
+      setup: this.welcoming(),
     });
     const body = document.body;
     for (const c of ["ready", "recording", "paused", "saved", "offline", "failed", "other"]) {
@@ -404,9 +405,13 @@ class App {
    * anyway (one started without models from the CLI) keeps the workspace, so it is never hidden,
    * and so does a call the user picked from the list; the readiness row brings the welcome back.
    */
+  private welcoming(): boolean {
+    return this.modelsCard.missing && !this.status?.live && !this.chosen;
+  }
+
   private welcome(): void {
     const missing = this.modelsCard.missing;
-    const on = missing && !this.status?.live && !this.chosen;
+    const on = this.welcoming();
     byId("welcome").hidden = !on;
     for (const id of ["scroller", "side"]) byId(id).hidden = on;
     // The transcript header goes with the transcript, and needs a call to describe.

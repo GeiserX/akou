@@ -100,6 +100,11 @@ export interface StateInput {
    */
   reopen?: boolean;
   lines: number;
+  /**
+   * The welcome is on screen (WINDOW section 10): the speech models are missing, so nothing can
+   * record, and the state word must not say ready.
+   */
+  setup?: boolean;
 }
 
 /** Channel health states that mean nothing is being recorded on that side. */
@@ -154,6 +159,11 @@ export function stateLabel(i: StateInput): StateLabel {
         ? "akou is not answering; retrying. If this stays, close this window and open it again"
         : "akou is not answering; retrying",
     };
+  }
+  // The welcome covers the page even when the last saved call sits open behind it, so the word
+  // follows the welcome, not that call. A call recording elsewhere still says so.
+  if (i.setup && !liveId) {
+    return { cls: "ready", label: "setup", meta: "the speech models are not here yet" };
   }
   if (!v?.call) {
     if (liveId) return { cls: "other", label: "another call is recording", meta: "" };
