@@ -111,6 +111,8 @@ export interface Transport {
    * (DC-U4). Absent where the page cannot hear the helper (a browser).
    */
   dictationLevels?(fn: (db: number) => void): { close(): void };
+  /** Zooms the window, as a double-click on a title bar does (DK-M7). Absent in a browser. */
+  zoomWindow?(): void;
 }
 
 /** The privacy panes the page may open: the call's two grants and dictation's Accessibility. */
@@ -206,6 +208,8 @@ export interface AkouRpc {
        * helper's `level` lines as `dictationLevel` (DC-N3).
        */
       watchDictationMic: { params: { on: boolean }; response: boolean };
+      /** A double-click on the title bar strip (DK-M7): the window zooms, or back. */
+      zoomWindow: { params: Record<string, never>; response: boolean };
     };
     messages: Record<string, never>;
   };

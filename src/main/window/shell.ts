@@ -93,6 +93,8 @@ export interface PillPlace {
 export interface NativeWindow {
   show(): void;
   close(): void;
+  /** Zooms the window, or back, as a double-click on a title bar does (DK-M7). */
+  zoom(): void;
   onClose(fn: () => void): void;
   /** The window gained (true) or lost (false) the focus. */
   onFocus(fn: (focused: boolean) => void): void;
@@ -164,6 +166,15 @@ export function pillStyle(platform: string): PillStyle {
   return {};
 }
 
+/**
+ * The main window's frame on each OS (DK-M7): on macOS no title bar is drawn, the traffic lights
+ * float over the sidebar and the page runs to the top edge; the page leaves them room when it runs
+ * in the window on macOS (`src/ui/app.ts` `titleBar`). Windows and Linux keep their native frame.
+ */
+export function titleBarStyle(platform: string): "hiddenInset" | "default" {
+  return platform === "darwin" ? "hiddenInset" : "default";
+}
+
 export type TrayMenuItem =
   | { type: "normal"; label: string; action: string; enabled?: boolean; checked?: boolean }
   | { type: "separator" };
@@ -185,7 +196,13 @@ export type AppMenuItem =
 /** The part of ElectroBun the shell uses. */
 export interface NativeUi {
   /** A window over the page, its RPC wired to `rpc.handlers`; returns the window and its sender. */
-  openWindow(o: { title: string; url: string; rpc: WindowRpc; frame?: Rect }): {
+  openWindow(o: {
+    title: string;
+    url: string;
+    rpc: WindowRpc;
+    frame?: Rect;
+    titleBarStyle: "hiddenInset" | "default";
+  }): {
     window: NativeWindow;
     send: WindowSend;
   };
@@ -815,9 +832,17 @@ export class Shell implements WindowShell {
         (pane) => this.app.openSettingsPane(pane),
         () => this.onPageReady(),
         (id, go) => this.answerQuit(id, go),
+        () => this.window?.zoom(),
       );
       const frame = placeFrame(this.o.state?.load().window, this.ui.workAreas());
-      const w = this.ui.openWindow({ title: "akou", url: WINDOW_URL, rpc: this.rpc, frame });
+      // The title is never drawn on macOS, but the Window menu, Mission Control and VoiceOver read it.
+      const w = this.ui.openWindow({
+        title: "akou",
+        url: WINDOW_URL,
+        rpc: this.rpc,
+        frame,
+        titleBarStyle: titleBarStyle(this.o.platform),
+      });
       this.frame = frame;
       this.window = w.window;
       this.send = w.send;

@@ -807,6 +807,31 @@ body.shell.welcoming:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr);
   }
 }
+/* The macOS window draws no title bar (DESKTOP DK-M7): the traffic lights float over the
+   sidebar's top, so the sidebar, the composer row and the ask row each start under a strip of
+   their own colour, --titlebar high. The page sets body.inset only in the desktop window on macOS;
+   the strip and those rows are the window's drag regions (app.ts titleBar). */
+body.inset {
+  --titlebar: 28px;
+}
+body.inset #sidebar {
+  padding-top: 0;
+}
+/* The wordmark's row takes the strip and the sidebar's side padding, so all of it drags. */
+body.inset #sidebar .brand {
+  height: calc(48px + var(--titlebar));
+  padding: calc(16px + var(--titlebar)) 16px 0;
+  margin: 0 -8px 16px;
+}
+body.inset #composer {
+  height: calc(56px + var(--titlebar));
+  min-height: calc(56px + var(--titlebar));
+  padding-top: var(--titlebar);
+}
+body.inset #ask-row {
+  min-height: calc(56px + var(--titlebar));
+  padding-top: calc(10px + var(--titlebar));
+}
 #welcome {
   overflow-y: auto;
   display: flex;
@@ -2037,6 +2062,32 @@ dialog {
   width: 90vw;
   max-height: 85vh;
   font-size: 13px;
+  padding-top: 0;
+}
+/* Every dialog's title row, with its × (WINDOW W15.8): it stays at the top while the rest
+   scrolls under it. The dialog has no top padding, so the row sticks at its very edge. */
+.dialog-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -1em;
+  padding: 1em 1em 0.5em;
+  background: var(--bg);
+}
+.dialog-head h2 {
+  flex: 1;
+  margin: 0;
+}
+.dialog-x {
+  font-size: 18px;
+  font-weight: 400;
+}
+/* The Models page's own title: the dialog's row says it. */
+#models-body > .models-page > h2 {
+  display: none;
 }
 .setting {
   display: grid;

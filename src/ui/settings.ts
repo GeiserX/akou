@@ -20,7 +20,7 @@
 import { hotkeyWarning } from "../main/window/hotkey.ts";
 import { appsEditor, type NextApp } from "./dictation-apps.ts";
 import { onDictationPage } from "./dictation-page.ts";
-import { byId, h, replace, toast } from "./dom.ts";
+import { byId, closable, h, openModal, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { AppStatus, Transport } from "./protocol.ts";
 
@@ -64,6 +64,12 @@ export class SettingsPane {
   ) {
     byId("settings-open").addEventListener("click", () => void this.open());
     byId("settings-close").addEventListener("click", () => this.dialog.close());
+    // Closing drops a change not saved, as it always has; only a stray click on the backdrop
+    // cannot: while one is there, the backdrop does nothing.
+    closable(
+      this.dialog,
+      () => Object.keys(changedSettings(this.fields, this.schema, this.shown)).length > 0,
+    );
     this.form.addEventListener("submit", (e) => {
       e.preventDefault();
       void this.save();
@@ -74,7 +80,7 @@ export class SettingsPane {
   /** Opens the pane, on one key when named (the Enhanced tab's "Choose a provider"). */
   async open(key?: string): Promise<void> {
     await this.load();
-    if (!this.dialog.open) this.dialog.showModal();
+    openModal(this.dialog);
     const at = key
       ? this.fields.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]:not(div)`)
       : null;

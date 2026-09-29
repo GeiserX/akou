@@ -15,7 +15,7 @@ import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
 import { mountDictationDialog } from "./dictation-page.ts";
 import { dictationReview } from "./dictation-review.ts";
-import { byId, h, replace, toast } from "./dom.ts";
+import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
@@ -75,8 +75,8 @@ export function showCall(call?: string): void {
 
 /**
  * The quit question (DK-M3), asked here because the SDK's message box would block the main
- * process. Cancel has the focus, so Return and Escape both keep the call; true only for the
- * confirm button.
+ * process. Cancel has the focus, so Return and Escape both keep the call, as do its × and a click
+ * on the backdrop; true only for the confirm button.
  */
 export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
   return new Promise((resolve) => {
@@ -85,7 +85,7 @@ export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
     const dialog = h(
       "dialog",
       { id: "quit-question", class: "question", attrs: { "aria-labelledby": "quit-message" } },
-      h("h2", { id: "quit-message" }, q.message),
+      h("div", { class: "dialog-head" }, h("h2", { id: "quit-message" }, q.message), closeX()),
       h("p", {}, q.detail),
       h("div", { class: "bar" }, cancel, go),
     );
@@ -100,8 +100,9 @@ export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
     cancel.addEventListener("click", () => finish(false));
     go.addEventListener("click", () => finish(true));
     dialog.addEventListener("close", () => finish(false));
+    closable(dialog);
     document.body.append(dialog);
-    dialog.showModal();
+    openModal(dialog);
     cancel.focus();
   });
 }
@@ -114,8 +115,10 @@ function wireModelsDialog(t: Transport): void {
   const dialog = byId<HTMLDialogElement>("models");
   const page = new ModelsPage(t, false);
   byId("models-body").append(page.root);
+  // A change to the models' settings not saved yet keeps the dialog open on a backdrop click.
+  closable(dialog, () => page.unsaved());
   byId("models-open").addEventListener("click", () => {
-    if (!dialog.open) dialog.showModal();
+    openModal(dialog);
     page.show();
   });
   byId("models-close").addEventListener("click", () => dialog.close());
@@ -125,6 +128,33 @@ function wireModelsDialog(t: Transport): void {
 /** The application menu's Settings… opens the settings pane, as its button does. */
 export function showSettings(): void {
   document.getElementById("settings-open")?.click();
+}
+
+/** ElectroBun's drag regions: its preload moves the window on a mousedown inside one. */
+const DRAG = "electrobun-webkit-app-region-drag";
+const NO_DRAG = "electrobun-webkit-app-region-no-drag";
+
+/**
+ * The macOS window draws no title bar (docs/ux/DESKTOP.md DK-M7): the shell opens it hidden-inset
+ * (`titleBarStyle` in `src/main/window/shell.ts`), so the traffic lights float over the sidebar's
+ * top and the page leaves them a strip (`body.inset`, `--titlebar` in theme.css). The strip and the
+ * top rows under it move the window, and a double-click on them zooms it, as a title bar does; the
+ * controls in them stay controls. Windows and Linux keep their native frame, and a browser tab has
+ * no window to move.
+ */
+function titleBar(inset: boolean): void {
+  if (document.body.classList.contains("inset") === inset) return;
+  document.body.classList.toggle("inset", inset);
+  for (const el of document.querySelectorAll("#sidebar .brand, #composer, #ask-row"))
+    el.classList.toggle(DRAG, inset);
+  for (const el of document.querySelectorAll("#controls > *, #ask-form"))
+    el.classList.toggle(NO_DRAG, inset);
+}
+
+/** True when the event lands in a drag region and not on a control inside it. */
+function onTitleBar(e: Event): boolean {
+  const el = e.target instanceof Element ? e.target : null;
+  return !!el?.closest(`.${DRAG}`) && !el.closest(`.${NO_DRAG}`);
 }
 
 function platform(): "mac" | "windows" | "linux" {
@@ -245,6 +275,9 @@ class App {
 
   async start(): Promise<void> {
     document.body.dataset.transport = this.t.kind;
+    document.addEventListener("dblclick", (e) => {
+      if (onTitleBar(e)) this.t.zoomWindow?.();
+    });
     this.wireControls();
     this.wireSidebar();
     byId("title-text").addEventListener("click", () => this.editTitle());
@@ -274,6 +307,7 @@ class App {
   private onStatus(s: AppStatus): void {
     const first = this.status === null;
     this.status = s;
+    titleBar(this.t.kind === "window" && s.app.platform === "darwin");
     this.modelsCard.update(s.models, true);
     const live = s.live?.call ?? null;
     const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);

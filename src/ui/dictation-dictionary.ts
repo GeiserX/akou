@@ -23,7 +23,7 @@
  */
 
 import { tokenize } from "../core/vocab/correct.ts";
-import { h, replace, toast } from "./dom.ts";
+import { closable, h, openModal, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 
@@ -300,8 +300,10 @@ export function mountDictionaryDialog(
   body.append(dictionary.root);
   const open = async () => {
     await dictionary.load();
-    if (!dialog.open) dialog.showModal();
+    openModal(dialog);
   };
+  // What is typed into the fields stays there when the dialog closes, so nothing is lost.
+  closable(dialog);
   document
     .getElementById("dictation-dictionary-close")
     ?.addEventListener("click", () => dialog.close());
