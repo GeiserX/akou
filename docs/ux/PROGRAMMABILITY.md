@@ -138,7 +138,7 @@ One command tests and resends the hand-off: `akou hooks run`. There is no separa
 
 ## 8. The `akou://` scheme and OS automation
 
-`POST /calls` answers with `url: akou://call/<id>`, and `akou_start` passes that link to the agent, but nothing registers the scheme, so the link opens nothing. ElectroBun 2.0.1 registers URL schemes on macOS only, and only for an app in `/Applications`. Its config type marks Windows and Linux "Not yet supported". `install.md` also allows `~/Applications`, where the scheme silently does not register.
+`POST /calls` answers with `url: akou://call/<id>`, and `akou_start` passes that link to the agent, but nothing registers the scheme, so the link opens nothing. ElectroBun 2.0.1 registers URL schemes on macOS only, and only for an app in `/Applications`. Its config type marks Windows and Linux "Not yet supported". `getting-started.md` also allows `~/Applications`, where the scheme silently does not register.
 
 So the P0 is to stop handing out the link. Registration is a later, macOS-only convenience for opening a call, and it never starts or stops recording. akou cannot tell which program opened a link, and any web page can open one.
 
