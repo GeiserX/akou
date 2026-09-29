@@ -223,6 +223,46 @@ describe("DC-O1: the pill, the island at the top", () => {
   );
 
   test(
+    "at rest from the key-down: a dimmed dot on the smallest island, nothing else, then listening",
+    async () => {
+      const p = v.page;
+      await state({ state: "pressed" });
+      expect(await visible(p, "#pill")).toBe(true);
+      expect(await p.getAttribute("#pill", "data-state")).toBe("pressed");
+      expect(await icons(p)).toEqual(["dot"]);
+      for (const sel of ["#level", "#controls", "#lang", "#hints", "#sheet", "#preview"])
+        expect({ sel, shown: await visible(p, sel) }).toEqual({ sel, shown: false });
+      expect(await text(p, "#word")).toBe("");
+      expect(await text(p, "#elapsed")).toBe("");
+      const look = await p.evaluate(() => {
+        const island = document.getElementById("island") as HTMLElement;
+        const dot = document.getElementById("dot") as HTMLElement;
+        const r = island.getBoundingClientRect();
+        return {
+          width: r.width,
+          height: r.height,
+          island: getComputedStyle(island).backgroundColor,
+          dot: getComputedStyle(dot).backgroundColor,
+          dotSize: dot.getBoundingClientRect().width,
+        };
+      });
+      // The collapsed island of the storyboard: 36 px tall at its narrowest, black, a grey dot.
+      expect(look).toEqual({
+        width: 126,
+        height: 36,
+        island: "rgb(0, 0, 0)",
+        dot: "rgba(255, 255, 255, 0.35)",
+        dotSize: 6,
+      });
+      await state({ state: "listening", since: await now(), keys: [], hotkey: "Right ⌘" });
+      expect(await icons(p)).toEqual(["rec"]);
+      await state({ state: "hidden" });
+      expect(await visible(p, "#pill")).toBe(false);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "the island is black in both appearances; red is the dot only and green the check only",
     async () => {
       const p = v.page;

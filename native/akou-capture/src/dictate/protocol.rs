@@ -12,6 +12,7 @@
 //! | `type` | fields |
 //! |---|---|
 //! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied`, `not-asked` on a macOS microphone never asked for, or `not-needed`) |
+//! | `press` | `on`: `true` when the dictation key went down and the press may become a session, with `frame: {x, y, width, height}` of the window that has the keyboard then (screen points from the top left of the primary display) where the backend can read it, so the pill shows its dot on that display (DC-O1); `false` when the press was not a dictation after all (another key during a modifier-only hold, a rebind). A press that becomes a session says nothing more: `session.started` follows |
 //! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample), and `mic: {transport, why}` when a device backend chose the mic (DC-N5): `transport` `built-in`, `bluetooth` or `other`; `why` `pinned`, `built-in` (instead of a Bluetooth default), `default` or `fallback` |
 //! | `level` | `rms` (linear, 0 to 1), 20 per second while a session runs or `meter` is on |
 //! | `key` | `name`: `Escape`, `Enter` or `Shift+Enter` during a session and until its insert settles; the hotkey's name when it is pressed while a session is still transcribing; any key while `record_keys` is on |
@@ -114,6 +115,33 @@ pub fn ready(backend: &str, swallow_keys: bool, mic: &str, accessibility: &str) 
             ),
         ],
     )
+}
+
+/// The frame of a window in screen points, from the top left of the primary display (DC-O1).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Frame {
+    pub x: i64,
+    pub y: i64,
+    pub width: i64,
+    pub height: i64,
+}
+
+/// The dictation key went down (`on`), with the frame of the window that has the keyboard, or the
+/// press was dropped before it became a session.
+pub fn press(on: bool, frame: Option<&Frame>) -> String {
+    let mut f = vec![("on", Json::Bool(on))];
+    if let Some(r) = frame.filter(|r| on && r.width > 0 && r.height > 0) {
+        f.push((
+            "frame",
+            Json::obj(vec![
+                ("x", Json::Int(r.x)),
+                ("y", Json::Int(r.y)),
+                ("width", Json::Int(r.width)),
+                ("height", Json::Int(r.height)),
+            ]),
+        ));
+    }
+    line("press", f)
 }
 
 /// `mic` is the device the audio comes from, when a device backend chose one (DC-N5); a file mic
@@ -796,6 +824,26 @@ mod tests {
         assert_eq!(v.get("hunks"), Some(&Value::Arr(vec![])));
     }
 
+    /// DC-O1: a frame goes out only with a press that is on and only when it has an area; a
+    /// dropped press or a window the backend could not measure carries none.
+    #[test]
+    fn dc_o1_press_carries_a_frame_only_when_on_and_measured() {
+        let r = Frame {
+            x: 10,
+            y: 20,
+            width: 300,
+            height: 200,
+        };
+        assert_eq!(
+            press(true, Some(&r)),
+            r#"{"type":"press","on":true,"frame":{"x":10,"y":20,"width":300,"height":200}}"#
+        );
+        assert_eq!(press(false, Some(&r)), r#"{"type":"press","on":false}"#);
+        let flat = Frame { height: 0, ..r };
+        assert_eq!(press(true, Some(&flat)), r#"{"type":"press","on":true}"#);
+        assert_eq!(press(true, None), r#"{"type":"press","on":true}"#);
+    }
+
     /// The lines both sides are held to, in `tests/fixtures/akou-dictate/`: every line this file
     /// writes is exactly the fixture's, and every command the app writes parses here. The Bun test
     /// `tests/dictation-protocol.test.ts` checks the same two files from the app's side, so a name
@@ -810,6 +858,16 @@ mod tests {
         };
         let mut written = vec![
             ready("simulate", true, "granted", "not-needed"),
+            press(
+                true,
+                Some(&Frame {
+                    x: -1440,
+                    y: 120,
+                    width: 900,
+                    height: 700,
+                }),
+            ),
+            press(false, None),
             session_started("1", &t, 123_456_789_012_345_678, None),
             level(0.25),
             key("Shift+Enter"),

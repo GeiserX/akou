@@ -536,8 +536,16 @@ impl Dictate {
         for (t_ns, note) in notes {
             let mut ev = Vec::new();
             match note {
-                Note::Act(Action::Arm { t_ns: at }) => self.mic.arm(at, &mut ev),
-                Note::Act(Action::Disarm) => self.mic.disarm(t_ns, &mut ev),
+                Note::Act(Action::Arm { t_ns: at }) => {
+                    // Before the mic: the pill shows its dot on the target's display at once.
+                    let frame = self.targets.frame();
+                    out.line(p::press(true, frame.as_ref()));
+                    self.mic.arm(at, &mut ev);
+                }
+                Note::Act(Action::Disarm) => {
+                    out.line(p::press(false, None));
+                    self.mic.disarm(t_ns, &mut ev);
+                }
                 Note::Act(Action::Start { t_ns: at }) => {
                     let id = self.next_id.to_string();
                     self.next_id += 1;
@@ -670,7 +678,8 @@ mod tests {
                     .unwrap()
                     .to_string()
             })
-            .filter(|t| t != "level")
+            // `press` has its own tests (`dc_o1_*`); the others follow the session.
+            .filter(|t| t != "level" && t != "press")
             .collect()
     }
 
@@ -722,16 +731,13 @@ mod tests {
             types(&out),
             ["ready", "mic", "session.started", "session.ended"]
         );
-        assert!(
-            out.lines[2].contains(r#""target":{"app":"Slack""#),
-            "{}",
-            out.lines[2]
-        );
-        assert!(
-            out.lines[2].contains(r#""capture_ns":"500000000""#),
-            "{}",
-            out.lines[2]
-        );
+        let started = out
+            .lines
+            .iter()
+            .find(|l| l.contains(r#""type":"session.started""#))
+            .unwrap();
+        assert!(started.contains(r#""target":{"app":"Slack""#), "{started}");
+        assert!(started.contains(r#""capture_ns":"500000000""#), "{started}");
         let ended = out
             .lines
             .iter()
@@ -1591,5 +1597,85 @@ mod tests {
         assert_eq!(board.calls(), ["pause music"]);
         assert!(!d.command(Command::Stop, 1500 * MS, &mut out));
         assert_eq!(board.calls(), ["pause music", "play music"]);
+    }
+
+    /// The `press` lines of `out`, in order.
+    fn presses(out: &Rec) -> Vec<String> {
+        out.lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"press""#))
+            .cloned()
+            .collect()
+    }
+
+    /// DC-O1: the dictation key going down says so before anything else, with the frame of the
+    /// window that has the keyboard, so the pill shows its dot on that display; the press that
+    /// becomes a session says nothing more, and `session.started` follows it.
+    #[test]
+    fn dc_o1_a_key_down_says_press_with_the_targets_frame_before_the_session() {
+        let w = World::new();
+        w.borrow_mut().frame = Some(p::Frame {
+            x: -1440,
+            y: 120,
+            width: 900,
+            height: 700,
+        });
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        assert_eq!(
+            presses(&out),
+            [r#"{"type":"press","on":true,"frame":{"x":-1440,"y":120,"width":900,"height":700}}"#]
+        );
+        run(&mut d, &mut out, 1000, 2000);
+        d.key(false, "RightCommand", 2000 * MS, &mut out);
+        run(&mut d, &mut out, 2000, 2500);
+        let at = |t: &str| out.lines.iter().position(|l| l.contains(t)).unwrap();
+        assert!(at(r#""type":"press""#) < at(r#""type":"session.started""#));
+        assert_eq!(
+            presses(&out).len(),
+            1,
+            "a press that became a session says no more"
+        );
+    }
+
+    /// DC-O1: a modifier-only press that another key interrupts was never a dictation: `press`
+    /// off, and no session. A backend that cannot tell the window sends no frame.
+    #[test]
+    fn dc_o1_an_interrupted_press_says_press_off_and_starts_nothing() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        d.key(true, "C", 1050 * MS, &mut out);
+        d.key(false, "C", 1080 * MS, &mut out);
+        d.key(false, "RightCommand", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1100, 2000);
+        assert_eq!(
+            presses(&out),
+            [
+                r#"{"type":"press","on":true}"#,
+                r#"{"type":"press","on":false}"#
+            ]
+        );
+        assert!(!types(&out).contains(&"session.started".to_string()));
+    }
+
+    /// DC-O1: the door's `session.start` is a press too, so the pill's dot comes first there as
+    /// well; with no key and no door, nothing is said.
+    #[test]
+    fn dc_o1_the_door_says_press_and_an_idle_helper_says_nothing() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        assert!(presses(&out).is_empty());
+        d.command(Command::SessionStart, 1000 * MS, &mut out);
+        assert_eq!(presses(&out), [r#"{"type":"press","on":true}"#]);
     }
 }

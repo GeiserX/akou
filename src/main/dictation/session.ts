@@ -92,6 +92,7 @@ import type {
   Bindings,
   EditHunk,
   EndReason,
+  Frame,
   HelperToApp,
   InsertMethod,
   SendKey,
@@ -297,6 +298,12 @@ export interface SessionOptions extends TextRules {
    * to the tap, and only a modifier alone still reaches it.
    */
   onSecureInput?(on: boolean): void;
+  /**
+   * The dictation key went down (`on`), with the frame of the window that has the keyboard where
+   * the helper can read it, or the press was dropped before it became a session (DC-O1): the
+   * pill's dot, on the target's display.
+   */
+  onPress?(on: boolean, frame: Frame | null): void;
   /**
    * `dictation.mic` (`default` when empty) and `dictation.preferBuiltInOverBluetooth`, sent as
    * `rebuild_mic` after `ready` (DC-U4, DC-N5); absent, the helper keeps its default.
@@ -621,6 +628,9 @@ export class DictationSession {
       case "rebind.failed":
         this.o.onLog?.("warn", `dictation key ${m.hotkey} not bound: ${m.reason}`);
         this.rebinds.shift()?.({ ok: false, reason: m.reason });
+        return;
+      case "press":
+        this.o.onPress?.(m.on, m.frame ?? null);
         return;
       case "secure_input":
         if (m.on === this.secureInput) return;

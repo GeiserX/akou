@@ -7,7 +7,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import type { Rect, ShellState } from "./shell.ts";
+import type { PillPlace, Rect, ShellState } from "./shell.ts";
 
 export const SHELL_STATE_FILE = "shell.json";
 
@@ -46,6 +46,18 @@ export function fileState(dir: string): { load(): ShellState; save(s: ShellState
       if (p && typeof o.pillEdge === "string") {
         out.pill = p;
         out.pillEdge = o.pillEdge;
+      }
+      // One place per display and edge (DC-O1); a place missing any part is dropped alone.
+      if (Array.isArray(o.pillPlaces)) {
+        const places: PillPlace[] = [];
+        for (const v of o.pillPlaces as unknown[]) {
+          const r = (v && typeof v === "object" ? v : {}) as Record<string, unknown>;
+          const area = rect(r.area);
+          const frame = rect(r.frame);
+          if (area && frame && typeof r.edge === "string")
+            places.push({ edge: r.edge, area, frame });
+        }
+        out.pillPlaces = places;
       }
       return out;
     },

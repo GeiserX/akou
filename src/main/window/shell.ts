@@ -70,9 +70,24 @@ export interface ShellState {
   window?: Rect;
   /** The floating indicator's last frame (DK-F1). */
   indicator?: Rect;
-  /** The dictation pill's frame after a drag (DC-O1), and the `dictation.pill` edge it was on. */
+  /** The dictation pill's places after a drag (DC-O1): one per display and edge. */
+  pillPlaces?: PillPlace[];
+  /**
+   * The single place kept before the pill had one per display, and its edge: read as the place on
+   * the display it overlaps, never written again.
+   */
   pill?: Rect;
   pillEdge?: string;
+}
+
+/**
+ * Where the pill was dragged on one display (DC-O1): `area` is that display's work area, `edge` the
+ * `dictation.pill` setting it was dragged under, `frame` where it went.
+ */
+export interface PillPlace {
+  edge: string;
+  area: Rect;
+  frame: Rect;
 }
 
 export interface NativeWindow {
@@ -97,6 +112,8 @@ export interface IndicatorWindow {
 
 /** The dictation pill's window (DC-O1): always on top, never takes the focus, a click included. */
 export interface PillWindow {
+  /** Moves it, shown or hidden: to the display of the window the text goes to (DC-O1). */
+  setFrame(frame: Rect): void;
   showInactive(): void;
   hide(): void;
   close(): void;
@@ -322,7 +339,7 @@ export const DEFAULT_WINDOW = { width: 1280, height: 820 } as const;
 /** No window is restored smaller than this. */
 const MIN_WINDOW = { width: 480, height: 360 } as const;
 /** The floating indicator's size: one row, never resized. */
-export const INDICATOR_SIZE = { width: 330, height: 40 } as const;
+export const INDICATOR_SIZE = { width: 480, height: 40 } as const;
 /** Its distance from the work area's edge the first time it shows. */
 const INDICATOR_MARGIN = 16;
 /**
@@ -382,34 +399,96 @@ export function placeIndicator(saved: Rect | undefined, areas: readonly Rect[]):
   return primary ? fitInto(want, areas, INDICATOR_SIZE) : want;
 }
 
+/** The same rectangle. */
+const sameRect = (a: Rect, b: Rect) =>
+  a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
+
+/** Where the shell put a window, as the OS reports it back: within a point or two. */
+const near = (a: Rect, b: Rect) => Math.abs(a.x - b.x) <= 2 && Math.abs(a.y - b.y) <= 2;
+
 /**
- * Where the dictation pill shows (DC-O1): where it was dragged last while on this edge, else
- * centred on the edge of the primary work area that `dictation.pill` names, and pulled whole onto a
+ * The display work area that holds `r`: the one it overlaps most, else the one nearest its centre
+ * (a window just past a display's edge, a work area that leaves out the menu bar). Undefined with
+ * no display reported.
+ */
+export function areaOf(r: Rect, areas: readonly Rect[]): Rect | undefined {
+  const real = areas.filter(hasArea);
+  let best: Rect | undefined;
+  let most = 0;
+  for (const a of real) {
+    const o = overlap(r, a);
+    if (o > most) {
+      most = o;
+      best = a;
+    }
+  }
+  if (best) return best;
+  const cx = r.x + r.width / 2;
+  const cy = r.y + r.height / 2;
+  const far = (a: Rect) =>
+    Math.hypot(
+      Math.max(a.x - cx, 0, cx - (a.x + a.width)),
+      Math.max(a.y - cy, 0, cy - (a.y + a.height)),
+    );
+  return real.reduce<Rect | undefined>((b, a) => (!b || far(a) < far(b) ? a : b), undefined);
+}
+
+/**
+ * Where the dictation pill shows (DC-O1), on the display whose work area is `on` (the primary when
+ * absent or no longer there): where it was dragged last on that display while on this edge, else
+ * centred on the side of that work area that `dictation.pill` names, and pulled whole onto a
  * display either way.
  */
 export function placePill(
-  saved: { frame?: Rect; edge?: string },
+  places: readonly PillPlace[],
   edge: string,
   areas: readonly Rect[],
+  on?: Rect,
 ): Rect {
-  const primary = areas.find((a) => a.width > 0 && a.height > 0);
+  const real = areas.filter(hasArea);
+  const area = (on && real.find((a) => sameRect(a, on))) || real[0];
   const { width, height } = PILL_SIZE;
-  if (saved.frame && saved.edge === edge) {
-    const want = { x: saved.frame.x, y: saved.frame.y, width, height };
-    return primary ? fitInto(want, areas, PILL_SIZE) : want;
+  if (!area) {
+    const any = places.find((p) => p.edge === edge);
+    return any ? { x: any.frame.x, y: any.frame.y, width, height } : { x: 0, y: 0, width, height };
   }
-  if (!primary) return { x: 0, y: 0, width, height };
-  const cx = primary.x + Math.round((primary.width - width) / 2);
-  const cy = primary.y + Math.round((primary.height - height) / 2);
+  const saved = places.find((p) => p.edge === edge && sameRect(p.area, area));
+  if (saved)
+    return fitInto({ x: saved.frame.x, y: saved.frame.y, width, height }, [area], PILL_SIZE);
+  const cx = area.x + Math.round((area.width - width) / 2);
+  const cy = area.y + Math.round((area.height - height) / 2);
   const at =
     edge === "top"
-      ? { x: cx, y: primary.y + ISLAND_TOP }
+      ? { x: cx, y: area.y + ISLAND_TOP }
       : edge === "left"
-        ? { x: primary.x + PILL_MARGIN, y: cy }
+        ? { x: area.x + PILL_MARGIN, y: cy }
         : edge === "right"
-          ? { x: primary.x + primary.width - width - PILL_MARGIN, y: cy }
-          : { x: cx, y: primary.y + primary.height - height - PILL_MARGIN };
-  return fitInto({ ...at, width, height }, areas, PILL_SIZE);
+          ? { x: area.x + area.width - width - PILL_MARGIN, y: cy }
+          : { x: cx, y: area.y + area.height - height - PILL_MARGIN };
+  return fitInto({ ...at, width, height }, [area], PILL_SIZE);
+}
+
+/** `places` with `frame`, dragged under `edge`, as the place on the display it is on now. */
+export function rememberPill(
+  places: readonly PillPlace[],
+  edge: string,
+  frame: Rect,
+  areas: readonly Rect[],
+): PillPlace[] {
+  const area = areaOf(frame, areas);
+  if (!area) return [...places];
+  return [
+    ...places.filter((p) => !(p.edge === edge && sameRect(p.area, area))),
+    { edge, area, frame },
+  ];
+}
+
+/** The places a state file holds, the single one kept before per-display places included. */
+export function pillPlaces(s: ShellState, areas: readonly Rect[]): PillPlace[] {
+  if (s.pillPlaces) return s.pillPlaces;
+  if (!s.pill || !s.pillEdge) return [];
+  const area = areaOf(s.pill, areas);
+  return area ? [{ edge: s.pillEdge, area, frame: s.pill }] : [];
 }
 
 /**
@@ -585,13 +664,20 @@ export class Shell implements WindowShell {
   } | null = null;
   /** Bumped by every close, so an open still reading the status knows it is stale. */
   private indicatorGen = 0;
-  /** The dictation pill while dictation runs (DC-O1), the edge it opened on, and a drag. */
+  /**
+   * The dictation pill while dictation runs (DC-O1): the edge it opened on, where it is and on
+   * which display, the places dragged per display, whether a drag changed them, and the frame the
+   * shell last moved it to, so the move it reports back is not taken for a drag.
+   */
   private pill: {
     window: PillWindow;
     rpc: PillRpcHandlers;
     edge: string;
     frame: Rect;
+    area: Rect | undefined;
+    places: PillPlace[];
     moved: boolean;
+    placed: Rect | null;
   } | null = null;
   /** The draft box while dictation runs (DC-S1), hidden between drafts. */
   private draft: {
@@ -1026,8 +1112,11 @@ export class Shell implements WindowShell {
   private createPill(d: ShellDictation, edge: string): void {
     const open = this.ui.openPill;
     if (!open) return;
-    const saved = this.o.state?.load() ?? {};
-    const frame = placePill({ frame: saved.pill, edge: saved.pillEdge }, edge, this.ui.workAreas());
+    const areas = this.ui.workAreas();
+    const places = pillPlaces(this.o.state?.load() ?? {}, areas);
+    // Where it was dragged last on this edge, until a key-down names the target's display.
+    const last = places.filter((p) => p.edge === edge).at(-1);
+    const frame = placePill(places, edge, areas, last?.area);
     let send: PillSend | null = null;
     let win: PillWindow | null = null;
     const drop = () => {};
@@ -1043,6 +1132,7 @@ export class Shell implements WindowShell {
       // The words as you speak are on by default (DC-O2); a screen share shows them until DK-P3.
       preview: { setting: () => this.app.config().settings["dictation.pillPreview"] },
       grant: () => this.app.openSettingsPane("accessibility"),
+      place: (target) => this.placePillOn(target),
     });
     let w: ReturnType<typeof open>;
     try {
@@ -1053,16 +1143,53 @@ export class Shell implements WindowShell {
     }
     send = w.send;
     win = w.window;
-    const p = { window: w.window, rpc, edge, frame, moved: false };
+    const p = {
+      window: w.window,
+      rpc,
+      edge,
+      frame,
+      area: areaOf(frame, areas),
+      places,
+      moved: false,
+      placed: null as Rect | null,
+    };
     this.pill = p;
     w.window.onFrame((f) => {
       if (!hasArea(f)) return;
       p.frame = f;
+      // The shell's own move, reported back: not a place the user chose.
+      if (p.placed && near(f, p.placed)) return;
+      p.placed = null;
+      const now = this.ui.workAreas();
+      p.area = areaOf(f, now);
+      p.places = rememberPill(p.places, p.edge, f, now);
       p.moved = true;
     });
     w.window.onClose(() => {
       if (this.pill === p) this.closePill();
     });
+  }
+
+  /**
+   * The pill goes to the display of the window the text goes to (DC-O1), to its place there, before
+   * it shows. A frame on the display it is on already, or none (the helper could not tell), leaves
+   * it where it is.
+   */
+  private placePillOn(target: Rect | null): void {
+    const p = this.pill;
+    if (!p || !target) return;
+    const areas = this.ui.workAreas();
+    const area = areaOf(target, areas);
+    if (!area || (p.area && sameRect(p.area, area))) return;
+    const next = placePill(p.places, p.edge, areas, area);
+    p.area = area;
+    p.frame = next;
+    p.placed = next;
+    try {
+      p.window.setFrame(next);
+    } catch (err) {
+      this.o.onLog?.("warn", `the pill did not move: ${(err as Error).message}`);
+    }
   }
 
   private closePill(): void {
@@ -1071,7 +1198,11 @@ export class Shell implements WindowShell {
     this.pill = null;
     const store = this.o.state;
     try {
-      if (store && p.moved) store.save({ ...store.load(), pill: p.frame, pillEdge: p.edge });
+      if (store && p.moved) {
+        // The single place of before is folded into the per-display places, never written again.
+        const { pill: _p, pillEdge: _e, ...rest } = store.load();
+        store.save({ ...rest, pillPlaces: p.places });
+      }
     } catch (err) {
       this.o.onLog?.("warn", `the pill's place was not saved: ${(err as Error).message}`);
     }

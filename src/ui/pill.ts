@@ -1,7 +1,9 @@
 /**
  * The dictation pill (docs/ux/DICTATION.md section 5.1, DC-O1): a small window above every other,
  * never activated, that says what dictation is doing. It is drawn as the island at the top chosen
- * in docs/ux/design-explorations/README.md: a black island that only changes width. Five states:
+ * in docs/ux/design-explorations/README.md: a black island that only changes width. From the
+ * key-down until the press is a session it is at rest, a dimmed dot on the smallest island
+ * (`pressed`). Five states:
  * `listening` with the recording dot, a five-segment level, the elapsed time and round Stop and
  * Cancel, and the key hints the backend can honour in a line under it after 1.5 s; `transcribing`
  * with a ring around the dot and the elapsed time once past 2 s; `inserted` with a check or
@@ -120,6 +122,7 @@ const WORD: Record<string, string> = {
 
 /** The icon each state shows at the island's left. */
 const ICON: Record<string, string> = {
+  pressed: "dot",
   listening: "rec",
   transcribing: "ring",
   inserted: "check",
