@@ -54,9 +54,6 @@
  *   --recorder-keys LIST    the keys reported as `key` when `record_keys {on: true}` arrives, as
  *                           the helper reports every key while the recorder is open (DC-U3)
  *
- * `meter {on: true}` (the Dictation page's meter, DC-U4 and DC-N3) sends `level` every 50 ms in
- * real time with no session, the RMS of the next 50 ms of the `--wav` mic from its start, round
- * and round (silence without one), until `meter {on: false}` or the end.
  *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4): Escape
  *                           and Enter never reach the activation rule, so they pass through to
  *                           the app and are never reported
@@ -85,6 +82,10 @@
  *   --refuse-hotkey KEY     a `rebind` to this hotkey is refused; the binding in force stays (DC-A7)
  *   --play-after-rebinds N  the scripted keys play after the Nth `rebind` (default 1), refused or
  *                           not, so a test can change the key first and then press it
+ *
+ * `meter {on: true}` (the Dictation page's meter, DC-U4 and DC-N3) sends `level` every 50 ms in
+ * real time with no session, the RMS of the next 50 ms of the `--wav` mic from its start, round
+ * and round (silence without one), until `meter {on: false}` or the end.
  *
  * The traps (DC-T1), one switch each:
  *
