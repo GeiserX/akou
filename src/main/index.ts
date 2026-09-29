@@ -1155,8 +1155,8 @@ export class AkouApp implements ApiApp {
 
   /**
    * The final layer landed: notes a provider wrote from the live layer are written again from it,
-   * with the same template. Notes written by hand, and the harness, are left to the window's button
-   * (`reEnhanceState`). A failure is logged; the button is still there.
+   * with the same template. Notes written by hand, and the harness, wait for `akou enhance`
+   * (`reEnhanceState`). A failure is logged; `akou enhance` can still run it.
    */
   private async reEnhance(id: string): Promise<void> {
     if (this.quitting) return;
