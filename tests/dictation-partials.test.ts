@@ -292,6 +292,7 @@ describe("the service's side", () => {
       languages: ["en", "es"],
       switchable: true,
       language: null,
+      chosen: null,
     });
     // The chip starts on dictation.language when it is set.
     expect(service({ language: "es" }).svc.languageChoice().language).toBe("es");

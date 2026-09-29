@@ -18,7 +18,8 @@
  * only with `dictation.pillPreview` on; the page shows it while listening and drops it after, the
  * words the last partial had too in white and the rest dimmer. The language chip (akou-5v8) shows
  * the session's language between the time and Stop; a click asks for the next of the user's
- * languages when the engine takes a forced one.
+ * languages when the engine takes a forced one. After an insert it says, read-only, the language
+ * the text went in as, when the main side names one.
  */
 
 import { mountChip } from "./dictation-chip.ts";
@@ -192,10 +193,18 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
     el("preview").hidden = shown === "";
   };
 
-  /** The language chip: the tag in capitals, a button only when a click can change it. */
+  /**
+   * The language chip: the tag in capitals, a button only when a click can change it. The done
+   * island keeps the language the text went in as, read-only.
+   */
   const showLanguage = () => {
     const chip = el<HTMLButtonElement>("lang");
-    const l = s.state === "listening" ? s.language : undefined;
+    const l =
+      s.state === "listening"
+        ? s.language
+        : s.state === "done" && typeof s.language === "string"
+          ? { tag: s.language, switchable: false, forced: false }
+          : undefined;
     const tag = l && typeof l.tag === "string" ? l.tag.split("-")[0]?.toUpperCase() : "";
     chip.hidden = !tag;
     chip.textContent = tag ?? "";

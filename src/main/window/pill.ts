@@ -13,7 +13,8 @@
  * listening island (akou-5v8) is up from the start when the engine takes a forced language: it
  * shows `dictation.language`, or `auto` while the engine chooses, and a click moves the session to
  * the next of the user's languages. A partial that names its language shows it; Parakeet's name
- * none, so on `fast` the chip stays down.
+ * none, so on `fast` the chip stays down. A session started with a language (`akou dictate start
+ * --language`) shows it as chosen from the start.
  *
  * - `listening` from the session's state, with the hints the key source can honour (DC-A4):
  *   Escape, Enter and Shift+Enter where it swallows keys; only the dictation key's on the portal
@@ -23,7 +24,8 @@
  *   the engine was still loading at the release, and `still transcribing` for `BUSY_MS` when the
  *   dictation key is pressed then (the helper refuses the press, DC-A4).
  * - `inserted` or `copied` for `DONE_MS` after the helper's receipt, with the engine's notice
- *   (`best failed, used fast`) or, after a clipboard-only insert, the paste hint.
+ *   (`best failed, used fast`) or, after a clipboard-only insert, the paste hint, and the language
+ *   the engine heard or was told when the user speaks two or more (akou-5v8), read-only.
  * - `error` with the log's message for `ERROR_MS`, or `NOTICE_MS` when it has buttons, so they can be
  *   reached (DC-O1, DC-R3): Retry where the dictation's audio is kept (`Retry locally` after a
  *   remote failure), which decodes it again and opens the draft box on the new reading; Copy and
@@ -94,6 +96,8 @@ export interface PillDictation {
     languages: readonly string[];
     switchable: boolean;
     language?: string | null;
+    /** The language chosen for the session listening (the door's start), else null. */
+    chosen?: string | null;
   };
   /** Forces a language for the session listening; false with none listening. */
   setLanguage?(language: string): boolean;
@@ -216,6 +220,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   let current: string | null = null;
   /** The dictation whose error the island shows, for its buttons. */
   let failed: string | null = null;
+  /** The language the current dictation's text was decoded in, from its `dictation.text`. */
+  let heard: string | null = null;
   /** The engine's notice for it (`best failed, used fast`). */
   let notice: string | null = null;
   let cancelHide: () => void = () => {};
@@ -273,7 +279,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         current = null;
         notice = null;
         lastWords = [];
-        forced = null;
+        heard = null;
+        forced = d.languageChoice?.()?.chosen ?? null;
         const keys: PillKey[] = st.swallow_keys === true ? [...SWALLOWED] : [];
         const language = chipFor(null);
         put({
@@ -461,10 +468,18 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         return;
       }
       if (e.id !== current) return;
-      if (e.type === "dictation.inserted") {
+      if (e.type === "dictation.text") heard = e.language;
+      else if (e.type === "dictation.inserted") {
         const copied = e.method === "clipboard";
         const note = copied ? pasteHint(o.platform) : notice;
-        put({ state: "done", how: copied ? "copied" : "inserted", ...(note ? { note } : {}) });
+        // Which of the user's languages it went in as; with one language there is nothing to say.
+        const language = heard && (d.languageChoice?.()?.languages.length ?? 0) >= 2 ? heard : null;
+        put({
+          state: "done",
+          how: copied ? "copied" : "inserted",
+          ...(note ? { note } : {}),
+          ...(language ? { language } : {}),
+        });
         hideAfter(DONE_MS);
       } else if (e.type === "dictation.failed") {
         const a = d.errorActions?.(e.id) ?? { actions: [] };

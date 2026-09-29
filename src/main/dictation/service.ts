@@ -559,7 +559,10 @@ export class DictationService {
     }
     const engine = this.retryEngineFor(it);
     if (!engine) return false;
-    const r = await this.retry(id, { engine });
+    // A language the user chose for the dictation's session (the pill's chip, the door) holds for
+    // its retry too; one `dictation.language` set is the retry's own default anyway.
+    const chosen = this.session()?.chosenLanguage(id) ?? null;
+    const r = await this.retry(id, { engine, ...(chosen ? { language: chosen } : {}) });
     if (!r.ok) {
       this.o.onLog?.("warn", `dictation ${id}: the retry failed (${r.message})`);
       return false;
@@ -568,7 +571,11 @@ export class DictationService {
     // A new dictation started while this one decoded: the box must not take its keyboard (DC-S1).
     const s = this.session()?.state;
     const busy = s === "listening" || s === "transcribing" || s === "inserting";
-    return this.draft.open(id, { focus: !busy, reading: r.answer }).ok;
+    return this.draft.open(id, {
+      focus: !busy,
+      reading: r.answer,
+      ...(chosen && r.answer.language_forced ? { forced: true } : {}),
+    }).ok;
   }
 
   /**
@@ -683,12 +690,14 @@ export class DictationService {
    * The languages the pill's chip moves between (akou-5v8): `dictation.languages`, else
    * `asr.languages`; `switchable` when there are two or more and the engine takes a forced one
    * (`fast` picks its own, DC-E4); `language`, the one a session asks for before the chip moves
-   * it: `dictation.language`, else null (the engine chooses).
+   * it: `dictation.language`, else null (the engine chooses); `chosen`, the one chosen for the
+   * session listening (the door's `start` with a language, or the chip), else null.
    */
   languageChoice(): {
     languages: readonly string[];
     switchable: boolean;
     language: string | null;
+    chosen: string | null;
   } {
     const languages = this.o.languages?.() ?? [];
     const engine = this.o.engine()?.name ?? "fast";
@@ -696,6 +705,7 @@ export class DictationService {
       languages,
       switchable: languages.length >= 2 && forcesLanguage(engine),
       language: this.o.language?.() ?? null,
+      chosen: this.session()?.listeningLanguage() ?? null,
     };
   }
 
@@ -722,9 +732,14 @@ export class DictationService {
   /**
    * The tray's and the CLI's door (DC-G1, DC-O4): `start` a latched session as if the key were
    * tapped, `stop` it (its audio is transcribed and inserted), or `cancel` it (nothing is). Resolves
-   * once the helper acted; a helper that did not act within `CONTROL_MS` is a refusal.
+   * once the helper acted; a helper that did not act within `CONTROL_MS` is a refusal. `language`
+   * forces one for the session `start` opens, as a click on the pill's chip does (akou-5v8).
    */
-  async control(action: ControlAction, waitMs = CONTROL_MS): Promise<ControlResult> {
+  async control(
+    action: ControlAction,
+    waitMs = CONTROL_MS,
+    o: { language?: string } = {},
+  ): Promise<ControlResult> {
     const s = this.helper?.session;
     if (!s)
       return { ok: false, code: "dictation_off", message: "dictation is off (dictation.enabled)" };
@@ -736,7 +751,7 @@ export class DictationService {
     if (action !== "start" && s.state !== "listening") {
       return { ok: false, code: "not_dictating", message: "no dictation is listening" };
     }
-    s.command(action);
+    s.command(action, action === "start" && o.language ? { language: o.language } : {});
     const done = () => (action === "start" ? s.state !== "idle" : s.state !== "listening");
     const t0 = Date.now();
     while (!done() && Date.now() - t0 < waitMs) await Bun.sleep(10);

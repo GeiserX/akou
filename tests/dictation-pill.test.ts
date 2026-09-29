@@ -70,6 +70,8 @@ function fakeDictation() {
     languages: ["en", "es"] as readonly string[],
     switchable: true,
     language: null as string | null,
+    /** The language the door's start chose for the session listening. */
+    chosen: null as string | null,
   };
   const forced: string[] = [];
   let seq = 0;
@@ -686,6 +688,46 @@ describe("akou-5v8: the language chip on the listening island", () => {
     expect(lang(f)).toEqual({ tag: "en", switchable: false, forced: false });
     expect(await f.p.handlers.control({ action: "language" })).toBe(false);
     expect(f.forced).toEqual([]);
+  });
+
+  test("a session the door started in a language shows it as chosen from the start", () => {
+    const f = pill();
+    f.choice.chosen = "es";
+    f.to("listening");
+    expect(lang(f)).toEqual({ tag: "es", switchable: true, forced: true });
+    // Positive control: the next session, started with none, starts from the setting again.
+    f.choice.chosen = null;
+    f.to("idle");
+    f.to("listening");
+    expect(lang(f)).toEqual({ tag: AUTO_LANGUAGE, switchable: true, forced: false });
+  });
+
+  test("the done island says the language the text went in as, only for a user of two or more", () => {
+    const run = (languages: readonly string[], heard: string | null) => {
+      const f = pill();
+      f.choice.languages = languages;
+      f.to("listening");
+      spoken(f, "d1");
+      f.to("transcribing");
+      f.event({
+        type: "dictation.text",
+        id: "d1",
+        raw: "hola",
+        text: "hola",
+        language: heard,
+        words: [],
+        engine: "best",
+        model: "qwen",
+        ms: 90,
+      });
+      f.event({ type: "dictation.inserted", id: "d1", method: "paste", receipt_ms: 5 });
+      f.to("idle");
+      return f.states().at(-1);
+    };
+    expect(run(["en", "es"], "es")).toEqual({ state: "done", how: "inserted", language: "es" });
+    // Positive controls: one language, or an engine that named none, say nothing.
+    expect(run(["en"], "es")).toEqual({ state: "done", how: "inserted" });
+    expect(run(["en", "es"], null)).toEqual({ state: "done", how: "inserted" });
   });
 
   test("the click does nothing outside listening", async () => {

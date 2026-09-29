@@ -431,6 +431,40 @@ describe("DC-O2: settled words and the phrase still changing", () => {
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "the inserted island keeps the language the text went in as, read-only, with the green check",
+    async () => {
+      const v = await viewPage("pill");
+      try {
+        const read = () =>
+          v.page.evaluate(() => {
+            const e = document.getElementById("lang") as HTMLButtonElement;
+            return {
+              hidden: e.hidden,
+              text: e.textContent,
+              disabled: e.disabled,
+              word: document.getElementById("word")?.textContent,
+              check: !document.getElementById("check")?.hasAttribute("hidden"),
+            };
+          });
+        await v.send("state", { state: "done", how: "inserted", language: "es-ES" });
+        expect(await read()).toEqual({
+          hidden: false,
+          text: "ES",
+          disabled: true,
+          word: "Inserted",
+          check: true,
+        });
+        // Positive control: a done state with no language has no chip.
+        await v.send("state", { state: "done", how: "inserted" });
+        expect((await read()).hidden).toBe(true);
+      } finally {
+        await v.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
 });
 
 describe("DC-O2, DC-D2: the preview's gate on the main side", () => {
@@ -794,6 +828,34 @@ describe("DC-S1: the draft box", () => {
   );
 
   test(
+    "akou-5v8: the switchable chip looks clickable, and its hover is a fill, never the chosen ring",
+    async () => {
+      const p = v.page;
+      const look = () =>
+        p.$eval("#draft-lang", (e) => {
+          const c = getComputedStyle(e);
+          return { cursor: c.cursor, fill: c.backgroundColor, ring: c.boxShadow };
+        });
+      // The last test clicked the chip: the pointer leaves it first.
+      await p.mouse.move(0, 0);
+      await v.send("open", draft({ id: "l4", languageSwitch: true }));
+      const rest = await look();
+      expect(rest.cursor).toBe("pointer");
+      await p.hover("#draft-lang");
+      const hover = await look();
+      expect(hover.fill).not.toBe(rest.fill);
+      expect(hover.ring).toBe("none");
+      // Positive control: the label is not clickable, and a chosen language wears the ring.
+      await p.mouse.move(0, 0);
+      await v.send("open", draft({ id: "l5" }));
+      expect((await look()).cursor).not.toBe("pointer");
+      await v.send("open", draft({ id: "l6", languageSwitch: true, languageForced: true }));
+      expect((await look()).ring).not.toBe("none");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "DC-U9: a box a draft-send rule opened sends on Enter, and Insert still inserts alone",
     async () => {
       const p = v.page;
@@ -985,6 +1047,37 @@ describe("DC-S1: the draft box", () => {
     expect(shiftMarks(m, t, "xaa bb cc").map((x) => x.start)).toEqual([4, 7]);
     expect(shiftMarks(m, t, "aa bX cc").map((x) => x.start)).toEqual([6]);
     expect(shiftMarks(m, t, "aa bb cc!").map((x) => x.start)).toEqual([3, 6]);
+  });
+
+  test("words the other engine heard as one stretch are one mark, when any of them is unsure (akou-w51.81)", () => {
+    const t = "tell the cooper netties team";
+    const k = ["Kubernetes"];
+    // `cooper` is sure and `netties` not: the stretch is one mark with one alternative.
+    const m = lowMarks(t, [
+      { w: "tell", c: 0.9 },
+      { w: "the", c: 0.9 },
+      { w: "cooper", c: 0.8, alt: k },
+      { w: "netties", c: 0.3, alt: k },
+      { w: "team", c: 0.9 },
+    ]);
+    expect(m).toEqual([{ start: 9, end: 23, alt: k }]);
+    // Positive control: a stretch whose words are all sure has no mark.
+    expect(
+      lowMarks(t, [
+        { w: "cooper", c: 0.8, alt: k },
+        { w: "netties", c: 0.9, alt: k },
+      ]),
+    ).toEqual([]);
+    // Two unsure words with no alternative stay two marks, as before.
+    expect(
+      lowMarks(t, [
+        { w: "cooper", c: 0.2 },
+        { w: "netties", c: 0.3 },
+      ]).map((x) => [x.start, x.end]),
+    ).toEqual([
+      [9, 15],
+      [16, 23],
+    ]);
   });
 });
 

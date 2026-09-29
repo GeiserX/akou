@@ -7,6 +7,8 @@
  * - `akou dictate start|stop|toggle|cancel`: the live session, for a Wayland compositor's key
  *   binding or a script: a latched session, as if the dictation key were tapped. They never launch
  *   the app (exit 69 when it is not running), and exit 78 while `dictation.enabled` is off.
+ *   `--language L` on start (and on a toggle that starts) forces the session into `L`, as a click
+ *   on the pill's language chip does.
  * - `akou dictate --remote-test`: DC-R4's Test of `dictation.remote.url`.
  * - `akou dictations list|show|delete`: the dictation history; `akou dictations retry ID --engine E
  *   [--language L]` decodes a spoken dictation's kept audio again, forced into `L` when given, and
@@ -24,7 +26,7 @@ const ENGINES = ["auto", "fast", "best", "remote"];
 const SESSION = ["start", "stop", "toggle", "cancel"];
 
 /** A session command, which never launches the app: a key binding must not open akou by itself. */
-async function session(ctx: Ctx, word: string): Promise<number> {
+async function session(ctx: Ctx, word: string, language: string | undefined): Promise<number> {
   try {
     let action = word;
     if (word === "toggle") {
@@ -32,7 +34,10 @@ async function session(ctx: Ctx, word: string): Promise<number> {
       if (st.status !== 200) return finish(ctx, st, () => "");
       action = st.body?.state === "listening" ? "stop" : "start";
     }
-    const r = await api(ctx, "POST", `/dictation/${action}`, { launch: false });
+    const r = await api(ctx, "POST", `/dictation/${action}`, {
+      launch: false,
+      ...(action === "start" && language ? { body: { language } } : {}),
+    });
     if (r.body?.error === "dictation_off") {
       const message =
         "dictation is off: turn on dictation.enabled (akou config set dictation.enabled true)";
@@ -61,14 +66,15 @@ export const dictateCommand: Command = {
   name: "dictate",
   summary: "Transcribe a clip through the dictation path, or start and stop a dictation",
   usage: `akou dictate FILE [--engine ${ENGINES.join("|")}] [--language L]   [--json]
-       akou dictate start|stop|toggle|cancel   [--json]
+       akou dictate start|toggle [--language L]   [--json]
+       akou dictate stop|cancel   [--json]
        akou dictate --remote-test   [--json]`,
   flags: {
     engine: { type: "string", value: "E", desc: `${ENGINES.join(", ")} (default auto)` },
     language: {
       type: "string",
       value: "L",
-      desc: "a BCP-47 tag such as en or es-ES, or auto; the fast engine detects it itself",
+      desc: "a BCP-47 tag such as en or es-ES, or auto, for the clip or the session start opens; the fast engine detects it itself",
     },
     "remote-test": {
       type: "boolean",
@@ -79,6 +85,7 @@ export const dictateCommand: Command = {
     "akou dictate note.wav",
     "akou dictate note.wav --json",
     "akou dictate toggle",
+    "akou dictate start --language es",
     "akou dictate --remote-test",
   ],
   run: async (ctx, p) => {
@@ -89,7 +96,10 @@ export const dictateCommand: Command = {
     }
     if (first !== undefined && SESSION.includes(first)) {
       if (rest.length > 0) return usage(ctx, `dictate ${first} takes nothing more`);
-      return session(ctx, first);
+      const language = str(p, "language");
+      if (language !== undefined && (first === "stop" || first === "cancel"))
+        return usage(ctx, `--language goes with start or toggle, not ${first}`);
+      return session(ctx, first, language);
     }
     const file = first;
     if (!file || rest.length > 0)

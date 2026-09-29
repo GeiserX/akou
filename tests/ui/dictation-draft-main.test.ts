@@ -378,6 +378,108 @@ describe("DC-S1: the draft box's page over the real main side", () => {
   );
 });
 
+describe("DC-S1, akou-w51.81: the other engine's word under an unsure one, over the real main side", () => {
+  let g: Rig;
+  beforeAll(async () => {
+    g = await draftRig();
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await g?.close();
+  });
+
+  test(
+    "a retry on fast underlines its unsure word, a click offers what best heard, and picking it changes the field",
+    async () => {
+      const d = dictation(g);
+      // `best` read the dictation: text only, since Qwen gives no word times.
+      const log = d.log;
+      log.append({
+        type: "dictation.started",
+        id: "d-alt",
+        target: TARGET,
+        engine: "best",
+        by: "user",
+      });
+      log.append({ type: "dictation.ended", id: "d-alt", reason: "released", seconds: 2 });
+      log.append({
+        type: "dictation.text",
+        id: "d-alt",
+        raw: "Ship it to Grafana today.",
+        text: "Ship it to Grafana today.",
+        language: "en",
+        words: [],
+        engine: "best",
+        model: "qwen",
+        ms: 300,
+      });
+      log.append({ type: "dictation.inserted", id: "d-alt", method: "paste", receipt_ms: 5 });
+      // The engine is the fake here: fast's reading of the same audio, unsure of one word.
+      const asked: string[] = [];
+      (d as unknown as { retry: typeof d.retry }).retry = async (id, o = {}) => {
+        asked.push(`${id} ${o.engine}`);
+        return {
+          ok: true,
+          answer: {
+            id,
+            text: "ship it to grafanna today",
+            raw: "ship it to grafanna today",
+            language: "en",
+            words: [
+              { w: "ship", s: 0, e: 0.3, c: 0.97 },
+              { w: "it", s: 0.3, e: 0.4, c: 0.95 },
+              { w: "to", s: 0.4, e: 0.5, c: 0.93 },
+              { w: "grafanna", s: 0.5, e: 1.0, c: 0.21 },
+              { w: "today", s: 1.0, e: 1.4, c: 0.9 },
+            ],
+            engine: "fast",
+            model: "parakeet",
+            ms: 40,
+          },
+        };
+      };
+      await openBox(g, "d-alt");
+      const page = g.view.page;
+      expect(await page.$$("#draft-marks mark")).toHaveLength(0);
+      const opens = g.opens.length;
+      // The engine menu shows only with two engines or more: the retry's engine is set directly.
+      expect(g.opens.at(-1)?.engines).toContain("fast");
+      await page.$eval("#draft-retry-engine", (e) => {
+        (e as HTMLSelectElement).value = "fast";
+        e.dispatchEvent(new Event("change"));
+      });
+      expect(await page.textContent("#draft-retry")).toBe("↻ Retry with fast");
+      await page.click("#draft-retry");
+      await until(() => g.opens.length > opens, 5000, "the retry's reading");
+      expect(asked).toEqual(["d-alt fast"]);
+      await page.waitForFunction(
+        () =>
+          (document.getElementById("draft-text") as HTMLTextAreaElement).value ===
+          "ship it to grafanna today",
+      );
+      expect(await page.$$eval("#draft-marks mark", (m) => m.map((x) => x.textContent))).toEqual([
+        "grafanna",
+      ]);
+      // A click inside the underlined word offers what best heard there.
+      await page.evaluate(() => {
+        const f = document.getElementById("draft-text") as HTMLTextAreaElement;
+        f.focus();
+        f.setSelectionRange(13, 13);
+        f.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      await page.waitForSelector("#draft-alts:not([hidden])");
+      expect(
+        await page.$$eval("#draft-alts button.alt", (b) => b.map((x) => x.textContent)),
+      ).toEqual(["Grafana"]);
+      await page.click("#draft-alts button.alt");
+      expect(await page.inputValue("#draft-text")).toBe("ship it to Grafana today");
+      expect(await page.$$("#draft-marks mark")).toHaveLength(0);
+      await page.press("#draft-text", "Escape");
+      await until(() => g.answered.at(-1) === "discard", 5000, "the discard");
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("DC-L4: the chip asks once, from the draft box's page", () => {
   let g: Rig;
   let n = 0;
