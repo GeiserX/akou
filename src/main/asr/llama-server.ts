@@ -268,7 +268,7 @@ export interface LlamaServerOptions {
   log?(level: "info" | "warn" | "error", msg: string): void;
 }
 
-/** The arguments llama-server starts with: loopback only, no prompt cache, one slot, no web UI. */
+/** The arguments llama-server starts with: loopback only, no prompt cache unless `promptCache` (the nightly's control), one slot, no web UI. */
 export function llamaArgs(
   o: Pick<
     LlamaServerOptions,

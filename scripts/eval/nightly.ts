@@ -509,7 +509,7 @@ async function qwenStage(
     bound: QWEN_GATE.flatMb,
   });
   notes.push(
-    `Qwen3-ASR-1.7B Q8_0 on llama-server (${accelerator}): WER on the first ${k} FLEURS clips per language, forced to the clip's language; the benchmark's ${quiet.length} silent AMI stretches on auto among en and es; memory over ${n} requests, then ${QWEN_GATE.controlRequests} with the default --cache-ram as the control, which must grow past ${QWEN_GATE.flatMb} MB`,
+    `Qwen3-ASR-1.7B Q8_0 on llama-server (${accelerator}): WER on the first ${k} FLEURS clips per language, language set to the clip's; the benchmark's ${quiet.length} silent AMI stretches on auto among en and es; memory over ${n} requests, then ${QWEN_GATE.controlRequests} with the default --cache-ram as the control, which must grow past ${QWEN_GATE.flatMb} MB`,
   );
 }
 
