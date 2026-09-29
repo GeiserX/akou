@@ -203,6 +203,26 @@ When the upgraded line lands, alone on the M4, first 80 utterances: Parakeet 0.1
 
 Memory while a call runs: live 2.25 GB, Parakeet 2.7 GB, and Qwen (MLX peaked at 7.8 GB in the benchmark; llama-server Q8_0 sat at 4.9 to 5.2 GB on Linux), about 10 to 13 GB in all. That needs a memory guard (`asr.memoryBudgetMb`, section 6), and it is why the upgrade is a setting.
 
+**Built (ASR-7).** The `upgrade` setup of `asr.live` runs it, in `src/main/asr/live-worker.ts` and `src/main/asr/upgrade.ts`:
+
+- **The unit is an utterance:** the streaming lines from one stop of the speaker to the next, at most 30 s. The speaker stopped when the stream heard nothing new for the pause plus the engine's chunk (section 3.1), or at a flush. A single line is too short a unit. The line cutter breaks at a 0.7 s gap between tokens, which falls inside sentences, and a token's time trails its audio, so a line's audio cuts words at both ends. On 20 FLEURS English clips, Parakeet on each line read 16.63 against 7.34 for the stream.
+- **Parakeet.** Right after the utterance's last line is written, the live Worker decodes the utterance's audio with Parakeet, gained and padded by `prepareSpan`. A call line waiting for its speaker label is decoded right after it, never before.
+- **Qwen.** The host sends the same audio to Qwen, one utterance at a time. The glossary is the call's decode list, and the language is `asr.languages` (forced when it names one). The host then writes `ROVER(Qwen, Parakeet)`, `model: rover-conf(qwen3-asr-1.7b,<parakeet>)`. Qwen comes first, so it breaks ties.
+- **Back into lines.** Each stage's words go back into the utterance's lines by text, not by time. They are aligned with the stream's words, and each word goes to the line of the stream word it matches. A word the stream did not have goes with the word before it. Each line gets its share as its next revision. A reader following the call (`akou_read`) gets the line again with its new text and model.
+- **Limits.** At most 6 utterances wait for Qwen. Past that, the oldest keeps Parakeet's text, so a slow Qwen upgrades the newest lines instead of falling behind. A request past 30 s, or a Qwen that fails, leaves the lines with Parakeet's text, and the failure is logged once.
+- **What never changes.** A line a person edited or retracted keeps their text, and so does a line that gets no words from a stage. `call.ended` gives up the request in flight, and anything that answers later is dropped, since the final pass covers the call.
+- **One Qwen.** Qwen runs on the llama-server dictation keeps warm when there is one, so one Qwen serves both. Otherwise the upgrade starts its own, which gives way to a final pass on Metal instead of stopping it, and stops when its call ends.
+- **No key of its own.** The plan named `asr.live.upgrade`. The upgrade is instead the `upgrade` value of `asr.live`.
+
+Measured on the reference Mac mini, 20 FLEURS clips per language, each clip one call through the live pipeline with the real models (`tests/live-upgrade-qwen.test.ts`; the repository's scorer, which does not normalize numbers):
+
+| Language (stream model) | Stream | After Parakeet | After ROVER(Q,P) | Parakeet lands (p50 / p95) | Qwen answers (p50 / p95) |
+|---|---|---|---|---|---|
+| en (`nemotron-en-560`) | 7.34 | 7.13 | **5.18** | 0.22 / 0.74 s | 0.79 / 2.17 s |
+| es (`nemotron-3.5-1120`) | 4.87 | 4.45 | **3.60** | 0.20 / 0.52 s | 1.05 / 2.76 s |
+
+The same vote with Qwen's words reversed, the failing control, reads 74.51 and 41.10.
+
 An LLM per utterance was measured on 20 utterances per set: −1 to −6 errors against ROVER(Q,P) with Opus, +4 / −2 with Sonnet, 3 to 13 s of extra wall time, $0.009 per utterance. The sample is too small to show a gain, and the LLM is too slow for the live view. It is not in the design.
 
 ## 4. Final pass: default engines and what N engines buy
@@ -270,7 +290,7 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | Key | Values | Default | Measured basis |
 |---|---|---|---|
 | `asr.language` | `auto`, an ISO code, or a list (the languages Qwen may choose from) | `auto`. A user who speaks English and Spanish sets `["en","es"]` | `lidc` −0.26 on edacc; forced `es` on code-switched clips 8.06 against 10.34 |
-| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `upgrade` on 16 GB or more with its models downloaded, else `nemotron` when its model is downloaded, else `parakeet`; never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; `upgrade` is listed as not built until ASR-7, and a call asked for it runs `nemotron` |
+| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `upgrade` on 16 GB or more with its models downloaded, else `nemotron` when its model is downloaded, else `parakeet`; never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; the upgrade itself (ASR-7) in `src/main/asr/live-worker.ts` |
 | `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120` (`kroko-es` later) | `auto` (by language, section 3.1) | Live table |
 | `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4 |
 | `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5 |

@@ -86,9 +86,20 @@ import {
   liveView,
   setupModels,
 } from "./asr/live-setups.ts";
-import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
+import {
+  type CallAccess,
+  type LineUpgrader,
+  LiveAsr,
+  type VocabSource,
+} from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
-import { type LlamaPlan, llamaPlan, metalHolder } from "./asr/llama-server.ts";
+import {
+  createLlamaServer,
+  type LlamaPlan,
+  type LlamaServer,
+  llamaPlan,
+  metalHolder,
+} from "./asr/llama-server.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -103,6 +114,7 @@ import {
   RECOGNIZER,
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
+import { QwenEngine } from "./asr/qwen.ts";
 import type { CallController, StartOk } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
 import { CallManager, type StartRequest } from "./call/manager.ts";
@@ -210,6 +222,11 @@ export const QUIT_FINAL_GRACE_MS = 5_000;
 const REBIND_ANSWER_MS = 3_000;
 /** How often dictation looks whether a final pass still holds the GPU `best` gave way to (DC-E2). */
 export const BEST_REWARM_MS = 5_000;
+/**
+ * One Qwen request of the in-call upgrade. A line takes 1.5 to 2.5 s; one past this keeps
+ * Parakeet's text, so a stuck server never holds the lines behind it for long.
+ */
+export const LIVE_QWEN_TIMEOUT_MS = 30_000;
 /**
  * The settings that decide which engine a dictation runs and how `best`'s server starts and idles
  * (DC-E2, DC-E3): a changed idle time arms its timer now, not after the next dictation.
@@ -550,6 +567,11 @@ export class AkouApp implements ApiApp {
   private bestDictation: BestEngine | null = null;
   /** The next look at whether `best` may be warmed again, while it gives way to the GPU's holder. */
   private bestRewarm: unknown = null;
+  /**
+   * Qwen's llama-server for the in-call upgrade when dictation keeps none warm, with the spec it
+   * was made from. It gives way to a final pass on Metal, and stops when its call ends.
+   */
+  private liveQwen: { server: LlamaServer; key: string } | null = null;
   /** The machine that detection read: its env names the image's llama-server. */
   private accelProbe: Probe | null = null;
 
@@ -774,6 +796,68 @@ export class AkouApp implements ApiApp {
     return chooseLiveSetup(this.liveContext(setting));
   }
 
+  /**
+   * Qwen for a call's in-call upgrade (ASR-7): the server dictation keeps warm when one runs, so
+   * one Qwen serves both, else one of its own. Its own gives way to a final pass on Metal instead
+   * of stopping it: the lines keep Parakeet's text meanwhile. A request never starts or restarts a
+   * server someone else owns or that was let go of: that process would run untracked.
+   */
+  private liveUpgrader(): LineUpgrader {
+    const gone = () => Promise.reject(new Error("its llama-server was stopped"));
+    return {
+      decode: (samples, o) => {
+        const spec = this.llamaSpec(QWEN_ASR);
+        const langs = this.cfg.settings["asr.languages"];
+        const warm = this.bestDictation?.warmServer() ?? null;
+        const own = warm ? null : this.liveQwenServer(spec);
+        const server = warm
+          ? {
+              url: () => (this.bestDictation?.warmServer() === warm ? warm.url() : gone()),
+              // Dictation's server is dictation's to restart.
+              restart: gone,
+            }
+          : {
+              url: () => (this.liveQwen?.server === own ? (own as LlamaServer).url() : gone()),
+              restart: () =>
+                this.liveQwen?.server === own ? (own as LlamaServer).restart() : gone(),
+            };
+        const qwen = new QwenEngine({
+          id: spec.engine,
+          server,
+          allowed: langs,
+          timeoutMs: LIVE_QWEN_TIMEOUT_MS,
+          signal: o.signal,
+          log: (level, msg) => this.log(level, `live upgrade: ${msg}`),
+        });
+        const [only] = langs;
+        return qwen.decode({
+          samples,
+          lang: langs.length === 1 && only ? only : "auto",
+          glossary: o.glossary,
+        });
+      },
+    };
+  }
+
+  /** The in-call upgrade's own llama-server for this spec, made on first use. */
+  private liveQwenServer(spec: LlamaEngineSpec): LlamaServer {
+    const key = JSON.stringify(spec);
+    if (this.liveQwen?.key === key) return this.liveQwen.server;
+    this.stopLiveQwen();
+    const server = createLlamaServer(spec, {
+      yieldMetal: true,
+      log: (level, msg) => this.log(level, `live upgrade: ${msg}`),
+    });
+    this.liveQwen = { server, key };
+    return server;
+  }
+
+  private stopLiveQwen(): void {
+    const q = this.liveQwen;
+    this.liveQwen = null;
+    void q?.server.stop();
+  }
+
   /** The Live section of `GET /models`: each setup, the one the next call runs and the live call's. */
   liveModels(): LiveView | null {
     if (this.runMode === "server") return null;
@@ -946,9 +1030,17 @@ export class AkouApp implements ApiApp {
             for (const fn of this.statusWatchers) fn();
           }
           // A live model a call loads counts as used, so the sweep keeps it.
-          if (ran.choice) this.shelf?.touch([ran.choice.engine]);
+          if (ran.choice) {
+            this.shelf?.touch(
+              ran.setup === "upgrade"
+                ? setupModels("upgrade", this.liveContext())
+                : [ran.choice.engine],
+            );
+          }
           return ran.choice;
         },
+        upgrade: (callId) =>
+          this.liveRan.get(callId)?.setup === "upgrade" ? this.liveUpgrader() : null,
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
       },
@@ -991,6 +1083,11 @@ export class AkouApp implements ApiApp {
     if (e.type === "final.done") queueMicrotask(() => void this.reEnhance(id));
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
+      // The final pass takes the GPU next; a later call that upgrades starts Qwen again. A call
+      // that started while this one was stopping and upgrades too keeps it.
+      const next = this.manager.live();
+      const nextUpgrades = next && next.id !== id && this.liveRan.get(next.id)?.setup === "upgrade";
+      if (this.liveRan.get(id)?.setup === "upgrade" && !nextUpgrades) this.stopLiveQwen();
       // After the event is out, so the pass starts from a log that has it.
       queueMicrotask(() => this.finalAtEnd(id));
     }
@@ -2818,6 +2915,9 @@ export class AkouApp implements ApiApp {
       this.remoteDictation?.close();
       if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
       await this.bestDictation?.stop();
+      const liveQwen = this.liveQwen;
+      this.liveQwen = null;
+      await liveQwen?.server.stop();
       await this.asr?.close();
       await this.page?.stop();
       await this.server?.stop();

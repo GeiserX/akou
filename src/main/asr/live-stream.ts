@@ -71,6 +71,11 @@ export interface StreamLine {
   from: number;
   to: number;
   text: string;
+  /**
+   * The speaker stopped here: the line closed because the engine heard nothing new (or at a
+   * flush), not at a gap between two words or at the window. The in-call upgrade's utterance ends.
+   */
+  stopped: boolean;
 }
 
 /** Tokens joined into text: one space between words, none at the ends. */
@@ -139,7 +144,7 @@ export class StreamChannel {
     if (tokens.length > 0) this.heard = this.pos;
     const out = this.take(tokens);
     const quiet = Math.round((this.o.pause + this.o.tierMs / 1000) * ASR_RATE);
-    if (this.line && this.pos - this.heard >= quiet) out.push(...this.end(this.now()));
+    if (this.line && this.pos - this.heard >= quiet) out.push(...this.end(this.now(), true));
     this.runs = this.runs.filter((r, i, all) => i === all.length - 1 || this.keeps(r));
     return out;
   }
@@ -148,7 +153,7 @@ export class StreamChannel {
   flush(): StreamLine[] {
     if (this.closed) return [];
     const out = this.take(this.stream.flush());
-    out.push(...this.end(this.now()));
+    out.push(...this.end(this.now(), true));
     return out;
   }
 
@@ -200,7 +205,7 @@ export class StreamChannel {
         (word || overdue) &&
         (tok.t - l.last >= this.o.pause || tok.t - l.first >= this.o.window)
       ) {
-        out.push(...this.end(tok.t));
+        out.push(...this.end(tok.t, false));
       }
       if (!this.line) {
         if (tok.text.trim() === "") continue;
@@ -214,7 +219,7 @@ export class StreamChannel {
   }
 
   /** Closes the open line no later than `limit` (seconds on the stream's timeline). */
-  private end(limit: number): StreamLine[] {
+  private end(limit: number, stopped: boolean): StreamLine[] {
     const l = this.line;
     if (!l) return [];
     this.line = null;
@@ -223,7 +228,7 @@ export class StreamChannel {
     this.lastEnd = to;
     const text = tokenText(l.tokens);
     const span = this.toFile(from, l.first, to);
-    return text && span ? [{ ...span, text }] : [];
+    return text && span ? [{ ...span, text, stopped }] : [];
   }
 
   /**

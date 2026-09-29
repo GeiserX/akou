@@ -38,9 +38,6 @@ function ctx(o: Partial<LiveSetupContext> & { on?: ReadonlySet<string> } = {}): 
   };
 }
 
-/** The in-call upgrade counted as built: how `auto` behaves once it is (ASR-7). */
-const built = () => true;
-
 describe("[akou-chp.23] the live setup the next call runs", () => {
   test("each value runs its own setup when its models are here", () => {
     expect(chooseLiveSetup(ctx({ setting: "parakeet" }))).toEqual({
@@ -51,55 +48,51 @@ describe("[akou-chp.23] the live setup the next call runs", () => {
       setup: "nemotron",
       choice: { engine: "nemotron-en-560", lang: "en" },
     });
-    expect(chooseLiveSetup(ctx({ setting: "upgrade", built }))).toEqual({
+    expect(chooseLiveSetup(ctx({ setting: "upgrade" }))).toEqual({
       setup: "upgrade",
       choice: { engine: "nemotron-en-560", lang: "en" },
     });
   });
 
   test("auto picks upgrade on a 16 GB machine and nemotron on an 8 GB one, the rest the same", () => {
-    expect(chooseLiveSetup(ctx({ built, memoryBytes: GB16 })).setup).toBe("upgrade");
-    expect(chooseLiveSetup(ctx({ built, memoryBytes: GB8 })).setup).toBe("nemotron");
+    expect(chooseLiveSetup(ctx({ memoryBytes: GB16 })).setup).toBe("upgrade");
+    expect(chooseLiveSetup(ctx({ memoryBytes: GB8 })).setup).toBe("nemotron");
     // A 16 GB Linux box reports a little under 16 GiB.
-    expect(chooseLiveSetup(ctx({ built, memoryBytes: 15.5 * 2 ** 30 })).setup).toBe("upgrade");
-    expect(chooseLiveSetup(ctx({ built, memoryBytes: UPGRADE_MIN_BYTES - 1 })).setup).toBe(
-      "nemotron",
-    );
+    expect(chooseLiveSetup(ctx({ memoryBytes: 15.5 * 2 ** 30 })).setup).toBe("upgrade");
+    expect(chooseLiveSetup(ctx({ memoryBytes: UPGRADE_MIN_BYTES - 1 })).setup).toBe("nemotron");
   });
 
   test("auto never picks a setup with a missing model", () => {
     for (const gone of [QWEN_ASR, RECOGNIZER, RUNTIME]) {
       const on = new Set([...EVERYTHING].filter((id) => id !== gone));
-      expect([gone, chooseLiveSetup(ctx({ built, on })).setup]).toEqual([gone, "nemotron"]);
+      expect([gone, chooseLiveSetup(ctx({ on })).setup]).toEqual([gone, "nemotron"]);
     }
     // No streaming model at all: Parakeet, whatever else is here.
     const none = new Set([RECOGNIZER, QWEN_ASR, RUNTIME]);
-    expect(chooseLiveSetup(ctx({ built, on: none })).setup).toBe("parakeet");
+    expect(chooseLiveSetup(ctx({ on: none })).setup).toBe("parakeet");
     // An own llama-server needs no downloaded build.
     const own = new Set([...EVERYTHING].filter((id) => id !== RUNTIME));
-    expect(chooseLiveSetup(ctx({ built, on: own, runtime: null })).setup).toBe("upgrade");
+    expect(chooseLiveSetup(ctx({ on: own, runtime: null })).setup).toBe("upgrade");
   });
 
   test("a named setup that cannot run falls back, and says why", () => {
     const noQwen = new Set([...EVERYTHING].filter((id) => id !== QWEN_ASR));
-    const up = chooseLiveSetup(ctx({ setting: "upgrade", built, on: noQwen }));
+    const up = chooseLiveSetup(ctx({ setting: "upgrade", on: noQwen }));
     expect(up.setup).toBe("nemotron");
     expect(up.note).toContain(QWEN_ASR);
     const nem = chooseLiveSetup(ctx({ setting: "nemotron", on: new Set([RECOGNIZER]) }));
     expect(nem.setup).toBe("parakeet");
     expect(nem.note).toContain("nemotron-en-560");
     // Named on purpose, upgrade runs whatever the memory: `auto` is the one that asks for 16 GB.
-    expect(chooseLiveSetup(ctx({ setting: "upgrade", built, memoryBytes: GB8 })).setup).toBe(
-      "upgrade",
-    );
+    expect(chooseLiveSetup(ctx({ setting: "upgrade", memoryBytes: GB8 })).setup).toBe("upgrade");
   });
 
-  test("until the in-call upgrade is built, auto runs nemotron and a call asked for upgrade says so", () => {
-    expect(LIVE_SETUPS.upgrade.unavailable).toContain("not built yet");
-    expect(chooseLiveSetup(ctx()).setup).toBe("nemotron");
-    const asked = chooseLiveSetup(ctx({ setting: "upgrade" }));
-    expect(asked.setup).toBe("nemotron");
-    expect(asked.note).toContain("not built yet");
+  test("[ASR-7] the upgrade is built: it is listed as available, and auto runs it with its models here", () => {
+    expect(LIVE_SETUPS.upgrade.unavailable).toBeUndefined();
+    expect(chooseLiveSetup(ctx())).toEqual({
+      setup: "upgrade",
+      choice: { engine: "nemotron-en-560", lang: "en" },
+    });
   });
 
   test("voxtral is listed, never a value: the setting and a call's start refuse it", () => {

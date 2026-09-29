@@ -15,10 +15,7 @@
  * `nemotron` when a streaming model is on disk, else `parakeet`. A setup whose models are missing is
  * never run: a named one that cannot run falls back the same way and says why. The choice is made
  * when a call takes the recognizer, so a change applies from the next call and a running call keeps
- * its setup.
- *
- * `upgrade` is not built yet (the in-call upgrade, ASR-7): until it is, it is listed with that
- * reason, `auto` never picks it, and a call asked for it runs `nemotron` and says so.
+ * its setup. The in-call upgrade itself (ASR-7) is in live-worker.ts.
  */
 
 import { type ScoreView, scoreView } from "../server/model-store.ts";
@@ -127,9 +124,7 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
   },
   upgrade: {
     title: "Nemotron, each line upgraded",
-    what: "Streaming Nemotron writes the words; when a line closes, Parakeet rewrites it about 0.2 s later and Qwen fused with Parakeet about 1.5 to 2.5 s later",
-    unavailable:
-      "not built yet: the rewrite of each line by Parakeet and Qwen during the call comes in a later version; until then a call asked for it runs Nemotron",
+    what: "Streaming Nemotron writes the words; when the speaker stops, Parakeet rewrites the lines about 0.2 s later and Qwen fused with Parakeet about 1.5 to 2.5 s later",
     accuracy: {
       metric: "call-wer",
       value: 13.31,
@@ -179,8 +174,6 @@ export interface LiveSetupContext {
   present: (id: string) => boolean;
   /** The llama-server build Qwen runs on here, or null for an own llama-server. */
   runtime: string | null;
-  /** Whether a setup is built; by default, the ones with no `unavailable` reason. */
-  built?: (id: LiveSetupId) => boolean;
 }
 
 export interface LiveSetupChoice {
@@ -191,8 +184,6 @@ export interface LiveSetupChoice {
   /** Why the setup differs from the one asked for, or why a streaming model is not used. */
   note?: string;
 }
-
-const isBuilt = (id: LiveSetupId) => LIVE_SETUPS[id].unavailable === undefined;
 
 /**
  * The model ids a setup loads here, for the Models page's Download and the sweep: the Nemotron
@@ -220,7 +211,6 @@ export function setupModels(id: LiveSetupId, c: LiveSetupContext): string[] {
 
 /** The setup the next call runs, never one whose models are missing. */
 export function chooseLiveSetup(c: LiveSetupContext): LiveSetupChoice {
-  const built = c.built ?? isBuilt;
   const setting = isLiveSetting(c.setting) ? c.setting : "auto";
   const stream = chooseLiveEngine(c.engine, c.languages, c.present);
   const fallback = (why?: string): LiveSetupChoice => {
@@ -232,9 +222,8 @@ export function chooseLiveSetup(c: LiveSetupContext): LiveSetupChoice {
   if (setting === "parakeet") return { setup: "parakeet", choice: null };
   if (setting === "nemotron") return fallback();
   const missing = setupModels("upgrade", c).filter((id) => !c.present(id));
-  const upgradeWhy = !built("upgrade")
-    ? `the upgrade setup is ${LIVE_SETUPS.upgrade.unavailable?.split(";")[0]}`
-    : missing.length > 0
+  const upgradeWhy =
+    missing.length > 0
       ? `the upgrade setup needs ${missing.join(", ")} (\`akou models pull <id>\` or the Models page)`
       : null;
   if (setting === "upgrade") {
