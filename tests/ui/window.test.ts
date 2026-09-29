@@ -1604,8 +1604,13 @@ describe("playback and Fix this line", () => {
         expect(await text(page, "#toast")).toBe(
           "should → could fixed on this line. Noted for the final transcript. Undo",
         );
-        expect(await text(page, '#lines .row[data-id="l000001"] .text')).toBe(
-          "we could move the build",
+        // The toast answers the request; the line redraws when the fold's push arrives.
+        await until(
+          async () =>
+            (await text(page, '#lines .row[data-id="l000001"] .text')) ===
+            "we could move the build",
+          5000,
+          "the line reworded",
         );
         await page.waitForSelector("#notes li.note.fix");
         expect(await text(page, "#notes li.note.fix .note-text")).toBe("Fixed: should -> could");
