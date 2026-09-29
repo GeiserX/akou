@@ -41,10 +41,11 @@ import { ModelsCard } from "./models-card.ts";
 import { ModelsPage } from "./models-page.ts";
 import { recordBlocked } from "./models-text.ts";
 import { message, NotepadPane } from "./notepad.ts";
+import { Pages } from "./pages.ts";
 import { Player } from "./player.ts";
 import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protocol.ts";
 import { ReviewPane } from "./review.ts";
-import { SettingsPane } from "./settings.ts";
+import { SettingsPage } from "./settings-page.ts";
 import { TranscriptPane } from "./transcript.ts";
 
 /** A level above this means someone on the call side is audible. */
@@ -125,7 +126,7 @@ function wireModelsDialog(t: Transport): void {
   dialog.addEventListener("close", () => page.hide());
 }
 
-/** The application menu's Settings… opens the settings pane, as its button does. */
+/** The application menu's Settings… opens the Settings page, as its sidebar row does. */
 export function showSettings(): void {
   document.getElementById("settings-open")?.click();
 }
@@ -173,6 +174,8 @@ class App {
   private renaming = false;
   /** Closes the open title field without saving; null when none is open. */
   private closeTitle: (() => void) | null = null;
+  /** The sidebar's pages (Settings), in the call workspace's place while one shows. */
+  private readonly pages: Pages;
 
   constructor(readonly t: Transport) {
     const view = () => this.view();
@@ -208,14 +211,23 @@ class App {
       () => this.view()?.call?.workspace,
       () => this.review.open(),
     );
-    const settings = new SettingsPane(
-      t,
-      () => void dictation.open(),
-      () => void dictation.dictionary.open(),
-    );
+    const settings = new SettingsPage(t, {
+      workspaces: () => this.calls.map((c) => c.workspace),
+      openModels: () => byId("models-open").click(),
+      openDictionary: () => void dictation.dictionary.open(),
+    });
+    this.pages = new Pages(byId("pages"), { settings });
+    const openSettings = (key?: string) => void this.pages.show("settings", key);
+    byId("settings-open").addEventListener("click", () => openSettings());
+    byId("calls-open").addEventListener("click", () => this.pages.leave());
+    const fromHash = () => {
+      if (location.hash === "#settings") openSettings();
+    };
+    window.addEventListener("hashchange", fromHash);
+    fromHash();
     this.modelsCard = new ModelsCard(t, {
       changed: () => this.paint(),
-      openAgentSettings: () => void settings.open("provider.kind"),
+      openAgentSettings: () => openSettings("provider.kind"),
       mac: this.platform === "mac",
     });
     wireModelsDialog(t);
@@ -224,7 +236,7 @@ class App {
       call,
       view,
       cite,
-      openSettings: (key) => void settings.open(key),
+      openSettings: (key) => openSettings(key),
     });
     this.review = new ReviewPane({
       t,
@@ -281,6 +293,8 @@ class App {
     const live = s.live?.call ?? null;
     const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
     if (live) this.seenLive = live;
+    // A new live call takes the window over from a page too (W3.17).
+    if (fresh && !first) this.pages.leave();
     if (fresh || !this.chosen) {
       const target = live ?? this.callId ?? s.last?.call ?? null;
       if (target && target !== this.callId) this.openCall(target, false);
@@ -293,6 +307,8 @@ class App {
   /** Shows a call: a new follower, every pane reset. */
   openCall(id: string, chosen: boolean): void {
     this.chosen = chosen;
+    // A call picked in the sidebar is the way back from a page.
+    if (chosen) this.pages.leave();
     if (id === this.callId && this.follower) {
       // Picked again: the call may be behind the welcome, which the pick now lifts.
       this.paint();
@@ -766,6 +782,7 @@ class App {
     });
     byId("readiness-setup").addEventListener("click", () => {
       // Back to the welcome, unless a call is recording: then the Models dialog.
+      this.pages.leave();
       this.chosen = false;
       this.paint();
       if (byId("welcome").hidden) byId("models-open").click();
@@ -943,7 +960,7 @@ class App {
       const c = k === "c" || (!/^[a-z]$/.test(k) && e.code === "KeyC");
       if (!mod || !e.shiftKey || e.altKey || !c) return;
       // The key's scope is the window (WINDOW 14), text fields included; Settings keeps its own.
-      if ((e.target as HTMLElement | null)?.closest("dialog")) return;
+      if ((e.target as HTMLElement | null)?.closest("dialog, #pages")) return;
       e.preventDefault();
       void this.copyTranscript();
     });

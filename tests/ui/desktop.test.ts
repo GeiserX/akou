@@ -257,12 +257,17 @@ describe("[DK-K4] Settings warns about a Control+Alt hotkey", () => {
         ] as const) {
           const page = await rig.open(undefined, { before: as(browser, host) });
           await page.click("#settings-open");
-          const field = page.locator("#set-app-hotkey");
-          await field.waitFor();
-          const hint = page.locator('div.setting[data-key="app.hotkey"] small.issue');
-          await field.fill("Control+Shift+F9");
+          // The record shortcut is recorded with Change; the warning is the recorder's note.
+          const change = page.locator('.pg-row[data-key="app.hotkey"] button.record-key');
+          await change.waitFor();
+          const hint = page.locator('.pg-row[data-key="app.hotkey"] .recorder-note');
+          await change.click();
+          await page.keyboard.press("Control+Shift+F9");
+          await until(async () => (await change.textContent()) === "Change", 3000, "recorded");
           expect(await hint.isHidden()).toBe(true);
-          await field.fill("Control+Alt+X");
+          await change.click();
+          await page.keyboard.press("Control+Alt+KeyX");
+          await until(async () => (await change.textContent()) === "Change", 3000, "recorded");
           if (warns) {
             await hint.waitFor({ state: "visible" });
             expect(await hint.textContent()).toContain("AltGr");

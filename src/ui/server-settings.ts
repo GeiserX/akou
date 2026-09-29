@@ -2,38 +2,29 @@
  * The Settings page of server mode (docs/ux/SERVER.md SV-U2). The Models page (SV-U6) is
  * `models-page.ts`, shared with the desktop window.
  *
- * Settings shows the server's own groups, drawn from the one settings registry (`GET /config`) with
- * the window's field code (`settings.ts`), and nothing of the recorder: no device, hotkey or tray.
- * A key the registry does not have in this version is left out, so a group grows as its settings
- * land. Network settings are shown and never editable here: they are the config file's.
+ * The same page as the window's Settings (`settings-page.ts`), with the server's own sections and
+ * nothing of the recorder: no device, shortcut or tray. A key the registry does not have in this
+ * version is left out, so a section grows as its settings land. Network settings are shown and
+ * never editable here: they are the config file's. Each change saves that key alone.
  */
 
-import { h, replace, toast } from "./dom.ts";
-import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
-import { type ServerScreen, section } from "./server-common.ts";
-import {
-  type ConfigReply,
-  changedSettings,
-  type SchemaEntry,
-  settingField,
-  showRefusals,
-} from "./settings.ts";
+import type { ServerScreen } from "./server-common.ts";
+import { type Layout, SettingsPage as PageView, WEBHOOKS } from "./settings-page.ts";
 
-/** The server's settings, in the groups of SV-U2. */
-export const SERVER_GROUPS: readonly { title: string; keys: readonly string[]; hint?: string }[] = [
+/** The server's settings, in the sections of SV-U2. */
+export const SERVER_GROUPS: Layout = [
   {
     title: "Engines and presets",
-    hint: "What a job runs when its request has no opinion. Telegram-Archive sends preset auto and language auto, and never asks for speaker labels, so these decide for it.",
-    keys: ["server.default_model", "server.default_language", "server.default_diarize"],
+    items: ["server.default_model", "server.default_language", "server.default_diarize"],
   },
   {
     title: "Models",
-    keys: ["server.auto_download", "server.models_max_gb", "server.models_unused_days"],
+    items: ["server.auto_download", "server.models_max_gb", "server.models_unused_days"],
   },
   {
     title: "Jobs and retention",
-    keys: [
+    items: [
       "server.concurrency",
       "server.queue_max",
       "server.queue_max_per_key",
@@ -42,15 +33,10 @@ export const SERVER_GROUPS: readonly { title: string; keys: readonly string[]; h
       "server.max_upload_mb",
     ],
   },
-  {
-    title: "Webhooks",
-    hint: "A job's callback URL may name only the hosts its key lists: set them per key, on the Keys page.",
-    keys: [],
-  },
+  { title: "Webhooks", items: [WEBHOOKS] },
   {
     title: "Network",
-    hint: "Set in the config file; akou reads them when it starts.",
-    keys: [
+    items: [
       "api.bind",
       "api.port",
       "server.behind_proxy",
@@ -60,114 +46,22 @@ export const SERVER_GROUPS: readonly { title: string; keys: readonly string[]; h
   },
 ];
 
-async function readConfig(t: Transport): Promise<ConfigReply | null> {
-  const r = await t.request<ConfigReply>("GET", "/config");
-  if (r.status === 200) return r.body;
-  toast(message(r.body, `the settings could not be read (HTTP ${r.status})`));
-  return null;
-}
-
 export class SettingsPage implements ServerScreen {
   readonly name = "settings" as const;
   readonly title = "Settings";
   readonly root: HTMLElement;
-  private readonly fields = h("div", { id: "server-settings" });
-  private schema: Record<string, SchemaEntry> = {};
-  private shown: Record<string, string> = {};
+  private readonly page: PageView;
 
-  constructor(private readonly t: Transport) {
-    const form = h(
-      "form",
-      { attrs: { novalidate: "" } },
-      this.fields,
-      h(
-        "div",
-        { class: "bar" },
-        h("button", { id: "settings-save", class: "go", type: "submit" }, "Save"),
-      ),
-    );
-    form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      void this.save();
-    });
-    this.root = section("Settings", form);
+  constructor(t: Transport) {
+    this.page = new PageView(t, { server: SERVER_GROUPS });
+    this.root = this.page.root;
   }
 
   show(): void {
-    // What the last visit drew is taken away until the new read lands: typing into it would be
-    // lost when the read replaces it.
-    replace(this.fields, h("p", { class: "hint" }, "Reading the settings…"));
-    void this.load();
+    void this.page.show();
   }
 
-  hide(): void {}
-
-  /** Bumped by every read, so an older read that lands late never draws over a newer one. */
-  private reads = 0;
-
-  private async load(): Promise<void> {
-    const read = ++this.reads;
-    const [cfg, server] = await Promise.all([
-      readConfig(this.t),
-      this.t.request<{ presets?: { name: string }[]; engines?: { id: string }[] }>(
-        "GET",
-        "/server",
-      ),
-    ]);
-    if (!cfg || read !== this.reads) return;
-    this.schema = cfg.schema;
-    this.shown = {};
-    const issues = new Map(cfg.issues.map((i) => [i.key, i.message]));
-    // The model setting takes a preset name or an engine id: offer both.
-    const choices = [
-      "auto",
-      ...(server.body.presets ?? []).map((p) => p.name),
-      ...(server.body.engines ?? []).map((e) => e.id),
-    ];
-    const models = h(
-      "datalist",
-      { id: "server-model-choices" },
-      ...[...new Set(choices)].map((c) => h("option", { value: c })),
-    );
-    replace(
-      this.fields,
-      h("p", { class: "hint" }, `Saved in ${cfg.file}`),
-      models,
-      ...SERVER_GROUPS.map((g) => {
-        const present = g.keys.filter((k) => k in this.schema);
-        return h(
-          "fieldset",
-          { attrs: { "data-group": g.title } },
-          h("legend", {}, g.title),
-          g.hint ? h("p", { class: "hint" }, g.hint) : null,
-          ...present.map((k) => {
-            const f = settingField(
-              k,
-              this.schema[k] as SchemaEntry,
-              cfg.settings[k],
-              issues.get(k),
-            );
-            this.shown[k] = f.shown;
-            if (k === "server.default_model") f.input.setAttribute("list", "server-model-choices");
-            return f.row;
-          }),
-        );
-      }),
-    );
-  }
-
-  private async save(): Promise<void> {
-    const patch = changedSettings(this.fields, this.schema, this.shown);
-    if (Object.keys(patch).length === 0) {
-      toast("Nothing changed.", "info");
-      return;
-    }
-    const r = await this.t.request<{ note?: string }>("PATCH", "/config", patch);
-    if (r.status >= 400) {
-      showRefusals(this.fields, r.body);
-      return;
-    }
-    toast(r.body.note ?? "Saved.", "info");
-    await this.load();
+  hide(): void {
+    this.page.leave();
   }
 }

@@ -134,10 +134,12 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           // What the provider and speech pills said is in Settings, read only, with the version.
           await page.click("#settings-open");
           await page.waitForSelector("#settings-provider-state");
-          expect(await text(page, "#settings-provider-state .v")).toBe("none (unavailable)");
-          expect(await text(page, "#settings-engine-state .v")).toBe("ready");
+          expect(await text(page, "#settings-provider-state")).toBe(
+            "Nothing answers: Ask shows the matching parts of the call.",
+          );
+          expect(await text(page, "#settings-engine-state")).toBe("The speech engine is ready.");
           const version = (await rig.api("GET", "/status")).body.app.version as string;
-          expect(await text(page, "#settings-version")).toBe(`akou ${version}. `);
+          expect(await text(page, "#settings-version")).toBe(`akou ${version}`);
         },
       );
     },

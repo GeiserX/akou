@@ -1,8 +1,8 @@
 /**
  * Every dialog of the window closes the way a window does (WINDOW W15.8): its × in the top corner,
  * always on screen, Escape, and a click on the backdrop; each gives the focus back to the control
- * that opened it. A dialog holding an edit a stray click would drop (Settings with a change not
- * saved) ignores the backdrop and still closes on its × and on Escape.
+ * that opened it. Settings is a page of the window, not a dialog: its tests are in
+ * `settings-page.test.ts`, including an edit left typed when the page is left.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -84,7 +84,6 @@ describe("W15.8: every dialog closes like a window", () => {
         await page.waitForSelector("#pill-review:not([hidden])");
         await closesThreeWays(page, "review", "#pill-review");
         await closesThreeWays(page, "models", "#models-open");
-        await closesThreeWays(page, "settings", "#settings-open");
         await closesThreeWays(page, "dictation", "#dictation-open");
 
         // Over the Dictation page, History and Dictionary close on their own, back to their button.
@@ -102,21 +101,6 @@ describe("W15.8: every dialog closes like a window", () => {
         expect(await isOpen(page, "dictation")).toBe(true);
         await page.keyboard.press("Escape");
         await page.waitForSelector("#dictation", { state: "hidden" });
-
-        // A change not saved in Settings keeps the dialog open on a backdrop click.
-        await page.click("#settings-open");
-        await page.waitForSelector("#settings[open] #settings-fields .setting");
-        const field = page.locator("#settings-fields input[type=text]").first();
-        await field.fill(`${await field.inputValue()}x`);
-        await backdrop(page);
-        expect(await isOpen(page, "settings")).toBe(true);
-        // Positive control: without the change the same click closes it.
-        await page.click("#settings .dialog-x");
-        await page.waitForSelector("#settings", { state: "hidden" });
-        await page.click("#settings-open");
-        await page.waitForSelector("#settings[open] #settings-fields .setting");
-        await backdrop(page);
-        await page.waitForSelector("#settings", { state: "hidden" });
       } finally {
         await rig.close();
         t.cleanup();

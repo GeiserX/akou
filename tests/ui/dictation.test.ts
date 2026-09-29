@@ -1283,21 +1283,20 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
-    "the Settings list leaves the dictation keys out and links to the page; #dictation opens it",
+    "the Settings page leaves the dictation keys out; the sidebar and #dictation open the page",
     async () => {
       const page = await rig.open(undefined, { before: (p) => dictationFixture(p) });
       await page.click("#settings-open");
-      await page.waitForSelector("#settings-fields .setting");
-      const flat = await page.$$eval("#settings-fields [data-key]:not(div)", (e) =>
+      await page.waitForSelector("#page-settings .pg-row[data-key]");
+      const flat = await page.$$eval("#page-settings [data-key]:not(.pg-row)", (e) =>
         e.map((x) => (x as HTMLElement).dataset.key as string),
       );
       expect(flat.length).toBeGreaterThan(5);
       expect(flat.filter((k) => k.startsWith("dictation.") || k === "asr.qwenIdleMinutes")).toEqual(
         [],
       );
-      await page.click("#settings-dictation button");
+      await page.click("#dictation-open");
       await page.waitForSelector("#dictation[open]");
-      expect(await page.isVisible("#settings")).toBe(false);
       await page.click("#dictation-close");
 
       // The address opens the page, as a link to it would.
@@ -1335,8 +1334,8 @@ describe("DC-U1: the Dictation page in the window", () => {
       expect(await page.$$("#dictation fieldset")).toEqual([]);
       await page.click("#dictation-close");
       await page.click("#settings-open");
-      await page.waitForSelector("#settings-fields .setting");
-      expect(await page.$("#settings-dictation")).toBeNull();
+      await page.waitForSelector("#page-settings .pg-row[data-key]");
+      expect(await page.$("#page-settings [data-key^='dictation.']")).toBeNull();
     },
     UI_TIMEOUT,
   );
@@ -1569,11 +1568,13 @@ describe("DC-U5: the dictionary and replacements", () => {
     async () => {
       const page = await rig.open();
       await page.click("#settings-open");
-      await page.waitForSelector("#settings[open] #settings-fields .setting");
-      expect(await page.$$("#settings-vocab li, #settings-vocab table")).toHaveLength(0);
+      await page.waitForSelector("#page-settings .pg-row[data-key]");
+      // Your words are under Word lists, one row that opens the dictionary.
+      await page.click("#settings-go-words");
+      await page.waitForSelector("#settings-dictionary");
+      expect(await page.$$("#page-settings li, #page-settings table")).toHaveLength(0);
       await page.click("#settings-dictionary");
       await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li");
-      expect(await page.$("#settings[open]")).toBeNull();
       expect(await page.$$("#dictionary-form")).toHaveLength(1);
     },
     UI_TIMEOUT,

@@ -317,8 +317,10 @@ describe("SV-U7: the server-mode page", () => {
       // Network settings are shown, never editable here.
       expect(await page.isDisabled("#page-settings input[data-key='api.bind']")).toBe(true);
 
+      // Each change saves that key alone, when the field is left: there is no Save button.
+      expect(await page.$("#settings-save")).toBeNull();
       await page.fill("#page-settings input[data-key='server.default_language']", "not a tag");
-      await page.click("#settings-save");
+      await page.press("#page-settings input[data-key='server.default_language']", "Tab");
       await until(
         async () =>
           (
@@ -331,15 +333,24 @@ describe("SV-U7: the server-mode page", () => {
         "the refusal on the field",
       );
       await page.fill("#page-settings input[data-key='server.default_language']", "es");
+      await page.press("#page-settings input[data-key='server.default_language']", "Tab");
       await page.check("#page-settings input[data-key='server.default_diarize']");
-      await page.click("#settings-save");
       await until(
         async () =>
           (await rig.api("GET", "/config")).body.settings["server.default_language"] === "es",
         3000,
         "the saved language",
       );
-      expect((await rig.api("GET", "/config")).body.settings["server.default_diarize"]).toBe(true);
+      await until(
+        async () =>
+          (await rig.api("GET", "/config")).body.settings["server.default_diarize"] === true,
+        3000,
+        "the saved switch",
+      );
+      // The same rows as the window's page: labels in words, not keys.
+      const words = await page.innerText("#page-settings");
+      expect(words).toContain("Language when a job names none");
+      expect(words).not.toContain("server.default_language");
       await page.unroute("**/api/v1/config");
     },
     UI_TIMEOUT,
