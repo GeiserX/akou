@@ -315,7 +315,10 @@ export const PARITY: readonly Row[] = [
     mcp: {
       none: "writes stay off MCP on purpose, so an agent never switches the provider or the share bind; PG-M4 adds the read-only akou_config_get",
     },
-    window: [ui("settings.ts", '"GET", "/config"'), ui("settings.ts", '"PATCH", "/config"')],
+    window: [
+      ui("settings-page.ts", '"GET", "/config"'),
+      ui("settings-page.ts", '"PATCH", "/config"'),
+    ],
   },
   {
     action: "Speech models",

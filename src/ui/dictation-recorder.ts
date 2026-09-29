@@ -149,6 +149,40 @@ export interface RecorderContext {
   others(key: string): [string, string][];
   /** This recorder started: the page stops any other, so one holds the keys at a time. */
   started?(r: KeyRecorder): void;
+  /** The button's word while not recording: `Record` unless the page says `Change`. */
+  button?: string;
+  /** False: keys come from the page alone, never from the dictation helper, and no `Use Fn`. */
+  helper?: boolean;
+  /** The binding in force while the field is empty (its default), drawn as the keycaps. */
+  fallback?: string;
+  /** What the binding is for, so the button's name says it and the binding (the keycaps are hidden from screen readers). */
+  label?: string;
+}
+
+const SPOKEN: Record<string, [mac: string, other: string]> = {
+  command: ["Command", "Windows"],
+  cmd: ["Command", "Windows"],
+  commandorcontrol: ["Command", "Control"],
+  super: ["Command", "Super"],
+  control: ["Control", "Control"],
+  ctrl: ["Control", "Control"],
+  option: ["Option", "Alt"],
+  alt: ["Option", "Alt"],
+  shift: ["Shift", "Shift"],
+  fn: ["Fn", "Fn"],
+};
+
+/** A binding as words a screen reader says: `Alt+Command+R` is `Option Command R` on a Mac. */
+export function spokenKeys(value: string, platform: string): string {
+  return value
+    .split("+")
+    .map((p) => p.trim())
+    .filter((p) => p !== "")
+    .map((p) => {
+      const s = SPOKEN[p.toLowerCase()];
+      return s ? (platform === "darwin" ? s[0] : s[1]) : p;
+    })
+    .join(" ");
 }
 
 /** The Record button, the keycaps and the notes for one key's row; the page saves on `change`. */
@@ -177,11 +211,11 @@ export class KeyRecorder {
         attrs: { "aria-pressed": "false", "data-for": key },
         on: { click: () => (this.live ? this.stop() : this.start()) },
       },
-      "Record",
+      ctx.button ?? "Record",
     );
     // Fn reaches akou only through the helper, which the window alone hears (DC-N2).
     const fn =
-      ctx.platform === "darwin" && t.dictationKeys
+      ctx.platform === "darwin" && ctx.helper !== false && t.dictationKeys
         ? h(
             "button",
             {
@@ -203,7 +237,25 @@ export class KeyRecorder {
   }
 
   private draw(): void {
-    replace(this.caps, ...keycaps(this.input.value, this.ctx.platform).map((k) => h("kbd", {}, k)));
+    const value = this.input.value || this.ctx.fallback || "";
+    replace(this.caps, ...keycaps(value, this.ctx.platform).map((k) => h("kbd", {}, k)));
+    this.name();
+  }
+
+  /** The button's accessible name while not recording: what it changes, and the binding now. */
+  private name(): void {
+    const value = this.input.value || this.ctx.fallback || "";
+    if (!this.ctx.label || this.live) this.button.removeAttribute("aria-label");
+    else
+      this.button.setAttribute(
+        "aria-label",
+        `${this.ctx.button ?? "Record"} ${this.ctx.label}${value ? `, now ${spokenKeys(value, this.ctx.platform)}` : ""}`,
+      );
+  }
+
+  /** Says what is wrong with the binding already saved (an AltGr chord), as a new one would. */
+  warnSaved(): void {
+    if (this.input.value) this.say(hotkeyWarning(this.input.value, this.ctx.platform) ?? "");
   }
 
   private say(text: string, refused = false): void {
@@ -221,13 +273,16 @@ export class KeyRecorder {
     this.say(only ?? "");
     window.addEventListener("keydown", this.down, true);
     window.addEventListener("keyup", this.up, true);
-    const helper = this.t.dictationKeys?.((name) => {
-      if (!HELPER_ONLY.test(name.trim())) return;
-      // Fn reached akou: the test is answered, whatever `take` makes of it.
-      clearTimeout(this.fnWait);
-      this.fnWait = undefined;
-      this.take(name.trim());
-    });
+    const helper =
+      this.ctx.helper === false
+        ? undefined
+        : this.t.dictationKeys?.((name) => {
+            if (!HELPER_ONLY.test(name.trim())) return;
+            // Fn reached akou: the test is answered, whatever `take` makes of it.
+            clearTimeout(this.fnWait);
+            this.fnWait = undefined;
+            this.take(name.trim());
+          });
     this.live = {
       ...(helper?.hearing ? { hearing: helper.hearing } : {}),
       close: () => {
@@ -236,6 +291,7 @@ export class KeyRecorder {
         helper?.close();
       },
     };
+    this.name();
   }
 
   /**
@@ -268,8 +324,9 @@ export class KeyRecorder {
     this.live?.close();
     this.live = null;
     this.alone = null;
-    this.button.textContent = "Record";
+    this.button.textContent = this.ctx.button ?? "Record";
     this.button.setAttribute("aria-pressed", "false");
+    this.name();
   }
 
   private readonly down = (e: KeyboardEvent): void => {

@@ -1582,6 +1582,7 @@ export class AkouApp implements ApiApp {
   /** The permission banner's button: the privacy pane that holds akou's grant. */
   async openSettingsPane(pane: SettingsPane): Promise<boolean> {
     const platform = this.o.platform ?? process.platform;
+    if (pane === "config") return this.openConfigFile(platform);
     const url =
       platform === "darwin"
         ? `x-apple.systempreferences:com.apple.preference.security?${MAC_PANES[pane]}`
@@ -1593,6 +1594,30 @@ export class AkouApp implements ApiApp {
     const cmd = platform === "darwin" ? ["open", url] : ["cmd", "/c", "start", "", url];
     try {
       const p = Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
+      return (await p.exited) === 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * The Settings page's "Open config file": the file in the system's text editor, written first
+   * when it does not exist yet, so the editor opens it rather than failing.
+   */
+  private async openConfigFile(platform: string): Promise<boolean> {
+    const file = this.cfg.paths.configFile;
+    if (!existsSync(file)) writePrivate(file, "{}\n");
+    if (this.o.openExternal) return this.o.openExternal(file);
+    const cmd =
+      platform === "darwin"
+        ? ["open", "-t", file]
+        : platform === "win32"
+          ? ["notepad.exe", file]
+          : ["xdg-open", file];
+    try {
+      const p = Bun.spawn(cmd, { stdout: "ignore", stderr: "ignore" });
+      // Notepad stays open until it is closed: its start is the answer.
+      if (platform === "win32") return true;
       return (await p.exited) === 0;
     } catch {
       return false;

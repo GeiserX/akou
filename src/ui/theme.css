@@ -792,6 +792,27 @@ body.shell:not(.server) #welcome {
 body.shell.welcoming:not(.server) {
   grid-template-columns: 13.75rem minmax(0, 1fr);
 }
+/* A page of the sidebar (Settings) takes the place of everything right of the sidebar: the
+   composer row, the notices, the call and the side pane. */
+body.shell.paged:not(.server) {
+  grid-template-columns: 13.75rem minmax(0, 1fr);
+}
+body.shell.paged:not(.server) > header,
+body.shell.paged:not(.server) > #banner,
+body.shell.paged:not(.server) > #final,
+body.shell.paged:not(.server) > #confirm,
+body.shell.paged:not(.server) > #layout,
+body.shell.paged:not(.server) > #jump {
+  display: none;
+}
+body.shell:not(.server) > #pages {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  min-height: 0;
+  overflow-y: auto;
+  /* A page draws its own margins (.pg); the transcript's padding would push its strip down. */
+  padding: 0;
+}
 #layout {
   flex: 1;
   display: grid;
@@ -803,7 +824,8 @@ body.shell.welcoming:not(.server) {
   body.shell:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr) 18rem;
   }
-  body.shell.welcoming:not(.server) {
+  body.shell.welcoming:not(.server),
+  body.shell.paged:not(.server) {
     grid-template-columns: 10rem minmax(0, 1fr);
   }
 }
@@ -1159,6 +1181,12 @@ body.inset #ask-row {
 }
 #sidebar .navrow.on {
   color: var(--fg);
+  background: var(--line);
+}
+#sidebar #calls-title {
+  flex: none;
+  margin: 0;
+  font: inherit;
 }
 #sidebar button.navrow:hover {
   background: var(--line);
@@ -2101,20 +2129,6 @@ dialog {
 .setting small {
   color: var(--dim);
 }
-/* The agent and the speech engine as they are now (WINDOW section 3.1): read only, no input. */
-.state-row {
-  display: grid;
-  grid-template-columns: 11rem minmax(0, 1fr);
-  gap: 2px 12px;
-  margin: 8px 0;
-}
-.state-row .k {
-  font-weight: 700;
-}
-.state-row small {
-  grid-column: 2;
-  color: var(--dim);
-}
 .setting.refused input,
 .setting.refused textarea {
   border-color: var(--rec);
@@ -2564,4 +2578,503 @@ dialog {
 }
 .dictation-history .issue {
   color: var(--rec);
+}
+
+/* Pages of grouped rows (docs/ux/design-explorations/sd-a-settings.html): Settings in the window
+   and in server mode. One centred column; a section title over a rounded panel of rows, each with
+   its label and one muted line of help on the left and its control on the right. The accent is
+   never used here: a switch that is on is green, a chosen segment a lighter fill. */
+.pg {
+  font-size: 13px;
+  line-height: 1.45;
+  padding: 28px 24px 56px;
+}
+.pg .ico {
+  width: 16px;
+  height: 16px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.pg-col {
+  max-width: 680px;
+  margin: 0 auto;
+}
+/* The page's own title-bar strip: in the macOS window (body.inset) it stays at the top of the
+   scrolling page, --titlebar high and the page's colour, so no row sits under the traffic lights
+   and the strip moves the window (app.ts titleBar). Elsewhere it has no height. */
+#pages > .pg-bar {
+  position: sticky;
+  top: 0;
+  z-index: 6;
+  height: var(--titlebar, 0px);
+  background: var(--bg);
+}
+.pg-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  margin-bottom: 20px;
+}
+.pg-head h1 {
+  margin: 0;
+  font-size: 22px;
+  line-height: 28px;
+  font-weight: 650;
+  letter-spacing: -0.015em;
+}
+.pg-head .grow,
+.pg-foot .grow {
+  flex: 1;
+}
+.pg-back {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin: 0 0 10px -4px;
+  padding: 2px 4px;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font-weight: 400;
+  font-size: 12px;
+}
+.pg-back:hover {
+  color: var(--fg);
+}
+.pg-back .ico {
+  width: 12px;
+  height: 12px;
+}
+.pg-sec {
+  margin: 18px 0 6px 4px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--dim);
+}
+.pg-grp {
+  border-radius: 10px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+}
+.pg-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  min-height: 44px;
+  padding: 8px 14px;
+  position: relative;
+  width: 100%;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: none;
+  color: var(--fg);
+  font: inherit;
+  text-align: left;
+}
+.pg-row + .pg-row {
+  border-top: 1px solid var(--line);
+}
+.pg-grp > .pg-row:first-child {
+  border-radius: 10px 10px 0 0;
+}
+.pg-grp > .pg-row:last-child {
+  border-radius: 0 0 10px 10px;
+}
+.pg-grp > .pg-row:only-child {
+  border-radius: 10px;
+}
+.pg-lbl {
+  flex: 1;
+  min-width: 0;
+  display: block;
+}
+.pg-name {
+  display: block;
+  font-weight: 500;
+  font-size: 13px;
+}
+.pg-help {
+  display: block;
+  margin-top: 1px;
+  max-width: 440px;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 400;
+  line-height: 1.45;
+  white-space: normal;
+}
+.pg-row .issue {
+  display: block;
+  margin-top: 2px;
+  color: var(--rec);
+  font-size: 12px;
+}
+.pg-ctl {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  max-width: 60%;
+}
+.pg-value {
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pg-more {
+  display: flex;
+  color: var(--faint);
+}
+.pg-more .ico {
+  width: 12px;
+  height: 12px;
+}
+button.pg-link {
+  cursor: pointer;
+}
+button.pg-link:hover,
+.pg-row.pg-flash {
+  background: rgba(242, 243, 245, 0.03);
+}
+.pg-row.pg-flash {
+  box-shadow: inset 2px 0 0 var(--dim);
+}
+/* The switch: a checkbox drawn as a track and a knob. */
+input.pg-switch {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 10px;
+  background: #3a3f46;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+input.pg-switch::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #e9ebee;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+  transition: left 0.15s;
+}
+input.pg-switch:checked {
+  background: #2fb34a;
+}
+input.pg-switch:checked::after {
+  left: 16px;
+  background: #fff;
+}
+input.pg-switch:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+/* The segmented choice: radios drawn side by side, the chosen one filled. */
+.pg-seg {
+  display: inline-flex;
+  height: 28px;
+  padding: 2px;
+  border-radius: 7px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+}
+.pg-seg label {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 5px;
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pg-seg input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  margin: 0;
+  pointer-events: none;
+}
+.pg-seg label:has(input:checked) {
+  background: #3a3f46;
+  color: var(--fg);
+}
+.pg-seg label:has(input:focus-visible) {
+  outline: 2px solid var(--fg);
+  outline-offset: 1px;
+}
+.pg-seg label:has(input:disabled) {
+  cursor: default;
+  opacity: 0.6;
+}
+select.pg-select,
+.pg-row .language-chips + select,
+.pg-row .dictation-languages select {
+  height: 28px;
+  padding: 0 26px 0 10px;
+  border-radius: 6px;
+  background:
+    var(--panel)
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='m5 6 3-3 3 3M5 10l3 3 3-3' fill='none' stroke='%238b9099' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E")
+    no-repeat right 8px center / 12px 12px;
+  border: 1px solid var(--line2);
+  appearance: none;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg);
+  max-width: 280px;
+}
+input.pg-input,
+textarea.pg-input {
+  height: 28px;
+  width: 220px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line2);
+  font-size: 12px;
+}
+input.pg-input.narrow {
+  width: 72px;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+input.pg-input.wide {
+  width: 300px;
+}
+textarea.pg-input.pg-lines {
+  height: auto;
+  width: 300px;
+  padding: 6px 10px;
+  line-height: 1.5;
+  resize: vertical;
+}
+.pg-input::placeholder {
+  color: var(--faint);
+}
+.pg-row.refused .pg-input,
+.pg-row.refused .pg-select {
+  border-color: var(--rec);
+}
+.pg-unit {
+  color: var(--dim);
+  font-size: 12px;
+}
+.pg-btn,
+.pg-row .recorder .record-key {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--raised);
+  border: 1px solid var(--line2);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg);
+}
+/* Keycaps: the record shortcut, and the key recorder's in a page's row. */
+.pg-kcap,
+.pg-row .recorder kbd {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 6px;
+  border-radius: 5px;
+  background: var(--raised);
+  border: 1px solid var(--line2);
+  border-bottom-width: 2px;
+  font:
+    500 11px -apple-system,
+    "SF Pro Text",
+    system-ui,
+    sans-serif;
+  color: #c3c7cd;
+  white-space: nowrap;
+}
+.pg-row .recorder {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 8px;
+}
+.pg-row .recorder .keycaps {
+  display: inline-flex;
+  gap: 8px;
+}
+.pg-row .recorder-note {
+  flex-basis: 100%;
+  text-align: right;
+  color: var(--dim);
+  font-size: 12px;
+  white-space: normal;
+}
+.pg-row .recorder-note.issue {
+  color: var(--rec);
+}
+.pg-row .recorder-note:empty {
+  display: none;
+}
+/* Chips: the languages of calls and the dictionaries, each with its ✕, and an add list. */
+.pg-chips,
+.pg-row .dictation-languages,
+.pg-row .language-none {
+  color: var(--dim);
+}
+.pg-row .language-chips {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.pg-chip,
+.pg-row .language-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 6px 0 10px;
+  border-radius: 12px;
+  background: var(--raised);
+  border: 1px solid var(--line2);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg);
+}
+.pg-row .language-chip small {
+  display: none;
+}
+.pg-chip .x,
+.pg-row .language-chip .remove {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--faint);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 14px;
+}
+select.pg-chip.add,
+.pg-row .dictation-languages select {
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 12px;
+  background: none;
+  border: 1px dashed var(--line2);
+  color: var(--dim);
+  appearance: none;
+  font-size: 12px;
+  font-weight: 400;
+  width: auto;
+}
+/* The search over every setting, at the title's right, and what it finds under it. */
+.pg-find {
+  position: relative;
+  width: 214px;
+}
+.pg-find label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: var(--panel);
+  border: 1px solid var(--line2);
+  color: var(--faint);
+}
+.pg-find label:focus-within {
+  border-color: var(--faint);
+}
+.pg-find .ico {
+  width: 13px;
+  height: 13px;
+}
+.pg-find input {
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-size: 12px;
+  outline: none;
+}
+.pg-find input::-webkit-search-cancel-button {
+  display: none;
+}
+.pg-find input::placeholder {
+  color: var(--faint);
+}
+.pg-menu {
+  position: absolute;
+  z-index: 5;
+  right: 0;
+  top: 34px;
+  width: 420px;
+  padding: 4px;
+  border-radius: 8px;
+  background: #212429;
+  border: 1px solid #33373e;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+.pg-menu > div {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 26px;
+  white-space: nowrap;
+  padding: 0 8px;
+  border-radius: 5px;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+.pg-menu > div.hi {
+  background: var(--line2);
+}
+.pg-menu > div > span:first-child {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.pg-menu .where {
+  flex: none;
+  margin-left: auto;
+  color: var(--dim);
+  font-size: 12px;
+}
+.pg-menu .none {
+  color: var(--dim);
+  cursor: default;
+}
+/* The foot: the version and the speech engine, read only, and the config file. */
+.pg-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 24px 4px 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+.pg-ctl-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }

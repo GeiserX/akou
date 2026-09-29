@@ -817,7 +817,7 @@ akou/
     core/
       log/                    events.ts (types), writer.ts, reader.ts, fold.ts, clock.ts
       vocab/                  correct.ts (read-time rules: whole-word, dictionary filter, fuzzy), used by fold.ts
-    ui/                       index.html, app.ts, transcript.ts, notepad.ts, ask.ts, enhanced.ts, settings.ts, share-viewer.ts, theme.css
+    ui/                       index.html, app.ts, transcript.ts, notepad.ts, ask.ts, enhanced.ts, settings-page.ts, share-viewer.ts, theme.css
   native/akou-capture/        Rust: src/main.rs (helper), src/lib.rs (napi addon), protocol.rs, aligner.rs, opus_writer.rs,
                               health/{dead_call,stall,device_watch}.rs, macos/{tap,aggregate,mic,exclude}.rs,
                               windows/{loopback,app_loopback,mic,notify}.rs, linux/{pipewire,pulse}.rs

@@ -116,7 +116,7 @@ export interface Transport {
 }
 
 /** The privacy panes the page may open: the call's two grants and dictation's Accessibility. */
-export type SettingsPane = "microphone" | "system-audio" | "accessibility";
+export type SettingsPane = "microphone" | "system-audio" | "accessibility" | "config";
 
 /** The question the shell asks in the window before a quit stops a recording (DK-M3). */
 export interface QuitQuestion {

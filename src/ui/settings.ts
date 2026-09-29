@@ -1,28 +1,17 @@
 /**
- * Settings (docs/DESIGN.md section 7), drawn from the one settings registry: `GET /config` returns
- * every key with its type, range, description and whether it is secret, so this pane has no list
- * of its own and cannot drift from the registry. Saving sends only the keys that changed through
- * `PATCH /config`, which validates them exactly as a hand-edited file is validated; a refusal is
- * shown next to the key.
+ * The settings registry's shapes (`GET /config`: every key with its type, range, description and
+ * whether it is secret) and the field code the pages share: a field per key, the keys whose field
+ * changed as a `PATCH /config` body, and a refusal shown beside its key. The Settings page is
+ * `settings-page.ts`; the Dictation page (docs/ux/DICTATION.md DC-U1) still draws its fields here,
+ * and a list of per-app rules (the `apps` type, DC-U9) as a table of rules (`dictation-apps.ts`).
  *
- * Keys the registry marks file only (`apiWritable: false`: a program akou runs, or an address
- * transcripts or keys are sent to) are shown, never editable here; the schema says which. A secret
- * is never shown back; typing a new one replaces it.
- *
- * Dictation's keys are on the Dictation page (docs/ux/DICTATION.md DC-U1) and left out here, with a
- * link to it, so a setting is never shown twice. A list of per-app rules (the `apps` type, DC-U9)
- * is drawn as a table of rules (`dictation-apps.ts`).
- *
- * Below the settings, the vocabulary panel opens the one dictionary editor (DC-U5, WINDOW W9.2),
- * so the words are never edited, or shown stale, in two places.
+ * A key the registry marks file only (`apiWritable: false`: a program akou runs, or an address
+ * transcripts or keys are sent to) is shown, never editable; a secret is never shown back.
  */
 
-import { hotkeyWarning } from "../main/window/hotkey.ts";
 import { appsEditor, type NextApp } from "./dictation-apps.ts";
-import { onDictationPage } from "./dictation-page.ts";
-import { byId, closable, h, openModal, replace, toast } from "./dom.ts";
+import { h, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
-import type { AppStatus, Transport } from "./protocol.ts";
 
 export interface SchemaEntry {
   type: "integer" | "number" | "boolean" | "string" | "string[]" | "hooks" | "apps";
@@ -43,205 +32,6 @@ export interface ConfigReply {
   set: Record<string, unknown>;
   issues: { key: string; message: string }[];
   schema: Record<string, SchemaEntry>;
-}
-
-export class SettingsPane {
-  private readonly dialog = byId<HTMLDialogElement>("settings");
-  private readonly form = byId<HTMLFormElement>("settings-form");
-  private readonly fields = byId("settings-fields");
-  private readonly vocab = byId("settings-vocab");
-  private schema: Record<string, SchemaEntry> = {};
-  /** The OS of the machine akou runs on, from its status: not the browser's (DK-K4). */
-  private platform = "";
-  private shown: Record<string, string> = {};
-
-  constructor(
-    private readonly t: Transport,
-    /** Opens the Dictation page, where the `dictation.*` keys are. */
-    private readonly openDictation: () => void = () => {},
-    /** Opens the dictionary editor (DC-U5). */
-    private readonly openDictionary: () => void = () => {},
-  ) {
-    byId("settings-open").addEventListener("click", () => void this.open());
-    byId("settings-close").addEventListener("click", () => this.dialog.close());
-    // Closing drops a change not saved, as it always has; only a stray click on the backdrop
-    // cannot: while one is there, the backdrop does nothing.
-    closable(
-      this.dialog,
-      () => Object.keys(changedSettings(this.fields, this.schema, this.shown)).length > 0,
-    );
-    this.form.addEventListener("submit", (e) => {
-      e.preventDefault();
-      void this.save();
-    });
-    this.vocabPanel();
-  }
-
-  /** Opens the pane, on one key when named (the Enhanced tab's "Choose a provider"). */
-  async open(key?: string): Promise<void> {
-    await this.load();
-    openModal(this.dialog);
-    const at = key
-      ? this.fields.querySelector<HTMLElement>(`[data-key="${CSS.escape(key)}"]:not(div)`)
-      : null;
-    (at ?? (this.fields.querySelector("input, select, textarea") as HTMLElement | null))?.focus();
-  }
-
-  private async load(): Promise<void> {
-    const [r, st] = await Promise.all([
-      this.t.request<ConfigReply>("GET", "/config"),
-      this.t.request<
-        Partial<Pick<AppStatus, "provider" | "asr">> & { app?: Partial<AppStatus["app"]> }
-      >("GET", "/status"),
-    ]);
-    this.platform = String(st.body?.app?.platform ?? "");
-    if (r.status >= 400) {
-      toast(message(r.body, "the settings could not be read"));
-      return;
-    }
-    this.schema = r.body.schema;
-    this.shown = {};
-    const issues = new Map(r.body.issues.map((i) => [i.key, i.message]));
-    const keys = Object.entries(this.schema);
-    const here = keys.filter(([key]) => !onDictationPage(key));
-    const rows = here.map(([key, spec]) =>
-      this.field(key, spec, r.body.settings[key], issues.get(key)),
-    );
-    // The agent and the speech engine as they are now, read only, above the provider's keys.
-    const at = here.findIndex(([key]) => key.startsWith("provider."));
-    rows.splice(at < 0 ? rows.length : at, 0, ...engineRows(st.body ?? {}));
-    replace(
-      this.fields,
-      h(
-        "p",
-        { class: "hint" },
-        st.body?.app?.version
-          ? h("span", { id: "settings-version" }, `akou ${st.body.app.version}. `)
-          : null,
-        `Saved in ${r.body.file}`,
-      ),
-      here.length < keys.length
-        ? h(
-            "p",
-            { id: "settings-dictation", class: "hint" },
-            "Dictation's settings are on its own page. ",
-            h(
-              "button",
-              {
-                type: "button",
-                on: {
-                  click: () => {
-                    this.dialog.close();
-                    this.openDictation();
-                  },
-                },
-              },
-              "Open Dictation",
-            ),
-          )
-        : null,
-      ...rows,
-    );
-  }
-
-  private field(key: string, spec: SchemaEntry, value: unknown, issue?: string): HTMLElement {
-    const f = settingField(key, spec, value, issue);
-    this.shown[key] = f.shown;
-    if (key === "app.hotkey") f.row.append(hotkeyHint(f.input, this.platform));
-    return f.row;
-  }
-
-  private async save(): Promise<void> {
-    const patch = changedSettings(this.fields, this.schema, this.shown);
-    if (Object.keys(patch).length === 0) {
-      this.dialog.close();
-      return;
-    }
-    const r = await this.t.request<{ errors?: string[]; note?: string }>("PATCH", "/config", patch);
-    if (r.status >= 400) {
-      showRefusals(this.fields, r.body);
-      return;
-    }
-    toast(r.body.note ?? "Saved.", "info");
-    await this.load();
-  }
-
-  private vocabPanel(): void {
-    replace(
-      this.vocab,
-      h("h3", {}, "Vocabulary"),
-      h(
-        "p",
-        { class: "hint" },
-        "Words akou should spell your way, and text to write for what you say. ",
-        h(
-          "button",
-          {
-            id: "settings-dictionary",
-            type: "button",
-            on: {
-              click: () => {
-                this.dialog.close();
-                this.openDictionary();
-              },
-            },
-          },
-          "Open Dictionary",
-        ),
-      ),
-    );
-  }
-}
-
-/**
- * The agent and the speech engine, read only (WINDOW section 3.1): what the header's provider and
- * speech pills said, kept here beside the keys that change them.
- */
-function engineRows(st: Partial<Pick<AppStatus, "provider" | "asr">>): HTMLElement[] {
-  const row = (id: string, label: string, value: string, detail?: string) =>
-    h(
-      "div",
-      { id, class: "state-row" },
-      h("span", { class: "k" }, label),
-      h("span", { class: "v" }, value),
-      detail ? h("small", {}, detail) : null,
-    );
-  const out: HTMLElement[] = [];
-  const p = st.provider;
-  if (p) {
-    const name = p.harness ?? p.id;
-    out.push(
-      row(
-        "settings-provider-state",
-        "Agent now",
-        p.state === "available" ? name : `${name} (${p.state})`,
-        p.detail ?? p.reason,
-      ),
-    );
-  }
-  if (st.asr)
-    out.push(row("settings-engine-state", "Speech engine now", st.asr.state, st.asr.reason));
-  return out;
-}
-
-/**
- * The hotkey's warning (DK-K4), under the field while you type: off macOS, `Control+Alt` is AltGr
- * on many layouts. A warning, never a refusal: the key is yours to choose.
- */
-function hotkeyHint(
-  input: HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement,
-  platform: string,
-): HTMLElement {
-  const hint = h("small", { class: "issue", attrs: { role: "status" } });
-  const draw = () => {
-    // An app too old to say its OS: no warning rather than a guess from the browser.
-    const w = platform ? hotkeyWarning(input.value, platform) : null;
-    hint.textContent = w ?? "";
-    hint.hidden = w === null;
-  };
-  input.addEventListener("input", draw);
-  draw();
-  return hint;
 }
 
 /**

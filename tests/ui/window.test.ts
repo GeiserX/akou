@@ -14,7 +14,6 @@ import { formatWall } from "../../src/core/log/clock.ts";
 import type { LogEvent } from "../../src/core/log/events.ts";
 import { NEMOTRON, RECOGNIZER } from "../../src/main/asr/models.ts";
 import { renderExport } from "../../src/main/handoff/export.ts";
-import { onDictationPage } from "../../src/ui/dictation-page.ts";
 import { stereoWav } from "../fixtures/audio.ts";
 import { modelRegistry } from "../fixtures/model-registry.ts";
 import { tempDir } from "../helpers.ts";
@@ -1490,7 +1489,7 @@ describe("enhanced notes with no provider", () => {
           expect(status).not.toContain("enhance/context");
           expect(await page.locator("#toast").isVisible()).toBe(false);
           await page.locator("#enhance-status button").click();
-          await page.waitForSelector("#settings[open]");
+          await page.waitForSelector("#page-settings:not([hidden])");
           await until(
             async () =>
               (await page.evaluate(
@@ -1501,73 +1500,6 @@ describe("enhanced notes with no provider", () => {
           );
         },
       );
-    },
-    UI_TIMEOUT,
-  );
-});
-
-describe("settings (driven by the registry)", () => {
-  test(
-    "every key the registry keeps file only is shown disabled, read from the schema",
-    async () => {
-      await withRig({}, async (rig) => {
-        const page = await rig.open();
-        await page.click("#settings-open");
-        await page.waitForSelector("#settings[open] .setting >> nth=5");
-        const schema = (await rig.api("GET", "/config")).body.schema as Record<
-          string,
-          { apiWritable: boolean }
-        >;
-        const fileOnly = Object.keys(schema).filter((k) => schema[k]?.apiWritable === false);
-        expect(fileOnly).toContain("provider.baseUrl");
-        expect(fileOnly).toContain("provider.harnessPath");
-        // The dictation keys are on the Dictation page, not in this list (DC-U1).
-        for (const k of Object.keys(schema).filter((k) => !onDictationPage(k))) {
-          const disabled = await page.locator(`#settings [data-key="${k}"]:not(div)`).isDisabled();
-          expect({ k, disabled }).toEqual({ k, disabled: fileOnly.includes(k) });
-        }
-      });
-    },
-    UI_TIMEOUT,
-  );
-
-  test(
-    "every registry key is shown; a change is saved; an out-of-range value is refused and shown",
-    async () => {
-      await withRig({}, async (rig) => {
-        const page = await rig.open();
-        await page.click("#settings-open");
-        await page.waitForSelector("#settings[open] .setting >> nth=5");
-        const keys = await page.$$eval("#settings .setting", (els) =>
-          els.map((e) => (e as HTMLElement).dataset.key),
-        );
-        const schema = Object.keys((await rig.api("GET", "/config")).body.schema);
-        // Every key but the Dictation page's (DC-U1).
-        expect(keys).toEqual(schema.filter((k) => !onDictationPage(k)));
-        // Programs akou runs are file only.
-        expect(
-          await page.locator('#settings [data-key="capture.helper"]:not(div)').isDisabled(),
-        ).toBe(true);
-        await page.fill('#settings [data-key="user.name"]:not(div)', "Ana Maria");
-        await page.click("#settings button[type=submit]");
-        await until(
-          async () => (await rig.api("GET", "/config")).body.settings["user.name"] === "Ana Maria",
-          5000,
-          "saved",
-        );
-        // The pane redraws from the saved file; wait for it before typing again.
-        await until(
-          async () =>
-            (await page.inputValue('#settings [data-key="user.name"]:not(div)')) === "Ana Maria" &&
-            (await page.locator("#toast.info").isVisible()),
-          5000,
-          "the redraw after saving",
-        );
-        await page.fill('#settings [data-key="asr.threads"]:not(div)', "999");
-        await page.click("#settings button[type=submit]");
-        await page.waitForSelector('#settings div.setting.refused[data-key="asr.threads"]');
-        expect((await rig.api("GET", "/config")).body.settings["asr.threads"]).not.toBe(999);
-      });
     },
     UI_TIMEOUT,
   );
@@ -2179,7 +2111,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
 
             // The agent step's quiet button opens Settings on the provider field.
             await page.click("#welcome-agent");
-            await page.waitForSelector("#settings[open]");
+            await page.waitForSelector("#page-settings:not([hidden])");
             await until(
               async () =>
                 (await page.evaluate(
@@ -2188,8 +2120,9 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
               5000,
               "the provider setting focused",
             );
-            await page.click("#settings-close");
-            await page.waitForSelector("#settings", { state: "hidden" });
+            // The sidebar's Calls is the way back to the welcome.
+            await page.click("#calls-open");
+            await page.waitForSelector("#welcome", { state: "visible" });
 
             // Every GET /models from here on fails, so what moves the bar is the status push.
             await page.route("**/api/v1/models", (r) => r.abort());

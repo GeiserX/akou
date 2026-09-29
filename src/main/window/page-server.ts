@@ -87,12 +87,15 @@ const SECURITY_HEADERS: Record<string, string> = {
   "cache-control": "no-store",
 };
 
-/** Panes the permission banner's button and dictation's setup (DC-N3) may open. */
-export const SETTINGS_PANES = ["microphone", "system-audio", "accessibility"] as const;
+/**
+ * Panes the permission banner's button and dictation's setup (DC-N3) may open, and `config`: akou's
+ * own config file, which the Settings page opens for the settings set there only.
+ */
+export const SETTINGS_PANES = ["microphone", "system-audio", "accessibility", "config"] as const;
 export type SettingsPane = (typeof SETTINGS_PANES)[number];
 
 /** Each pane's anchor in macOS System Settings, Privacy & Security. */
-export const MAC_PANES: Readonly<Record<SettingsPane, string>> = {
+export const MAC_PANES: Readonly<Record<Exclude<SettingsPane, "config">, string>> = {
   microphone: "Privacy_Microphone",
   "system-audio": "Privacy_AudioCapture",
   accessibility: "Privacy_Accessibility",
