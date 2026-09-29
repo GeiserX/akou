@@ -6,7 +6,7 @@ The window is one of two equal ways to drive akou. The other is the harness, thr
 
 ## 0. The simple version
 
-- **One window, three columns.** Calls on the left, the transcript in the middle, and on the right Ask on top with the last answer, then Notes with a Notes | Enhanced toggle, then the note input at the foot. A composer row on top holds the state, the new call's fields, the Mic and Call meters and Record; the open call's header sits over the transcript. A slim player bar sits under the transcript, and only when the open call has a recording.
+- **One window, three columns.** Calls on the left, the transcript in the middle, and on the right Ask on top with the last answer, then Notes, then the note input at the foot. A composer row on top holds the state, the new call's fields, the Mic and Call meters and Record; the open call's header sits over the transcript. A slim player bar sits under the transcript, and only when the open call has a recording.
 - **Asking is one keystroke away.** `Mod+J` focuses the ask box, and the command palette turns any text it cannot match into a question. The small floating indicator that stays up while the meeting app is in front belongs to [DESKTOP.md](DESKTOP.md) (DK-F1). It carries no transcript text, so it is safe during a screen share, and its Open transcript button brings this window forward on the live call.
 - **One action registry.** Every action (Record, Mute, Find, Copy transcript, Ask "Catch me up", Rename speaker) is one entry with an id, a label, keys and a condition. The buttons, the keyboard map, the command palette, the `?` sheet, the application menu and the tooltips all read that registry. Adding an action adds it everywhere.
 - **One message catalog per language.** English and Spanish first. Every string the window, the tray and the notifications show comes from it.
@@ -41,7 +41,7 @@ Columns:
 │   Weekly…  ● │ Weekly sync       [review] Restart Share │ │ Move the build [15:41 Ben]│ │
 │   1:1 Ana    │ Wed, 15:36 · 27 min · work · Template: … │ └─────────────────────────┘ │
 │ ▸ HIRING   1 │ (● Ben 14 min) (● You 9 min)             ├─────────────────────────────┤
-│              ├──────────────────────────────────────────┤ Notes 3   [Notes|Enhanced]  │
+│              ├──────────────────────────────────────────┤ Notes 3                     │
 │   Dictation  │ transcript                               │ 15:38 • budget review first │
 │   Models     │ 15:41  Ben    we should move the build   │ 15:41 ☐ Ben: move build box │
 │   Settings   │ 15:41  You    to the new box? which one  │ 15:44 ? which region        │
@@ -60,7 +60,7 @@ Columns:
 | Banner | one message at a time, highest severity first, with at most one action button | `health`, provider, models |
 | Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
 | Transcript | committed lines, the provisional row, the find bar when open | the fold |
-| Side column | on top the ask box with its presets menu, then the last question and its cited answer; under it Notes with its count and the Notes \| Enhanced toggle over one of the two panes; at the foot the note input with its markers as hints | the fold and the ask stream |
+| Side column | on top the ask box with its presets menu, then the last question and its cited answer; under it Notes with its count; at the foot the note input with its markers as hints | the fold and the ask stream |
 | Player bar | under the transcript, only for a saved call with a recorded part (never with no call or during a live call): play or pause, position as wall time, speed, balance | the call's audio |
 | Dialogs | Settings, Words (review and vocabulary), share options, speaker popover, shortcuts sheet, command palette | registry and fold |
 
@@ -68,11 +68,11 @@ Below 1248 px wide the sidebar narrows to 10 rem and the side column to 18 rem, 
 
 On macOS the window draws no title bar ([DESKTOP](DESKTOP.md) DK-M7): the traffic lights sit over the sidebar's top, and the sidebar, the composer row, the ask row and a page's header start 28 px down; a page keeps that strip at its top as it scrolls. That strip and those rows move the window and a double-click on them zooms it; the controls in them do not. Windows and Linux keep their native frame and this spacing.
 
-One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Enhance, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The selected Notes | Enhanced tab, the open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
+One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W1.1 | The Notes and Enhanced tabs show one pane at a time | P0 | Audit: `[role="tabpanel"]{display:flex}` in `theme.css` beats `[hidden]`, so the panes showed stacked | For each tab, the other pane has computed `display: none` and is skipped by Tab. The general "hidden means hidden" invariant with its positive control is TESTING TS-15; this row is the fix that turns it green | has |
+| W1.1 | The notes pane is Notes alone: no tabs, no Enhanced pane, no Enhance and no "Find misheard words" | P0 | Audit: the Notes and Enhanced panes once showed stacked. Enhance is not part of the window now: a word is fixed on its line (W4.8) | None of those controls is in the DOM, and the side pane names neither. The general "hidden means hidden" invariant with its positive control is TESTING TS-15 | has |
 | W1.3 | Narrow layouts: calls column collapses under 900 px, side pane becomes a drawer under 640 px | P2 | Audit: at 800 px the sidebar keeps its width | Screenshots at 1280, 800 and 600 px show the described layout; no horizontal scroll | missing |
 
 Moved: W1.2 (tests assert computed visibility) is TESTING TS-15. W1.4 (remember the window frame) is DESKTOP DK-M4.
@@ -91,8 +91,8 @@ The composer row's state word and dot show one of the rows below. The state mach
 | Paused | paused | amber | Resume, Stop, Mute, Restart | Resume, Stop |
 | Not capturing (no level for 5 s, or both channels proven dead) | not capturing | amber | Stop, Restart | capture comes back, or Restart |
 | Stopping | stopping | red pulse | none (under 5 s by design) | → saved, and the final pass runs |
-| Final pass running | saved, with the final-pass note and its bar under the composer row | green | Share, Copy transcript, Enhance; Restart when no other call records | → saved |
-| Saved | saved | green | Share, Copy transcript, Enhance, Record a new call; Restart when no other call records | Record |
+| Final pass running | saved, with the final-pass note and its bar under the composer row | green | Share, Copy transcript; Restart when no other call records | → saved |
+| Saved | saved | green | Share, Copy transcript, Record a new call; Restart when no other call records | Record |
 | Failed to start | recording failed, the tooltip names the stage and the error | red | Restart, Record | Restart or a new call |
 | Ended unexpectedly or interrupted | ended unexpectedly, interrupted | amber | Restart (same call) | Restart |
 | Another call recording | another call is recording | grey | Stop the other call | the other call stops |
@@ -200,12 +200,12 @@ The player bar gets real controls. It is a slim bar under the transcript, and it
 
 ## 6. The side pane
 
-The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it with a two-way toggle, Notes | Enhanced (a tablist of two; the arrow keys move between them and Tab skips the hidden pane). The note input is at the foot and stays on screen whichever pane is selected, because notes are the default action during a call.
+The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it, alone: there is no Enhanced tab (section 6.3). The note input is at the foot and stays on screen, because notes are the default action during a call.
 
 ### 6.1 Notes
 
 ```
- Notes 4                              [Notes|Enhanced]
+ Notes 4
  15:38  •  budget review first
  15:41  ☐  Ben: move build box
  15:44  ?  which region
@@ -256,9 +256,11 @@ Moved: W6.12 (presets as files) is PG-F2; the ask box and the palette draw prese
 
 ### 6.3 Enhanced
 
+Hidden: Enhance is not part of the window. The code, `akou enhance`, the API and the MCP tools stay, and notes already written stay in the export's Notes section and `GET /calls/{id}/enhanced`. The rows below wait until Enhance comes back.
+
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W6.16 | Enhance, template switcher, revisions, user versus AI styling, citations | done | DESIGN 5.2 | Existing tests | has |
+| W6.16 | Enhance, template switcher, revisions, user versus AI styling, citations | done | DESIGN 5.2 | Existing tests | hidden from the window (`enhanced.ts` is not mounted) |
 | W6.17 | Copy the enhanced notes as Markdown | P1 | Granola, Fathom, Wispr | Copy yields the `## Notes` section of the export render | missing |
 | W6.18 | Edit the enhanced notes in place; saving writes `enhanced rev+1 by:user` and stops automatic re-enhance | P1 | Audit: `PUT /enhanced` exists but no UI | Edit, save: a new revision by user; `final.done` afterwards offers a button instead of re-enhancing | missing |
 | W6.19 | Rewrite by instruction ("make next steps more detailed") on the whole notes or a selection | P2 | Granola | The instruction goes to the provider with the current revision and the pack; the result is a new revision; the previous stays selectable | missing |
@@ -324,7 +326,7 @@ Moved: W10.2 (guided first run) is DK-O2. W10.3 (3 s capture test) is DK-O1. W10
 
 ## 11. Settings
 
-Settings is a page of the window, not a dialog: the sidebar's Settings row, the application menu's Settings… (`Mod+,`), the welcome's "Choose an agent", and the Enhanced tab's "Choose one in Settings" open it in the place of the call workspace, and the sidebar's Calls, or any call in its list, leads back. The design is direction A of [design-explorations](design-explorations/README.md) ([sd-a-settings.png](design-explorations/sd-a-settings.png)); what shipped is [st-1-settings-dark.png](design-explorations/built/st-1-settings-dark.png).
+Settings is a page of the window, not a dialog: the sidebar's Settings row, the application menu's Settings… (`Mod+,`), and the welcome's "Choose an agent" open it in the place of the call workspace, and the sidebar's Calls, or any call in its list, leads back. The design is direction A of [design-explorations](design-explorations/README.md) ([sd-a-settings.png](design-explorations/sd-a-settings.png)); what shipped is [st-1-settings-dark.png](design-explorations/built/st-1-settings-dark.png).
 
 The page is one centred column of sections, each a rounded panel of rows: a human label and at most one short line of muted help on the left, the control on the right (a switch, a segmented choice, a select, a field with its unit, keycaps). A default shows as its value. No row names a setting's key, a path of akou's own or a value in code quotes; the words are in [settings-labels.ts](../../src/ui/settings-labels.ts), and [settings-labels.test.ts](../../tests/ui/settings-labels.test.ts) fails on a key without words or words that quote a key. The sections are General, Workspaces and recordings, Calls, Notes and AI, Privacy and sharing, and Advanced, whose rows (Speech engines, Audio capture, Word lists, Export and ports, Server mode) each lead to a page of their own under a back link and say what that page holds. Every key the registry has and the Dictation page does not show lives on the page or one of those pages; a key the layout does not place yet lands on an "Other settings" page rather than out of reach. The live transcript's row leads to Models, where it is chosen. A key the registry keeps file only is shown read only, and the page opens the config file in the system's text editor. The foot says the version and the speech engine's state in words, never the engine's own reason (it names a folder and a command), with a way to Models while the speech models are not downloaded; the agent's state is the help line of "Answers and enhanced notes". Share links open to the tailnet, the local network, only this computer, or an address typed into a field. The record shortcut's Change button says the shortcut to a screen reader, and Use default goes back to the default. A search at the title's right finds a setting by its words across the page and its Advanced pages and goes to it.
 
@@ -381,7 +383,7 @@ hark-viewer's other page parameter, `?quiet=SECONDS`, is dropped on purpose. The
 | `Mod+K` | Command palette | window |
 | `Mod+F` | Find in this call | window |
 | `Mod+J` | Focus the ask box | window |
-| `Mod+1` `Mod+2` | Notes, Enhanced (focus the note input) | window |
+| `Mod+1` | Notes (focus the note input) | window |
 | `Mod+Shift+C` | Copy transcript so far | window |
 | `Mod+,` | Settings | window |
 | `Alt+↑` `Alt+↓` | Previous / next call | window |
@@ -462,7 +464,6 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 | Calls list | the default workspace with "No calls yet"; a search that matches nothing says so | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
 | Notes | the input's placeholder, "Type a note, Enter to add it", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
 | Ask | the input with its presets menu, and the call's last answered question if it has one | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has) |
-| Enhanced | "No enhanced notes yet." with the template select and Enhance | "Writing the notes…" | the reason, the previous revision still shown |
 | Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
 | Models | the welcome with each model, its size and the one Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
 | Settings | n/a | n/a | the registry's refusal per key (has) |
@@ -501,7 +502,7 @@ Seen, not planned. No acceptance line and no bead until someone asks or a decisi
 | W6.22 | Chapters as a template section with clickable start times | tl;dv, Zoom, Open Granola |
 | W8.5 | Change a speaker's hue | MacWhisper, Descript |
 | W8.6 | Talk time per speaker after the final pass | tl;dv, Fathom, Minutes |
-| W10.5 | A labelled sample call to try Ask, Enhance and export, never exported | Granola, Minutes |
+| W10.5 | A labelled sample call to try Ask and export, never exported | Granola, Minutes |
 | W11.9 | "Send test delivery" button for the webhook; the CLI test is PG-W2 | anarlog, MacWhisper, Fathom |
 | W12.9 | "Email these notes" as a `mailto:` draft | Granola |
 | W13.5 | Retention: delete audio older than N days, keep the transcript, off by default | anarlog, VoiceInk, Granola |
@@ -512,7 +513,7 @@ Seen, not planned. No acceptance line and no bead until someone asks or a decisi
 
 Five items, each a small pull request, each fixing something that is broken or promised and missing today:
 
-- **W1.1** The two side-pane tabs, Notes and Enhanced, show one pane at a time (TESTING TS-15 proves the rule everywhere).
+- **W1.1** The notes pane is Notes alone, with no Enhanced tab (TESTING TS-15 proves "hidden means hidden" everywhere).
 - **W2.5** Record with missing models is disabled with its reason, and the welcome offers the download, instead of a toast naming a CLI flag.
 - **W5.2** The player can pause: a button and `Space`.
 - **W6.2** A note edit saves on blur and after a 2 s pause, so clicking away no longer loses it.

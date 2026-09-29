@@ -1,9 +1,9 @@
 /**
  * The window (docs/DESIGN.md section 7): one page, plain TypeScript and DOM, no framework. It keeps
- * everything hark-viewer did and adds the notepad, the ask box, the Enhanced tab, settings and
- * sharing. This module wires the parts and draws the header: the status dot and label, the title,
- * the pills, the controls, the banner, the final-pass note, the level meters, the list of calls,
- * playback, and the speaker and "Fix this word" menus.
+ * everything hark-viewer did and adds the notepad, the ask box, settings and sharing. This module
+ * wires the parts and draws the header: the status dot and label, the title, the pills, the
+ * controls, the banner, the final-pass note, the level meters, the list of calls, playback, and the
+ * speaker and "Fix this word" menus.
  *
  * Updates arrive pushed: the followed call's events (`follow.ts`) and the app's status after every
  * start, stop, pause or share. Nothing is polled; the one timer redraws the clock and the "for N"
@@ -16,7 +16,6 @@ import { AskPane } from "./ask.ts";
 import { mountDictationDialog } from "./dictation-page.ts";
 import { dictationReview } from "./dictation-review.ts";
 import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
-import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
 import { SmoothMeters } from "./meter.ts";
@@ -194,7 +193,6 @@ class App {
   private readonly transcript: TranscriptPane;
   private readonly notepad: NotepadPane;
   private readonly askPane: AskPane;
-  private readonly enhanced: EnhancedPane;
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
@@ -273,22 +271,11 @@ class App {
     byId("models").addEventListener("close", () => {
       if (this.pages.open === "settings") void settings.refreshLive();
     });
-    this.enhanced = new EnhancedPane({
-      t,
-      call,
-      view,
-      cite,
-      openSettings: (key) => openSettings(key),
-    });
     this.review = new ReviewPane({
       t,
       call,
       cite,
       more: dictationReview(t),
-      ended: () => {
-        const v = this.view();
-        return !!v?.call && !v.live;
-      },
     });
   }
 
@@ -309,12 +296,12 @@ class App {
     this.wireControls();
     this.wireSidebar();
     byId("title-text").addEventListener("click", () => this.editTitle());
-    this.wireTabs();
     this.wirePopover();
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
-    void this.enhanced.loadTemplates().then((names) => {
+    void this.t.request<{ templates?: string[] }>("GET", "/templates").then((r) => {
+      const names = r.body.templates ?? [];
       replace(
         byId("template"),
         h("option", { value: "" }, "Template: automatic"),
@@ -376,7 +363,6 @@ class App {
     this.transcript.reset();
     this.notepad.reset();
     this.askPane.reset();
-    this.enhanced.reset();
     this.player.stop();
     this.meters(null);
     this.drawPeople(null);
@@ -401,9 +387,6 @@ class App {
           if (e.type === "note" || e.type === "note.del") notes = true;
           if (e.type.startsWith("speaker.")) speakers = true;
           if (e.type === "ask" || e.type === "answer") asked = true;
-          if (e.type === "enhanced") this.enhanced.refresh();
-          // Notes written before the final layer may now be offered a re-enhance.
-          if (e.type === "final.done") void this.enhanced.load();
         }
         if (notes) this.notepad.render();
         if (speakers) this.askPane.renderPresets();
@@ -434,7 +417,6 @@ class App {
     });
     this.follower = f;
     this.askPane.renderPresets();
-    this.enhanced.paint();
     this.drawCalls();
     this.paint();
   }
@@ -446,8 +428,6 @@ class App {
     const v = this.view();
     const now = Date.now();
     const s = this.status;
-    this.enhanced.paint();
-    this.review.paint();
     const st = stateLabel({
       view: v,
       status: s,
@@ -1146,31 +1126,6 @@ class App {
     );
     bar.append(row);
     bar.hidden = false;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tabs: Notes and Enhanced. Ask sits above them and is never a tab (WINDOW section 6).
-
-  private wireTabs(): void {
-    const tabs = [...document.querySelectorAll<HTMLButtonElement>("[role=tab]")];
-    const select = (tab: HTMLButtonElement) => {
-      for (const t of tabs) {
-        const on = t === tab;
-        t.setAttribute("aria-selected", String(on));
-        t.tabIndex = on ? 0 : -1;
-        byId(t.getAttribute("aria-controls") as string).hidden = !on;
-      }
-    };
-    for (const [i, tab] of tabs.entries()) {
-      tab.addEventListener("click", () => select(tab));
-      tab.addEventListener("keydown", (e) => {
-        const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-        if (!d) return;
-        const next = tabs[(i + d + tabs.length) % tabs.length] as HTMLButtonElement;
-        select(next);
-        next.focus();
-      });
-    }
   }
 
   // ---------------------------------------------------------------------------
