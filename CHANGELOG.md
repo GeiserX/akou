@@ -2,6 +2,30 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.5.1 — the final pass no longer fills the disk with swap
+
+On 0.5.0, every final pass left its speech models in the app's memory, about 2.7 GB with Parakeet fp32. The first start of 0.5.0 runs the final pass over every past call that lacks one, so a few calls in a row were enough to grow the app to 10 GB, most of it in swap, until the disk was full. 0.5.1 fixes that and also brings a macOS window without the grey title bar, dialogs that close from the top, and a simpler in-call upgrade.
+
+### Fixed
+- **A final pass lets go of its models when it ends.** Each pass runs in its own Worker, and akou used to stop that Worker before the models' memory was freed. The Worker now frees them first. Three 40-minute calls in a row used to leave the app at 8.6 GB. Now it ends at about 1.2 GB, and that falls to about 130 MB after a few idle minutes. You no longer have to quit akou to get the memory back.
+- **Every dialog closes from its top corner, with Escape, or with a click outside.** That covers Dictation, Words to review, Models, Settings, History, Dictionary, the quit question and server mode's key shown once. The title row with its × stays in view while the dialog scrolls, and closing puts the focus back where it was. See [docs/ux/WINDOW.md](docs/ux/WINDOW.md). A click outside does nothing while Settings or Models holds a change you have not saved, and never closes the key shown once. On the quit question, every way out means Cancel, so the call keeps recording.
+
+### Changed
+- **The macOS window runs to the top edge.** The grey title bar that only said "akou" is gone. The traffic lights sit over the sidebar, you drag the window by the strip above the rows, and a double-click on that strip zooms it. Windows, Linux and the browser page keep their normal frame.
+- **The optional in-call upgrade (`asr.live: upgrade`) rewrites each line once, with Qwen alone.** Before, Parakeet rewrote each line and then a Qwen and Parakeet vote rewrote it again. On FLEURS read speech the result is 4.75 WER in English and 2.75 in Spanish, against 5.18 and 3.60 for the vote ([docs/research/asr-architecture.md](docs/research/asr-architecture.md#32-upgrading-live-text-during-the-call)). It has not been measured on meetings, so the Models page now shows these FLEURS numbers in place of the old AMI figure.
+
+The Telegram-Archive contract is unchanged from 0.5.0.
+
+### Known limitations
+- **Nobody has dragged or double-click zoomed the new macOS window on a real Mac yet.** The tests run the page in a browser engine. Both steps are on the [release checklist](scripts/release-checklist.md).
+- **A final pass stopped at its time budget still keeps its models** until akou restarts. Only a pass that ends by itself releases them.
+- **The first-start catch-up has no retry limit.** A call whose final pass fails every time is tried again at every start.
+- **During an in-call upgrade that started its own Qwen, dictation uses the `fast` engine** until the call ends.
+- **Dictation still ships in the macOS app only**, and with Accessibility refused the dictation key does nothing yet.
+- **The island's live words show in a screen share** (DK-P3). Turn `dictation.pillPreview` off before sharing your screen if that matters.
+- **Streaming Nemotron loses words over a long call**, and **the Parakeet live path does not keep to `asr.languages`**, as in 0.5.0.
+- Every other item under 0.5.0's Known limitations still applies.
+
 ## 0.5.0 — a new window, and the accurate transcript for every call the app records
 
 The desktop window is rebuilt around a sidebar, and a first start now opens on a welcome that downloads the speech models instead of a workspace that cannot record. Dictation moves to a black island at the top of the screen that shows your words as you speak. The accurate final pass, which never ran on a call the desktop app recorded, now does. The live transcript can come from streaming Nemotron, which shows words sooner and never takes one back.
