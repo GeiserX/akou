@@ -27,6 +27,7 @@ import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
 import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
+import { LIVE_SETTINGS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
@@ -453,6 +454,12 @@ export const SETTINGS = {
     default: [],
     apiWritable: false,
     doc: "Command that starts the diarization helper, before its own arguments. Empty: the akou-diarize bundled with the app, else the one on PATH.",
+  },
+  "asr.live": {
+    type: "string",
+    values: LIVE_SETTINGS,
+    default: "auto",
+    doc: "What writes the live transcript of a call. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `upgrade`: Nemotron, then each closed line rewritten by Parakeet and by Qwen (listed as not built yet in this version; a call asked for it runs `nemotron`). `auto` picks `upgrade` on a machine with 16 GB or more whose models are downloaded, else `nemotron` when its model is downloaded, else `parakeet`; a setup whose models are missing never runs. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its setup.",
   },
   "asr.live.engine": {
     type: "string",

@@ -75,6 +75,11 @@ export interface StartRequest {
    * live. Without it a start answers `503 models_missing` (the app checks, not the manager).
    */
   withoutModels?: boolean;
+  /**
+   * This call's live setup (`asr.live`'s values), instead of the setting. Read by the app when the
+   * call's audio first reaches the recognizer; the manager does not use it.
+   */
+  live?: string;
 }
 
 export type CallRef = string;

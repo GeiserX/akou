@@ -403,7 +403,7 @@ export function publishedAt(url: string): string {
   }
 }
 
-function scoreView(m: Measure | NotMeasured | undefined): ScoreView {
+export function scoreView(m: Measure | NotMeasured | undefined): ScoreView {
   if (!m) return { score: null, not_measured: "no measurement recorded for this model" };
   if ("notMeasured" in m) return { score: null, not_measured: m.notMeasured };
   return {
@@ -425,6 +425,8 @@ export interface ModelView {
   languages: "any" | readonly string[] | null;
   /** It transcribes while the call runs, not only after. */
   streaming: boolean;
+  /** It transcribes after the call (the final pass or a job); false for a live-only model. */
+  after_call: boolean;
   /** Where its files are downloaded from: host and repository, for example `huggingface.co/org/repo`. */
   from: string[];
   state: "ready" | "downloading" | "missing";
@@ -752,6 +754,7 @@ export class ModelStore {
         job: m.job,
         languages: c.languages ?? null,
         streaming: c.serves?.includes("live") ?? false,
+        after_call: c.serves ? c.serves.includes("final") : true,
         from: [...new Set(m.files.map((f) => publishedAt(f.url)))],
         state,
         ...this.size(m.id),

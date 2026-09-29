@@ -25,6 +25,7 @@ function row(id: string, o: Partial<ModelRow> = {}): ModelRow {
     job: "a recognizer",
     languages: ["en", "es"],
     streaming: false,
+    after_call: true,
     from: ["huggingface.co/org/repo"],
     state: "ready",
     bytes: 1e9,
@@ -119,6 +120,11 @@ describe("[SV-U6] what a model is for, its size, and this machine's speed", () =
     expect(purposeText(row("a", { streaming: true }))).toBe(
       "a recognizer · en, es · live and after the call",
     );
+    // A streaming model the final pass never runs (the live Nemotrons) is live only.
+    expect(purposeText(row("n", { streaming: true, after_call: false }))).toBe(
+      "a recognizer · en, es · live only",
+    );
+    expect(purposeText(row("f", {}))).toBe("a recognizer · en, es · after the call only");
     const many = "bg cs da de el en es et fi".split(" ");
     expect(purposeText(row("b", { languages: many }))).toContain("9 languages");
     expect(purposeText(row("s", { kind: "speakers", job: "speaker labels" }))).toBe(

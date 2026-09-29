@@ -24,7 +24,7 @@ const start: Command = {
   name: "start",
   summary: "Start a call; answers once audio is being written",
   usage:
-    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--without-models] [--json]",
+    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live SETUP] [--without-models] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the call goes in" },
     title: { type: "string", short: "t", value: "TITLE", desc: "the call's title" },
@@ -37,13 +37,21 @@ const start: Command = {
     },
     mic: { type: "string", value: "ID", desc: "the microphone: a device id or none" },
     vocab: { type: "string", value: "A,B", desc: "words for this call only, comma-separated" },
+    live: {
+      type: "string",
+      value: "SETUP",
+      desc: "the live transcript for this call only: auto, parakeet, nemotron or upgrade (default: asr.live)",
+    },
     // Audio only, before `akou models pull` has run: nothing is transcribed live.
     "without-models": {
       type: "boolean",
       desc: "record audio now and transcribe later, before the models are downloaded",
     },
   },
-  examples: ['akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform'],
+  examples: [
+    'akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform',
+    "akou start --live nemotron",
+  ],
   run: async (ctx, p) => {
     // `-t Weekly sync` and `-t "Weekly sync"` both work: loose words after the flags join the title.
     const title = [str(p, "title"), ...p.positional].filter((x) => x !== undefined).join(" ");
@@ -56,6 +64,7 @@ const start: Command = {
         mic: str(p, "mic"),
         vocab: list(p, "vocab"),
         withoutModels: bool(p, "without-models") || undefined,
+        live: str(p, "live"),
       },
     });
     return finish(
@@ -105,7 +114,7 @@ function statusText(s: Body, color = false): string {
   const live = s.live;
   if (live) {
     out.push(
-      `Live: "${live.title}" in ${live.workspace}, ${live.state}${live.muted ? ", muted" : ""}, ${live.parts} part${live.parts === 1 ? "" : "s"}, recognizer lag ${live.lag} s (${live.call})`,
+      `Live: "${live.title}" in ${live.workspace}, ${live.state}${live.muted ? ", muted" : ""}, ${live.parts} part${live.parts === 1 ? "" : "s"}, recognizer lag ${live.lag} s${live.setup ? `, live setup ${live.setup}${live.engine ? ` (${live.engine})` : ""}` : ""} (${live.call})`,
     );
     for (const h of live.health ?? []) {
       out.push(`  ${h.ch}: ${healthWord(color, h.state)}${h.detail ? ` (${h.detail})` : ""}`);
