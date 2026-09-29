@@ -19,7 +19,7 @@
     <section id="calls" aria-labelledby="calls-title"></section>
   </div>
   <button class="navrow" id="dictation-open" type="button" title="Type what you say into any app"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.8" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5v1.7"/></svg><span class="grow">Dictation</span></button>
-  <button class="navrow" id="models-open" type="button" title="Speech and speaker models: download, delete, compare"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5z"/><path d="M2.5 5 8 8.2 13.5 5M8 8.2v6"/></svg><span class="grow">Models</span><i class="pip" id="models-pip" title="Speech models missing" hidden></i></button>
+  <button class="navrow" id="models-open" type="button" data-page="models" title="Speech and speaker models: download, remove, choose"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5z"/><path d="M2.5 5 8 8.2 13.5 5M8 8.2v6"/></svg><span class="grow">Models</span><i class="pip" id="models-pip" title="Speech models missing" hidden></i></button>
   <button class="navrow" id="settings-open" type="button" data-page="settings"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7"/><circle cx="10.5" cy="4.5" r="1.5"/><circle cx="5.5" cy="11.5" r="1.5"/></svg><span class="grow">Settings</span></button>
   <div class="spacer"></div>
   <div id="readiness" data-state="none">
@@ -38,7 +38,10 @@
       <datalist id="workspaces"></datalist>
       <input id="newtitle" placeholder="Call title (optional)" aria-label="Call title" maxlength="80" autocomplete="off">
     </div>
-    <select class="idle" id="template" aria-label="Template"><option value="">Template: automatic</option></select>
+    <div id="live-pick" hidden>
+      <button id="live" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="live-menu"><span class="live-key">Live:</span> <span id="live-name">no model</span><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg></button>
+      <div id="live-menu" role="menu" aria-label="Live transcription model" hidden></div>
+    </div>
     <fieldset id="meters"><legend>Levels</legend>
       <span class="meter"><span class="health" id="health-mic" data-state="none"></span><label for="meter-mic">Mic</label><meter id="meter-mic" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
       <span class="meter"><span class="health" id="health-call" data-state="none"></span><label for="meter-call">Call</label><meter id="meter-call" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
@@ -186,11 +189,6 @@
   <p id="review-status" role="status"></p>
   <ul id="review-list"></ul>
   <div class="bar"><button type="button" id="review-close">Close</button></div>
-</dialog>
-<dialog id="models" aria-label="Models">
-  <div class="dialog-head"><h2>Models</h2><button type="button" class="icon dialog-x" title="Close (Esc)" aria-label="Close">×</button></div>
-  <div id="models-body"></div>
-  <div class="bar"><button type="button" id="models-close">Close</button></div>
 </dialog>
 <dialog id="dictation" aria-label="Dictation">
   <div class="dialog-head"><h2>Dictation</h2><button type="button" class="icon dialog-x" title="Close (Esc)" aria-label="Close">×</button></div>

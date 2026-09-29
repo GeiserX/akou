@@ -10,6 +10,7 @@
 import { describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import { onDictationPage } from "../../src/ui/dictation-page.ts";
+import { MODELS_KEYS } from "../../src/ui/models-rows.ts";
 import { tempDir } from "../helpers.ts";
 import { seedCall, standardCall, UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
 
@@ -123,10 +124,22 @@ describe("the Settings page", () => {
           await page.click("#page-settings .pg-back");
           await page.waitForSelector(`#${sub}`);
         }
-        // The after-call row says what the file sends where; the live transcript is on Models.
-        const byHand = new Set(["hooks", "webhook.url", "asr.live"]);
+        // The after-call row says what the file sends where; the models' settings are on Models.
+        const byHand = new Set<string>(["hooks", "webhook.url", ...MODELS_KEYS]);
         const home = Object.keys(schema).filter((k) => !onDictationPage(k) && !byHand.has(k));
         expect(home.filter((k) => !seen.has(k))).toEqual([]);
+        // And the Models page holds each of those.
+        await page.click("#models-open");
+        await page.waitForSelector("#page-models #models-go-helpers");
+        const onModels = await page.$$eval("#page-models [data-key]:not(.pg-row)", (els) =>
+          els.map((e) => (e as HTMLElement).dataset.key as string),
+        );
+        if (await page.$("#page-models input[name='models-live']")) onModels.push("asr.live");
+        if (await page.$("#page-models input[name='models-speakers']"))
+          onModels.push("asr.diarizer");
+        expect(MODELS_KEYS.filter((k) => !onModels.includes(k))).toEqual([]);
+        await page.click("#settings-open");
+        await page.waitForSelector("#page-settings .pg-row[data-key='user.name']");
         for (const k of home) {
           expect({ k, disabled: seen.get(k) }).toEqual({
             k,
@@ -308,7 +321,7 @@ describe("the Settings page", () => {
         expect(foot).not.toContain(rig.home);
         expect(foot).not.toContain("akou models");
         await page.click("#settings-get-models");
-        await page.waitForSelector("dialog#models[open]");
+        await page.waitForSelector("#page-models:not([hidden])");
       });
     },
     UI_TIMEOUT,

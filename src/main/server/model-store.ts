@@ -235,6 +235,8 @@ interface Download {
   bytes: Map<string, number>;
   tries: number;
   timer: ReturnType<typeof setTimeout> | null;
+  /** Aborts the try in flight when a person cancels the download. */
+  abort: AbortController;
 }
 
 function freeOf(dir: string): number {
@@ -382,6 +384,8 @@ export type ScoreView =
       metric: Measure["metric"];
       value: number;
       what: string;
+      /** The test set in plain words, for an accuracy figure: `read speech`, `meetings`. */
+      set?: string;
       source: string;
       formula: string;
     }
@@ -411,6 +415,7 @@ export function scoreView(m: Measure | NotMeasured | undefined): ScoreView {
     metric: m.metric,
     value: Math.round(m.value * 100) / 100,
     what: m.what,
+    ...(m.set ? { set: m.set } : {}),
     source: m.source,
     formula: FORMULAS[m.metric],
   };
@@ -569,7 +574,13 @@ export class ModelStore {
       if (this.downloads.has(id) || this.closed) continue;
       const entry = this.entry(id);
       if (!entry) continue;
-      const d: Download = { entry, bytes: new Map(), tries: 0, timer: null };
+      const d: Download = {
+        entry,
+        bytes: new Map(),
+        tries: 0,
+        timer: null,
+        abort: new AbortController(),
+      };
       this.downloads.set(id, d);
       this.o.log("info", `model.download ${id} started`);
       void this.attempt(d);
@@ -586,9 +597,10 @@ export class ModelStore {
         env: this.o.env,
         fetch: this.o.fetch,
         onProgress: (p) => d.bytes.set(p.name, p.bytes),
+        signal: d.abort.signal,
       });
     } catch (err) {
-      if (this.closed) return;
+      if (this.closed || d.abort.signal.aborted) return;
       const delays = this.o.retryMs ?? DOWNLOAD_RETRY_MS;
       const cause = (err as Error).message;
       if (!(err instanceof DownloadRefused) && d.tries <= delays.length) {
@@ -606,7 +618,7 @@ export class ModelStore {
       this.announce({ model: id, ok: false, error: cause });
       return;
     }
-    if (this.closed) return;
+    if (this.closed || d.abort.signal.aborted) return;
     this.downloads.delete(id);
     this.touch([id]);
     this.o.log("info", `model.download ${id} done`);
@@ -621,6 +633,23 @@ export class ModelStore {
   onEnd(fn: (e: DownloadEnd) => void): () => void {
     this.watchers.add(fn);
     return () => this.watchers.delete(fn);
+  }
+
+  /**
+   * Stops one model's download on purpose (the Models page's Cancel, `POST /models/cancel`): the
+   * try in flight is aborted and a retry waiting is dropped. The files already verified and the
+   * partial file stay, so a later pull resumes. A job waiting on the model fails, as it does when a
+   * download gives up. False when the model is not downloading.
+   */
+  cancel(id: string, by: string): boolean {
+    const d = this.downloads.get(id);
+    if (!d) return false;
+    d.abort.abort();
+    if (d.timer) clearTimeout(d.timer);
+    this.downloads.delete(id);
+    this.o.log("info", `model.download ${id} cancelled key ${by}`);
+    this.announce({ model: id, ok: false, error: "the download was cancelled" });
+    return true;
   }
 
   /** The ids downloading now. */

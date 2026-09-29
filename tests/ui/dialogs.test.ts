@@ -83,7 +83,6 @@ describe("W15.8: every dialog closes like a window", () => {
         });
         await page.waitForSelector("#pill-review:not([hidden])");
         await closesThreeWays(page, "review", "#pill-review");
-        await closesThreeWays(page, "models", "#models-open");
         await closesThreeWays(page, "dictation", "#dictation-open");
 
         // Over the Dictation page, History and Dictionary close on their own, back to their button.

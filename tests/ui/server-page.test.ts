@@ -10,6 +10,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
+import { RECOGNIZER } from "../../src/main/asr/models.ts";
 import { readUploadAudio } from "../../src/main/server/audio.ts";
 import { type AppRig, appRig } from "../api-helpers.ts";
 import { asKey, clip, type Key, newKey, SERVER, submit } from "../server-helpers.ts";
@@ -357,35 +358,67 @@ describe("SV-U7: the server-mode page", () => {
   );
 
   test(
-    "SV-U6: the models page says whether the speech models are on disk, and what a client's missing model does",
+    "SV-U6: the models page says what is on the server, and what a client's missing model does",
     async () => {
       await page.click('#server-nav [data-page="models"]');
       await until(
-        async () => ((await page.textContent("#models-state")) ?? "").includes("on disk"),
+        async () =>
+          /on this server|^Nothing downloaded yet\.$/.test(
+            (await page.textContent("#models-state")) ?? "",
+          ),
         3000,
         "the models' state",
       );
+      // The server's own page: no live transcript, no dictation engines, jobs and speakers.
+      expect(await page.$("#models-live")).toBeNull();
+      expect(await page.$("#models-dictation")).toBeNull();
+      await page.waitForSelector("#models-jobs [data-model]");
+      expect(await page.textContent("#page-models")).toContain("On this server");
+      // Every recognizer a job can run has its row under Jobs, and both speaker choices theirs.
+      const listed = (await rig.api("GET", "/models")).body.models as {
+        id: string;
+        kind: string;
+        after_call: boolean;
+      }[];
+      const speech = listed.filter((m) => m.kind === "speech" && m.after_call).map((m) => m.id);
+      expect(speech.length).toBeGreaterThan(1);
+      const rows = (sel: string, attr: string) =>
+        page.$$eval(sel, (els, a) => els.map((e) => e.getAttribute(a as string)), attr);
+      expect(await rows("#models-jobs [data-model]", "data-model")).toEqual(speech);
+      expect(await rows("#models-speakers [data-diarizer]", "data-diarizer")).toEqual([
+        "nemotron",
+        "embeddings",
+      ]);
+      for (const id of ["#models-unused-days", "#models-max-gb"])
+        expect(await page.isVisible(id)).toBe(true);
+      // A preset in the setting marks the recognizer it runs, and nothing is picked for it.
+      await rig.api("PATCH", "/config", { "server.default_model": "fast" });
+      await page.click('#server-nav [data-page="jobs"]');
+      await page.click('#server-nav [data-page="models"]');
+      await page.waitForSelector("#models-jobs input:checked");
+      expect(
+        await page.$eval("#models-jobs input:checked", (el) =>
+          el.closest("[data-model]")?.getAttribute("data-model"),
+        ),
+      ).toBe(RECOGNIZER);
+      expect((await rig.api("GET", "/config")).body.settings["server.default_model"]).toBe("fast");
+      await rig.api("PATCH", "/config", { "server.default_model": "auto" });
       // server.auto_download is on by default: download and queue.
-      await page.waitForSelector("#models-on-demand-download");
-      expect(await page.isChecked("#models-on-demand-download")).toBe(true);
-      await page.check("#models-on-demand-reject");
-      await page.click("#models-settings-save");
+      expect(await page.isChecked("#models-auto-download")).toBe(true);
+      await page.click("#models-auto-download");
       await until(
         async () =>
           (await rig.api("GET", "/config")).body.settings["server.auto_download"] === false,
         3000,
         "the saved choice",
       );
-      await page.check("#models-on-demand-download");
-      await page.click("#models-settings-save");
+      await page.click("#models-auto-download");
       await until(
         async () =>
           (await rig.api("GET", "/config")).body.settings["server.auto_download"] === true,
         3000,
         "the choice back",
       );
-      // Every catalog model has a row, in its section.
-      await page.waitForSelector('#page-models [data-kind="speech"] .model');
     },
     UI_TIMEOUT,
   );

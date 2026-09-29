@@ -2737,6 +2737,11 @@ export class AkouApp implements ApiApp {
     return shelf.delete(id, this.modelsHeld(), by);
   }
 
+  /** Stops one model's download; the partial file stays for the next pull. */
+  cancelModel(id: string, by: string): boolean {
+    return this.shelf?.cancel(id, by) ?? false;
+  }
+
   /**
    * Deletes the models unused for `server.models_unused_days` (0: never), in both modes: never
    * the default's set, one in use, or one downloading. Server mode sweeps through its job service,
