@@ -218,8 +218,8 @@ export function callRoutes(r: Router<ApiApp>): void {
     },
     async (c) => {
       const b = await c.body<{ title: string }>();
-      const title = checkTitle(b.title);
       const id = resolveRef(c.app, c.params.id as string, { allowLast: true });
+      const title = checkTitle(b.title);
       const e = await c.app.write(id, (call) => ({
         type: "call.renamed",
         rev: call.view.titleRev + 1,

@@ -196,6 +196,9 @@ const calls: Command = {
       return finish(ctx, r, (b) => `${b.call} is now "${b.title}"`);
     }
     if (sub !== undefined) return usage(ctx, `calls has no ${sub}; try: calls rename CALL TITLE`);
+    if (str(p, "call") !== undefined) {
+      return usage(ctx, "-c names the call to rename: calls rename -c CALL TITLE");
+    }
     const r = await api(ctx, "GET", "/calls", {
       query: {
         workspace: str(p, "workspace"),

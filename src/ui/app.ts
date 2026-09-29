@@ -164,6 +164,8 @@ class App {
   private drawnCalls = "";
   /** The title is being edited: the header leaves it alone until the edit closes. */
   private renaming = false;
+  /** Closes the open title field without saving; null when none is open. */
+  private closeTitle: (() => void) | null = null;
 
   constructor(readonly t: Transport) {
     const view = () => this.view();
@@ -279,8 +281,10 @@ class App {
       this.paint();
       return;
     }
-    // A title being edited is saved to its own call before another one is shown.
+    // A title being edited is saved to its own call before another one is shown, and the field
+    // closes, so it can never rename this call while another one is on screen.
     document.getElementById("title-input")?.blur();
+    this.closeTitle?.();
     this.follower?.stop();
     this.callId = id;
     this.hues = new HueBook();
@@ -506,6 +510,14 @@ class App {
     input.select();
     this.renaming = true;
     let open = true;
+    const close = () => {
+      open = false;
+      if (this.closeTitle === close) this.closeTitle = null;
+      this.renaming = false;
+      input.remove();
+      shown.hidden = false;
+    };
+    this.closeTitle = close;
     const done = async (keep: boolean) => {
       if (!open) return;
       open = false;
@@ -514,18 +526,18 @@ class App {
         const r = await this.t
           .request<{ title?: string }>("PATCH", `/calls/${encodeURIComponent(id)}`, { title })
           .catch(() => null);
+        if (!r || r.status >= 400) toast(message(r?.body, "the call was not renamed"));
+        // Another call was opened meanwhile, which closed this field: nothing left to show.
+        if (!input.isConnected) return;
         if (!r || r.status >= 400) {
           // The field stays open with its text, to try again.
-          toast(message(r?.body, "the call was not renamed"));
           open = true;
           return;
         }
         // Shown at once; the event on the stream brings the same title a moment later.
-        if (this.callId === id) shown.textContent = r.body.title ?? title;
+        shown.textContent = r.body.title ?? title;
       }
-      this.renaming = false;
-      input.remove();
-      shown.hidden = false;
+      close();
       if (document.activeElement === document.body) shown.focus();
     };
     input.addEventListener("keydown", (e) => {

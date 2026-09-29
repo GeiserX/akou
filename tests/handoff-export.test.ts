@@ -9,6 +9,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   renameSync,
@@ -342,6 +343,27 @@ describe("re-export", () => {
       // Positive control: a real change still goes up by one from the file's own revision.
       r.append({ seq: 0, t: T0, type: "speaker.name", spk: "c2", name: "Cleo", by: "user" });
       expect(r.run()).toMatchObject({ written: true, rev: 2, path: first.path });
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  test("a call renamed after its export keeps one attachments folder, and the file links into it", () => {
+    const r = rig();
+    try {
+      const first = r.run({ audio: "copy" });
+      r.append({ seq: 0, t: T0, type: "call.renamed", rev: 1, title: "Q3 planning", by: "user" });
+      r.append({ seq: 0, t: T0, type: "speaker.name", spk: "c2", name: "Cleo", by: "user" });
+      const second = r.run({ audio: "copy" });
+      expect(second).toMatchObject({
+        written: true,
+        path: first.path,
+        attachments: first.attachments,
+      });
+      expect(readdirSync(join(r.root, "work", "attachments"))).toEqual([BASE]);
+      const md = readFileSync(second.path, "utf8");
+      expect(md).toContain("title: Q3 planning");
+      expect(md).toContain(`attachments/${BASE}/part-001.opus`);
     } finally {
       r.cleanup();
     }

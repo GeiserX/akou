@@ -13,6 +13,8 @@
  *   disk, nothing is written and no `export.done` is due. Otherwise the revision goes up by one.
  * - **Found by `akou_id`.** A re-export looks for the file by the id in its frontmatter, so a file
  *   the user renamed is still found.
+ * - **Attachments keep their first name.** The folder is named after the call's first export in
+ *   this folder, so renaming the call later does not start a second folder.
  * - **Never over the user's edits.** A file whose SHA-256 is not one akou wrote (every `export.done`
  *   records it) was edited, so the new version goes beside it as `… (akou update).md`.
  * - **Atomic.** Every file is written to a temporary name and renamed into place.
@@ -482,11 +484,14 @@ export function exportCall(o: ExportOptions): ExportResult {
   if (!c) throw new Error("the call has no call.created");
   const warn = o.onWarn ?? (() => {});
   const folder = join(o.root, c.workspace);
-  const base = exportBaseName(view);
-  const attachments = join(folder, "attachments", base);
   const known = view.handoff().exports;
   const ours = new Set(known.map((e) => e.sha256));
-  const target = pickTarget(folder, base, c.id, ours);
+  const target = pickTarget(folder, exportBaseName(view), c.id, ours);
+  // The attachments folder keeps the name of this call's first export here, so a call renamed
+  // after it was exported still links into the folder that holds its audio.
+  const named = known.find((e) => dirname(e.path) === folder)?.path ?? target.path;
+  const base = basename(named, ".md").replace(/ \(akou update(?: \d+)?\)$/, "");
+  const attachments = join(folder, "attachments", base);
 
   // Attachments: the log, then the audio parts that exist.
   mkdirSync(attachments, { recursive: true });

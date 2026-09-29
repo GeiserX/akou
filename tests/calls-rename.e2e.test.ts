@@ -115,6 +115,10 @@ describe("renaming over every door", () => {
     expect(await listed(SAVED)).toBe("Q3 planning");
     const unknown = await rig.api("PATCH", "/calls/01J8Z6Q4M2VX0K7B3D4E5NOPE0", { title: "Q4" });
     expect(unknown.status).toBe(404);
+    // An unknown call is a 404 even with a bad title: the call is looked up first.
+    expect(
+      (await rig.api("PATCH", "/calls/01J8Z6Q4M2VX0K7B3D4E5NOPE0", { title: "" })).status,
+    ).toBe(404);
     // A rename names the call; moving it to another workspace is not this route.
     const move = await rig.api("PATCH", `/calls/${SAVED}`, { title: "Q4", workspace: "home" });
     expect([move.status, move.body.error]).toEqual([400, "unknown_field"]);
@@ -158,9 +162,11 @@ describe("renaming over every door", () => {
     ).toBe(0);
     expect(out).toEqual([`${SAVED} is now "Planning review"`]);
     expect(await listed(SAVED)).toBe("Planning review");
-    // No title is a usage error that sends nothing; an empty one is the app's 422, name kept.
+    // No title, or a blank one, is a usage error the CLI refuses without sending; name kept.
     expect(await runCli(["calls", "rename", SAVED], io, { launch: null })).toBe(64);
-    expect(await runCli(["calls", "rename", SAVED, " "], io, { launch: null })).not.toBe(0);
+    expect(await runCli(["calls", "rename", SAVED, " "], io, { launch: null })).toBe(64);
+    // -c only names the call to rename; listing refuses it instead of ignoring it.
+    expect(await runCli(["calls", "-c", SAVED], io, { launch: null })).toBe(64);
     expect(await listed(SAVED)).toBe("Planning review");
   });
 

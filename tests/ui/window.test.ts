@@ -1157,6 +1157,30 @@ describe("renaming a call from its title (WINDOW 3.1)", () => {
             5000,
             "renamed by another door",
           );
+          // A save that fails leaves the field open to try again; opening another call closes
+          // it, so Enter can never rename the call that was on screen before.
+          await page.route("**/api/v1/calls/*", (route) =>
+            route.request().method() === "PATCH"
+              ? route.fulfill({ status: 409, json: { error: "conflict", message: "try later" } })
+              : route.fallback(),
+          );
+          await page.click("#title-text");
+          await page.fill("#title-input", "Never saved");
+          await page.locator("#title-input").blur();
+          await until(async () => (await text(page, "#toast")) === "try later", 5000, "refused");
+          expect(await page.inputValue("#title-input")).toBe("Never saved");
+          await page.unroute("**/api/v1/calls/*");
+          await page.click(`#calls li[data-id="${live}"] button`);
+          await until(
+            async () => (await text(page, "#title-text")) === "Standup, agreed",
+            5000,
+            "switched back",
+          );
+          expect(await page.locator("#title-input").count()).toBe(0);
+          expect(await page.locator("#title-text").isVisible()).toBe(true);
+          expect(await renames(saved)).toBe(1);
+          expect(await renames(live)).toBe(2);
+
           // No reload happened on the way.
           expect(await page.evaluate(() => (window as unknown as { marker: number }).marker)).toBe(
             7,
