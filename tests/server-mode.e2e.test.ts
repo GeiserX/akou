@@ -1,10 +1,12 @@
 /**
  * Server mode's front door (docs/ux/SERVER.md sections 2 to 4, docs/research/service-interface.md
  * SI-3): the switch, the bind, the Host rule, the keys and their scopes, the anonymous routes, and
- * the upload exception to the 64 KB JSON rule. Every rule has a positive control: the same request
- * where the rule does not hold, or the app mode that keeps DESIGN 6.3 as it was.
+ * the upload exception to the 64 KB JSON rule, and a job's name (SV-J10). Every rule has a positive
+ * control: the same request where the rule does not hold, or the app mode that keeps DESIGN 6.3 as
+ * it was.
  */
 
+import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -19,11 +21,14 @@ import { type ApiApp, buildRouter, startApiServer } from "../src/main/api/server
 import type { ModelSpecEntry } from "../src/main/asr/models.ts";
 import { loadConfig } from "../src/main/config/schema.ts";
 import { apiBind, StartRefused, startApp } from "../src/main/index.ts";
+import { readUploadAudio } from "../src/main/server/audio.ts";
+import { JobStore, type NewJob } from "../src/main/server/store.ts";
 import { type AppRig, appRig, rawRequest, writeSettings } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { cli } from "./cli-helpers.ts";
 import { FIXTURE_ROUTES } from "./fixtures/openapi-routes.ts";
 import { tempDir } from "./helpers.ts";
+import { asKey, clip, submit, newKey as writeKey } from "./server-helpers.ts";
 
 /** `POST /v1/jobs` as the route table will describe it: a multipart upload, for any key. */
 const JOBS_CREATE = (
@@ -754,3 +759,194 @@ function fakeApp(): ApiApp {
     config: () => ({ settings: { "server.retain_days": 7 } }),
   } as unknown as ApiApp;
 }
+
+describe("SV-J10: a job carries a name, and the lists find it by that name", () => {
+  /** Holds every upload's decode until `open()`: the first job stays running, the rest queued. */
+  let open = () => {};
+  const held = new Promise<void>((r) => {
+    open = r;
+  });
+  let named: AppRig;
+
+  beforeAll(async () => {
+    named = await appRig({
+      settings: SERVER,
+      jobs: {
+        decode: async (path: string, signal: AbortSignal) => {
+          await held;
+          return readUploadAudio(path, { signal });
+        },
+      },
+    });
+  });
+
+  afterAll(async () => {
+    open();
+    await named?.close();
+  });
+
+  /** The ids `GET /v1/jobs?q=` answers, newest first. */
+  async function found(key: string, q: string): Promise<string[]> {
+    const r = await asKey(named, key, "GET", `/jobs?q=${encodeURIComponent(q)}`);
+    expect(r.status).toBe(200);
+    return (r.body.jobs as { id: string }[]).map((j) => j.id);
+  }
+
+  test("a title given at submit is on the job, and GET /v1/jobs finds the job by it", async () => {
+    const k = await writeKey(named, "archive");
+    const s = await submit(named, k.key, clip(["hello"], 2), { title: "  Weekly   sync\n" });
+    expect(s.status).toBe(202);
+    // One line, trimmed: the same rule as a call's title.
+    expect(s.body.title).toBe("Weekly sync");
+    const id = s.body.id as string;
+    expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Weekly sync");
+    const listed = await asKey(named, k.key, "GET", "/jobs");
+    expect(listed.body.jobs.find((j: { id: string }) => j.id === id)?.title).toBe("Weekly sync");
+    expect(await found(k.key, "WEEKLY")).toEqual([id]);
+    // Positive control: a text in no title, id or state finds nothing.
+    expect(await found(k.key, "monthly")).toEqual([]);
+    // A blank title is no title.
+    const blank = await submit(named, k.key, clip(["ok"], 2), { title: "   " });
+    expect(blank.status).toBe(202);
+    expect(blank.body.title).toBeNull();
+  });
+
+  test("a job started without a title is named later with PATCH, and found by the new name", async () => {
+    const k = await writeKey(named, "renamer");
+    const s = await submit(named, k.key, clip(["world"], 2));
+    expect(s.status).toBe(202);
+    expect(s.body.title).toBeNull();
+    const id = s.body.id as string;
+    // Positive control: before the rename, the name finds nothing.
+    expect(await found(k.key, "standup")).toEqual([]);
+
+    const r = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Standup, Tuesday" });
+    expect(r.status).toBe(200);
+    expect(r.body).toMatchObject({ id, title: "Standup, Tuesday" });
+    expect(await found(k.key, "standup")).toEqual([id]);
+    expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Standup, Tuesday");
+
+    // Renamed again: the old name no longer finds it.
+    await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "Retro" });
+    expect(await found(k.key, "standup")).toEqual([]);
+    expect(await found(k.key, "retro")).toEqual([id]);
+
+    // An empty title is refused and the name stays.
+    const empty = await asKey(named, k.key, "PATCH", `/jobs/${id}`, { title: "  " });
+    expect(empty.status).toBe(422);
+    expect(empty.body).toMatchObject({ error: "bad_field", field: "title" });
+    expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+
+    // Another key cannot see the job, so it cannot name it; an unknown id is 404 too.
+    const other = await writeKey(named, "other");
+    const theirs = await asKey(named, other.key, "PATCH", `/jobs/${id}`, { title: "Mine" });
+    expect(theirs.status).toBe(404);
+    expect(await found(other.key, "retro")).toEqual([]);
+    expect((await asKey(named, k.key, "PATCH", "/jobs/job_nope", { title: "x" })).status).toBe(404);
+    expect((await asKey(named, k.key, "GET", `/jobs/${id}`)).body.title).toBe("Retro");
+  });
+
+  test("the OpenAI door takes the name from metadata.title while the job runs", async () => {
+    const k = await writeKey(named, "openai");
+    const form = new FormData();
+    form.append(
+      "file",
+      new Blob([new Uint8Array(clip(["hello"], 2))], { type: "audio/wav" }),
+      "note.wav",
+    );
+    form.append("metadata", JSON.stringify({ title: "Voice note from the door" }));
+    const answer = fetch(`http://127.0.0.1:${named.port}/v1/audio/transcriptions`, {
+      method: "POST",
+      headers: { authorization: `Bearer ${k.key}` },
+      body: form,
+    });
+    let ids: string[] = [];
+    await until(
+      async () => {
+        ids = await found(k.key, "voice note from");
+        return ids.length === 1;
+      },
+      10_000,
+      "the OpenAI job listed by its name",
+    );
+    const job = await asKey(named, k.key, "GET", `/jobs/${ids[0]}`);
+    expect(job.body.metadata).toEqual({ title: "Voice note from the door" });
+    open();
+    expect((await answer).status).toBe(200);
+  }, 30_000);
+});
+
+describe("SV-J10: the jobs store's search", () => {
+  const job = (title: string | null): NewJob => ({
+    key_id: "k1",
+    title,
+    preset: "fast",
+    language: "auto",
+    keywords: [],
+    diarize: false,
+    callback_url: null,
+    metadata: null,
+    idempotency_key: null,
+    file_sha256: "0",
+    audio: "/nowhere",
+  });
+
+  test("q finds by title in any case, accents included, by id and by state; a rename follows", () => {
+    const t = tempDir();
+    const store = new JobStore(join(t.dir, "jobs.db"));
+    try {
+      const a = store.submit(job("Ángel y Ana")).job;
+      const b = store.submit(job("Weekly sync")).job;
+      const c = store.submit(job(null)).job;
+      const ids = (q: string, limit = 50) => store.list({ key: null, q, limit }).map((j) => j.id);
+      // SQLite's lower() folds ASCII only: these two fail if the match moves into SQL.
+      expect(ids("ángel")).toEqual([a.id]);
+      expect(ids("ÁNGEL")).toEqual([a.id]);
+      expect(ids("weekly")).toEqual([b.id]);
+      expect(ids(c.id.slice(-8).toLowerCase())).toEqual([c.id]);
+      // `%` and `_` are plain characters, not patterns.
+      expect(ids("%")).toEqual([]);
+      store.markRunning(b.id);
+      expect(ids("running")).toEqual([b.id]);
+      expect(ids("queued")).toEqual([c.id, a.id]);
+      // Newest first, `limit` of the matches, and the cursor pages on past them.
+      expect(ids("queued", 1)).toEqual([c.id]);
+      expect(store.list({ key: null, q: "queued", before: c.seq, limit: 1 })[0]?.id).toBe(a.id);
+      // Another key's jobs are not searched.
+      expect(store.list({ key: "k2", q: "weekly", limit: 50 })).toEqual([]);
+      // A rename is found by its new name at once.
+      expect(store.rename(c.id, "Named later")).toBe(true);
+      expect(ids("named later")).toEqual([c.id]);
+      expect(store.rename("job_nope", "x")).toBe(false);
+      // Positive control: no q lists every job.
+      expect(store.list({ key: null, limit: 50 })).toHaveLength(3);
+    } finally {
+      store.close();
+      t.cleanup();
+    }
+  });
+
+  test("a jobs.db from before titles opens: its jobs have none, and a new one takes a title", () => {
+    const t = tempDir();
+    const path = join(t.dir, "jobs.db");
+    const first = new JobStore(path);
+    const old = first.submit(job(null)).job;
+    first.close();
+    const raw = new Database(path);
+    raw.run("ALTER TABLE jobs DROP COLUMN title");
+    raw.close();
+    const store = new JobStore(path);
+    try {
+      expect(store.job(old.id)?.title).toBeNull();
+      const named = store.submit(job("Weekly sync")).job;
+      expect(store.job(named.id)?.title).toBe("Weekly sync");
+      expect(store.rename(old.id, "Named after the upgrade")).toBe(true);
+      expect(store.list({ key: null, q: "after the upgrade", limit: 50 }).map((j) => j.id)).toEqual(
+        [old.id],
+      );
+    } finally {
+      store.close();
+      t.cleanup();
+    }
+  });
+});

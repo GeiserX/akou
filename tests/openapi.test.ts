@@ -460,6 +460,7 @@ describe("[SI-2] the served copy, GET /v1/openapi.json", () => {
         "jobs.delete",
         "jobs.get",
         "jobs.list",
+        "jobs.rename",
         "jobs.result",
         "keys.me",
         "server.get",

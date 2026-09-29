@@ -18,6 +18,8 @@
  *   no model named it runs `server.dictation_engine`. Ignored when the server has no dictation slots.
  *   A dictation may stream its body during the hold (DC-R6): chunked, with a WAV whose length says
  *   "to the end"; nothing is decoded until the body ends, as for any other upload.
+ * - `metadata` (JSON, as on `POST /v1/jobs`): the OpenAI request has no name field, so a string
+ *   `metadata.title` names the job while it runs, on the Jobs page and in `GET /v1/jobs` (SV-J10).
  * - `stream=true`: Server-Sent Events, `transcript.text.delta` per segment (or
  *   `transcript.text.segment` for `diarized_json`), then `transcript.text.done`.
  * - Accepted and ignored: `temperature`, `chunking_strategy`, `include[]`, `languages[]`,
@@ -30,6 +32,7 @@ import { caller } from "../caller.ts";
 import { HttpError, json, type RouteContext, type Router } from "../http.ts";
 import type { SpooledFile } from "../multipart.ts";
 import type { ApiApp } from "../server.ts";
+import { checkTitle } from "./calls.ts";
 import {
   chooseModel,
   type Form,
@@ -41,6 +44,7 @@ import {
   laneAsk,
   languageOf,
   MAX_KEYWORDS,
+  metadataOf,
   queueFullError,
   requireRoomUnlessLane,
   textField,
@@ -73,6 +77,7 @@ const FIELDS = new Set([
   "known_speaker_names",
   "known_speaker_references",
   "interactive",
+  "metadata",
 ]);
 
 function bad(field: string, message: string): HttpError {
@@ -227,6 +232,13 @@ function streamOpenAI(r: Rendered, diarized: boolean): Response {
   });
 }
 
+/** The job's name from `metadata.title`, when that is a string that is not blank. */
+function titleIn(metadata: unknown): string | null {
+  if (typeof metadata !== "object" || metadata === null) return null;
+  const t = (metadata as { title?: unknown }).title;
+  return typeof t === "string" && t.trim() !== "" ? checkTitle(t) : null;
+}
+
 /** Does `model` name a preset or recognizer this server knows (not `whisper-1` or empty)? */
 function namesModel(jobs: ReturnType<typeof jobsOf>, model: string | undefined): boolean {
   if ((model ?? "").trim() === "") return false;
@@ -278,6 +290,7 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
     list(form, "known_speaker_references");
     textField(form, "chunking_strategy");
     const interactive = interactiveOf(jobs, form);
+    const metadata = metadataOf(form);
     const asked = { model: textField(form, "model") };
     // `whisper-1` and other unknown names are no opinion here, so the lane's engine decides.
     const choice = chooseModel(
@@ -294,7 +307,8 @@ async function transcriptions(c: RouteContext<ApiApp>): Promise<Response> {
       keywords,
       diarize: format === "diarized_json",
       callback_url: null,
-      metadata: null,
+      metadata,
+      title: titleIn(metadata),
       idempotency_key: null,
       interactive,
       file_sha256: file.sha256,
@@ -343,7 +357,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
     "/audio/transcriptions",
     {
       id: "openai.transcribe",
-      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
+      doc: "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
       access: "jobs",
       modes: ["server"],
       door: "compat",
@@ -359,6 +373,7 @@ export function openaiRoutes(r: Router<ApiApp>): void {
           "stream?": "boolean",
           "temperature?": "number",
           "interactive?": "boolean",
+          "metadata?": "string",
         },
       },
       ok: 200,

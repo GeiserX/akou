@@ -1,7 +1,8 @@
 /**
  * The server-mode page in a real browser (docs/ux/SERVER.md section 12.4): after the admin login it
  * opens on Jobs, with Models, Keys and Settings beside it, and no recording control (SV-U7). The
- * Jobs page shows a job submitted from outside within a second and cancels it (SV-U4); the Keys
+ * Jobs page shows a job submitted from outside within a second and cancels it (SV-U4), shows a job
+ * by its title, follows a rename and searches by title, id and state (SV-J10); the Keys
  * page creates a key that works from a client and shows it once (SV-U3); the Settings page holds
  * the server's defaults and no device picker (SV-U2, SV-S2). The same bundle in app mode still
  * shows the call window.
@@ -163,6 +164,76 @@ describe("SV-U7: the server-mode page", () => {
       );
       await until(async () => (await rowText(page, id)) === null, 3000, "the row to go");
       held.open();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "SV-J10: a job is shown by its title, follows a rename without a reload, and the search narrows by title, id and state",
+    async () => {
+      /** The name cell of a job's row: its title and its id, as drawn. */
+      const nameCell = (id: string) =>
+        page.evaluate((id) => {
+          const td = document.querySelector(`#jobs-table tr[data-id="${id}"] td`);
+          return td
+            ? {
+                first: td.firstElementChild?.className ?? null,
+                title: td.querySelector(".job-title")?.textContent ?? null,
+                id: td.querySelector(".job-id")?.textContent ?? null,
+                text: td.textContent,
+              }
+            : null;
+        }, id);
+      const a = await submit(rig, archive.key, clip(["hello"], 2), { title: "Budget review" });
+      const b = await submit(rig, archive.key, clip(["world"], 2));
+      expect([a.status, b.status]).toEqual([202, 202]);
+      const idA = a.body.id as string;
+      const idB = b.body.id as string;
+      await until(async () => (await nameCell(idA))?.title === "Budget review", 3000, "the title");
+      // The title first, the id dim beside it.
+      expect(await nameCell(idA)).toMatchObject({ first: "job-title", id: idA });
+      // An untitled job shows its id alone.
+      await until(async () => (await nameCell(idB))?.text === idB, 3000, "the untitled row");
+      expect((await nameCell(idB))?.title).toBeNull();
+
+      // Named over the API: the row follows on the next read, with no reload.
+      await page.evaluate(() => {
+        (window as unknown as { stay: number }).stay = 1;
+      });
+      const r = await asKey(rig, archive.key, "PATCH", `/jobs/${idB}`, { title: "Standup notes" });
+      expect(r.status).toBe(200);
+      await until(async () => (await nameCell(idB))?.title === "Standup notes", 3000, "the rename");
+      expect(await page.evaluate(() => (window as unknown as { stay?: number }).stay)).toBe(1);
+
+      const both = async () => [
+        (await rowText(page, idA)) !== null,
+        (await rowText(page, idB)) !== null,
+      ];
+      const search = async (text: string, want: boolean[], what: string) => {
+        await page.fill("#jobs-search", text);
+        await until(async () => JSON.stringify(await both()) === JSON.stringify(want), 3000, what);
+      };
+      // By title, in any case.
+      await search("BUDGET", [true, false], "the title search");
+      await search("standup", [false, true], "the renamed title search");
+      // By id.
+      await search(idB.slice(-8).toLowerCase(), [false, true], "the id search");
+      // By state, once both have run (the gate is open once SV-U4 has run, or from here).
+      held.open();
+      await page.fill("#jobs-search", "");
+      await until(
+        async () =>
+          (await asKey(rig, archive.key, "GET", `/jobs/${idA}`)).body.status === "done" &&
+          (await asKey(rig, archive.key, "GET", `/jobs/${idB}`)).body.status === "done",
+        10_000,
+        "both jobs done",
+      );
+      await search("done", [true, true], "the state search");
+      await search("failed", [false, false], "a state neither is in");
+      // Escape clears the search and every row comes back.
+      await page.press("#jobs-search", "Escape");
+      expect(await page.inputValue("#jobs-search")).toBe("");
+      await until(async () => JSON.stringify(await both()) === "[true,true]", 3000, "every row");
     },
     UI_TIMEOUT,
   );

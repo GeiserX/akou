@@ -414,6 +414,7 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Window | `open` | `POST /window` | none | n/a | PG-M4 adds open window |
 | Quit | `quit` | `POST /quit` | none, by design | tray Quit | none |
 | Transcribe a file as a job (server mode) | `transcribe`, `jobs list` | `POST /jobs`, `GET /jobs` … | none, by design | none | window: no jobs until SV-U4 |
+| Name or rename a job (server mode) | none: the program that submits a job names it; `jobs list` shows the name | `PATCH /jobs/{id}` | none, by design | the Jobs page shows and searches the name | none |
 | Run the server | `serve` | n/a | n/a | n/a | it starts the API, so no other door can |
 | Token, skill, models, doctor, completion | CLI only | n/a | n/a | models card | these touch only akou's folders or the terminal |
 

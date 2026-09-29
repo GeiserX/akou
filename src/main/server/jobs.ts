@@ -177,6 +177,7 @@ export function jobView(j: Job, waiting: Waiting | null = null): Record<string, 
   const finished = j.done_at ?? j.failed_at ?? j.cancelled_at;
   return {
     id: j.id,
+    title: j.title,
     status: j.status,
     key_id: j.key_id,
     created_at: iso(j.created_at),
@@ -645,11 +646,21 @@ export class JobService {
    */
   list(
     who: Identity,
-    o: { key?: string; status?: JobStatus; before?: number; limit: number },
+    o: { key?: string; status?: JobStatus; q?: string; before?: number; limit: number },
   ): Job[] {
     const admin = who.scopes.includes("admin");
     if (!admin && o.key !== undefined && o.key !== who.id) return [];
     return this.store.list({ ...o, key: admin ? (o.key ?? null) : who.id });
+  }
+
+  /**
+   * Names or renames a job the caller may see, in any state; null when it cannot see one by that
+   * id. The name is the job's own: the result, the feed and a remote's copy never carry it.
+   */
+  rename(who: Identity, id: string, title: string): Job | null {
+    const j = this.get(who, id);
+    if (!j || !this.store.rename(j.id, title)) return null;
+    return this.store.job(j.id);
   }
 
   /**
