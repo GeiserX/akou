@@ -34,7 +34,8 @@ export interface DraftTransport {
   discard(p: Params<"discard">): void;
   copy(p: Params<"copy">): void;
   retry(p: Params<"retry">): void;
-  language(p: Params<"language">): void;
+  /** The chip's click; false when no new reading comes, and the chip takes clicks again. */
+  language(p: Params<"language">): Promise<boolean>;
   chip(a: ChipAnswer): void;
 }
 
@@ -102,7 +103,7 @@ function clock(seconds: number): string {
  * The language chip: the tag in capitals, a button only when a click can decode the audio again
  * in another language, ringed when the user chose it.
  */
-function languageChip(d: DraftOpen, onSwitch: () => void): HTMLElement {
+function languageChip(d: DraftOpen, onSwitch: () => Promise<boolean>): HTMLElement {
   const tag = (d.language ?? "").split("-")[0]?.toUpperCase() ?? "";
   if (d.languageSwitch !== true)
     return h("span", { id: "draft-lang", class: "lang", attrs: { title: "Language heard" } }, tag);
@@ -119,15 +120,17 @@ function languageChip(d: DraftOpen, onSwitch: () => void): HTMLElement {
   b.toggleAttribute("data-switchable", true);
   b.toggleAttribute("data-forced", d.languageForced === true);
   b.addEventListener("click", () => {
-    // One decode at a time: the next open draws a new chip.
+    // One decode at a time: the next open draws a new chip, and a switch that failed frees it.
     b.disabled = true;
-    onSwitch();
+    void onSwitch().then((ok) => {
+      if (!ok) b.disabled = false;
+    });
   });
   return b;
 }
 
 /** The engine line: `fast (Parakeet) on this Mac · took 0.3 s · 0:14 of audio · EN`. */
-function metaLine(d: DraftOpen, onSwitch: () => void): (string | HTMLElement)[] {
+function metaLine(d: DraftOpen, onSwitch: () => Promise<boolean>): (string | HTMLElement)[] {
   const dot = () => h("span", { class: "dot", attrs: { "aria-hidden": "true" } });
   const here = d.platform === "darwin" ? "on this Mac" : "on this computer";
   const parts: (string | HTMLElement)[][] = [
@@ -264,9 +267,9 @@ export function mountDraft(t: DraftTransport): DraftSink {
         typeof next.seconds === "number" && next.seconds > 0 ? `· ${clock(next.seconds)}` : "";
       replace(
         el("draft-meta"),
-        ...metaLine(next, () => {
-          if (d === next && !done) t.language({ id: next.id });
-        }),
+        ...metaLine(next, () =>
+          d === next && !done ? t.language({ id: next.id }) : Promise.resolve(false),
+        ),
       );
       replace(el("draft-retry-engine"), ...next.engines.map((e) => h("option", { value: e }, e)));
       el("draft-retry-group").hidden = next.engines.length === 0;

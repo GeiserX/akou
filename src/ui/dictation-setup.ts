@@ -293,20 +293,25 @@ export class DictationSetup {
     });
     const issue = h("p", { id: "dictation-setup-issue", class: "issue", attrs: { role: "alert" } });
     issue.hidden = true;
-    next.addEventListener("click", () => {
+    next.addEventListener("click", async () => {
       const l = list.value();
-      if (l.length === 0) return;
+      if (l.length === 0 || next.disabled) return;
       const same = l.length === saved.length && l.every((c, i) => c === saved[i]);
-      void (same ? Promise.resolve(null) : this.host.save("dictation.languages", l)).then(
-        (wrong) => {
-          if (wrong) {
-            issue.textContent = wrong;
-            issue.hidden = false;
-            return;
-          }
-          this.go("key");
-        },
-      );
+      // One save at a time: a second click waits for the first.
+      next.disabled = true;
+      let wrong: string | null;
+      try {
+        wrong = same ? null : await this.host.save("dictation.languages", l);
+      } catch (err) {
+        wrong = `not saved: ${(err as Error).message}`;
+      }
+      next.disabled = list.value().length === 0;
+      if (wrong) {
+        issue.textContent = wrong;
+        issue.hidden = false;
+        return;
+      }
+      this.go("key");
     });
     return [
       h("h4", {}, "Your languages"),

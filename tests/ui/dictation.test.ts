@@ -774,6 +774,21 @@ describe("DC-S1: the draft box", () => {
       expect(await p.$eval("#draft-lang", (e) => e.tagName)).toBe("SPAN");
       await p.click("#draft-lang");
       expect(v.requests).toHaveLength(1);
+
+      // A switch that brings no new reading (no audio kept, nothing heard) frees the chip again.
+      const refused = await viewPage("draft", {
+        answer: (name) => (name === "language" ? false : undefined),
+      });
+      try {
+        await refused.send("open", draft({ id: "l3", languageSwitch: true }));
+        await refused.page.click("#draft-lang");
+        await refused.page.waitForFunction(
+          () => !(document.getElementById("draft-lang") as HTMLButtonElement).disabled,
+        );
+        expect(refused.requests).toEqual([{ name: "language", params: { id: "l3" } }]);
+      } finally {
+        await refused.close();
+      }
     },
     UI_TIMEOUT,
   );
@@ -2003,6 +2018,41 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       await until(() => fx.patches.length === 1, 5000, "the switch saved");
       expect(fx.patches).toEqual([{ "dictation.enabled": true }]);
       expect(await page.$("#dictation .dictation-setup")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the languages step: a refused or failed save says why and keeps the step, then saves once",
+    async () => {
+      const { page, fx } = await browserPage({ mic: "granted", accessibility: "granted" });
+      await page.click("#dictation-setup-open");
+      await step(page, "mic");
+      await page.click("#dictation-setup-next");
+      await step(page, "languages");
+      fx.refuse.set("dictation.languages", "is a list of ISO 639 codes");
+      await page.click("#dictation-setup-next");
+      await page.waitForSelector("#dictation-setup-issue:not([hidden])");
+      expect(await text(page, "#dictation-setup-issue")).toBe(
+        "dictation.languages: is a list of ISO 639 codes",
+      );
+      expect(await page.isDisabled("#dictation-setup-next")).toBe(false);
+      // The request itself fails: the step names it rather than leaving the button dead.
+      const fail = (u: URL) => u.pathname.endsWith("/config");
+      await page.route(fail, (r) => (r.request().method() === "PATCH" ? r.abort() : r.fallback()));
+      await page.click("#dictation-setup-next");
+      await page.waitForFunction(() =>
+        document.getElementById("dictation-setup-issue")?.textContent?.startsWith("not saved:"),
+      );
+      expect(await page.isDisabled("#dictation-setup-next")).toBe(false);
+      await page.unroute(fail);
+      // A double click saves once and moves on.
+      await page.dblclick("#dictation-setup-next");
+      await step(page, "key");
+      expect(fx.patches).toEqual([
+        { "dictation.languages": ["en"] },
+        { "dictation.languages": ["en"] },
+      ]);
     },
     UI_TIMEOUT,
   );
