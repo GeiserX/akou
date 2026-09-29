@@ -74,6 +74,12 @@ export const PROBE_MS = 1000;
 /** A probe that has not printed its `ready` line by then answers nothing. */
 const PROBE_DEADLINE_MS = 5000;
 
+/**
+ * How often the grants are read again after the helper lost one (DC-N1), so the key works again
+ * soon after the user gives it back, with no page open to ask.
+ */
+export const REGRANT_POLL_MS = 2000;
+
 export type Grants = { mic: Grant; accessibility: Grant };
 
 /** A grant dictation can work with: given, one the OS does not ask for, or one not asked yet. */
@@ -230,6 +236,8 @@ export interface DictationStatus {
   /** The engine is loading its model: a press now is kept and decoded once it is ready. */
   loading: boolean;
   grants: Grants | null;
+  /** The grants the running helper lost since it started (DC-N1): its key does nothing now. */
+  lost: string[];
   backend: string | null;
   /** Whether the key source can hold Escape and Enter during a session (DC-A4); null before ready. */
   swallow_keys: boolean | null;
@@ -258,7 +266,11 @@ export type DictationFollow =
    * The learn chip for a fix made in the app's field after a direct insert (DC-L2, DC-L4): the
    * pill shows it, or with the pill off the shell notifies and releases it (DC-O4).
    */
-  | { kind: "chip"; chip: Chip };
+  | { kind: "chip"; chip: Chip }
+  /** The helper lost a grant it started with (DC-N1): on macOS the key tap is dead. */
+  | { kind: "grant-lost"; name: string }
+  /** macOS Secure Input turned on or off: a keyed chord cannot reach the helper while it is on. */
+  | { kind: "secure-input"; on: boolean };
 
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -266,6 +278,8 @@ interface Helper {
   exited: Promise<void>;
   /** Started again because a grant arrived: it is not started again for one more. */
   regranted?: boolean;
+  /** Reads the grants while one is lost, until it is back or this helper stops (DC-N1). */
+  regrant?: ReturnType<typeof setInterval>;
 }
 
 export class DictationService {
@@ -690,6 +704,7 @@ export class DictationService {
       verdict: this.o.verdict?.() ?? null,
       loading: this.o.loading?.() ?? false,
       grants: s?.ready?.grants ?? null,
+      lost: s ? [...s.lost] : [],
       backend: s?.ready?.backend ?? null,
       swallow_keys: s?.ready?.swallow_keys ?? null,
       remote: this.o.remote?.() ?? null,
@@ -746,6 +761,8 @@ export class DictationService {
       onPartial: (p) => this.tell({ kind: "partial", ...p }),
       onCue: (m) => this.o.cue?.(m),
       onRecordedKey: (name) => this.recorder?.(name),
+      onGrantLost: (name) => this.grantLost(h, name),
+      onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
       metering: () => this.metering,
       send: (c) => {
@@ -785,6 +802,7 @@ export class DictationService {
     h.exited = (async () => {
       await proc.exited;
       await Promise.all([out, err]);
+      clearInterval(h.regrant);
       session.helperGone();
       if (this.helper === h) {
         this.helper = null;
@@ -883,6 +901,27 @@ export class DictationService {
     })();
     this.probed = { at, grants };
     return grants;
+  }
+
+  /**
+   * Helper `h` lost grant `name` it started with (DC-N1). The followers hear it (the pill says so
+   * with the button to the pane), and the grants are read again every `REGRANT_POLL_MS` until the
+   * grant is back, which starts the helper again, since the tap is only made at a start.
+   */
+  private grantLost(h: Helper, name: string): void {
+    if (this.helper !== h) return;
+    // A helper started again for an earlier grant may be started again for this one.
+    h.regranted = false;
+    this.tell({ kind: "grant-lost", name });
+
+    if (h.regrant) return;
+    h.regrant = setInterval(() => {
+      if (this.helper !== h || h.session.lost.size === 0) {
+        clearInterval(h.regrant);
+        return;
+      }
+      void this.grants();
+    }, REGRANT_POLL_MS);
   }
 
   /** Stops helper `h` and starts it again with the same command and keys, unless stopped meanwhile. */

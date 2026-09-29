@@ -27,6 +27,11 @@
  * - `error` with the log's message for `ERROR_MS`. Its buttons (Retry, Copy, Open draft) wait for
  *   the draft box (DC-S1), so it offers none yet.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
+ * - `notice` for `NOTICE_MS` when the dictation key does nothing (macOS): the helper lost the
+ *   Accessibility grant (DC-N1), with a button to its pane, shown once the island is free, so a
+ *   session keeps its Stop and its outcome; or Secure Input turned on while the key is a keyed
+ *   chord, which the OS then keeps from the tap (DC-A2), at most once per `SECURE_REPEAT_MS`, and
+ *   only with nothing else showing. Secure Input off takes it down.
  * - the learn chip (DC-L4) for a fix made in the app's field after a direct insert (DC-L2): shown
  *   with the window, whatever the state, until it is answered, and after Learn for its Undo line;
  *   a page that never answers is taken as ignoring it after `CHIP_WAIT_MS`. The chip carries only
@@ -36,6 +41,7 @@
  * and never shows here.
  */
 
+import { parseBinding } from "../../core/dictation/activation.ts";
 import type {
   ChipAnswer,
   PillKey,
@@ -63,7 +69,13 @@ export interface PillSend {
 
 /** Dictation as the pill sees it: the app's `DictationService` behind the shell. */
 export interface PillDictation {
-  status(): { state: string; loading: boolean; swallow_keys: boolean | null };
+  status(): {
+    state: string;
+    loading: boolean;
+    swallow_keys: boolean | null;
+    /** The grants the running helper lost (DC-N1); absent, none. */
+    lost?: readonly string[];
+  };
   /**
    * The log's events, the mic level and the engine's notices, from now on; the session's partials
    * while `partials` answers true (DC-E5).
@@ -99,6 +111,8 @@ export interface PillOptions {
   later?(ms: number, fn: () => void): () => void;
   /** The label for a binding (`Right ⌘`). */
   label(binding: string, platform: string): string;
+  /** Opens the Accessibility pane: the notice's button after the grant was lost (DC-N1). */
+  grant?(): Promise<boolean>;
 }
 
 export interface PillRpcHandlers {
@@ -110,6 +124,23 @@ export interface PillRpcHandlers {
   /** What the page shows now. */
   shown(): PillState;
   close(): void;
+}
+
+/** How long a notice stays: long enough to reach its button. */
+export const NOTICE_MS = 10_000;
+/**
+ * A Secure Input notice comes back at most this often: a terminal with secure entry turns Secure
+ * Input on each time it comes to the front.
+ */
+export const SECURE_REPEAT_MS = 10 * 60_000;
+
+/** A binding with a key that is not a modifier: the kind Secure Input keeps from the tap (DC-A2). */
+export function keyedChord(binding: string): boolean {
+  try {
+    return parseBinding(binding).kind === "chord";
+  } catch {
+    return false;
+  }
 }
 
 /** How long `inserted` or `copied` stays before the pill hides (DC-O1). */
@@ -182,10 +213,25 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   let lastWords: string[] = [];
   /** The language the chip forced for the session listening, else null. */
   let forced: string | null = null;
+  /** When the last Secure Input notice showed. */
+  let secureAt = Number.NEGATIVE_INFINITY;
+  /**
+   * The grant was lost while the island showed something else (DC-N1): a session's island keeps
+   * its Stop, the only way out of a latched session with a dead tap, and its outcome its time. The
+   * notice shows when the island would hide, if the grant is still lost then.
+   */
+  let grantPending = false;
 
   const visible = () => shown.state !== "hidden" || chipUp !== null;
 
   const put = (s: PillState) => {
+    if (s.state === "hidden" && grantPending) {
+      grantPending = false;
+      if (d.status().lost?.includes("accessibility") ?? true) {
+        showNotice("grant-lost");
+        return;
+      }
+    }
     shown = s;
     send().state(s);
     o.onVisible(visible());
@@ -228,6 +274,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       case "transcribing":
       case "inserting":
         if (shown.state === "transcribing") return;
+        // Whatever was due to hide the island must not hide the session's.
+        cancelHide();
         put({
           state: "transcribing",
           since: o.now(),
@@ -235,8 +283,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         });
         return;
       case "idle":
-        // An outcome stays for its time; anything else (empty, cancelled) hides now.
-        if (shown.state === "done" || shown.state === "error") return;
+        // An outcome or a notice stays for its time; anything else (empty, cancelled) hides now.
+        if (shown.state === "done" || shown.state === "error" || shown.state === "notice") return;
         cancelHide();
         if (shown.state !== "hidden") put({ state: "hidden" });
         return;
@@ -271,6 +319,54 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       return;
     const { language: _, ...rest } = shown;
     put(language ? { ...rest, language } : rest);
+  };
+
+  /** Says why the dictation key does nothing now, for `NOTICE_MS`. */
+  const showNotice = (reason: "grant-lost" | "secure-input") => {
+    const key = o.label(o.hotkey(), o.platform);
+    put(
+      reason === "grant-lost"
+        ? {
+            state: "notice",
+            reason,
+            message: `${key} does nothing without Accessibility`,
+            detail:
+              "macOS took the grant back. Turn akou on under Accessibility and dictation starts again.",
+            actions: o.grant ? ["grant"] : [],
+          }
+        : {
+            state: "notice",
+            reason,
+            message: `${key} cannot reach akou while Secure Input is on`,
+            detail:
+              "A password field or a terminal’s secure entry holds the keyboard. A key alone, such as Right ⌘, still works.",
+            actions: [],
+          },
+    );
+    hideAfter(NOTICE_MS);
+  };
+
+  /** Secure Input changed: a keyed chord is dead while it is on (DC-A2). */
+  const secureInput = (on: boolean) => {
+    if (!on) {
+      if (shown.state === "notice" && shown.reason === "secure-input") {
+        cancelHide();
+        put({ state: "hidden" });
+      }
+      return;
+    }
+    // Only when it matters (a keyed chord), with nothing else on the island, and not every time.
+    if (
+      o.platform !== "darwin" ||
+      !keyedChord(o.hotkey()) ||
+      shown.state !== "hidden" ||
+      chipUp !== null
+    )
+      return;
+
+    if (o.now() - secureAt < SECURE_REPEAT_MS) return;
+    secureAt = o.now();
+    showNotice("secure-input");
   };
 
   /** A partial's words to the ticker, as the preview's rule allows, with its settled start. */
@@ -317,6 +413,17 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
                 void d.chip?.({ id: c.id, action: "ignore" });
                 chipOver(c.id);
               });
+        return;
+      }
+      if (m.kind === "grant-lost") {
+        // The words and the pane are macOS's; elsewhere the Dictation page says it.
+        if (m.name !== "accessibility" || o.platform !== "darwin") return;
+        if (shown.state === "hidden" || shown.state === "notice") showNotice("grant-lost");
+        else grantPending = true;
+        return;
+      }
+      if (m.kind === "secure-input") {
+        secureInput(m.on);
         return;
       }
       if (m.kind === "busy") {
@@ -371,6 +478,12 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     handlers: {
       control: async ({ action }) => {
         if (action === "language") return nextLanguage();
+        if (action === "grant") {
+          if (shown.state !== "notice" || shown.reason !== "grant-lost" || !o.grant) return false;
+          cancelHide();
+          put({ state: "hidden" });
+          return o.grant();
+        }
         if (action !== "stop" && action !== "cancel") return false;
         return d.control(action);
       },

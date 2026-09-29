@@ -74,6 +74,7 @@ describe("DC-G1: GET /v1/dictation", () => {
       fallback: null,
       remote: null,
       grants: { mic: "granted", accessibility: "granted" },
+      lost: [],
       backend: "fake",
       swallow_keys: true,
     });

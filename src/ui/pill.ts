@@ -6,8 +6,10 @@
  * Cancel, and the key hints the backend can honour in a line under it after 1.5 s; `transcribing`
  * with a ring around the dot and the elapsed time once past 2 s; `inserted` with a check or
  * `copied` with the paste shortcut; `error` with a sheet under the island holding the message and
- * up to three buttons; hidden. The learn chip (DC-L4) hangs under the island, a neutral one when no
- * state is showing.
+ * up to three buttons; hidden. A `notice` says why the dictation key does nothing now (the
+ * Accessibility grant lost, Secure Input on) in the same sheet, its message in bold over a dimmer
+ * line on what to do. The learn chip (DC-L4) hangs under the island, a neutral one when no state
+ * is showing.
  *
  * The page only draws what the main process sends (`pill-protocol.ts`): the main side decides when
  * a state ends, and the window's no-focus style is the shell's. No state carries dictated text, and
@@ -101,6 +103,7 @@ const ACTION_LABEL: Record<PillAction, string> = {
   retry: "Retry",
   copy: "Copy",
   "open-draft": "Open draft",
+  grant: "Open Accessibility settings",
 };
 
 /** The island's word for each state; listening has none, its dot and level say it. */
@@ -109,6 +112,8 @@ const WORD: Record<string, string> = {
   inserted: "Inserted",
   copied: "Copied",
   error: "Didn’t finish",
+  "grant-lost": "Accessibility lost",
+  "secure-input": "Secure Input on",
   chip: "Vocabulary",
 };
 
@@ -121,6 +126,9 @@ const ICON: Record<string, string> = {
   error: "alert",
   chip: "book",
 };
+
+/** The island's look for a notice: the alert, like an error's. */
+const NOTICE_ICON = "alert";
 
 /** Transcribing's wait in seconds with one decimal, as `2.4 s`; a minute or more as `1:05`. */
 function waitText(ms: number): string {
@@ -150,7 +158,13 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
 
   /** The state the island draws: a chip with nothing else showing gets the neutral island. */
   const look = () =>
-    s.state === "done" ? s.how : s.state === "hidden" && chipUp ? "chip" : s.state;
+    s.state === "done"
+      ? s.how
+      : s.state === "notice"
+        ? s.reason
+        : s.state === "hidden" && chipUp
+          ? "chip"
+          : s.state;
 
   const tick = () => {
     const since = s.state === "listening" || s.state === "transcribing" ? s.since : null;
@@ -203,7 +217,8 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
     pill.dataset.state = state;
     pill.hidden = state === "hidden";
     // The icons are SVG, which has no `hidden` property: the attribute itself.
-    for (const id of Object.values(ICON)) el(id).toggleAttribute("hidden", ICON[state] !== id);
+    const icon = cur.state === "notice" ? NOTICE_ICON : ICON[state];
+    for (const id of Object.values(ICON)) el(id).toggleAttribute("hidden", icon !== id);
     const listening = s.state === "listening";
     el("level").hidden = !listening;
     if (!listening) paintLevel(FLOOR_DB);
@@ -231,13 +246,24 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
       warn ? h("span", { class: "sep" }, "·") : null,
       warn ? h("span", { id: "warn" }, warn) : null,
     );
-    el("sheet").hidden = s.state !== "error";
-    el("message").textContent = s.state === "error" ? s.message : "";
+    const sheet = cur.state === "error" || cur.state === "notice";
+    el("sheet").hidden = !sheet;
+    el("message").textContent = sheet ? cur.message : "";
+    el("detail").textContent = cur.state === "notice" ? cur.detail : "";
+    el("detail").hidden = cur.state !== "notice";
     const buttons =
-      cur.state === "error"
+      cur.state === "error" || cur.state === "notice"
         ? cur.actions
             .filter((a) => a in ACTION_LABEL)
-            .map((a) => button(a, a === "retry" ? (cur.retryLabel ?? "Retry") : ACTION_LABEL[a], a))
+            .map((a) =>
+              button(
+                a,
+                cur.state === "error" && a === "retry"
+                  ? (cur.retryLabel ?? "Retry")
+                  : ACTION_LABEL[a],
+                a,
+              ),
+            )
         : [];
     replace(el("buttons"), ...buttons);
     showPreview();
