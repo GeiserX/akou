@@ -25,7 +25,9 @@
  * only. A text holding a line break is pasted even under `type`, since a typed line break is a
  * Return key press, which sends in a chat app and runs a line in a terminal. The send key goes
  * with the insert, and the helper presses it only after the target read the clipboard, never on
- * a timer. Nothing is sent after a clipboard-only insert, since nothing was pasted.
+ * a timer. Nothing is sent after a clipboard-only insert, since nothing was pasted. While the helper
+ * has no Accessibility grant (refused at the setup, DC-N3, or taken back, DC-N1) it can post no
+ * paste and no key, so every insert, the draft box's too, is clipboard only.
  *
  * Spacing and case (DC-S4): with `smartSpacing` in the insert policy the helper reads the field
  * just before the insert and fits the text to what sits around the cursor; with
@@ -35,7 +37,8 @@
  * session's engine, language and formatting pass, how its text goes in and its send key, and
  * with `mode` `draft` or `draft-send` sends the text to the draft box instead of the app, where
  * Enter inserts (and with `draft-send` presses the send key). A field the rule leaves out follows
- * the global setting.
+ * the global setting. A draft box the session opens for another reason (Shift+Enter, the focus
+ * guard) still inserts with the rule's method and send key.
  *
  * The focus guard (DC-N9): when the helper refuses an insert because the keyboard moved
  * (`focus-changed`) or the field cannot take it (`not-editable`, `field-unknown`), the text goes to
@@ -326,12 +329,26 @@ export interface PreviewPartial {
 }
 
 /**
- * What a per-app rule (DC-U9) asks of the draft box it opens: Enter presses the send key too
- * (`draft-send`), and the rule's send key in place of `dictation.sendKey`.
+ * What a per-app rule (DC-U9) asks of a draft box its session opens: Enter presses the send key
+ * too (`draft-send`), and the rule's send key and insert method in place of `dictation.sendKey`
+ * and `dictation.insert`. A box Shift+Enter or the focus guard opened carries the rule's send key
+ * and insert method too, never `enterSends`.
  */
 export interface DraftRule {
   enterSends: boolean;
   sendKey?: SendKey;
+  insert?: InsertMethod;
+}
+
+/** What the rule of a session carries into a draft box it opens; none when it changes nothing. */
+function draftRule(rule: AppRule | null, enterSends: boolean): DraftRule | undefined {
+  if (!rule) return undefined;
+  const d: DraftRule = {
+    enterSends,
+    ...(rule.sendKey ? { sendKey: rule.sendKey as SendKey } : {}),
+    ...(rule.insert ? { insert: rule.insert as InsertMethod } : {}),
+  };
+  return d.enterSends || d.sendKey || d.insert ? d : undefined;
 }
 
 /** How often a listening session's audio is decoded again for the preview (DC-E5). */
@@ -454,6 +471,11 @@ export class DictationSession {
   private readonly inserts = new Map<string, string>();
   /** Dictations whose field the helper reads back after the insert (DC-L2), by its session id. */
   private readonly reads = new Map<string, string>();
+  /**
+   * The per-app rule of a dictation waiting for its insert (DC-U9), by the helper's session id, for
+   * the draft box the focus guard may open on it.
+   */
+  private readonly insertRules = new Map<string, DraftRule>();
   /** The draft box's inserts and copies waiting for the helper's answer, by the id sent. */
   private readonly explicit = new Map<string, Explicit>();
   private explicitSeq = 0;
@@ -569,13 +591,22 @@ export class DictationSession {
 
   /**
    * Inserts `text` where dictation `id` was going (the draft box's Enter, DC-S1): the helper first
-   * brings `target` forward (DC-N9), then pastes there and presses `sendKey` after the receipt.
-   * Writes `dictation.inserted` when it lands; a refusal writes nothing and is answered, so the
-   * caller can open the box again with the user's text.
+   * brings `target` forward (DC-N9), then inserts there the way `insert` (a per-app rule's, DC-U9)
+   * or `dictation.insert` says, and presses `sendKey` after the receipt. Writes `dictation.inserted`
+   * when it lands; a refusal writes nothing and is answered, so the caller can open the box again
+   * with the user's text.
    */
-  insertText(id: string, text: string, target: Target, sendKey: SendKey): Promise<InsertOutcome> {
+  insertText(
+    id: string,
+    text: string,
+    target: Target,
+    sendKey: SendKey,
+    insert?: InsertMethod,
+  ): Promise<InsertOutcome> {
     if (!this.ready)
       return Promise.resolve({ ok: false, reason: "the dictation helper is not up" });
+    const p = this.o.insertPolicy?.() ?? DEFAULT_INSERT;
+    const method = this.method(insert ?? p.method, text, false);
     const hid = `draft-${++this.explicitSeq}`;
     const done = new Promise<InsertOutcome>((resolve) => this.explicit.set(hid, { id, resolve }));
     this.o.send({ type: "focus", target });
@@ -583,12 +614,26 @@ export class DictationSession {
       type: "insert",
       id: hid,
       text,
-      method: "paste",
-      send_key: sendKey,
+      method,
+      // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
+      send_key: method === "clipboard" ? "none" : sendKey,
       target,
-      ...spacing(this.o.insertPolicy?.() ?? DEFAULT_INSERT),
+      ...spacing(p),
     });
     return done;
+  }
+
+  /**
+   * How a text goes in (DC-S2, DC-N3, DC-N7, DC-N8): the clipboard only for a password field, for
+   * `clipboard`, and while the helper has no Accessibility grant, since without it the helper can
+   * post no paste and no key (the no-grant fallback of DC-N3, and a grant taken back, DC-N1). A
+   * line break is never typed: the typed path turns it into a Return key press (DC-N7), which would
+   * send in a chat app or run a line in a terminal, so such a text is pasted.
+   */
+  private method(wanted: InsertMethod, text: string, secure: boolean): InsertMethod {
+    if (secure || wanted === "clipboard" || this.ready?.grants.accessibility === "denied")
+      return "clipboard";
+    return wanted === "type" && !text.includes("\n") ? "type" : "paste";
   }
 
   /**
@@ -729,6 +774,7 @@ export class DictationSession {
         const id = this.inserts.get(m.id);
         if (!id) return;
         this.inserts.delete(m.id);
+        this.insertRules.delete(m.id);
         // Nothing was pasted after a clipboard-only insert, so nothing is read back.
         if (m.method === "clipboard") this.reads.delete(m.id);
         this.write({
@@ -766,10 +812,13 @@ export class DictationSession {
         }
         const id = this.inserts.get(m.id);
         if (!id) return;
+        const rule = this.insertRules.get(m.id);
         this.inserts.delete(m.id);
         this.reads.delete(m.id);
-        // The keyboard moved or the field cannot take it: the text waits in the draft box.
-        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason, false)) {
+        this.insertRules.delete(m.id);
+        // The keyboard moved or the field cannot take it: the text waits in the draft box, whose
+        // Enter goes in as the session's rule said (DC-U9).
+        if (DRAFT_REASONS.has(m.reason) && this.o.onDraft?.(id, m.reason, false, rule)) {
           this.write({ type: "dictation.drafted", id, reason: m.reason });
         } else {
           this.write({ type: "dictation.failed", id, error: `insert: ${m.reason}` });
@@ -949,6 +998,7 @@ export class DictationSession {
     }
     this.inserts.clear();
     this.reads.clear();
+    this.insertRules.clear();
     for (const x of this.explicit.values())
       x.resolve({ ok: false, reason: "the dictation helper stopped" });
     this.explicit.clear();
@@ -1098,7 +1148,7 @@ export class DictationSession {
     }
     // Shift+Enter: the draft box, taking the keyboard. Never a password field's text in it.
     if (c.asked === "draft" && !c.secure) {
-      const opened = this.o.onDraft?.(id, "key", true) ?? false;
+      const opened = this.o.onDraft?.(id, "key", true, draftRule(c.rule, false)) ?? false;
       this.notInserted(
         c,
         opened
@@ -1119,8 +1169,8 @@ export class DictationSession {
     ) {
       const opened =
         this.o.onDraft?.(id, "rule", true, {
+          ...draftRule(rule, false),
           enterSends: rule.mode === "draft-send",
-          ...(rule.sendKey ? { sendKey: rule.sendKey as SendKey } : {}),
         }) ?? false;
       this.notInserted(
         c,
@@ -1130,16 +1180,8 @@ export class DictationSession {
       );
       return;
     }
-    // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only. A line
-    // break is never typed: the typed path turns it into a Return key press (DC-N7), which would
-    // send in a chat app or run a line in a terminal, so such a text is pasted.
-    const wanted = rule?.insert ?? p.method;
-    const method: InsertMethod =
-      c.secure || wanted === "clipboard"
-        ? "clipboard"
-        : wanted === "type" && !r.text.includes("\n")
-          ? "type"
-          : "paste";
+    // Nothing is ever pasted or typed into a password field (DC-N8): the clipboard only.
+    const method = this.method(rule?.insert ?? p.method, r.text, c.secure);
     // Nothing was pasted after a clipboard-only insert, so there is nothing to send (DC-S2).
     const send = method !== "clipboard" && (c.asked === "send" || p.sendAlways || spoken);
     // DC-L2: the helper reads the field back after a paste; never a password field's.
@@ -1148,6 +1190,8 @@ export class DictationSession {
     if (this.latest === c) this.latest = null;
     this.inserts.set(c.helperId, id);
     if (read) this.reads.set(c.helperId, id);
+    const kept = draftRule(rule, false);
+    if (kept) this.insertRules.set(c.helperId, kept);
     this.settle();
     this.o.send({
       type: "insert",
