@@ -12,8 +12,18 @@
 /** A key the backend swallows during a session (DC-A4), shown as a hint only when it does. */
 export type PillKey = "escape" | "enter" | "shift-enter";
 
-/** What the error state offers (DC-O1, DC-R3). */
-export type PillAction = "retry" | "copy" | "open-draft";
+/**
+ * What the error state offers (DC-O1, DC-R3), and the notice's `grant`, which opens the
+ * Accessibility pane (DC-N1).
+ */
+export type PillAction = "retry" | "copy" | "open-draft" | "grant";
+
+/**
+ * Why the dictation key does nothing now (DC-N1, DC-A2): `grant-lost` once macOS took back the
+ * Accessibility grant, which kills the key tap; `secure-input` while Secure Input keeps a keyed
+ * chord from the helper, though a modifier alone still reaches it.
+ */
+export type PillNotice = "grant-lost" | "secure-input";
 
 /**
  * The language chip on the listening island (akou-5v8): the session's language, a BCP-47 tag, as a
@@ -55,6 +65,17 @@ export type PillState =
       actions: PillAction[];
       /** The Retry button's words, `Retry locally` after a remote failure. */
       retryLabel?: string;
+    }
+  /**
+   * A sheet under the island, as an error's, saying why the dictation key does nothing now: the
+   * `message` in bold (it names the key), the `detail` dimmer (what to do), and its buttons.
+   */
+  | {
+      state: "notice";
+      reason: PillNotice;
+      message: string;
+      detail: string;
+      actions: PillAction[];
     };
 
 /** One candidate of the learn chip (DC-L4). */

@@ -173,6 +173,8 @@ export class DictationSettings {
   private platform = "";
   /** What `GET /dictation` says about the grants; null where it says nothing. */
   private grants: DictationGrants | null = null;
+  /** The grants the running helper lost since it started (DC-N1): its key does nothing now. */
+  private lost: string[] = [];
   private recorders: KeyRecorder[] = [];
   /** Dictation's setup (DC-N3), drawn instead of the groups while it runs. */
   private setup: DictationSetup | null = null;
@@ -201,14 +203,15 @@ export class DictationSettings {
         ? Promise.resolve(null)
         : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
       app ? this.t.request<{ app?: { platform?: string } }>("GET", "/status") : null,
-      app ? this.readGrants() : null,
+      app ? this.readGrants() : { grants: null, lost: [] },
       app ? readMics(this.t) : null,
       app && this.openReview ? readDictationReview(this.t) : null,
     ]);
     if (read !== this.reads) return;
     this.review = review;
     this.platform = String(status?.body?.app?.platform ?? "");
-    this.grants = grants;
+    this.grants = grants.grants;
+    this.lost = grants.lost;
     this.mics = mics;
     if (cfg.status !== 200) {
       this.close();
@@ -224,10 +227,20 @@ export class DictationSettings {
     this.draw(server?.body?.dictation?.served_last_hour);
   }
 
-  /** The grants the helper reports, as they are now; null where the app says nothing. */
-  private async readGrants(): Promise<DictationGrants | null> {
-    const r = await this.t.request<{ grants?: DictationGrants }>("GET", "/dictation");
-    return r.status < 400 ? (r.body?.grants ?? null) : null;
+  /**
+   * The grants the helper reports, as they are now, null where the app says nothing; and the ones
+   * the running helper lost since it started.
+   */
+  private async readGrants(): Promise<{ grants: DictationGrants | null; lost: string[] }> {
+    const r = await this.t.request<{ grants?: DictationGrants; lost?: unknown }>(
+      "GET",
+      "/dictation",
+    );
+    if (r.status >= 400) return { grants: null, lost: [] };
+    const lost = Array.isArray(r.body?.lost)
+      ? r.body.lost.filter((x): x is string => typeof x === "string")
+      : [];
+    return { grants: r.body?.grants ?? null, lost };
   }
 
   private draw(served?: number): void {
@@ -280,6 +293,7 @@ export class DictationSettings {
             "This akou has no dictation settings yet.",
           )
         : null,
+      top ? this.grantLost() : null,
       top ? this.permissions() : null,
     );
     this.soundsNow();
@@ -419,6 +433,34 @@ export class DictationSettings {
     );
   }
 
+  /**
+   * The Accessibility grant the running helper lost (DC-N1): on macOS its key tap is dead until the
+   * grant is back, when the app starts the helper again by itself.
+   */
+  private grantLost(): HTMLElement | null {
+    if (this.platform !== "darwin" || !this.lost.includes("accessibility")) return null;
+    return h(
+      "p",
+      { id: "dictation-grant-lost", class: "issue" },
+      "Accessibility lost: macOS took the grant back, so the dictation key does nothing. Turn akou on under Accessibility and dictation starts again by itself. ",
+      h(
+        "button",
+        {
+          type: "button",
+          id: "dictation-grant-lost-open",
+          on: {
+            click: () =>
+              void this.t.openSettingsPane("accessibility").then((ok) => {
+                if (!ok)
+                  toast("Open the privacy settings yourself: this window cannot open them here.");
+              }),
+          },
+        },
+        "Open Accessibility settings",
+      ),
+    );
+  }
+
   /** The grants as the helper reports them, and the way back into the setup. */
   private permissions(): HTMLElement | null {
     const g = this.grants;
@@ -436,7 +478,9 @@ export class DictationSettings {
       { id: "dictation-permissions", class: "hint" },
       `Permissions: Microphone ${word(g.mic)}`,
       this.platform === "darwin"
-        ? `, Accessibility ${word(g.accessibility)}${grantOk(g.accessibility) ? "" : " (clipboard only)"}`
+        ? this.lost.includes("accessibility")
+          ? ", Accessibility lost"
+          : `, Accessibility ${word(g.accessibility)}${grantOk(g.accessibility) ? "" : " (clipboard only)"}`
         : "",
       ". ",
       h(
@@ -455,8 +499,9 @@ export class DictationSettings {
       grants: () => this.grants,
       setting: (k) => this.settings[k],
       readGrants: async () => {
-        const g = await this.readGrants();
+        const { grants: g, lost } = await this.readGrants();
         if (g) this.grants = g;
+        this.lost = lost;
         return g;
       },
       keyRow: () => {
@@ -577,6 +622,8 @@ export class DictationSettings {
    */
   private chordsOnly(): string | null {
     if (this.platform !== "darwin" || this.grants?.accessibility !== "denied") return null;
+    // A grant taken back after the start leaves the tap dead, not the Carbon fallback (DC-N1).
+    if (this.lost.includes("accessibility")) return null;
     return "without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.";
   }
 

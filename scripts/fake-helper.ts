@@ -51,6 +51,15 @@
  *   --probe                 prints the `ready` line and exits, as `akou-capture dictate --probe`
  *   --probe-grants LIST     the grants `--probe` reports instead of `--grants`: a grant given
  *                           after the helper started (DC-U2, DC-N3)
+ *   --grants-file FILE      the grants as the OS holds them now, a line like `--grants` takes, read
+ *                           for `ready` and by `--probe` instead of `--grants`; while the fake runs
+ *                           it reads the file every 100 ms and says `grant.lost` once for a grant
+ *                           `ready` reported that the file no longer names, as the real helper does
+ *                           on wake and when a session fails to start (DC-N1)
+ *   --secure-input-at MS    macOS Secure Input turns on at key time MS: `secure_input {on: true}`,
+ *                           and from then on every key that is not a modifier is lost before the
+ *                           activation rule, as macOS hands the tap no keyed event while a password
+ *                           field holds the keyboard; a modifier alone still arrives (DC-A2)
  *   --recorder-keys LIST    the keys reported as `key` when `record_keys {on: true}` arrives, as
  *                           the helper reports every key while the recorder is open (DC-U3)
  *
@@ -121,6 +130,7 @@ import {
   type Activation,
   ActivationMachine,
   type ActivationOut,
+  isModifier,
   type KeyInput,
   parseBinding,
 } from "../src/core/dictation/activation.ts";
@@ -402,7 +412,16 @@ async function runDictate(): Promise<void> {
   const log = (file: string | undefined, o: unknown) => {
     if (file) appendFileSync(file, `${JSON.stringify(o)}\n`);
   };
-  const grants = (opt("--grants") ?? "mic,accessibility").split(",");
+  const grantsFile = opt("--grants-file");
+  /** The grants the OS holds now: the file's line when there is one. */
+  const osGrants = (): string[] =>
+    grantsFile
+      ? readFileSync(grantsFile, "utf8")
+          .trim()
+          .split(",")
+          .map((g) => g.trim())
+      : (opt("--grants") ?? "mic,accessibility").split(",");
+  const grants = osGrants();
   const field = (opt("--field") ?? "editable") as FieldKind;
   const target: Target = {
     app: opt("--target-app") ?? "com.example.editor",
@@ -425,6 +444,8 @@ async function runDictate(): Promise<void> {
   const slowMic = num("--slow-mic") ?? 0;
   const tapDisabledAt = num("--tap-disabled-at");
   let tapDisabled = tapDisabledAt !== undefined;
+  const secureAt = num("--secure-input-at");
+  let secure = false;
   let played = false;
   let rebinds = 0;
   const playAfter = num("--play-after-rebinds") ?? 1;
@@ -502,6 +523,15 @@ async function runDictate(): Promise<void> {
         // The event that finds the tap disabled is lost; the callback re-enables the tap.
         tapDisabled = false;
         log(opt("--tap-log"), { key: k.key, down: k.down, lost: true });
+        continue;
+      }
+      if (secureAt !== undefined && !secure && k.at >= secureAt) {
+        secure = true;
+        say({ type: "secure_input", on: true });
+      }
+      // Secure Input: macOS hands the tap no keyed event, only the modifiers' flags (DC-A2).
+      if (secure && !isModifier(k.key)) {
+        log(opt("--tap-log"), { key: k.key, down: k.down, lost: "secure-input" });
         continue;
       }
       // A key source that cannot swallow never shows the rule Escape or Enter (DC-A4).
@@ -642,7 +672,8 @@ async function runDictate(): Promise<void> {
     }
   };
 
-  const given = flag("--probe") ? (opt("--probe-grants")?.split(",") ?? grants) : grants;
+  const given =
+    flag("--probe") && !grantsFile ? (opt("--probe-grants")?.split(",") ?? grants) : grants;
   const notAsked = opt("--not-asked")?.split(",") ?? [];
   const grant = (name: string) =>
     given.includes(name) ? "granted" : notAsked.includes(name) ? "not-asked" : "denied";
@@ -655,6 +686,19 @@ async function runDictate(): Promise<void> {
     grants: { mic: grant("mic"), accessibility: grant("accessibility") },
   });
   if (flag("--probe")) process.exit(EXIT.ok);
+  // A grant `ready` reported taken back while the fake runs: said once, as the real helper does.
+  const gone = new Set<string>();
+  const lostWatch = grantsFile
+    ? setInterval(() => {
+        const now = osGrants();
+        for (const name of ["mic", "accessibility"]) {
+          if (given.includes(name) && !now.includes(name) && !gone.has(name)) {
+            gone.add(name);
+            say({ type: "grant.lost", name });
+          }
+        }
+      }, 100)
+    : undefined;
   const dec = new TextDecoder();
   let rest = "";
   for await (const chunk of Bun.stdin.stream()) {
@@ -679,6 +723,7 @@ async function runDictate(): Promise<void> {
   }
   // Closing stdin means stop. Inserts still waiting for their receipt are let go.
   clearInterval(meter);
+  clearInterval(lostWatch);
   stdout.flush();
   say({ type: "stopped", reason: "stop" });
   process.exit(EXIT.ok);

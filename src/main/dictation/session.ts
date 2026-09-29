@@ -258,6 +258,16 @@ export interface SessionOptions extends TextRules {
   /** A key the helper reported while the Dictation page's recorder is open (DC-U3). */
   onRecordedKey?(name: string): void;
   /**
+   * A grant `ready` reported is gone (DC-N1): on macOS a revoked Accessibility grant kills the key
+   * tap without a word, so the dictation key does nothing until the grant is back.
+   */
+  onGrantLost?(name: string): void;
+  /**
+   * macOS Secure Input turned on or off (DC-N1, DC-A2): while it is on the OS hands no keyed chord
+   * to the tap, and only a modifier alone still reaches it.
+   */
+  onSecureInput?(on: boolean): void;
+  /**
    * `dictation.mic` (`default` when empty) and `dictation.preferBuiltInOverBluetooth`, sent as
    * `rebuild_mic` after `ready` (DC-U4, DC-N5); absent, the helper keeps its default.
    */
@@ -390,6 +400,8 @@ export class DictationSession {
   private early: Early = { chunks: [], samples: 0 };
   /** macOS Secure Input, as the helper last reported it. */
   private secureInput = false;
+  /** The grants the helper said were taken back since its `ready` (DC-N1). */
+  readonly lost = new Set<string>();
   /** Dictations waiting for their insert's result, by the helper's session id. */
   private readonly inserts = new Map<string, string>();
   /** Dictations whose field the helper reads back after the insert (DC-L2), by its session id. */
@@ -529,6 +541,7 @@ export class DictationSession {
     switch (m.type) {
       case "ready":
         this.ready = m;
+        this.lost.clear();
         this.recording = false;
         this.set("idle");
         void this.rebind();
@@ -543,8 +556,22 @@ export class DictationSession {
         this.rebinds.shift()?.({ ok: false, reason: m.reason });
         return;
       case "secure_input":
+        if (m.on === this.secureInput) return;
         this.secureInput = m.on;
+        this.o.onSecureInput?.(m.on);
         return;
+      case "grant.lost": {
+        const r = this.ready;
+        if (this.lost.has(m.name)) return;
+        this.lost.add(m.name);
+        // `ready` said granted: from now on the grant reads as the OS holds it, so a probe that
+        // finds it given again starts the helper again (the tap is made at the start).
+        if (r && (m.name === "mic" || m.name === "accessibility"))
+          this.ready = { ...r, grants: { ...r.grants, [m.name]: "denied" } };
+        this.o.onLog?.("warn", `dictation: the ${m.name} grant was taken back`);
+        this.o.onGrantLost?.(m.name);
+        return;
+      }
       case "warn":
         this.o.onLog?.("warn", `dictation helper: ${m.code}: ${m.msg}`);
         return;
@@ -670,7 +697,7 @@ export class DictationSession {
         return;
       }
       default:
-        // grant.lost, mic, stopped: the pill's, in later items.
+        // mic, stopped: nothing for the app to do.
         return;
     }
   }

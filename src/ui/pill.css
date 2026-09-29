@@ -296,6 +296,14 @@ button:focus-visible {
   line-height: 18px;
   overflow-wrap: anywhere;
 }
+/* A notice's line on what to do, dimmer under its bold message, as the storyboard's error sheet. */
+#detail {
+  margin: 4px 0 0;
+  font-size: 12px;
+  line-height: 16px;
+  color: var(--under-dim);
+  overflow-wrap: anywhere;
+}
 #buttons,
 #chip {
   display: flex;
