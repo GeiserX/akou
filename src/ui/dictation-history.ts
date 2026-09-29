@@ -15,7 +15,7 @@
  * - Copy: the page's own clipboard.
  */
 
-import { h, replace, toast } from "./dom.ts";
+import { closable, h, openModal, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 import { twoStep } from "./server-common.ts";
@@ -282,8 +282,9 @@ export function mountHistoryDialog(t: Transport): { open(): Promise<void> } {
   body.append(history.root);
   const open = async () => {
     await history.load();
-    if (!dialog.open) dialog.showModal();
+    openModal(dialog);
   };
+  closable(dialog);
   document
     .getElementById("dictation-history-close")
     ?.addEventListener("click", () => dialog.close());

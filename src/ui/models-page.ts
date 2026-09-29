@@ -572,7 +572,12 @@ export class ModelsPage {
 
   private settingsShown: Record<string, unknown> = {};
 
-  private async saveSettings(): Promise<void> {
+  /** True while the settings at the foot hold a change not saved yet. */
+  unsaved(): boolean {
+    return Object.keys(this.settingsPatch()).length > 0;
+  }
+
+  private settingsPatch(): Record<string, unknown> {
     const patch: Record<string, unknown> = {};
     const reject = this.settings.querySelector<HTMLInputElement>("#models-on-demand-reject");
     if (reject && reject.checked === this.settingsShown["server.auto_download"]) {
@@ -583,6 +588,11 @@ export class ModelsPage {
       const now = el.value === "" ? null : Number(el.value);
       if (now !== this.settingsShown[key]) patch[key] = now;
     }
+    return patch;
+  }
+
+  private async saveSettings(): Promise<void> {
+    const patch = this.settingsPatch();
     if (Object.keys(patch).length === 0) {
       toast("Nothing changed.", "info");
       return;

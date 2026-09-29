@@ -15,7 +15,7 @@ import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
 import { mountDictationDialog } from "./dictation-page.ts";
 import { dictationReview } from "./dictation-review.ts";
-import { byId, h, replace, toast } from "./dom.ts";
+import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
@@ -75,8 +75,8 @@ export function showCall(call?: string): void {
 
 /**
  * The quit question (DK-M3), asked here because the SDK's message box would block the main
- * process. Cancel has the focus, so Return and Escape both keep the call; true only for the
- * confirm button.
+ * process. Cancel has the focus, so Return and Escape both keep the call, as do its × and a click
+ * on the backdrop; true only for the confirm button.
  */
 export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
   return new Promise((resolve) => {
@@ -85,7 +85,7 @@ export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
     const dialog = h(
       "dialog",
       { id: "quit-question", class: "question", attrs: { "aria-labelledby": "quit-message" } },
-      h("h2", { id: "quit-message" }, q.message),
+      h("div", { class: "dialog-head" }, h("h2", { id: "quit-message" }, q.message), closeX()),
       h("p", {}, q.detail),
       h("div", { class: "bar" }, cancel, go),
     );
@@ -100,8 +100,9 @@ export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
     cancel.addEventListener("click", () => finish(false));
     go.addEventListener("click", () => finish(true));
     dialog.addEventListener("close", () => finish(false));
+    closable(dialog);
     document.body.append(dialog);
-    dialog.showModal();
+    openModal(dialog);
     cancel.focus();
   });
 }
@@ -114,8 +115,10 @@ function wireModelsDialog(t: Transport): void {
   const dialog = byId<HTMLDialogElement>("models");
   const page = new ModelsPage(t, false);
   byId("models-body").append(page.root);
+  // A change to the models' settings not saved yet keeps the dialog open on a backdrop click.
+  closable(dialog, () => page.unsaved());
   byId("models-open").addEventListener("click", () => {
-    if (!dialog.open) dialog.showModal();
+    openModal(dialog);
     page.show();
   });
   byId("models-close").addEventListener("click", () => dialog.close());

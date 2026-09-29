@@ -31,7 +31,7 @@ import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { remotePanel } from "./dictation-remote.ts";
 import { type DictationReview, readDictationReview, waitingTerms } from "./dictation-review.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
-import { h, replace, toast } from "./dom.ts";
+import { closable, h, openModal, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 import { type ServerScreen, section, twoStep } from "./server-common.ts";
@@ -789,8 +789,9 @@ export function mountDictationDialog(
   });
   const open = async () => {
     await page.load();
-    if (!dialog.open) dialog.showModal();
+    openModal(dialog);
   };
+  closable(dialog);
   // A recorder left open would keep every key press of the window, and a setup its grant reads.
   dialog.addEventListener("close", () => page.close());
   document.getElementById("dictation-open")?.addEventListener("click", () => void open());

@@ -83,3 +83,88 @@ export function toast(message: string, kind: "error" | "info" = "error"): void {
     el.hidden = true;
   }, 6000);
 }
+
+/** The × of a dialog's title row (WINDOW W15.8), for a dialog built in code. */
+export function closeX(): HTMLButtonElement {
+  return h(
+    "button",
+    {
+      type: "button",
+      class: "icon dialog-x",
+      title: "Close (Esc)",
+      attrs: { "aria-label": "Close" },
+    },
+    "×",
+  );
+}
+
+/** What opened each open dialog, given the focus back when it closes. */
+const openers = new WeakMap<HTMLDialogElement, Element | null>();
+
+/**
+ * The control the user last pressed or moved the focus to. WebKit gives a clicked button no
+ * focus, so `document.activeElement` alone does not say which button opened a dialog; it focuses
+ * the dialog around the button instead, which leaves the button as the control.
+ */
+let lastControl: Element | null = null;
+let tracking = false;
+function trackControls(): void {
+  if (tracking) return;
+  tracking = true;
+  const control = "button, a[href], input, select, textarea, summary, [tabindex]";
+  document.addEventListener(
+    "pointerdown",
+    (e) => {
+      lastControl = (e.target as Element | null)?.closest?.(control) ?? null;
+    },
+    true,
+  );
+  document.addEventListener(
+    "focusin",
+    (e) => {
+      const to = e.target as Element;
+      if (lastControl && to !== lastControl && to.contains(lastControl)) return;
+      lastControl = to;
+    },
+    true,
+  );
+}
+
+/**
+ * A modal dialog closes the way a window does (WINDOW W15.8): by its × (`.dialog-x`), by Escape,
+ * which `showModal` gives it, and by a click on the backdrop, pressed and released there so a text
+ * selection dragged out of a field closes nothing. Closed, it gives the focus back to what opened
+ * it through `openModal`: WebKit and WebView2 do not all do it themselves. While `keep` answers
+ * true the dialog holds an edit a stray click must not drop, and the backdrop does nothing; the ×
+ * and Escape still close it, as its Close button does.
+ */
+export function closable(dialog: HTMLDialogElement, keep: () => boolean = () => false): void {
+  trackControls();
+  dialog.querySelector(".dialog-x")?.addEventListener("click", () => dialog.close());
+  const outside = (e: MouseEvent) => {
+    if (e.target !== dialog) return false;
+    const r = dialog.getBoundingClientRect();
+    return e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom;
+  };
+  let pressed = false;
+  dialog.addEventListener("pointerdown", (e) => {
+    pressed = outside(e);
+  });
+  dialog.addEventListener("click", (e) => {
+    if (pressed && outside(e) && !keep()) dialog.close();
+    pressed = false;
+  });
+  dialog.addEventListener("close", () => {
+    const opener = openers.get(dialog);
+    openers.delete(dialog);
+    if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+  });
+}
+
+/** Opens a `closable` dialog as a modal, remembering the control that opened it. */
+export function openModal(dialog: HTMLDialogElement): void {
+  if (dialog.open) return;
+  const last = lastControl?.isConnected ? lastControl : null;
+  openers.set(dialog, last ?? document.activeElement);
+  dialog.showModal();
+}
