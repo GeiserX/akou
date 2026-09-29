@@ -810,6 +810,8 @@ body.shell:not(.server) > #pages {
   grid-row: 1 / -1;
   min-height: 0;
   overflow-y: auto;
+  /* A page draws its own margins (.pg); the transcript's padding would push its strip down. */
+  padding: 0;
 }
 #layout {
   flex: 1;

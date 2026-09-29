@@ -383,6 +383,17 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
             await page.click("#settings-open");
             await page.waitForSelector("#page-settings .pg-top h1");
             const home = await pageTitleBar(page);
+            // Scrolled, the strip stays at the window's top and the rows pass under it.
+            const stuck = await page.evaluate(() => {
+              const pages = document.getElementById("pages");
+              pages?.scrollTo({ top: 300, behavior: "instant" });
+              const bar = document.querySelector("#pages > .pg-bar")?.getBoundingClientRect();
+              const r = pages?.getBoundingClientRect();
+              const hit = r && document.elementFromPoint(r.left + r.width / 2, 14);
+              const seen = `${pages?.scrollTop} ${bar?.top} ${hit?.className}`;
+              pages?.scrollTo({ top: 0, behavior: "instant" });
+              return seen;
+            });
             // A double-click on the header's empty middle zooms; one on its search box does not.
             const gap = await page.evaluate(() => {
               const h1 = document
@@ -413,6 +424,7 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
                 expect(p.loose).toEqual([]);
               }
               expect(zooms()).toBe(2);
+              expect(stuck).toStartWith("300 0 pg-bar");
               onMac.push(home.title, sub.title);
             } else {
               for (const p of [home, sub])
