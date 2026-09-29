@@ -31,7 +31,7 @@ You do this once per install. After that akou opens like any other app.
 
 Apple lets an app open without a warning only when it is signed with a paid Developer ID and checked by Apple (notarized). akou 0.x is neither. It carries an ad-hoc signature instead. That proves the files were not changed after the build, but it does not say who built them. That is why the first open needs your explicit OK. The `SHA256SUMS` check above is how you confirm the file is the one this repository built.
 
-Signing and notarization will come later. The [release workflow](../.github/workflows/release.yml) is ready for them. Once the owner adds a Developer ID and Apple credentials as secrets, the same build signs and notarizes, and this step goes away.
+Signing and notarization will come later. The [release workflow](https://github.com/GeiserX/akou/blob/main/.github/workflows/release.yml) is ready for them. Once the owner adds a Developer ID and Apple credentials as secrets, the same build signs and notarizes, and this step goes away.
 
 ## The speech models
 
@@ -43,7 +43,7 @@ From a terminal it is the same download, with progress per file:
 akou models pull
 ```
 
-On a machine without internet, copy the files from another machine and run `akou models import DIR`. `akou models list` shows what is there. The files and their checksums are listed in [src/main/asr/models.ts](../src/main/asr/models.ts).
+On a machine without internet, copy the files from another machine and run `akou models import DIR`. `akou models list` shows what is there. The files and their checksums are listed in [src/main/asr/models.ts](https://github.com/GeiserX/akou/blob/main/src/main/asr/models.ts).
 
 Until the models are there, akou does not start a recording: `akou start` answers `503 models_missing` and says to run `akou models pull`. If you need to record right away, `akou start --without-models` records the audio only, with no live transcript.
 
@@ -99,7 +99,7 @@ It gives Claude Code the akou skills and the `akou_*` tools in one step, and upd
 
 ## The server
 
-akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](../Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](#a-gpu)). There is no `latest` tag: name the version you want.
+akou also runs as a transcription server that other programs send audio to. [ux/SERVER.md](https://github.com/GeiserX/akou/blob/main/docs/ux/SERVER.md) has the design. The image is `drumsergio/akou:<version>`, built from the [Dockerfile](https://github.com/GeiserX/akou/blob/main/Dockerfile) for linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants for a GPU ([A GPU](#a-gpu)). There is no `latest` tag: name the version you want.
 
 The server runs as an unprivileged user, uid 1000, keeps its settings, keys and jobs under `/data` and the models under `/models`. Both must be writable by uid 1000, `/models` too even when every model is already in it: the pull and the server write downloads and the models' `usage.json` there. Named volumes, as below, already are. A bind-mounted folder in place of a volume must belong to uid 1000 (`chown 1000:1000` it on the host), and a read-only mount (`:ro`) does not work: the pull stops with exit 70 and the server with exit 77, both naming the folder and `EROFS`.
 
@@ -139,7 +139,7 @@ docker exec akou akou keys create --name archive --scope jobs --callback-host te
 
 It prints the `ak_` API key and the `whsec_` webhook secret once, and never again: give the key to the program as its bearer token, and the secret to whatever checks the signed callbacks. The key works at once, with no restart. Repeat `--callback-host` for each host; `*` allows any public host, but a callback to a private address, such as another container by its name, needs that host named. A key with no callback host submits jobs and reads the event feed, and a submit that names a `callback_url` is refused with 422 `callback_not_allowed`. `akou keys list` and `akou keys revoke ID` manage them the same way.
 
-To run it beside [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive), use the compose file in [examples/compose/telegram-archive](../examples/compose/telegram-archive/) and the one-time setup in [ux/SERVER.md section 12.5](ux/SERVER.md#125-one-compose-file-for-both).
+To run it beside [Telegram-Archive](https://github.com/GeiserX/Telegram-Archive), use the compose file in [examples/compose/telegram-archive](https://github.com/GeiserX/akou/tree/main/examples/compose/telegram-archive/) and the one-time setup in [ux/SERVER.md section 12.5](https://github.com/GeiserX/akou/blob/main/docs/ux/SERVER.md#125-one-compose-file-for-both).
 
 Without Docker, run `bun src/main/cli/cli.ts serve` in a source checkout. That is `akou serve`, the same server in the foreground. The single-file `akou` CLI runs `akou serve` too, on Linux x64 and arm64 and on macOS. It carries no speech engine, so it answers the API but cannot transcribe, and it says so when it starts.
 
@@ -191,7 +191,7 @@ To start it at boot, with no one logged in, save this as `/Library/LaunchDaemons
 
 ### Sending jobs to another akou
 
-An akou server can hand jobs to other akou servers, for example a container that sends `best` to a Mac mini with a GPU, while its clients keep talking to it alone. [ux/SERVER.md section 14](ux/SERVER.md#14-sending-jobs-to-another-akou) has the design. On the remote, make a `jobs` key for the server that will send it jobs:
+An akou server can hand jobs to other akou servers, for example a container that sends `best` to a Mac mini with a GPU, while its clients keep talking to it alone. [ux/SERVER.md section 14](https://github.com/GeiserX/akou/blob/main/docs/ux/SERVER.md#14-sending-jobs-to-another-akou) has the design. On the remote, make a `jobs` key for the server that will send it jobs:
 
 ```sh
 akou keys create --name primary --scope jobs

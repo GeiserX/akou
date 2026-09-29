@@ -55,7 +55,7 @@ Commands in `config.json` (never settable over the API, because they are program
 
 Each gets one JSON document on standard input: the call's frontmatter and folder, the paths of the log, the audio and the export, the transcript as rows (`text` corrected, `heard` the raw text when it differs), the notes, what an agent remembered, and the enhanced notes. `AKOU_CALL_ID`, `AKOU_CALL_DIR` and `AKOU_STAGE` are set too. A hook runs in the call folder in its own process group, its output goes to `logs/hooks.log`, and it is stopped after `timeoutSec` (600 by default). `akou hooks run CALL` runs them again.
 
-Two examples ship in [examples/hooks](../examples/hooks): committing the export into a Git repository, and posting the enhanced notes to a chat webhook.
+Two examples ship in [examples/hooks](https://github.com/GeiserX/akou/tree/main/examples/hooks): committing the export into a Git repository, and posting the enhanced notes to a chat webhook.
 
 ### 3. The webhook
 

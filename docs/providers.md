@@ -65,10 +65,10 @@ It ships off, and stays off unless a follow-up question costs at least 40 % fewe
 
 1. A synthetic call from a fixed seed, short enough for the whole-call prompt.
 2. The same questions asked twice through Claude Code, once fresh each time and once in one session, with three new lines added between questions both times.
-3. The tokens of each run, as Claude Code reports them in its `result` event: input, cache writes, cache reads and output, all counted. Cache reads count in full because a resumed session carries its whole earlier conversation. Whether that is cheaper on your subscription is the vendor's rule, and akou cannot see it ([the rule in code](../src/main/llm/reuse.ts)).
+3. The tokens of each run, as Claude Code reports them in its `result` event: input, cache writes, cache reads and output, all counted. Cache reads count in full because a resumed session carries its whole earlier conversation. Whether that is cheaper on your subscription is the vendor's rule, and akou cannot see it ([the rule in code](https://github.com/GeiserX/akou/blob/main/src/main/llm/reuse.ts)).
 4. The first question is left out; the mean over the follow-ups decides.
 
-[`bun scripts/measure-resume.ts --yes`](../scripts/measure-resume.ts) runs it and prints both lists and the verdict. It spends your subscription, which is why it needs `--yes`. **No measurement has been recorded yet**, so the setting stays off.
+[`bun scripts/measure-resume.ts --yes`](https://github.com/GeiserX/akou/blob/main/scripts/measure-resume.ts) runs it and prints both lists and the verdict. It spends your subscription, which is why it needs `--yes`. **No measurement has been recorded yet**, so the setting stays off.
 
 ## Keys
 

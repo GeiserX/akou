@@ -35,6 +35,8 @@ The first window downloads the speech models (about 3.0 GB, each file checked ag
 
 ## Documentation
 
+The documentation is published as a site at [geiserx.github.io/akou](https://geiserx.github.io/akou/). The same pages on GitHub:
+
 - [Getting started](docs/getting-started.md): installing the app and the command line, the first open, models, permissions, uninstalling
 - [Providers](docs/providers.md): what answers questions and writes notes
 - [Handing calls to your own knowledge system](docs/knowledge-handoff.md)
