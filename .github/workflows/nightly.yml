@@ -8,7 +8,8 @@ name: nightly
 #   language on FLEURS, latency percentiles and the real-time factor, diarization error on two
 #   AMI Meeting Corpus test meetings, and the replay recall floor, each next to its committed
 #   baseline in docs/gates/nightly-baselines.json (scripts/eval/nightly.ts). Today it scores the
-#   default recognizer only, not every engine.
+#   default recognizer, and Qwen3-ASR through llama-server on macOS and Linux (ASR-5: WER, silent
+#   clips, and memory flat over 150 requests with the default prompt cache as the failing control).
 # - ui-webkit: the window suite in Playwright's WebKit, the closest stand-in for the WKWebView and
 #   WebKitGTK the app ships (TS-14). It runs by hand only while some of its tests fail on WebKit
 #   (docs/TESTING.md TS-14), so the scheduled night is not red by design; it joins the schedule,
@@ -18,6 +19,11 @@ on:
   schedule:
     - cron: "17 3 * * *"
   workflow_dispatch:
+    inputs:
+      only:
+        description: "Stages to run, comma separated (fleurs, ami, replay, qwen); empty runs them all"
+        required: false
+        default: ""
 
 permissions:
   contents: read
@@ -86,11 +92,16 @@ jobs:
         with:
           path: eval-data
           key: eval-data-${{ runner.os }}-${{ hashFiles('scripts/eval/nightly.ts', 'docs/research/asr-benchmark.json') }}
+      # Qwen and its llama-server build (about 2.5 GB) are fetched each night, outside the cached
+      # folders, so the recognizer's cache stays small enough for the repository's cache quota.
       - name: evaluate against the committed baselines
+        env:
+          ONLY: ${{ inputs.only }}
         run: |
           bun scripts/eval/nightly.ts --models eval-models --data eval-data \
+            --qwen-models "$RUNNER_TEMP/qwen-models" \
             --diarize "native/akou-diarize/target/release/akou-diarize$EXE" \
-            --nemotron models/nemotron3_diar_v3.onnx --out nightly-results.json
+            --nemotron models/nemotron3_diar_v3.onnx ${ONLY:+--only "$ONLY"} --out nightly-results.json
 
   ui-webkit:
     # By hand only until the suite passes on WebKit (see the header).

@@ -1,7 +1,7 @@
 /**
  * The part of the nightly evaluation (scripts/eval/nightly.ts) that needs no model and no network:
- * reading a WAV into the recognizer's rate. The downloads and the models run in the nightly job
- * itself; the scoring is tested in score.test.ts.
+ * reading a WAV into the recognizer's rate, and the pinned silent clips. The downloads and the
+ * models run in the nightly job itself; the scoring is tested in score.test.ts.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -9,7 +9,7 @@ import { createHash } from "node:crypto";
 import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { pinned, readWav } from "../../scripts/eval/nightly.ts";
+import { pinned, readWav, SILENCE } from "../../scripts/eval/nightly.ts";
 import { ASR_RATE } from "../../src/main/asr/engine.ts";
 
 describe("a WAV at the recognizer's rate", () => {
@@ -111,5 +111,21 @@ describe("the committed baselines", () => {
       /\b(greedy|beam)\b/.test(b._measured[p] ?? ""),
     );
     expect(named).toEqual(Object.keys(b.platforms));
+  });
+});
+
+describe("Qwen's silent clips (ASR-5)", () => {
+  test("the benchmark's 25 stretches, each 3 to 8 s, in order and inside its meeting", () => {
+    const all = SILENCE.meetings.flatMap((m) => m.stretches);
+    expect(all).toHaveLength(25);
+    for (const m of SILENCE.meetings) {
+      expect(m.wavSha256).toMatch(/^[0-9a-f]{64}$/);
+      m.stretches.forEach(([start, end], i) => {
+        expect(end - start).toBeGreaterThanOrEqual(3);
+        expect(end - start).toBeLessThanOrEqual(8);
+        if (i > 0)
+          expect(start).toBeGreaterThan((m.stretches[i - 1] as readonly number[])[1] as number);
+      });
+    }
   });
 });
