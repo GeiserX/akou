@@ -2261,10 +2261,6 @@ dialog {
   font-size: 18px;
   font-weight: 400;
 }
-/* The Models page's own title: the dialog's row says it. */
-#models-body > .models-page > h2 {
-  display: none;
-}
 .setting {
   display: grid;
   gap: 2px;
@@ -2514,191 +2510,6 @@ dialog {
   width: 36em;
 }
 
-/* The Models page (docs/ux/SERVER.md SV-U6), in server mode's page and the window's Models
-   dialog: one card per model with two bars, accuracy and speed, on a 0 to 100 scale. */
-.models-page {
-  font-size: 13px;
-}
-.models-page h3 {
-  margin: 18px 0 2px;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--dim);
-}
-.models-top,
-.models-sort {
-  flex-wrap: wrap;
-  margin: 6px 0;
-}
-.models-top #models-state {
-  margin: 0;
-  flex: 1 1 18em;
-}
-.models-group > summary {
-  margin: 18px 0 2px;
-  cursor: pointer;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--dim);
-}
-.model-list {
-  list-style: none;
-  margin: 6px 0 0;
-  padding: 0;
-  display: grid;
-  gap: 8px;
-}
-.model {
-  display: grid;
-  gap: 4px;
-  padding: 10px 12px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-}
-.model[data-state="missing"] {
-  background: transparent;
-  border-style: dashed;
-}
-.model p {
-  margin: 0;
-}
-.model-head {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 6px;
-}
-.model-name {
-  font-family: ui-monospace, monospace;
-  font-size: 13px;
-  overflow-wrap: anywhere;
-}
-.model-size {
-  margin-left: auto;
-  color: var(--dim);
-  font-variant-numeric: tabular-nums;
-}
-.badge {
-  font-size: 11px;
-  padding: 0 6px;
-  border-radius: 999px;
-  border: 1px solid var(--faint);
-  color: var(--dim);
-}
-.badge.ok {
-  border-color: var(--ok);
-  color: var(--ok);
-}
-.model-purpose,
-.model-kept,
-.model-measured {
-  font-size: 12px;
-  color: var(--dim);
-}
-.model-from {
-  color: var(--faint);
-  overflow-wrap: anywhere;
-}
-.model-bars {
-  display: grid;
-  gap: 3px;
-  margin: 2px 0;
-  max-width: 46rem;
-}
-.mbar {
-  display: grid;
-  grid-template-columns: 5.5em minmax(60px, 1fr) minmax(9em, auto);
-  align-items: center;
-  gap: 8px;
-  font-size: 12px;
-}
-.mbar-label {
-  color: var(--dim);
-}
-.mbar .track {
-  height: 8px;
-  border-radius: 4px;
-  background: var(--line);
-  overflow: hidden;
-}
-.mbar .fill {
-  display: block;
-  height: 100%;
-  width: 0;
-  border-radius: 4px;
-  background: var(--ok);
-}
-.mbar.speed .fill {
-  background: var(--dim);
-}
-.mbar.none .track {
-  background: repeating-linear-gradient(-45deg, var(--line) 0 4px, transparent 4px 8px);
-}
-.mbar-value {
-  font-variant-numeric: tabular-nums;
-  color: var(--fg);
-}
-.mbar.none .mbar-value {
-  color: var(--faint);
-  font-style: italic;
-}
-.model-actions {
-  flex-wrap: wrap;
-  justify-content: flex-end;
-}
-.model-actions button {
-  padding: 4px 10px;
-  font-size: 12px;
-}
-.model-actions progress {
-  flex: 1 1 8em;
-}
-#models-settings {
-  margin-top: 18px;
-  display: grid;
-  gap: 8px;
-}
-#models-settings fieldset {
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  display: grid;
-  gap: 6px;
-  margin: 0;
-}
-#models-settings .choice {
-  display: flex;
-  gap: 8px;
-  align-items: baseline;
-}
-#models-settings .choice small {
-  display: block;
-  color: var(--dim);
-}
-.models-numbers {
-  display: grid;
-  gap: 6px;
-}
-.models-numbers label {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-}
-.models-numbers input {
-  width: 6em;
-}
-@media (max-width: 560px) {
-  .mbar {
-    grid-template-columns: 4.5em minmax(40px, 1fr) auto;
-    gap: 6px;
-  }
-  .model-actions {
-    justify-content: flex-start;
-  }
-}
 /* Dictation: the key recorder's keycaps and the history list (DC-U3, DC-H1). */
 .keycaps kbd {
   font: inherit;
@@ -3225,4 +3036,124 @@ select.pg-chip.add,
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* The Models page (docs/ux/design-explorations/sd-a-models.html): the line under the title,
+   radio lists, tags, a download's bar, and Remove, which shows on the row under the pointer. */
+.pg-title .pg-help {
+  margin-top: 2px;
+  max-width: none;
+  font-size: 12.5px;
+}
+.pg-sechelp {
+  margin: -2px 0 6px 4px;
+  color: var(--dim);
+  font-size: 12px;
+}
+label.pg-choice {
+  cursor: pointer;
+}
+input.pg-radio {
+  appearance: none;
+  box-sizing: border-box;
+  flex: none;
+  align-self: flex-start;
+  width: 16px;
+  min-width: 16px;
+  height: 16px;
+  margin: 2px 0 0;
+  padding: 0;
+  border-radius: 50%;
+  border: 1.5px solid #4a4f57;
+  background: none;
+  cursor: inherit;
+}
+input.pg-radio:checked {
+  border: 5px solid var(--fg);
+}
+input.pg-radio:focus-visible {
+  outline: 2px solid var(--line2);
+  outline-offset: 2px;
+}
+.pg-choice.dis {
+  opacity: 0.55;
+  cursor: default;
+}
+.pg-default {
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 400;
+}
+.pg-tag {
+  display: inline-flex;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border-radius: 10px;
+  background: var(--line2);
+  color: var(--fg);
+  font-size: 11px;
+  white-space: nowrap;
+}
+.pg-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  white-space: nowrap;
+}
+.pg-btn.ghost {
+  background: none;
+}
+.pg-btn .ico {
+  width: 12px;
+  height: 12px;
+}
+.pg-btn:disabled {
+  color: var(--faint);
+}
+.pg-row .pg-remove {
+  position: absolute;
+  right: 14px;
+  opacity: 0;
+  pointer-events: none;
+}
+.pg-row:hover .pg-remove,
+.pg-row .pg-remove:focus-visible {
+  position: static;
+  opacity: 1;
+  pointer-events: auto;
+}
+.pg-row:hover .pg-remove:disabled {
+  opacity: 0.5;
+}
+.pg-row:has(.pg-remove):hover {
+  background: rgba(242, 243, 245, 0.03);
+}
+.pg-progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 1px;
+  color: var(--dim);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+.pg-bar-track {
+  display: block;
+  width: 120px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--line2);
+  overflow: hidden;
+}
+.pg-bar-track > i {
+  display: block;
+  height: 100%;
+  background: var(--dim);
+}
+#page-models .pg-value {
+  font-variant-numeric: tabular-nums;
+}
+#page-models .pg-head {
+  margin-bottom: 20px;
 }

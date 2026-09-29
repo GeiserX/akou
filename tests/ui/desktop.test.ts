@@ -315,19 +315,24 @@ function titleBarState(page: Page) {
   });
 }
 
-/** The page's own strip and header: their heights, tops, drag regions and loose controls. */
-function pageTitleBar(page: Page) {
-  return page.evaluate(() => {
+/**
+ * The page's own strip and header: their heights, tops, drag regions and loose controls. `at` is
+ * the page on screen; a page left behind keeps its header hidden, which counts for nothing.
+ */
+function pageTitleBar(page: Page, at = "#page-settings") {
+  return page.evaluate((at) => {
     const DRAG = "electrobun-webkit-app-region-drag";
     const NO_DRAG = "electrobun-webkit-app-region-no-drag";
     const controls = "input, select, button, textarea, a, [tabindex]";
-    const inPages = [...document.querySelectorAll(`#pages .${DRAG}`)];
+    const inPages = [...document.querySelectorAll<HTMLElement>(`#pages .${DRAG}`)].filter((el) =>
+      el.checkVisibility(),
+    );
     return {
       bar: Math.round(
         document.querySelector("#pages > .pg-bar")?.getBoundingClientRect().height ?? -1,
       ),
       title: Math.round(
-        document.querySelector("#page-settings .pg-top h1")?.getBoundingClientRect().top ?? -1,
+        document.querySelector(`${at} .pg-top h1`)?.getBoundingClientRect().top ?? -1,
       ),
       drag: inPages.map((el) => el.className.split(" ")[0]).sort(),
       controls: inPages.flatMap((el) => [...el.querySelectorAll(controls)]).length,
@@ -336,7 +341,7 @@ function pageTitleBar(page: Page) {
         .filter((el) => !el.closest(`.${NO_DRAG}`))
         .map((el) => el.id || el.tagName),
     };
-  });
+  }, at);
 }
 
 describe("[DK-M7] the macOS window's title bar strip", () => {
@@ -348,6 +353,7 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
       try {
         // The page header's tops on macOS, which the other platforms draw 28 px higher.
         const onMac: number[] = [];
+        const modelsOnMac: number[] = [];
         for (const platform of ["darwin", "win32", "linux"]) {
           const w = await windowPage(rig, { platform });
           const { page } = w;
@@ -432,6 +438,27 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
               // The same header, without the strip above it.
               expect([home.title, sub.title]).toEqual(onMac.map((top) => top - 28));
               expect(`${platform}: ${zooms()}`).toBe(`${platform}: 0`);
+            }
+            // The Models page and its Helpers page start under the same strip, with the same drag.
+            await page.click("#models-open");
+            await page.waitForSelector("#page-models .pg-top h1");
+            const models = await pageTitleBar(page, "#page-models");
+            await page.click("#models-go-helpers");
+            await page.waitForSelector("#page-models .pg-back");
+            const helpers = await pageTitleBar(page, "#page-models");
+            if (platform === "darwin") {
+              for (const p of [models, helpers]) {
+                expect(p.bar).toBe(28);
+                expect(p.title).toBeGreaterThanOrEqual(28 + 28);
+                expect(p.drag).toEqual(["pg-bar", "pg-top"]);
+                expect(p.controls).toBeGreaterThan(0);
+                expect(p.loose).toEqual([]);
+              }
+              modelsOnMac.push(models.title, helpers.title);
+            } else {
+              for (const p of [models, helpers])
+                expect(`${platform}: ${p.bar} ${p.drag}`).toBe(`${platform}: 0 `);
+              expect([models.title, helpers.title]).toEqual(modelsOnMac.map((top) => top - 28));
             }
           } finally {
             await w.close();
