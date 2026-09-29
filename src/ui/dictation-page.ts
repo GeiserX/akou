@@ -59,6 +59,9 @@ export interface DictationGrants {
 const SOUNDS_KEY = "dictation.sounds";
 const PILL_KEY = "dictation.pill";
 
+/** Reading the field back (DC-L2), which on macOS waits for the Accessibility grant. */
+const READ_FIELD_KEY = "dictation.readField";
+
 /** The master switch, drawn above the groups. */
 export const ENABLE_KEY = "dictation.enabled";
 
@@ -309,6 +312,8 @@ export class DictationSettings {
     let input = f.input;
     if (key === MIC_KEY && input instanceof HTMLInputElement) input = this.micField(input);
     if (key === SOUNDS_KEY) input.after(h("small", { id: "dictation-sounds-now", class: "hint" }));
+    const waiting = key === READ_FIELD_KEY ? this.readWaits() : null;
+    if (waiting) input.after(waiting);
     input.addEventListener("change", () => {
       if (key === SOUNDS_KEY || key === PILL_KEY) this.soundsNow();
       // The switch turned on with a grant missing runs the setup instead (DC-U2, DC-N3).
@@ -528,6 +533,21 @@ export class DictationSettings {
     this.stopNextApp();
     this.setup?.stop();
     this.setup = null;
+  }
+
+  /**
+   * DC-L2: on macOS the helper reads no field without the Accessibility grant, so a read-back
+   * that is on says it waits for it rather than looking as if it worked.
+   */
+  private readWaits(): HTMLElement | null {
+    const g = this.grants?.accessibility;
+    if (this.platform !== "darwin" || !g || g === "granted" || g === "not-needed") return null;
+    if (this.settings[READ_FIELD_KEY] !== true) return null;
+    return h(
+      "small",
+      { id: "dictation-read-waiting", class: "hint" },
+      " Waiting for the Accessibility grant: until you give it, akou reads no field and learns only from the draft box.",
+    );
   }
 
   /**

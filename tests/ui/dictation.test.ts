@@ -2578,6 +2578,52 @@ describe("DC-U3: the dictation key recorder", () => {
   );
 });
 
+describe("DC-L2: the read-back waits for the Accessibility grant on macOS", () => {
+  let rig: UiRig;
+  let t: ReturnType<typeof tempDir>;
+  beforeAll(async () => {
+    t = tempDir("akou-ui-dict-read-");
+    rig = await uiRig({ home: t.dir });
+  }, UI_TIMEOUT);
+  afterAll(async () => {
+    await rig?.close();
+    t?.cleanup();
+  });
+
+  const openPage = async (platform: string, grants: DictationGrants) => {
+    const page = await rig.open(undefined, {
+      before: async (p) => {
+        const fx = await dictationFixture(p, { platform, grants });
+        // The app's default: the read-back is on.
+        fx.settings["dictation.readField"] = true;
+      },
+    });
+    await page.click("#dictation-open");
+    await page.waitForSelector("#dictation div.setting[data-key='dictation.readField']");
+    return page;
+  };
+
+  test(
+    "on macOS without the grant the setting says it waits; with the grant, or on Linux, it does not",
+    async () => {
+      const denied = await openPage("darwin", { mic: "granted", accessibility: "denied" });
+      expect(
+        await text(
+          denied,
+          "#dictation div.setting[data-key='dictation.readField'] #dictation-read-waiting",
+        ),
+      ).toContain("Waiting for the Accessibility grant");
+      // The controls: the same page with the grant, and Windows, which needs none.
+      const granted = await openPage("darwin", { mic: "granted", accessibility: "granted" });
+      expect(await granted.locator("#dictation-read-waiting").count()).toBe(0);
+      // On Linux `accessibility` says whether a keyboard is readable, which the read-back never needs.
+      const linux = await openPage("linux", { mic: "granted", accessibility: "denied" });
+      expect(await linux.locator("#dictation-read-waiting").count()).toBe(0);
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("DC-U4: reading the microphones", () => {
   // `readMics` makes one request; nothing else of a transport is reached.
   const answering = (status: number, body: unknown) =>

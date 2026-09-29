@@ -262,6 +262,11 @@ export interface SessionOptions extends TextRules {
    * `rebuild_mic` after `ready` (DC-U4, DC-N5); absent, the helper keeps its default.
    */
   mic?(): { device: string; preferBuiltIn: boolean };
+  /**
+   * Whether the Dictation page's meter is on (DC-U4, DC-N3): sent as `meter` after `ready`, so a
+   * helper started again while the page shows its meter keeps it moving.
+   */
+  metering?(): boolean;
 }
 
 /** A decode of the end of the audio so far, for the preview only. */
@@ -454,6 +459,16 @@ export class DictationSession {
     return true;
   }
 
+  /**
+   * Turns the Dictation page's meter on or off (DC-U4, DC-N3): while it is on the helper keeps
+   * the mic open and sends `level` with no session. False before `ready`.
+   */
+  meter(on: boolean): boolean {
+    if (!this.ready) return false;
+    this.o.send({ type: "meter", on });
+    return true;
+  }
+
   /** Sends the helper the microphone the settings pick (DC-U4, DC-N5); nothing before `ready`. */
   rebuildMic(): void {
     const m = this.o.mic?.();
@@ -518,6 +533,7 @@ export class DictationSession {
         this.set("idle");
         void this.rebind();
         this.rebuildMic();
+        if (this.o.metering?.()) this.meter(true);
         return;
       case "rebound":
         this.rebinds.shift()?.({ ok: true });
