@@ -741,6 +741,29 @@ describe("DC-S1: the draft box", () => {
   );
 
   test(
+    "DC-U9: a box a draft-send rule opened sends on Enter, and Insert still inserts alone",
+    async () => {
+      const p = v.page;
+      v.requests.length = 0;
+      await v.send("open", draft({ id: "r1", enterSends: true }));
+      expect(await text(p, "#draft-send-key")).toBe("↵");
+      await p.keyboard.press("Enter");
+      await v.send("open", draft({ id: "r2", enterSends: true }));
+      await p.click("#draft-insert");
+      // Positive control: without the rule, Enter inserts and sends nothing.
+      await v.send("open", draft({ id: "r3" }));
+      expect(await text(p, "#draft-send-key")).toBe("Ctrl ↵");
+      await p.keyboard.press("Enter");
+      expect(v.requests).toEqual([
+        { name: "insert", params: { id: "r1", text: draft().text, send: true } },
+        { name: "insert", params: { id: "r2", text: draft().text, send: false } },
+        { name: "insert", params: { id: "r3", text: draft().text, send: false } },
+      ]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "low-confidence words are underlined, the other engine's reading replaces one, an edit drops its mark",
     async () => {
       const p = v.page;

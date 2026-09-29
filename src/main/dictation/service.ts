@@ -36,6 +36,7 @@ import type { CueMoment } from "../../ui/dictation-cues.ts";
 import type { Chip, ChipAnswer } from "../../ui/pill-protocol.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
+import type { AppRule } from "../config/schema.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
 import { DraftBox, type DraftBoxOptions } from "./draft.ts";
 import { forcesLanguage } from "./engines.ts";
@@ -186,6 +187,8 @@ export interface DictationServiceOptions extends TextRules {
    * `dictation.sendAlways`, `dictation.restoreClipboard`. Absent: paste, and never a send key.
    */
   insert?(): InsertPolicy;
+  /** `dictation.apps`, the per-app rules (DC-U9); absent, none. */
+  apps?(): readonly AppRule[];
   /** `dictation.silenceStopSeconds` and `dictation.maxMinutes` (DC-A3); absent, never. */
   autoStop?(): AutoStop;
   /** `dictation.spokenSend` (DC-S5); absent, off. */
@@ -750,8 +753,10 @@ export class DictationService {
       onLevel: (rms) => this.tell({ kind: "level", rms }),
       onNotice: (id, notice) => this.tell({ kind: "notice", id, notice }),
       saveAudio: (id, samples) => this.audio.write(id, samples),
-      onDraft: (id, _reason, focus) => this.draft.open(id, { focus }).ok,
+      onDraft: (id, _reason, focus, rule) =>
+        this.draft.open(id, { focus, ...(rule ? { rule } : {}) }).ok,
       ...(this.o.insert ? { insertPolicy: this.o.insert } : {}),
+      appRule: (app) => this.o.apps?.().find((r) => r.app === app),
       onBusy: () => this.tell({ kind: "busy" }),
       onWarning: (note) => this.tell({ kind: "warning", note }),
       ...(this.o.autoStop ? { autoStop: this.o.autoStop } : {}),

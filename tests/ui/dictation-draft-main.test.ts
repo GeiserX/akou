@@ -277,12 +277,16 @@ describe("DC-S1: the draft box's page over the real main side", () => {
       await until(() => g.terms().includes("Kubernetes"), 5000, "the word learned");
       expect(await page.textContent("#chip")).toContain('Learned "Kubernetes"');
       await page.click("#chip-undo");
-      await until(() => !g.terms().includes("Kubernetes"), 5000, "the word taken back");
-      const learn = dictation(g)
-        .log.events()
-        .filter((e) => e.type === "dictation.learn")
-        .map((e) => (e as { status: string }).status);
-      expect(learn).toEqual(["proposed", "accepted", "ignored"]);
+      const learn = () =>
+        dictation(g)
+          .log.events()
+          .filter((e) => e.type === "dictation.learn")
+          .map((e) => (e as { status: string }).status);
+      // Undo takes the word out of the file first and writes `ignored` after: wait for both, or
+      // the next test finds the box still closing.
+      await until(() => learn().length === 3, 5000, "the undo written");
+      expect(g.terms()).not.toContain("Kubernetes");
+      expect(learn()).toEqual(["proposed", "accepted", "ignored"]);
     },
     UI_TIMEOUT,
   );

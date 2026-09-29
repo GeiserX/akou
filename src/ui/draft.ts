@@ -1,7 +1,8 @@
 /**
  * The draft box (docs/ux/DICTATION.md section 5.2, DC-S1): where a dictation lands when you want to
  * read it before it goes anywhere. Enter inserts into the app captured when the session began,
- * Ctrl+Enter (Cmd+Enter on macOS) inserts and presses the send key, Shift+Enter is a newline, and
+ * Ctrl+Enter (Cmd+Enter on macOS) inserts and presses the send key (and so does Enter in a box a
+ * per-app rule opened with `draft-send`), Shift+Enter is a newline, and
  * Escape discards. Discard, Retry with another engine, Copy, Insert and Send sit below as buttons.
  * It is drawn as a sheet dropped from the island at the top (docs/ux/design-explorations/README.md):
  * the island says `Draft` and the audio's length, the sheet holds the field, where the text goes,
@@ -164,7 +165,8 @@ export function mountDraft(t: DraftTransport): DraftSink {
     const other = mac() ? e.ctrlKey : e.metaKey;
     if (other) return;
     e.preventDefault();
-    insert(mod);
+    // A per-app rule's `draft-send` (DC-U9): Enter sends as well.
+    insert(mod || d?.enterSends === true);
   });
   field.addEventListener("click", () => {
     const at = field.selectionStart;
@@ -234,10 +236,12 @@ export function mountDraft(t: DraftTransport): DraftSink {
       el("draft-retry-group").hidden = next.engines.length === 0;
       el("draft-retry-pick").hidden = next.engines.length < 2;
       retryWith();
-      el("draft-send-key").textContent = mac() ? "⌘↵" : "Ctrl ↵";
-      el("draft-send").title = mac()
-        ? "Insert and send (Cmd+Enter)"
-        : "Insert and send (Ctrl+Enter)";
+      const sendMod = mac() ? "Cmd+Enter" : "Ctrl+Enter";
+      el("draft-send-key").textContent = next.enterSends ? "↵" : mac() ? "⌘↵" : "Ctrl ↵";
+      el("draft-send").title = next.enterSends
+        ? `Insert and send (Enter or ${sendMod})`
+        : `Insert and send (${sendMod})`;
+      el("draft-insert").title = next.enterSends ? "Insert without sending" : "Insert (Enter)";
       el("draft").hidden = false;
       paintMarks();
       if (next.focus) {

@@ -8,6 +8,9 @@
  *   page (`POST /v1/dictations/{id}/insert`), taking the keyboard. Fix (`fix: true`) opens the same
  *   box for teaching only: Enter learns and inserts nothing, so the app the dictation went into is
  *   left alone.
+ * - **Per-app rules** (DC-U9) open it too, taking the keyboard, for an app whose rule has `mode`
+ *   `draft` or `draft-send`; with `draft-send` Enter presses the send key as Ctrl/Cmd+Enter does,
+ *   and the rule's `sendKey` stands in for `dictation.sendKey`.
  * - **Enter** hides the box, has the helper bring the captured target forward and pastes there
  *   (DC-N9), pressing `dictation.sendKey` after the receipt for Ctrl/Cmd+Enter (DC-S2). A refused
  *   insert opens the box again with the user's text, without the keyboard. **Escape** writes
@@ -31,7 +34,7 @@ import type { DraftOpen, DraftRpc, DraftWord } from "../../ui/dictation-protocol
 import type { Chip } from "../../ui/pill-protocol.ts";
 import { Learner } from "./learner.ts";
 import type { SendKey } from "./protocol.ts";
-import type { DictationSession } from "./session.ts";
+import type { DictationSession, DraftRule } from "./session.ts";
 import type { DictationLog } from "./store.ts";
 
 type Requests = DraftRpc["bun"]["requests"];
@@ -116,6 +119,8 @@ interface Open {
   target: Target | null;
   /** Enter, Escape or a refused insert answered it; the box waits to be hidden or reopened. */
   answered: boolean;
+  /** The per-app rule that opened it (DC-U9), or null. */
+  rule: DraftRule | null;
 }
 
 export class DraftBox {
@@ -177,7 +182,10 @@ export class DraftBox {
    * `fix` for teaching only; `text` for another reading of it (a retry's, from history) in place
    * of the one in the log.
    */
-  open(id: string, o: { focus: boolean; fix?: boolean; text?: string }): DraftOpenResult {
+  open(
+    id: string,
+    o: { focus: boolean; fix?: boolean; text?: string; rule?: DraftRule },
+  ): DraftOpenResult {
     const w = this.win;
     if (!w)
       return { ok: false, code: "no_draft_box", message: "the draft box needs the desktop window" };
@@ -198,6 +206,7 @@ export class DraftBox {
       ...(o.fix ? { fix: true } : {}),
       base,
       words: o.text === undefined ? it.words : [],
+      ...(o.rule ? { rule: o.rule } : {}),
     });
     return { ok: true };
   }
@@ -213,6 +222,7 @@ export class DraftBox {
       words: DictationItem["words"];
       engine?: string;
       ms?: number | null;
+      rule?: DraftRule | null;
     },
   ): void {
     // Another dictation's draft left unanswered in the box: its learn window closes with it.
@@ -227,6 +237,7 @@ export class DraftBox {
       language: it.language,
       target: it.target,
       answered: false,
+      rule: o.rule ?? null,
     };
     const engine = o.engine ?? it.engine;
     const model = o.engine ? null : it.model;
@@ -243,6 +254,7 @@ export class DraftBox {
       engines: this.o.engines(),
       focus: o.focus,
       platform: this.o.platform,
+      ...(o.rule?.enterSends ? { enterSends: true } : {}),
     };
     this.up = true;
     w.open(d);
@@ -273,7 +285,8 @@ export class DraftBox {
     }
     // The keyboard goes back to the target, so the box steps aside first.
     this.hide();
-    const r = await s.insertText(id, text, c.target, send ? this.o.sendKey() : "none");
+    const sendKey = c.rule?.sendKey ?? this.o.sendKey();
+    const r = await s.insertText(id, text, c.target, send ? sendKey : "none");
     // A refused insert reopens at once: another dictation's draft may take the box during the check.
     if (!r.ok) this.reopen(c, text, r.reason);
     const chip = await learning;
@@ -291,7 +304,14 @@ export class DraftBox {
     const w = this.win;
     const it = this.o.log.item(c.id);
     if (!w || !it) return;
-    this.show(w, it, { focus: false, fix: c.fix, text, base: c.base, words: c.words });
+    this.show(w, it, {
+      focus: false,
+      fix: c.fix,
+      text,
+      base: c.base,
+      words: c.words,
+      rule: c.rule,
+    });
   }
 
   private discard(id: string): boolean {
@@ -333,6 +353,7 @@ export class DraftBox {
       words: a.words,
       engine: a.model ? `${a.engine} (${a.model})` : a.engine,
       ms: a.ms,
+      rule: c.rule,
     });
     return true;
   }
