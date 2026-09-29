@@ -499,10 +499,6 @@ export class AkouApp implements ApiApp {
   private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
   private readonly queries = new WeakMap<object, CallQuery>();
   private readonly vocabCache = new Map<string, VocabSource>();
-  /** A call's own `live` from its start (`akou start --live`), by call id. */
-  private readonly liveAsked = new Map<string, string>();
-  /** The `live` of the call starting now, before its id is known here. */
-  private startingLive: string | undefined;
   /** The live setup each call runs, chosen once when it first takes the recognizer. */
   private readonly liveRan = new Map<string, LiveSetupChoice>();
   /** Workspaces whose vocabulary files could not be read; retried when the vocabulary changes. */
@@ -940,7 +936,7 @@ export class AkouApp implements ApiApp {
         liveEngine: (callId) => {
           let ran = this.liveRan.get(callId);
           if (!ran) {
-            ran = this.liveChoice(this.liveAsked.get(callId) ?? this.startingLive);
+            ran = this.liveChoice(this.manager.controller(callId)?.liveAsked);
             this.liveRan.set(callId, ran);
             this.log(
               "info",
@@ -1691,16 +1687,9 @@ export class AkouApp implements ApiApp {
     // A start reads the files again when they could not be read before.
     this.vocabFailed.delete(ws);
     await this.loadVocab(ws);
-    // The call's own live setup: asked for by the recognizer as soon as audio arrives, which can be
-    // before the start answers here.
-    this.startingLive = req.live;
-    try {
-      const r = await this.manager.start(req);
-      if (r.ok && req.live) this.liveAsked.set(r.call, req.live);
-      return r;
-    } finally {
-      this.startingLive = undefined;
-    }
+    // The call's own live setup rides on its controller (`liveAsked`), never a shared slot: a
+    // concurrent start that is refused cannot touch the call that is starting.
+    return this.manager.start(req);
   }
 
   async call(id: string): Promise<CallController> {

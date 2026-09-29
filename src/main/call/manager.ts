@@ -76,8 +76,9 @@ export interface StartRequest {
    */
   withoutModels?: boolean;
   /**
-   * This call's live setup (`asr.live`'s values), instead of the setting. Read by the app when the
-   * call's audio first reaches the recognizer; the manager does not use it.
+   * This call's live setup (`asr.live`'s values), instead of the setting. Kept on the call's
+   * controller (`liveAsked`) before the helper spawns; the app reads it there when the call's audio
+   * first reaches the recognizer.
    */
   live?: string;
 }
@@ -294,6 +295,7 @@ export class CallManager {
         },
       );
     }
+    c.liveAsked = req.live;
     this.controllers.set(id, c);
     this.o.onOpen?.(c);
     this.onEvent(id, workspace, c.view.call as LogEvent);

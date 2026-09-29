@@ -310,7 +310,8 @@ Their exact names can still move with the engine design. What this section fixes
 
 | Key | Type | Values come from | Takes effect |
 |---|---|---|---|
-| `asr.live.engine` | one engine id | registry entries with role `live` | next call |
+| `asr.live` | `auto`, `parakeet`, `nemotron` or `upgrade` (`voxtral` listed as unavailable) | fixed; the Models page's Live section shows each with its bars | next call |
+| `asr.live.engine` | one engine id, used when `asr.live` resolves to `nemotron` or `upgrade` | registry entries with role `live` | next call |
 | `asr.final.engines` | ordered list of engine ids; the first is the primary | registry entries with role `final` | next final pass |
 | `asr.final.fusion` | one method, shown only when two or more final engines are chosen | the engine design's list, for example `off`, a per-word vote among the engines, or per word by the provider | next final pass |
 | `asr.language` | `auto` or a language code | the union of the chosen engines' languages | next call |

@@ -465,7 +465,7 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_ENGINE_SETTINGS,
     default: "auto",
-    doc: "The streaming model that writes the live transcript: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
+    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron` or `upgrade`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
   },
   "asr.segmentPause": {
     type: "number",

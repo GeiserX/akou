@@ -163,7 +163,8 @@ export function liveHint(v: LiveView): string {
   const next = v.setups.find((s) => s.id === v.next)?.title ?? v.next;
   const setting =
     v.setting === "auto" ? "Auto" : (v.setups.find((s) => s.id === v.setting)?.title ?? v.setting);
-  const why = v.note ? ` (${v.note})` : "";
+  // The note is the log's, written for a terminal: the page shows its words without backticks.
+  const why = v.note ? ` (${v.note.replaceAll("`", "")})` : "";
   return `What writes the transcript while a call runs. Chosen: ${setting}; the next call runs ${next}${why}. A change applies from the next call; a running call keeps its setup.`;
 }
 

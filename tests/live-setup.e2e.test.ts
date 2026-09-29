@@ -11,8 +11,10 @@ import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent, Seg } from "../src/core/log/events.ts";
+import { type Provisional, ProvisionalBoard } from "../src/core/log/fold.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import { CallController } from "../src/main/call/call.ts";
 import { type AppRig, appRig, FAKE_MODELS, speechWav } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { rigCli } from "./cli-helpers.ts";
@@ -67,6 +69,43 @@ async function liveStatus(): Promise<Body> {
 }
 
 /**
+ * Words shown and then taken back: a provisional line that does not extend the one before it on
+ * its open line, or whose words are not the start of the line finally written there. Empty when
+ * nothing shown is ever withdrawn.
+ */
+function withdrawn(shown: readonly Provisional[], segs: readonly Seg[]): string[] {
+  const out: string[] = [];
+  const open = (p: Provisional) => `${p.ch}/${p.part}/${p.w0}`;
+  for (let i = 1; i < shown.length; i++) {
+    const [a, b] = [shown[i - 1], shown[i]] as [Provisional, Provisional];
+    if (open(a) === open(b) && !b.text.startsWith(a.text)) out.push(`"${a.text}" -> "${b.text}"`);
+  }
+  for (const v of shown) {
+    const written = segs.some(
+      (s) => s.layer === "live" && s.ch === v.ch && s.w0 === v.w0 && s.text?.startsWith(v.text),
+    );
+    if (!written) out.push(`"${v.text}" never written`);
+  }
+  return out;
+}
+
+/** The provisional lines published while `run` runs, in order. */
+async function watchShown<T>(run: () => Promise<T>): Promise<{ r: T; shown: Provisional[] }> {
+  const shown: Provisional[] = [];
+  const update = ProvisionalBoard.prototype.update;
+  ProvisionalBoard.prototype.update = function (p: Provisional) {
+    const took = update.call(this, p);
+    if (took) shown.push({ ...p });
+    return took;
+  };
+  try {
+    return { r: await run(), shown };
+  } finally {
+    ProvisionalBoard.prototype.update = update;
+  }
+}
+
+/**
  * Runs one call until its first lines are written, and returns the setup the status named and the
  * models that wrote its lines. `during` runs once the call has chosen its setup.
  */
@@ -77,24 +116,40 @@ async function oneCall(
   setup: string;
   engine: string | null;
   models: (string | undefined)[];
-  rewritten: number;
 }> {
-  const id = await rig.startCall(body);
-  await until(async () => (await liveStatus())?.setup != null, 10_000, "the live setup");
-  const live = await liveStatus();
-  await during();
-  const segs = async () =>
-    (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
-  await until(async () => (await segs()).length >= 2, 15_000, "the call's lines");
-  const stop = await rig.api("POST", "/calls/live/stop");
-  expect(stop.status).toBe(200);
-  await until(async () => (await liveStatus()) === null, 10_000, "the call's end");
+  return (await runCall(body, during)).seen;
+}
+
+/** `oneCall`, also returning the call's live lines and the provisional lines shown. */
+async function runCall(
+  body: Record<string, unknown> = {},
+  during: () => Promise<void> = async () => {},
+): Promise<{
+  seen: { setup: string; engine: string | null; models: (string | undefined)[] };
+  segs: Seg[];
+  shown: Provisional[];
+}> {
+  const { r, shown } = await watchShown(async () => {
+    const id = await rig.startCall(body);
+    await until(async () => (await liveStatus())?.setup != null, 10_000, "the live setup");
+    const live = await liveStatus();
+    await during();
+    const segs = async () =>
+      (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
+    await until(async () => (await segs()).length >= 2, 15_000, "the call's lines");
+    const stop = await rig.api("POST", "/calls/live/stop");
+    expect(stop.status).toBe(200);
+    await until(async () => (await liveStatus()) === null, 10_000, "the call's end");
+    return { live, segs: await segs() };
+  });
   return {
-    setup: live.setup,
-    engine: live.engine,
-    models: [...new Set((await segs()).map((s) => s.model))],
-    // A line's words written again (a later revision carrying `text`) would be words taken back.
-    rewritten: (await segs()).filter((s) => s.rev > 1 && s.text !== undefined).length,
+    seen: {
+      setup: r.live.setup,
+      engine: r.live.engine,
+      models: [...new Set(r.segs.map((s) => s.model))],
+    },
+    segs: r.segs,
+    shown,
   };
 }
 
@@ -110,21 +165,26 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
       setup: "parakeet",
       engine: null,
       models: ["fake-parakeet"],
-      rewritten: 0,
     });
     await setLive("nemotron");
-    expect(await oneCall()).toEqual({
+    const nemo = await runCall();
+    expect(nemo.seen).toEqual({
       setup: "nemotron",
       engine: STREAM,
       models: [STREAM],
-      rewritten: 0,
     });
+    // Words showed while the lines were open, and none of them was ever taken back.
+    expect(nemo.shown.length).toBeGreaterThan(2);
+    expect(withdrawn(nemo.shown, nemo.segs)).toEqual([]);
+    // Control: the same check on the same call catches a shown word that is later withdrawn.
+    const last = nemo.shown.findLast((v) => v.text.includes(" ")) as Provisional;
+    const taken = { ...last, pseq: last.pseq + 1, text: last.text.replace(/ \S+$/, " wrong") };
+    expect(withdrawn([...nemo.shown, taken], nemo.segs).length).toBeGreaterThan(0);
     await setLive("auto");
     expect(await oneCall()).toEqual({
       setup: "nemotron",
       engine: STREAM,
       models: [STREAM],
-      rewritten: 0,
     });
   });
 
@@ -134,7 +194,6 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
       setup: "nemotron",
       engine: STREAM,
       models: [STREAM],
-      rewritten: 0,
     });
     expect(rig.logs.some((l) => /runs the nemotron live setup .*upgrade setup/.test(l.msg))).toBe(
       true,
@@ -149,14 +208,12 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
       setup: "parakeet",
       engine: null,
       models: ["fake-parakeet"],
-      rewritten: 0,
     });
     const kept = await oneCall({}, () => setLive("parakeet"));
     expect(kept).toEqual({
       setup: "nemotron",
       engine: STREAM,
       models: [STREAM],
-      rewritten: 0,
     });
     // The change applies from the next call.
     expect((await oneCall()).setup).toBe("parakeet");
@@ -175,6 +232,32 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
     expect(st.out).toContain(`live setup nemotron (${STREAM})`);
     expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
     await until(async () => (await liveStatus()) === null, 10_000, "the call's end");
+  });
+
+  test("a start refused while another call starts never changes that call's setup", async () => {
+    await setLive("nemotron");
+    // The call's own setup is on its controller before its helper spawns, so audio that reaches
+    // the recognizer before the start answers already reads it. A second start sent while the
+    // first is still starting is refused and leaves it alone.
+    const atBegin: (string | undefined)[] = [];
+    let other: Promise<{ status: number; body: Body }> | undefined;
+    const begin = CallController.prototype.begin;
+    CallController.prototype.begin = function (this: CallController) {
+      atBegin.push(this.liveAsked);
+      const started = begin.call(this);
+      other ??= rig.api("POST", "/calls", { workspace: "work", live: "nemotron" });
+      return started;
+    };
+    let seen: Awaited<ReturnType<typeof oneCall>>;
+    try {
+      seen = await oneCall({ live: "parakeet" });
+    } finally {
+      CallController.prototype.begin = begin;
+    }
+    const refused = await other;
+    expect(atBegin).toEqual(["parakeet"]);
+    expect([refused?.status, refused?.body.error]).toEqual([409, "already_recording"]);
+    expect(seen).toEqual({ setup: "parakeet", engine: null, models: ["fake-parakeet"] });
   });
 
   test("POST /calls refuses a live that is not a setup, and starts nothing", async () => {

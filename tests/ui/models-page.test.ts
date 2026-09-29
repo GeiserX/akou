@@ -244,9 +244,11 @@ describe("akou-chp.23: the Live section of the Models page", () => {
         "Unavailable:",
       );
       expect(await page.$('#models-live [data-setup="voxtral"] [data-action="use"]')).toBeNull();
-      expect(await page.textContent("#models-live-hint")).toContain(
-        "A change applies from the next call",
-      );
+      const hint = await page.textContent("#models-live-hint");
+      expect(hint).toContain("A change applies from the next call");
+      // The note names the command in plain text, without the log's backticks.
+      expect(hint).toContain("(the live model nemotron-en-560 is not downloaded (akou models pull");
+      expect(hint).not.toContain("`");
     },
     UI_TIMEOUT,
   );
