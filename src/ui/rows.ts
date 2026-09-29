@@ -3,8 +3,9 @@
  * direction A): a page title with an optional search on its right, a section title, a rounded
  * panel of rows, and a row with its label and one short line of help on the left and its control
  * on the right. The controls are a switch, a segmented choice, a select, a text or number field
- * with its unit, keycaps, and a row that leads to another page. The Settings page and server
- * mode's Settings page draw from these, so both look the same.
+ * with its unit, keycaps, a row that leads to another page, and a row that is one choice of a
+ * radio list. The Settings and Models pages, in the window and in server mode, draw from these,
+ * so they look the same.
  *
  * A control that a setting is saved from carries the setting's `data-key` on an input, select or
  * textarea, as the old form did: the save code reads it the same way whatever draws it
@@ -37,6 +38,7 @@ export const ICONS = {
   updown: ["m5 6 3-3 3 3M5 10l3 3 3-3"],
   search: ["M11.5 7a4.5 4.5 0 1 1-9 0a4.5 4.5 0 1 1 9 0", "m10.5 10.5 3 3"],
   folder: ["M2 4.5a1 1 0 0 1 1-1h3l1.5 1.5H13a1 1 0 0 1 1 1V12a1 1 0 0 1-1 1H3a1 1 0 0 1-1-1z"],
+  download: ["M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"],
 };
 
 /**
@@ -46,9 +48,12 @@ export const ICONS = {
  */
 export function pageHead(
   title: string,
-  o: { back?: HTMLButtonElement; right?: Child[] } = {},
+  o: { back?: HTMLButtonElement; right?: Child[]; sub?: HTMLElement } = {},
 ): HTMLElement {
-  const head = h("div", { class: "pg-head" }, h("h1", {}, title), h("span", { class: "grow" }));
+  const name = o.sub
+    ? h("div", { class: "pg-title" }, h("h1", {}, title), o.sub)
+    : h("h1", {}, title);
+  const head = h("div", { class: "pg-head" }, name, h("span", { class: "grow" }));
   append(head, ...(o.right ?? []));
   return h("div", { class: "pg-top" }, o.back ?? null, head);
 }
@@ -65,12 +70,18 @@ export function backLink(label: string, back: () => void): HTMLButtonElement {
 
 /** A section: its title, then one panel of rows. */
 export function section(title: string, ...rows: Child[]): HTMLElement {
+  return sectionWith(title, null, ...rows);
+}
+
+/** A section with one short line under its title, as "A change applies the next time akou starts." */
+export function sectionWith(title: string, help: Child, ...rows: Child[]): HTMLElement {
   const panel = h("div", { class: "pg-grp" });
   append(panel, ...rows);
   return h(
     "section",
     { class: "pg-section", attrs: { "data-section": title } },
     h("h2", { class: "pg-sec" }, title),
+    help ? h("p", { class: "pg-sechelp" }, help) : null,
     panel,
   );
 }
@@ -132,6 +143,57 @@ export function linkRow(
       h("span", { class: "pg-more" }, icon(...ICONS.chevron)),
     ),
   );
+}
+
+/**
+ * One choice of a radio list, the whole row its label: the circle, the name with "(default)" after
+ * it when it is the setting's default, one short line of facts, and on the right what the row adds
+ * (a tag, a size, a button). A button on the right stays a button: a press on it is not a pick.
+ */
+export function choiceRow(
+  o: {
+    name: string;
+    value: string;
+    label: string;
+    help?: Child;
+    checked: boolean;
+    isDefault?: boolean;
+    disabled?: boolean;
+  },
+  ...controls: Child[]
+): HTMLLabelElement {
+  const radio = h("input", {
+    type: "radio",
+    class: "pg-radio",
+    value: o.value,
+    attrs: { name: o.name },
+  });
+  radio.checked = o.checked;
+  radio.disabled = o.disabled === true;
+  const ctl = h("span", { class: "pg-ctl" });
+  append(ctl, ...controls);
+  return h(
+    "label",
+    { class: `pg-row pg-choice${o.disabled ? " dis" : ""}` },
+    radio,
+    h(
+      "span",
+      { class: "pg-lbl" },
+      h(
+        "b",
+        { class: "pg-name" },
+        o.label,
+        o.isDefault ? h("span", { class: "pg-default" }, " (default)") : null,
+      ),
+      o.help ? h("span", { class: "pg-help" }, o.help) : null,
+    ),
+    ctl,
+  );
+}
+
+/** A small rounded tag on a row's right: "next call", "this call". */
+export function tag(text: string, mark?: string): HTMLElement {
+  return h("span", { class: "pg-tag", attrs: mark ? { "data-mark": mark } : {} }, text);
 }
 
 /** A switch: a checkbox drawn as one, with `role="switch"` so it is announced as one. */
@@ -239,5 +301,25 @@ export function button(label: string, click: () => void, id?: string): HTMLButto
     "button",
     { type: "button", class: "pg-btn", ...(id ? { id } : {}), on: { click } },
     label,
+  );
+}
+
+/** A download bar with what it says beside it: "42 % of 2.52 GB". */
+export function progress(pct: number, text: string): HTMLElement {
+  const fill = h("i", {});
+  fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+  return h(
+    "span",
+    { class: "pg-progress" },
+    h(
+      "span",
+      {
+        class: "pg-bar-track",
+        role: "progressbar",
+        attrs: { "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) },
+      },
+      fill,
+    ),
+    h("span", { class: "pg-bar-text" }, text),
   );
 }

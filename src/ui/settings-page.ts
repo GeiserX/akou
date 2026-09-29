@@ -25,6 +25,7 @@ import { type CaptureInput, readMics } from "./dictation-mic.ts";
 import { onDictationPage } from "./dictation-page.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { h, replace, toast } from "./dom.ts";
+import { MODELS_KEYS } from "./models-rows.ts";
 import { message } from "./notepad.ts";
 import type { AppStatus, Transport } from "./protocol.ts";
 import {
@@ -119,16 +120,13 @@ const SUBS: Record<string, SubPage> = {
   },
   speech: {
     title: "Speech engines",
-    help: "Which streaming model, decoding, threads, pause length, models folder, who spoke.",
+    help: "Which streaming model, decoding, threads, pause length, models folder.",
     groups: [
       {
         title: "Live transcript",
         keys: ["asr.live.engine", "asr.parakeet.decoding", "asr.segmentPause", "asr.segmentWindow"],
       },
-      {
-        title: "Engines",
-        keys: ["asr.threads", "asr.accelerator", "asr.diarizer", "asr.modelsDir"],
-      },
+      { title: "Engines", keys: ["asr.threads", "asr.modelsDir"] },
       { title: "Programs", keys: ["asr.llamaServer", "asr.diarizeHelper"] },
     ],
   },
@@ -194,10 +192,7 @@ const SUBS: Record<string, SubPage> = {
           "server.max_upload_mb",
         ],
       },
-      {
-        title: "Models",
-        keys: ["server.auto_download", "server.models_max_gb", "server.models_unused_days"],
-      },
+      { title: "Models", keys: ["server.auto_download"] },
       {
         title: "Dictation for other computers",
         keys: ["server.dictation_slots", "server.dictation_engine"],
@@ -210,12 +205,23 @@ const SUBS: Record<string, SubPage> = {
 /** Keys whose value is a folder: drawn as its name, changed by typing where it is. */
 const FOLDERS = new Set(["recordings.root", "export.dir", "asr.modelsDir"]);
 
-/** Keys the Settings page shows neither on itself nor on its pages: their home is elsewhere. */
-const ELSEWHERE = new Set(["asr.live"]);
+/**
+ * Keys the Settings page shows neither on itself nor on its pages: their home is the Models page,
+ * which its Live transcript row and its search lead to.
+ */
+const ELSEWHERE = new Set<string>(MODELS_KEYS);
 
 /** The keys a row drawn by hand shows: the after-call row says what the file sends where. */
 const BY_HAND: Readonly<Record<string, readonly string[]>> = {
   [AFTER_CALL]: ["hooks", "webhook.url"],
+};
+
+/** What the Models page calls its settings, for the search here. */
+const MODELS_WORDS: Readonly<Record<string, string>> = {
+  "asr.diarizer": "Speakers: who spoke when",
+  "asr.accelerator": "Use the graphics chip",
+  "server.models_unused_days": "Delete models unused for",
+  "server.models_max_gb": "Keep all models under",
 };
 
 /** Every key this layout places, on the page or an Advanced page. */
@@ -262,8 +268,8 @@ interface SearchItem {
 export interface SettingsPageHooks {
   /** The workspaces the calls list knows, for the Workspaces row. */
   workspaces?: () => string[];
-  /** Opens the Models page, where the live transcript is chosen. */
-  openModels?: () => void;
+  /** Opens the Models page, where the live transcript is chosen; on `key`, at that setting. */
+  openModels?: (key?: string) => void;
   /** Opens the dictionary of your words (DC-U5). */
   openDictionary?: () => void;
   /**
@@ -1032,19 +1038,6 @@ export class SettingsPage {
     );
   }
 
-  /** The Models dialog closed over the page: the Live transcript row says what it chose. */
-  async refreshLive(): Promise<void> {
-    const [models, cfg] = await Promise.all([
-      this.t.request<LiveReply>("GET", "/models"),
-      this.t.request<ConfigReply>("GET", "/config"),
-    ]);
-    if (models.status < 400) this.live = models.body?.live ?? null;
-    if (cfg.status < 400) this.settings["asr.live"] = cfg.body.settings["asr.live"];
-    const old = this.col.querySelector("#settings-live");
-    const next = this.liveRow();
-    if (old && next) old.replaceWith(next);
-  }
-
   private liveRow(): HTMLElement | null {
     if (!("asr.live" in this.schema)) return null;
     const l = this.live;
@@ -1052,7 +1045,7 @@ export class SettingsPage {
     const setting = String(this.settings["asr.live"] ?? l?.setting ?? "auto");
     const value = setting === "auto" ? `Automatic${next ? `, ${next}` : ""}` : next || setting;
     return linkRow({ label: "Live transcript", value, id: "settings-live" }, () =>
-      this.hooks.openModels?.(),
+      this.hooks.openModels?.("asr.live"),
     );
   }
 
@@ -1227,6 +1220,16 @@ export class SettingsPage {
       }
     for (const [name, p] of Object.entries(subs))
       for (const g of p.groups) for (const k of g.keys) add(k, p.title, name);
+    // The Models page's settings are found here too, and the search goes there.
+    if (this.hooks.openModels && !this.hooks.server)
+      for (const k of MODELS_KEYS)
+        if (k !== "asr.live" && k in this.schema)
+          out.push({
+            label: MODELS_WORDS[k] ?? wordsFor(k).label,
+            help: wordsFor(k).label,
+            where: "Models",
+            go: () => this.hooks.openModels?.(k),
+          });
     return out;
   }
 

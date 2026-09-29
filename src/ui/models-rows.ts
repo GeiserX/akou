@@ -1,7 +1,8 @@
 /**
- * What the Models page says of each model (`models-page.ts`): the sort orders, sizes, languages,
- * the two bars, the measured speed and why a model is kept. Pure, so the tests read it without a
- * browser.
+ * What the Models page says (`models-page.ts`, docs/ux/design-explorations/sd-a-models.html): each
+ * model's name, its facts as plain sentences built from the numbers in `asr/model-scores.ts` and
+ * `asr/live-setups.ts` (each accuracy figure naming its test set), sizes, and why a model is kept.
+ * Pure, so the tests read it without a browser.
  */
 
 import type { LiveSetupView, LiveView } from "../main/asr/live-setups.ts";
@@ -11,53 +12,62 @@ import { when } from "./server-text.ts";
 export type ModelRow = ModelView;
 export type { LiveSetupView, LiveView };
 
-export const SORTS = [
-  { by: "accuracy", label: "Accuracy" },
-  { by: "speed", label: "Speed" },
-  { by: "size", label: "Size" },
-  { by: "name", label: "Name" },
-  { by: "last_used", label: "Last used" },
+/** Catalog ids the page places by hand (`tests/models-rows.test.ts` checks them against the catalog). */
+export const RECOGNIZER_ID = "parakeet-tdt-0.6b-v3-fp32";
+export const QWEN_ID = "qwen3-asr-1.7b";
+/** The models each speaker setting (`asr.diarizer`) runs on. */
+export const DIARIZERS: Readonly<Record<string, readonly string[]>> = {
+  nemotron: ["nemotron-3-diarization"],
+  embeddings: ["pyannote-segmentation-3.0", "titanet-small"],
+};
+
+/** The settings whose home is the Models page; the Settings page leaves them out and links here. */
+export const MODELS_KEYS = [
+  "asr.live",
+  "asr.diarizer",
+  "asr.accelerator",
+  "server.models_unused_days",
+  "server.models_max_gb",
 ] as const;
-export type SortBy = (typeof SORTS)[number]["by"];
 
-/** The page's sections, in order; helpers start folded. */
-export const SECTIONS: readonly { kind: ModelRow["kind"]; title: string; hint: string }[] = [
-  {
-    kind: "speech",
-    title: "Speech recognition",
-    hint: "The models that turn speech into words.",
-  },
-  {
-    kind: "speakers",
-    title: "Speaker labels",
-    hint: "Diarization: who spoke when. Used when a job or a call asks for speaker labels.",
-  },
-  {
-    kind: "helper",
-    title: "Helpers",
-    hint: "Voice activity detection and the programs a model runs on. They are fetched with the model that needs them.",
-  },
-];
+/** The defaults the page marks "(default)"; `tests/models-rows.test.ts` checks them against the registry. */
+export const DEFAULTS: Readonly<Record<string, string>> = {
+  "asr.live": "auto",
+  "asr.diarizer": "nemotron",
+  "server.default_model": "auto",
+};
 
-/** A score to sort by: the bar, else nothing (last). */
-function scoreOf(s: ScoreView): number {
-  return s.score ?? -1;
+const NAMES: Readonly<Record<string, string>> = {
+  [RECOGNIZER_ID]: "Parakeet v3",
+  [QWEN_ID]: "Qwen3-ASR 1.7B",
+  "nemotron-3-diarization": "Nemotron diarization",
+  "pyannote-segmentation-3.0": "Speech turns",
+  "titanet-small": "Voice fingerprints",
+  "silero-vad": "Voice detection",
+  "nemotron-en-560": "Nemotron streaming, English",
+  "nemotron-3.5-560": "Nemotron streaming, many languages",
+  "nemotron-3.5-1120": "Nemotron streaming, many languages, larger",
+};
+
+/** A model's name in words; a model the page has no name for keeps its id. */
+export function modelName(r: Pick<ModelRow, "id" | "job">): string {
+  if (NAMES[r.id]) return NAMES[r.id] as string;
+  if (r.id.startsWith("llama-server")) return "Qwen3-ASR's program";
+  return r.id;
 }
 
-/**
- * The rows in the order asked for. Best first for accuracy and speed, largest first for size, A to
- * Z for name, most recent first for last used; a model with no number goes last, then by name.
- */
-export function sortRows(rows: readonly ModelRow[], by: SortBy): ModelRow[] {
-  const name = (a: ModelRow, b: ModelRow) => a.id.localeCompare(b.id);
-  const key: Record<SortBy, (r: ModelRow) => number> = {
-    accuracy: (r) => scoreOf(r.accuracy),
-    speed: (r) => scoreOf(r.speed),
-    size: (r) => r.size,
-    name: () => 0,
-    last_used: (r) => (r.last_used_at === null ? -1 : Date.parse(r.last_used_at)),
-  };
-  return [...rows].sort((a, b) => key[by](b) - key[by](a) || name(a, b));
+/** The live setups' names on the page, in its order: Automatic first, Voxtral last. */
+export const LIVE_ORDER = ["auto", "nemotron", "parakeet", "upgrade", "voxtral"] as const;
+const LIVE_NAMES: Readonly<Record<string, string>> = {
+  auto: "Automatic",
+  nemotron: "Nemotron, streaming",
+  parakeet: "Parakeet, between pauses",
+  upgrade: "Nemotron, each line rewritten by Qwen",
+  voxtral: "Voxtral Realtime",
+};
+
+export function liveName(id: string, fallback = id): string {
+  return LIVE_NAMES[id] ?? fallback;
 }
 
 /** `2.55 GB`, `40 MB`, `644 KB`, in powers of ten as the settings count them. */
@@ -67,119 +77,170 @@ export function sizeText(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
 
-/** `25 languages`, `en, es`, `any language`, or nothing when the catalog does not say. */
-export function languagesText(r: ModelRow): string {
-  if (r.languages === null) return "";
-  if (r.languages === "any") return "any language";
-  if (r.languages.length <= 3) return r.languages.join(", ");
-  return `${r.languages.length} languages`;
+/** A model's size as the page gives it: `2.55 GB`, `0.05 GB`, and a small helper's `2 MB`. */
+export function gbText(bytes: number): string {
+  return bytes < 5e6 ? sizeText(bytes) : `${(bytes / 1e9).toFixed(2)} GB`;
 }
 
-/** What the model is for, in one line: its job, languages, and whether it streams. */
-export function purposeText(r: ModelRow): string {
-  const langs = r.kind === "speech" ? languagesText(r) : "";
-  return [r.job, langs, r.kind === "speech" ? reachText(r) : ""]
-    .filter((x) => x !== "")
-    .join(" · ");
+/** How often a word is wrong: `1 word in 5` from 10 % up, `5 words in 100` below. */
+function wordsWrong(pct: number): string {
+  if (pct >= 10) return `1 word in ${Math.round(100 / pct)}`;
+  const n = Math.max(1, Math.round(pct));
+  return `${n} word${n === 1 ? "" : "s"} in 100`;
 }
 
-/** When a speech model transcribes: live, after the call, or both. An older app sends no `after_call`. */
-function reachText(r: ModelRow): string {
-  if (!r.streaming) return "after the call only";
-  return r.after_call === false ? "live only" : "live and after the call";
+/** How often a second goes to the wrong speaker: `1 second in 10`, `6 seconds in 10`. */
+function secondsWrong(pct: number): string {
+  if (pct < 5) return `${Math.max(1, Math.round(pct))} second${pct < 1.5 ? "" : "s"} in 100`;
+  const n = Math.round(pct / 10);
+  return `${n} second${n === 1 ? "" : "s"} in 10`;
 }
 
-/** One bar: the 0 to 100 value or null, the short label beside it, and the full source text. */
-export interface Bar {
-  value: number | null;
-  label: string;
-  title: string;
+/**
+ * The accuracy figure as a sentence naming its test set: "About 1 word in 5 wrong on meetings.",
+ * "About 1 second in 10 given to the wrong speaker on real calls." Null when nobody measured it,
+ * or the figure has no test set in words.
+ */
+export function accuracyText(s: ScoreView): string | null {
+  if (s.score === null || !s.set) return null;
+  if (s.metric === "wer" || s.metric === "call-wer")
+    return `About ${wordsWrong(s.value)} wrong on ${s.set}.`;
+  if (s.metric === "der")
+    return `About ${secondsWrong(s.value)} given to the wrong speaker on ${s.set}.`;
+  return null;
 }
 
-const METRIC: Record<string, (v: number) => string> = {
-  wer: (v) => `WER ${v} %`,
-  der: (v) => `DER ${v} %`,
-  rtfx: (v) => `${v}x real time`,
-  "call-wer": (v) => `WER ${v} % on meetings`,
-  seconds: (v) => `${v} s`,
-  cores: (v) => `${v} cores`,
-  gb: (v) => `${v} GB`,
-};
-
-export function bar(s: ScoreView): Bar {
-  if (s.score === null) return { value: null, label: "not measured", title: s.not_measured };
-  const raw = (METRIC[s.metric] ?? String)(s.value);
-  return {
-    value: s.score,
-    label: `${s.score} · ${raw}`,
-    title: `${raw}: ${s.what}. Score: ${s.formula}. Source: ${s.source}`,
-  };
+/** Minutes, one decimal under ten. */
+function minutes(n: number): string {
+  return n < 10 ? String(Math.round(n * 10) / 10) : String(Math.round(n));
 }
 
-/** This machine's measured speed, or null when it has not run the model. */
-export function measuredText(r: ModelRow): string | null {
-  if (!r.measured) return null;
-  const { rtf, runs } = r.measured;
-  const x = rtf > 0 ? Math.round(10 / rtf) / 10 : 0;
-  return `Measured here: ${x}x real time (real-time factor ${rtf}), median of ${runs} run${runs === 1 ? "" : "s"}`;
+/**
+ * How long an hour of audio takes: this machine's own runs when it has any, else the reference
+ * machine's figure. Empty when neither is known.
+ */
+export function hourText(r: ModelRow, here: string): string {
+  if (r.measured && r.measured.rtf > 0)
+    return `An hour of audio in ${minutes(60 * r.measured.rtf)} minutes on ${here}.`;
+  if (r.speed.score !== null && r.speed.metric === "rtfx" && r.speed.value > 0)
+    return `An hour of audio in ${minutes(60 / r.speed.value)} minutes.`;
+  return "";
+}
+
+/** The first letter lower case, to follow a colon. */
+function lower(s: string): string {
+  return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
+/** A live setup's facts: its accuracy on meetings, then how its lines behave. */
+export function liveHelp(s: LiveSetupView): string {
+  return [accuracyText(s.accuracy), s.plain].filter((x) => x).join(" ");
+}
+
+/** What Automatic runs: Nemotron once a streaming model is here, else Parakeet. */
+export function autoHelp(v: LiveView, here: string): string {
+  const streams =
+    v.setting === "auto"
+      ? v.next === "nemotron"
+      : (v.setups.find((s) => s.id === "nemotron")?.models.every((m) => m.state === "ready") ??
+        false);
+  return streams
+    ? `Uses Nemotron, since it is on ${here}.`
+    : `Uses Parakeet until Nemotron is on ${here}.`;
+}
+
+/**
+ * Where the tags go: "next call" on the row the next call runs, "this call" on the row the live
+ * call runs. With Automatic chosen, the setup it resolves to is marked on Automatic's own row.
+ * One row both runs now and runs next: it says "this call".
+ */
+export function liveTags(v: LiveView): Map<string, string[]> {
+  const rowOf = (id: string) => (v.setting === "auto" && id === v.next ? "auto" : id);
+  const out = new Map<string, string[]>();
+  const add = (row: string, tag: string) => out.set(row, [...(out.get(row) ?? []), tag]);
+  const running = v.running ? rowOf(v.running) : null;
+  if (running) add(running, "this call");
+  const next = rowOf(v.next);
+  if (next !== running) add(next, "next call");
+  return out;
+}
+
+/** The After the call row's facts: what it does, its accuracy, and how fast. */
+export function afterCallHelp(r: ModelRow, here: string): string {
+  return [
+    "Writes the accurate transcript when a call ends.",
+    accuracyText(r.accuracy),
+    hourText(r, here),
+  ]
+    .filter((x) => x)
+    .join(" ");
+}
+
+/** Dictation's Best row: the most accurate, what else it does, and what dictation does without it. */
+export function bestHelp(r: ModelRow): string {
+  const acc = accuracyText(r.accuracy);
+  return [
+    acc ? `The most accurate: ${lower(acc)}` : "The most accurate.",
+    "It also rewrites live lines and checks the words akou learns.",
+    "Without it, dictation uses Fast.",
+  ].join(" ");
+}
+
+/** A speaker setting's facts. */
+export function speakersHelp(setting: string, rows: readonly ModelRow[]): string {
+  const acc = rows.map((r) => accuracyText(r.accuracy)).find((x) => x) ?? null;
+  if (setting === "nemotron")
+    return ["Who spoke when, live and after the call.", acc].filter((x) => x).join(" ");
+  return acc ? `The older way: ${lower(acc)}` : "The older way.";
+}
+
+/** A helper's line: what it is for. */
+export function helperHelp(r: ModelRow): string {
+  if (r.id === "silero-vad") return "Finds where someone speaks, for every model.";
+  if (r.id.startsWith("llama-server")) return "The program Qwen3-ASR runs in, for this computer.";
+  if (r.kind === "speech" && r.streaming && !r.after_call)
+    return [accuracyText(r.accuracy), "Writes the live transcript as words are said."]
+      .filter((x) => x)
+      .join(" ");
+  const acc = accuracyText(r.accuracy);
+  return acc ?? capital(r.job);
+}
+
+function capital(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** The page's line under its title: how much is on this computer, and that none of it leaves. */
+export function totalText(rows: readonly ModelRow[], here: string, server: boolean): string {
+  const bytes = rows.filter((r) => r.state === "ready").reduce((n, r) => n + r.size, 0);
+  const gb = (bytes / 1e9).toFixed(1);
+  return `${gb} GB on ${here}. Nothing leaves ${server ? "this server" : "this computer"}.`;
 }
 
 /** Last use and what the sweep does with it: kept, deleted on a date, or never deleted. */
 export function keptText(r: ModelRow, unusedDays: number | null): string {
   if (r.state !== "ready") return r.state === "downloading" ? "Downloading" : "Not downloaded";
   const used = r.last_used_at ? `Last used ${when(r.last_used_at)}` : "Not used yet";
-  if (r.default) return `${used} · Kept: default`;
-  if (r.in_use) return `${used} · Kept: in use`;
-  if (r.evicts_at) return `${used} · Deleted on ${when(r.evicts_at)} if still unused`;
-  return unusedDays === 0 ? `${used} · Kept: automatic deletion is off` : used;
+  if (r.default) return `${used}. Kept: the default.`;
+  if (r.in_use) return `${used}. Kept: in use.`;
+  if (r.evicts_at) return `${used}. Deleted on ${when(r.evicts_at)} if still unused.`;
+  return unusedDays === 0 ? `${used}. Kept: nothing is deleted for being unused.` : `${used}.`;
 }
 
-/** Why Delete is not offered on a model, or null when it is. */
-export function deleteRefusal(r: ModelRow): string | null {
-  if (r.state !== "ready") return r.state === "downloading" ? "downloading" : null;
-  if (r.default) return "the default model's set is never deleted; choose another default first";
-  if (r.in_use) return "in use by a job, a worker or the recognizer";
+/** Why Remove is not offered on a model, or null when it is. */
+export function removeRefusal(r: ModelRow): string | null {
+  if (r.state !== "ready") return r.state === "downloading" ? "It is downloading." : null;
+  if (r.default) return "Kept: akou uses it by default. Choose another first.";
+  if (r.in_use) return "Kept: in use right now.";
   return null;
 }
 
 /** Percent of a download, rounded down. */
-export function percent(r: ModelRow): number {
-  return r.size > 0 ? Math.floor((100 * r.bytes) / r.size) : 0;
+export function percent(bytes: number, size: number): number {
+  return size > 0 ? Math.floor((100 * bytes) / size) : 0;
 }
 
-// ---------------------------------------------------------------------------
-// The Live section: the live setups (`asr.live`)
-
-/** The four bars of a live setup, in the order the page draws them. */
-export const LIVE_BARS = [
-  { side: "accuracy", label: "Accuracy" },
-  { side: "latency", label: "Latency" },
-  { side: "cores", label: "Cores" },
-  { side: "memory", label: "Memory" },
-] as const;
-
-/** The line under the section's title: the setting, what the next call runs, and when a change applies. */
-export function liveHint(v: LiveView): string {
-  const next = v.setups.find((s) => s.id === v.next)?.title ?? v.next;
-  const setting =
-    v.setting === "auto" ? "Auto" : (v.setups.find((s) => s.id === v.setting)?.title ?? v.setting);
-  // The note is the log's, written for a terminal: the page shows its words without backticks.
-  const why = v.note ? ` (${v.note.replaceAll("`", "")})` : "";
-  return `What writes the transcript while a call runs. Chosen: ${setting}; the next call runs ${next}${why}. A change applies from the next call; a running call keeps its setup.`;
-}
-
-/** The models a setup needs that are not on disk yet. */
-export function liveMissing(s: LiveSetupView): string[] {
-  return s.models.filter((m) => m.state === "missing").map((m) => m.id);
-}
-
-/** What the setup loads here, and which of those are missing. */
-export function liveModelsText(s: LiveSetupView): string {
-  if (s.models.length === 0) return "";
-  const names = s.models.map((m) =>
-    m.state === "ready"
-      ? m.id
-      : `${m.id} (${m.state === "downloading" ? "downloading" : "not downloaded"})`,
-  );
-  return `Runs on ${names.join(", ")}`;
+/** "Needs Qwen3-ASR." for a setup or engine whose models are not all here. */
+export function needsText(missing: readonly ModelRow[]): string {
+  return missing.length === 0 ? "" : `Needs ${missing.map((r) => modelName(r)).join(" and ")}.`;
 }
