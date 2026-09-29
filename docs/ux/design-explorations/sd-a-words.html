@@ -17,16 +17,16 @@ svg{display:block;flex:none}
 .ico{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .num{font-variant-numeric:tabular-nums}
 
-.win{width:1440px;height:900px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column;position:relative}
+.win{width:1440px;min-height:900px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column;position:relative}
 .titlebar{height:40px;flex:none;display:flex;align-items:center;position:relative;background:var(--panel);border-bottom:1px solid var(--line)}
 .lights{display:flex;gap:8px;padding-left:16px}
 .lights i{width:12px;height:12px;border-radius:50%;display:block}
 .lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
 .titlebar .title{position:absolute;left:0;right:0;text-align:center;font-weight:600;font-size:13px;color:var(--dim);pointer-events:none}
-.body{flex:1;display:flex;min-height:0}
+.body{flex:1;display:flex;min-height:0;background:linear-gradient(90deg,var(--panel) 219px,var(--line) 219px 220px,var(--bg) 220px)}
 
 /* sidebar, as B2 */
-.side{width:220px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 8px 0}
+.side{width:220px;height:860px;align-self:flex-start;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 8px 0}
 .brand{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;margin-bottom:16px}
 .brand svg{height:28px;width:86px}
 .nav a{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:6px;color:var(--dim);text-decoration:none}
@@ -56,27 +56,23 @@ svg{display:block;flex:none}
 .sw i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#e9ebee;box-shadow:0 1px 2px rgba(0,0,0,.4)}
 .sw.on{background:#2fb34a}
 .sw.on i{left:16px;background:#fff}
-.sw.big{width:42px;height:24px;border-radius:12px}
-.sw.big i{width:20px;height:20px}
-.sw.big.on i{left:20px}
 .kcap{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 9px;border-radius:6px;background:var(--raised);border:1px solid var(--line2);border-bottom-width:2px;font-size:12.5px;font-weight:500;color:var(--fg);white-space:nowrap}
 .kcap small{font-size:11px;font-weight:500;color:#c3c7cd}
 .kcap.s{height:20px;padding:0 6px;font-size:11px;border-radius:5px;color:#c3c7cd}
 .kcap.xl{height:44px;padding:0 16px;font-size:20px;border-radius:9px;border-bottom-width:3px;gap:8px}
 .kcap.xl small{font-size:15px}
-.plus{color:var(--faint);font-size:12px;margin:0 2px}
 .btn{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:6px;background:var(--raised);border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
 .btn.ghost{background:none}
 .btn .ico{width:12px;height:12px}
 .link{color:var(--dim);font-size:12px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .link .ico{width:12px;height:12px}
 .sel{display:inline-flex;align-items:center;justify-content:space-between;gap:8px;height:28px;padding:0 8px 0 10px;border-radius:6px;background:var(--panel);border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
-.sel em{font-style:normal;color:var(--faint)}
+.sel em{font-style:normal;color:var(--dim)}
 .sel .ico{width:12px;height:12px;color:var(--dim)}
 .input{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:6px;background:var(--bg);border:1px solid var(--line2);font-size:12px;color:var(--fg)}
 .seg{display:inline-flex;height:28px;padding:2px;border-radius:7px;background:var(--panel);border:1px solid var(--line2)}
 .seg span{padding:0 10px;border-radius:5px;font-size:12px;color:var(--dim);display:flex;align-items:center;white-space:nowrap}
-.seg span.on{background:var(--line2);color:var(--fg)}
+.seg span.on{background:#3a3f46;color:var(--fg)}
 .chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 6px 0 10px;border-radius:12px;background:var(--raised);border:1px solid var(--line2);font-size:12px;color:var(--fg)}
 .chip .x{color:var(--faint);font-size:11px;width:14px;text-align:center}
 .chip.add{padding:0 10px;background:none;border-style:dashed;color:var(--dim)}
@@ -94,11 +90,10 @@ svg{display:block;flex:none}
 .menu div.hi{background:var(--line2)}
 .menu div .ico{width:13px;height:13px;color:var(--dim)}
 .menu hr{border:0;border-top:1px solid #33373e;margin:4px 2px}
-.tip{position:absolute;z-index:5;height:22px;padding:0 8px;border-radius:5px;background:#26292e;border:1px solid #33373e;font-size:11px;color:var(--fg);display:flex;align-items:center;white-space:nowrap;box-shadow:0 6px 16px rgba(0,0,0,.5)}
 .appico{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0d0e10;flex:none}
 
 
-.scroll{position:absolute;inset:0;overflow:hidden;padding:28px 0 0}
+.scroll{position:relative;padding:28px 0 56px}
 .col{width:680px;margin:0 auto}
 .phead{display:flex;align-items:flex-start;gap:16px;margin-bottom:20px}
 .phead h1{font-size:22px;line-height:28px;font-weight:650;letter-spacing:-.015em}
@@ -116,15 +111,30 @@ svg{display:block;flex:none}
 .row .lbl .help{margin-top:1px}
 .row .ctl{display:flex;align-items:center;gap:8px;flex:none}
 .row.hover{background:rgba(242,243,245,.03)}
-.row .ck{width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--dim);border:1px solid var(--line2);background:var(--raised)}
-.row .ck .ico{width:12px;height:12px}
 .row .more{color:var(--faint);display:flex;align-items:center}
 .row .more .ico{width:12px;height:12px}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
-.fade{position:absolute;left:0;right:0;bottom:0;height:56px;background:linear-gradient(rgba(13,14,16,0),var(--bg));pointer-events:none}
 .app{display:flex;align-items:center;gap:10px}
 .app b{font-weight:500}
-
+.row .lbl .help{max-width:440px}
+.radio{width:16px;height:16px;border-radius:50%;border:1.5px solid #4a4f57;flex:none;align-self:flex-start;margin-top:2px}
+.radio.on{border:5px solid var(--fg)}
+.row.dis{opacity:.55}
+.tag{height:20px;padding:0 8px;border-radius:10px;background:var(--line2);font-size:11px;color:var(--fg);display:inline-flex;align-items:center;white-space:nowrap}
+.state{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dim);white-space:nowrap}
+.state .ico{width:13px;height:13px}
+.state.ok .ico{color:var(--ok)}
+.state.warn .ico{color:var(--warn)}
+.sechelp{color:var(--dim);font-size:12px;margin:-2px 0 6px 4px}
+.prog{width:120px;height:4px;border-radius:2px;background:var(--line2);overflow:hidden;display:block}
+.prog i{display:block;width:42%;height:100%;background:var(--dim)}
+.appico.gen{background:var(--raised);border:1px solid var(--line2);color:var(--dim)}
+.appico.gen .ico{width:13px;height:13px}
+.states{width:1440px;padding:28px 48px 44px;background:#000}
+.states h2{font-size:13px;font-weight:600;color:var(--dim);margin:0 0 14px}
+.panels{display:flex;gap:24px;align-items:flex-start}
+.panel{flex:1;min-width:0}
+.panel .cap{font-size:12px;color:var(--dim);margin:0 0 6px 4px}
 </style>
 </head>
 <body>
@@ -156,15 +166,24 @@ svg{display:block;flex:none}
 <div class="scroll"><div class="col">
   <div class="link" style="margin-bottom:10px"><svg class="ico" viewBox="0 0 16 16"><path d="m10 3.5-4.5 4.5 4.5 4.5"/></svg>Dictation</div>
   <div class="phead">
-    <div class="grow"><h1>Words and replacements</h1><div class="help">Spelled your way in every dictation. Calls use a word too when you say so.</div></div>
+    <div class="grow"><h1>Words and replacements</h1><div class="help">Spelled your way in every dictation. Words marked Calls too also fix your call transcripts.</div></div>
   </div>
-  <div class="grp"><div class="row"><span class="input" style="flex:1;color:var(--faint)">You say</span><span class="faint">→</span><span class="input" style="flex:1;color:var(--faint)">akou writes</span><span class="btn">Add</span></div></div>
-  <div class="sec">To review</div><div class="grp"><div class="row"><div class="lbl"><b>Grafana</b><div class="help">You changed “gra fauna” to this in Mail, yesterday.</div></div><div class="ctl"><span class="btn">Learn it</span><span class="btn ghost">Not a word</span></div></div></div>
-  <div class="sec">Words <span class="faint" style="font-weight:500">12</span></div><div class="grp"><div class="row"><div class="lbl"><b>Kubernetes</b></div><div class="ctl"><span class="help">also heard as “cooper netties”</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>akou</b></div><div class="ctl"><span class="help">also heard as “a coo”, “echo”</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>PostgreSQL</b></div><div class="ctl"><span class="help">Calls too</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><span class="link">9 more</span></div></div>
-  <div class="sec">Replacements <span class="faint" style="font-weight:500">3</span></div><div class="grp"><div class="row"><div class="lbl"><b>dot com <span class="faint">→</span> .com</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>new paragraph <span class="faint">→</span> ¶</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
+  <div class="grp"><div class="row"><span class="input" style="flex:1;color:var(--faint)">Add a word</span><span class="btn">Add</span></div></div>
+  <div style="margin:8px 4px 0"><span class="link">Replace something I say</span></div>
+  <div class="sec">To review</div><div class="grp"><div class="row"><div class="lbl"><b>Grafana</b><div class="help">You changed “gra fauna” to this in Mail, yesterday.</div></div><div class="ctl"><span class="btn">Learn it</span><span class="btn ghost">Ignore</span></div></div></div>
+  <div class="sec">Words <span class="help" style="font-weight:500">12</span></div><div class="grp"><div class="row"><div class="lbl"><b>Kubernetes</b></div><div class="ctl"><span class="help">also heard as “cooper netties”</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>akou</b></div><div class="ctl"><span class="help">also heard as “a coo”, “echo”</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>PostgreSQL</b></div><div class="ctl"><span class="help">Calls too</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b style="font-weight:400;color:var(--dim)">9 more</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
+  <div class="sec">Replacements <span class="help" style="font-weight:500">3</span></div><div class="grp"><div class="row"><div class="lbl"><b>dot com <span class="help">→</span> .com</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>at sign <span class="help">→</span> @</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>my email <span class="help">→</span> jordan@example.com</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
+  <div class="sec">From the Product workspace <span class="help" style="font-weight:500">4</span></div><div class="sechelp">Used on Product's calls only, not in dictation. Change them from that workspace.</div><div class="grp"><div class="row"><div class="lbl"><b style="color:var(--dim)">Stripe</b></div></div><div class="row"><div class="lbl"><b style="color:var(--dim)">Looker</b></div></div><div class="row"><div class="lbl"><b style="font-weight:400;color:var(--dim)">2 more</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
   <div class="row" style="padding:12px 4px"><span class="link"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>Import a list, one word per line</span></div>
-</div><div class="fade"></div></div>
+</div></div>
     </section>
+  </div>
+</div>
+<div class="states">
+  <h2>Other states on this page</h2>
+  <div class="panels">
+    <div class="panel"><div class="cap">Replace something I say</div><div class="grp"><div class="row"><span class="input" style="flex:1;color:var(--faint)">You say</span><span class="help">→</span><span class="input" style="flex:1;color:var(--faint)">akou writes</span><span class="btn">Add</span></div></div></div>
+    <div class="panel"><div class="cap">A word, opened</div><div class="grp"><div class="row"><div class="lbl"><b>PostgreSQL</b><div class="help">Also heard as “postgres QL”.</div></div></div><div class="row"><div class="lbl"><b>Use in calls too</b><div class="help">Fixes it in every call transcript as well.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><span class="link">Remove this word</span></div></div></div>
   </div>
 </div>
 </body>
