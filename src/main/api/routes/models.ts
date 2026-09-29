@@ -14,6 +14,8 @@
  *   pinned SHA-256, and answers at once: `202` with the state while it runs, `200` when the models
  *   are already there. Progress is `GET /models`. `{"model": id}` fetches that one model under the
  *   size cap and the free-space check (SV-M2).
+ * - `POST /models/cancel`: `{"model": id}` stops that model's download; the partial file stays, so
+ *   the next pull resumes. 404 when it is not downloading.
  * - `DELETE /models/{id}`: deletes one model under the sweep's rules; 409 `model_in_use` for the
  *   default's set or a model in use.
  *
@@ -81,6 +83,29 @@ export function modelRoutes(r: Router<ApiApp>): void {
       }
       const s = c.app.pullModels();
       return json(s.state === "ready" ? 200 : 202, s);
+    },
+  );
+  r.add(
+    "POST",
+    "/models/cancel",
+    {
+      id: "models.cancel",
+      doc: "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. 404 when the model is not downloading.",
+      access: "admin",
+      modes: ["app", "server"],
+      body: { model: "string" },
+      ok: 200,
+    },
+    async (c) => {
+      const b = await c.body<{ model?: unknown }>();
+      if (typeof b.model !== "string" || b.model.trim() === "") {
+        throw new HttpError(422, "bad_field", "model is a model id", { field: "model" });
+      }
+      const id = b.model.trim();
+      if (!c.app.cancelModel?.(id, caller(c).id)) {
+        throw new HttpError(404, "not_found", `${id} is not downloading`, { model: id });
+      }
+      return json(200, { model: id, cancelled: true });
     },
   );
   r.add(

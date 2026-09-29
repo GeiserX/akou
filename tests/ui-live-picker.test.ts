@@ -17,6 +17,7 @@ function setup(id: LiveSetupView["id"], models: State[], unavailable: string | n
     id,
     title: id,
     what: id,
+    plain: id,
     unavailable,
     selected: false,
     running: false,

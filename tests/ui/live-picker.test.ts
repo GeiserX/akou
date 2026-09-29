@@ -170,7 +170,7 @@ describe("W3.19: the live model picker in the Record row", () => {
             "No live model is downloaded",
           );
           await page.click("#live-get");
-          await page.waitForSelector("#models[open]");
+          await page.waitForSelector('body[data-page="models"] #page-models:not([hidden])');
           expect(await page.isHidden("#live-menu")).toBe(true);
         },
         (home) => {

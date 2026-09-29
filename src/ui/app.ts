@@ -110,24 +110,6 @@ export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
   });
 }
 
-/**
- * The Models dialog (DESKTOP.md DK-E2): the Models page of server mode, the same code, over the
- * app's own `/models`. Read when opened, and it stops following when closed.
- */
-function wireModelsDialog(t: Transport): void {
-  const dialog = byId<HTMLDialogElement>("models");
-  const page = new ModelsPage(t, false);
-  byId("models-body").append(page.root);
-  // A change to the models' settings not saved yet keeps the dialog open on a backdrop click.
-  closable(dialog, () => page.unsaved());
-  byId("models-open").addEventListener("click", () => {
-    openModal(dialog);
-    page.show();
-  });
-  byId("models-close").addEventListener("click", () => dialog.close());
-  dialog.addEventListener("close", () => page.hide());
-}
-
 /** The application menu's Settings… opens the Settings page, as its sidebar row does. */
 export function showSettings(): void {
   document.getElementById("settings-open")?.click();
@@ -219,7 +201,7 @@ class App {
   private renaming = false;
   /** Closes the open title field without saving; null when none is open. */
   private closeTitle: (() => void) | null = null;
-  /** The sidebar's pages (Settings), in the call workspace's place while one shows. */
+  /** The sidebar's pages (Models, Settings), in the call workspace's place while one shows. */
   private readonly pages: Pages;
 
   constructor(readonly t: Transport) {
@@ -256,17 +238,25 @@ class App {
       () => this.view()?.call?.workspace,
       () => this.review.open(),
     );
+    const openModels = (key?: string) => void this.pages.show("models", key);
     const settings = new SettingsPage(t, {
       workspaces: () => this.calls.map((c) => c.workspace),
-      openModels: () => byId("models-open").click(),
+      openModels,
       openDictionary: () => void dictation.dictionary.open(),
     });
-    this.pages = new Pages(byId("pages"), { settings }, () => this.drawCalls());
+    const models = new ModelsPage(t, false);
+    this.pages = new Pages(byId("pages"), { settings, models }, () => {
+      this.drawCalls();
+      // Back from a page (a download, a delete or Use for calls on Models): the menu reads again.
+      if (!this.pages?.open) void this.livePicker?.load();
+    });
     const openSettings = (key?: string) => void this.pages.show("settings", key);
     byId("settings-open").addEventListener("click", () => openSettings());
+    byId("models-open").addEventListener("click", () => openModels());
     byId("calls-open").addEventListener("click", () => this.pages.leave());
     const fromHash = () => {
       if (location.hash === "#settings") openSettings();
+      if (location.hash === "#models") openModels();
     };
     window.addEventListener("hashchange", fromHash);
     fromHash();
@@ -275,13 +265,7 @@ class App {
       openAgentSettings: () => openSettings("provider.kind"),
       mac: this.platform === "mac",
     });
-    wireModelsDialog(t);
-    byId("models").addEventListener("close", () => {
-      if (this.pages.open === "settings") void settings.refreshLive();
-    });
-    this.livePicker = new LivePicker({ t, openModels: () => byId("models-open").click() });
-    // A download, a delete or Use for calls on the Models page changes what the menu lists.
-    byId("models").addEventListener("close", () => void this.livePicker.load());
+    this.livePicker = new LivePicker({ t, openModels: () => openModels() });
     this.enhanced = new EnhancedPane({
       t,
       call,
@@ -838,7 +822,7 @@ class App {
       this.drawCalls();
     });
     byId("readiness-setup").addEventListener("click", () => {
-      // Back to the welcome, unless a call is recording: then the Models dialog.
+      // Back to the welcome, unless a call is recording: then the Models page.
       this.pages.leave();
       this.chosen = false;
       this.paint();
