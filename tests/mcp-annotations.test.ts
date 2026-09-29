@@ -68,6 +68,7 @@ const ANNOTATIONS: Record<string, Hints> = {
   akou_enhance_context: READ,
   akou_enhanced_put: WRITE,
   akou_enhance: PROVIDER,
+  akou_rename_call: IDEMPOTENT,
   akou_list_calls: READ,
   akou_get_call: READ,
   akou_export: WRITE,

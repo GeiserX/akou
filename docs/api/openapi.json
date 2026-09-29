@@ -697,6 +697,62 @@
           "app"
         ],
         "x-akou-access": "admin"
+      },
+      "patch": {
+        "operationId": "calls.rename",
+        "tags": [
+          "calls"
+        ],
+        "description": "Rename a call, live or saved: `title` becomes the name every list, search, header and share shows from now on. The rename is a new `call.renamed` event; the folder keeps the name it was created with. Also takes `last`. An empty title answers 422 and the old name stays.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
       }
     },
     "/v1/calls/{id}/stop": {
@@ -3273,7 +3329,7 @@
         "tags": [
           "dictation"
         ],
-        "description": "The dictation log as server-sent events: every event after the cursor (`event`, its `seq` as the id), then each new one as it is written, and the mic's `level` (`{rms}`, 20 a second) while a dictation listens, which is never stored. A reconnecting client sends `Last-Event-ID` and resumes after it; a deleted dictation shows only its tombstone.",
+        "description": "The dictation log as server-sent events: every event after the cursor (`event`, its `seq` as the id), then each new one as it is written, and the mic's `level` (`{rms}`, 20 a second) while a dictation listens or the Dictation page's meter is on, which is never stored. A reconnecting client sends `Last-Event-ID` and resumes after it; a deleted dictation shows only its tombstone.",
         "parameters": [
           {
             "name": "after",

@@ -59,6 +59,10 @@ export interface DictationGrants {
 const SOUNDS_KEY = "dictation.sounds";
 const PILL_KEY = "dictation.pill";
 
+/** Reading the field back (DC-L2), which on macOS waits for the Accessibility grant. */
+const READ_FIELD_KEY = "dictation.readField";
+const LEARN_KEY = "dictation.learn";
+
 /** The master switch, drawn above the groups. */
 export const ENABLE_KEY = "dictation.enabled";
 
@@ -309,8 +313,11 @@ export class DictationSettings {
     let input = f.input;
     if (key === MIC_KEY && input instanceof HTMLInputElement) input = this.micField(input);
     if (key === SOUNDS_KEY) input.after(h("small", { id: "dictation-sounds-now", class: "hint" }));
+    const waiting = key === READ_FIELD_KEY ? this.readWaits(input) : null;
+    if (waiting) input.after(waiting);
     input.addEventListener("change", () => {
       if (key === SOUNDS_KEY || key === PILL_KEY) this.soundsNow();
+      if (key === READ_FIELD_KEY || key === LEARN_KEY) this.redrawReadWaits();
       // The switch turned on with a grant missing runs the setup instead (DC-U2, DC-N3).
       if (key === ENABLE_KEY && input instanceof HTMLInputElement && input.checked) {
         if (this.missingGrant()) {
@@ -528,6 +535,40 @@ export class DictationSettings {
     this.stopNextApp();
     this.setup?.stop();
     this.setup = null;
+  }
+
+  /**
+   * DC-L2: on macOS the helper reads no field without the Accessibility grant, so a read-back
+   * that is on says it waits for it rather than looking as if it worked.
+   */
+  private readWaits(readInput?: HTMLElement): HTMLElement | null {
+    const g = this.grants?.accessibility;
+    if (this.platform !== "darwin" || !g || g === "granted" || g === "not-needed") return null;
+    // The fields as they stand, so a toggle updates the note before the save comes back.
+    const read =
+      readInput instanceof HTMLInputElement
+        ? readInput.checked
+        : this.settings[READ_FIELD_KEY] === true;
+    if (!read) return null;
+    // With learning off main asks for no field read at all, so there is nothing to wait for.
+    const learn =
+      this.root.querySelector<HTMLInputElement | HTMLSelectElement>(
+        `[data-key="${LEARN_KEY}"]:not(div)`,
+      )?.value ?? this.settings[LEARN_KEY];
+    if (learn === "off") return null;
+    return h(
+      "small",
+      { id: "dictation-read-waiting", class: "hint" },
+      " Waiting for the Accessibility grant: until you give it, akou reads no field and learns only from the draft box.",
+    );
+  }
+
+  /** Puts the DC-L2 note back after the read-back or learning setting changed on the page. */
+  private redrawReadWaits(): void {
+    this.root.querySelector("#dictation-read-waiting")?.remove();
+    const input = this.root.querySelector<HTMLInputElement>(`input[data-key="${READ_FIELD_KEY}"]`);
+    const waiting = input ? this.readWaits(input) : null;
+    if (input && waiting) input.after(waiting);
   }
 
   /**

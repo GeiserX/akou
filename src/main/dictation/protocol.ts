@@ -142,6 +142,11 @@ export type AppToHelper =
   | { type: "rebuild_mic"; device: string; prefer_built_in?: boolean }
   | { type: "warm"; mode: "off" | "auto" | "always" }
   | { type: "record_keys"; on: boolean }
+  /**
+   * The Dictation page's meter (DC-U4, DC-N3): while on, the helper keeps the mic open and sends
+   * `level` 20 times a second with no session.
+   */
+  | { type: "meter"; on: boolean }
   | { type: "stop" };
 
 export function encodeCommand(c: AppToHelper): string {

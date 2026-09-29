@@ -524,12 +524,44 @@ button.icon.on {
   flex: 1;
   min-width: 0;
   max-width: none;
+  /* The title button cuts a long title itself; the heading must not clip the focus ring. */
+  overflow: visible;
   margin: 0;
   color: var(--fg);
   font-size: 20px;
   line-height: 28px;
   font-weight: 650;
   letter-spacing: -0.015em;
+}
+/* The title is the rename control (WINDOW 3.1): plain text until hovered, a field while edited.
+   Both keep the heading's type, so starting an edit moves nothing. */
+#title-text,
+#title-input {
+  max-width: 100%;
+  margin: 0 -6px;
+  padding: 0 6px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--fg);
+}
+#title-text {
+  display: inline-block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  vertical-align: top;
+  text-align: left;
+  background: transparent;
+  cursor: text;
+}
+#title-text:hover {
+  border-color: var(--line2);
+}
+#title-input {
+  width: 100%;
+  background: var(--raised);
+  border-color: var(--line2);
 }
 #call-head .head-top > button {
   padding: 5px 10px;

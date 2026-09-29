@@ -54,6 +54,7 @@ const DESIGN_TOOLS = [
   "akou_enhance_context",
   "akou_enhanced_put",
   "akou_enhance",
+  "akou_rename_call",
   "akou_list_calls",
   "akou_get_call",
   "akou_export",

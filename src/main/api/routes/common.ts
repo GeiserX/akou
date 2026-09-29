@@ -1,8 +1,8 @@
 /**
  * Resolving `{id}` on every route (docs/DESIGN.md section 6.2, TRAPS T3.14): a call ULID or `live`
  * everywhere; `last` only on GET routes, on the questions `context` and `ask` (reads, not changes)
- * and on the post-call actions `restart`, `finalize`, `export` and `enhance`, so a control or a
- * write can never land on a finished call by accident.
+ * and on the post-call actions `restart`, `finalize`, `export`, `enhance` and a rename, so a
+ * control or a write can never land on a finished call by accident.
  */
 
 import type { CallController } from "../../call/call.ts";

@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { DictationService, type DictationServiceOptions } from "../src/main/dictation/service.ts";
 import type { Bridge } from "../src/main/window/bridge.ts";
 import { windowRpc } from "../src/main/window/rpc.ts";
-import { FAKE_HELPER } from "./api-helpers.ts";
+import { FAKE_HELPER, speechWav } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -147,6 +147,83 @@ describe("DC-U4: the microphone goes to the helper", () => {
     await until(() => sent(r, "rebind").length === 1, 5000, "the rebind");
     await Bun.sleep(200);
     expect(sent(r, "rebuild_mic")).toEqual([]);
+  });
+});
+
+describe("DC-U4, DC-N3: the page's meter moves on the helper's level", () => {
+  /** The window's RPC over `svc`, and the levels it sent the page. */
+  function window(svc: DictationService | null) {
+    const levels: number[] = [];
+    const bridge = {
+      app: { dictation: () => svc },
+      watchLifecycle: () => () => {},
+    } as unknown as Bridge;
+    const rpc = windowRpc(
+      bridge,
+      () => ({
+        followed: () => {},
+        asked: () => {},
+        status: () => {},
+        showCall: () => {},
+        showSettings: () => {},
+        askQuit: () => {},
+        dictationLevel: ({ db }) => levels.push(db),
+      }),
+      async () => false,
+    );
+    return { rpc, levels };
+  }
+
+  test("on: the helper gets meter and its levels reach the page with no session; off stops them", async () => {
+    const t = tempDir("akou-dict-meter-");
+    cleanups.push(t.cleanup);
+    const r = rig(["--wav", speechWav(t.dir)]);
+    await started(r);
+    const w = window(r.svc);
+    expect(await w.rpc.handlers.watchDictationMic({ on: true })).toBe(true);
+    // The fake's mic is 0.4 s of silence, then speech: the meter reads both.
+    await until(() => w.levels.some((db) => db > -40), 5000, "a spoken level");
+    expect(w.levels.some((db) => db <= -60)).toBe(true);
+    expect(w.levels.every((db) => db >= -60 && db <= 0)).toBe(true);
+    expect(sent(r, "meter")).toEqual([{ type: "meter", on: true }]);
+    expect(r.svc.status().state).toBe("idle");
+
+    expect(await w.rpc.handlers.watchDictationMic({ on: false })).toBe(true);
+    await until(() => sent(r, "meter").length === 2, 5000, "meter off");
+    expect(sent(r, "meter")[1]).toEqual({ type: "meter", on: false });
+    await Bun.sleep(150);
+    const after = w.levels.length;
+    await Bun.sleep(300);
+    expect(w.levels.length).toBe(after);
+  });
+
+  test("the window closing turns the meter off", async () => {
+    const r = rig([]);
+    await started(r);
+    const w = window(r.svc);
+    expect(await w.rpc.handlers.watchDictationMic({ on: true })).toBe(true);
+    w.rpc.close();
+    await until(() => sent(r, "meter").length === 2, 5000, "meter off");
+    expect(sent(r, "meter")[1]).toEqual({ type: "meter", on: false });
+  });
+
+  test("with dictation off the meter is told no; a helper that starts meanwhile gets it on, and off when the page closes", async () => {
+    expect(await window(null).rpc.handlers.watchDictationMic({ on: true })).toBe(false);
+    const r = rig([]);
+    const w = window(r.svc);
+    expect(await w.rpc.handlers.watchDictationMic({ on: true })).toBe(false);
+    await started(r);
+    await until(() => sent(r, "meter").length === 1, 5000, "meter after ready");
+    expect(sent(r, "meter")[0]).toEqual({ type: "meter", on: true });
+    w.rpc.close();
+    await until(() => sent(r, "meter").length === 2, 5000, "meter off");
+    expect(sent(r, "meter")[1]).toEqual({ type: "meter", on: false });
+    // Positive control: a helper started with the meter off is never told to meter.
+    const c = rig([]);
+    await started(c);
+    await until(() => sent(c, "rebind").length === 1, 5000, "the rebind");
+    await Bun.sleep(200);
+    expect(sent(c, "meter")).toEqual([]);
   });
 });
 

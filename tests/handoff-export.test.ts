@@ -9,6 +9,7 @@ import {
   existsSync,
   lstatSync,
   mkdirSync,
+  readdirSync,
   readFileSync,
   readlinkSync,
   renameSync,
@@ -26,6 +27,7 @@ import {
   safeFileTitle,
   yamlScalar,
 } from "../src/main/handoff/export.ts";
+import { buildPayload } from "../src/main/handoff/hooks.ts";
 import { fakeOpus } from "./fixtures/opus.ts";
 import { jsonl, LogBuilder, T0, TZ, tempDir } from "./helpers.ts";
 
@@ -342,6 +344,36 @@ describe("re-export", () => {
       // Positive control: a real change still goes up by one from the file's own revision.
       r.append({ seq: 0, t: T0, type: "speaker.name", spk: "c2", name: "Cleo", by: "user" });
       expect(r.run()).toMatchObject({ written: true, rev: 2, path: first.path });
+    } finally {
+      r.cleanup();
+    }
+  });
+
+  test("a call renamed after its export keeps one attachments folder, and the file links into it", () => {
+    const r = rig();
+    try {
+      const first = r.run({ audio: "copy" });
+      r.append({ seq: 0, t: T0, type: "call.renamed", rev: 1, title: "Q3 planning", by: "user" });
+      r.append({ seq: 0, t: T0, type: "speaker.name", spk: "c2", name: "Cleo", by: "user" });
+      const second = r.run({ audio: "copy" });
+      expect(second).toMatchObject({
+        written: true,
+        path: first.path,
+        attachments: first.attachments,
+      });
+      expect(readdirSync(join(r.root, "work", "attachments"))).toEqual([BASE]);
+      const md = readFileSync(second.path, "utf8");
+      expect(md).toContain("title: Q3 planning");
+      expect(md).toContain(`attachments/${BASE}/part-001.opus`);
+      // A hook is handed the same folder, so it commits the attachments that exist.
+      const payload = buildPayload({
+        stage: "final.done",
+        view: fold(r.events),
+        dir: r.dir,
+        version: "0.1.0",
+        exportMd: second.path,
+      });
+      expect(payload.paths.exportAttachments).toBe(first.attachments);
     } finally {
       r.cleanup();
     }

@@ -12,6 +12,7 @@
 import type { AkouRpc, AppStatus, Method } from "../../ui/protocol.ts";
 import type { Bridge } from "./bridge.ts";
 import type { SettingsPane } from "./page-server.ts";
+import { levelDb } from "./pill.ts";
 
 type Messages = AkouRpc["webview"]["messages"];
 
@@ -25,6 +26,8 @@ export interface WindowSend {
   askQuit(m: Messages["askQuit"]): void;
   /** A key the dictation helper reported while the page's recorder is open (DC-U3). */
   dictationKey?(m: Messages["dictationKey"]): void;
+  /** The dictation mic's level while the page's meter is on (DC-U4, DC-N3). */
+  dictationLevel?(m: Messages["dictationLevel"]): void;
 }
 
 export interface WindowRpc {
@@ -62,6 +65,13 @@ export function windowRpc(
   const asks = new Map<string, AbortController>();
   /** The page's dictation key recorder holds the helper's keys (DC-U3). */
   let recording = false;
+  /** The page's mic meter: the service it turned on, and the follow of its levels. */
+  let meter: { svc: { watchMic(on: boolean): boolean }; stop: () => void } | null = null;
+  const stopMeter = () => {
+    meter?.stop();
+    meter?.svc.watchMic(false);
+    meter = null;
+  };
   const unwatch = bridge.watchLifecycle(() => {
     void (bridge.app.status() as Promise<unknown>).then((s) => send().status(s as AppStatus));
   });
@@ -164,13 +174,28 @@ export function windowRpc(
         recording = on && ok;
         return ok;
       },
-      // Nor its mic level (DC-N3): the setup's meter stays still and the setup goes on.
-      watchDictationMic: async () => false,
+      // The helper's mic level while the page shows a meter (DC-U4, DC-N3), in dBFS. False while
+      // no helper is up: the meter stays still and the setup goes on. The meter is kept on all
+      // the same, so a helper that starts while the page shows it (the setup turning dictation
+      // on) moves it, and the page closing still turns it off.
+      watchDictationMic: async ({ on }) => {
+        stopMeter();
+        if (!on) return true;
+        const d = bridge.app.dictation?.();
+        if (!d) return false;
+        const ok = d.watchMic(true);
+        const stop = d.follow((m) => {
+          if (m.kind === "level") send().dictationLevel?.({ db: levelDb(m.rms) });
+        });
+        meter = { svc: d, stop };
+        return ok;
+      },
     },
     close: () => {
       unwatch();
       if (recording) bridge.app.dictation?.()?.recordKeys(null);
       recording = false;
+      stopMeter();
       for (const s of [...follows.keys()]) stopFollow(s);
       for (const a of asks.values()) a.abort();
       asks.clear();

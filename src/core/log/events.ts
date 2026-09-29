@@ -35,6 +35,17 @@ export interface CallCreated extends Envelope {
   template?: string;
 }
 
+/**
+ * The call's new title. `call.created` keeps the first one; the highest `rev` wins, so a rename is
+ * a new event and never an edit (DESIGN 4.2). The folder keeps the name it was created with.
+ */
+export interface CallRenamed extends Envelope {
+  type: "call.renamed";
+  rev: number;
+  title: string;
+  by: Author;
+}
+
 export interface CallEnded extends Envelope {
   type: "call.ended";
   reason: "stop" | "interrupted" | "abandoned";
@@ -352,6 +363,7 @@ export interface WebhookDone extends Envelope {
 
 export type LogEvent =
   | CallCreated
+  | CallRenamed
   | CallEnded
   | CallFailed
   | PartStarted
@@ -454,6 +466,7 @@ const SPECS: { [T in EventType]: Spec } = {
     akou: req("string"),
     template: opt("string"),
   },
+  "call.renamed": { rev: req("int"), title: req("string"), by: req("author") },
   "call.ended": { reason: req(["stop", "interrupted", "abandoned"]) },
   "call.failed": { stage: req("string"), error: req("string") },
   "part.started": {
@@ -693,11 +706,17 @@ function validateBody(o: Record<string, unknown>, type: EventType): string | nul
   if (type === "call.created" && o.schema !== SCHEMA_VERSION) {
     return `call.created: unsupported schema ${String(o.schema)}`;
   }
+  if (type === "call.renamed" && (o.title as string).trim() === "") {
+    return "call.renamed: title must not be empty";
+  }
   if (type === "vocab.add" && typeof o.term === "string") {
     if (o.term.trim() === "") return "vocab.add: term must not be empty";
     if (o.heard === undefined) return 'vocab.add: missing field "heard"';
   }
-  if ((type === "note" || type === "remember" || type === "vocab.add") && (o.rev as number) < 1) {
+  if (
+    (type === "note" || type === "remember" || type === "vocab.add" || type === "call.renamed") &&
+    (o.rev as number) < 1
+  ) {
     return `${type}: rev must be >= 1`;
   }
   if (type === "answer") {
