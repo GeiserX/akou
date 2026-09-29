@@ -140,6 +140,7 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
           focusFn(true);
         },
         close: () => void p.ready.then((page) => page.close()),
+        zoom: () => {},
         onClose: () => {},
         onFocus: (fn) => {
           focusFn = fn;

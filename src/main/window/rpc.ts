@@ -47,6 +47,7 @@ export interface WindowRpc {
     answerQuit(p: { id: number; go: boolean }): Promise<boolean>;
     recordDictationKeys(p: { on: boolean }): Promise<boolean>;
     watchDictationMic(p: { on: boolean }): Promise<boolean>;
+    zoomWindow(p: Record<string, never>): Promise<boolean>;
   };
   /** Stops every stream (the window closed). */
   close(): void;
@@ -60,6 +61,8 @@ export function windowRpc(
   booted: () => void = () => {},
   /** The page answered the quit question `id` (DK-M3). */
   answerQuit: (id: number, go: boolean) => void = () => {},
+  /** The page's title bar strip was double-clicked (DK-M7). */
+  zoom: () => void = () => {},
 ): WindowRpc {
   const follows = new Map<string, () => void>();
   const asks = new Map<string, AbortController>();
@@ -162,6 +165,11 @@ export function windowRpc(
 
       answerQuit: async ({ id, go }) => {
         answerQuit(id, go === true);
+        return true;
+      },
+
+      zoomWindow: async () => {
+        zoom();
         return true;
       },
 

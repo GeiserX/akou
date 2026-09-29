@@ -47,7 +47,7 @@ function noActivate(hwnd: Pointer | null): void {
 
 export function electrobunUi(): NativeUi {
   return {
-    openWindow({ title, url, rpc, frame }) {
+    openWindow({ title, url, rpc, frame, titleBarStyle }) {
       const defined = BrowserView.defineRPC<AkouRpc>({
         maxRequestTime: MAX_REQUEST_MS,
         handlers: { requests: rpc.handlers, messages: {} },
@@ -57,6 +57,7 @@ export function electrobunUi(): NativeUi {
         url,
         rpc: defined,
         frame: frame ?? { width: 1280, height: 820 },
+        titleBarStyle,
       });
       const window: NativeWindow = {
         show: () => {
@@ -64,6 +65,7 @@ export function electrobunUi(): NativeUi {
           win.focus();
         },
         close: () => win.close(),
+        zoom: () => (win.isMaximized() ? win.unmaximize() : win.maximize()),
         onClose: (fn) => win.on("close", fn),
         onFocus: (fn) => {
           win.on("focus", () => fn(true));

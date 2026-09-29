@@ -10,7 +10,7 @@ import type { Page } from "playwright-core";
 import type { EventDraft } from "../../src/core/log/events.ts";
 import { tempDir } from "../helpers.ts";
 import { type DesktopRig, desktopRig } from "./desktop-rig.ts";
-import { seg, silentWav, UI_TIMEOUT, uiRig, until } from "./rig.ts";
+import { seg, silentWav, UI_TIMEOUT, uiRig, until, windowPage } from "./rig.ts";
 
 /** Markers carried by the call's title, its lines and its speaker's name. */
 const MARKS = ["TITLEMARK-q7x", "SEGMARK-z9k", "NAMEMARK-w3v"] as const;
@@ -272,6 +272,104 @@ describe("[DK-K4] Settings warns about a Control+Alt hotkey", () => {
           }
           await page.close();
         }
+      } finally {
+        await rig.close();
+        t.cleanup();
+      }
+    },
+    UI_TIMEOUT,
+  );
+});
+
+/** What the title bar strip looks like on the page: the inset, the tops, the drag regions. */
+function titleBarState(page: Page) {
+  return page.evaluate(() => {
+    const DRAG = "electrobun-webkit-app-region-drag";
+    const NO_DRAG = "electrobun-webkit-app-region-no-drag";
+    const top = (sel: string) =>
+      Math.round(document.querySelector(sel)?.getBoundingClientRect().top ?? -1);
+    const controls = "input, select, button, textarea, [tabindex]";
+    return {
+      inset: document.body.classList.contains("inset"),
+      tops: {
+        wordmark: top("#sidebar .brand svg"),
+        record: top("#record"),
+        ask: top("#ask-form"),
+      },
+      drag: [...document.querySelectorAll(`.${DRAG}`)].map(
+        (el) => el.id || el.className.split(" ")[0],
+      ),
+      // A control inside a drag region with no no-drag between them would move the window.
+      loose: [...document.querySelectorAll(`.${DRAG} :is(${controls})`)]
+        .filter((el) => !el.closest(`.${NO_DRAG}`))
+        .map((el) => el.id || el.tagName),
+      controls: [
+        ...document.querySelectorAll(`#composer :is(${controls}), #ask-row :is(${controls})`),
+      ].length,
+    };
+  });
+}
+
+describe("[DK-M7] the macOS window's title bar strip", () => {
+  test(
+    "on macOS the top rows start under the traffic lights and drag; Windows, Linux and a browser keep their spacing",
+    async () => {
+      const t = tempDir("akou-ui-titlebar-");
+      const rig = await uiRig({ home: t.dir });
+      try {
+        for (const platform of ["darwin", "win32", "linux"]) {
+          const w = await windowPage(rig, { platform });
+          const { page } = w;
+          try {
+            await page.setViewportSize({ width: 1280, height: 820 });
+            // The status has been applied once the state word replaced its placeholder.
+            await page.waitForFunction(() => document.getElementById("state")?.textContent !== "…");
+            const s = await titleBarState(page);
+            const zooms = () => w.requests.filter((r) => r.name === "zoomWindow").length;
+            // A double-click on the row's empty top-left corner, then on a field in it.
+            const box = await page.locator("#composer").boundingBox();
+            if (!box) throw new Error("no composer");
+            await page.mouse.dblclick(box.x + 4, box.y + 4);
+            await page.dblclick("#workspace");
+            if (platform === "darwin") {
+              expect(s.inset).toBe(true);
+              // The traffic lights take the top 28 px of the window; nothing is drawn under them.
+              expect(Math.min(s.tops.wordmark, s.tops.record, s.tops.ask)).toBeGreaterThanOrEqual(
+                28,
+              );
+              expect(s.drag.sort()).toEqual(["ask-row", "brand", "composer"]);
+              expect(s.controls).toBeGreaterThan(5);
+              expect(s.loose).toEqual([]);
+              await until(() => zooms() === 1, 5000, "the zoom");
+            } else {
+              expect(`${platform}: ${s.inset} ${s.drag}`).toBe(`${platform}: false `);
+              expect(Math.max(s.tops.wordmark, s.tops.record, s.tops.ask)).toBeLessThan(28);
+            }
+            // The field's double-click selects its word; only the strip zooms.
+            await new Promise((r) => setTimeout(r, 200));
+            expect(`${platform}: ${zooms()}`).toBe(`${platform}: ${platform === "darwin" ? 1 : 0}`);
+          } finally {
+            await w.close();
+          }
+        }
+        // A browser tab on a Mac has no window to move.
+        const page = await rig.open(undefined, {
+          before: (p) =>
+            p.route(
+              (u) => u.pathname === "/api/v1/status",
+              async (route) => {
+                const res = await route.fetch();
+                const real = (await res.json()) as { app: Record<string, unknown> };
+                return route.fulfill({
+                  response: res,
+                  json: { ...real, app: { ...real.app, platform: "darwin" } },
+                });
+              },
+            ),
+        });
+        await page.waitForFunction(() => document.getElementById("state")?.textContent !== "…");
+        const s = await titleBarState(page);
+        expect(`browser: ${s.inset} ${s.drag}`).toBe("browser: false ");
       } finally {
         await rig.close();
         t.cleanup();

@@ -130,6 +130,33 @@ export function showSettings(): void {
   document.getElementById("settings-open")?.click();
 }
 
+/** ElectroBun's drag regions: its preload moves the window on a mousedown inside one. */
+const DRAG = "electrobun-webkit-app-region-drag";
+const NO_DRAG = "electrobun-webkit-app-region-no-drag";
+
+/**
+ * The macOS window draws no title bar (docs/ux/DESKTOP.md DK-M7): the shell opens it hidden-inset
+ * (`titleBarStyle` in `src/main/window/shell.ts`), so the traffic lights float over the sidebar's
+ * top and the page leaves them a strip (`body.inset`, `--titlebar` in theme.css). The strip and the
+ * top rows under it move the window, and a double-click on them zooms it, as a title bar does; the
+ * controls in them stay controls. Windows and Linux keep their native frame, and a browser tab has
+ * no window to move.
+ */
+function titleBar(inset: boolean): void {
+  if (document.body.classList.contains("inset") === inset) return;
+  document.body.classList.toggle("inset", inset);
+  for (const el of document.querySelectorAll("#sidebar .brand, #composer, #ask-row"))
+    el.classList.toggle(DRAG, inset);
+  for (const el of document.querySelectorAll("#controls > *, #ask-form"))
+    el.classList.toggle(NO_DRAG, inset);
+}
+
+/** True when the event lands in a drag region and not on a control inside it. */
+function onTitleBar(e: Event): boolean {
+  const el = e.target instanceof Element ? e.target : null;
+  return !!el?.closest(`.${DRAG}`) && !el.closest(`.${NO_DRAG}`);
+}
+
 function platform(): "mac" | "windows" | "linux" {
   const p = `${navigator.platform} ${navigator.userAgent}`.toLowerCase();
   return p.includes("mac") ? "mac" : p.includes("win") ? "windows" : "linux";
@@ -248,6 +275,9 @@ class App {
 
   async start(): Promise<void> {
     document.body.dataset.transport = this.t.kind;
+    document.addEventListener("dblclick", (e) => {
+      if (onTitleBar(e)) this.t.zoomWindow?.();
+    });
     this.wireControls();
     this.wireSidebar();
     byId("title-text").addEventListener("click", () => this.editTitle());
@@ -277,6 +307,7 @@ class App {
   private onStatus(s: AppStatus): void {
     const first = this.status === null;
     this.status = s;
+    titleBar(this.t.kind === "window" && s.app.platform === "darwin");
     this.modelsCard.update(s.models, true);
     const live = s.live?.call ?? null;
     const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
