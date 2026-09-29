@@ -19,6 +19,7 @@ import {
   LivePipeline,
   UPGRADE_QUEUE_MAX,
 } from "../src/main/asr/live-worker.ts";
+import { splitToLines, UTTERANCE_MAX_SECONDS } from "../src/main/asr/upgrade.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { CallQuery } from "../src/main/query/context.ts";
 import { ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
@@ -35,7 +36,7 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// The Worker: Parakeet's rewrite of each streaming line
+// The Worker: Parakeet's decode of each utterance
 
 function pipeline(o: ConstructorParameters<typeof FakeModels>[0] = {}) {
   const models = new FakeModels(o);
@@ -55,31 +56,76 @@ function feed(p: LivePipeline, ch: "mic" | "call", audio: Float32Array, part = 1
   }
 }
 
-const twoLines = () =>
+/**
+ * Two lines, cut at a 0.8 s gap between words: the next word came before the stream went quiet
+ * (1.8 s after the last word), so they are one utterance.
+ */
+const twoLines = (gap = 0.8) =>
   concat(
     silence(0.5),
     speak(["we", "should", "move", "the", "build"], { voice: 1 }),
-    silence(1.5),
+    silence(gap),
     speak(["to", "the", "new", "box"], { voice: 4 }),
-    silence(2),
+    silence(2.5),
   );
 
-/** The outputs that matter here, in order: `seg <key> <model>` and `upgrade <key> <model>`. */
+/** The outputs that matter here, in order: `seg <key> <model>` and `upgrade <keys> <model>`. */
 function trail(out: readonly LiveOut[]): string[] {
   return out.flatMap((x) =>
     x.type === "seg"
       ? [`seg ${x.key} ${x.model}`]
       : x.type === "upgrade"
-        ? [`upgrade ${x.key} ${x.model}`]
+        ? [`upgrade ${x.keys.join(",")} ${x.model}`]
         : [],
   );
 }
 
-describe("[ASR-7] Parakeet rewrites each streaming line in the Worker", () => {
-  test("each written line is followed by Parakeet's decode of its audio, keyed to it", async () => {
+describe("[ASR-7] lines cut back from utterances", () => {
+  test("each word goes to the line of the stream word it aligns with", () => {
+    const lines = ["we should", "move the build"];
+    expect(splitToLines(lines, "we should move the built.".split(" "))).toEqual([
+      "we should",
+      "move the built.",
+    ]);
+    // A word the stream did not have goes with the word before it.
+    expect(splitToLines(lines, "we should really move the build".split(" "))).toEqual([
+      "we should really",
+      "move the build",
+    ]);
+    // Before any stream word: the first line. A line whose words all went gets none.
+    expect(splitToLines(["um", "move it"], ["so", "move", "it"])).toEqual(["so", "move it"]);
+    expect(splitToLines(["um", "move it"], ["move", "it"])).toEqual(["", "move it"]);
+    // Punctuation and case do not move a word to another line.
+    expect(splitToLines(["Hello,", "World"], ["hello", "world."])).toEqual(["hello", "world."]);
+  });
+});
+
+describe("[ASR-7] Parakeet decodes each utterance in the Worker", () => {
+  test("the lines up to a stop of the speaker are one utterance: one Parakeet decode after its last line", async () => {
     const { p, out } = pipeline();
     await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
     feed(p, "mic", twoLines());
+    await p.endPart(1);
+    expect(trail(out)).toEqual([
+      "seg 1 fake-nemotron",
+      "seg 2 fake-nemotron",
+      "upgrade 1,2 fake-parakeet",
+    ]);
+    const u = out.find((x) => x.type === "upgrade");
+    expect([u?.text, u?.lines]).toEqual([
+      "we should move the build to the new box",
+      ["we should move the build", "to the new box"],
+    ]);
+    // The audio Qwen gets next is the utterance's, gained and padded as Parakeet took it.
+    const segs = out.filter((x) => x.type === "seg");
+    const span = (segs[1]?.a1 as number) - (segs[0]?.a0 as number);
+    expect(u?.samples.length).toBeGreaterThanOrEqual(Math.round(span * RATE));
+  });
+
+  test("a stop between the lines makes two utterances", async () => {
+    const { p, out } = pipeline();
+    await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
+    feed(p, "mic", twoLines(2.5));
     await p.endPart(1);
     expect(trail(out)).toEqual([
       "seg 1 fake-nemotron",
@@ -87,14 +133,24 @@ describe("[ASR-7] Parakeet rewrites each streaming line in the Worker", () => {
       "seg 2 fake-nemotron",
       "upgrade 2 fake-parakeet",
     ]);
+  });
+
+  test(`an utterance ends at ${UTTERANCE_MAX_SECONDS} s even while the speaker goes on`, async () => {
+    const { p, out } = pipeline();
+    await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
+    const said: Float32Array[] = [silence(0.3)];
+    // 26 lines 0.8 s apart, 37 s with no stop.
+    for (let i = 0; i < 26; i++) said.push(speak(["hello", "world"]), silence(0.8));
+    feed(p, "mic", concat(...said, silence(2.5)));
+    await p.endPart(1);
     const ups = out.filter((x) => x.type === "upgrade");
-    expect(ups.map((u) => u.text)).toEqual(["we should move the build", "to the new box"]);
-    // The audio Qwen gets next is the line's, gained and padded as Parakeet took it.
-    const segs = out.filter((x) => x.type === "seg");
-    for (const [i, u] of ups.entries()) {
-      const s = segs[i] as { a0: number; a1: number };
-      expect(u.samples.length).toBeGreaterThanOrEqual(Math.round((s.a1 - s.a0) * RATE));
+    expect(ups.length).toBeGreaterThanOrEqual(2);
+    for (const u of ups) {
+      expect(u.samples.length / RATE).toBeLessThan(UTTERANCE_MAX_SECONDS + 3);
     }
+    expect(ups.flatMap((u) => u.keys)).toEqual(
+      out.flatMap((x) => (x.type === "seg" ? [x.key as number] : [])),
+    );
   });
 
   test("without the upgrade setup, or without a streaming engine, no line is rewritten", async () => {
@@ -111,7 +167,7 @@ describe("[ASR-7] Parakeet rewrites each streaming line in the Worker", () => {
     expect(trail(windows.out).every((x) => x.startsWith("seg "))).toBe(true);
   });
 
-  test("a call line held for its speaker label gets its rewrite right after it, never before", async () => {
+  test("an utterance whose last line waits for its speaker label is decoded right after it, never before", async () => {
     // A diarizer that decides 6 s behind the audio: each line waits for its label.
     const { p, out } = pipeline({ diarizer: "nemotron", streamStep: 4, streamLookahead: 2 });
     await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
@@ -119,9 +175,8 @@ describe("[ASR-7] Parakeet rewrites each streaming line in the Worker", () => {
     await p.endPart(1);
     expect(trail(out)).toEqual([
       "seg 1 fake-nemotron",
-      "upgrade 1 fake-parakeet",
       "seg 2 fake-nemotron",
-      "upgrade 2 fake-parakeet",
+      "upgrade 1,2 fake-parakeet",
     ]);
     const segs = out.filter((x) => x.type === "seg");
     expect(segs.map((s) => s.spk)).toEqual(["c1", "c2"]);
@@ -209,10 +264,12 @@ async function rig(qwen: LineUpgrader | null) {
   engine.onStart = null;
   const id = res.call;
   const segs = () => ofType(events, "seg") as Seg[];
-  const play = (words: string[][]) => {
+  /** Each group of words one utterance; a `gap` of 0.8 s makes them lines of one utterance. */
+  const play = (words: string[][], gap = 2.5) => {
     const parts: Float32Array[] = [silence(0.5)];
-    // A streaming line closes once its last word is decided and the pause has passed: 1.9 s.
-    for (const w of words) parts.push(speak(w), silence(2.2));
+    // The stream closes a line and ends the utterance 1.8 s after the last word: it went quiet.
+    for (const w of words) parts.push(speak(w), silence(gap));
+    parts.push(silence(2.5));
     const audio = concat(...parts);
     engine.last.play(audio, silence(audio.length / RATE));
   };
@@ -248,6 +305,30 @@ describe("[ASR-7] the host writes each line's upgrades as revisions", () => {
     qwen.asked[1]?.answer(qwenSays("to the news box", [], 0.4));
     await until(() => r.segs().length === 6, 5000, "the votes");
     expect(revisions(r.segs()).slice(4)).toEqual([
+      "l000001 3 rover-conf(fake-qwen,fake-parakeet) we should move the built",
+      "l000002 3 rover-conf(fake-qwen,fake-parakeet) to the new box",
+    ]);
+    await r.mgr.stop();
+  });
+
+  test("an utterance of two lines: each stage's words are cut back into the lines they belong to", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    r.play(
+      [
+        ["we", "should", "move", "the", "build"],
+        ["to", "the", "new", "box"],
+      ],
+      0.8,
+    );
+    await until(() => qwen.asked.length === 1, 5000, "the utterance at Qwen");
+    qwen.asked[0]?.answer(qwenSays("we should move the built to the new box", ["built"]));
+    await until(() => r.segs().length === 6, 5000, "the votes");
+    expect(revisions(r.segs())).toEqual([
+      "l000001 1 fake-nemotron we should move the build",
+      "l000002 1 fake-nemotron to the new box",
+      "l000001 2 fake-parakeet we should move the build",
+      "l000002 2 fake-parakeet to the new box",
       "l000001 3 rover-conf(fake-qwen,fake-parakeet) we should move the built",
       "l000002 3 rover-conf(fake-qwen,fake-parakeet) to the new box",
     ]);

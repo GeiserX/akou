@@ -11,11 +11,12 @@
  * Speakers (step 5) are the same on both.
  *
  * The `upgrade` setup (live-setups.ts, ASR-7) rewrites each streaming line twice during the call,
- * as new revisions of the same `seg`: the Worker decodes the line's audio with Parakeet as soon as
- * the line is written (rev 2, about 0.2 s), and the host sends that audio to Qwen and writes the
- * confidence vote of Qwen and Parakeet (rev 3, 1.5 to 2.5 s). A word shown is never taken back
- * while its line is open; the upgrade replaces the whole closed line. A line a person edited or
- * retracted keeps their text, an empty answer changes nothing, and nothing is written after the
+ * as new revisions of the same `seg`, one utterance at a time (upgrade.ts): once the speaker
+ * stops, the Worker decodes the utterance's audio with Parakeet (about 0.2 s), and the host sends
+ * that audio to Qwen and writes the confidence vote of Qwen and Parakeet (1.5 to 2.5 s). Each
+ * stage's words are cut back into the utterance's lines. A word shown is never taken back while
+ * its line is open; the upgrade replaces whole closed lines. A line a person edited or retracted
+ * keeps their text, a line that gets no words keeps its own, and nothing is written after the
  * call's `call.ended`: an answer that comes later is dropped, and the final pass covers it.
  *
  * Per channel, in the Worker (`LivePipeline`):
@@ -87,6 +88,7 @@ import {
   type SpeakerEvent,
   StreamSpeakers,
 } from "./speakers.ts";
+import { splitToLines, UTTERANCE_MAX_SECONDS } from "./upgrade.ts";
 
 /** A stream diarizer that dies is started again at most this many times per call. */
 export const STREAM_RESTART_LIMIT = 3;
@@ -145,16 +147,18 @@ export type LiveOut =
   | SpeakerEvent
   | { type: "log"; level: "info" | "warn" | "error"; msg: string };
 
-/** Parakeet's rewrite of a written streaming line (the `upgrade` setup): its next revision. */
+/** Parakeet's decode of an utterance's written streaming lines (the `upgrade` setup). */
 export interface UpgradeOut {
   type: "upgrade";
-  /** The `key` of the line's `seg`. */
-  key: number;
+  /** The `key` of each of its lines' `seg`, in order. */
+  keys: number[];
+  /** Each line's streaming text, which Parakeet's and Qwen's words are cut back into. */
+  lines: string[];
   text: string;
   model: string;
   lang?: string;
   words: WordHyp[];
-  /** The line's audio, gained and padded as Parakeet took it: what Qwen decodes next. */
+  /** The utterance's audio, gained and padded as Parakeet took it: what Qwen decodes next. */
   samples: Float32Array;
 }
 
@@ -289,6 +293,8 @@ interface ChannelState {
   pseq: number;
   /** The streaming engine's stream, when the call runs one (live-stream.ts); else VAD windows. */
   live: StreamChannel | null;
+  /** The `upgrade` setup's open utterance: its written lines so far and their audio's span. */
+  utt: { part: number; from: number; to: number; keys: number[]; lines: string[] } | null;
   /** The open line's text as last published, so an unchanged line is not published again. */
   shown: string;
 }
@@ -324,7 +330,7 @@ export class LivePipeline {
   private upgrade = false;
   /** The last line key given out; keys never repeat within a Worker. */
   private lineKey = 0;
-  /** Upgrades of lines still waiting for their speaker label, sent right after their `seg`. */
+  /** Upgrades whose last line still waits for its speaker label, sent right after that `seg`. */
   private readonly heldUpgrades = new Map<number, UpgradeOut>();
 
   constructor(
@@ -351,6 +357,7 @@ export class LivePipeline {
       lastProvisional: 0,
       pseq: 0,
       live: null,
+      utt: null,
       shown: "",
     });
     this.chans = new Map(CHANNELS.map((ch) => [ch, state(ch)]));
@@ -540,6 +547,7 @@ export class LivePipeline {
     st.inSpeech = false;
     st.pseq = 0;
     st.shown = "";
+    st.utt = null;
   }
 
   /** Audio for one channel at `start` (samples on the part's file timeline). */
@@ -694,36 +702,51 @@ export class LivePipeline {
       }
     }
     const keep = sc.keepFrom(part);
-    if (keep !== null) st.audio.trimTo(keep);
+    // An open utterance keeps its audio for the upgrade.
+    if (keep !== null) st.audio.trimTo(st.utt ? Math.min(keep, st.utt.from) : keep);
   }
 
-  /** Writes the lines the stream closed, and on the `upgrade` setup Parakeet's rewrite of each. */
+  /** Writes the lines the stream closed; on the `upgrade` setup they gather into utterances. */
   private lines(st: ChannelState, lines: readonly StreamLine[]): void {
     const model = this.engine?.id ?? this.models.recognizerModel;
     for (const l of lines) {
       st.shown = "";
-      if (l.to <= l.from) continue;
-      const samples = st.audio.slice(l.from, l.to);
-      const key = this.emitLine(st, l.part, l.from, l.to, samples, { text: l.text, model });
-      if (key !== null && this.upgrade) this.upgradeLine(key, samples);
+      if (l.to > l.from) {
+        const samples = st.audio.slice(l.from, l.to);
+        const key = this.emitLine(st, l.part, l.from, l.to, samples, { text: l.text, model });
+        if (key !== null && this.upgrade) {
+          if (st.utt && st.utt.part !== l.part) this.upgradeUtterance(st);
+          st.utt ??= { part: l.part, from: l.from, to: l.to, keys: [], lines: [] };
+          st.utt.to = l.to;
+          st.utt.keys.push(key);
+          st.utt.lines.push(l.text);
+        }
+      }
+      const long = st.utt && st.utt.to - st.utt.from >= UTTERANCE_MAX_SECONDS * ASR_RATE;
+      if (l.stopped || long) this.upgradeUtterance(st);
     }
     st.inSpeech = st.live?.open() != null;
   }
 
   /**
-   * Parakeet's decode of a written line, sent as its next revision right after the line's `seg`
-   * (held with it while the stream diarizer decides its speaker). Its audio goes along for Qwen.
+   * Parakeet's decode of the closed utterance, sent right after its last line's `seg` (held with
+   * it while the stream diarizer decides that line's speaker). Its audio goes along for Qwen.
    */
-  private upgradeLine(key: number, samples: Float32Array): void {
+  private upgradeUtterance(st: ChannelState): void {
+    const utt = st.utt;
+    st.utt = null;
+    if (!utt || utt.keys.length === 0) return;
+    const last = utt.keys.at(-1) as number;
     let u: UpgradeOut;
     try {
       const h = this.hot();
-      const prepared = prepareSpan(samples);
+      const prepared = prepareSpan(st.audio.slice(utt.from, utt.to));
       const r = h.recognizer.decode(prepared, streamHotwords(h));
       const text = r.text.trim();
       u = {
         type: "upgrade",
-        key,
+        keys: utt.keys,
+        lines: utt.lines,
         text,
         model: h.recognizer.model,
         words: r.words ?? text.split(/\s+/).flatMap((w) => (w ? [{ w }] : [])),
@@ -734,11 +757,11 @@ export class LivePipeline {
       this.emit({
         type: "log",
         level: "error",
-        msg: `live upgrade: ${this.models.recognizerModel} failed on a line (${(err as Error).message}); it keeps the streaming text`,
+        msg: `live upgrade: ${this.models.recognizerModel} failed on an utterance (${(err as Error).message}); its lines keep the streaming text`,
       });
       return;
     }
-    if (this.pending.some((p) => p.seg.key === key)) this.heldUpgrades.set(key, u);
+    if (this.pending.some((p) => p.seg.key === last)) this.heldUpgrades.set(last, u);
     else this.emit(u);
   }
 
@@ -940,8 +963,8 @@ export class LivePipeline {
       if (p.emb && spk !== "c?") this.speakers.addTo(spk, p.emb);
       this.emit({ ...p.seg, spk });
       const u = p.seg.key === undefined ? undefined : this.heldUpgrades.get(p.seg.key);
-      if (u) {
-        this.heldUpgrades.delete(u.key);
+      if (u && p.seg.key !== undefined) {
+        this.heldUpgrades.delete(p.seg.key);
         this.emit(u);
       }
       for (const c of this.speakers.centroids(this.now())) this.emit(c);
@@ -1281,7 +1304,7 @@ interface Transport {
   close(): void;
 }
 
-/** Qwen for the in-call upgrade: one closed line's audio, gained and padded, to its hypothesis. */
+/** Qwen for the in-call upgrade: one utterance's audio, gained and padded, to its hypothesis. */
 export interface LineUpgrader {
   decode(
     samples: Float32Array,
@@ -1290,21 +1313,27 @@ export interface LineUpgrader {
 }
 
 /**
- * Lines waiting for Qwen per call. Past this the oldest waiting line keeps Parakeet's text, so a
- * slow Qwen upgrades the newest lines instead of falling further behind.
+ * Utterances waiting for Qwen per call. Past this the oldest waiting one keeps Parakeet's text, so
+ * a slow Qwen upgrades the newest lines instead of falling further behind.
  */
 export const UPGRADE_QUEUE_MAX = 6;
 
 /** The in-call vote of Qwen and Parakeet (docs/research/asr-architecture.md section 3.2). */
 const UPGRADE_FUSER = new RoverFuser("rover-conf");
 
+/** A written line of an utterance: its id and its streaming text. */
+interface UpgradeLine {
+  id: string;
+  text: string;
+}
+
 /** An upgrading call's state on the host. */
 interface HostUpgrade {
   qwen: LineUpgrader;
   /** Its written lines by the key the Worker gave them, until their Parakeet revision comes. */
   keys: Map<number, string>;
-  /** Lines waiting for Qwen, oldest first, each with Parakeet's hypothesis. */
-  waiting: { id: string; samples: Float32Array; parakeet: Hypothesis }[];
+  /** Utterances waiting for Qwen, oldest first, each with its lines and Parakeet's hypothesis. */
+  waiting: { lines: UpgradeLine[]; samples: Float32Array; parakeet: Hypothesis }[];
   busy: boolean;
   /** Aborted at `call.ended`: the request in flight is given up. */
   ended: AbortController;
@@ -1858,12 +1887,17 @@ export class LiveAsr {
 
   // --- the in-call upgrade ------------------------------------------------------------------
 
-  /** Parakeet's rewrite of a written line: its next revision, then the line waits for Qwen. */
+  /** Parakeet's decode of an utterance: its lines' next revisions, then it waits for Qwen. */
   private upgradeLine(c: HostCall, m: UpgradeOut): void {
     const u = c.upgrade;
-    const id = u?.keys.get(m.key);
-    if (!u || !id) return;
-    u.keys.delete(m.key);
+    if (!u) return;
+    const lines: UpgradeLine[] = [];
+    m.keys.forEach((key, i) => {
+      const id = u.keys.get(key);
+      u.keys.delete(key);
+      if (id) lines.push({ id, text: m.lines[i] as string });
+    });
+    if (lines.length === 0) return;
     const parakeet: Hypothesis = {
       engine: m.model,
       text: m.text,
@@ -1871,16 +1905,19 @@ export class LiveAsr {
       ms: 0,
       ...(m.lang ? { lang: m.lang } : {}),
     };
-    if (!this.revise(c, id, parakeet)) return;
-    u.waiting.push({ id, samples: m.samples, parakeet });
+    if (!this.revise(c, lines, parakeet)) return;
+    u.waiting.push({ lines, samples: m.samples, parakeet });
     if (u.waiting.length > UPGRADE_QUEUE_MAX) {
       const late = u.waiting.shift();
-      this.log("warn", `live upgrade: Qwen is behind; line ${late?.id} keeps Parakeet's text`);
+      this.log(
+        "warn",
+        `live upgrade: Qwen is behind; ${late?.lines.map((l) => l.id).join(", ")} keep Parakeet's text`,
+      );
     }
     void this.runQwen(c, u);
   }
 
-  /** Decodes the waiting lines with Qwen, one at a time, and writes each one's vote. */
+  /** Decodes the waiting utterances with Qwen, one at a time, and writes each one's vote. */
   private async runQwen(c: HostCall, u: HostUpgrade): Promise<void> {
     if (u.busy) return;
     u.busy = true;
@@ -1904,7 +1941,7 @@ export class LiveAsr {
         }
         u.failed = "";
         // Qwen first: engine order breaks ties, as in the benchmark's ROVER(Q,P).
-        this.revise(c, job.id, UPGRADE_FUSER.fuseSync([qwen, job.parakeet]));
+        this.revise(c, job.lines, UPGRADE_FUSER.fuseSync([qwen, job.parakeet]));
       }
     } finally {
       u.busy = false;
@@ -1912,28 +1949,38 @@ export class LiveAsr {
   }
 
   /**
-   * Writes a hypothesis as the next revision of live line `id`. False when the line may take no
-   * more: its call has ended, or a person edited or retracted it. An empty hypothesis changes
-   * nothing and leaves the line open to the next stage.
+   * Writes a hypothesis of an utterance as the next revision of each of its lines, its words cut
+   * back into them. False when the call has ended and nothing may be written. A line a person
+   * edited or retracted, or one that gets no words, is left as it is.
    */
-  private revise(c: HostCall, id: string, h: Hypothesis): boolean {
+  private revise(c: HostCall, lines: readonly UpgradeLine[], h: Hypothesis): boolean {
     if (this.calls.get(c.id) !== c) {
-      this.log("warn", `live upgrade of ${id} dropped: its call has ended`);
+      this.log(
+        "warn",
+        `live upgrade of ${lines.map((l) => l.id).join(", ")} dropped: its call has ended`,
+      );
       return false;
     }
-    const seg = c.access.view.segment(id);
-    if (!seg || seg.text === null || seg.by !== undefined) return false;
-    const text = h.text.trim();
-    if (text === "") return true;
-    const e = c.access.record({
-      type: "seg",
-      id,
-      rev: seg.rev + 1,
-      text,
-      model: h.engine,
-      ...(h.lang ? { lang: h.lang } : {}),
+    const words = h.words.length > 0 ? h.words.map((w) => w.w) : h.text.split(/\s+/);
+    const parts = splitToLines(
+      lines.map((l) => l.text),
+      words.filter((w) => w !== ""),
+    );
+    lines.forEach((l, i) => {
+      const seg = c.access.view.segment(l.id);
+      if (!seg || seg.text === null || seg.by !== undefined) return;
+      const text = (parts[i] as string).trim();
+      if (text === "") return;
+      c.access.record({
+        type: "seg",
+        id: l.id,
+        rev: seg.rev + 1,
+        text,
+        model: h.engine,
+        ...(h.lang ? { lang: h.lang } : {}),
+      });
     });
-    return e !== null;
+    return true;
   }
 
   /** The call ended: the Qwen request in flight is given up and nothing waiting is decoded. */

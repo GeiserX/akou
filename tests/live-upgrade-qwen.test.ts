@@ -1,8 +1,9 @@
 /**
  * ASR-7 against the real models: public FLEURS clips through the live pipeline on the `upgrade`
- * setup, each streaming line rewritten by Parakeet in the pipeline and then by the vote of Qwen and
- * Parakeet, as the host does it. It reports the word error rate of each stage and how long each
- * rewrite takes. Model-gated, so it never runs in CI's test jobs and never downloads anything.
+ * setup, each utterance decoded by Parakeet in the pipeline and then by the vote of Qwen and
+ * Parakeet, and cut back into its lines, as the host does it. It reports the word error rate of
+ * each stage and how long each rewrite takes. Model-gated, so it never runs in CI's test jobs and
+ * never downloads anything.
  * It needs:
  *
  * - `AKOU_LIVE_MODELS`: a models folder with `nemotron-en-560`, `nemotron-3.5-1120`,
@@ -23,13 +24,14 @@ import { FLEURS, readWav } from "../scripts/eval/nightly.ts";
 import { percentile, wer } from "../scripts/eval/score.ts";
 import { ASR_RATE, type Hypothesis } from "../src/main/asr/engine.ts";
 import { chooseLiveEngine, type LiveChoice } from "../src/main/asr/live-engines.ts";
-import { type LiveOut, LivePipeline, type UpgradeOut } from "../src/main/asr/live-worker.ts";
+import { type LiveOut, LivePipeline } from "../src/main/asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "../src/main/asr/llama-catalog.ts";
 import { createLlamaServer, llamaBuild } from "../src/main/asr/llama-server.ts";
 import { type Accelerator, hostPlatform, modelFile } from "../src/main/asr/models.ts";
 import { QwenEngine } from "../src/main/asr/qwen.ts";
 import { RoverFuser } from "../src/main/asr/rover.ts";
 import { SherpaModels } from "../src/main/asr/sherpa.ts";
+import { splitToLines } from "../src/main/asr/upgrade.ts";
 
 const MODELS = process.env.AKOU_LIVE_MODELS;
 const DATA = process.env.AKOU_FLEURS;
@@ -133,27 +135,43 @@ if (!READY) {
               }
               await p.flush();
               const mine = out.slice(from);
-              const stages: Stages = { stream: "", parakeet: "", vote: "", control: "" };
-              const add = (k: keyof Stages, t: string) => {
-                stages[k] = `${stages[k]} ${t}`.trim();
-              };
+              // Each line's text after each stage, as the host writes it: a line that gets no
+              // words from a stage keeps the text it had.
+              const texts = new Map<number, Stages>();
+              let segAt = 0;
               for (const { o, at } of mine) {
                 if (o.type === "log" && o.level === "error") throw new Error(o.msg);
-                if (o.type !== "seg") continue;
-                add("stream", o.text);
-                const next = mine.find((x) => x.o.type === "upgrade" && x.o.key === o.key);
-                const u = next ? (next.o as UpgradeOut) : null;
-                if (!u) throw new Error("a line with no Parakeet rewrite");
-                parakeetS.push(((next as { at: number }).at - at) / 1000);
-                const pk: Hypothesis = { engine: u.model, text: u.text, words: u.words, ms: 0 };
-                add("parakeet", u.text || o.text);
+                if (o.type === "seg" && o.key !== undefined) {
+                  texts.set(o.key, { stream: o.text, parakeet: o.text, vote: "", control: "" });
+                  segAt = at;
+                }
+                if (o.type !== "upgrade") continue;
+                parakeetS.push((at - segAt) / 1000);
+                const apply = (k: keyof Stages, h: Hypothesis) => {
+                  const parts = splitToLines(
+                    o.lines,
+                    h.words.map((x) => x.w),
+                  );
+                  o.keys.forEach((key, j) => {
+                    const cur = texts.get(key);
+                    if (cur && parts[j]) cur[k] = parts[j] as string;
+                  });
+                };
+                const pk: Hypothesis = { engine: o.model, text: o.text, words: o.words, ms: 0 };
+                apply("parakeet", pk);
+                for (const key of o.keys) {
+                  const cur = texts.get(key);
+                  if (cur) cur.vote = cur.control = cur.parakeet;
+                }
                 const t = performance.now();
-                const q = await qwen.decode({ samples: u.samples, lang, glossary: [] });
+                const q = await qwen.decode({ samples: o.samples, lang, glossary: [] });
                 qwenS.push((performance.now() - t) / 1000);
-                const vote = fuser.fuseSync([q, pk]);
-                add("vote", vote.text || u.text || o.text);
-                const scrambled = { ...q, words: [...q.words].reverse() };
-                add("control", fuser.fuseSync([scrambled, pk]).text);
+                apply("vote", fuser.fuseSync([q, pk]));
+                apply("control", fuser.fuseSync([{ ...q, words: [...q.words].reverse() }, pk]));
+              }
+              const stages: Stages = { stream: "", parakeet: "", vote: "", control: "" };
+              for (const k of Object.keys(stages) as (keyof Stages)[]) {
+                stages[k] = [...texts.values()].map((x) => x[k] || x.parakeet).join(" ");
               }
               rows.push({ ref: clip.ref, ...stages });
             }
