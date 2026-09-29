@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>akou · Dictation (A)</title>
+<title>akou · Models (A)</title>
 <style>
 :root{
   --bg:#0d0e10;--panel:#15171a;--raised:#1b1e22;--line:#1f2226;--line2:#2a2e34;
@@ -125,6 +125,11 @@ svg{display:block;flex:none}
 .app{display:flex;align-items:center;gap:10px}
 .app b{font-weight:500}
 
+.radio{width:16px;height:16px;border-radius:50%;border:1.5px solid var(--line2);flex:none;align-self:flex-start;margin-top:3px}
+.radio.on{border:5px solid var(--fg)}
+.tag{height:20px;padding:0 8px;border-radius:10px;border:1px solid var(--line2);font-size:11px;color:var(--dim);display:inline-flex;align-items:center}
+.row .lbl .help{max-width:470px}
+
 </style>
 </head>
 <body>
@@ -145,8 +150,8 @@ svg{display:block;flex:none}
       <div class="group"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg>Default<span class="cnt num">3</span></div>
       <div class="newws"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>New workspace</div>
     </div>
-    <a class="on" href="#"><svg class="ico" viewBox="0 0 16 16"><rect x="6" y="1.8" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5v1.7"/></svg><span class="grow">Dictation</span></a>
-    <a href="#"><svg class="ico" viewBox="0 0 16 16"><path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5z"/><path d="M2.5 5 8 8.2 13.5 5M8 8.2v6"/></svg><span class="grow">Models</span></a>
+    <a href="#"><svg class="ico" viewBox="0 0 16 16"><rect x="6" y="1.8" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5v1.7"/></svg><span class="grow">Dictation</span></a>
+    <a class="on" href="#"><svg class="ico" viewBox="0 0 16 16"><path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5z"/><path d="M2.5 5 8 8.2 13.5 5M8 8.2v6"/></svg><span class="grow">Models</span></a>
     <a href="#"><svg class="ico" viewBox="0 0 16 16"><path d="M2 4.5h7M12 4.5h2M2 11.5h2M7 11.5h7"/><circle cx="10.5" cy="4.5" r="1.5"/><circle cx="5.5" cy="11.5" r="1.5"/></svg><span class="grow">Settings</span></a>
   </nav>
   <div class="spacer"></div>
@@ -155,15 +160,12 @@ svg{display:block;flex:none}
     <section class="main">
 <div class="scroll"><div class="col">
   <div class="phead">
-    <div class="grow"><h1>Dictation</h1><div class="help">Hold a key, speak, and the words go where your cursor is.</div></div>
-    <span class="link" style="margin-top:6px"><svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>History<svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span>
-    <span class="sw big on"><i></i></span>
+    <div class="grow"><h1>Models</h1><div class="help">6.2 GB on this Mac, in Application Support. Nothing leaves this computer.</div></div>
   </div>
-  <div class="sec">Key</div><div class="grp"><div class="row"><div class="lbl"><b>Dictation key</b></div><div class="ctl"><span class="kcap"><small>Right</small>⌘</span><span class="faint" style="font-size:11.5px">Default</span><span class="btn">Change</span></div></div><div class="row"><div class="lbl"><b>How the key works</b><div class="help">Hold to talk and let go to insert. A quick tap keeps listening until the next tap.</div></div><div class="ctl"><span class="seg"><span class="on">Hold or tap</span><span>Hold only</span><span>Tap only</span></span></div></div><div class="row"><div class="lbl"><b>While listening</b></div><div class="ctl"><span style="display:flex;align-items:center;gap:4px"><span class="kcap s">esc</span> <span class="help">cancel</span><span class="kcap s" style="margin-left:12px">↵</span> <span class="help">send</span><span class="kcap s" style="margin-left:12px">⇧ ↵</span> <span class="help">open the draft</span></span></div></div><div class="row"><div class="lbl"><b>Other keys</b></div><div class="ctl"><span class="help">Fix last</span><span class="kcap s">⇧</span><span class="plus">+</span><span class="kcap s">Right ⌘</span><span class="help" style="margin-left:8px">Draft, paste last: none</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
-  <div class="sec">Voice</div><div class="grp"><div class="row"><div class="lbl"><b>Languages</b><div class="help">akou picks between these as you speak.</div></div><div class="ctl"><span class="chips"><span class="chip">English<span class="x">✕</span></span><span class="chip">Spanish<span class="x">✕</span></span><span class="chip add">+ Add</span></span></div></div><div class="row hover"><div class="lbl"><b>Microphone</b></div><div class="ctl"><span class="lvl"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="sel"><span>System default <em>MacBook Pro Microphone</em></span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span><span class="ck"><svg class="ico" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></span><span class="tip" style="left:calc(100% + 10px);top:11px">Copy config key</span></div></div><div class="row"><div class="lbl"><b>Keep headsets sounding good</b><div class="help">With a Bluetooth headset on, dictate through the built-in mic.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div></div>
-  <div class="sec">Words</div><div class="grp"><div class="row"><div class="lbl"><b>Words and replacements</b><div class="help">Spelled your way in every dictation.</div></div><div class="ctl"><span class="chips"><span class="chip word">Kubernetes</span><span class="chip word">dot com <span class="arrow">→</span> .com</span><span class="chip word">akou</span><span class="faint" style="font-size:12px;align-self:center">+ 12 more</span></span><span class="btn">Edit</span></div></div></div>
-  <div class="sec">Rules per app</div><div class="grp"><div class="row"><div class="lbl"><b><span class="app"><span class="appico" style="background:#e0b0ff">S</span><b>Slack</b></span></b></div><div class="ctl"><span class="help">Draft first, then send</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b><span class="app"><span class="appico" style="background:#b7bdc6">&gt;_</span><b>Terminal</b></span></b></div><div class="ctl"><span class="help">Types the keys, never sends</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b><span class="link"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>Add an app</span></b></div><div class="ctl"><span class="link">Use the app I dictate into next</span></div></div></div>
-  <div class="sec">Engine</div><div class="grp"><div class="row"><div class="lbl"><b>Speed or accuracy</b><div class="help">Automatic uses Best on this Mac.</div></div><div class="ctl"><span class="seg"><span class="on">Automatic</span><span>Fast</span><span>Best</span><span>Another akou</span></span></div></div></div>
+  <div class="sec">Live transcript</div><div class="grp"><div class="row"><span class="radio on"></span><div class="lbl"><b>Automatic</b><div class="help">Uses Nemotron below, since its model is here.</div></div></div><div class="row"><span class="radio"></span><div class="lbl"><b>Nemotron, streaming</b><div class="help">About 19 in 100 words wrong on meetings. Words appear half a second after they are said and never change. 0.4 cores, 2.3 GB.</div></div><div class="ctl"><span class="faint" style="font-size:11.5px">0.68 GB</span></div></div><div class="row"><span class="radio"></span><div class="lbl"><b>Parakeet, between pauses</b><div class="help">About 36 in 100 words wrong on meetings, and words on screen can change. 0.8 s. 1 core, 3.6 GB.</div></div></div><div class="row"><span class="radio"></span><div class="lbl"><b>Nemotron, each line rewritten by Qwen</b><div class="help">Nemotron's words, then Qwen rewrites each line about a second after the speaker stops. 10 to 13 GB during a call.</div></div></div></div>
+  <div class="sec">After the call, the accurate transcript</div><div class="grp"><div class="row"><div class="lbl"><b>Parakeet v3</b><div class="help">The default. About 5 in 100 words wrong on our English and Spanish test clips. An hour of audio in 1.3 minutes.</div></div><div class="ctl"><span class="faint num" style="font-size:11.5px">2.55 GB</span><span class="tag">Default</span></div></div><div class="row"><div class="lbl"><b>Qwen3-ASR 1.7B</b><div class="help">The most accurate. About 3 in 100 words wrong. An hour in 8 minutes, on the Mac's GPU.</div></div><div class="ctl"><span class="faint num" style="font-size:11.5px">2.52 GB</span><span class="btn ghost">Remove</span></div></div></div>
+  <div class="sec">Speakers</div><div class="grp"><div class="row"><div class="lbl"><b>Nemotron diarization</b><div class="help">Who spoke when, live and after the call. About 1 second in 10 given to the wrong speaker on real calls.</div></div><div class="ctl"><span class="faint num" style="font-size:11.5px">0.40 GB</span><span class="tag">Default</span></div></div><div class="row"><div class="lbl"><b>Voice fingerprints</b><div class="help">The older way: clusters of voices, then pyannote after the call. Less accurate.</div></div><div class="ctl"><span class="faint num" style="font-size:11.5px">0.05 GB</span><span class="btn"><svg class="ico" viewBox="0 0 16 16"><path d="M8 2.5v8M4.5 7 8 10.5 11.5 7M3 13h10"/></svg>Download</span></div></div></div>
+  <div class="sec">On this Mac</div><div class="grp"><div class="row"><div class="lbl"><b>Speech engine GPU</b><div class="help">Qwen runs on Metal, this Mac's GPU. The other models run on the CPU.</div></div><div class="ctl"><span class="sel"><span>Automatic <em>Metal</em></span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span></div></div><div class="row"><div class="lbl"><b>Delete models unused for</b><div class="help">The default and anything in use are never deleted.</div></div><div class="ctl"><span class="input num" style="width:64px;justify-content:flex-end">30</span><span class="help">days</span></div></div></div>
 </div><div class="fade"></div></div>
     </section>
   </div>

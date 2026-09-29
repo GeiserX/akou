@@ -101,8 +101,12 @@ svg{display:block;flex:none}
 .scroll{position:absolute;inset:0;overflow:hidden;padding:36px 0 0}
 .col{width:600px;margin:0 auto}
 .top{display:flex;align-items:center;gap:16px}
+.tabs{display:flex;gap:20px;margin-top:10px;border-bottom:1px solid var(--line)}
+.tabs span{padding:8px 0 9px;color:var(--dim);font-size:13px;margin-bottom:-1px}
+.tabs span.on{color:var(--fg);border-bottom:2px solid var(--fg)}
+.tabs span em{font-style:normal;color:var(--faint);font-size:11.5px;margin-left:4px}
 .top h1{font-size:22px;line-height:28px;font-weight:650;letter-spacing:-.015em;flex:1}
-.hero{margin-top:18px;padding:26px 24px 22px;border-radius:14px;background:var(--panel);border:1px solid var(--line);text-align:center}
+.hero{margin-top:16px;padding:26px 24px 22px;border-radius:14px;background:var(--panel);border:1px solid var(--line);text-align:center}
 .hero .keys{display:flex;justify-content:center;align-items:center;gap:12px}
 .hero .how{margin-top:12px;font-size:13.5px;color:#d5d8dd}
 .hero .how2{margin-top:4px}
@@ -158,6 +162,7 @@ svg{display:block;flex:none}
     <section class="main">
 <div class="scroll"><div class="col">
   <div class="top"><h1>Dictation</h1><span class="help">On</span><span class="sw big on"><i></i></span></div>
+  <div class="tabs"><span class="on">Setup</span><span class="">Words<em>15</em></span><span class="">History</span></div>
   <div class="hero">
     <div class="keys"><span class="kcap xl"><small>Right</small>⌘</span></div>
     <div class="how">Hold to talk, let go to insert.</div>
@@ -172,7 +177,7 @@ svg{display:block;flex:none}
     <div class="item"><span class="lbl">Words</span><span class="ctl"><span class="help">Kubernetes, dot com → .com, akou and 12 more</span></span><span class="end"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div>
     <div class="item"><span class="lbl">Rules per app</span><span class="ctl"><span class="help">Slack drafts first, Terminal types the keys</span></span><span class="end"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div>
   </div>
-  <div class="adv"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg><b>Advanced</b><span class="help">Speed or accuracy, other keys, how text goes in, learning, the island and sounds, history</span></div>
+  <div class="adv"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg><b>Advanced</b><span class="help">Speed or accuracy, other keys, how text goes in, learning, the island and sounds, how long history is kept</span></div>
 </div></div>
     </section>
   </div>
