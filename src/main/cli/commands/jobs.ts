@@ -49,7 +49,11 @@ export const jobsCommand: Command = {
       const jobs = (b?.jobs ?? []) as Body[];
       if (jobs.length === 0) return "No jobs";
       return jobs
-        .map((j) => [j.id, j.status, when(j.created_at)].filter((x) => x !== "").join("  "))
+        .map((j) =>
+          [j.id, j.status, when(j.created_at), typeof j.title === "string" ? j.title : ""]
+            .filter((x) => x !== "")
+            .join("  "),
+        )
         .join("\n");
     });
   },

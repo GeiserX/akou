@@ -2213,6 +2213,52 @@ dialog {
   white-space: pre-wrap;
   font-size: 12px;
 }
+/* The Jobs page's search, drawn as the desktop sidebar's (WINDOW section 13), and the name cell:
+   the title first, the id dim beside it (SV-J10). */
+#page-jobs .search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 220px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 6px;
+  background: var(--bg);
+  border: 1px solid var(--line);
+  color: var(--faint);
+}
+#page-jobs .search:focus-within {
+  border-color: var(--faint);
+}
+#page-jobs .search .ico {
+  width: 14px;
+  height: 14px;
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+}
+#jobs-search {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 12px;
+  outline: none;
+}
+#jobs-search::placeholder {
+  color: var(--faint);
+}
+#jobs-table .job-title {
+  color: var(--fg);
+}
+#jobs-table .job-id {
+  color: var(--dim);
+  font-size: 11px;
+}
 #key-form {
   display: grid;
   grid-template-columns: max-content minmax(0, 28em);

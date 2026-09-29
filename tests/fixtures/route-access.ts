@@ -97,6 +97,7 @@ export const ACCESS: Readonly<Record<string, Access>> = {
   "POST /v1/jobs": "jobs",
   "GET /v1/jobs": "jobs",
   "GET /v1/jobs/{id}": "jobs",
+  "PATCH /v1/jobs/{id}": "jobs",
   "GET /v1/jobs/{id}/result": "jobs",
   "DELETE /v1/jobs/{id}": "jobs",
   "GET /v1/events": "jobs",

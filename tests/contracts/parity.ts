@@ -403,6 +403,20 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
+    action: "Name or rename a job (server mode)",
+    cli: {
+      none: "a program names the jobs it submits, at submit or with PATCH; `akou jobs list` shows the name",
+    },
+    api: ["PATCH /jobs/:id"],
+    mcp: {
+      none: "jobs are for programs over HTTP; Executor loads them from the OpenAPI file, and remote MCP waits (service-interface.md)",
+    },
+    // SERVER.md SV-J10: the Jobs page shows the name and searches it; the program names the job.
+    window: {
+      none: "the Jobs page shows each job's name and finds jobs by it; the program that submitted a job names it",
+    },
+  },
+  {
     action: "Run the server in the foreground (server mode)",
     cli: ["serve"],
     api: { none: "it starts the API, so the API cannot start it" },
