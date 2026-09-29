@@ -6,6 +6,7 @@
  * it was.
  */
 
+import { Database } from "bun:sqlite";
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { createHash } from "node:crypto";
 import { existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
@@ -919,6 +920,30 @@ describe("SV-J10: the jobs store's search", () => {
       expect(store.rename("job_nope", "x")).toBe(false);
       // Positive control: no q lists every job.
       expect(store.list({ key: null, limit: 50 })).toHaveLength(3);
+    } finally {
+      store.close();
+      t.cleanup();
+    }
+  });
+
+  test("a jobs.db from before titles opens: its jobs have none, and a new one takes a title", () => {
+    const t = tempDir();
+    const path = join(t.dir, "jobs.db");
+    const first = new JobStore(path);
+    const old = first.submit(job(null)).job;
+    first.close();
+    const raw = new Database(path);
+    raw.run("ALTER TABLE jobs DROP COLUMN title");
+    raw.close();
+    const store = new JobStore(path);
+    try {
+      expect(store.job(old.id)?.title).toBeNull();
+      const named = store.submit(job("Weekly sync")).job;
+      expect(store.job(named.id)?.title).toBe("Weekly sync");
+      expect(store.rename(old.id, "Named after the upgrade")).toBe(true);
+      expect(store.list({ key: null, q: "after the upgrade", limit: 50 }).map((j) => j.id)).toEqual(
+        [old.id],
+      );
     } finally {
       store.close();
       t.cleanup();
