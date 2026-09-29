@@ -459,7 +459,7 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_SETTINGS,
     default: "auto",
-    doc: "What writes the live transcript of a call. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `upgrade`: Nemotron, then each closed line rewritten during the call by Parakeet (about 0.2 s later) and by Qwen voting with Parakeet (1.5 to 2.5 s later); about 10 to 13 GB while a call runs. `auto` picks `upgrade` on a machine with 16 GB or more whose models are downloaded, else `nemotron` when its model is downloaded, else `parakeet`; a setup whose models are missing never runs. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its setup.",
+    doc: "What writes the live transcript of a call. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `upgrade`: Nemotron, then, each time the speaker stops, the lines rewritten during the call by Parakeet (about 0.2 s later) and by Qwen voting with Parakeet (1.5 to 2.5 s later); about 10 to 13 GB while a call runs. `auto` picks `upgrade` on a machine with 16 GB or more whose models are downloaded, else `nemotron` when its model is downloaded, else `parakeet`; a setup whose models are missing never runs. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its setup.",
   },
   "asr.live.engine": {
     type: "string",

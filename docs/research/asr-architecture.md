@@ -203,15 +203,25 @@ When the upgraded line lands, alone on the M4, first 80 utterances: Parakeet 0.1
 
 Memory while a call runs: live 2.25 GB, Parakeet 2.7 GB, and Qwen (MLX peaked at 7.8 GB in the benchmark; llama-server Q8_0 sat at 4.9 to 5.2 GB on Linux), about 10 to 13 GB in all. That needs a memory guard (`asr.memoryBudgetMb`, section 6), and it is why the upgrade is a setting.
 
-**Built (ASR-7).** The `upgrade` setup of `asr.live` runs it, in `src/main/asr/live-worker.ts`:
+**Built (ASR-7).** The `upgrade` setup of `asr.live` runs it, in `src/main/asr/live-worker.ts` and `src/main/asr/upgrade.ts`:
 
-- The line the streaming cutter closes (0.7 s gap or 12 s, section 3.1) is the utterance; there is no second segmenter.
-- The live Worker decodes the line's audio with Parakeet, gained and padded by `prepareSpan`, right after the line is written, and sends it as the line's next revision. A call line waiting for its speaker label gets its rewrite right after it, never before.
-- The host sends the same audio to Qwen, one line at a time, with the call's decode list as the glossary and `asr.languages` as the language (forced when it names one), and writes `ROVER(Qwen, Parakeet)` as the revision after that, `model: rover-conf(qwen3-asr-1.7b,<parakeet>)`. Qwen comes first, so it breaks ties. A reader following the call (`akou_read`) gets the line again with its new text and model.
-- At most 6 lines wait for Qwen; past that the oldest keeps Parakeet's text, so a slow Qwen upgrades the newest lines instead of falling behind. A request past 30 s, or a Qwen that fails, leaves the line with Parakeet's text, and the failure is logged once.
-- A line a person edited or retracted keeps their text. A hypothesis with no words changes nothing. `call.ended` gives up the request in flight and anything that answers later is dropped, since the final pass covers the call.
-- Qwen runs on the llama-server dictation keeps warm when there is one, so one Qwen serves both. Otherwise the upgrade starts its own, which gives way to a final pass on Metal instead of stopping it, and stops when its call ends.
-- The upgrade has no key of its own (`asr.live.upgrade` in the plan): it is the `upgrade` value of `asr.live`.
+- **The unit is an utterance:** the streaming lines from one stop of the speaker to the next, at most 30 s. The speaker stopped when the stream heard nothing new for the pause plus the engine's chunk (section 3.1), or at a flush. A single line is too short a unit. The line cutter breaks at a 0.7 s gap between tokens, which falls inside sentences, and a token's time trails its audio, so a line's audio cuts words at both ends. On 20 FLEURS English clips, Parakeet on each line read 16.63 against 7.34 for the stream.
+- **Parakeet.** Right after the utterance's last line is written, the live Worker decodes the utterance's audio with Parakeet, gained and padded by `prepareSpan`. A call line waiting for its speaker label is decoded right after it, never before.
+- **Qwen.** The host sends the same audio to Qwen, one utterance at a time. The glossary is the call's decode list, and the language is `asr.languages` (forced when it names one). The host then writes `ROVER(Qwen, Parakeet)`, `model: rover-conf(qwen3-asr-1.7b,<parakeet>)`. Qwen comes first, so it breaks ties.
+- **Back into lines.** Each stage's words go back into the utterance's lines by text, not by time. They are aligned with the stream's words, and each word goes to the line of the stream word it matches. A word the stream did not have goes with the word before it. Each line gets its share as its next revision. A reader following the call (`akou_read`) gets the line again with its new text and model.
+- **Limits.** At most 6 utterances wait for Qwen. Past that, the oldest keeps Parakeet's text, so a slow Qwen upgrades the newest lines instead of falling behind. A request past 30 s, or a Qwen that fails, leaves the lines with Parakeet's text, and the failure is logged once.
+- **What never changes.** A line a person edited or retracted keeps their text, and so does a line that gets no words from a stage. `call.ended` gives up the request in flight, and anything that answers later is dropped, since the final pass covers the call.
+- **One Qwen.** Qwen runs on the llama-server dictation keeps warm when there is one, so one Qwen serves both. Otherwise the upgrade starts its own, which gives way to a final pass on Metal instead of stopping it, and stops when its call ends.
+- **No key of its own.** The plan named `asr.live.upgrade`. The upgrade is instead the `upgrade` value of `asr.live`.
+
+Measured on the reference Mac mini, 20 FLEURS clips per language, each clip one call through the live pipeline with the real models (`tests/live-upgrade-qwen.test.ts`; the repository's scorer, which does not normalize numbers):
+
+| Language (stream model) | Stream | After Parakeet | After ROVER(Q,P) | Parakeet lands (p50 / p95) | Qwen answers (p50 / p95) |
+|---|---|---|---|---|---|
+| en (`nemotron-en-560`) | 7.34 | 7.13 | **5.18** | 0.22 / 0.74 s | 0.79 / 2.17 s |
+| es (`nemotron-3.5-1120`) | 4.87 | 4.45 | **3.60** | 0.20 / 0.52 s | 1.05 / 2.76 s |
+
+The same vote with Qwen's words reversed, the failing control, reads 74.51 and 41.10.
 
 An LLM per utterance was measured on 20 utterances per set: −1 to −6 errors against ROVER(Q,P) with Opus, +4 / −2 with Sonnet, 3 to 13 s of extra wall time, $0.009 per utterance. The sample is too small to show a gain, and the LLM is too slow for the live view. It is not in the design.
 

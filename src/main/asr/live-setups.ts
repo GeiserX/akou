@@ -124,7 +124,7 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
   },
   upgrade: {
     title: "Nemotron, each line upgraded",
-    what: "Streaming Nemotron writes the words; when a line closes, Parakeet rewrites it about 0.2 s later and Qwen fused with Parakeet about 1.5 to 2.5 s later",
+    what: "Streaming Nemotron writes the words; when the speaker stops, Parakeet rewrites the lines about 0.2 s later and Qwen fused with Parakeet about 1.5 to 2.5 s later",
     accuracy: {
       metric: "call-wer",
       value: 13.31,
