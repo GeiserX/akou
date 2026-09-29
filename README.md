@@ -1,7 +1,6 @@
-<picture>
-  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/akou-banner-dark.svg">
-  <img alt="akou. Every word of your calls, on your own machine." src="assets/brand/akou-banner.svg" width="100%">
-</picture>
+<p align="center">
+  <img src="docs/images/banner.svg" alt="akou" width="100%">
+</p>
 
 # akou
 
