@@ -6,7 +6,10 @@
  * Escape discards. Discard, Retry with another engine, Copy, Insert and Send sit below as buttons.
  * It is drawn as a sheet dropped from the island at the top (docs/ux/design-explorations/README.md):
  * the island says `Draft` and the audio's length, the sheet holds the field, where the text goes,
- * and the engine, where it ran, how long it took, the audio's length and the language.
+ * and the engine, where it ran, how long it took, the audio's length and the language. With two or
+ * more of the user's languages and an engine that takes a forced one, the language chip is a
+ * button: a click decodes the same audio again in the next language (akou-5v8), and the new reading
+ * comes back as a new open, the chip ringed as one the user chose.
  *
  * Words the engine was unsure of are underlined, from its word confidences; an engine that gives
  * none gets the note `no confidence from this engine` and no underline. A click on an underlined
@@ -31,6 +34,8 @@ export interface DraftTransport {
   discard(p: Params<"discard">): void;
   copy(p: Params<"copy">): void;
   retry(p: Params<"retry">): void;
+  /** The chip's click; false when no new reading comes, and the chip takes clicks again. */
+  language(p: Params<"language">): Promise<boolean>;
   chip(a: ChipAnswer): void;
 }
 
@@ -94,8 +99,38 @@ function clock(seconds: number): string {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
 
+/**
+ * The language chip: the tag in capitals, a button only when a click can decode the audio again
+ * in another language, ringed when the user chose it.
+ */
+function languageChip(d: DraftOpen, onSwitch: () => Promise<boolean>): HTMLElement {
+  const tag = (d.language ?? "").split("-")[0]?.toUpperCase() ?? "";
+  if (d.languageSwitch !== true)
+    return h("span", { id: "draft-lang", class: "lang", attrs: { title: "Language heard" } }, tag);
+  const b = h(
+    "button",
+    {
+      id: "draft-lang",
+      class: "lang",
+      type: "button",
+      attrs: { title: "Switch language", "aria-label": `Switch language, now ${tag}` },
+    },
+    tag,
+  );
+  b.toggleAttribute("data-switchable", true);
+  b.toggleAttribute("data-forced", d.languageForced === true);
+  b.addEventListener("click", () => {
+    // One decode at a time: the next open draws a new chip, and a switch that failed frees it.
+    b.disabled = true;
+    void onSwitch().then((ok) => {
+      if (!ok) b.disabled = false;
+    });
+  });
+  return b;
+}
+
 /** The engine line: `fast (Parakeet) on this Mac · took 0.3 s · 0:14 of audio · EN`. */
-function metaLine(d: DraftOpen): (string | HTMLElement)[] {
+function metaLine(d: DraftOpen, onSwitch: () => Promise<boolean>): (string | HTMLElement)[] {
   const dot = () => h("span", { class: "dot", attrs: { "aria-hidden": "true" } });
   const here = d.platform === "darwin" ? "on this Mac" : "on this computer";
   const parts: (string | HTMLElement)[][] = [
@@ -103,8 +138,7 @@ function metaLine(d: DraftOpen): (string | HTMLElement)[] {
     ["took ", h("b", {}, `${(d.ms / 1000).toFixed(1)} s`)],
   ];
   if (typeof d.seconds === "number" && d.seconds > 0) parts.push([`${clock(d.seconds)} of audio`]);
-  if (d.language)
-    parts.push([h("span", { id: "draft-lang", class: "lang" }, d.language.toUpperCase())]);
+  if (d.language) parts.push([languageChip(d, onSwitch)]);
   return parts.flatMap((p, i) => (i === 0 ? p : [dot(), ...p]));
 }
 
@@ -231,7 +265,12 @@ export function mountDraft(t: DraftTransport): DraftSink {
       el("draft-app-icon").textContent = (next.to ?? "").charAt(0).toUpperCase();
       el("draft-length").textContent =
         typeof next.seconds === "number" && next.seconds > 0 ? `· ${clock(next.seconds)}` : "";
-      replace(el("draft-meta"), ...metaLine(next));
+      replace(
+        el("draft-meta"),
+        ...metaLine(next, () =>
+          d === next && !done ? t.language({ id: next.id }) : Promise.resolve(false),
+        ),
+      );
       replace(el("draft-retry-engine"), ...next.engines.map((e) => h("option", { value: e }, e)));
       el("draft-retry-group").hidden = next.engines.length === 0;
       el("draft-retry-pick").hidden = next.engines.length < 2;

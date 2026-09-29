@@ -25,6 +25,7 @@ import { nextDictatedApp } from "./dictation-apps.ts";
 import { cueStyle } from "./dictation-cues.ts";
 import { mountDictionaryDialog } from "./dictation-dictionary.ts";
 import { mountHistoryDialog } from "./dictation-history.ts";
+import { LanguageList } from "./dictation-languages.ts";
 import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { remotePanel } from "./dictation-remote.ts";
@@ -65,6 +66,9 @@ const PILL_KEY = "dictation.pill";
 /** Reading the field back (DC-L2), which on macOS waits for the Accessibility grant. */
 const READ_FIELD_KEY = "dictation.readField";
 const LEARN_KEY = "dictation.learn";
+
+/** The user's languages, drawn as chips with an add list (akou-5v8). */
+const LANGUAGES_KEY = "dictation.languages";
 
 /** The master switch, drawn above the groups. */
 export const ENABLE_KEY = "dictation.enabled";
@@ -327,6 +331,8 @@ export class DictationSettings {
     }
     let input = f.input;
     if (key === MIC_KEY && input instanceof HTMLInputElement) input = this.micField(input);
+    if (key === LANGUAGES_KEY && input instanceof HTMLTextAreaElement && !input.disabled)
+      languageChips(input);
     if (key === SOUNDS_KEY) input.after(h("small", { id: "dictation-sounds-now", class: "hint" }));
     const waiting = key === READ_FIELD_KEY ? this.readWaits(input) : null;
     if (waiting) input.after(waiting);
@@ -736,6 +742,25 @@ export class DictationSettings {
     this.settings[key] = value;
     this.shown[key] = shownValue(this.schema[key], value);
   }
+}
+
+/**
+ * `dictation.languages` as chips with an add list in place of its text box, which stays the value
+ * the page saves: each change writes the list into it, one code a line, and saves.
+ */
+function languageChips(input: HTMLTextAreaElement): void {
+  const list = new LanguageList(
+    input.value
+      .split("\n")
+      .map((c) => c.trim())
+      .filter((c) => c !== ""),
+    (l) => {
+      input.value = l.join("\n");
+      input.dispatchEvent(new Event("change"));
+    },
+  );
+  input.hidden = true;
+  input.after(list.root);
 }
 
 /**

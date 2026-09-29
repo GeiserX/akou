@@ -33,12 +33,12 @@ import { join } from "node:path";
 import type { DictationEvent, DictationItem } from "../../core/dictation/events.ts";
 import { applyHunks, type Redecode } from "../../core/dictation/learn.ts";
 import type { CueMoment } from "../../ui/dictation-cues.ts";
-import type { Chip, ChipAnswer } from "../../ui/pill-protocol.ts";
+import type { Chip, ChipAnswer, PillAction } from "../../ui/pill-protocol.ts";
 import { realClock, withDeadline } from "../capture/engine.ts";
 import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import type { AppRule } from "../config/schema.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
-import { DraftBox, type DraftBoxOptions } from "./draft.ts";
+import { DraftBox, type DraftBoxOptions, NO_TARGET } from "./draft.ts";
 import { forcesLanguage } from "./engines.ts";
 import { Learner } from "./learner.ts";
 import {
@@ -141,6 +141,9 @@ export type RetryResult =
 
 /** The session commands of the tray and the CLI (DC-G1). */
 export type ControlAction = "start" | "stop" | "cancel";
+
+/** The buttons of the pill's error sheet (DC-O1, DC-R3). */
+export type ErrorAction = Extract<PillAction, "retry" | "copy" | "open-draft">;
 
 /** Why a session command was refused: the code the API answers with, and a sentence. */
 export type ControlResult =
@@ -333,8 +336,12 @@ export class DictationService {
       sendKey: d.sendKey ?? (() => "none"),
       learnMode: d.learnMode ?? (() => "off"),
       engines: d.engines ?? (() => []),
-      retry: async (id, engine) => {
-        const r = await this.retry(id, engine === "auto" ? {} : { engine });
+      languages: () => this.o.languages?.() ?? [],
+      retry: async (id, engine, language) => {
+        const r = await this.retry(id, {
+          ...(engine === "auto" ? {} : { engine }),
+          ...(language ? { language } : {}),
+        });
         return r.ok ? r : { ok: false, message: r.message };
       },
       ...(d.knownPairs ? { knownPairs: d.knownPairs } : {}),
@@ -518,6 +525,63 @@ export class DictationService {
   }
 
   /**
+   * What the pill's error sheet offers for failed dictation `id` (DC-O1, DC-R3): Retry where its
+   * audio is kept and an engine can decode it (`Retry locally` when the remote's decode failed),
+   * Copy where it has text and a helper runs to copy it, Open draft where it has text.
+   */
+  errorActions(id: string): { actions: ErrorAction[]; retryLabel?: string } {
+    const it = this.log.item(id);
+    if (!it) return { actions: [] };
+    const actions: ErrorAction[] = [];
+    const engine = this.retryEngineFor(it);
+    if (engine && this.audio.has(id)) actions.push("retry");
+    if (it.text && this.session()) actions.push("copy");
+    if (it.text) actions.push("open-draft");
+    const local = actions.includes("retry") && remoteDecodeFailed(it);
+    return { actions, ...(local ? { retryLabel: "Retry locally" } : {}) };
+  }
+
+  /**
+   * An error sheet's button for dictation `id`. Retry decodes its kept audio again and opens the
+   * draft box on the new reading, where Enter inserts into the app captured at the press; Open
+   * draft opens it on the text it has; Copy puts that text on the clipboard. Nothing is pasted from
+   * here, since the user's focus may have moved since the press.
+   */
+  async errorAction(id: string, action: ErrorAction): Promise<boolean> {
+    const it = this.log.item(id);
+    if (!it) return false;
+    if (action === "open-draft") return it.text ? this.draft.open(id, { focus: true }).ok : false;
+    if (action === "copy") {
+      const s = this.session();
+      if (!it.text || !s) return false;
+      const r = await s.copyText(it.text, it.target ?? NO_TARGET);
+      return r.ok;
+    }
+    const engine = this.retryEngineFor(it);
+    if (!engine) return false;
+    const r = await this.retry(id, { engine });
+    if (!r.ok) {
+      this.o.onLog?.("warn", `dictation ${id}: the retry failed (${r.message})`);
+      return false;
+    }
+    if (r.answer.text === "") return false;
+    // A new dictation started while this one decoded: the box must not take its keyboard (DC-S1).
+    const s = this.session()?.state;
+    const busy = s === "listening" || s === "transcribing" || s === "inserting";
+    return this.draft.open(id, { focus: !busy, reading: r.answer }).ok;
+  }
+
+  /**
+   * The engine an error's Retry decodes on: a local one after the remote's decode failed (best
+   * when it runs here, else fast), else the one that read it.
+   */
+  private retryEngineFor(it: { engine: string; text: string | null }): string | null {
+    const here = (this.o.draft?.engines?.() ?? []).filter((e) => e !== "remote");
+    if (remoteDecodeFailed(it)) return here.includes("best") ? "best" : (here[0] ?? null);
+    return ["fast", "best", "remote"].includes(it.engine) ? it.engine : (here[0] ?? null);
+  }
+
+  /**
    * The chip for dictation `id` has nowhere to show (the pill is off): it is over with nothing
    * written, so its pairs wait in the words to review (DC-O4, DC-L5).
    */
@@ -538,9 +602,10 @@ export class DictationService {
   /**
    * Decodes a dictation's kept audio again with `engine` (DC-G1, DC-H1): the same guards and text
    * rules as a new dictation, answered beside the first reading. The dictation and its log are not
-   * changed.
+   * changed. `language` forces one on an engine that takes it, as the language chip does (akou-5v8);
+   * absent, `dictation.language` as for a new dictation.
    */
-  async retry(id: string, o: { engine?: string } = {}): Promise<RetryResult> {
+  async retry(id: string, o: { engine?: string; language?: string } = {}): Promise<RetryResult> {
     if (!this.log.item(id)) return { ok: false, code: "not_found", message: `no dictation ${id}` };
     const samples = await this.audio.read(id);
     if (!samples) {
@@ -552,7 +617,7 @@ export class DictationService {
     }
     const engine = this.o.engine(o.engine);
     if (!engine) return { ok: false, code: "models_missing", message: "no speech model is loaded" };
-    const language = this.o.language?.();
+    const language = o.language ?? this.o.language?.();
     try {
       const r = await decodeDictation(this.o, engine, samples, language);
       if (r.kind === "empty") {
@@ -1023,6 +1088,14 @@ export class DictationService {
 }
 
 /** The text rules the service hands each session (DC-E6, DC-L6, DC-S7, DC-S6). */
+/**
+ * The remote's decode failed, so it has no text: a remote reading whose insert failed has its text
+ * and needs no local retry.
+ */
+function remoteDecodeFailed(it: { engine: string; text: string | null }): boolean {
+  return it.engine === "remote" && !it.text;
+}
+
 function textRules(o: TextRules): TextRules {
   const r: TextRules = {};
   if (o.correct) r.correct = o.correct;

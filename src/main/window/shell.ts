@@ -230,7 +230,10 @@ export interface ShellApp {
  * changes, and for the pill its events and levels.
  */
 export interface ShellDictation
-  extends Pick<PillDictation, "follow" | "languageChoice" | "setLanguage"> {
+  extends Pick<
+    PillDictation,
+    "follow" | "languageChoice" | "setLanguage" | "errorActions" | "errorAction"
+  > {
   /** `off`, `starting`, `idle`, `listening`, `transcribing` or `inserting`. */
   state(): string;
   status(): ReturnType<PillDictation["status"]>;
@@ -284,6 +287,8 @@ export function appForShell(app: AkouApp): ShellApp {
       languageChoice: () =>
         app.dictation()?.languageChoice() ?? { languages: [], switchable: false },
       setLanguage: (language) => app.dictation()?.setLanguage(language) ?? false,
+      errorActions: (id) => app.dictation()?.errorActions(id) ?? { actions: [] },
+      errorAction: async (id, action) => (await app.dictation()?.errorAction(id, action)) === true,
       hotkey: () => app.dictation()?.hotkey() ?? "",
       draft: () => app.dictation()?.draft ?? null,
       chip: async (a) => (await app.dictation()?.answerChip(a)) === true,

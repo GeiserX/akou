@@ -24,8 +24,11 @@
  *   dictation key is pressed then (the helper refuses the press, DC-A4).
  * - `inserted` or `copied` for `DONE_MS` after the helper's receipt, with the engine's notice
  *   (`best failed, used fast`) or, after a clipboard-only insert, the paste hint.
- * - `error` with the log's message for `ERROR_MS`. Its buttons (Retry, Copy, Open draft) wait for
- *   the draft box (DC-S1), so it offers none yet.
+ * - `error` with the log's message for `ERROR_MS`, or `NOTICE_MS` when it has buttons, so they can be
+ *   reached (DC-O1, DC-R3): Retry where the dictation's audio is kept (`Retry locally` after a
+ *   remote failure), which decodes it again and opens the draft box on the new reading; Copy and
+ *   Open draft where it has text. Nothing is inserted from the pill: the draft box's Enter does it,
+ *   into the app captured when the session began.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
  * - `notice` for `NOTICE_MS` when the dictation key does nothing (macOS): the helper lost the
  *   Accessibility grant (DC-N1), with a button to its pane, shown once the island is free, so a
@@ -51,7 +54,7 @@ import type {
 } from "../../ui/pill-protocol.ts";
 import { pillPreview } from "../../ui/pill-protocol.ts";
 import { LEARNED_MS } from "../dictation/learner.ts";
-import type { DictationFollow } from "../dictation/service.ts";
+import type { DictationFollow, ErrorAction } from "../dictation/service.ts";
 
 type Messages = PillRpc["webview"]["messages"];
 type Requests = PillRpc["bun"]["requests"];
@@ -96,7 +99,16 @@ export interface PillDictation {
   setLanguage?(language: string): boolean;
   /** The answer to a learn chip the pill showed (DC-L4); absent, no chip is answered. */
   chip?(a: ChipAnswer): Promise<boolean>;
+  /**
+   * What a failed dictation offers (DC-O1, DC-R3): `retry` where its audio is kept, `copy` and
+   * `open-draft` where it has text; `retryLabel` names a retry that runs locally after the remote.
+   */
+  errorActions?(id: string): { actions: ErrorAction[]; retryLabel?: string };
+  /** One of those buttons, for dictation `id`: true when it did what it says. */
+  errorAction?(id: string, action: ErrorAction): Promise<boolean>;
 }
+
+const ERROR_ACTIONS: readonly string[] = ["retry", "copy", "open-draft"];
 
 export interface PillOptions {
   platform: string;
@@ -145,7 +157,7 @@ export function keyedChord(binding: string): boolean {
 
 /** How long `inserted` or `copied` stays before the pill hides (DC-O1). */
 export const DONE_MS = 1500;
-/** How long an error stays: it has no button to close it until the draft box exists. */
+/** How long an error with no button stays; one with buttons stays `NOTICE_MS`. */
 export const ERROR_MS = 5000;
 /** The line under `transcribing` while the engine was loading its model at the release. */
 export const LOADING_NOTE = "loading model";
@@ -202,6 +214,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   let shown: PillState = { state: "hidden" };
   /** The spoken dictation the pill follows, from its `dictation.started` on. */
   let current: string | null = null;
+  /** The dictation whose error the island shows, for its buttons. */
+  let failed: string | null = null;
   /** The engine's notice for it (`best failed, used fast`). */
   let notice: string | null = null;
   let cancelHide: () => void = () => {};
@@ -453,8 +467,15 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         put({ state: "done", how: copied ? "copied" : "inserted", ...(note ? { note } : {}) });
         hideAfter(DONE_MS);
       } else if (e.type === "dictation.failed") {
-        put({ state: "error", message: e.error, actions: [] });
-        hideAfter(ERROR_MS);
+        const a = d.errorActions?.(e.id) ?? { actions: [] };
+        failed = e.id;
+        put({
+          state: "error",
+          message: e.error,
+          actions: a.actions,
+          ...(a.retryLabel ? { retryLabel: a.retryLabel } : {}),
+        });
+        hideAfter(a.actions.length > 0 ? NOTICE_MS : ERROR_MS);
       }
     },
     // Partials are decoded only for the ticker: Parakeet's carry no language for the chip.
@@ -474,10 +495,39 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     return true;
   };
 
+  /**
+   * An error's button: the island steps aside (Retry shows `transcribing` while it decodes) and
+   * comes back with the error if the button could not do it.
+   */
+  const onError = async (action: ErrorAction): Promise<boolean> => {
+    const was = shown;
+    const id = failed;
+    if (was.state !== "error" || !id || !was.actions.includes(action) || !d.errorAction)
+      return false;
+    cancelHide();
+    let mine: PillState = was;
+    if (action === "retry") {
+      mine = { state: "transcribing", since: o.now() };
+      put(mine);
+    }
+    const ok = await d.errorAction(id, action);
+    // A new session took the island meanwhile: it is that one's now.
+    if (shown !== mine) return ok;
+    if (!ok) {
+      put(was);
+      hideAfter(NOTICE_MS);
+    } else if (action === "copy") {
+      put({ state: "done", how: "copied", note: pasteHint(o.platform) });
+      hideAfter(DONE_MS);
+    } else put({ state: "hidden" });
+    return ok;
+  };
+
   return {
     handlers: {
       control: async ({ action }) => {
         if (action === "language") return nextLanguage();
+        if (ERROR_ACTIONS.includes(action)) return onError(action as ErrorAction);
         if (action === "grant") {
           if (shown.state !== "notice" || shown.reason !== "grant-lost" || !o.grant) return false;
           cancelHide();
