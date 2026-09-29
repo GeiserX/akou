@@ -3,6 +3,13 @@
  * turns each channel's 16 kHz audio into segments, provisional lines and speaker labels, and the
  * host on the main thread that feeds it and writes what it finds to the log.
  *
+ * A call runs one of two recognition paths, chosen when it starts (`asr.live.engine`,
+ * live-engines.ts). With a streaming engine (Nemotron), each channel is one stream for the whole
+ * call behind a causal gain, and lines are cut from its tokens (live-stream.ts): a word once shown
+ * is never taken back, and the provisional line is the open line's words so far. Without one (its
+ * model not downloaded), steps 1 to 4 below re-decode VAD windows with the offline recognizer.
+ * Speakers (step 5) are the same on both.
+ *
  * Per channel, in the Worker (`LivePipeline`):
  * 1. **Segment** with Silero VAD. A segment closes after `segmentPause` (0.7 s) of no speech or at
  *    `segmentWindow` (12 s) of unbroken speech. VAD only cuts the live transcript; it never decides
@@ -48,6 +55,7 @@ import type { MergedEntry } from "../vocab/files.ts";
 import {
   ASR_RATE,
   type Embedder,
+  type LiveEngine,
   loadModelSet,
   type ModelSet,
   type ModelSpec,
@@ -57,6 +65,8 @@ import {
   type WordHyp,
 } from "./engine.ts";
 import { DEFAULT_FINAL, timelinePieces } from "./finalize-worker.ts";
+import type { LiveChoice } from "./live-engines.ts";
+import { StreamChannel, type StreamLine } from "./live-stream.ts";
 import { RECOGNIZER } from "./models.ts";
 import { prepareSpan } from "./pad.ts";
 import { siblingModule } from "./sibling.ts";
@@ -251,6 +261,10 @@ interface ChannelState {
   lastSpeech: number;
   lastProvisional: number;
   pseq: number;
+  /** The streaming engine's stream, when the call runs one (live-stream.ts); else VAD windows. */
+  live: StreamChannel | null;
+  /** The open line's text as last published, so an unchanged line is not published again. */
+  shown: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -278,6 +292,8 @@ export class LivePipeline {
   private labelsUsed = 0;
   private streamStarts = 0;
   private dictationVad: Vad | null = null;
+  /** The call's streaming engine, or null for VAD windows re-decoded by the recognizer. */
+  private engine: LiveEngine | null = null;
 
   constructor(
     private readonly models: ModelSet,
@@ -302,6 +318,8 @@ export class LivePipeline {
       lastSpeech: 0,
       lastProvisional: 0,
       pseq: 0,
+      live: null,
+      shown: "",
     });
     this.chans = new Map(CHANNELS.map((ch) => [ch, state(ch)]));
   }
@@ -320,7 +338,7 @@ export class LivePipeline {
    * the last one its final words.
    */
   async beginCall(
-    state: Parameters<LiveSpeakers["restore"]>[0] & { ids?: string[] },
+    state: Parameters<LiveSpeakers["restore"]>[0] & { ids?: string[]; live?: LiveChoice },
   ): Promise<void> {
     let open = false;
     for (const st of this.chans.values()) {
@@ -335,6 +353,7 @@ export class LivePipeline {
     this.speakers.restore(state);
     for (const id of state.ids ?? []) this.speakers.noteId(id);
     for (const st of this.chans.values()) this.resetChannel(st, null, 0);
+    this.startEngine(state.live);
     // The new call's stream starts afresh: its speakers take the call's labels by centroid, or
     // the numbers after every label the call already has (a Worker that took over a call mid-way
     // has lost the old stream's speaker state).
@@ -347,6 +366,43 @@ export class LivePipeline {
     } else {
       s?.d.close();
       this.stream = null;
+    }
+  }
+
+  /**
+   * The new call's live engine: a stream per channel for the whole call, or none (VAD windows
+   * re-decoded by the recognizer). An engine that does not load leaves the call on the recognizer.
+   */
+  private startEngine(choice: LiveChoice | undefined): void {
+    let closed = false;
+    for (const st of this.chans.values()) {
+      closed ||= st.live !== null;
+      st.live?.close();
+      st.live = null;
+    }
+    // A stream's native state (the encoder's caches) is freed only when it is collected, and the
+    // JavaScript heap is too small to ask for that on its own: collect the last call's now.
+    if (closed) Bun.gc(true);
+    this.engine = null;
+    if (!choice) return;
+    try {
+      if (!this.models.liveEngine) throw new Error("this model set has no streaming engine");
+      this.engine = this.models.liveEngine(choice.engine);
+    } catch (err) {
+      this.emit({
+        type: "log",
+        level: "error",
+        msg: `live: ${choice.engine} did not load (${(err as Error).message}); this call's live lines come from ${this.models.recognizerModel}`,
+      });
+      return;
+    }
+    const engine = this.engine;
+    for (const st of this.chans.values()) {
+      st.live = new StreamChannel(engine.open(choice.lang), {
+        pause: this.o.segmentPause,
+        window: this.o.segmentWindow,
+        tierMs: engine.tierMs,
+      });
     }
   }
 
@@ -446,6 +502,7 @@ export class LivePipeline {
     st.audio.reset(pos);
     st.inSpeech = false;
     st.pseq = 0;
+    st.shown = "";
   }
 
   /** Audio for one channel at `start` (samples on the part's file timeline). */
@@ -476,6 +533,11 @@ export class LivePipeline {
     }
     st.audio.push(samples);
     if (ch === "call") this.toStream(part, st.pos, samples);
+    if (st.live) {
+      this.streamAudio(st, st.live, part, samples);
+      this.emit({ type: "progress", part, ch, pos: st.pos });
+      return;
+    }
     st.pos += samples.length;
 
     const w = st.vad.windowSize;
@@ -528,6 +590,10 @@ export class LivePipeline {
 
   /** Closes an open segment at the newest audio (part end, flush, skipped audio). */
   private closeOpen(st: ChannelState): void {
+    if (st.live) {
+      this.lines(st, st.live.flush());
+      return;
+    }
     if (!st.inSpeech) return;
     this.close(st, st.segStart, Math.min(st.pos, st.lastSpeech + this.sec(this.o.postRoll)));
     st.inSpeech = false;
@@ -558,13 +624,72 @@ export class LivePipeline {
     if (st.part === null || to <= from) return;
     const samples = st.audio.slice(from, to);
     const r = this.decode(samples);
+    this.emitLine(st, st.part, from, to, samples, r);
+  }
+
+  // --- the streaming engine -----------------------------------------------------------------
+
+  /** Audio for a channel whose call runs a streaming engine: lines as the engine closes them. */
+  private streamAudio(
+    st: ChannelState,
+    sc: StreamChannel,
+    part: number,
+    samples: Float32Array,
+  ): void {
+    const at = st.pos;
+    st.pos += samples.length;
+    this.lines(st, sc.push(part, at, samples));
+    const open = sc.open();
+    st.inSpeech = open !== null;
+    if (open) {
+      st.segStart = open.from;
+      if (this.live && open.text !== st.shown) {
+        st.shown = open.text;
+        st.pseq++;
+        this.emit({
+          type: "provisional",
+          part: open.part,
+          ch: st.ch,
+          pseq: st.pseq,
+          a0: open.from / ASR_RATE,
+          text: open.text,
+        });
+      }
+    }
+    const keep = sc.keepFrom(part);
+    if (keep !== null) st.audio.trimTo(keep);
+  }
+
+  /** Writes the lines the stream closed. */
+  private lines(st: ChannelState, lines: readonly StreamLine[]): void {
+    const model = this.engine?.id ?? this.models.recognizerModel;
+    for (const l of lines) {
+      st.shown = "";
+      if (l.to <= l.from) continue;
+      this.emitLine(st, l.part, l.from, l.to, st.audio.slice(l.from, l.to), {
+        text: l.text,
+        model,
+      });
+    }
+    st.inSpeech = st.live?.open() != null;
+  }
+
+  /** One closed line: labelled, or held for the stream diarizer's decision on its audio. */
+  private emitLine(
+    st: ChannelState,
+    part: number,
+    from: number,
+    to: number,
+    samples: Float32Array,
+    r: { text: string; lang?: string; model: string },
+  ): void {
     if (r.text === "") return;
     const a0 = from / ASR_RATE;
     const a1 = to / ASR_RATE;
     if (st.ch === "call" && this.labels === "stream") {
       const seg = {
         type: "seg" as const,
-        part: st.part,
+        part,
         ch: st.ch,
         a0,
         a1,
@@ -573,7 +698,7 @@ export class LivePipeline {
         ...(r.lang ? { lang: r.lang } : {}),
       };
       const s = this.stream && !this.stream.dead ? this.stream : null;
-      const range = s ? streamRange(s, st.part, from, to) : null;
+      const range = s ? streamRange(s, part, from, to) : null;
       let emb: Float32Array | null = null;
       if (a1 - a0 >= MIN_EMBED_SECONDS) {
         this.embedder ??= this.models.embedder();
@@ -596,11 +721,11 @@ export class LivePipeline {
         this.embedder ??= this.models.embedder();
         emb = this.embedder.embed(samples);
       }
-      spk = this.speakers.assign(st.part, a0, a1, emb);
+      spk = this.speakers.assign(part, a0, a1, emb);
     }
     this.emit({
       type: "seg",
-      part: st.part,
+      part,
       ch: st.ch,
       a0,
       a1,
@@ -801,10 +926,14 @@ export class LivePipeline {
     this.drain(true);
   }
 
-  /** Stops the stream diarizer (the transcriber is closing). */
+  /** Stops the stream diarizer and the live streams (the transcriber is closing). */
   stop(): void {
     this.stream?.d.close();
     this.stream = null;
+    for (const st of this.chans.values()) {
+      st.live?.close();
+      st.live = null;
+    }
   }
 
   /** The tail shorter than one VAD window counts as speech if a segment is open. */
@@ -842,6 +971,8 @@ export type ToWorker =
       merges: { from: string; into: string }[];
       unmerged: { from: string; into: string }[];
       ids: string[];
+      /** The call's streaming engine; absent for VAD windows re-decoded by the recognizer. */
+      live?: LiveChoice;
     }
   | { type: "decode-list"; list: DecodeList | null; version: number }
   | {
@@ -1043,6 +1174,11 @@ export interface LiveAsrOptions {
   live?: Partial<LiveOptions>;
   /** The vocabulary files for a call, read when the call starts. */
   vocab?(callId: string): VocabSource;
+  /**
+   * The streaming engine a call runs, asked when the call takes the Worker, so a changed setting
+   * applies from the next call. Null or absent: VAD windows re-decoded by the recognizer.
+   */
+  liveEngine?(callId: string): LiveChoice | null;
   /** Backlog levels that write `asr.lag`, seconds. */
   lagLevels?: readonly number[];
   /** Audio in flight to the Worker per channel, seconds; the rest waits in the ingest queue. */
@@ -1076,6 +1212,8 @@ interface HostCall {
   lagLevel: number;
   /** A newer call took the recognizer; this one's late audio is left to the final pass. */
   superseded: boolean;
+  /** The call's streaming engine, asked once: a Worker that takes the call over keeps it. */
+  live?: LiveChoice | null;
 }
 
 /** A Worker that dies is replaced at most this many times in `RESPAWN_WINDOW_MS`. */
@@ -1375,7 +1513,15 @@ export class LiveAsr {
     const spks = view
       .lines("live", { includeEcho: true, includeRetracted: true })
       .map((l) => l.spkRaw);
-    this.transport.post({ type: "call", id: c.id, ...view.speakerState(), ids: spks });
+    if (c.live === undefined) c.live = this.o.liveEngine?.(c.id) ?? null;
+    const live = c.live;
+    this.transport.post({
+      type: "call",
+      id: c.id,
+      ...view.speakerState(),
+      ids: spks,
+      ...(live ? { live } : {}),
+    });
     c.listKey = "";
     this.sendDecodeList(c);
   }

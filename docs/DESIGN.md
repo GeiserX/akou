@@ -240,6 +240,11 @@ akou never bundles models. First run offers one explicit download of what the ma
 
 ### 3.1 The live path, per channel
 
+A call runs one of two recognition paths, chosen when it starts: `asr.live.engine` picks a streaming Nemotron by the call's languages (`asr.languages`), and only one whose model is downloaded. A running call keeps its path; a changed setting applies from the next call. The design and its measurements are in [asr-architecture.md section 3.1](research/asr-architecture.md#31-what-replaces-the-12-s-windows).
+
+- **Streaming (Nemotron).** Each channel is one stream for the whole call, behind a causal gain (toward -3 dBFS, instant attack, 5 s release, at most +20 dB). The engine appends tokens and never takes one back, so a word on screen stays there; the provisional line is the open line's words so far. A line closes at a 0.7 s gap between tokens (`segmentPause`), when that gap plus the model's chunk passes with no token, or before a word that would take it past 12 s (`segmentWindow`). A part end, skipped audio or Stop flushes the stream and closes the line. Speaker labels are as in 3.2.
+- **Parakeet (no streaming model on disk).** Steps 2 to 6 below. Steps 1 and 7 apply to both paths.
+
 1. **Pull** 16 kHz packets from the helper. A bounded queue (10 minutes) buffers while a model loads or the machine is busy. Beyond that the Worker reads back from the Opus file. Audio is never dropped for the recognizer; it only lags.
 2. **Segment** with Silero VAD: a segment closes after 0.7 s of silence (`segmentPause`, 0.2 to 5) or at 12 s of unbroken speech (`segmentWindow`, 2 to 30, must exceed the pause). Speech the VAD misses is still caught by the forced cut. There is no amplitude-based segmenter, so a noisy room cannot hide silence.
 3. **Gain** the copy sent to the model toward -3 dBFS, at most +20 dB, never attenuate. The recording is untouched.
