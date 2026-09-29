@@ -114,6 +114,8 @@ if (!READY) {
           });
           const out: { o: LiveOut; at: number }[] = [];
           const p = new LivePipeline(models, {}, (o) => out.push({ o, at: performance.now() }));
+          // Parakeet loads now, as the app loads it with the call's decode list, not on the first line.
+          p.setDecodeList(null, 0);
           const server = qwenServer();
           const qwen = new QwenEngine({ id: QWEN_ASR, server, allowed: [lang] });
           const fuser = new RoverFuser("rover-conf");
@@ -135,12 +137,13 @@ if (!READY) {
               const add = (k: keyof Stages, t: string) => {
                 stages[k] = `${stages[k]} ${t}`.trim();
               };
-              for (const [i, { o, at }] of mine.entries()) {
+              for (const { o, at } of mine) {
+                if (o.type === "log" && o.level === "error") throw new Error(o.msg);
                 if (o.type !== "seg") continue;
                 add("stream", o.text);
-                const next = mine[i + 1];
-                const u = next?.o.type === "upgrade" ? (next.o as UpgradeOut) : null;
-                if (!u || u.key !== o.key) throw new Error("a line with no Parakeet rewrite");
+                const next = mine.find((x) => x.o.type === "upgrade" && x.o.key === o.key);
+                const u = next ? (next.o as UpgradeOut) : null;
+                if (!u) throw new Error("a line with no Parakeet rewrite");
                 parakeetS.push(((next as { at: number }).at - at) / 1000);
                 const pk: Hypothesis = { engine: u.model, text: u.text, words: u.words, ms: 0 };
                 add("parakeet", u.text || o.text);
