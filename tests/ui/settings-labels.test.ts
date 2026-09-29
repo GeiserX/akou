@@ -43,4 +43,17 @@ describe("the Settings page's words", () => {
       expect({ key, unknown }).toEqual({ key, unknown: [] });
     }
   });
+
+  test("each value the registry takes has a choice, so none becomes unreachable", () => {
+    let checked = 0;
+    for (const [key, w] of Object.entries(WORDS)) {
+      const values = (SETTINGS as Record<string, { values?: readonly string[] }>)[key]?.values;
+      if (!w.choices || !values) continue;
+      checked++;
+      const offered = new Set(w.choices.map(([v]) => v));
+      const missing = values.filter((v) => !offered.has(v));
+      expect({ key, missing }).toEqual({ key, missing: [] });
+    }
+    expect(checked).toBeGreaterThan(0);
+  });
 });

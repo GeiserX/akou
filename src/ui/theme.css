@@ -2931,6 +2931,9 @@ textarea.pg-input.pg-lines {
 /* Chips: the languages of calls and the dictionaries, each with its ✕, and an add list. */
 .pg-chips,
 .pg-row .dictation-languages,
+.pg-row .language-none {
+  color: var(--dim);
+}
 .pg-row .language-chips {
   display: flex;
   flex-wrap: wrap;
@@ -3067,7 +3070,7 @@ select.pg-chip.add,
   align-items: center;
   gap: 12px;
   margin: 24px 4px 0;
-  color: var(--faint);
+  color: var(--dim);
   font-size: 12px;
 }
 .pg-ctl-group {

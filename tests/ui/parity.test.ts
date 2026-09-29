@@ -135,7 +135,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           await page.click("#settings-open");
           await page.waitForSelector("#settings-provider-state");
           expect(await text(page, "#settings-provider-state")).toBe(
-            "Nothing answers: Ask shows the matching parts of the call.",
+            "Ask shows the matching parts of the call instead.",
           );
           expect(await text(page, "#settings-engine-state")).toBe("The speech engine is ready.");
           const version = (await rig.api("GET", "/status")).body.app.version as string;

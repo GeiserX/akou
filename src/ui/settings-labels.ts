@@ -74,7 +74,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "provider.harnessResume": {
     label: "Follow-up questions reuse one session",
-    help: "Sends only what is new since the last question. It keeps those sessions in its own history.",
+    help: "Sends only what is new since the last question. Claude Code or Codex keeps those sessions in its history.",
   },
   "provider.harnessPath": {
     label: "Program",
@@ -98,6 +98,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     choices: [
       ["tailnet", "My devices (Tailscale)"],
       ["lan", "My local network"],
+      ["127.0.0.1", "Only this computer"],
     ],
   },
 

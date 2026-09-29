@@ -22,6 +22,8 @@ export class Pages {
   constructor(
     private readonly host: HTMLElement,
     private readonly pages: Readonly<Record<string, WindowPage>>,
+    /** Called when the window moves between the calls and a page (the call list's mark follows). */
+    private readonly moved: () => void = () => {},
   ) {
     for (const p of Object.values(pages)) {
       p.root.hidden = true;
@@ -77,5 +79,6 @@ export class Pages {
     on(calls, this.current === null);
     for (const el of document.querySelectorAll<HTMLElement>("#sidebar [data-page]"))
       on(el, el.dataset.page === this.current);
+    this.moved();
   }
 }

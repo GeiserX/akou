@@ -255,7 +255,7 @@ class App {
       openModels: () => byId("models-open").click(),
       openDictionary: () => void dictation.dictionary.open(),
     });
-    this.pages = new Pages(byId("pages"), { settings });
+    this.pages = new Pages(byId("pages"), { settings }, () => this.drawCalls());
     const openSettings = (key?: string) => void this.pages.show("settings", key);
     byId("settings-open").addEventListener("click", () => openSettings());
     byId("calls-open").addEventListener("click", () => this.pages.leave());
@@ -270,6 +270,9 @@ class App {
       mac: this.platform === "mac",
     });
     wireModelsDialog(t);
+    byId("models").addEventListener("close", () => {
+      if (this.pages.open === "settings") void settings.refreshLive();
+    });
     this.enhanced = new EnhancedPane({
       t,
       call,
@@ -843,6 +846,7 @@ class App {
       query,
       live,
       this.callId,
+      this.pages?.open ?? null,
       [...this.folded],
       new Date(now).toDateString(),
     ]);
@@ -924,7 +928,11 @@ class App {
                   "button",
                   {
                     type: "button",
-                    attrs: { "aria-current": String(c.id === this.callId), "data-id": c.id },
+                    // A page on screen is where the window is: the call it left is not marked.
+                    attrs: {
+                      "aria-current": String(c.id === this.callId && !this.pages?.open),
+                      "data-id": c.id,
+                    },
                     on: { click: () => this.openCall(c.id, true) },
                   },
                   h("span", { class: "what" }, c.title || "Untitled call"),

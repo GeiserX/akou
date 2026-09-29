@@ -23,7 +23,7 @@ import { hotkeyFor } from "../main/window/hotkey.ts";
 import { LanguageList, languageName } from "./dictation-languages.ts";
 import { type CaptureInput, readMics } from "./dictation-mic.ts";
 import { onDictationPage } from "./dictation-page.ts";
-import { KEY_SETTINGS, KeyRecorder, keycaps as keycapsOf } from "./dictation-recorder.ts";
+import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
 import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { AppStatus, Transport } from "./protocol.ts";
@@ -331,9 +331,12 @@ export class SettingsPage {
 
   /** Reads everything and draws the page; on `key`, goes to that setting and focuses it. */
   async show(key?: string): Promise<void> {
+    // Shown again while on screen (its sidebar row, clicked from an Advanced page): what is typed
+    // there is saved first, as leaving saves it, since a click in WebKit leaves the field focused
+    // and fires no change. The read below then sees it.
+    await this.saveTyped();
     // What the last visit drew goes until the read lands: typing into it would be lost when the
     // read draws over it.
-    this.recorder?.stop();
     replace(this.col, h("p", { class: "pg-reading" }, "Reading the settings…"));
     await this.load();
     this.sub = key ? this.pageOf(key) : null;
@@ -343,11 +346,17 @@ export class SettingsPage {
 
   /** The page is left: what is still typed into a field is saved; a key recording stops. */
   leave(): void {
+    void this.saveTyped();
+  }
+
+  /** Stops a key recording and saves each row whose field holds what the file does not. */
+  private async saveTyped(): Promise<void> {
     this.recorder?.stop();
     this.results.hidden = true;
-    for (const r of this.col.querySelectorAll<HTMLElement>(".pg-row[data-key]")) {
-      if (Object.keys(changedSettings(r, this.schema, this.shown)).length > 0) void this.save(r);
-    }
+    const rows = [...this.col.querySelectorAll<HTMLElement>(".pg-row[data-key]")].filter(
+      (r) => Object.keys(changedSettings(r, this.schema, this.shown)).length > 0,
+    );
+    await Promise.all(rows.map((r) => this.save(r)));
   }
 
   private async load(): Promise<void> {
@@ -474,9 +483,12 @@ export class SettingsPage {
     return [
       pageHead(p.title, {
         back: backLink("Settings", () => {
+          const from = this.sub;
           this.leave();
           this.sub = null;
           this.draw();
+          // The keyboard goes on from the row it came through, not the top of the window.
+          this.col.querySelector<HTMLElement>(`#settings-go-${from}`)?.focus();
         }),
       }),
       ...sections,
@@ -523,6 +535,7 @@ export class SettingsPage {
           this.leave();
           this.sub = name;
           this.draw();
+          this.col.querySelector<HTMLElement>(".pg-back")?.focus();
         },
       );
     }
@@ -619,6 +632,12 @@ export class SettingsPage {
     if (spec.type === "string[]") {
       const list = Array.isArray(value) ? (value as string[]) : [];
       if (spec.values) return [this.chips(id, key, list, spec.values, w)];
+      // Read only and one line at most (a program): a one-line field, the whole of it on hover.
+      if (spec.apiWritable === false && list.length <= 1) {
+        const one = field({ id, label: w.label, value: list[0] ?? "", placeholder: w.empty ?? "" });
+        if (list[0]) one.title = list[0];
+        return [one];
+      }
       const area = h("textarea", {
         id,
         class: "pg-input pg-lines",
@@ -740,7 +759,7 @@ export class SettingsPage {
       "openai-compatible": "The OpenAI-compatible server",
     };
     const name = names[p.harness ?? ""] ?? names[p.id] ?? p.id;
-    if (p.id === "none") return "Nothing answers: Ask shows the matching parts of the call.";
+    if (p.id === "none") return "Ask shows the matching parts of the call instead.";
     if (p.state === "available")
       return p.id === "harness" ? `Uses ${name} on ${this.here}.` : `Uses ${name}.`;
     const why = p.reason ?? p.detail;
@@ -853,11 +872,15 @@ export class SettingsPage {
         hidden.dispatchEvent(new Event("change", { bubbles: true }));
       },
       "settings-call-languages",
+      "Any language",
     );
     return h("div", { class: "pg-chips" }, chips.root, hidden);
   }
 
-  /** The record shortcut as keycaps, its default when none is set, and Change to record another. */
+  /**
+   * The record shortcut as keycaps, its default when none is set, Change to record another, and
+   * Use default to go back to it.
+   */
   private hotkeyControls(id: string, value: string): (Node | null)[] {
     const input = h("input", { id, type: "text", value, hidden: true });
     input.dataset.key = "app.hotkey";
@@ -866,25 +889,70 @@ export class SettingsPage {
       platform,
       button: "Change",
       helper: false,
+      label: "record shortcut",
       fallback: hotkeyFor("", platform),
-      chordsOnly: () =>
-        `Press a chord, such as ${keycapsText(hotkeyFor("", platform), platform)}; a key alone cannot start a call.`,
+      // The shortcut in use still starts a call while recording: the words ask for a new one.
+      chordsOnly: () => "Press the new chord. A key alone cannot start a call.",
       others: () =>
         Object.entries(KEY_SETTINGS)
           .map(([k, words]) => [words, this.settings[k]] as [string, unknown])
           .filter((x): x is [string, string] => typeof x[1] === "string"),
     });
-    return [this.recorder.root, input];
+    this.recorder.warnSaved();
+    const reset = button(
+      "Use default",
+      () => {
+        input.value = "";
+        input.dispatchEvent(new Event("input"));
+        input.dispatchEvent(new Event("change", { bubbles: true }));
+      },
+      "settings-hotkey-default",
+    );
+    const follow = () => {
+      reset.hidden = input.value === "";
+    };
+    input.addEventListener("input", follow);
+    input.addEventListener("change", follow);
+    follow();
+    return [this.recorder.root, reset, input];
   }
 
+  /** Where share links listen: the tailnet, the local network, this computer, or an address typed. */
   private bindControl(id: string, value: string): HTMLElement {
     const w = wordsFor("share.bind");
-    const options = [...(w.choices ?? [])];
-    // An address typed into the file stays shown, as the third choice.
-    if (value && !options.some(([v]) => v === value)) options.push([value, value]);
-    const seg = segmented({ id, label: w.label, options, value });
-    seg.input.dataset.key = "share.bind";
-    return seg.root;
+    const options = w.choices ?? [];
+    const known = options.some(([v]) => v === value);
+    const select = selectBox({ id, label: w.label, options, value: known ? value : "~" });
+    select.append(h("option", { value: "~" }, "An address…"));
+    select.value = known ? value : "~";
+    const typed = field({
+      id: `${id}-address`,
+      label: "The address",
+      value: known ? "" : value,
+      placeholder: "An IPv4 address",
+    });
+    typed.hidden = known;
+    const hidden = h("input", { type: "hidden", value });
+    hidden.dataset.key = "share.bind";
+    const write = (v: string) => {
+      if (!v || v === hidden.value) return;
+      hidden.value = v;
+      hidden.dispatchEvent(new Event("change", { bubbles: true }));
+    };
+    select.addEventListener("change", (e) => {
+      e.stopPropagation();
+      typed.hidden = select.value !== "~";
+      if (select.value === "~") {
+        typed.focus();
+        return;
+      }
+      write(select.value);
+    });
+    typed.addEventListener("change", (e) => {
+      e.stopPropagation();
+      write(typed.value.trim());
+    });
+    return h("span", { class: "pg-ctl-group" }, typed, select, hidden);
   }
 
   /**
@@ -953,9 +1021,22 @@ export class SettingsPage {
   private workspacesRow(): HTMLElement {
     const names = [...new Set(["default", ...(this.hooks.workspaces?.() ?? [])])];
     return row(
-      { label: "Workspaces", help: "Record a call into a new name and it has its own." },
+      { label: "Workspaces", help: "A call recorded into a new workspace creates it." },
       h("span", { id: "settings-workspaces", class: "pg-value" }, names.map(title).join(", ")),
     );
+  }
+
+  /** The Models dialog closed over the page: the Live transcript row says what it chose. */
+  async refreshLive(): Promise<void> {
+    const [models, cfg] = await Promise.all([
+      this.t.request<LiveReply>("GET", "/models"),
+      this.t.request<ConfigReply>("GET", "/config"),
+    ]);
+    if (models.status < 400) this.live = models.body?.live ?? null;
+    if (cfg.status < 400) this.settings["asr.live"] = cfg.body.settings["asr.live"];
+    const old = this.col.querySelector("#settings-live");
+    const next = this.liveRow();
+    if (old && next) old.replaceWith(next);
   }
 
   private liveRow(): HTMLElement | null {
@@ -1009,22 +1090,35 @@ export class SettingsPage {
     );
   }
 
-  /** The foot: the version and the speech engine's state, read only, and the config file. */
+  /**
+   * The foot: the version and the speech engine's state, read only, in words (the engine's own
+   * reason names a folder and a command, so it is never shown); on an Advanced page, the config
+   * file, where its file-only rows are set.
+   */
   private foot(): HTMLElement {
     const v = this.status.app?.version;
     const asr = this.status.asr;
-    const engine = asr
-      ? asr.state === "ready"
+    const missing =
+      asr?.state === "unavailable" && /speech models are not in/.test(asr.reason ?? "");
+    const engine = !asr
+      ? ""
+      : asr.state === "ready"
         ? "The speech engine is ready."
-        : `The speech engine is ${asr.state}${asr.reason ? `: ${asr.reason}` : "."}`
-      : "";
+        : asr.state === "loading"
+          ? "The speech engine is starting."
+          : missing
+            ? "The speech models are not downloaded yet."
+            : "The speech engine could not start.";
     return h(
       "div",
       { class: "pg-foot" },
       v ? h("span", { id: "settings-version" }, `akou ${v}`) : null,
       engine ? h("span", { id: "settings-engine-state" }, engine) : null,
+      missing && this.hooks.openModels
+        ? button("Open Models", () => this.hooks.openModels?.(), "settings-get-models")
+        : null,
       h("span", { class: "grow" }),
-      this.openConfigButton(),
+      this.sub ? this.openConfigButton() : null,
     );
   }
 
@@ -1246,10 +1340,6 @@ function flash(el: HTMLElement): void {
   el.scrollIntoView({ block: "center" });
   el.classList.add("pg-flash");
   setTimeout(() => el.classList.remove("pg-flash"), 1200);
-}
-
-function keycapsText(value: string, platform: string): string {
-  return keycapsOf(value, platform).join(platform === "darwin" ? "" : "+");
 }
 
 function hooksText(v: unknown): string {

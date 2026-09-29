@@ -47,6 +47,8 @@ export class LanguageList {
     initial: readonly string[],
     private readonly onChange: (list: string[]) => void,
     private readonly id = "dictation-languages",
+    /** What an empty list means, shown in its place (a default is a value, never a blank). */
+    private readonly none?: string,
   ) {
     this.list = [...new Set(initial)];
     this.root.id = id;
@@ -94,6 +96,8 @@ export class LanguageList {
     add.addEventListener("change", () => {
       if (add.value) this.set([...this.list, add.value]);
     });
-    replace(this.root, h("ul", { class: "language-chips" }, ...chips), add);
+    const none =
+      chips.length === 0 && this.none ? h("li", { class: "language-none" }, this.none) : null;
+    replace(this.root, h("ul", { class: "language-chips" }, none, ...chips), add);
   }
 }

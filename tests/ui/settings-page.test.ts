@@ -73,6 +73,8 @@ describe("the Settings page", () => {
             expect(`${sel}: ${await page.isVisible(sel)}`).toBe(`${sel}: false`);
           expect(await page.getAttribute("#settings-open", "aria-current")).toBe("page");
           expect(await page.getAttribute("#calls-open", "aria-current")).toBeNull();
+          // The call it left is not marked too: one row says where the window is.
+          await page.waitForSelector('#calls [aria-current="true"]', { state: "detached" });
 
           await page.click("#calls-open");
           await page.waitForSelector("#page-settings", { state: "hidden" });
@@ -84,6 +86,7 @@ describe("the Settings page", () => {
           await page.click(`#calls button[data-id="${id}"]`);
           await page.waitForSelector("#page-settings", { state: "hidden" });
           expect(await page.isVisible("#lines")).toBe(true);
+          await page.waitForSelector(`#calls button[data-id="${id}"][aria-current="true"]`);
 
           // The application menu's Settings… opens the page, as the sidebar does.
           await page.evaluate(() => document.getElementById("settings-open")?.click());
@@ -130,6 +133,10 @@ describe("the Settings page", () => {
             disabled: schema[k]?.apiWritable === false,
           });
         }
+        // The equality above holds on an empty list too: a key the file alone sets is on screen,
+        // read only, so the check sees at least one.
+        expect(seen.get("provider.baseUrl")).toBe(true);
+        expect(seen.get("provider.harnessPath")).toBe(true);
         // The Dictation page's keys are not here.
         expect([...seen.keys()].filter((k) => onDictationPage(k))).toEqual([]);
         // No key, no backtick, no path of akou's own.
@@ -196,6 +203,112 @@ describe("the Settings page", () => {
           "the name saved on leaving",
         );
         expect(sent.every((p) => Object.keys(p).length === 1)).toBe(true);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Settings clicked again from an Advanced page saves what is typed there first",
+    async () => {
+      await withRig({}, async (rig) => {
+        const page = await rig.open();
+        const sent = patches(page);
+        await openSettings(page);
+        await page.click("#settings-go-speech");
+        // Typed, with no change fired, as when WebKit keeps the focus in the field on a click.
+        await page.$eval("#set-asr-threads", (el) => {
+          (el as HTMLInputElement).value = "5";
+        });
+        await page.click("#settings-open");
+        await page.waitForSelector("#settings-go-speech");
+        await until(
+          async () => (await rig.api("GET", "/config")).body.settings["asr.threads"] === 5,
+          5000,
+          "the threads saved on showing Settings again",
+        );
+        expect(sent).toEqual([{ "asr.threads": 5 }]);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "defaults read as values: any language, the share choice, the shortcut named for a screen reader",
+    async () => {
+      await withRig({}, async (rig) => {
+        const page = await rig.open();
+        const sent = patches(page);
+        await openSettings(page);
+        // No language chosen means any: it says so, beside the add list.
+        expect(await page.textContent("#settings-call-languages .language-none")).toBe(
+          "Any language",
+        );
+        // The rig's share links listen on this computer: a choice in words, not the address.
+        const bind = "#set-share-bind";
+        expect(
+          await page.$eval(bind, (s) => (s as HTMLSelectElement).selectedOptions[0]?.text),
+        ).toBe("Only this computer");
+        expect(await page.isVisible(`${bind}-address`)).toBe(false);
+        // An address is typed into a field and saved alone.
+        await page.selectOption(bind, "~");
+        await page.fill(`${bind}-address`, "192.0.2.5");
+        await page.press(`${bind}-address`, "Tab");
+        await until(() => sent.length === 1, 5000, "the address saved");
+        expect(sent[0]).toEqual({ "share.bind": "192.0.2.5" });
+        await page.selectOption(bind, "lan");
+        await until(() => sent.length === 2, 5000, "the local network saved");
+        expect(sent[1]).toEqual({ "share.bind": "lan" });
+        // The keycaps are hidden from a screen reader: the button says the shortcut.
+        const change = ".pg-row[data-key='app.hotkey'] button.record-key";
+        expect(await page.getAttribute(change, "aria-label")).toMatch(
+          /^Change record shortcut, now \S/,
+        );
+        // Recorded, then back to the default with Use default.
+        expect(await page.isVisible("#settings-hotkey-default")).toBe(false);
+        await page.click(change);
+        await page.keyboard.press("Control+Shift+KeyK");
+        await until(() => sent.length === 3, 5000, "the shortcut saved");
+        expect(await page.getAttribute(change, "aria-label")).toBe(
+          "Change record shortcut, now Control Shift K",
+        );
+        await page.click("#settings-hotkey-default");
+        await until(() => sent.length === 4, 5000, "the default saved");
+        expect(sent[3]).toEqual({ "app.hotkey": "" });
+        expect(await page.isVisible("#settings-hotkey-default")).toBe(false);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with the speech models missing, the foot says so in words and leads to Models",
+    async () => {
+      // One model file that is not on disk: the engine waits for the models.
+      const modelRegistry = [
+        {
+          id: "tiny",
+          job: "test",
+          licence: "MIT",
+          source: "test",
+          files: [
+            { name: "a.onnx", url: "http://127.0.0.1:9/a.onnx", sha256: "0".repeat(64), size: 1e6 },
+          ],
+        },
+      ];
+      await withRig({ modelRegistry }, async (rig) => {
+        expect((await rig.api("GET", "/status")).body.asr.reason).toContain("models");
+        const page = await rig.open();
+        await openSettings(page);
+        const foot = await page.innerText("#page-settings .pg-foot");
+        expect(await page.textContent("#settings-engine-state")).toBe(
+          "The speech models are not downloaded yet.",
+        );
+        expect(foot).not.toContain("`");
+        expect(foot).not.toContain(rig.home);
+        expect(foot).not.toContain("akou models");
+        await page.click("#settings-get-models");
+        await page.waitForSelector("dialog#models[open]");
       });
     },
     UI_TIMEOUT,
