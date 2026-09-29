@@ -3,7 +3,9 @@
  * window's Models dialog: two bars per model drawn from the scores, "not measured" where nobody
  * measured, the sort control reordering the rows, Delete disabled on the default with the reason,
  * Download with live progress, the settings saved over `PATCH /config`, and no sideways scroll in
- * a narrow window in either theme. The catalog is a loopback registry of tiny files named after
+ * a narrow window in either theme. Above them, the Live section (akou-chp.23): the four live setups
+ * with their four bars, the next call's marked, Download for a setup's missing model, and Use for
+ * calls, with the mark moving as the models and the setting change. The catalog is a loopback registry of tiny files named after
  * the real models, so the real scores apply and nothing comes from the network.
  */
 
@@ -18,6 +20,8 @@ import { tempDir } from "../helpers.ts";
 import { UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
 
 const PYANNOTE = "pyannote-segmentation-3.0";
+/** The streaming model `nemotron` runs for English: fetched on demand, missing at first. */
+const STREAM = "nemotron-en-560";
 
 let reg: ModelRegistry;
 let rig: UiRig;
@@ -34,13 +38,14 @@ beforeAll(async () => {
     reg.entry(PYANNOTE, ["seg.onnx"]),
     // Qwen fetched on demand only: missing here, and more accurate but slower than Parakeet.
     { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true } as ModelSpecEntry,
+    { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true } as ModelSpecEntry,
   ];
   const models = join(home.dir, "models");
   mkdirSync(models, { recursive: true });
   for (const m of catalog.slice(0, 4)) reg.install(models, m);
   rig = await uiRig({
     modelRegistry: catalog,
-    settings: { "asr.modelsDir": models, "asr.diarizer": "nemotron" },
+    settings: { "asr.modelsDir": models, "asr.diarizer": "nemotron", "asr.languages": ["en"] },
     jobs: { modelStore: { retryMs: [5, 5, 5], freeBytes: () => 1e12 } },
   });
   await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
@@ -101,7 +106,7 @@ describe("SV-U6: the Models page in the desktop window", () => {
   test(
     "speech, speaker labels, and the helpers folded",
     async () => {
-      expect((await order("speech")).sort()).toEqual([QWEN_ASR, RECOGNIZER].sort());
+      expect((await order("speech")).sort()).toEqual([QWEN_ASR, RECOGNIZER, STREAM].sort());
       expect((await order("speakers")).sort()).toEqual([NEMOTRON, PYANNOTE].sort());
       expect(
         await page.$eval(
@@ -117,9 +122,9 @@ describe("SV-U6: the Models page in the desktop window", () => {
     "the sort control reorders the rows: accuracy puts Qwen first, speed puts Parakeet first",
     async () => {
       await page.selectOption("#models-sort", "accuracy");
-      expect(await order("speech")).toEqual([QWEN_ASR, RECOGNIZER]);
+      expect(await order("speech")).toEqual([QWEN_ASR, RECOGNIZER, STREAM]);
       await page.selectOption("#models-sort", "speed");
-      expect(await order("speech")).toEqual([RECOGNIZER, QWEN_ASR]);
+      expect(await order("speech")).toEqual([RECOGNIZER, STREAM, QWEN_ASR]);
       await page.selectOption("#models-sort", "name");
       expect(await order("speakers")).toEqual([NEMOTRON, PYANNOTE]);
     },
@@ -202,6 +207,66 @@ describe("SV-U6: the Models page in the desktop window", () => {
         expect(colors[0]).not.toBe(colors[1]);
       }
       await page.emulateMedia({ colorScheme: null });
+    },
+    UI_TIMEOUT,
+  );
+});
+
+/** The setups the Live section marks as the next call's. */
+function marked(): Promise<string[]> {
+  return page.$$eval('#models-live .live-setup:has([data-mark="next"])', (els) =>
+    els.map((e) => (e as HTMLElement).dataset.setup as string),
+  );
+}
+
+describe("akou-chp.23: the Live section of the Models page", () => {
+  test(
+    "four setups with four bars each, the next call's marked, the unavailable ones saying why",
+    async () => {
+      const ids = await page.$$eval("#models-live .live-setup", (els) =>
+        els.map((e) => (e as HTMLElement).dataset.setup),
+      );
+      expect(ids).toEqual(["parakeet", "nemotron", "upgrade", "voxtral"]);
+      for (const id of ids) {
+        expect(await page.$$(`#models-live [data-setup="${id}"] .mbar`)).toHaveLength(4);
+      }
+      const parakeet = '#models-live [data-setup="parakeet"]';
+      expect(await page.getAttribute(`${parakeet} .mbar.accuracy`, "data-value")).toBe("28");
+      expect(await page.textContent(`${parakeet} .mbar.accuracy .mbar-value`)).toBe(
+        "28 · WER 36.17 % on meetings",
+      );
+      // No streaming model here yet: auto runs Parakeet, and Nemotron is one Download away.
+      expect(await marked()).toEqual(["parakeet"]);
+      expect(await page.getAttribute('#models-live [data-setup="nemotron"]', "data-state")).toBe(
+        "missing",
+      );
+      expect(await page.textContent('#models-live [data-setup="voxtral"]')).toContain(
+        "Unavailable:",
+      );
+      expect(await page.$('#models-live [data-setup="voxtral"] [data-action="use"]')).toBeNull();
+      const hint = await page.textContent("#models-live-hint");
+      expect(hint).toContain("A change applies from the next call");
+      // The note names the command in plain text, without the log's backticks.
+      expect(hint).toContain("(the live model nemotron-en-560 is not downloaded (akou models pull");
+      expect(hint).not.toContain("`");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the mark follows the models and the setting: Download moves it to Nemotron, Use moves it back",
+    async () => {
+      const nemotron = '#models-live [data-setup="nemotron"]';
+      await page.click(`${nemotron} [data-action="download"]`);
+      await page.waitForSelector(`${nemotron}[data-state="ready"] [data-mark="next"]`);
+      expect(await marked()).toEqual(["nemotron"]);
+      await page.click('#models-live [data-setup="parakeet"] [data-action="use"]');
+      await page.waitForSelector('#models-live [data-setup="parakeet"] [data-mark="next"]');
+      expect(await marked()).toEqual(["parakeet"]);
+      expect((await rig.api("GET", "/config")).body.settings["asr.live"]).toBe("parakeet");
+      await page.click("#models-live-auto");
+      await page.waitForSelector(`${nemotron} [data-mark="next"]`);
+      expect(await marked()).toEqual(["nemotron"]);
     },
     UI_TIMEOUT,
   );

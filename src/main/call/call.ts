@@ -145,6 +145,11 @@ export class CallController {
   current: PartRun | null = null;
   /** A part whose helper is starting and has not captured yet. */
   launching: PartRun | null = null;
+  /**
+   * This call's own live setup from its start (`POST /calls {live}`), set before the helper
+   * spawns, so the recognizer reads it even when audio arrives before the start answers.
+   */
+  liveAsked: string | undefined;
   private writer: LogWriter | null;
   /** Holders of the writer beyond the call's own capture (the final pass). */
   private holds = 0;

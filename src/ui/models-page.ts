@@ -1,5 +1,8 @@
 /**
- * The Models page (docs/ux/SERVER.md SV-U6, DESKTOP.md DK-E2): every catalog model in three
+ * The Models page (docs/ux/SERVER.md SV-U6, DESKTOP.md DK-E2): in the app, first the Live section
+ * (`asr.live`, akou-chp.23): each live setup with its accuracy, latency, cores and memory bars, the
+ * one the next call runs and the one the live call runs marked, its missing models one Download
+ * away, and Use to choose it. Then every catalog model in three
  * sections (speech recognition, speaker labels, and the helpers folded), each with what it is for,
  * its size, state, last use and the date the sweep deletes it, two bars for accuracy and speed with
  * the numbers behind them, and Download, Delete and Set as default. Below, the settings that decide
@@ -10,11 +13,18 @@
  * `DELETE /models/{id}`, `GET` and `PATCH /config`.
  */
 
+import type { ScoreView } from "../main/server/model-store.ts";
 import { h, replace, toast } from "./dom.ts";
 import {
   bar,
   deleteRefusal,
   keptText,
+  LIVE_BARS,
+  type LiveSetupView,
+  type LiveView,
+  liveHint,
+  liveMissing,
+  liveModelsText,
   type ModelRow,
   measuredText,
   percent,
@@ -31,7 +41,7 @@ import { section, twoStep } from "./server-common.ts";
 import { modelsStateText } from "./server-text.ts";
 import type { ConfigReply } from "./settings.ts";
 
-type ModelsReply = ModelsInfo & { models?: ModelRow[] };
+type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView };
 
 const SORT_KEY = "akou.models.sort";
 
@@ -52,6 +62,13 @@ export class ModelsPage {
     ...SORTS.map((s) => h("option", { value: s.by }, s.label)),
   );
   private readonly lists = h("div", { id: "models-lists" });
+  private readonly liveSection = h("section", {
+    id: "models-live",
+    class: "models-group",
+    hidden: true,
+    attrs: { "data-kind": "live" },
+  });
+  private live: LiveView | null = null;
   private readonly settings = h("form", {
     id: "models-settings",
     attrs: { novalidate: "", "aria-label": "Model settings" },
@@ -93,6 +110,7 @@ export class ModelsPage {
         "Every file comes from the model's own publisher, pinned to one revision and checked against its SHA-256 before it is used. Where each model comes from is on its row.",
       ),
       h("div", { class: "bar models-top" }, this.state, this.progress, this.pullAll),
+      this.liveSection,
       h(
         "div",
         { class: "bar models-sort" },
@@ -141,7 +159,12 @@ export class ModelsPage {
     this.progress.value = m.total > 0 ? m.bytes / m.total : 0;
     this.rows = m.models ?? [];
     this.drawRows();
-    const busy = m.state === "downloading" || this.rows.some((r) => r.state === "downloading");
+    this.live = m.live ?? null;
+    this.drawLive();
+    const busy =
+      m.state === "downloading" ||
+      this.rows.some((r) => r.state === "downloading") ||
+      (this.live?.setups.some((s) => s.models.some((x) => x.state === "downloading")) ?? false);
     if (busy && this.shown) this.timer ??= setInterval(() => void this.read(), 1000);
     else this.stop();
   }
@@ -215,7 +238,12 @@ export class ModelsPage {
   }
 
   private bar(label: string, side: "accuracy" | "speed", r: ModelRow): HTMLElement {
-    const b = bar(r[side]);
+    return this.meter(label, side, r[side], r.id);
+  }
+
+  /** One bar: its score, the raw number beside it, and the source in its title. */
+  private meter(label: string, side: string, score: ScoreView, of: string): HTMLElement {
+    const b = bar(score);
     const fill = h("span", { class: "fill" });
     if (b.value !== null) fill.style.width = `${b.value}%`;
     return h(
@@ -235,7 +263,7 @@ export class ModelsPage {
           class: "track",
           role: "meter",
           attrs: {
-            "aria-label": `${label} of ${r.id}`,
+            "aria-label": `${label} of ${of}`,
             "aria-valuemin": "0",
             "aria-valuemax": "100",
             ...(b.value === null
@@ -247,6 +275,116 @@ export class ModelsPage {
       ),
       h("span", { class: "mbar-value" }, b.label),
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // The Live section
+
+  private drawLive(): void {
+    const v = this.live;
+    this.liveSection.hidden = v === null;
+    if (!v) return;
+    const auto =
+      v.setting === "auto"
+        ? null
+        : h(
+            "button",
+            {
+              type: "button",
+              id: "models-live-auto",
+              title: "Sets asr.live to auto",
+              on: { click: () => void this.useLive("auto") },
+            },
+            "Back to auto",
+          );
+    replace(
+      this.liveSection,
+      h("h3", {}, "Live transcript"),
+      h("p", { class: "hint", id: "models-live-hint" }, liveHint(v), auto ? " " : null, auto),
+      h("ul", { class: "model-list" }, ...v.setups.map((s) => this.liveRow(s, v))),
+    );
+  }
+
+  private liveRow(s: LiveSetupView, v: LiveView): HTMLElement {
+    const missing = liveMissing(s);
+    const state = s.unavailable ? "unavailable" : missing.length > 0 ? "missing" : "ready";
+    const models = liveModelsText(s);
+    const actions = h("div", { class: "bar model-actions" });
+    if (!s.unavailable && missing.length > 0) {
+      actions.append(
+        h(
+          "button",
+          {
+            class: "go",
+            type: "button",
+            title: `Downloads ${missing.join(", ")}`,
+            attrs: { "data-action": "download" },
+            on: { click: () => void this.downloadAll(missing) },
+          },
+          "Download",
+        ),
+      );
+    }
+    if (!s.unavailable && v.setting !== s.id) {
+      actions.append(
+        h(
+          "button",
+          {
+            type: "button",
+            title: `Sets asr.live to ${s.id}`,
+            attrs: { "data-action": "use" },
+            on: { click: () => void this.useLive(s.id) },
+          },
+          "Use for calls",
+        ),
+      );
+    }
+    return h(
+      "li",
+      { class: "model live-setup", attrs: { "data-setup": s.id, "data-state": state } },
+      h(
+        "div",
+        { class: "model-head" },
+        h("strong", { class: "model-name" }, s.title),
+        s.selected
+          ? h("span", { class: "badge ok", attrs: { "data-mark": "next" } }, "next call")
+          : null,
+        s.running
+          ? h("span", { class: "badge", attrs: { "data-mark": "running" } }, "this call")
+          : null,
+        s.unavailable ? h("span", { class: "badge" }, "unavailable") : null,
+      ),
+      h("p", { class: "model-purpose" }, s.what),
+      h(
+        "div",
+        { class: "model-bars" },
+        ...LIVE_BARS.map((b) => this.meter(b.label, b.side, s[b.side], s.title)),
+      ),
+      s.unavailable ? h("p", { class: "model-kept" }, `Unavailable: ${s.unavailable}`) : null,
+      models ? h("p", { class: "model-kept" }, models) : null,
+      actions,
+    );
+  }
+
+  private async downloadAll(ids: readonly string[]): Promise<void> {
+    for (const id of ids) {
+      const r = await this.t.request<ModelsReply>("POST", "/models/pull", { model: id });
+      if (r.status >= 400) {
+        toast(message(r.body, `${id} could not start downloading (HTTP ${r.status})`));
+        break;
+      }
+    }
+    await this.read();
+  }
+
+  private async useLive(value: string): Promise<void> {
+    const r = await this.t.request<{ note?: string }>("PATCH", "/config", { "asr.live": value });
+    if (r.status >= 400) {
+      toast(message(r.body, `asr.live could not be set (HTTP ${r.status})`));
+      return;
+    }
+    toast(r.body.note ?? `The next call's live transcript: ${value}.`, "info");
+    await this.read();
   }
 
   private actions(r: ModelRow): HTMLElement {

@@ -36,6 +36,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
@@ -77,7 +78,14 @@ import {
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
-import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
+import {
+  chooseLiveSetup,
+  type LiveSetupChoice,
+  type LiveSetupContext,
+  type LiveView,
+  liveView,
+  setupModels,
+} from "./asr/live-setups.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
 import { type LlamaPlan, llamaPlan, metalHolder } from "./asr/llama-server.ts";
@@ -262,6 +270,8 @@ export interface AppOptions {
   models?: ModelSpec | null;
   /** Runs the live recognizer on the main thread. Tests only. */
   asrInThread?: boolean;
+  /** Physical memory in bytes, which `asr.live` `auto` reads; by default the machine's. Tests only. */
+  memoryBytes?: number;
   /**
    * The model files `POST /models/pull` fetches and a start requires. Tests pass tiny files on a
    * loopback server; the recognizer is then not restarted after a pull, because they are not models.
@@ -489,6 +499,8 @@ export class AkouApp implements ApiApp {
   private readonly levelsByCall = new Map<string, { mic: number; call: number; at: number }>();
   private readonly queries = new WeakMap<object, CallQuery>();
   private readonly vocabCache = new Map<string, VocabSource>();
+  /** The live setup each call runs, chosen once when it first takes the recognizer. */
+  private readonly liveRan = new Map<string, LiveSetupChoice>();
   /** Workspaces whose vocabulary files could not be read; retried when the vocabulary changes. */
   private readonly vocabFailed = new Set<string>();
   /** Reads of a workspace's vocabulary files in flight, so two readers share one. */
@@ -737,17 +749,41 @@ export class AkouApp implements ApiApp {
     return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
-  /**
-   * The streaming engine the next call runs (`asr.live.engine` and `asr.languages`), only ever one
-   * whose model files are here; null for the recognizer's VAD windows.
-   */
-  private liveChoice(): { choice: LiveChoice | null; note?: string } {
+  /** What the next call's live setup depends on here: the settings, memory and models on disk. */
+  private liveContext(setting?: string): LiveSetupContext {
     const s = this.cfg.settings;
     const catalog = this.o.modelRegistry ?? MODELS;
-    return chooseLiveEngine(s["asr.live.engine"], s["asr.languages"], (id) => {
-      const m = catalog.find((x) => x.id === id);
-      return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
-    });
+    return {
+      setting: setting ?? s["asr.live"],
+      engine: s["asr.live.engine"],
+      languages: s["asr.languages"],
+      memoryBytes: this.o.memoryBytes ?? totalmem(),
+      present: (id) => {
+        const m = catalog.find((x) => x.id === id);
+        return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
+      },
+      runtime: this.llamaPlan().build?.id ?? null,
+    };
+  }
+
+  /**
+   * The live setup a call runs (`asr.live`, or the call's own `live`), only ever one whose model
+   * files are here: its streaming engine, or null for the recognizer's VAD windows.
+   */
+  private liveChoice(setting?: string): LiveSetupChoice {
+    return chooseLiveSetup(this.liveContext(setting));
+  }
+
+  /** The Live section of `GET /models`: each setup, the one the next call runs and the live call's. */
+  liveModels(): LiveView | null {
+    if (this.runMode === "server") return null;
+    const live = this.manager.live();
+    const running = live ? (this.liveRan.get(live.id)?.setup ?? null) : null;
+    const shelf = this.shelf;
+    const ctx = this.liveContext();
+    return liveView(ctx, running, (id) =>
+      shelf ? shelf.state(id) : ctx.present(id) ? "ready" : "missing",
+    );
   }
 
   /** The real engines on the models folder, with the speaker-label engine the settings choose. */
@@ -897,12 +933,21 @@ export class AkouApp implements ApiApp {
           const ws = this.manager.controller(callId)?.view.call?.workspace ?? "";
           return this.vocabCache.get(ws) ?? { entries: [], files: [] };
         },
-        liveEngine: () => {
-          const { choice, note } = this.liveChoice();
-          if (note) this.log("info", `asr: ${note}`);
+        liveEngine: (callId) => {
+          let ran = this.liveRan.get(callId);
+          if (!ran) {
+            ran = this.liveChoice(this.manager.controller(callId)?.liveAsked);
+            this.liveRan.set(callId, ran);
+            this.log(
+              "info",
+              `asr: call ${callId} runs the ${ran.setup} live setup${ran.choice ? ` (${ran.choice.engine})` : ""}${ran.note ? `: ${ran.note}` : ""}`,
+            );
+            // The status names the live call's setup: the window's pill reads it from the push.
+            for (const fn of this.statusWatchers) fn();
+          }
           // A live model a call loads counts as used, so the sweep keeps it.
-          if (choice) this.shelf?.touch([choice.engine]);
-          return choice;
+          if (ran.choice) this.shelf?.touch([ran.choice.engine]);
+          return ran.choice;
         },
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
@@ -1642,6 +1687,8 @@ export class AkouApp implements ApiApp {
     // A start reads the files again when they could not be read before.
     this.vocabFailed.delete(ws);
     await this.loadVocab(ws);
+    // The call's own live setup rides on its controller (`liveAsked`), never a shared slot: a
+    // concurrent start that is refused cannot touch the call that is starting.
     return this.manager.start(req);
   }
 
@@ -1727,6 +1774,9 @@ export class AkouApp implements ApiApp {
             parts: live.view.parts().length,
             health: live.view.health().map((h) => ({ ch: h.ch, state: h.state, detail: h.detail })),
             lag: live.view.asrLag?.seconds ?? 0,
+            // The live setup and streaming engine this call runs; null before audio reaches the recognizer.
+            setup: this.liveRan.get(live.id)?.setup ?? null,
+            engine: this.liveRan.get(live.id)?.choice?.engine ?? null,
             levels: this.levels(live.id),
           }
         : null,
@@ -2521,9 +2571,10 @@ export class AkouApp implements ApiApp {
     const jobs = this.jobService;
     if (jobs) return jobs.held();
     if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
-    const live = this.liveChoice().choice?.engine;
+    const ctx = this.liveContext();
+    const live = setupModels(chooseLiveSetup(ctx).setup, ctx);
     return {
-      defaults: new Set([...this.registry().map((m) => m.id), ...(live ? [live] : [])]),
+      defaults: new Set([...this.registry().map((m) => m.id), ...live]),
       inUse:
         this.asr !== null || this.finals.size > 0 || this.modelsPull.running
           ? new Set(this.runningSet().map((m) => m.id))

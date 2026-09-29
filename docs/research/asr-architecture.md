@@ -173,7 +173,8 @@ So the new path shows words sooner, closes lines sooner, costs less, and never r
 - A word shows 0.70 s (p50) after the audio at its token time reached the app, with both channels fed at real time; the same feed held back 1.5 s reads 2.24 s. This was measured while other jobs loaded the machine, and from the token's time rather than from the end of the word as in the table above.
 - One stream over many utterances loses words that a fresh stream per clip keeps. The first 40 English clips joined into one call with 0.9 s gaps read 12.84, against 8.05 for the same clips run one call each; whole sentences go missing, with or without the gain. That is the engine, not the line cutter, but the gated test runs each clip as its own call and so cannot see it. A multi-utterance case (a few minutes of e22 or ami, or the joined clips) belongs in that test, with a bound taken from the single-stream figures above.
 - Lines in Chinese, Japanese and Thai break before a token that starts with one of those scripts, since their tokens rarely carry a leading space. Any line a second past the window breaks before the next token, word start or not.
-- The Parakeet path stays. It runs a call when no streaming model is on disk (the first-run download does not include one yet), and it is the `parakeet` setup of the live choice (akou-chp.23).
+- The Parakeet path stays. It runs a call when no streaming model is on disk (the first-run download does not include one yet), and it is the `parakeet` setup of the live choice (`asr.live`, akou-chp.23).
+- The live choice is `asr.live`: `parakeet`, `nemotron` or `upgrade`, and `auto`. The Models page lists each setup with four bars from the numbers above and in 3.2: accuracy `100 - 2 x` AMI WER (Parakeet 28, Nemotron 62, upgrade 73), latency `100 - 50 x` seconds to a shown word (61, 77, 77), cores `100 - 50 x` cores per channel (53, 81, not measured for the upgrade) and memory `100 - 6.25 x` GB (78, 86, 19). A change applies from the next call; `akou start --live` sets it for one call.
 
 Options behind the same setting, all measured:
 
@@ -269,8 +270,8 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | Key | Values | Default | Measured basis |
 |---|---|---|---|
 | `asr.language` | `auto`, an ISO code, or a list (the languages Qwen may choose from) | `auto`. A user who speaks English and Spanish sets `["en","es"]` | `lidc` −0.26 on edacc; forced `es` on code-switched clips 8.06 against 10.34 |
-| `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120`, `kroko-es`, `off` | `auto` (by language, section 3.1) | Live table |
-| `asr.live.upgrade` | `off`, `parakeet`, `parakeet+qwen` | `parakeet+qwen` on 16 GB or more, `parakeet` below | Upgrade table; memory |
+| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `upgrade` on 16 GB or more with its models downloaded, else `nemotron` when its model is downloaded, else `parakeet`; never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; `upgrade` is listed as not built until ASR-7, and a call asked for it runs `nemotron` |
+| `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120` (`kroko-es` later) | `auto` (by language, section 3.1) | Live table |
 | `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4 |
 | `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5 |
 | `asr.fusion.llm` | `none`, `pick`, `free` | `none` | Section 5 |

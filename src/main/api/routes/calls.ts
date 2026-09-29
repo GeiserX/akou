@@ -8,6 +8,7 @@
  */
 
 import { formatWall } from "../../../core/log/clock.ts";
+import { isLiveSetting, LIVE_SETTINGS } from "../../asr/live-setups.ts";
 import type { CallController } from "../../call/call.ts";
 import { LIVE_CONTROLS } from "../../call/manager.ts";
 import { validateTerm } from "../../vocab/files.ts";
@@ -102,7 +103,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded. One call at a time: a second start answers 409.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live setup (`auto`, `parakeet`, `nemotron`, `upgrade`) instead of `asr.live`. One call at a time: a second start answers 409.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -113,6 +114,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         "mic?": "string",
         "vocab?": "string[]",
         "withoutModels?": "boolean",
+        "live?": "string",
       },
       ok: 201,
     },
@@ -125,7 +127,13 @@ export function callRoutes(r: Router<ApiApp>): void {
         mic?: string;
         vocab?: string[];
         withoutModels?: boolean;
+        live?: unknown;
       }>();
+      if (b.live !== undefined && (typeof b.live !== "string" || !isLiveSetting(b.live))) {
+        throw new HttpError(422, "bad_field", `live is one of ${LIVE_SETTINGS.join(", ")}`, {
+          field: "live",
+        });
+      }
       const vocab = [];
       for (const term of b.vocab ?? []) {
         const bad = validateTerm(term);
@@ -141,6 +149,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         vocab,
         by: c.by,
         withoutModels: b.withoutModels,
+        live: b.live as string | undefined,
       });
       if (!res.ok) return outcome(res);
       return json(201, {

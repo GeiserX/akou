@@ -13,6 +13,13 @@
  *   factor) on the reference machine: `50 * log10(RTFx)`. Real time scores 0, 10x scores 50, 100x
  *   scores 100. Logarithmic because the models span two orders of magnitude.
  *
+ * The live setups' bars (live-setups.ts), lower is better on each:
+ * - **Accuracy on calls** (WER on AMI meetings, %): `100 - 2 * WER`. Meetings are harder than
+ *   FLEURS read speech, so a 50 % WER scores 0.
+ * - **Latency** (seconds from a word said to the word shown, p50): `100 - 50 * s`. 2 s scores 0.
+ * - **Cores** (CPU cores the live path uses for one channel): `100 - 50 * cores`. 2 cores score 0.
+ * - **Memory** (resident GB during a call): `100 - 6.25 * GB`. 16 GB scores 0.
+ *
  * Every score is clamped to 0..100 and rounded. The reference machine is `REFERENCE_MACHINE`.
  *
  * Keyed by catalog id. The llama-server builds (`serves: ["runtime"]`) are programs, not models,
@@ -23,7 +30,7 @@ import type { CatalogEntry, ModelSpecEntry } from "./models.ts";
 
 export const REFERENCE_MACHINE = "Apple M4 Mac mini, 10 cores, 16 GB";
 
-export type Metric = "wer" | "der" | "rtfx";
+export type Metric = "wer" | "der" | "rtfx" | "call-wer" | "seconds" | "cores" | "gb";
 
 /** One number: what it is, on what, and where it is written down. */
 export interface Measure {
@@ -168,14 +175,19 @@ export function scoresOf(m: ModelSpecEntry): ModelScores | null {
   return serves?.length === 1 && serves[0] === "runtime" ? RUNTIME : null;
 }
 
+const RAW: Readonly<Record<Metric, (v: number) => number>> = {
+  wer: (v) => 100 - 5 * v,
+  der: (v) => 100 - v,
+  rtfx: (v) => 50 * Math.log10(v),
+  "call-wer": (v) => 100 - 2 * v,
+  seconds: (v) => 100 - 50 * v,
+  cores: (v) => 100 - 50 * v,
+  gb: (v) => 100 - 6.25 * v,
+};
+
 /** A measure's 0 to 100 score, by the formulas at the top of this file. */
 export function score(m: Measure): number {
-  const raw =
-    m.metric === "wer"
-      ? 100 - 5 * m.value
-      : m.metric === "der"
-        ? 100 - m.value
-        : 50 * Math.log10(m.value);
+  const raw = RAW[m.metric](m.value);
   return Math.round(Math.min(100, Math.max(0, raw)));
 }
 
@@ -184,4 +196,8 @@ export const FORMULAS: Readonly<Record<Metric, string>> = {
   wer: "100 - 5 x WER (a 20 % WER scores 0)",
   der: "100 - DER",
   rtfx: `50 x log10(RTFx) on the ${REFERENCE_MACHINE} (real time 0, 10x 50, 100x 100)`,
+  "call-wer": "100 - 2 x WER on AMI meetings (a 50 % WER scores 0)",
+  seconds: "100 - 50 x seconds (2 s scores 0)",
+  cores: "100 - 50 x cores (2 cores score 0)",
+  gb: "100 - 6.25 x GB (16 GB scores 0)",
 };

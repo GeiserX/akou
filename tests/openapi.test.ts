@@ -172,6 +172,7 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
       "mic",
       "vocab",
       "withoutModels",
+      "live",
     ]);
     expect(schema?.additionalProperties).toBe(false);
   });
