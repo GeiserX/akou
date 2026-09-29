@@ -19,6 +19,7 @@ import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
+import { LivePicker } from "./live-picker.ts";
 import { SmoothMeters } from "./meter.ts";
 import {
   banner,
@@ -198,10 +199,14 @@ class App {
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
+  /** The live model the next call runs: the Record row's "Live:" menu. */
+  private readonly livePicker: LivePicker;
   private readonly levels = new SmoothMeters((ch, db) => {
     byId<HTMLMeterElement>(`meter-${ch}`).value = db;
   });
   private blobs = new Map<string, string>();
+  /** What the live menu last read its models for, from the status push. */
+  private liveKey = "";
   /** A start is on its way: Record waits for the answer. */
   private starting = false;
   /** The calls as `GET /calls` last listed them, and the workspaces the user folded. */
@@ -273,6 +278,9 @@ class App {
     byId("models").addEventListener("close", () => {
       if (this.pages.open === "settings") void settings.refreshLive();
     });
+    this.livePicker = new LivePicker({ t, openModels: () => byId("models-open").click() });
+    // A download, a delete or Use for calls on the Models page changes what the menu lists.
+    byId("models").addEventListener("close", () => void this.livePicker.load());
     this.enhanced = new EnhancedPane({
       t,
       call,
@@ -314,13 +322,7 @@ class App {
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
-    void this.enhanced.loadTemplates().then((names) => {
-      replace(
-        byId("template"),
-        h("option", { value: "" }, "Template: automatic"),
-        ...names.map((n) => h("option", { value: n }, n)),
-      );
-    });
+    void this.enhanced.loadTemplates();
     setInterval(() => this.paint(), 1000);
     this.paint();
   }
@@ -337,6 +339,13 @@ class App {
     this.status = s;
     titleBar(this.t.kind === "window" && s.app.platform === "darwin");
     this.modelsCard.update(s.models, true);
+    this.livePicker.follow(s.live);
+    // The live menu reads its models again when the speech models or the live call change.
+    const liveKey = JSON.stringify([s.models?.state, s.live?.call, s.live?.setup]);
+    if (liveKey !== this.liveKey) {
+      this.liveKey = liveKey;
+      void this.livePicker.load();
+    }
     const live = s.live?.call ?? null;
     const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
     if (live) this.seenLive = live;
@@ -1027,13 +1036,13 @@ class App {
     if (this.starting || recordBlocked(this.status?.models) !== null) return;
     this.starting = true;
     this.paint();
-    const template = byId<HTMLSelectElement>("template").value;
+    const live = this.livePicker.value();
     let r: Reply<{ call?: string; error?: string }>;
     try {
       r = await this.t.request("POST", "/calls", {
         workspace: this.workspaceInput().value.trim() || undefined,
         title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
-        ...(template ? { template } : {}),
+        ...(live ? { live } : {}),
       });
     } finally {
       this.starting = false;

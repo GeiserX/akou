@@ -38,7 +38,10 @@
       <datalist id="workspaces"></datalist>
       <input id="newtitle" placeholder="Call title (optional)" aria-label="Call title" maxlength="80" autocomplete="off">
     </div>
-    <select class="idle" id="template" aria-label="Template"><option value="">Template: automatic</option></select>
+    <div id="live-pick" hidden>
+      <button id="live" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="live-menu"><span class="live-key">Live:</span> <span id="live-name">no model</span><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg></button>
+      <div id="live-menu" role="menu" aria-label="Live transcription model" hidden></div>
+    </div>
     <fieldset id="meters"><legend>Levels</legend>
       <span class="meter"><span class="health" id="health-mic" data-state="none"></span><label for="meter-mic">Mic</label><meter id="meter-mic" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
       <span class="meter"><span class="health" id="health-call" data-state="none"></span><label for="meter-call">Call</label><meter id="meter-call" min="-60" max="0" low="-45" high="-6" optimum="-20" value="-60"></meter></span>
