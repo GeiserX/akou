@@ -292,6 +292,104 @@ describe("DC-S1: the draft box's keys", () => {
   });
 });
 
+describe("akou-5v8: the draft box's language chip", () => {
+  /** A box whose retry answers in the language asked for, recording each ask. */
+  const bilingual = (o: Partial<DraftBoxOptions> = {}) => {
+    const asked: { engine: string; language: string | undefined }[] = [];
+    const f = box({
+      languages: () => ["en", "es"],
+      retry: async (_id, engine, language) => {
+        asked.push({ engine, language });
+        return {
+          ok: true,
+          answer: {
+            text: language === "es" ? "dile al equipo" : "tell the team",
+            language: language ?? "en",
+            words: [],
+            engine,
+            model: "q",
+            ms: 12,
+          },
+        };
+      },
+      ...o,
+    });
+    return { ...f, asked };
+  };
+
+  test("a click decodes the same audio again in the next language, on an engine that takes one, and the text is replaced", async () => {
+    const f = bilingual();
+    const a = f.dictation();
+    f.b.open(a, { focus: false });
+    // The reading came from fast, which picks its own language: the switch runs on best.
+    expect(f.opens.at(-1)).toMatchObject({ language: "en", languageSwitch: true });
+    expect(f.opens.at(-1)?.languageForced).toBeUndefined();
+    expect(await f.b.handlers.language({ id: a })).toBe(true);
+    expect(f.asked).toEqual([{ engine: "best", language: "es" }]);
+    expect(f.opens.at(-1)).toMatchObject({
+      id: a,
+      text: "dile al equipo",
+      language: "es",
+      languageForced: true,
+      languageSwitch: true,
+      engine: "best (q)",
+      focus: true,
+    });
+    // The next click goes round to the first language, on the reading's own engine.
+    expect(await f.b.handlers.language({ id: a })).toBe(true);
+    expect(f.asked[1]).toEqual({ engine: "best", language: "en" });
+    expect(f.opens.at(-1)).toMatchObject({ text: "tell the team", language: "en" });
+    // Enter inserts the reading shown, and the edit is diffed against it, not the first one.
+    expect(await f.b.handlers.insert({ id: a, text: "tell the team", send: false })).toBe(true);
+    expect(f.inserts).toEqual([{ id: a, text: "tell the team", sendKey: "none" }]);
+    expect(f.learnEvents()).toEqual([]);
+  });
+
+  test("positive controls: one language, or no engine that takes a forced one, leaves the chip read-only", async () => {
+    const one = bilingual({ languages: () => ["en"] });
+    const a = one.dictation();
+    one.b.open(a, { focus: false });
+    expect(one.opens.at(-1)?.language).toBe("en");
+    expect(one.opens.at(-1)?.languageSwitch).toBeUndefined();
+    expect(await one.b.handlers.language({ id: a })).toBe(false);
+
+    const fastOnly = bilingual({ engines: () => ["fast"] });
+    const b = fastOnly.dictation();
+    fastOnly.b.open(b, { focus: false });
+    expect(fastOnly.opens.at(-1)?.languageSwitch).toBeUndefined();
+    expect(await fastOnly.b.handlers.language({ id: b })).toBe(false);
+    expect([...one.asked, ...fastOnly.asked]).toEqual([]);
+  });
+
+  test("a draft answered while the switch decodes is not shown again", async () => {
+    let decoded: () => void = () => {};
+    const f = bilingual({
+      retry: () =>
+        new Promise((res) => {
+          decoded = () =>
+            res({
+              ok: true,
+              answer: {
+                text: "hola",
+                language: "es",
+                words: [],
+                engine: "best",
+                model: null,
+                ms: 1,
+              },
+            });
+        }),
+    });
+    const a = f.dictation();
+    f.b.open(a, { focus: false });
+    const switched = f.b.handlers.language({ id: a });
+    expect(await f.b.handlers.discard({ id: a })).toBe(true);
+    decoded();
+    expect(await switched).toBe(false);
+    expect(f.opens).toHaveLength(1);
+  });
+});
+
 describe("DC-L1: the draft box learns from the edit", () => {
   test('"cooper netties" fixed to "Kubernetes" is proposed and the chip shows; Enter with no edit writes nothing', async () => {
     const f = box();

@@ -3076,7 +3076,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
+        "description": "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. `language` (a BCP-47 tag, or auto for `dictation.language`) forces the decode into it on best and a remote akou, as the draft box's language chip does; fast detects the language itself. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
         "parameters": [
           {
             "name": "id",
@@ -3096,6 +3096,9 @@
                 "type": "object",
                 "properties": {
                   "engine": {
+                    "type": "string"
+                  },
+                  "language": {
                     "type": "string"
                   }
                 },

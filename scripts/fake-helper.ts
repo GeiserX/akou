@@ -604,7 +604,8 @@ async function runDictate(): Promise<void> {
         return;
       case "insert": {
         log(opt("--inserter-log"), { ...c, at: now() });
-        if (flag("--no-receipt")) {
+        // A clipboard-only insert pastes nothing, so it waits for no receipt.
+        if (flag("--no-receipt") && c.method !== "clipboard") {
           // The real inserter gives up on a target that never read: no send key, then the failure.
           setTimeout(() => {
             machine?.settled();

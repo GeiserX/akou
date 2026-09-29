@@ -35,6 +35,13 @@ export interface DraftOpen {
   seconds?: number;
   /** The language the engine heard or was told (`es`), when known. */
   language?: string;
+  /**
+   * A click on the language chip decodes the same audio again in the next of the user's languages
+   * (akou-5v8): there are two or more, and an engine that takes a forced language can run.
+   */
+  languageSwitch?: boolean;
+  /** The chip chose the language, rather than the engine hearing it. */
+  languageForced?: boolean;
   /** The engines a retry can use (`best`, `remote`), from the installed ones. */
   engines: string[];
   /** A deliberate open takes the keyboard; an automatic one never does. */
@@ -55,6 +62,11 @@ export interface DraftRpc {
       copy: { params: { id: string; text: string }; response: boolean };
       /** Decode the same audio again; the answer comes back as a new `open`. */
       retry: { params: { id: string; engine: string }; response: boolean };
+      /**
+       * The language chip's click: decode the same audio again forced into the next of the user's
+       * languages; the answer comes back as a new `open`.
+       */
+      language: { params: { id: string }; response: boolean };
       chip: { params: ChipAnswer; response: boolean };
     };
     messages: Record<string, never>;

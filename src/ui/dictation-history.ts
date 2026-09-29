@@ -1,7 +1,7 @@
 /**
  * The dictation History page (docs/ux/DICTATION.md DC-H1), in the desktop window beside the
  * Dictation settings: every dictation with its time, the app it went to, the engine, the time it
- * took, its state and its text, newest first, over `GET /dictations`. Search is over the text, on
+ * took, the language it was heard in (akou-5v8), its state and its text, newest first, over `GET /dictations`. Search is over the text, on
  * this page only, since dictations are the user's own words and not a call.
  *
  * Every action goes through the API (DC-G1), so a script can do what the page does:
@@ -29,6 +29,8 @@ export interface DictationRow {
   /** The app it went to; null for a clip sent to the API. */
   app: string | null;
   text: string | null;
+  /** The language the engine heard or was told (`es`); null when it named none. */
+  language?: string | null;
   engine: string;
   model?: string | null;
   ms: number | null;
@@ -128,6 +130,13 @@ export class DictationHistory {
         h("time", { attrs: { datetime: new Date(d.at).toISOString() } }, when(d.at)),
         ` · ${d.app ?? "no app"} · ${d.engine}${d.ms !== null ? ` ${took(d.ms)}` : ""}`,
         d.fallback_from ? ` (instead of ${d.fallback_from})` : "",
+        d.language
+          ? h(
+              "span",
+              { class: "language", attrs: { title: "Language heard" } },
+              ` · ${d.language.split("-")[0]?.toUpperCase()}`,
+            )
+          : "",
         " · ",
         h("span", { class: "state" }, d.state),
         d.error ? h("span", { class: "issue" }, ` ${d.error}`) : null,
