@@ -6,16 +6,19 @@
  * With none downloaded the button reads "Live: no model" and the menu says so, with "Get models"
  * opening the Models page.
  *
- * The choice starts as `asr.live` and is sent as `live` with the next `POST /calls`; picking one
- * also saves it as `asr.live` (`PATCH /config`, that key only), so the Models page and this
- * button always agree. While a call records the button shows the setup that call runs and is
- * disabled: a change applies from the next call. Server mode has no Record row and its
+ * The check sits on `asr.live`; picking a line saves it as `asr.live` (`PATCH /config`, that key
+ * only), so the Models page and this button always agree. Record reads `asr.live` again (after any
+ * save still on its way) and sends it as the call's `live`, so a change made in the CLI, the API,
+ * another window or the Models page is never overridden by what this button last read. When
+ * `asr.live` names a setup whose models are not all here, no line is checked, the button names what
+ * calls run instead and the menu says why. While a call records the button shows the setup that
+ * call runs and is disabled: a change applies from the next call. Server mode has no Record row and its
  * `GET /models` has no `live` section, so the button stays hidden there.
  */
 
 import type { LiveSetting, LiveView } from "../main/asr/live-setups.ts";
 import { byId, h, replace, toast } from "./dom.ts";
-import { type LiveOption, liveChosen, liveOptions, liveTitle } from "./live-options.ts";
+import { type LiveOption, liveChecked, liveNote, liveOptions, liveTitle } from "./live-options.ts";
 import { message } from "./notepad.ts";
 import type { Reply, Transport } from "./protocol.ts";
 
@@ -46,7 +49,12 @@ export class LivePicker {
   /** `GET /models`'s live section as last read; null before it, or where there is none. */
   private view: LiveView | null = null;
   private options: LiveOption[] = [];
+  /** The line with the check: `asr.live` when it is listed, else null. */
   private chosen: LiveSetting | null = null;
+  /** A pick's `PATCH /config` still on its way, which Record waits for. */
+  private saving: Promise<void> = Promise.resolve();
+  /** The re-read while a model downloads, so the menu gains the setup when it lands. */
+  private poll: ReturnType<typeof setTimeout> | null = null;
   /** The setup the live call runs, or null with no call recording. */
   private running: { setup: string | null } | null = null;
   /** Bumped by every read, so an older answer that lands late never draws over a newer one. */
@@ -78,12 +86,24 @@ export class LivePicker {
     document.addEventListener("pointerdown", (e) => {
       if (!this.menuBox.hidden && !this.box.contains(e.target as Node)) this.menu(false);
     });
+    // Tab out of the menu closes it, as a click elsewhere does.
+    this.box.addEventListener("focusout", (e) => {
+      const to = (e as FocusEvent).relatedTarget as Node | null;
+      if (!this.menuBox.hidden && to !== null && !this.box.contains(to)) this.menu(false);
+    });
     this.paint();
   }
 
-  /** The `live` a call started from the window asks for, or undefined to leave it to the app. */
-  value(): LiveSetting | undefined {
-    return this.chosen ?? undefined;
+  /**
+   * The `live` a call started from the window asks for: `asr.live` read now, after any pick still
+   * being saved, or undefined to leave it to the app. Never the last read, which a change made
+   * elsewhere may have outdated.
+   */
+  async value(): Promise<LiveSetting | undefined> {
+    await this.saving;
+    // Its own answer, even when a later read supersedes it on screen.
+    const read = await this.load();
+    return (read === undefined ? this.view : read)?.setting;
   }
 
   /** The live call, as the status push names it: the button shows its setup and waits. */
@@ -95,45 +115,65 @@ export class LivePicker {
     this.paint();
   }
 
-  /** Reads the live setups again: after a download, a delete, a call, or the Models page. */
-  async load(): Promise<void> {
+  /**
+   * Reads the live setups again: after a download, a delete, a call, or the Models page. Answers
+   * the live section it read (null where there is none), or undefined when the read failed.
+   */
+  async load(): Promise<LiveView | null | undefined> {
     const n = ++this.reads;
     let r: Reply<{ live?: LiveView }>;
     try {
       r = await this.d.t.request<{ live?: LiveView }>("GET", "/models");
     } catch {
       // The app is out of reach for a moment: the menu keeps what it last read.
-      return;
+      return undefined;
     }
-    if (n !== this.reads || r.status >= 400) return;
-    const was = JSON.stringify([this.options, this.chosen]);
-    this.view = r.body.live ?? null;
+    if (r.status >= 400) return undefined;
+    const read = r.body.live ?? null;
+    if (n !== this.reads) return read;
+    const was = JSON.stringify([this.options, this.chosen, this.note()]);
+    this.view = read;
     this.options = this.view ? liveOptions(this.view) : [];
-    this.chosen = this.view ? liveChosen(this.view, this.options) : null;
+    this.chosen = this.view ? liveChecked(this.view, this.options) : null;
     this.paint();
+    // A model on its way: read again shortly, so the setup is listed when it lands.
+    if (this.poll) clearTimeout(this.poll);
+    this.poll = null;
+    const downloading = this.view?.setups.some((s) =>
+      s.models.some((m) => m.state === "downloading"),
+    );
+    if (downloading) this.poll = setTimeout(() => void this.load(), 3000);
     // An open menu is drawn again only when its lines changed, so the focus stays where it is.
-    if (!this.menuBox.hidden && JSON.stringify([this.options, this.chosen]) !== was) {
+    if (!this.menuBox.hidden && JSON.stringify([this.options, this.chosen, this.note()]) !== was) {
       this.drawMenu();
       this.focusMenu();
     }
+    return read;
+  }
+
+  private note(): string | null {
+    return this.view ? liveNote(this.view, this.options) : null;
   }
 
   private paint(): void {
     this.box.hidden = this.view === null;
     const recording = this.running !== null;
+    const any = this.options.length > 0;
+    // What the next call runs: the checked line, or with the saved setup not here, its fallback.
+    const next = this.chosen ?? (this.view && any ? this.view.next : null);
     const name = recording
-      ? liveTitle(this.running?.setup ?? this.chosen ?? "auto")
-      : this.chosen
-        ? liveTitle(this.chosen)
+      ? liveTitle(this.running?.setup ?? next ?? "auto")
+      : next
+        ? liveTitle(next)
         : "no model";
     if (this.label.textContent !== name) this.label.textContent = name;
     this.button.disabled = recording;
-    this.box.dataset.state = recording ? "recording" : this.chosen ? "ready" : "none";
+    this.box.dataset.state = recording ? "recording" : any ? "ready" : "none";
     this.button.title = recording
       ? "This call keeps its live model; a change applies from the next call."
-      : this.chosen
-        ? "The model that writes the live transcript of the next call."
-        : "No live model is downloaded yet.";
+      : !any
+        ? "No live model is downloaded yet."
+        : (this.note() ?? "The model that writes the live transcript of the next call.");
   }
 
   private menu(open: boolean): void {
@@ -178,8 +218,10 @@ export class LivePicker {
       );
       return;
     }
+    const note = this.note();
     replace(
       this.menuBox,
+      ...(note ? [h("p", { class: "live-note" }, note)] : []),
       ...this.options.map((o) =>
         h(
           "button",
@@ -205,7 +247,11 @@ export class LivePicker {
   private async pick(id: LiveSetting): Promise<void> {
     this.menu(false);
     this.button.focus();
-    if (id === this.chosen) return;
+    // Against the saved setting, not the check: Automatic picked while the saved setup is not
+    // here is a real change of asr.live.
+    if (!this.view || id === this.view.setting) return;
+    // A read already on its way carries the old setting: it must not draw over the pick.
+    this.reads++;
     const before = this.chosen;
     this.chosen = id;
     this.paint();
@@ -214,17 +260,22 @@ export class LivePicker {
       this.paint();
       toast(why);
     };
-    let r: Reply;
-    try {
-      r = await this.d.t.request("PATCH", "/config", { "asr.live": id });
-    } catch {
-      failed("The live model could not be saved: akou is out of reach.");
-      return;
-    }
-    if (r.status >= 400) {
-      failed(message(r.body, `the live model could not be saved (HTTP ${r.status})`));
-      return;
-    }
-    await this.load();
+    const save = async (): Promise<void> => {
+      let r: Reply;
+      try {
+        r = await this.d.t.request("PATCH", "/config", { "asr.live": id });
+      } catch {
+        failed("The live model could not be saved: akou is out of reach.");
+        return;
+      }
+      if (r.status >= 400) {
+        failed(message(r.body, `the live model could not be saved (HTTP ${r.status})`));
+        return;
+      }
+      await this.load();
+    };
+    const saving = save();
+    this.saving = saving;
+    await saving;
   }
 }

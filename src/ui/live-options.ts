@@ -55,8 +55,17 @@ export function liveOptions(v: LiveView): LiveOption[] {
   ];
 }
 
-/** The chosen line: `asr.live` when it is listed, else Automatic; null with nothing listed. */
-export function liveChosen(v: LiveView, options: readonly LiveOption[]): LiveSetting | null {
-  if (options.length === 0) return null;
-  return options.some((o) => o.id === v.setting) ? v.setting : "auto";
+/** The checked line: `asr.live` when it is listed, else none; the check never moves to a setup nobody chose. */
+export function liveChecked(v: LiveView, options: readonly LiveOption[]): LiveSetting | null {
+  return options.some((o) => o.id === v.setting) ? v.setting : null;
+}
+
+/**
+ * Why the saved setup is not the one a call runs, in plain words, when `asr.live` names a setup
+ * whose models are not all here; null when it is listed. The app then runs `next` instead, the
+ * same fallback the CLI and the hotkey get.
+ */
+export function liveNote(v: LiveView, options: readonly LiveOption[]): string | null {
+  if (options.length === 0 || liveChecked(v, options) !== null) return null;
+  return `${liveTitle(v.setting)} is not downloaded, so calls run ${liveTitle(v.next)} until it is.`;
 }

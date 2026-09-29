@@ -180,4 +180,85 @@ describe("W3.19: the live model picker in the Record row", () => {
     },
     UI_TIMEOUT,
   );
+
+  test(
+    "Record sends asr.live as it is now, even when the CLI or API changed it after the window read it; at 1024 px the button never covers the state word",
+    async () => {
+      await withModels(4, async (rig) => {
+        await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
+        const starts: unknown[] = [];
+        const page = await rig.open(undefined, {
+          before: (p) =>
+            p.on("request", (r) => {
+              if (r.method() === "POST" && new URL(r.url()).pathname.endsWith("/calls"))
+                starts.push(r.postDataJSON());
+            }),
+        });
+        await page.setViewportSize({ width: 1024, height: 700 });
+        await until(async () => (await label(page)) === "Automatic", 5000, "the setting");
+
+        // `akou config set asr.live parakeet`, with the window idle and its menu never opened.
+        await rig.api("PATCH", "/config", { "asr.live": "parakeet" });
+        await page.click("#record");
+        await until(async () => (await page.textContent("#state")) === "rec", 8000, "recording");
+        expect(starts).toEqual([expect.objectContaining({ live: "parakeet" })]);
+        await until(
+          async () => (await rig.api("GET", "/status")).body.live?.setup === "parakeet",
+          10_000,
+          "the call runs parakeet",
+        );
+        await until(
+          async () => (await label(page)) === "Parakeet between pauses",
+          5000,
+          "the running setup shown",
+        );
+
+        // The longest name, while recording, in a 1024 px window: the button ends before REC.
+        const box = async (sel: string) => {
+          const b = await page.locator(sel).boundingBox();
+          if (!b) throw new Error(`${sel} has no box`);
+          return b;
+        };
+        const state = await box("#state");
+        const live = await box("#live");
+        expect(live.x).toBeGreaterThanOrEqual(state.x + state.width);
+        await page.click("#stop");
+        await until(async () => (await page.textContent("#state")) === "saved", 8000, "stopped");
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a saved setup whose model is not here checks no line, names what runs, and picking Automatic saves it",
+    async () => {
+      // Three models: no streaming model, so asr.live=nemotron falls back to Parakeet.
+      await withModels(3, async (rig) => {
+        await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
+        await rig.api("PATCH", "/config", { "asr.live": "nemotron" });
+        const page = await rig.open();
+        await until(
+          async () => (await label(page)) === "Parakeet between pauses",
+          5000,
+          "the fallback named",
+        );
+        await page.click("#live");
+        await page.waitForSelector("#live-menu:not([hidden]) .live-item");
+        expect(await listed(page)).toEqual(["auto", "parakeet"]);
+        expect(await page.$$('#live-menu [aria-checked="true"]')).toHaveLength(0);
+        expect(await page.textContent("#live-menu .live-note")).toBe(
+          "Streaming (Nemotron) is not downloaded, so calls run Parakeet between pauses until it is.",
+        );
+
+        await page.click('#live-menu [data-live="auto"]');
+        await until(
+          async () => (await rig.api("GET", "/config")).body.settings["asr.live"] === "auto",
+          5000,
+          "Automatic saved",
+        );
+        await until(async () => (await label(page)) === "Automatic", 5000, "Automatic checked");
+      });
+    },
+    UI_TIMEOUT,
+  );
 });

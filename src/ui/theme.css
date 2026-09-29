@@ -347,7 +347,8 @@ body.welcoming #composer #controls {
    menu of the setups downloaded here, each with one plain line. Disabled while a call records. */
 #live-pick {
   position: relative;
-  flex: none;
+  flex: 0 1 auto;
+  min-width: 6.5rem;
   display: flex;
 }
 #live-pick[hidden] {
@@ -357,6 +358,8 @@ body.welcoming #composer #controls {
   display: flex;
   align-items: center;
   gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 15rem;
   height: 32px;
   padding: 0 6px 0 10px;
@@ -369,6 +372,7 @@ body.welcoming #composer #controls {
   white-space: nowrap;
 }
 #live .live-key {
+  flex: none;
   color: var(--dim);
 }
 #live-name {
@@ -449,6 +453,12 @@ body.welcoming #composer #controls {
   font-weight: 400;
   line-height: 1.4;
   white-space: normal;
+}
+#live-menu .live-note {
+  margin: 6px 8px 4px;
+  color: var(--dim);
+  font-size: 12px;
+  line-height: 1.4;
 }
 #live-menu .live-none {
   margin: 6px 8px 8px;

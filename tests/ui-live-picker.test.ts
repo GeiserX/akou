@@ -1,13 +1,13 @@
 /**
  * What the Record row's live model menu lists (docs/ux/WINDOW.md W3.19, `src/ui/live-options.ts`),
  * without the DOM: only the setups whose every model is on disk, Automatic first when one is, never
- * an unavailable setup, and the chosen line. The browser suite (`tests/ui/live-picker.test.ts`)
+ * an unavailable setup, and the checked line. The browser suite (`tests/ui/live-picker.test.ts`)
  * checks the same menu on the real page.
  */
 
 import { describe, expect, test } from "bun:test";
 import type { LiveSetupView, LiveView } from "../src/main/asr/live-setups.ts";
-import { liveChosen, liveOptions } from "../src/ui/live-options.ts";
+import { liveChecked, liveNote, liveOptions } from "../src/ui/live-options.ts";
 
 type State = "ready" | "downloading" | "missing";
 const none: LiveSetupView["accuracy"] = { score: null, not_measured: "not measured" };
@@ -77,23 +77,27 @@ describe("W3.19: the live model menu's lines", () => {
   test("nothing downloaded: no line at all, not even Automatic", () => {
     const v = view("auto", { parakeet: ["missing"], nemotron: ["missing"], upgrade: ["missing"] });
     expect(liveOptions(v)).toEqual([]);
-    expect(liveChosen(v, liveOptions(v))).toBeNull();
+    expect(liveChecked(v, liveOptions(v))).toBeNull();
+    expect(liveNote(v, liveOptions(v))).toBeNull();
   });
 
-  test("the chosen line is asr.live when it is listed, else Automatic", () => {
+  test("the check is on asr.live when it is listed, else on nothing, with a note naming what runs", () => {
     const listed = view("nemotron", {
       parakeet: ["ready"],
       nemotron: ["ready"],
       upgrade: ["missing"],
     });
-    expect(liveChosen(listed, liveOptions(listed))).toBe("nemotron");
-    // The upgrade was chosen, then its Qwen deleted: the menu shows Automatic, what the app
-    // falls back to, rather than a line that is not there.
-    const gone = view("upgrade", {
-      parakeet: ["ready"],
-      nemotron: ["ready"],
-      upgrade: ["missing"],
-    });
-    expect(liveChosen(gone, liveOptions(gone))).toBe("auto");
+    expect(liveChecked(listed, liveOptions(listed))).toBe("nemotron");
+    expect(liveNote(listed, liveOptions(listed))).toBeNull();
+    // The upgrade was chosen, then its Qwen deleted: the check does not move to Automatic, which
+    // nobody picked, and the note says what calls run meanwhile. asr.live stays the upgrade.
+    const gone = {
+      ...view("upgrade", { parakeet: ["ready"], nemotron: ["ready"], upgrade: ["missing"] }),
+      next: "nemotron" as const,
+    };
+    expect(liveChecked(gone, liveOptions(gone))).toBeNull();
+    expect(liveNote(gone, liveOptions(gone))).toBe(
+      "Streaming + Qwen rewrite is not downloaded, so calls run Streaming (Nemotron) until it is.",
+    );
   });
 });

@@ -19,6 +19,7 @@ import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
+import { liveTitle } from "./live-options.ts";
 import { LivePicker } from "./live-picker.ts";
 import { SmoothMeters } from "./meter.ts";
 import {
@@ -685,7 +686,7 @@ class App {
     const setup = running && running.call === this.callId ? running.setup : null;
     const livePill = byId("pill-live");
     livePill.hidden = !setup;
-    livePill.textContent = setup ? `live: ${setup}` : "";
+    livePill.textContent = setup ? `Live: ${liveTitle(setup)}` : "";
     livePill.title = setup && running?.engine ? running.engine : "";
     const share = this.status?.share.shares?.find((x) => x.call === this.callId);
     const pill = byId("pill-share");
@@ -1036,7 +1037,7 @@ class App {
     if (this.starting || recordBlocked(this.status?.models) !== null) return;
     this.starting = true;
     this.paint();
-    const live = this.livePicker.value();
+    const live = await this.livePicker.value();
     let r: Reply<{ call?: string; error?: string }>;
     try {
       r = await this.t.request("POST", "/calls", {
