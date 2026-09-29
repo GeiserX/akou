@@ -84,6 +84,7 @@ export function electrobunUi(): NativeUi {
           showSettings: (m) => defined.send.showSettings(m),
           askQuit: (m) => defined.send.askQuit(m),
           dictationKey: (m) => defined.send.dictationKey(m),
+          dictationLevel: (m) => defined.send.dictationLevel(m),
         },
       };
     },

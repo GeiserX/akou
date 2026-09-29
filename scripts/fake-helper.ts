@@ -53,6 +53,7 @@
  *                           after the helper started (DC-U2, DC-N3)
  *   --recorder-keys LIST    the keys reported as `key` when `record_keys {on: true}` arrives, as
  *                           the helper reports every key while the recorder is open (DC-U3)
+ *
  *   --no-swallow            `swallow_keys: false`, as the portal and CLI backends (DC-A4): Escape
  *                           and Enter never reach the activation rule, so they pass through to
  *                           the app and are never reported
@@ -81,6 +82,10 @@
  *   --refuse-hotkey KEY     a `rebind` to this hotkey is refused; the binding in force stays (DC-A7)
  *   --play-after-rebinds N  the scripted keys play after the Nth `rebind` (default 1), refused or
  *                           not, so a test can change the key first and then press it
+ *
+ * `meter {on: true}` (the Dictation page's meter, DC-U4 and DC-N3) sends `level` every 50 ms in
+ * real time with no session, the RMS of the next 50 ms of the `--wav` mic from its start, round
+ * and round (silence without one), until `meter {on: false}` or the end.
  *
  * The traps (DC-T1), one switch each:
  *
@@ -456,6 +461,8 @@ async function runDictate(): Promise<void> {
   };
 
   let machine: ActivationMachine | null = null;
+  /** The page's meter while it is on. */
+  let meter: ReturnType<typeof setInterval> | undefined;
   let open: { id: string; at: number } | null = null;
   /** A session started by `session.start`: its key time, and the real time it began. */
   let started: { at: number; real: number } | null = null;
@@ -541,6 +548,23 @@ async function runDictate(): Promise<void> {
       case "settled":
         machine?.settled();
         return;
+      case "meter": {
+        clearInterval(meter);
+        meter = undefined;
+        if (!c.on) return;
+        let at = 0;
+        const n = CAPTURE_RATE / 20;
+        meter = setInterval(() => {
+          let s2 = 0;
+          for (let i = 0; i < n && mic.length > 0; i++) {
+            const x = mic[(at + i) % mic.length] ?? 0;
+            s2 += x * x;
+          }
+          at = mic.length > 0 ? (at + n) % mic.length : 0;
+          say({ type: "level", rms: Math.sqrt(s2 / n) });
+        }, 50);
+        return;
+      }
       case "record_keys":
         if (c.on)
           for (const name of opt("--recorder-keys")?.split(",") ?? []) say({ type: "key", name });
@@ -654,6 +678,7 @@ async function runDictate(): Promise<void> {
     if (stopping) break;
   }
   // Closing stdin means stop. Inserts still waiting for their receipt are let go.
+  clearInterval(meter);
   stdout.flush();
   say({ type: "stopped", reason: "stop" });
   process.exit(EXIT.ok);

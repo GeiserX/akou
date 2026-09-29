@@ -471,6 +471,11 @@ impl Dictate {
                     self.media_resume();
                 }
             }
+            Command::Meter { on } => {
+                let mut ev = Vec::new();
+                self.mic.set_meter(on, t_ns, &mut ev);
+                self.mic_events(ev, out);
+            }
             // The device is chosen per OS (DC-N5); a file mic has nothing to rebuild.
             Command::RebuildMic { .. } => {}
         }
@@ -899,6 +904,43 @@ mod tests {
             "{}",
             ended[1]
         );
+    }
+
+    /// DC-U4, DC-N3: `meter {on}` opens the mic with no session and levels come 20 a second;
+    /// `meter {off}` closes it and the levels stop. The control: the same idle time with the
+    /// meter off opens nothing and sends no level.
+    #[test]
+    fn dc_u4_the_meter_command_sends_levels_with_no_session() {
+        let w = World::new();
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", true, ("granted", "granted"), &mut out);
+        let parse = |l: &str| Command::parse(l).unwrap();
+        d.command(parse(r#"{"type":"warm","mode":"off"}"#), 0, &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        let levels = |out: &Rec| {
+            out.lines
+                .iter()
+                .filter(|l| l.contains(r#""type":"level""#))
+                .count()
+        };
+        assert!(!d.mic_open(), "off with no meter: the mic is closed");
+        assert_eq!(levels(&out), 0);
+        let mics = |out: &Rec| types(out).iter().filter(|t| *t == "mic").count();
+        let before = mics(&out);
+
+        d.command(parse(r#"{"type":"meter","on":true}"#), 1000 * MS, &mut out);
+        assert!(d.mic_open());
+        run(&mut d, &mut out, 1000, 2000);
+        assert_eq!(levels(&out), 20);
+        assert!(out.packets.is_empty(), "the meter sends no audio");
+        assert!(!types(&out).iter().any(|t| t.starts_with("session")));
+
+        d.command(parse(r#"{"type":"meter","on":false}"#), 2000 * MS, &mut out);
+        assert!(!d.mic_open());
+        run(&mut d, &mut out, 2000, 3000);
+        assert_eq!(levels(&out), 20);
+        assert_eq!(mics(&out) - before, 2, "one open, one close");
     }
 
     /// DC-N1: the tap answers while the worker is stuck inside an insert. The fake sink blocks in

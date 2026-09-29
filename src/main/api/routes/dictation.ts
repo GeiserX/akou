@@ -421,7 +421,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictation/stream",
     {
       id: "dictation.stream",
-      doc: "The dictation log as server-sent events: every event after the cursor (`event`, its `seq` as the id), then each new one as it is written, and the mic's `level` (`{rms}`, 20 a second) while a dictation listens, which is never stored. A reconnecting client sends `Last-Event-ID` and resumes after it; a deleted dictation shows only its tombstone.",
+      doc: "The dictation log as server-sent events: every event after the cursor (`event`, its `seq` as the id), then each new one as it is written, and the mic's `level` (`{rms}`, 20 a second) while a dictation listens or the Dictation page's meter is on, which is never stored. A reconnecting client sends `Last-Event-ID` and resumes after it; a deleted dictation shows only its tombstone.",
       access: "admin",
       modes: ["app"],
       query: {

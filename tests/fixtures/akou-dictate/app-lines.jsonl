@@ -8,4 +8,5 @@
 {"type":"rebuild_mic","device":"default"}
 {"type":"warm","mode":"auto"}
 {"type":"record_keys","on":true}
+{"type":"meter","on":true}
 {"type":"stop"}

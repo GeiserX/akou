@@ -13,7 +13,7 @@
 //! |---|---|
 //! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied`, `not-asked` on a macOS microphone never asked for, or `not-needed`) |
 //! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample), and `mic: {transport, why}` when a device backend chose the mic (DC-N5): `transport` `built-in`, `bluetooth` or `other`; `why` `pinned`, `built-in` (instead of a Bluetooth default), `default` or `fallback` |
-//! | `level` | `rms` (linear, 0 to 1), 20 per second while a session runs |
+//! | `level` | `rms` (linear, 0 to 1), 20 per second while a session runs or `meter` is on |
 //! | `key` | `name`: `Escape`, `Enter` or `Shift+Enter` during a session and until its insert settles; the hotkey's name when it is pressed while a session is still transcribing; any key while `record_keys` is on |
 //! | `grant.lost` | `name` |
 //! | `session.ended` | `id`, `reason`: `release`, `tap`, `key` (Enter or Shift+Enter ended it), `cancel`, `silence`, `max`, `stop` |
@@ -38,7 +38,8 @@
 //! (`device` is `dictation.mic`, `default` when empty; `prefer_built_in` is
 //! `dictation.preferBuiltInOverBluetooth`, default true), `warm {mode}`,
 //! `record_keys {on}`, `pause_media {on}` (`dictation.muteMedia`, off until the app sends it:
-//! sessions pause the players that are playing, DC-U8), `stop`.
+//! sessions pause the players that are playing, DC-U8), `meter {on}` (the Dictation page's
+//! meter, DC-U4 and DC-N3: the mic stays open and `level` comes with no session), `stop`.
 
 use crate::json::Json;
 
@@ -264,6 +265,10 @@ pub enum Command {
     PauseMedia {
         on: bool,
     },
+    /// The Dictation page's meter (DC-U4, DC-N3).
+    Meter {
+        on: bool,
+    },
     Stop,
 }
 
@@ -339,6 +344,12 @@ impl Command {
                     .get("on")
                     .and_then(Value::as_bool)
                     .ok_or("pause_media needs on")?,
+            },
+            "meter" => Command::Meter {
+                on: v
+                    .get("on")
+                    .and_then(Value::as_bool)
+                    .ok_or("meter needs on")?,
             },
             "stop" => Command::Stop,
             other => return Err(format!("unknown command {other}")),
@@ -649,6 +660,7 @@ mod tests {
                 r#"{"type":"pause_media","on":false}"#,
                 Command::PauseMedia { on: false },
             ),
+            (r#"{"type":"meter","on":true}"#, Command::Meter { on: true }),
             (r#"{"type":"stop","extra":[1,2.5,null,{}]}"#, Command::Stop),
         ];
         for (text, want) in cases {
@@ -671,6 +683,8 @@ mod tests {
             r#"{"type":"record_keys"}"#,
             r#"{"type":"pause_media"}"#,
             r#"{"type":"pause_media","on":"yes"}"#,
+            r#"{"type":"meter"}"#,
+            r#"{"type":"meter","on":1}"#,
             r#"{"type":"rebuild_mic","prefer_built_in":"yes"}"#,
             r#"{"type":"stop"} x"#,
             r#"{"type":"stop""#,
@@ -848,6 +862,7 @@ mod tests {
                     mode: "auto".into(),
                 },
                 Command::RecordKeys { on: true },
+                Command::Meter { on: true },
                 Command::Stop,
             ]
         );
