@@ -11,9 +11,11 @@
  * |            | and then by Qwen fused with it                               |         |
  * | `voxtral`  | listed only: unavailable, with its reason                    |         |
  *
- * `auto` picks `upgrade` on a machine with 16 GB or more whose models are all on disk, else
- * `nemotron` when a streaming model is on disk, else `parakeet`. A setup whose models are missing is
- * never run: a named one that cannot run falls back the same way and says why. The choice is made
+ * `auto` picks `nemotron` when a streaming model is on disk, else `parakeet`. It never picks
+ * `upgrade`: the accurate transcript is the final pass after the call, and the upgrade keeps the
+ * GPU busy for the whole call, so it runs only when chosen by name (the Models page, `asr.live`, a
+ * call's `live` at its start). A setup whose models are missing is never run: a named one that
+ * cannot run falls back the same way and says why. The choice is made
  * when a call takes the recognizer, so a change applies from the next call and a running call keeps
  * its setup. The in-call upgrade itself (ASR-7) is in live-worker.ts.
  */
@@ -41,12 +43,6 @@ export type LiveSetting = (typeof LIVE_SETTINGS)[number];
 export function isLiveSetting(v: string): v is LiveSetting {
   return (LIVE_SETTINGS as readonly string[]).includes(v);
 }
-
-/**
- * The memory `auto` asks of `upgrade`: 16 GB, less what an OS keeps for itself (a 16 GB Linux box
- * reports about 15.5 GiB). Live Nemotron, Parakeet and Qwen hold 10 to 13 GB during a call.
- */
-export const UPGRADE_MIN_BYTES = 15 * 2 ** 30;
 
 export interface LiveSetupInfo {
   title: string;
@@ -168,8 +164,6 @@ export interface LiveSetupContext {
   engine: string;
   /** `asr.languages`. */
   languages: readonly string[];
-  /** Physical memory, bytes. */
-  memoryBytes: number;
   /** Whether a catalog model's files are on disk. */
   present: (id: string) => boolean;
   /** The llama-server build Qwen runs on here, or null for an own llama-server. */
@@ -220,21 +214,14 @@ export function chooseLiveSetup(c: LiveSetupContext): LiveSetupChoice {
     return { setup: "parakeet", choice: null, ...(note ? { note } : {}) };
   };
   if (setting === "parakeet") return { setup: "parakeet", choice: null };
-  if (setting === "nemotron") return fallback();
+  if (setting === "nemotron" || setting === "auto") return fallback();
   const missing = setupModels("upgrade", c).filter((id) => !c.present(id));
   const upgradeWhy =
     missing.length > 0
       ? `the upgrade setup needs ${missing.join(", ")} (\`akou models pull <id>\` or the Models page)`
       : null;
-  if (setting === "upgrade") {
-    if (upgradeWhy === null && stream.choice) return { setup: "upgrade", choice: stream.choice };
-    return fallback(upgradeWhy ?? undefined);
-  }
-  // auto
-  if (upgradeWhy === null && stream.choice && c.memoryBytes >= UPGRADE_MIN_BYTES) {
-    return { setup: "upgrade", choice: stream.choice };
-  }
-  return fallback();
+  if (upgradeWhy === null && stream.choice) return { setup: "upgrade", choice: stream.choice };
+  return fallback(upgradeWhy ?? undefined);
 }
 
 // ---------------------------------------------------------------------------

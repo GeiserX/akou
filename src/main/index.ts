@@ -36,7 +36,6 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { totalmem } from "node:os";
 import { join } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
@@ -287,8 +286,6 @@ export interface AppOptions {
   models?: ModelSpec | null;
   /** Runs the live recognizer on the main thread. Tests only. */
   asrInThread?: boolean;
-  /** Physical memory in bytes, which `asr.live` `auto` reads; by default the machine's. Tests only. */
-  memoryBytes?: number;
   /**
    * The model files `POST /models/pull` fetches and a start requires. Tests pass tiny files on a
    * loopback server; the recognizer is then not restarted after a pull, because they are not models.
@@ -779,7 +776,6 @@ export class AkouApp implements ApiApp {
       setting: setting ?? s["asr.live"],
       engine: s["asr.live.engine"],
       languages: s["asr.languages"],
-      memoryBytes: this.o.memoryBytes ?? totalmem(),
       present: (id) => {
         const m = catalog.find((x) => x.id === id);
         return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
