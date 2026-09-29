@@ -22,10 +22,16 @@
  * below 1 gives the same output: each candidate of a disputed column has one vote, so confidence
  * decides.
  *
- * Words align by a key: NFKC, lowercase, apostrophes and other punctuation removed. A fused word
- * takes its spelling from the earliest engine that wrote it, the highest confidence among those
- * that did, and the first times one of them has. A word that is only punctuation joins the word
- * before it.
+ * Words align by the benchmark's key: NFKC, lowercase, apostrophes removed, other punctuation a
+ * space. A word whose key has several parts ("well-known", "3.5") takes one column per part, as
+ * another engine's "well known" does; the punctuation stays on the part before it, and parts of one
+ * word that all win from the same engine join back into that word. A fused word takes its spelling
+ * from the earliest engine that wrote it, the highest confidence among those that did, and the
+ * first times one of them has. A word that is only punctuation joins the word before it.
+ *
+ * One difference from the benchmark: it gave the default confidence to an engine that reported
+ * none across a whole set; here the rule is per hypothesis, so a unit where a confidence-reporting
+ * engine happens to return none scores its words at the default, not 1.
  */
 
 import type { Provider } from "../llm/provider.ts";
@@ -181,28 +187,76 @@ export function regions(cols: readonly Column[]): Region[] {
   return out;
 }
 
-/** A word's alignment key: NFKC, lowercase, with apostrophes and other punctuation removed. */
+/**
+ * A word's alignment key, the benchmark's `norm`: NFKC, lowercase, apostrophes removed, other
+ * punctuation a space. Several parts are separated by one space.
+ */
 export function wordKey(w: string): string {
   return w
     .normalize("NFKC")
     .toLowerCase()
-    .replace(/[^\p{L}\p{M}\p{N}]/gu, "");
+    .replace(/['’]/g, "")
+    .replace(/[^\p{L}\p{M}\p{N}]+/gu, " ")
+    .trim();
 }
 
-/** A hypothesis's words with keys; a word that is only punctuation joins the word before it. */
-function keyed(h: Hypothesis): WordHyp[] {
-  const out: WordHyp[] = [];
-  let lead = "";
-  for (const word of h.words) {
-    const last = out.at(-1);
-    if (wordKey(word.w) === "") {
-      if (last) last.w = `${last.w} ${word.w}`;
-      else lead = `${lead}${word.w} `;
+/** A character where a word's key splits: punctuation or space, not an apostrophe. */
+const splits = (c: string) => wordKey(c) === "" && !/^['’]+$/.test(c.normalize("NFKC"));
+
+/**
+ * A word's spelling cut where its key splits, the punctuation staying on the piece before the cut
+ * (a leading one on the first piece). When the cuts do not line up with the key's parts, the parts
+ * themselves.
+ */
+function pieces(w: string, keys: readonly string[]): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let cut = false;
+  for (const c of w) {
+    if (splits(c)) {
+      cur += c;
+      cut = wordKey(cur) !== "";
     } else {
-      out.push({ ...word, w: `${lead}${word.w}` });
-      lead = "";
+      if (cut) {
+        out.push(cur);
+        cur = "";
+      }
+      cur += c;
+      cut = false;
     }
   }
+  if (cur) out.push(cur);
+  return out.length === keys.length ? out : [...keys];
+}
+
+/** One key of a hypothesis: the word it spells, and where it came from. */
+interface Keyed {
+  hyp: WordHyp;
+  key: string;
+  /** The word's index in the hypothesis, and which part of its key this is. */
+  src: number;
+  part: number;
+}
+
+/** A hypothesis's keys; a word that is only punctuation joins the word before it. */
+function keyed(h: Hypothesis): Keyed[] {
+  const out: Keyed[] = [];
+  let lead = "";
+  h.words.forEach((word, src) => {
+    const keys = wordKey(word.w).split(" ").filter(Boolean);
+    const last = out.at(-1);
+    if (!keys.length) {
+      if (last) last.hyp.w = `${last.hyp.w} ${word.w}`;
+      else lead = `${lead}${word.w} `;
+      return;
+    }
+    const spelt = pieces(word.w, keys);
+    keys.forEach((key, part) => {
+      const w = `${part === 0 ? lead : ""}${spelt[part] as string}`;
+      out.push({ hyp: { ...word, w }, key, src, part });
+    });
+    lead = "";
+  });
   return out;
 }
 
@@ -228,33 +282,44 @@ export class RoverFuser implements Fuser {
     const t = performance.now();
     const words = hyps.map(keyed);
     const cols = build(
-      words.map((ws) => ({ words: ws.map((x) => wordKey(x.w)), conf: ws.map((x) => x.conf) })),
+      words.map((ws) => ({ words: ws.map((x) => x.key), conf: ws.map((x) => x.hyp.conf) })),
     );
     const defaultConf = words.map((ws) =>
-      ws.some((x) => x.conf !== undefined) ? 1 : this.params.defaultConf,
+      ws.some((x) => x.hyp.conf !== undefined) ? 1 : this.params.defaultConf,
     );
-    const fused: WordHyp[] = [];
+    const fused: { hyp: WordHyp; e: number; src: number; part: number }[] = [];
     vote(cols, this.params, defaultConf).forEach((s, k) => {
       if (s < 0) return;
       const col = cols[k] as Column;
       const key = col[s]?.w;
       const from = col.flatMap((x, e) =>
-        x.w === key ? [(words[e] as WordHyp[])[x.i] as WordHyp] : [],
+        x.w === key ? [(words[e] as Keyed[])[x.i] as Keyed] : [],
       );
-      const word: WordHyp = { w: (from[0] as WordHyp).w };
-      const confs = from.flatMap((x) => (x.conf === undefined ? [] : [x.conf]));
+      const head = from[0] as Keyed;
+      const word: WordHyp = { w: head.hyp.w };
+      const confs = from.flatMap((x) => (x.hyp.conf === undefined ? [] : [x.hyp.conf]));
       if (confs.length) word.conf = Math.max(...confs);
-      const timed = from.find((x) => x.t0 !== undefined && x.t1 !== undefined);
+      const timed = from.find((x) => x.hyp.t0 !== undefined && x.hyp.t1 !== undefined);
       if (timed) {
-        word.t0 = timed.t0;
-        word.t1 = timed.t1;
+        word.t0 = timed.hyp.t0;
+        word.t1 = timed.hyp.t1;
       }
-      fused.push(word);
+      const prev = fused.at(-1);
+      if (prev && prev.e === s && prev.src === head.src && prev.part + 1 === head.part) {
+        // The next part of the same word from the same engine: join it back.
+        prev.hyp.w += word.w;
+        if (word.conf !== undefined) prev.hyp.conf = Math.min(prev.hyp.conf ?? 1, word.conf);
+        if (word.t0 !== undefined) {
+          prev.hyp.t0 ??= word.t0;
+          prev.hyp.t1 = word.t1;
+        }
+        prev.part = head.part;
+      } else fused.push({ hyp: word, e: s, src: head.src, part: head.part });
     });
     const out: Hypothesis = {
       engine: `${this.id}(${hyps.map((h) => h.engine).join(",")})`,
-      text: fused.map((x) => x.w).join(" "),
-      words: fused,
+      text: fused.map((x) => x.hyp.w).join(" "),
+      words: fused.map((x) => x.hyp),
       ms: performance.now() - t,
     };
     const lang = hyps.find((h) => h.lang)?.lang;

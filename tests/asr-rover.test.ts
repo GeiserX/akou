@@ -226,6 +226,52 @@ describe("ASR-3: spelling, confidence and times of the fused words", () => {
     expect(new RoverFuser().fuseSync([a, b, c]).text).toBe("— yes — no");
   });
 
+  test("a word that agrees takes the highest confidence and the earliest engine's times", () => {
+    const q = hyp("q", [{ w: "yes", conf: 0.6, t0: 1, t1: 2 }]);
+    const p = hyp("p", [{ w: "yes", conf: 0.9, t0: 3, t1: 4 }]);
+    expect(new RoverFuser().fuseSync([q, p]).words).toEqual([
+      { w: "yes", conf: 0.9, t0: 1, t1: 2 },
+    ]);
+  });
+
+  test("a word the benchmark's key splits aligns part by part, and never repeats", () => {
+    expect(wordKey("well-known,")).toBe("well known");
+    expect(wordKey("rock'n'roll")).toBe("rocknroll");
+    const fuse = (...hs: Hypothesis[]) => new RoverFuser().fuseSync(hs);
+    const q = hyp("q", [{ w: "a" }, { w: "well-known" }, { w: "b" }]);
+    const p = hyp("p", [
+      { w: "a", conf: 0.9 },
+      { w: "well", conf: 0.9, t0: 1, t1: 1.2 },
+      { w: "known", conf: 0.6, t0: 1.2, t1: 1.5 },
+      { w: "b", conf: 0.9 },
+    ]);
+    // Both parts win with Q's spelling, so they join back into Q's word.
+    expect(fuse(q, p).words).toEqual([
+      { w: "a", conf: 0.9 },
+      { w: "well-known", conf: 0.6, t0: 1, t1: 1.5 },
+      { w: "b", conf: 0.9 },
+    ]);
+    expect(fuse(p, q).text).toBe("a well known b");
+    expect(
+      fuse(hyp("q", [{ w: "follow-up." }]), hyp("p", [{ w: "follow" }, { w: "up" }])).text,
+    ).toBe("follow-up.");
+    const grew = (w: string[]) =>
+      hyp(
+        "x",
+        w.map((x) => ({ w: x })),
+      );
+    expect(fuse(grew(["grew", "3.5", "percent"]), grew(["grew", "3", "5", "percent"])).text).toBe(
+      "grew 3.5 percent",
+    );
+    expect(fuse(grew(["—", "well-known"]), grew(["well", "known"])).text).toBe("— well-known");
+    // A part another engine wins splits the word, and its punctuation stays on the left part.
+    const shown = hyp("p", [
+      { w: "well", conf: 0.9 },
+      { w: "shown", conf: 0.9 },
+    ]);
+    expect(fuse(hyp("q", [{ w: "well-known" }]), shown).text).toBe("well- shown");
+  });
+
   test("a word with no confidence from an engine that reports them votes at 1, not the default", () => {
     // Q's "yes" carries no confidence while its other words do, so it scores 1 and beats P's 0.8;
     // at the default 0.7 it would lose.
