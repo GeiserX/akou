@@ -99,7 +99,10 @@ export interface SegState {
   w1: number;
   /** Current text; null when retracted. */
   text: string | null;
-  /** The recognizer's text, from revision 1. Never changed by edits or corrections. */
+  /**
+   * The recognizer's text: revision 1's, or a later revision's with no author (the in-call upgrade
+   * rewriting a live line). Never changed by edits or corrections.
+   */
   recognized: string | null;
   lang?: string;
   model: string;
@@ -706,6 +709,7 @@ export class CallView {
     if (e.w0 !== undefined) cur.w0 = e.w0;
     if (e.w1 !== undefined) cur.w1 = e.w1;
     if (e.text !== undefined) cur.text = e.text;
+    if (e.text !== undefined && e.by === undefined && cur.by === undefined) cur.recognized = e.text;
     if (e.lang !== undefined) cur.lang = e.lang;
     if (e.lang) this.langs.add(e.lang);
     if (e.model !== undefined) cur.model = e.model;

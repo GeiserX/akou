@@ -10,6 +10,14 @@
  * model not downloaded), steps 1 to 4 below re-decode VAD windows with the offline recognizer.
  * Speakers (step 5) are the same on both.
  *
+ * The `upgrade` setup (live-setups.ts, ASR-7) rewrites each streaming line twice during the call,
+ * as new revisions of the same `seg`: the Worker decodes the line's audio with Parakeet as soon as
+ * the line is written (rev 2, about 0.2 s), and the host sends that audio to Qwen and writes the
+ * confidence vote of Qwen and Parakeet (rev 3, 1.5 to 2.5 s). A word shown is never taken back
+ * while its line is open; the upgrade replaces the whole closed line. A line a person edited or
+ * retracted keeps their text, an empty answer changes nothing, and nothing is written after the
+ * call's `call.ended`: an answer that comes later is dropped, and the final pass covers it.
+ *
  * Per channel, in the Worker (`LivePipeline`):
  * 1. **Segment** with Silero VAD. A segment closes after `segmentPause` (0.7 s) of no speech or at
  *    `segmentWindow` (12 s) of unbroken speech. VAD only cuts the live transcript; it never decides
@@ -55,6 +63,7 @@ import type { MergedEntry } from "../vocab/files.ts";
 import {
   ASR_RATE,
   type Embedder,
+  type Hypothesis,
   type LiveEngine,
   loadModelSet,
   type ModelSet,
@@ -69,6 +78,7 @@ import type { LiveChoice } from "./live-engines.ts";
 import { StreamChannel, type StreamLine } from "./live-stream.ts";
 import { RECOGNIZER } from "./models.ts";
 import { prepareSpan } from "./pad.ts";
+import { RoverFuser } from "./rover.ts";
 import { siblingModule } from "./sibling.ts";
 import {
   highestLabel,
@@ -118,7 +128,10 @@ export type LiveOut =
       spk: string;
       model: string;
       lang?: string;
+      /** The line's key within the Worker, for the upgrade's revisions of it. */
+      key?: number;
     }
+  | UpgradeOut
   | { type: "provisional"; part: number; ch: Channel; pseq: number; a0: number; text: string }
   | { type: "progress"; part: number; ch: Channel; pos: number }
   | {
@@ -131,6 +144,19 @@ export type LiveOut =
     }
   | SpeakerEvent
   | { type: "log"; level: "info" | "warn" | "error"; msg: string };
+
+/** Parakeet's rewrite of a written streaming line (the `upgrade` setup): its next revision. */
+export interface UpgradeOut {
+  type: "upgrade";
+  /** The `key` of the line's `seg`. */
+  key: number;
+  text: string;
+  model: string;
+  lang?: string;
+  words: WordHyp[];
+  /** The line's audio, gained and padded as Parakeet took it: what Qwen decodes next. */
+  samples: Float32Array;
+}
 
 /**
  * A dictation's buffer decoded whole on the loaded recognizer (docs/ux/DICTATION.md DC-E1). Word
@@ -294,6 +320,12 @@ export class LivePipeline {
   private dictationVad: Vad | null = null;
   /** The call's streaming engine, or null for VAD windows re-decoded by the recognizer. */
   private engine: LiveEngine | null = null;
+  /** The call runs the `upgrade` setup: each streaming line is decoded again by Parakeet. */
+  private upgrade = false;
+  /** The last line key given out; keys never repeat within a Worker. */
+  private lineKey = 0;
+  /** Upgrades of lines still waiting for their speaker label, sent right after their `seg`. */
+  private readonly heldUpgrades = new Map<number, UpgradeOut>();
 
   constructor(
     private readonly models: ModelSet,
@@ -338,7 +370,11 @@ export class LivePipeline {
    * the last one its final words.
    */
   async beginCall(
-    state: Parameters<LiveSpeakers["restore"]>[0] & { ids?: string[]; live?: LiveChoice },
+    state: Parameters<LiveSpeakers["restore"]>[0] & {
+      ids?: string[];
+      live?: LiveChoice;
+      upgrade?: boolean;
+    },
   ): Promise<void> {
     let open = false;
     for (const st of this.chans.values()) {
@@ -354,6 +390,7 @@ export class LivePipeline {
     for (const id of state.ids ?? []) this.speakers.noteId(id);
     for (const st of this.chans.values()) this.resetChannel(st, null, 0);
     this.startEngine(state.live);
+    this.upgrade = this.engine !== null && state.upgrade === true;
     // The new call's stream starts afresh: its speakers take the call's labels by centroid, or
     // the numbers after every label the call already has (a Worker that took over a call mid-way
     // has lost the old stream's speaker state).
@@ -660,21 +697,55 @@ export class LivePipeline {
     if (keep !== null) st.audio.trimTo(keep);
   }
 
-  /** Writes the lines the stream closed. */
+  /** Writes the lines the stream closed, and on the `upgrade` setup Parakeet's rewrite of each. */
   private lines(st: ChannelState, lines: readonly StreamLine[]): void {
     const model = this.engine?.id ?? this.models.recognizerModel;
     for (const l of lines) {
       st.shown = "";
       if (l.to <= l.from) continue;
-      this.emitLine(st, l.part, l.from, l.to, st.audio.slice(l.from, l.to), {
-        text: l.text,
-        model,
-      });
+      const samples = st.audio.slice(l.from, l.to);
+      const key = this.emitLine(st, l.part, l.from, l.to, samples, { text: l.text, model });
+      if (key !== null && this.upgrade) this.upgradeLine(key, samples);
     }
     st.inSpeech = st.live?.open() != null;
   }
 
-  /** One closed line: labelled, or held for the stream diarizer's decision on its audio. */
+  /**
+   * Parakeet's decode of a written line, sent as its next revision right after the line's `seg`
+   * (held with it while the stream diarizer decides its speaker). Its audio goes along for Qwen.
+   */
+  private upgradeLine(key: number, samples: Float32Array): void {
+    let u: UpgradeOut;
+    try {
+      const h = this.hot();
+      const prepared = prepareSpan(samples);
+      const r = h.recognizer.decode(prepared, streamHotwords(h));
+      const text = r.text.trim();
+      u = {
+        type: "upgrade",
+        key,
+        text,
+        model: h.recognizer.model,
+        words: r.words ?? text.split(/\s+/).flatMap((w) => (w ? [{ w }] : [])),
+        samples: prepared,
+        ...(r.lang ? { lang: r.lang } : {}),
+      };
+    } catch (err) {
+      this.emit({
+        type: "log",
+        level: "error",
+        msg: `live upgrade: ${this.models.recognizerModel} failed on a line (${(err as Error).message}); it keeps the streaming text`,
+      });
+      return;
+    }
+    if (this.pending.some((p) => p.seg.key === key)) this.heldUpgrades.set(key, u);
+    else this.emit(u);
+  }
+
+  /**
+   * One closed line: labelled, or held for the stream diarizer's decision on its audio. Answers
+   * the line's key, or null when it has no text and nothing is written.
+   */
   private emitLine(
     st: ChannelState,
     part: number,
@@ -682,10 +753,11 @@ export class LivePipeline {
     to: number,
     samples: Float32Array,
     r: { text: string; lang?: string; model: string },
-  ): void {
-    if (r.text === "") return;
+  ): number | null {
+    if (r.text === "") return null;
     const a0 = from / ASR_RATE;
     const a1 = to / ASR_RATE;
+    const key = ++this.lineKey;
     if (st.ch === "call" && this.labels === "stream") {
       const seg = {
         type: "seg" as const,
@@ -695,6 +767,7 @@ export class LivePipeline {
         a1,
         text: r.text,
         model: r.model,
+        key,
         ...(r.lang ? { lang: r.lang } : {}),
       };
       const s = this.stream && !this.stream.dead ? this.stream : null;
@@ -712,7 +785,7 @@ export class LivePipeline {
         emb,
       });
       this.drain(false);
-      return;
+      return key;
     }
     let spk = "you";
     if (st.ch === "call") {
@@ -732,12 +805,14 @@ export class LivePipeline {
       text: r.text,
       spk,
       model: r.model,
+      key,
       ...(r.lang ? { lang: r.lang } : {}),
     });
     if (st.ch === "call") {
       for (const m of this.speakers.merges()) this.emit(m);
       for (const c of this.speakers.centroids(this.now())) this.emit(c);
     }
+    return key;
   }
 
   /**
@@ -864,6 +939,11 @@ export class LivePipeline {
       this.pending.shift();
       if (p.emb && spk !== "c?") this.speakers.addTo(spk, p.emb);
       this.emit({ ...p.seg, spk });
+      const u = p.seg.key === undefined ? undefined : this.heldUpgrades.get(p.seg.key);
+      if (u) {
+        this.heldUpgrades.delete(u.key);
+        this.emit(u);
+      }
       for (const c of this.speakers.centroids(this.now())) this.emit(c);
     }
     const s = this.stream;
@@ -973,6 +1053,8 @@ export type ToWorker =
       ids: string[];
       /** The call's streaming engine; absent for VAD windows re-decoded by the recognizer. */
       live?: LiveChoice;
+      /** The call runs the `upgrade` setup: Parakeet rewrites each streaming line. */
+      upgrade?: boolean;
     }
   | { type: "decode-list"; list: DecodeList | null; version: number }
   | {
@@ -1179,6 +1261,11 @@ export interface LiveAsrOptions {
    * applies from the next call. Null or absent: VAD windows re-decoded by the recognizer.
    */
   liveEngine?(callId: string): LiveChoice | null;
+  /**
+   * The in-call upgrade of a call that runs the `upgrade` setup, asked once per call after
+   * `liveEngine`; null or absent for any other setup.
+   */
+  upgrade?(callId: string): LineUpgrader | null;
   /** Backlog levels that write `asr.lag`, seconds. */
   lagLevels?: readonly number[];
   /** Audio in flight to the Worker per channel, seconds; the rest waits in the ingest queue. */
@@ -1192,6 +1279,39 @@ export interface LiveAsrOptions {
 interface Transport {
   post(m: ToWorker, transfer?: ArrayBuffer[]): void;
   close(): void;
+}
+
+/** Qwen for the in-call upgrade: one closed line's audio, gained and padded, to its hypothesis. */
+export interface LineUpgrader {
+  decode(
+    samples: Float32Array,
+    o: { glossary: readonly string[]; signal: AbortSignal },
+  ): Promise<Hypothesis>;
+}
+
+/**
+ * Lines waiting for Qwen per call. Past this the oldest waiting line keeps Parakeet's text, so a
+ * slow Qwen upgrades the newest lines instead of falling further behind.
+ */
+export const UPGRADE_QUEUE_MAX = 6;
+
+/** The in-call vote of Qwen and Parakeet (docs/research/asr-architecture.md section 3.2). */
+const UPGRADE_FUSER = new RoverFuser("rover-conf");
+
+/** An upgrading call's state on the host. */
+interface HostUpgrade {
+  qwen: LineUpgrader;
+  /** Its written lines by the key the Worker gave them, until their Parakeet revision comes. */
+  keys: Map<number, string>;
+  /** Lines waiting for Qwen, oldest first, each with Parakeet's hypothesis. */
+  waiting: { id: string; samples: Float32Array; parakeet: Hypothesis }[];
+  busy: boolean;
+  /** Aborted at `call.ended`: the request in flight is given up. */
+  ended: AbortController;
+  /** The call's decode list as Qwen's glossary. */
+  glossary: string[];
+  /** The last Qwen failure logged, so a failing server is logged once, not per line. */
+  failed: string;
 }
 
 interface HostCall {
@@ -1214,6 +1334,8 @@ interface HostCall {
   superseded: boolean;
   /** The call's streaming engine, asked once: a Worker that takes the call over keeps it. */
   live?: LiveChoice | null;
+  /** The call's in-call upgrade, asked once with the engine; null for any other setup. */
+  upgrade?: HostUpgrade | null;
 }
 
 /** A Worker that dies is replaced at most this many times in `RESPAWN_WINDOW_MS`. */
@@ -1440,6 +1562,7 @@ export class LiveAsr {
         // Its open lines were flushed before this event; anything later is dropped.
         this.calls.delete(callId);
         if (isCurrent) this.current = null;
+        this.endUpgrade(c);
         break;
       default:
         break;
@@ -1463,6 +1586,7 @@ export class LiveAsr {
   /** Stops the Worker. */
   async close(): Promise<void> {
     this.closed = true;
+    for (const c of this.calls.values()) this.endUpgrade(c);
     this.transport.close();
     for (const done of this.flushes.values()) done();
     this.flushes.clear();
@@ -1515,12 +1639,29 @@ export class LiveAsr {
       .map((l) => l.spkRaw);
     if (c.live === undefined) c.live = this.o.liveEngine?.(c.id) ?? null;
     const live = c.live;
+    if (c.upgrade === undefined) {
+      const qwen = live ? (this.o.upgrade?.(c.id) ?? null) : null;
+      c.upgrade = qwen
+        ? {
+            qwen,
+            keys: new Map(),
+            waiting: [],
+            busy: false,
+            ended: new AbortController(),
+            glossary: [],
+            failed: "",
+          }
+        : null;
+    }
+    // A Worker taking the call over numbers its lines afresh.
+    c.upgrade?.keys.clear();
     this.transport.post({
       type: "call",
       id: c.id,
       ...view.speakerState(),
       ids: spks,
       ...(live ? { live } : {}),
+      ...(c.upgrade ? { upgrade: true } : {}),
     });
     c.listKey = "";
     this.sendDecodeList(c);
@@ -1536,6 +1677,7 @@ export class LiveAsr {
     if (key === c.listKey) return;
     c.listKey = key;
     c.version++;
+    if (c.upgrade) c.upgrade.glossary = list.entries.map((e) => e.term);
     for (const w of list.warnings) this.log("warn", w);
     this.transport.post({ type: "decode-list", list, version: c.version });
   }
@@ -1646,6 +1788,9 @@ export class LiveAsr {
         });
         return;
       }
+      case "upgrade":
+        if (c) this.upgradeLine(c, m);
+        return;
       case "seg":
         if (c) this.writeSeg(c, m);
         else {
@@ -1708,6 +1853,94 @@ export class LiveAsr {
     }
     c.nextLive++;
     c.access.view.provisional.commit(m.ch, w1);
+    if (c.upgrade && m.key !== undefined) c.upgrade.keys.set(m.key, id);
+  }
+
+  // --- the in-call upgrade ------------------------------------------------------------------
+
+  /** Parakeet's rewrite of a written line: its next revision, then the line waits for Qwen. */
+  private upgradeLine(c: HostCall, m: UpgradeOut): void {
+    const u = c.upgrade;
+    const id = u?.keys.get(m.key);
+    if (!u || !id) return;
+    u.keys.delete(m.key);
+    const parakeet: Hypothesis = {
+      engine: m.model,
+      text: m.text,
+      words: m.words,
+      ms: 0,
+      ...(m.lang ? { lang: m.lang } : {}),
+    };
+    if (!this.revise(c, id, parakeet)) return;
+    u.waiting.push({ id, samples: m.samples, parakeet });
+    if (u.waiting.length > UPGRADE_QUEUE_MAX) {
+      const late = u.waiting.shift();
+      this.log("warn", `live upgrade: Qwen is behind; line ${late?.id} keeps Parakeet's text`);
+    }
+    void this.runQwen(c, u);
+  }
+
+  /** Decodes the waiting lines with Qwen, one at a time, and writes each one's vote. */
+  private async runQwen(c: HostCall, u: HostUpgrade): Promise<void> {
+    if (u.busy) return;
+    u.busy = true;
+    try {
+      for (;;) {
+        const job = u.waiting.shift();
+        if (!job || u.ended.signal.aborted) break;
+        let qwen: Hypothesis;
+        try {
+          qwen = await u.qwen.decode(job.samples, {
+            glossary: u.glossary,
+            signal: u.ended.signal,
+          });
+        } catch (err) {
+          const why = (err as Error).message;
+          if (!u.ended.signal.aborted && why !== u.failed) {
+            u.failed = why;
+            this.log("warn", `live upgrade: Qwen failed (${why}); lines keep Parakeet's text`);
+          }
+          continue;
+        }
+        u.failed = "";
+        // Qwen first: engine order breaks ties, as in the benchmark's ROVER(Q,P).
+        this.revise(c, job.id, UPGRADE_FUSER.fuseSync([qwen, job.parakeet]));
+      }
+    } finally {
+      u.busy = false;
+    }
+  }
+
+  /**
+   * Writes a hypothesis as the next revision of live line `id`. False when the line may take no
+   * more: its call has ended, or a person edited or retracted it. An empty hypothesis changes
+   * nothing and leaves the line open to the next stage.
+   */
+  private revise(c: HostCall, id: string, h: Hypothesis): boolean {
+    if (this.calls.get(c.id) !== c) {
+      this.log("warn", `live upgrade of ${id} dropped: its call has ended`);
+      return false;
+    }
+    const seg = c.access.view.segment(id);
+    if (!seg || seg.text === null || seg.by !== undefined) return false;
+    const text = h.text.trim();
+    if (text === "") return true;
+    const e = c.access.record({
+      type: "seg",
+      id,
+      rev: seg.rev + 1,
+      text,
+      model: h.engine,
+      ...(h.lang ? { lang: h.lang } : {}),
+    });
+    return e !== null;
+  }
+
+  /** The call ended: the Qwen request in flight is given up and nothing waiting is decoded. */
+  private endUpgrade(c: HostCall): void {
+    if (!c.upgrade) return;
+    c.upgrade.ended.abort();
+    c.upgrade.waiting.length = 0;
   }
 }
 

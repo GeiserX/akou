@@ -203,6 +203,16 @@ When the upgraded line lands, alone on the M4, first 80 utterances: Parakeet 0.1
 
 Memory while a call runs: live 2.25 GB, Parakeet 2.7 GB, and Qwen (MLX peaked at 7.8 GB in the benchmark; llama-server Q8_0 sat at 4.9 to 5.2 GB on Linux), about 10 to 13 GB in all. That needs a memory guard (`asr.memoryBudgetMb`, section 6), and it is why the upgrade is a setting.
 
+**Built (ASR-7).** The `upgrade` setup of `asr.live` runs it, in `src/main/asr/live-worker.ts`:
+
+- The line the streaming cutter closes (0.7 s gap or 12 s, section 3.1) is the utterance; there is no second segmenter.
+- The live Worker decodes the line's audio with Parakeet, gained and padded by `prepareSpan`, right after the line is written, and sends it as the line's next revision. A call line waiting for its speaker label gets its rewrite right after it, never before.
+- The host sends the same audio to Qwen, one line at a time, with the call's decode list as the glossary and `asr.languages` as the language (forced when it names one), and writes `ROVER(Qwen, Parakeet)` as the revision after that, `model: rover-conf(qwen3-asr-1.7b,<parakeet>)`. Qwen comes first, so it breaks ties. A reader following the call (`akou_read`) gets the line again with its new text and model.
+- At most 6 lines wait for Qwen; past that the oldest keeps Parakeet's text, so a slow Qwen upgrades the newest lines instead of falling behind. A request past 30 s, or a Qwen that fails, leaves the line with Parakeet's text, and the failure is logged once.
+- A line a person edited or retracted keeps their text. A hypothesis with no words changes nothing. `call.ended` gives up the request in flight and anything that answers later is dropped, since the final pass covers the call.
+- Qwen runs on the llama-server dictation keeps warm when there is one, so one Qwen serves both. Otherwise the upgrade starts its own, which gives way to a final pass on Metal instead of stopping it, and stops when its call ends.
+- The upgrade has no key of its own (`asr.live.upgrade` in the plan): it is the `upgrade` value of `asr.live`.
+
 An LLM per utterance was measured on 20 utterances per set: −1 to −6 errors against ROVER(Q,P) with Opus, +4 / −2 with Sonnet, 3 to 13 s of extra wall time, $0.009 per utterance. The sample is too small to show a gain, and the LLM is too slow for the live view. It is not in the design.
 
 ## 4. Final pass: default engines and what N engines buy
@@ -270,7 +280,7 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | Key | Values | Default | Measured basis |
 |---|---|---|---|
 | `asr.language` | `auto`, an ISO code, or a list (the languages Qwen may choose from) | `auto`. A user who speaks English and Spanish sets `["en","es"]` | `lidc` −0.26 on edacc; forced `es` on code-switched clips 8.06 against 10.34 |
-| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `upgrade` on 16 GB or more with its models downloaded, else `nemotron` when its model is downloaded, else `parakeet`; never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; `upgrade` is listed as not built until ASR-7, and a call asked for it runs `nemotron` |
+| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `upgrade` on 16 GB or more with its models downloaded, else `nemotron` when its model is downloaded, else `parakeet`; never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; the upgrade itself (ASR-7) in `src/main/asr/live-worker.ts` |
 | `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120` (`kroko-es` later) | `auto` (by language, section 3.1) | Live table |
 | `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4 |
 | `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5 |
