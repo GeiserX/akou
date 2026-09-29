@@ -26,18 +26,23 @@ import {
   NOTICE_MS,
   type PillDictation,
   type PillSend,
+  PRESS_MS,
   pillRpc,
   settledWords,
 } from "../src/main/window/pill.ts";
 import {
   appForShell,
+  areaOf,
   DRAFT_SIZE,
   type NativeUi,
   PILL_SIZE,
+  type PillPlace,
   type PillStyle,
+  pillPlaces,
   placeDraft,
   placePill,
   type Rect,
+  rememberPill,
   Shell,
   type ShellApp,
   type ShellState,
@@ -739,6 +744,88 @@ describe("akou-5v8: the language chip on the listening island", () => {
   });
 });
 
+describe("DC-O1: the island at rest from the key-down", () => {
+  /** The pill with a `place` that records where the shell was asked to move it. */
+  function placed() {
+    const f = fakeDictation();
+    const r = recorder();
+    const t = manualLater();
+    const visible: boolean[] = [];
+    const moves: unknown[] = [];
+    const p = pillRpc(f.d, () => r.send, {
+      platform: "darwin",
+      hotkey: () => "RightCommand",
+      label: hotkeyLabel,
+      now: () => 1000,
+      onVisible: (v) => visible.push(v),
+      preview: { setting: () => false },
+      later: t.later,
+      place: (frame) => moves.push({ frame, showing: visible.at(-1) === true }),
+    });
+    cleanups.push(() => p.close());
+    const to = (state: string) => {
+      f.st.state = state;
+      p.update();
+    };
+    return { ...f, ...r, t, p, visible, moves, to };
+  }
+  const FRAME = { x: 1600, y: 200, width: 900, height: 700 };
+
+  test("a key-down shows the dot, placed first, and the session takes the island from it", () => {
+    const f = placed();
+    f.tell({ kind: "press", on: true, frame: FRAME });
+    expect(f.moves).toEqual([{ frame: FRAME, showing: false }]);
+    expect(f.states()).toEqual([{ state: "pressed" }]);
+    expect(f.visible.at(-1)).toBe(true);
+    // The session's changes while the press settles do not take the dot down.
+    f.to("idle");
+    expect(f.states().at(-1)).toEqual({ state: "pressed" });
+    f.to("listening");
+    expect(f.states().at(-1)).toMatchObject({ state: "listening" });
+    // Its own timer is gone with it: listening stays past it.
+    expect(f.t.pending()).toEqual([]);
+  });
+
+  test("a dropped press hides the dot, and nothing else", () => {
+    const f = placed();
+    f.tell({ kind: "press", on: true, frame: null });
+    expect(f.moves).toEqual([{ frame: null, showing: false }]);
+    f.tell({ kind: "press", on: false, frame: null });
+    expect(f.states().at(-1)).toEqual({ state: "hidden" });
+    expect(f.visible.at(-1)).toBe(false);
+    // Positive control: a press off while a session listens leaves the session's island alone.
+    f.to("listening");
+    f.tell({ kind: "press", on: false, frame: null });
+    expect(f.states().at(-1)).toMatchObject({ state: "listening" });
+  });
+
+  test("a dot with nothing after it goes after PRESS_MS", () => {
+    const f = placed();
+    f.tell({ kind: "press", on: true, frame: null });
+    expect(f.t.pending()).toEqual([PRESS_MS]);
+    f.t.run(PRESS_MS);
+    expect(f.states().at(-1)).toEqual({ state: "hidden" });
+    expect(f.visible.at(-1)).toBe(false);
+  });
+
+  test("a press takes the island from an outcome, never from a session", () => {
+    const f = placed();
+    f.to("listening");
+    spoken(f, "d1");
+    f.to("transcribing");
+    f.tell({ kind: "press", on: true, frame: FRAME });
+    expect(f.states().at(-1)).toMatchObject({ state: "transcribing" });
+    expect(f.moves).toEqual([]);
+    f.event({ type: "dictation.inserted", id: "d1", method: "paste", receipt_ms: 5 });
+    f.to("idle");
+    expect(f.states().at(-1)).toEqual({ state: "done", how: "inserted" });
+    f.tell({ kind: "press", on: true, frame: FRAME });
+    expect(f.states().at(-1)).toEqual({ state: "pressed" });
+    // The outcome's timer no longer hides the island; the press's own does.
+    expect(f.t.pending()).toEqual([PRESS_MS]);
+  });
+});
+
 describe("DC-O1: the pill's window", () => {
   const AREAS: Rect[] = [
     { x: 0, y: 25, width: 1440, height: 850 },
@@ -748,16 +835,29 @@ describe("DC-O1: the pill's window", () => {
   test("each edge centres it on that side of the primary work area", () => {
     const { width, height } = PILL_SIZE;
     const cx = (1440 - width) / 2;
-    expect(placePill({}, "bottom", AREAS)).toEqual({ x: cx, y: 875 - height - 24, width, height });
+    expect(placePill([], "bottom", AREAS)).toEqual({ x: cx, y: 875 - height - 24, width, height });
     // The island sits right under the menu bar, where a notch would be.
-    expect(placePill({}, "top", AREAS)).toEqual({ x: cx, y: 25 + 4, width, height });
+    expect(placePill([], "top", AREAS)).toEqual({ x: cx, y: 25 + 4, width, height });
     const cy = 25 + (850 - height) / 2;
-    expect(placePill({}, "left", AREAS)).toEqual({ x: 24, y: cy, width, height });
-    expect(placePill({}, "right", AREAS)).toEqual({ x: 1440 - width - 24, y: cy, width, height });
+    expect(placePill([], "left", AREAS)).toEqual({ x: 24, y: cy, width, height });
+    expect(placePill([], "right", AREAS)).toEqual({ x: 1440 - width - 24, y: cy, width, height });
+  });
+
+  test("on another display it centres on that display's edge; a display gone means the primary", () => {
+    const { width, height } = PILL_SIZE;
+    const second = AREAS[1] as Rect;
+    expect(placePill([], "top", AREAS, second)).toEqual({
+      x: 1440 + (1920 - width) / 2,
+      y: 4,
+      width,
+      height,
+    });
+    const gone = { x: 5000, y: 0, width: 800, height: 600 };
+    expect(placePill([], "top", AREAS, gone)).toEqual(placePill([], "top", AREAS));
   });
 
   test("the draft box drops from the island: its own island where the pill's is, at the top centre", () => {
-    const pill = placePill({}, "top", AREAS);
+    const pill = placePill([], "top", AREAS);
     const draft = placeDraft(AREAS);
     expect(draft).toEqual({
       x: (1440 - DRAFT_SIZE.width) / 2,
@@ -769,33 +869,67 @@ describe("DC-O1: the pill's window", () => {
     expect(draft.x + draft.width / 2).toBe(pill.x + pill.width / 2);
   });
 
-  test("a dragged place is kept on its edge, pulled onto a display, and dropped for another edge", () => {
-    const dragged = { x: 2000, y: 600, width: 1, height: 1 };
+  test("a dragged place is kept for its display and edge only, and pulled whole onto that display", () => {
     const { width, height } = PILL_SIZE;
-    expect(placePill({ frame: dragged, edge: "bottom" }, "bottom", AREAS)).toEqual({
-      x: 2000,
-      y: 600,
-      width,
-      height,
-    });
-    // Off every display: back onto the primary, whole.
-    expect(placePill({ frame: { ...dragged, x: 9000 }, edge: "bottom" }, "bottom", AREAS).x).toBe(
-      1440 - width,
+    const second = AREAS[1] as Rect;
+    const dragged = { x: 2000, y: 600, width, height };
+    const places = rememberPill([], "bottom", dragged, AREAS);
+    expect(places).toEqual([{ edge: "bottom", area: second, frame: dragged }]);
+    expect(placePill(places, "bottom", AREAS, second)).toEqual(dragged);
+    // The primary keeps its own default, and another edge its own.
+    expect(placePill(places, "bottom", AREAS)).toEqual(placePill([], "bottom", AREAS));
+    expect(placePill(places, "top", AREAS, second)).toEqual(placePill([], "top", AREAS, second));
+    // A place half off its display comes back whole onto it.
+    const past = rememberPill([], "bottom", { ...dragged, x: 3300 }, AREAS);
+    expect(placePill(past, "bottom", AREAS, second).x).toBe(1440 + 1920 - width);
+    // A second drag on the same display replaces the first; the other display's place stays.
+    const both = rememberPill(
+      rememberPill(places, "bottom", { x: 100, y: 300, width, height }, AREAS),
+      "bottom",
+      { ...dragged, x: 2100 },
+      AREAS,
     );
-    expect(placePill({ frame: dragged, edge: "bottom" }, "top", AREAS)).toEqual(
-      placePill({}, "top", AREAS),
-    );
+    expect(both.map((p) => [p.area.x, p.frame.x])).toEqual([
+      [0, 100],
+      [1440, 2100],
+    ]);
   });
 
-  test("the shell's state file keeps the dragged place and its edge", () => {
+  test("the display of a window: the one it overlaps most, else the nearest", () => {
+    expect(areaOf({ x: 1300, y: 100, width: 400, height: 300 }, AREAS)).toEqual(AREAS[1]);
+    expect(areaOf({ x: 1000, y: 100, width: 400, height: 300 }, AREAS)).toEqual(AREAS[0]);
+    // Only the menu bar strip, outside the primary's work area: still the primary.
+    expect(areaOf({ x: 100, y: 0, width: 300, height: 20 }, AREAS)).toEqual(AREAS[0]);
+    expect(areaOf({ x: 9000, y: 100, width: 10, height: 10 }, AREAS)).toEqual(AREAS[1]);
+    expect(areaOf({ x: 0, y: 0, width: 10, height: 10 }, [])).toBeUndefined();
+  });
+
+  test("the shell's state file keeps a place per display, and reads the single place of before", () => {
     const t = tempDir("akou-pill-state-");
     cleanups.push(t.cleanup);
     const store = fileState(t.dir);
-    const s: ShellState = { pill: { x: 1, y: 2, width: 3, height: 4 }, pillEdge: "top" };
-    store.save(s);
-    expect(store.load()).toEqual(s);
+    const place: PillPlace = {
+      edge: "top",
+      area: AREAS[1] as Rect,
+      frame: { x: 2000, y: 4, width: 480, height: 200 },
+    };
+    store.save({ pillPlaces: [place] });
+    expect(store.load()).toEqual({ pillPlaces: [place] });
+    // A place missing a part is dropped alone.
+    writeFileSync(
+      join(t.dir, "shell.json"),
+      JSON.stringify({ pillPlaces: [place, { edge: "top", frame: place.frame }] }),
+    );
+    expect(store.load()).toEqual({ pillPlaces: [place] });
+    // The single place of before is read as the place on the display it overlaps.
+    const old: ShellState = { pill: { x: 2000, y: 600, width: 480, height: 200 }, pillEdge: "top" };
+    store.save(old);
+    expect(store.load()).toEqual(old);
+    expect(pillPlaces(old, AREAS)).toEqual([
+      { edge: "top", area: AREAS[1] as Rect, frame: { x: 2000, y: 600, width: 480, height: 200 } },
+    ]);
     // A place without its edge is not trusted.
-    writeFileSync(join(t.dir, "shell.json"), JSON.stringify({ pill: s.pill }));
+    writeFileSync(join(t.dir, "shell.json"), JSON.stringify({ pill: old.pill }));
     expect(store.load()).toEqual({});
   });
 
@@ -805,11 +939,20 @@ describe("DC-O1: the pill's window", () => {
     pill?: string;
     state?: ShellState;
     refuse?: boolean;
+    /** The displays' work areas, the primary first. */
+    areas?: Rect[];
   }) {
     const fd = fakeDictation();
     const f = fakeUi();
+    if (o.areas) f.areas = o.areas;
     const opened: { frame: Rect; style: PillStyle }[] = [];
-    const win = { visible: false, closed: 0, frame: (_r: Rect) => {} };
+    const win = {
+      visible: false,
+      closed: 0,
+      frame: (_r: Rect) => {},
+      /** Every move the shell made, and whether the window showed at that moment. */
+      moves: [] as { to: Rect; visible: boolean }[],
+    };
     const r = recorder();
     const ui: NativeUi = {
       ...f.ui,
@@ -818,6 +961,9 @@ describe("DC-O1: the pill's window", () => {
         opened.push({ frame: p.frame, style: p.style });
         return {
           window: {
+            setFrame: (to) => {
+              win.moves.push({ to, visible: win.visible });
+            },
             showInactive: () => {
               win.visible = true;
             },
@@ -895,7 +1041,7 @@ describe("DC-O1: the pill's window", () => {
       ["linux", {}],
     ] as const) {
       const s = await shellWith({ platform });
-      expect(s.opened).toEqual([{ frame: placePill({}, "bottom", fakeUi().areas), style }]);
+      expect(s.opened).toEqual([{ frame: placePill([], "bottom", fakeUi().areas), style }]);
       expect(s.win.visible).toBe(false);
       s.to("listening");
       expect(s.win.visible).toBe(true);
@@ -967,22 +1113,103 @@ describe("DC-O1: the pill's window", () => {
     s.win.frame(place);
     s.to("off");
     expect(s.win.closed).toBe(1);
-    expect(s.saved()).toMatchObject({ pill: place, pillEdge: "bottom" });
+    expect(s.saved()).toEqual({
+      pillPlaces: [{ edge: "bottom", area: s.f.areas[0] as Rect, frame: place }],
+    });
     s.to("idle");
     expect(s.opened.at(-1)?.frame).toEqual(place);
+  });
+
+  test("the single place of before opens where it was, and is written back as a per-display place", async () => {
+    const place = { x: 900, y: 500, width: PILL_SIZE.width, height: PILL_SIZE.height };
+    const s = await shellWith({ platform: "darwin", state: { pill: place, pillEdge: "bottom" } });
+    expect(s.opened.at(-1)?.frame).toEqual(place);
+    s.win.frame({ ...place, x: 800 });
+    s.to("off");
+    expect(s.saved()).toEqual({
+      pillPlaces: [{ edge: "bottom", area: s.f.areas[0] as Rect, frame: { ...place, x: 800 } }],
+    });
+  });
+
+  describe("DC-O1: the pill opens on the display of the window the text goes to", () => {
+    const TWO: Rect[] = [
+      { x: 0, y: 25, width: 1440, height: 850 },
+      { x: 1440, y: 0, width: 1920, height: 1080 },
+    ];
+    const ON_SECOND = { x: 1600, y: 200, width: 1200, height: 700 };
+
+    const twoDisplays = () => shellWith({ platform: "darwin", areas: TWO });
+
+    test("a key-down in a window on the second display moves the pill there before the dot shows", async () => {
+      const s = await twoDisplays();
+      s.fd.tell({ kind: "press", on: true, frame: ON_SECOND });
+      const there = placePill([], "bottom", TWO, TWO[1]);
+      expect(s.win.moves).toEqual([{ to: there, visible: false }]);
+      expect(s.win.visible).toBe(true);
+      expect(s.r.states().at(-1)).toEqual({ state: "pressed" });
+      // The move the OS reports back is the shell's own, not a drag: nothing is saved.
+      s.win.frame(there);
+      s.to("off");
+      expect(s.saved()).toEqual({});
+    });
+
+    test("positive control: a window on the display the pill is on, or none known, moves nothing", async () => {
+      const s = await twoDisplays();
+      s.fd.tell({ kind: "press", on: true, frame: { x: 100, y: 100, width: 600, height: 400 } });
+      s.fd.tell({ kind: "press", on: false, frame: null });
+      s.fd.tell({ kind: "press", on: true, frame: null });
+      expect(s.win.moves).toEqual([]);
+      expect(s.r.states().at(-1)).toEqual({ state: "pressed" });
+      // The same shell does move for the second display.
+      s.fd.tell({ kind: "press", on: false, frame: null });
+      s.fd.tell({ kind: "press", on: true, frame: ON_SECOND });
+      expect(s.win.moves).toHaveLength(1);
+    });
+
+    test("a drag on the second display is its place there, and the primary keeps its own", async () => {
+      const s = await twoDisplays();
+      s.fd.tell({ kind: "press", on: true, frame: ON_SECOND });
+      const dragged = { x: 2500, y: 700, width: PILL_SIZE.width, height: PILL_SIZE.height };
+      s.win.frame(dragged);
+      // Back to a window on the primary: its default place; then the second display again.
+      s.fd.tell({ kind: "press", on: false, frame: null });
+      s.fd.tell({ kind: "press", on: true, frame: { x: 10, y: 60, width: 500, height: 500 } });
+      s.fd.tell({ kind: "press", on: false, frame: null });
+      s.fd.tell({ kind: "press", on: true, frame: ON_SECOND });
+      expect(s.win.moves.map((m) => m.to)).toEqual([
+        placePill([], "bottom", TWO, TWO[1]),
+        placePill([], "bottom", TWO),
+        dragged,
+      ]);
+      // After a restart the second display's place is still there.
+      s.to("off");
+      expect(s.saved()).toEqual({
+        pillPlaces: [{ edge: "bottom", area: TWO[1] as Rect, frame: dragged }],
+      });
+      // It opens again where it was dragged last, so a press with no frame (Linux) finds it there.
+      s.to("idle");
+      expect(s.opened.at(-1)?.frame).toEqual(dragged);
+      s.fd.tell({ kind: "press", on: true, frame: { x: 10, y: 60, width: 500, height: 500 } });
+      s.fd.tell({ kind: "press", on: false, frame: null });
+      s.fd.tell({ kind: "press", on: true, frame: ON_SECOND });
+      expect(s.win.moves.at(-1)?.to).toEqual(dragged);
+    });
   });
 });
 
 describe("DC-O1: the pill over a whole app", () => {
   async function rig(
-    o: Pick<RigOptions, "models" | "jobs"> & { settings?: Record<string, unknown> } = {},
+    o: Pick<RigOptions, "models" | "jobs"> & {
+      settings?: Record<string, unknown>;
+      helperArgs?: string[];
+    } = {},
   ): Promise<AppRig> {
     const t = tempDir("akou-dict-pill-");
     cleanups.push(t.cleanup);
     const wav = join(t.dir, "mic.wav");
     writeFileSync(wav, monoWav(concat(speak(["hello"]), silence(3))));
     const r = await appRig({
-      helperArgs: ["--wav", wav],
+      helperArgs: ["--wav", wav, ...(o.helperArgs ?? [])],
       // Named, since the default is off on Linux.
       settings: { "dictation.enabled": true, "dictation.pill": "bottom", ...o.settings },
       ...(o.models !== undefined ? { models: o.models } : {}),
@@ -993,15 +1220,21 @@ describe("DC-O1: the pill over a whole app", () => {
     return r;
   }
 
-  /** The real shell's pill over `r`, recording what the page is told. */
-  async function pillOver(r: AppRig) {
+  /**
+   * The real shell's pill over `r`, recording what the page is told and where the shell moved the
+   * window, on the displays `areas` (one by default).
+   */
+  async function pillOver(r: AppRig, areas?: Rect[]) {
     const f = fakeUi();
+    if (areas) f.areas = areas;
     const rec = recorder();
+    const moves: Rect[] = [];
     let rpc: Parameters<NonNullable<NativeUi["openPill"]>>[0]["rpc"] | null = null;
     f.ui.openPill = (o) => {
       rpc = o.rpc;
       return {
         window: {
+          setFrame: (to) => moves.push(to),
           showInactive: () => {},
           hide: () => {},
           close: () => {},
@@ -1022,7 +1255,7 @@ describe("DC-O1: the pill over a whole app", () => {
       (
         rpc as unknown as { handlers: { control: (p: object) => Promise<boolean> } }
       ).handlers.control({ action });
-    return { f, rec, control };
+    return { f, rec, control, moves };
   }
 
   /** One spoken dictation from the tray, stopped from the pill once the pill says listening. */
@@ -1037,6 +1270,23 @@ describe("DC-O1: the pill over a whole app", () => {
     await Bun.sleep(1500);
     expect(await p.control("stop")).toBe(true);
   }
+
+  test("the helper's press names the window with the keyboard: the pill moves to its display, then the dot shows", async () => {
+    const two: Rect[] = [
+      { x: 0, y: 25, width: 1440, height: 850 },
+      { x: 1440, y: 0, width: 1920, height: 1080 },
+    ];
+    const r = await rig({ helperArgs: ["--target-frame", "1600,200,900,700"] });
+    const p = await pillOver(r, two);
+    await dictate(p);
+    expect(p.moves).toEqual([placePill([], "bottom", two, two[1])]);
+    expect(p.rec.states()[0]).toEqual({ state: "pressed" });
+    // Positive control: the same press with no frame (a helper that cannot tell) moves nothing.
+    const plain = await pillOver(await rig(), two);
+    await dictate(plain);
+    expect(plain.moves).toEqual([]);
+    expect(plain.rec.states()[0]).toEqual({ state: "pressed" });
+  });
 
   test("DC-E2: a press while the live Worker still loads its model shows loading model, and inserts once it is ready", async () => {
     const t = tempDir("akou-dict-pill-load-");
@@ -1067,7 +1317,8 @@ describe("DC-O1: the pill over a whole app", () => {
     // The audio is kept: nothing is inserted, and nothing fails, while the model loads.
     await Bun.sleep(300);
     expect(r.app.dictation()?.log.items()[0]?.state).not.toBe("failed");
-    expect(p.rec.states().map((s) => s.state)).toEqual(["listening", "transcribing"]);
+    // The dot from the press, then the session's island.
+    expect(p.rec.states().map((s) => s.state)).toEqual(["pressed", "listening", "transcribing"]);
     writeFileSync(gate, "");
     await until(
       () => p.rec.states().some((s) => s.state === "done"),
@@ -1150,6 +1401,7 @@ describe("DC-O1: the pill over a whole app", () => {
       rpc = o.rpc;
       return {
         window: {
+          setFrame: () => {},
           showInactive: () => {
             visible = true;
           },
@@ -1187,7 +1439,12 @@ describe("DC-O1: the pill over a whole app", () => {
       10_000,
       "the pill to say inserted",
     );
-    expect(rec.states().map((s) => s.state)).toEqual(["listening", "transcribing", "done"]);
+    expect(rec.states().map((s) => s.state)).toEqual([
+      "pressed",
+      "listening",
+      "transcribing",
+      "done",
+    ]);
     expect(rec.states().at(-1)).toEqual({ state: "done", how: "inserted" });
     expect(r.app.dictation()?.log.items()[0]).toMatchObject({ text: "hello" });
     expect(rec.sent.some((m) => JSON.stringify(m.payload).includes("hello"))).toBe(false);

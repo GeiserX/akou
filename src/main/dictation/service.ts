@@ -45,6 +45,7 @@ import {
   type Bindings,
   type EditHunk,
   encodeCommand,
+  type Frame,
   type Grant,
   parseHelperLine,
 } from "./protocol.ts";
@@ -276,7 +277,12 @@ export type DictationFollow =
   /** The helper lost a grant it started with (DC-N1): on macOS the key tap is dead. */
   | { kind: "grant-lost"; name: string }
   /** macOS Secure Input turned on or off: a keyed chord cannot reach the helper while it is on. */
-  | { kind: "secure-input"; on: boolean };
+  | { kind: "secure-input"; on: boolean }
+  /**
+   * The dictation key went down, with the frame of the window that has the keyboard where the
+   * helper can read it, or the press was dropped before it became a session (DC-O1).
+   */
+  | { kind: "press"; on: boolean; frame: Frame | null };
 
 interface Helper {
   proc: Bun.Subprocess<"pipe", "pipe", "pipe">;
@@ -848,6 +854,7 @@ export class DictationService {
       onRecordedKey: (name) => this.recorder?.(name),
       onGrantLost: (name) => this.grantLost(h, name),
       onSecureInput: (on) => this.tell({ kind: "secure-input", on }),
+      onPress: (on, frame) => this.tell({ kind: "press", on, frame }),
       ...(this.o.mic ? { mic: this.o.mic } : {}),
       metering: () => this.metering,
       send: (c) => {

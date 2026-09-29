@@ -21,7 +21,7 @@ const read = (name: string) =>
 
 test("every line the Rust helper writes is a trusted message, never log text", () => {
   const lines = read("helper-lines.jsonl");
-  expect(lines.length).toBe(22);
+  expect(lines.length).toBe(24);
   for (const line of lines) {
     const m = parseHelperLine(line);
     expect({ line, kind: m.kind }).toEqual({ line, kind: "msg" });
@@ -39,6 +39,9 @@ test("positive control: a line in the old dialect is only log text", () => {
     '{"type":"ready","protocol":"akou-dictate/1","version":"1","backend":"x","swallow_keys":true,"grants":{"mic":true,"accessibility":true}}',
     '{"type":"bound","hotkey":"RightCommand"}',
     '{"type":"session.ended","id":"1","reason":"interrupt"}',
+    // A press whose frame has no area, or one that is not a yes or no, is not trusted (DC-O1).
+    '{"type":"press","on":true,"frame":{"x":0,"y":0,"width":0,"height":10}}',
+    '{"type":"press","on":"yes"}',
   ]) {
     expect(parseHelperLine(line).kind).toBe("text");
   }

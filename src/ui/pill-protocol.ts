@@ -39,6 +39,11 @@ export interface PillLanguage {
 
 export type PillState =
   | { state: "hidden" }
+  /**
+   * The island at rest: the dictation key is down and the press is not a session yet (a
+   * modifier held under the hold time, a mic still opening), a dot and nothing else (DC-O1).
+   */
+  | { state: "pressed" }
   | {
       state: "listening";
       /** When audio started arriving, epoch ms: the elapsed time counts from here. */

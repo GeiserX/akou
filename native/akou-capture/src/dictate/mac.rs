@@ -49,13 +49,13 @@ use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXVal
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFMachPort, CFNumber, CFPreferencesAppSynchronize,
     CFPreferencesCopyAppValue, CFPreferencesSetAppValue, CFRange, CFRetained, CFRunLoop, CFString,
-    CFType, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
+    CFType, ConcreteType, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventMask, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
     CGEventTapOptions, CGEventTapPlacement, CGEventTapProxy, CGEventType,
-    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowLayer,
-    kCGWindowNumber, kCGWindowOwnerPID,
+    CGWindowListCopyWindowInfo, CGWindowListOption, kCGNullWindowID, kCGWindowBounds,
+    kCGWindowLayer, kCGWindowNumber, kCGWindowOwnerPID,
 };
 use objc2_foundation::NSString;
 
@@ -186,23 +186,47 @@ fn front_pid(sys: &AXUIElement) -> Option<i32> {
             return Some(pid);
         }
     }
-    windows().into_iter().next().map(|(pid, _)| pid)
+    windows().into_iter().next().map(|w| w.pid)
 }
 
-/// On-screen normal windows, front to back, as `(owner pid, window number)`. Neither needs the
-/// screen-recording grant (only window names do).
-fn windows() -> Vec<(i32, i64)> {
+/// An on-screen normal window: its owner, its number and its bounds.
+struct Window {
+    pid: i32,
+    number: i64,
+    frame: Option<p::Frame>,
+}
+
+/// On-screen normal windows, front to back, with their bounds (`kCGWindowBounds`, points from the
+/// top left of the primary display). None of it needs the screen-recording grant (only window
+/// names do).
+fn windows() -> Vec<Window> {
     let opts = CGWindowListOption::OptionOnScreenOnly | CGWindowListOption::ExcludeDesktopElements;
     let Some(list) = CGWindowListCopyWindowInfo(opts, kCGNullWindowID) else {
         return Vec::new();
     };
-    let num = |d: &CFDictionary, k: &CFString| -> Option<i64> {
+    /// The value of `k` in `d` as `T`, borrowed from the dictionary.
+    fn get<'a, T: ConcreteType>(d: &'a CFDictionary, k: &CFString) -> Option<&'a T> {
         // SAFETY: the key is a CFString and the dictionary's values are CF objects.
         let v = unsafe { d.value((k as *const CFString).cast()) };
         let v = NonNull::new(v as *mut CFType)?;
         // SAFETY: a borrowed CF object from a live dictionary.
-        let v: &CFType = unsafe { v.as_ref() };
-        v.downcast_ref::<CFNumber>()?.as_i64()
+        let v: &'a CFType = unsafe { v.as_ref() };
+        v.downcast_ref::<T>()
+    }
+    let num = |d: &CFDictionary, k: &CFString| get::<CFNumber>(d, k)?.as_i64();
+    let bounds = |d: &CFDictionary| -> Option<p::Frame> {
+        // SAFETY: the window-list key is a CFString constant.
+        let b = get::<CFDictionary>(d, unsafe { kCGWindowBounds })?;
+        let n = |k: &str| {
+            let v = get::<CFNumber>(b, &CFString::from_str(k))?.as_f64()?;
+            v.is_finite().then(|| v.round() as i64)
+        };
+        Some(p::Frame {
+            x: n("X")?,
+            y: n("Y")?,
+            width: n("Width")?,
+            height: n("Height")?,
+        })
     };
     let mut out = Vec::new();
     for i in 0..list.count() {
@@ -220,7 +244,11 @@ fn windows() -> Vec<(i32, i64)> {
             )
         };
         if let (Some(pid), Some(0), Some(n)) = (owner, layer, number) {
-            out.push((pid as i32, n));
+            out.push(Window {
+                pid: pid as i32,
+                number: n,
+                frame: bounds(d),
+            });
         }
     }
     out
@@ -260,8 +288,8 @@ impl Targets for Screen {
         };
         let window = windows()
             .into_iter()
-            .find(|(owner, _)| *owner == pid)
-            .map(|(_, n)| n.to_string())
+            .find(|w| w.pid == pid)
+            .map(|w| w.number.to_string())
             .unwrap_or_default();
         let field = match focused(pid) {
             Some(el) => field_kind(
@@ -277,6 +305,12 @@ impl Targets for Screen {
             window,
             field: field.into(),
         }
+    }
+
+    /// The frontmost normal window of the application with the keyboard: where the pill shows.
+    fn frame(&mut self) -> Option<p::Frame> {
+        let pid = front_pid(&system_wide())?;
+        windows().into_iter().find(|w| w.pid == pid)?.frame
     }
 
     fn secure_input(&mut self) -> bool {

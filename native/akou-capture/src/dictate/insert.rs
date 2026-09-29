@@ -125,6 +125,11 @@ pub trait Sink {
 pub trait Targets {
     /// The app, window and field under the cursor now.
     fn target(&mut self, t_ns: u64) -> Target;
+    /// The frame of the window that has the keyboard now, for the pill's display (DC-O1); none
+    /// where the backend cannot tell (Linux).
+    fn frame(&mut self) -> Option<super::protocol::Frame> {
+        None
+    }
     /// macOS Secure Input: a password field somewhere holds the keyboard. False elsewhere.
     fn secure_input(&mut self) -> bool;
     /// Windows: the target runs at a higher integrity level than the helper. False elsewhere.

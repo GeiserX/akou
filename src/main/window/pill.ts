@@ -31,6 +31,10 @@
  *   remote failure), which decodes it again and opens the draft box on the new reading; Copy and
  *   Open draft where it has text. Nothing is inserted from the pill: the draft box's Enter does it,
  *   into the app captured when the session began.
+ * - `pressed`, the island at rest, from the dictation key's down until the press is a session
+ *   (a modifier held under the hold time, a mic still opening) or is dropped (another key during
+ *   a modifier-only hold), at most `PRESS_MS`. Before it shows, the shell moves the window to the
+ *   display of the window with the keyboard, when the helper can tell.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
  * - `notice` for `NOTICE_MS` when the dictation key does nothing (macOS): the helper lost the
  *   Accessibility grant (DC-N1), with a button to its pane, shown once the island is free, so a
@@ -56,6 +60,7 @@ import type {
 } from "../../ui/pill-protocol.ts";
 import { pillPreview } from "../../ui/pill-protocol.ts";
 import { LEARNED_MS } from "../dictation/learner.ts";
+import type { Frame } from "../dictation/protocol.ts";
 import type { DictationFollow, ErrorAction } from "../dictation/service.ts";
 
 type Messages = PillRpc["webview"]["messages"];
@@ -129,6 +134,11 @@ export interface PillOptions {
   label(binding: string, platform: string): string;
   /** Opens the Accessibility pane: the notice's button after the grant was lost (DC-N1). */
   grant?(): Promise<boolean>;
+  /**
+   * Moves the window to the display that holds `frame`, the window with the keyboard at the
+   * key-down, before it shows (DC-O1); null, where the helper cannot tell, leaves it where it is.
+   */
+  place?(frame: Frame | null): void;
 }
 
 export interface PillRpcHandlers {
@@ -158,6 +168,12 @@ export function keyedChord(binding: string): boolean {
     return false;
   }
 }
+
+/**
+ * How long the island stays at rest with nothing after the key-down: a mic that never opened, a
+ * press the helper never settled. A session shows long before (the hold time and a cold mic).
+ */
+export const PRESS_MS = 3000;
 
 /** How long `inserted` or `copied` stays before the pill hides (DC-O1). */
 export const DONE_MS = 1500;
@@ -304,8 +320,15 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         });
         return;
       case "idle":
-        // An outcome or a notice stays for its time; anything else (empty, cancelled) hides now.
-        if (shown.state === "done" || shown.state === "error" || shown.state === "notice") return;
+        // An outcome or a notice stays for its time, and the dot until the press is a session or
+        // is dropped; anything else (empty, cancelled) hides now.
+        if (
+          shown.state === "done" ||
+          shown.state === "error" ||
+          shown.state === "notice" ||
+          shown.state === "pressed"
+        )
+          return;
         cancelHide();
         if (shown.state !== "hidden") put({ state: "hidden" });
         return;
@@ -390,6 +413,25 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     showNotice("secure-input");
   };
 
+  /**
+   * The dictation key went down: the island at rest, on the display of the window with the
+   * keyboard, until the session shows or the press is dropped (DC-O1). A press takes the island
+   * from an outcome or a notice; a session's island is the session's.
+   */
+  const pressed = (on: boolean, frame: Frame | null) => {
+    if (!on) {
+      if (shown.state !== "pressed") return;
+      cancelHide();
+      put({ state: "hidden" });
+      return;
+    }
+    if (shown.state === "listening" || shown.state === "transcribing") return;
+    cancelHide();
+    o.place?.(frame);
+    put({ state: "pressed" });
+    hideAfter(PRESS_MS);
+  };
+
   /** A partial's words to the ticker, as the preview's rule allows, with its settled start. */
   const sendPreview = (partial: unknown) => {
     if (shown.state !== "listening") return;
@@ -445,6 +487,10 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       }
       if (m.kind === "secure-input") {
         secureInput(m.on);
+        return;
+      }
+      if (m.kind === "press") {
+        pressed(m.on, m.frame);
         return;
       }
       if (m.kind === "busy") {
