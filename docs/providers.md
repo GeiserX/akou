@@ -40,7 +40,7 @@ flowchart LR
 | Enhance | When you run `akou enhance` or an agent calls `akou_enhance` (the window does not offer it) | Yes, on your request |
 | Vocabulary pass | When you run `akou vocab pass` on a call that has ended (the window fixes words on their line instead) | Yes, on your request |
 | Rolling memo | After at least 3 minutes and 1,500 tokens of new speech, every time | Off unless `memo.provider` is `on` |
-| Re-enhance after the final layer | Once, when the final transcript lands after notes were written from the live one | Never on its own: the window offers a button |
+| Re-enhance after the final layer | Once, when the final transcript lands after notes were written from the live one | Never on its own: run `akou enhance` again (the window does not offer it) |
 
 `memo.provider` is `auto` by default: on for `openai-compatible` and `anthropic`, off for `harness`, because it would spend your subscription every few minutes while you are not looking. Set it to `off` to stop it for every provider. An agent following the call can still write the memo with `akou_memo_put`.
 
