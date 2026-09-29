@@ -1,5 +1,5 @@
 /**
- * Builds the macOS app, unsigned, into `dist/release/` (docs/DESIGN.md section 9, docs/install.md):
+ * Builds the macOS app, unsigned, into `dist/release/` (docs/DESIGN.md section 9, docs/getting-started.md):
  *
  *   bun scripts/build-app.ts [--allow-missing-helper]
  *

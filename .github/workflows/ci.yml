@@ -1305,7 +1305,7 @@ jobs:
 
   # The server image (docs/ux/SERVER.md SV-T1) on both architectures, each on its own runner: build
   # it, pull the fast preset into a cached models volume with the image's own CLI and no server
-  # running, start it as install.md says (the port published on 127.0.0.1, `server.behind_proxy` set
+  # running, start it as getting-started.md says (the port published on 127.0.0.1, `server.behind_proxy` set
   # by AKOU_BEHIND_PROXY, since a container binds 0.0.0.0 and SV-P5 refuses that without it), and ask
   # it for /healthz within 60 s, for /v1/server with no token and for `id -u`; then transcribe an Ogg
   # Opus voice note, an M4A, an MP3 and a WebM in it (SV-P6). The job round trip runs when the
@@ -1446,7 +1446,7 @@ jobs:
   # box another akou sends its GPU jobs to (docs/ux/SERVER.md section 14). The same round trip as
   # the image's: `/healthz`, then one clip by long-poll, event feed and signed webhook, then
   # `akou transcribe`, with an Ogg Opus voice note as Telegram-Archive sends, decoded by the
-  # Homebrew ffmpeg a Mac server needs too (install.md).
+  # Homebrew ffmpeg a Mac server needs too (getting-started.md).
   server-macos:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -1462,7 +1462,7 @@ jobs:
         with:
           bun-version-file: .bun-version
       - run: bun install --frozen-lockfile
-      - name: ffmpeg, as install.md tells a Mac server to install it
+      - name: ffmpeg, as getting-started.md tells a Mac server to install it
         env:
           HOMEBREW_NO_AUTO_UPDATE: "1"
           HOMEBREW_NO_INSTALL_CLEANUP: "1"
@@ -1598,7 +1598,7 @@ jobs:
   # Vulkan loader and Mesa's drivers load (llvmpipe, Mesa's CPU renderer, shows once it is made
   # visible, and never counts as a GPU); in -cuda, every CUDA library resolves in the image but the
   # driver's own, which --gpus all brings; and akou, asked inside each, reports the CPU, verified by
-  # the real build, with the reason. The real GPU runs are the operator's (docs/install.md).
+  # the real build, with the reason. The real GPU runs are the operator's (docs/getting-started.md).
   gpu-image:
     needs: changes
     if: needs.changes.outputs.gpu == 'true'
