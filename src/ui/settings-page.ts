@@ -678,7 +678,9 @@ export class SettingsPage {
         h("option", { value: "" }, "+ Add"),
         ...left.map((v) => h("option", { value: v }, name(v))),
       );
-      add.addEventListener("change", () => set([...now, add.value]));
+      add.addEventListener("change", () => {
+        if (add.value) set([...now, add.value]);
+      });
       replace(
         root,
         now.length === 0 && w.empty ? h("span", { class: "pg-value" }, w.empty) : null,
