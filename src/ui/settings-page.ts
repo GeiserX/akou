@@ -293,6 +293,7 @@ export class SettingsPage {
   /** The Advanced page on screen, or null for the page itself. */
   private sub: string | null = null;
   private reads = 0;
+  private shows = 0;
   private readonly search = h("input", {
     id: "settings-search",
     type: "search",
@@ -334,11 +335,15 @@ export class SettingsPage {
     // Shown again while on screen (its sidebar row, clicked from an Advanced page): what is typed
     // there is saved first, as leaving saves it, since a click in WebKit leaves the field focused
     // and fires no change. The read below then sees it.
+    // A later show, or leaving, makes this one stale: it draws nothing and moves no focus.
+    const shown = ++this.shows;
     await this.saveTyped();
+    if (shown !== this.shows) return;
     // What the last visit drew goes until the read lands: typing into it would be lost when the
     // read draws over it.
     replace(this.col, h("p", { class: "pg-reading" }, "Reading the settings…"));
     await this.load();
+    if (shown !== this.shows) return;
     this.sub = key ? this.pageOf(key) : null;
     this.draw();
     if (key) this.goTo(key);
@@ -346,6 +351,7 @@ export class SettingsPage {
 
   /** The page is left: what is still typed into a field is saved; a key recording stops. */
   leave(): void {
+    this.shows++;
     void this.saveTyped();
   }
 
@@ -484,7 +490,7 @@ export class SettingsPage {
       pageHead(p.title, {
         back: backLink("Settings", () => {
           const from = this.sub;
-          this.leave();
+          void this.saveTyped();
           this.sub = null;
           this.draw();
           // The keyboard goes on from the row it came through, not the top of the window.
@@ -532,7 +538,7 @@ export class SettingsPage {
           id: `settings-go-${name}`,
         },
         () => {
-          this.leave();
+          void this.saveTyped();
           this.sub = name;
           this.draw();
           this.col.querySelector<HTMLElement>(".pg-back")?.focus();
@@ -1293,7 +1299,7 @@ export class SettingsPage {
   /** Goes to a key's row, on the page it lives on, and gives its control the focus. */
   private goTo(key: string, sub: string | null = this.pageOf(key)): void {
     if (sub !== this.sub) {
-      this.leave();
+      void this.saveTyped();
       this.sub = sub;
       this.draw();
     }
@@ -1302,7 +1308,7 @@ export class SettingsPage {
 
   private goToRow(id: string): void {
     if (this.sub !== null) {
-      this.leave();
+      void this.saveTyped();
       this.sub = null;
       this.draw();
     }
