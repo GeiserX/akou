@@ -75,7 +75,7 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
 const MAX_TITLE = 200;
 
 /** A new title: one line, trimmed; empty or too long is refused with 422 and changes nothing. */
-function checkTitle(raw: string): string {
+export function checkTitle(raw: string): string {
   const title = raw.replace(/\s+/g, " ").trim();
   if (title === "") {
     throw new HttpError(422, "bad_field", "the title is empty", { field: "title" });

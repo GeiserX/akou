@@ -3189,7 +3189,7 @@
         "tags": [
           "dictation"
         ],
-        "description": "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine (\"best on metal\", \"downloading best, using fast\"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).",
+        "description": "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine (\"best on metal\", \"downloading best, using fast\"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper starts again by itself once it is), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).",
         "responses": {
           "200": {
             "description": "OK",
@@ -3913,7 +3913,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "Submit an audio file for transcription; answers at once with the queued job. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
+        "description": "Submit an audio file for transcription; answers at once with the queued job. `title` (optional, one line up to 200 characters) names the job in the lists and their search; `PATCH /v1/jobs/{id}` names it later. `model` (a preset or a recognizer id) overrides `preset`, which overrides `server.default_model`; a model not on disk is downloaded while the job waits (`waiting_for`). An `Idempotency-Key` header makes a retried submit of the same file and options (keywords in any order, `language` in any case) return the first job (200); the same key with another file, `preset`, `model`, `language`, `keywords[]` or `diarize` answers 422 `idempotency_conflict` with the job's `id` and the differing `fields`. `title`, `metadata`, `callback_url` and `priority` are not compared: a retry gets the first job with its own. `metadata` (JSON, up to 4 KB) comes back on the job; `callback_url` gets a signed webhook when it ends. `priority` (-10 to 10, default 0): a higher one runs first, then submit order. A full queue (`server.queue_max`, `server.queue_max_per_key`) answers 429 `queue_full` with `Retry-After` in seconds. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits and never sent to a remote; with no dictation slots the field is ignored (`GET /v1/server` `capabilities.interactive` says which).",
         "requestBody": {
           "required": true,
           "content": {
@@ -3925,6 +3925,9 @@
                     "type": "string",
                     "format": "binary",
                     "contentMediaType": "application/octet-stream"
+                  },
+                  "title": {
+                    "type": "string"
                   },
                   "preset": {
                     "type": "string"
@@ -3990,7 +3993,7 @@
         "tags": [
           "jobs"
         ],
-        "description": "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `cursor` pages on from the last job's `seq`.",
+        "description": "The key's jobs, newest first (an admin key sees every key's, or one key's with `key`). `status` keeps one state; `q` keeps the jobs whose title, id or state contains it, in any case; `cursor` pages on from the last job's `seq`.",
         "parameters": [
           {
             "name": "status",
@@ -4006,6 +4009,15 @@
                 "failed",
                 "cancelled"
               ]
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "description": "Only jobs whose title, id or state contains this text, in any case.",
+            "schema": {
+              "type": "string"
             }
           },
           {
@@ -4092,6 +4104,62 @@
             }
           }
         ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "server"
+        ],
+        "x-akou-access": "jobs"
+      },
+      "patch": {
+        "operationId": "jobs.rename",
+        "tags": [
+          "jobs"
+        ],
+        "description": "Name or rename a job, in any state: `title` is what the lists, their search and the Jobs page show from now on. The result, the event feed and a webhook do not carry it. An empty title answers 422 and the old name stays.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The job id.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "title": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "title"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "OK",
@@ -4385,7 +4453,7 @@
         "tags": [
           "openai"
         ],
-        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
+        "description": "The OpenAI transcription endpoint: a file in, its transcript out, in one request. `model` names a preset or a recognizer id (anything else leaves it to `server.default_model`); `response_format` is json, text, srt, vtt, verbose_json or diarized_json, whose segments carry `speaker` `s0`, `s1`, … (one per speaker found in this file) or `unknown` when the speaker model found no turns or failed; `stream=true` sends Server-Sent Events. `interactive=true` (a dictation) runs in the reserved lane of `server.dictation_slots` Workers, in arrival order, never refused by the queue's limits, running `server.dictation_engine` when no model is named; with no dictation slots the field is ignored. `metadata` (JSON, up to 4 KB) is kept on the job while it runs, and a string `metadata.title` names it in `GET /v1/jobs` and on the Jobs page. The body may arrive chunked while the audio is still being recorded (a dictation streamed during the hold); a 16 kHz 16-bit PCM WAV whose data size is 0 or 0xFFFFFFFF is read to the end of the file, and the transcript starts once the body ends.",
         "requestBody": {
           "required": true,
           "content": {
@@ -4430,6 +4498,9 @@
                   },
                   "interactive": {
                     "type": "boolean"
+                  },
+                  "metadata": {
+                    "type": "string"
                   }
                 },
                 "required": [

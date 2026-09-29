@@ -328,7 +328,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictation",
     {
       id: "dictation.status",
-      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
+      doc: 'Dictation now: `enabled` (`dictation.enabled`), the session\'s `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine ("best on metal", "downloading best, using fast"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote\'s `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper starts again by itself once it is), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).',
       access: "admin",
       modes: ["app"],
       ok: 200,
@@ -357,6 +357,8 @@ export function dictationRoutes(r: Router<ApiApp>): void {
             }
           : null,
         grants,
+        // Read after `grants()`, which may have started the helper again for a grant now back.
+        lost: svc.status().lost,
         backend: st.backend,
         swallow_keys: st.swallow_keys,
       });

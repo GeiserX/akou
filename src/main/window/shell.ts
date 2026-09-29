@@ -1037,6 +1037,7 @@ export class Shell implements WindowShell {
       },
       // The words as you speak are on by default (DC-O2); a screen share shows them until DK-P3.
       preview: { setting: () => this.app.config().settings["dictation.pillPreview"] },
+      grant: () => this.app.openSettingsPane("accessibility"),
     });
     let w: ReturnType<typeof open>;
     try {

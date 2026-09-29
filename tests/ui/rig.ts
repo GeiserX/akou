@@ -868,6 +868,10 @@ export async function windowPage(
     platform?: string;
     /** Read at every `GET /dictation`, so a test changes the grants as the OS would. */
     grants?: DictationGrants;
+    /** The grants the running helper lost since it started, on `GET /dictation` (DC-N1). */
+    lost?: string[];
+    /** The answer to `recordDictationKeys`: false, no helper hears keys (DC-N2). */
+    hearing?: boolean;
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
     devices?: DevicesFixture;
@@ -892,6 +896,7 @@ export async function windowPage(
           enabled: settings["dictation.enabled"],
           state: "idle",
           grants: o.grants ?? { mic: "granted", accessibility: "granted" },
+          lost: o.lost ?? [],
         },
       };
     if (p.path === "/config" && p.method === "PATCH") {
@@ -924,7 +929,9 @@ export async function windowPage(
           ? status()
           : name === "follow"
             ? { ok: false }
-            : undefined,
+            : name === "recordDictationKeys"
+              ? (o.hearing ?? true)
+              : undefined,
   });
   await v.page.waitForFunction(() => document.body.dataset.transport === "window");
   return { ...v, patches };

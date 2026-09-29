@@ -167,12 +167,15 @@ export function windowRpc(
 
       // The helper reports every key while the recorder is open, Fn and Globe included, which the
       // webview never sees (DC-U3). False with dictation off: the recorder takes what the page sees.
+      // False too while its key tap is dead (Accessibility denied or taken back): it hears no key,
+      // so `Use Fn` must not blame the keyboard (DC-N2).
       recordDictationKeys: async ({ on }) => {
         const d = bridge.app.dictation?.();
         if (!d) return false;
         const ok = d.recordKeys(on ? (name) => send().dictationKey?.({ name }) : null);
         recording = on && ok;
-        return ok;
+        const st = d.status();
+        return ok && st.grants?.accessibility !== "denied" && !st.lost.includes("accessibility");
       },
       // The helper's mic level while the page shows a meter (DC-U4, DC-N3), in dBFS. False while
       // no helper is up: the meter stays still and the setup goes on. The meter is kept on all
