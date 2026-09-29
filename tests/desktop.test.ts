@@ -57,7 +57,13 @@ const LONG = 30_000;
 
 /** An app that records what the shell asks of it; `live` says whether a call records. */
 function fakeApp(o: { live?: boolean; settings?: Record<string, unknown> } = {}) {
-  const state = { live: o.live ?? false, quits: 0, windows: 0, stops: 0 };
+  const state = {
+    live: o.live ?? false,
+    quits: 0,
+    windows: 0,
+    stops: 0,
+    openedOn: undefined as string | undefined,
+  };
   let shell: Shell | null = null;
   const app: ShellApp = {
     status: async () => ({
@@ -82,6 +88,7 @@ function fakeApp(o: { live?: boolean; settings?: Record<string, unknown> } = {})
     openSettingsPane: async () => false,
     openWindow: async (call) => {
       state.windows++;
+      state.openedOn = call;
       shell?.show(call);
     },
     onAnnounce: () => () => {},
@@ -929,14 +936,17 @@ describe("[DK-F1] the floating indicator, in the shell", () => {
     await on.shell.close();
   });
 
-  test("a click on it opens the main window; it offers no Ask (PRINCIPLES: asking is the palette)", async () => {
+  test("a call that starts opens no main window; a click on it opens the window on the live call; it offers no Ask (PRINCIPLES: asking is the palette)", async () => {
     const f = fakeUi();
     const { shell, a, feed } = await eventShell(f);
     feed("call.created");
     await until(() => f.indicator() !== null, 1000, "the indicator");
+    await Bun.sleep(20);
+    expect(a.state.windows).toBe(0);
     const handlers = f.indicator()?.rpc.handlers as Record<string, unknown>;
     expect(await (handlers.openMain as () => Promise<boolean>)()).toBe(true);
     expect(a.state.windows).toBe(1);
+    expect(a.state.openedOn).toBe("c1");
     expect(Object.keys(handlers).sort()).toEqual([
       "control",
       "follow",

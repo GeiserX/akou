@@ -189,11 +189,15 @@ describe("DESIGN 7 parity with hark-viewer", () => {
             expect(await page.locator("#restart").isVisible()).toBe(true);
           }
           expect(await text(page, "#meta")).toContain("open: permission denied");
-          // A live call elsewhere: the call on screen says so, and Stop names the other call.
+          // A new live call takes the window over (W3.17).
           const live = await rig.startCall({ title: "Live one" });
+          await page.waitForSelector(`#calls li[data-id="${live}"] button[aria-current="true"]`);
+          // Another call picked while it records: the call on screen says so, and Stop names
+          // the other call.
+          await page.click(`#calls li[data-id="${ids.failed}"] button`);
           await until(async () => (await state()) === "another call is recording", 5000, "other");
           expect(await text(page, "#stop")).toBe("Stop the other call");
-          // Open the live call: recording, then not capturing once no audio arrives for 5 s.
+          // Back to the live call: recording, then not capturing once no audio arrives for 5 s.
           await page.click(`#calls li[data-id="${live}"] button`);
           await until(async () => (await state()) === "rec", 5000, "rec");
           await until(async () => (await state()) === "not capturing", 12_000, "not capturing");

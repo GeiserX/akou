@@ -260,6 +260,61 @@ describe("following a live call", () => {
   );
 });
 
+/** The call the sidebar marks as the one on screen. */
+const shown = (page: Page) =>
+  page.evaluate(
+    () =>
+      document.querySelector<HTMLElement>('#calls button[data-id][aria-current="true"]')?.dataset
+        .id ?? null,
+  );
+
+describe("[W3.17] a new live call takes the window over, from any door", () => {
+  test(
+    "a call started from the CLI replaces a call the user picked; a picked call holds until the next one; an ended call stays",
+    async () => {
+      let old = "";
+      await withRig({ seed: (home) => (old = seedCall(home, standardCall).id) }, async (rig) => {
+        // The user opened an old call: the window shows it as picked.
+        const page = await rig.open(old);
+        await until(async () => (await shown(page)) === old, 5000, "the old call on screen");
+        // `akou start` from a terminal or an agent: not the window's own start.
+        const cli = { "x-akou-client": "cli" };
+        const first = await rig.api("POST", "/calls", { workspace: "work", title: "One" }, cli);
+        expect(first.status).toBe(201);
+        const one = first.body.call as string;
+        await until(async () => (await shown(page)) === one, 5000, "the CLI's call on screen");
+        await until(async () => (await text(page, "#state")) === "rec", 5000, "recording");
+        // The user picks the old call to read it while the call runs: it holds.
+        await page.click(`#calls button[data-id="${old}"]`);
+        await until(async () => (await shown(page)) === old, 5000, "the old call picked again");
+        // A window opened on the old call while one is live (`akou open OLD`) shows what it was
+        // asked for.
+        const asked = await rig.open(old);
+        await until(async () => (await shown(asked)) === old, 5000, "the asked-for call");
+        await Bun.sleep(1500);
+        expect(await shown(page)).toBe(old);
+        expect(await shown(asked)).toBe(old);
+        expect((await rig.api("POST", `/calls/${one}/stop`, {}, cli)).status).toBeLessThan(300);
+        // The next new live call takes the window over again.
+        const second = await rig.api("POST", "/calls", { workspace: "work", title: "Two" }, cli);
+        expect(second.status).toBe(201);
+        const two = second.body.call as string;
+        await until(async () => (await shown(page)) === two, 5000, "the second call on screen");
+        // It ends: the window stays on it.
+        expect((await rig.api("POST", `/calls/${two}/stop`, {}, cli)).status).toBeLessThan(300);
+        await until(
+          async () => (await rig.api("GET", "/status")).body?.live === null,
+          5000,
+          "no live call",
+        );
+        await Bun.sleep(500);
+        expect(await shown(page)).toBe(two);
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("XSS: every text from a transcript, a note, a name or an answer renders inert", () => {
   test(
     "a payload in a line, a speaker name, a note, a title and an answer stays text",

@@ -1,8 +1,9 @@
 /**
  * The floating indicator (docs/ux/DESKTOP.md section 7, DK-F1): a small always-on-top window that
  * shows a recording at a glance while the main window is not in front. A dot, the elapsed time,
- * the two levels, Mute and Stop; a click on the dot and time opens the main window. Asking goes
- * through the palette, not here (PRINCIPLES.md).
+ * the two levels, Open transcript, Mute and Stop; Open transcript (and a click on the dot and time)
+ * brings the main window forward on the live call. Asking goes through the palette, not here
+ * (PRINCIPLES.md).
  *
  * It shows no transcript text, no title, no names and no answers, so it can stay up during a
  * screen share. The rule is enforced on the main side (`src/main/window/indicator.ts`): this page
@@ -17,6 +18,7 @@
 
 import { elapsedText, recordedMs } from "./indicator-clock.ts";
 import type { IndicatorEvent, IndicatorStatus } from "./indicator-protocol.ts";
+import { SmoothMeters } from "./meter.ts";
 import type { Levels } from "./protocol.ts";
 
 /** What a followed call feeds the page. */
@@ -72,7 +74,7 @@ export function mountIndicator(
     const mute = el<HTMLButtonElement>("mute");
     mute.textContent = live?.muted ? "Unmute" : "Mute";
     mute.setAttribute("aria-pressed", String(!!live?.muted));
-    for (const id of ["mute", "stop"]) el<HTMLButtonElement>(id).disabled = !live;
+    for (const id of ["show", "mute", "stop"]) el<HTMLButtonElement>(id).disabled = !live;
     tick();
   };
 
@@ -89,12 +91,10 @@ export function mountIndicator(
     e.title = `recording since ${at}`;
   };
 
-  const level = (l: Levels) => {
-    for (const ch of ["mic", "call"] as const) {
-      const m = el<HTMLMeterElement>(`lvl-${ch}`);
-      m.value = Math.max(-60, Math.min(0, l[ch]));
-    }
-  };
+  const meters = new SmoothMeters((ch, db) => {
+    el<HTMLMeterElement>(`lvl-${ch}`).value = db;
+  });
+  const level = (l: Levels) => meters.set(l);
 
   /** Follows the call from its first event: the page keeps no cursor, and the events are few. */
   const start = (call: string) => {
@@ -128,6 +128,7 @@ export function mountIndicator(
       follow?.close();
       follow = null;
       followed = call;
+      meters.reset();
       events = [];
       health = { mic: "ok", call: "ok" };
       if (call) start(call);
@@ -142,6 +143,9 @@ export function mountIndicator(
     if (live) void t.control(live.muted ? "unmute" : "mute");
   });
   el("open").addEventListener("click", () => host.open());
+  el("show").addEventListener("click", () => {
+    if (live) host.open();
+  });
 
   const timer = setInterval(tick, 1000);
   draw();
