@@ -162,6 +162,8 @@ class App {
   private folded = new Set<string>();
   /** What the calls list was last drawn from, so an unchanged list is not redrawn. */
   private drawnCalls = "";
+  /** The title is being edited: the header leaves it alone until the edit closes. */
+  private renaming = false;
 
   constructor(readonly t: Transport) {
     const view = () => this.view();
@@ -239,6 +241,7 @@ class App {
     document.body.dataset.transport = this.t.kind;
     this.wireControls();
     this.wireSidebar();
+    byId("title-text").addEventListener("click", () => this.editTitle());
     this.wireTabs();
     this.wirePopover();
     const pinned = new URLSearchParams(location.search).get("call");
@@ -276,6 +279,8 @@ class App {
       this.paint();
       return;
     }
+    // A title being edited is saved to its own call before another one is shown.
+    document.getElementById("title-input")?.blur();
     this.follower?.stop();
     this.callId = id;
     this.hues = new HueBook();
@@ -448,7 +453,7 @@ class App {
    */
   private callHead(v: CallView | null, now: number, note: string): void {
     const call = v?.call;
-    byId("title").textContent = call ? call.title || "Untitled call" : "";
+    if (!this.renaming) byId("title-text").textContent = call ? call.title || "Untitled call" : "";
     const meta = byId("meta");
     if (!v || !call) {
       meta.textContent = "";
@@ -475,6 +480,61 @@ class App {
     ]
       .filter(Boolean)
       .join("\n");
+  }
+
+  /**
+   * Renaming the open call from its title (WINDOW 3.1), live or saved, the way a note is edited:
+   * a click or Enter opens the field, Enter or leaving it saves, Escape keeps the old name. An
+   * empty or unchanged title saves nothing. The save is a `call.renamed` through `PATCH`; the
+   * header, the sidebar row, its search and the window title follow from the log and the status
+   * push that event causes, from this window or any other door.
+   */
+  private editTitle(): void {
+    const id = this.callId;
+    const call = this.view()?.call;
+    if (!id || !call || this.renaming) return;
+    const shown = byId("title-text");
+    const old = call.title;
+    const input = h("input", {
+      id: "title-input",
+      value: old,
+      attrs: { "aria-label": "Call title", maxlength: "200", autocomplete: "off" },
+    });
+    shown.hidden = true;
+    shown.after(input);
+    input.focus();
+    input.select();
+    this.renaming = true;
+    let open = true;
+    const done = async (keep: boolean) => {
+      if (!open) return;
+      open = false;
+      const title = input.value.replace(/\s+/g, " ").trim();
+      if (keep && title !== "" && title !== old) {
+        const r = await this.t
+          .request<{ title?: string }>("PATCH", `/calls/${encodeURIComponent(id)}`, { title })
+          .catch(() => null);
+        if (!r || r.status >= 400) {
+          // The field stays open with its text, to try again.
+          toast(message(r?.body, "the call was not renamed"));
+          open = true;
+          return;
+        }
+        // Shown at once; the event on the stream brings the same title a moment later.
+        if (this.callId === id) shown.textContent = r.body.title ?? title;
+      }
+      this.renaming = false;
+      input.remove();
+      shown.hidden = false;
+      if (document.activeElement === document.body) shown.focus();
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" && e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      void done(e.key === "Enter");
+    });
+    input.addEventListener("blur", () => void done(true));
   }
 
   /** The speaker chips under the title: each voice's colour and its time, the most first. */

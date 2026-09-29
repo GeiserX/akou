@@ -346,6 +346,7 @@ Folder names are unique by construction. akou never writes into an existing call
 | Type | Fields beyond the envelope | Purpose |
 |---|---|---|
 | `call.created` | `id`, `schema`, `workspace`, `title`, `tz`, `user`, `akou`, `template?` | Always `seq` 1 |
+| `call.renamed` | `rev`, `title`, `by` | The call's title from now on; the highest `rev` wins over `call.created`'s. The folder keeps its first name |
 | `call.ended` | `reason: stop \| interrupted \| abandoned` | `abandoned`: an `interrupted` call with no resume for 24 h, closed at the next app start |
 | `call.failed` | `stage`, `error` | A start that never captured; this is the only event for that outcome. The folder and any audio are kept and listed as failed |
 | `part.started` | `part`, `file`, `wallStart`, `monoStart`, `mic`, `call`, `capture` | The (wall, monotonic) anchor pair |
@@ -551,6 +552,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 | `akou enhance [--template T] [--call ID]` · `akou finalize [CALL] [--force]` | Post-call |
 | `akou wait [CALL] --for final.done\|enhanced\|exported [--timeout 30m]` | Blocks until the call reaches the stage: exit 0, 69 when the final pass cannot run (`final.failed {step: unavailable}`), 70 when it failed, 124 at the timeout. A stage reached before a new part, or notes and an export made before a new final layer, do not count |
 | `akou calls [-w WS] [--limit N] [--failed]` | Lists calls by date, title, duration, participants. No content search |
+| `akou calls rename CALL TITLE…` | Renames a call, live or saved (`last` works); every list and search shows the new title |
 | `akou show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | One call's transcript or notes |
 | `akou export [CALL] [--to DIR]` · `akou hooks run CALL [--stage S]` | Hand-off, re-run |
 | `akou share on\|off\|status [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | Read-only live link |
@@ -576,6 +578,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | `GET /models` · `POST /models/pull` | The speech models on disk (`missing`, `downloading` with bytes, `ready`, `failed`); the first-run download, answered at once (`202`) and followed with `GET /models` |
 | `GET /calls?workspace&limit&failed` | Metadata list |
 | `GET /calls/{id\|live\|last}` | Header, parts, roster, health, final state. `live` gives 404 `no_live_call {last}` when nothing is recording |
+| `PATCH /calls/{id\|live\|last}` `{title}` | Renames the call at any time with a `call.renamed` event; 422 on an empty title, and the old name stays |
 | `POST /calls/{id}/{stop,pause,resume,mute,unmute,restart}` | Controls. `restart` takes `{force}` |
 | `GET /calls/{id}/events?after=SEQ&wait=25` | Raw log, long-poll |
 | `GET /calls/{id}/stream?after=SEQ` | SSE: events plus ephemeral `partial`, `level` and `read` (the app's text and `heard` for every line its vocabulary corrects, after the backlog and again whenever that changes) |
@@ -635,6 +638,7 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 | `akou_vocab_add {term, heard?, scope = "call", workspace?, decode?, note?}` · `akou_vocab_propose {entries[], call?}` · `akou_vocab_approve {terms[], call?}` · `akou_vocab_reject {terms[], call?}` · `akou_vocab_list {workspace?, call?, unconfirmed?}` · `akou_vocab_suggest {text?, call?, k = 20}` · `akou_vocab_check {term}` | The custom vocabulary: a word the user just stated goes in mid-call with `scope: call`; anything the agent inferred is a proposal until the user says yes |
 | `akou_enhance_context {template?}` · `akou_enhanced_put {markdown, coversSeq}` · `akou_enhance {template?}` | The agent writes the enhancement, or asks akou's provider to |
 | `akou_list_calls {workspace?, limit = 20, failed?}` · `akou_get_call {call, layer = "best", cursor?}` (a page at a time, with `nextCursor`) · `akou_export {call}` | Past calls by name only |
+| `akou_rename_call {call = "live", title}` | Rename a call when the user names it |
 
 Tool descriptions carry the rules: cite wall time, never quote a draft line as fact, answer only from the live call unless a call is named, say when a call has ended.
 
@@ -666,7 +670,7 @@ Everything hark-viewer did is kept:
 | States: recording, paused, offline, not capturing, failed, ready, saved, another call recording | Same set; "offline" becomes "ended unexpectedly" or "interrupted". While the welcome shows (speech models missing, no call recording or picked) the word is "setup", never "ready" |
 | Banners: red dead, amber guess, grey quiet, green recovered, "check permission" | Same wording model on all OSes, from `health`, plus amber "transcript N s behind" and a permission banner with a button that opens the right settings pane |
 | Record, Mute, Pause, Stop, Restart; "Stop the other call"; toasts | Same. Restart stays visible when a call ended, failed or crashed. While the speech models are missing, Record is disabled with its reason, the composer row keeps only its state word, and a welcome with the one download replaces the transcript, the side pane and the player |
-| Workspace picker, title field | Same, plus template picker |
+| Workspace picker, title field | Same, plus template picker. The title in the call header renames the call at any time, live or saved; the header, the sidebar row, its search and the window title follow, whichever door renamed it (`PATCH /calls/{id}`, `akou calls rename`, `akou_rename_call`) |
 | Append-only rows: time column, speaker label on change, last 3 bright, older dim, rise animation, pinned auto-scroll, "Back to live" after 80 px, font 14 to 44 px | Same. The time column is wall clock. Speaker chips are clickable to rename, merge, unmerge |
 | Stable speaker hues: you = 214, others from `[36,145,285,5,178,58,325,100]` in order of first appearance | Same, and none within 30° of the accent; you are drawn in a neutral grey, not your hue; a renamed speaker keeps its hue |
 | Grey provisional row, dashed border | Same, with the 3 s expiry |

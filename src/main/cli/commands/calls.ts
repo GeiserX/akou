@@ -1,7 +1,7 @@
 /**
  * Starting, controlling and listing calls, and the app itself (docs/DESIGN.md sections 1.5 and 6.1):
- * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls`,
- * `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
+ * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls` and
+ * `calls rename`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
 import { bool, int, list, str } from "../args.ts";
@@ -170,15 +170,32 @@ function minutes(from: number, to: number | null): string {
 
 const calls: Command = {
   name: "calls",
-  summary: "List calls by date, title and duration (no content search)",
-  usage: "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json]",
+  summary: "List calls by date, title and duration (no content search), or rename one",
+  usage:
+    "akou calls [-w WORKSPACE] [--limit N] [--failed] [--json] | akou calls rename CALL TITLE… [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "only calls in this workspace" },
     limit: { type: "string", value: "N", desc: "at most N calls, newest first" },
     failed: { type: "boolean", desc: "only calls whose capture or final pass failed" },
+    call: callFlag("none; name one"),
   },
-  examples: ["akou calls -w work --limit 5"],
+  examples: ["akou calls -w work --limit 5", "akou calls rename last Weekly sync"],
   run: async (ctx, p) => {
+    const [sub, ...rest] = p.positional;
+    if (sub === "rename") {
+      // The call is `-c CALL` or the first word; every word after it is the title.
+      const call = str(p, "call") ?? rest.shift();
+      const title = rest.join(" ").trim();
+      if (!call || title === "") {
+        return usage(ctx, "calls rename needs a call and a title: calls rename last Weekly sync");
+      }
+      if (str(p, "workspace") !== undefined) {
+        return usage(ctx, "calls rename changes the title only; -w does not move a call");
+      }
+      const r = await api(ctx, "PATCH", `/calls/${enc(call)}`, { body: { title } });
+      return finish(ctx, r, (b) => `${b.call} is now "${b.title}"`);
+    }
+    if (sub !== undefined) return usage(ctx, `calls has no ${sub}; try: calls rename CALL TITLE`);
     const r = await api(ctx, "GET", "/calls", {
       query: {
         workspace: str(p, "workspace"),

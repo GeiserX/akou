@@ -321,6 +321,8 @@ export class CallView {
 
   private _lastSeq = 0;
   private _call: CallCreated | null = null;
+  /** The `rev` of the `call.renamed` that set the title; 0 while it is the one it was created with. */
+  private _titleRev = 0;
   private _state: CallState = "empty";
   private _muted = false;
   private _failed: CallFailed | null = null;
@@ -414,6 +416,12 @@ export class CallView {
         this._call = e;
         this._state = "starting";
         this.invalidateNames();
+        break;
+      case "call.renamed":
+        // The highest revision wins; `call` carries the title every reader shows.
+        if (!this._call || e.rev <= this._titleRev) break;
+        this._titleRev = e.rev;
+        this._call = { ...this._call, title: e.title };
         break;
       case "call.ended":
         this._endedReason = e.reason;
@@ -788,8 +796,14 @@ export class CallView {
     return this._lastSeq;
   }
 
+  /** `call.created` with the current title: the latest `call.renamed` applied over the first. */
   get call(): CallCreated | null {
     return this._call;
+  }
+
+  /** The `rev` of the title's latest rename, 0 when it was never renamed. The next rename is +1. */
+  get titleRev(): number {
+    return this._titleRev;
   }
 
   get state(): CallState {

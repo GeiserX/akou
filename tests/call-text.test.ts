@@ -278,6 +278,7 @@ const OTHER_TOOLS: Record<string, string> = {
   akou_vocab_reject: "terms",
   akou_vocab_check: "a verdict on one term",
   akou_enhanced_put: "the save result",
+  akou_rename_call: "the call id and the title the agent gave",
   akou_list_calls: "titles, dates and states, no content",
   akou_export: "file paths",
 };
