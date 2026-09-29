@@ -89,7 +89,7 @@ describe("the final pass without readable audio", () => {
       const r = await rig.api("POST", `/calls/${id}/finalize`);
       expect(r.status).toBe(501);
       expect(r.body).toMatchObject({ error: "final_unavailable", call: id });
-      expect(r.body.message).toContain("Opus decoding is not built");
+      expect(r.body.message).toContain("cannot read this call's audio");
       expect((await rig.api("GET", `/calls/${id}/events`)).body.cursor).toBe(before);
       await rig.close();
     },

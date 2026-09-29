@@ -765,13 +765,14 @@ jobs:
             END { printf "<testsuites tests=\"%d\" failures=\"%d\" skipped=\"%d\">\n<testsuite name=\"cargo test\">\n%s</testsuite>\n</testsuites>\n", n, f, s, cases }
           ' .cargo-test.log > .junit-helper.xml
           bun scripts/ci/test-floor.ts helper .junit-helper.xml
-      # The capture traps, the app's dictation service over `dictate` (DC-T1) and DC-N4's words
-      # from the WAV to the transcript, against the simulate build.
+      # The capture traps, the app's dictation service over `dictate` (DC-T1), DC-N4's words
+      # from the WAV to the transcript, and a recorded call's final pass from its Opus part
+      # (SV-P10), against the simulate build.
       - name: capture traps and dictation against the built helper
         env:
           AKOU_CAPTURE_BIN: ${{ github.workspace }}/native/akou-capture/target/release/akou-capture${{ env.EXE }}
           AKOU_CAPTURE_BIN_SHIPPING: ${{ github.workspace }}/native/akou-capture/target/shipping/akou-capture${{ env.EXE }}
-        run: bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-capture-e2e.xml tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts tests/dictation-preroll.e2e.test.ts
+        run: bun test --rerun-each "$TEST_REPEAT" --reporter=junit --reporter-outfile=.junit-capture-e2e.xml tests/capture-rust.e2e.test.ts tests/dictation-helper.e2e.test.ts tests/dictation-preroll.e2e.test.ts tests/asr-opus-final.e2e.test.ts
       # With both binaries set every test runs: the floor allows no skip.
       - run: bun scripts/ci/test-floor.ts capture-e2e .junit-capture-e2e.xml
 
