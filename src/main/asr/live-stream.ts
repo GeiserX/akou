@@ -9,10 +9,12 @@
  *    never taken back, so a word on screen stays there.
  * 3. **Lines.** A line closes at a gap of `pause` seconds between two tokens, when `pause` plus the
  *    engine's chunk of new audio brings no token (the speaker stopped), or when a word would take
- *    it past `window` seconds. A line only ever breaks before a word, never inside one. The quiet
- *    is counted from the last token the engine returned, not from that token's time: an engine
- *    returns a word some way behind its audio, and counting from its time would close a line with
- *    the rest of a word still to come.
+ *    it past `window` seconds. A line breaks only before a token that starts a word: one with a
+ *    leading space, or one that starts with a Chinese, Japanese or Thai character, since those
+ *    scripts put no spaces between words. Should no such token come, a line past `window` plus a
+ *    second breaks before any token. The quiet is counted from the last token the engine returned,
+ *    not from that token's time: an engine returns a word some way behind its audio, and counting
+ *    from its time would close a line with the rest of a word still to come.
  *
  * Times: the stream has its own timeline, the samples pushed to it. Each run of contiguous audio
  * of one part sits somewhere on it (`runs`), which maps a line back to the part's file timeline. A
@@ -30,6 +32,14 @@ export const LINE_LEAD_SECONDS = 0.3;
 export const LINE_TAIL_SECONDS = 0.5;
 /** Audio kept before an open line, or before now when none is open, beyond the engine's chunk. */
 const KEEP_SECONDS = 2;
+/**
+ * A token that starts a word without a leading space: Chinese, Japanese and Thai write no spaces
+ * between words, so their tokens rarely carry one. A combining mark continues the token before it.
+ */
+const SPACELESS_WORD =
+  /^(?!\p{M})[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Thai}]/u;
+/** Past the window by this much, a line breaks before any token, word start or not. */
+const WINDOW_GRACE_SECONDS = 1;
 
 /** A peak follower turned into a gain: a copy of each block, never the recording. */
 export class CausalGain {
@@ -183,8 +193,13 @@ export class StreamChannel {
     const out: StreamLine[] = [];
     for (const tok of tokens) {
       const l = this.line;
-      const word = tok.text.startsWith(" ") || !l;
-      if (l && word && (tok.t - l.last >= this.o.pause || tok.t - l.first >= this.o.window)) {
+      const word = !l || tok.text.startsWith(" ") || SPACELESS_WORD.test(tok.text);
+      const overdue = l !== null && tok.t - l.first >= this.o.window + WINDOW_GRACE_SECONDS;
+      if (
+        l &&
+        (word || overdue) &&
+        (tok.t - l.last >= this.o.pause || tok.t - l.first >= this.o.window)
+      ) {
         out.push(...this.end(tok.t));
       }
       if (!this.line) {

@@ -403,6 +403,37 @@ describe("[ASR-4] lines cut from streaming tokens", () => {
     expect(words.length).toBe(tokens.length / 2);
   });
 
+  test("Chinese, Japanese and Thai tokens carry no space, and still break at a gap and at 12 s", () => {
+    const secs = (l: { from: number; to: number }) => (l.to - l.from) / RATE;
+    // A 0.9 s gap between two Japanese words, from an engine that answers fast: the gap closes
+    // the first line, before silence would.
+    const gap = new StreamChannel(
+      new ScriptedStream([tok("こんにち", 1), tok("は", 1.3), tok("ありがとう", 2.2)], 0.1),
+      o,
+    );
+    expect([...drive(gap, 5), ...gap.flush()].map((l) => l.text)).toEqual([
+      "こんにちは",
+      "ありがとう",
+    ]);
+    // 30 s of unbroken Chinese and Thai: every line within the window, no token lost.
+    const tokens: LiveToken[] = [];
+    for (let k = 0; 0.5 + 0.3 * k < 30; k++)
+      tokens.push(tok(k % 2 ? "今天" : "สวัสดี", 0.5 + 0.3 * k));
+    const sc = new StreamChannel(new ScriptedStream(tokens), o);
+    const lines = [...drive(sc, 31), ...sc.flush()];
+    expect(lines.length).toBeGreaterThanOrEqual(3);
+    for (const l of lines) expect(secs(l)).toBeLessThanOrEqual(12.5);
+    expect(lines.map((l) => l.text).join("")).toBe(tokens.map((t) => t.text).join(""));
+    // A script the cutter does not know as space-less still breaks a second past the window.
+    const pieces: LiveToken[] = [];
+    for (let k = 0; 0.5 + 0.3 * k < 30; k++) pieces.push(tok("ab", 0.5 + 0.3 * k));
+    const other = new StreamChannel(new ScriptedStream(pieces), o);
+    const long = [...drive(other, 31), ...other.flush()];
+    expect(long.length).toBeGreaterThanOrEqual(3);
+    for (const l of long) expect(secs(l)).toBeLessThanOrEqual(14);
+    expect(long.map((l) => l.text).join("")).toBe("ab".repeat(pieces.length));
+  });
+
   test("a line maps back to the part and file position its audio came from", () => {
     const sc = new StreamChannel(new ScriptedStream([tok(" ok", 1), tok(" great", 3.2)]), o);
     drive(sc, 2, 1, 0);
