@@ -2,6 +2,52 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.5.0 — a new window, and the accurate transcript for every call the app records
+
+The desktop window is rebuilt around a sidebar, and a first start now opens on a welcome that downloads the speech models instead of a workspace that cannot record. Dictation moves to a black island at the top of the screen that shows your words as you speak. The accurate final pass, which never ran on a call the desktop app recorded, now does. The live transcript can come from streaming Nemotron, which shows words sooner and never takes one back.
+
+### The window
+- **A welcome on first start.** While the speech models are missing, the window shows three steps in place of the workspace: download the models, what macOS will ask at the first Record, and the optional agent. Record stays disabled with its reason, and the state word reads `setup`, not `ready`. See [docs/ux/WINDOW.md](docs/ux/WINDOW.md).
+- **The sidebar.** Calls grouped by workspace, newest first, with the live call on top. A search box finds a call by title or workspace (it never searches what was said). Dictation, Models and Settings moved from the header into the sidebar, and a row at the bottom says whether akou can record.
+- **One composer row.** A round red Record with the global hotkey beside it, the title and template fields, and two thin meters for the mic and the call. The debug chips (clock, workspace, template, provider, engine) are gone; Settings shows the agent and speech engine in use.
+- **A call header over the transcript**, with the title, day, length, workspace and the speakers with their talk time.
+- **Ask and notes together.** The ask box sits on top with its presets in a menu, the last answer shows as a card, and the note input stays at the foot whether Notes or Enhanced is selected.
+- **The player shows only when the open call has a recording.** The accent colour is kept for the one primary action, the welcome's Download.
+- **Rename a call any time**, live or saved: click the title in the call header, `PATCH /v1/calls/{id}`, `akou calls rename last Weekly sync`, or MCP `akou_rename_call`. The call's folder keeps its first name.
+- **A call started from the CLI or an agent takes the window over**, even after you clicked another call. The floating indicator has an Open transcript button, and both its meters and the window's now rise and fall like a level meter instead of jumping.
+
+### Dictation
+- **The island.** The pill is now a black island at the top of the display you dictate into. It shows a dot the moment the key goes down, the words as you speak (`dictation.pillPreview`, on by default), then a check or `Copied · ⌘V`. The draft box drops from it as a sheet, with Discard, Retry on another engine, Copy, Insert and Send. See [docs/ux/DICTATION.md](docs/ux/DICTATION.md).
+- **Languages.** Setup asks which languages you speak. A language chip on the island and in the draft box switches the language with a click when the engine can be forced into one (`best` or `remote`), and the history row and the done island name the language used. `akou dictate start --language es` starts in a given language.
+- **Alternatives.** Once two engines have read a dictation, clicking an underlined word offers what the other engine heard there.
+- **Spacing and case.** Words dictated mid-sentence get the space before and after they need, and the first word is lower-cased mid-sentence (`Maybe` becomes `maybe`; `I`, `NASA` and `iPhone` stay). This reads the focused field, never a password field or a terminal, and only with `dictation.readField` and `dictation.smartSpacing` on.
+- **Per-app rules work.** The rules the Dictation page saves now apply: the engine, the language, the formatting pass, the insert method and send key, and sending the text to the draft box instead. `dictation.insert: type` now types, as its name says, and pastes only text that holds a line break, so a spoken new line never presses Return in a chat app.
+- **Clipboard only when Accessibility is refused.** Every insert then goes to the clipboard, with `Copied · ⌘V` on the island.
+- **It says why the key does nothing.** The island names a lost Accessibility grant, and dictation starts again by itself once the grant is back. With Secure Input on, it says a key chord cannot reach akou and a single key still works. The key recorder has a Use Fn test.
+- **A failed dictation keeps its words.** The error sheet has Retry, Copy and Open draft.
+- **Sounds when the island is off**, the Linux default: start, stop, cancel and done cues through the OS's own player.
+- **The Dictation page's mic meter moves**, and the page says when reading the field waits for Accessibility.
+
+### Transcription
+- **The final pass runs on the calls the desktop app records.** The capture helper now decodes its own Opus parts, so `akou finalize` and `akou wait --for final.done` work on every call, not only on calls with a WAV beside each part. **The first start of 0.5.0 runs the final pass on every past call that does not have a finished one, including calls whose pass failed before, one call at a time in the background.**
+- **Streaming Nemotron for the live transcript.** Words show about 0.7 s after they are said and are never taken back. It measured 18.80 WER on AMI meetings against 36.17 for the Parakeet path ([docs/research/asr-architecture.md](docs/research/asr-architecture.md)). The model is not part of the first download: get one from the Live section of the Models page (or `akou models pull nemotron-en-560`). `asr.live.engine` picks the model from `asr.languages`.
+- **Choose what writes the live transcript.** `asr.live` is `auto`, `parakeet`, `nemotron` or `upgrade`, set on the Models page, with `akou config set`, or per call with `akou start --live nemotron` and `POST /calls {live}`. `auto` uses Nemotron when its model is on disk, else Parakeet. `upgrade` rewrites each utterance during the call with Parakeet and then Qwen (13.31 WER on AMI), but keeps the GPU busy for the whole call, so it runs only when you choose it. `akou status` and `GET /status` report the setup a call runs.
+- **Qwen no longer invents words on silence.** On 25 silent clips it wrote 78 words before this fix and none after. The nightly models job now checks Qwen's accuracy, its silence and llama-server's memory.
+
+### Server mode
+- **Named jobs.** `POST /v1/jobs` takes an optional `title`, the OpenAI door takes it as `metadata.title`, and `PATCH /v1/jobs/{id}` renames a job. `GET /v1/jobs?q=` finds jobs by title, id or state, and the Jobs page shows the title and has a search box. `akou jobs list` prints it. See [docs/ux/SERVER.md](docs/ux/SERVER.md).
+
+The Telegram-Archive contract keeps its shape: the event feed, the job fields and the error shape are as in 0.4.0. `title` and `q` are new and optional.
+
+### Known limitations
+- **Dictation still ships in the macOS app only.** No desktop app is built for Windows or Linux yet.
+- **Clipboard only without Accessibility is the app's half.** On macOS the helper's key tap needs Accessibility, so with the grant refused the dictation key does nothing yet. A dictation started from the tray, `akou dictate start` or the API does land on the clipboard.
+- **The island's live words show in a screen share.** akou cannot hide its windows from screen capture yet (DK-P3). Turn `dictation.pillPreview` off before sharing your screen if that matters.
+- **Streaming Nemotron loses words over a long call.** One stream per channel for the whole call read 12.84 WER on 40 joined English clips, against 8.05 for the same clips one call each. The final pass after the call is unaffected.
+- **The live pass does not keep to `asr.languages` on the Parakeet path.** Parakeet takes no language, so a short English word can come out in another script in the live transcript.
+- **The first-start catch-up has no retry limit.** A call whose final pass fails every time is tried again at every start.
+- Every other item under 0.4.0's Known limitations still applies, except the ones this release closes: the error sheet's buttons, the still mic meter, per-app rules, sounds, and grants seen only while the helper runs.
+
 ## 0.4.0 — hold a key, talk, and akou types it into the app
 
 akou can now type what you say into whatever app has the keyboard. Hold the dictation key, speak, let go, and the text goes in at the cursor. When you fix a word it heard wrong, it offers to learn that word, once, and learns it only if you say yes. The macOS app runs it end to end. The Windows and Linux halves of the helper pass CI, but no desktop app ships for those systems yet. A machine with no model of its own can send its dictations to another akou. The Models page now compares the models and downloads or deletes them, in the app as well as on the server.
