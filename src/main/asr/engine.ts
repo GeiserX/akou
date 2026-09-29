@@ -71,9 +71,14 @@ export interface LiveToken {
   conf: number;
 }
 
-/** One live stream, kept for the whole call. */
+/**
+ * One live stream, kept for the whole call. Token times are seconds on the stream's own timeline:
+ * the samples pushed to it, nothing an engine adds itself.
+ */
 export interface LiveStream {
+  /** Appends audio; returns the tokens decoded since the last call. */
   push(samples: Float32Array): LiveToken[];
+  /** Decodes everything pushed so far and returns the rest of its tokens; the stream goes on. */
   flush(): LiveToken[];
   close(): void;
 }
@@ -216,6 +221,11 @@ export interface ModelSet {
    * labels then come from embedding clusters).
    */
   streamDiarizer(listener: StreamListener): StreamDiarizer | null;
+  /**
+   * A streaming engine of the live pass (`asr.live.engine`), loaded on first use; a set holds one
+   * at a time. Absent when the set has none: the live pass then re-decodes VAD windows.
+   */
+  liveEngine?(id: string): LiveEngine;
   /** Model loads so far, by model. */
   readonly loads: Readonly<Record<string, number>>;
 }

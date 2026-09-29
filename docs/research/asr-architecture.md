@@ -160,6 +160,19 @@ Latency and cost, first 600 s of e22, alone on the M4:
 
 So the new path shows words sooner, closes lines sooner, costs less, and never retracts.
 
+**Measured in akou's own live path (ASR-4).** Each FLEURS clip ran as one call through `LivePipeline` (the causal gain, one stream, the line cutter, the flush at the end) on the reference Mac mini, 150 clips per language, scored with the repository's normalizer (`scripts/eval/score.ts`, which does not normalize numbers). "Engine alone" is the same engine decoding each whole clip, gained by `prepareSpan`:
+
+| Engine | Stream language | fleurs_en | fleurs_es | Engine alone (en / es) |
+|---|---|---|---|---|
+| `nemotron-en-560` | `en` | 9.30 | | 9.30 |
+| `nemotron-3.5-560` | `auto` | 10.16 | 6.31 | 10.10 / 6.39 |
+| `nemotron-3.5-1120` | `auto` (en), `es` (es) | 9.99 | 6.36 | 9.96 / 6.54 |
+
+- The live path costs nothing against the engine alone: at most 0.06 worse on any row, and up to 0.18 better.
+- Number-normalized (Whisper's English normalizer, `text2num` for Spanish), Spanish reads 4.60 to 4.65 against the benchmark's 4.75. English reads 9.58 (`nemotron-en-560`) and 10.59 (both 3.5 tiers) against the benchmark's 8.15, a gap we have not explained. The benchmark harness is not in the repository yet (ASR-11). Part of the English errors are words spoken in a clip beyond its reference sentence, and one clip loops on a syllable under greedy decoding (15 errors).
+- A word shows 0.70 s (p50) after the audio at its token time reached the app, with both channels fed at real time; the same feed held back 1.5 s reads 2.24 s. This was measured while other jobs loaded the machine, and from the token's time rather than from the end of the word as in the table above.
+- The Parakeet path stays. It runs a call when no streaming model is on disk (the first-run download does not include one yet), and it is the `parakeet` setup of the live choice (akou-chp.23).
+
 Options behind the same setting, all measured:
 
 - Kroko es: Spanish only; its licence and training data must be cleared first.
