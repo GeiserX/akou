@@ -188,6 +188,7 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
     createTray: () => ({
       setMenu: () => {},
       setTitle: () => {},
+      setImage: () => {},
       onAction: () => {},
       remove: () => {},
     }),

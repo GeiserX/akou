@@ -18,7 +18,8 @@
  *   API, MCP and the CLI, for as long as the box is up (TRAPS "A synchronous SDK dialog").
  * - **Single instance** is the app's own lock; `main.ts` asks a running app to show its window.
  * - **The tray always has an image** (DK-T1): the idle item has no text, so without one it is
- *   invisible on macOS. The files are drawn by `scripts/tray-icons.ts`.
+ *   invisible on macOS. While a call records it is the mark with a red dot and no text (DK-T2).
+ *   The files are drawn by `scripts/tray-icons.ts`.
  * - **The application menu** (DK-M1, macOS) carries the Edit roles: the webview gets copy, paste,
  *   undo and select all only through them.
  * - **Notifications** (DK-N1, DK-N2, DK-T5): `notify.ts` decides; the shell feeds it the app's
@@ -182,6 +183,7 @@ export type TrayMenuItem =
 export interface NativeTray {
   setMenu(items: TrayMenuItem[]): void;
   setTitle(title: string): void;
+  setImage(o: { image: string; template: boolean }): void;
   onAction(fn: (action: string) => void): void;
   remove(): void;
 }
@@ -548,11 +550,29 @@ function fitInto(want: Rect, areas: readonly Rect[], min: { width: number; heigh
   };
 }
 
-/** The tray image for a platform: a template PNG on macOS, an ICO on Windows, a PNG elsewhere. */
-export function trayImage(platform: string, dir = TRAY_DIR): { image: string; template: boolean } {
-  if (platform === "darwin") return { image: join(dir, "akou-template.png"), template: true };
-  if (platform === "win32") return { image: join(dir, "akou.ico"), template: false };
-  return { image: join(dir, "akou.png"), template: false };
+/**
+ * The tray image for a platform: a template PNG on macOS, an ICO on Windows, a PNG elsewhere. While
+ * a call records, the mark's dot is red; a template image cannot hold a colour, so on macOS that
+ * one is a plain image.
+ */
+export function trayImage(
+  platform: string,
+  recording = false,
+  dir = TRAY_DIR,
+): { image: string; template: boolean } {
+  if (platform === "darwin") {
+    return recording
+      ? { image: join(dir, "akou-recording-macos.png"), template: false }
+      : { image: join(dir, "akou-template.png"), template: true };
+  }
+  const name = recording ? "akou-recording" : "akou";
+  if (platform === "win32") return { image: join(dir, `${name}.ico`), template: false };
+  return { image: join(dir, `${name}.png`), template: false };
+}
+
+/** Whether the tray shows the recording mark: a call that records, not one that is paused. */
+export function trayRecording(s: Pick<AppStatus, "live">): boolean {
+  return !!s.live && s.live.state !== "paused";
 }
 
 /**
@@ -647,16 +667,15 @@ export function trayMenu(o: {
 }
 
 /**
- * The tray's title: what a glance at the menu bar needs. A dictation shows while it listens or
- * transcribes, whatever the pill setting (DC-O4), since it lasts seconds and a call's state is
- * back right after.
+ * The tray's title: what a glance at the menu bar needs beside the image. A recording call has
+ * none, since the mark's red dot says it. A dictation shows while it listens or transcribes,
+ * whatever the pill setting (DC-O4), since it lasts seconds and a call's state is back right after.
  */
 export function trayTitle(s: Pick<AppStatus, "live" | "share">, dictation?: string): string {
   if (dictation === "listening") return "● dictating";
   if (dictation === "transcribing" || dictation === "inserting") return "… transcribing";
   if (s.share?.active) return "● shared";
-  if (!s.live) return "";
-  return s.live.state === "paused" ? "❚❚" : "● rec";
+  return s.live?.state === "paused" ? "❚❚" : "";
 }
 
 export class Shell implements WindowShell {
@@ -664,6 +683,8 @@ export class Shell implements WindowShell {
   private send: WindowSend | null = null;
   private rpc: WindowRpc | null = null;
   private tray: NativeTray | null = null;
+  /** Whether the tray shows the recording mark, so the image is set only when that changes. */
+  private recordingMark = false;
   private hotkey: string | null = null;
   private quitting = false;
   /** The quit question is up; a second quit waits for its answer instead of asking again. */
@@ -974,6 +995,11 @@ export class Shell implements WindowShell {
     this.live = !!s.live;
     const dictation = this.app.dictation?.state();
     this.tray?.setTitle(trayTitle(s, dictation));
+    const recording = trayRecording(s);
+    if (recording !== this.recordingMark) {
+      this.recordingMark = recording;
+      this.tray?.setImage(trayImage(this.o.platform, recording));
+    }
     this.tray?.setMenu(
       trayMenu({
         live: this.live,
@@ -1310,5 +1336,6 @@ export class Shell implements WindowShell {
     if (this.hotkey) this.ui.unregisterShortcut(this.hotkey);
     this.tray?.remove();
     this.tray = null;
+    this.recordingMark = false;
   }
 }

@@ -210,16 +210,42 @@ export function electrobunUi(): NativeUi {
       };
     },
 
-    createTray({ title, image, template }): NativeTray {
-      const tray = new Tray({ title, image, template, width: 16, height: 16 });
+    createTray(o): NativeTray {
+      let title = o.title;
+      let menu: TrayMenuItem[] | null = null;
+      let onAction: ((action: string) => void) | null = null;
+      const listen = (t: Tray, fn: (action: string) => void) =>
+        t.on("tray-clicked", (e) => {
+          const action = (e as { data?: { action?: string } }).data?.action;
+          if (action) fn(action);
+        });
+      const make = (image: string, template: boolean) => {
+        const t = new Tray({ title, image, template, width: 16, height: 16 });
+        if (menu) t.setMenu(menu);
+        if (onAction) listen(t, onAction);
+        return t;
+      };
+      let tray = make(o.image, o.template);
       return {
-        setMenu: (items: TrayMenuItem[]) => tray.setMenu(items),
-        setTitle: (t) => tray.setTitle(t),
-        onAction: (fn) =>
-          tray.on("tray-clicked", (e) => {
-            const action = (e as { data?: { action?: string } }).data?.action;
-            if (action) fn(action);
-          }),
+        setMenu: (items) => {
+          menu = items;
+          tray.setMenu(items);
+        },
+        setTitle: (t) => {
+          title = t;
+          tray.setTitle(t);
+        },
+        setImage: ({ image, template }) => {
+          // On macOS the SDK's `setImage` loads a plain image at its pixel size: a template turns
+          // black on a dark menu bar and a 32 px file draws at 32 pt. A new item gets both right.
+          if (process.platform !== "darwin") return tray.setImage(image);
+          tray.remove();
+          tray = make(image, template);
+        },
+        onAction: (fn) => {
+          onAction = fn;
+          listen(tray, fn);
+        },
         remove: () => tray.remove(),
       };
     },

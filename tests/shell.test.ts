@@ -8,6 +8,7 @@ import { describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
+import { inflateSync } from "node:zlib";
 import config, { MAIN_OUT, SHERPA_LIBS, sherpaCopies } from "../electrobun.config.ts";
 import { ICONSET, ICONSET_FILES } from "../scripts/app-icon.ts";
 import { MIN_MACOS } from "../scripts/build-app.ts";
@@ -33,6 +34,7 @@ import {
   TRAY_DIR,
   trayImage,
   trayMenu,
+  trayRecording,
   trayTitle,
   WINDOW_URL,
 } from "../src/main/window/shell.ts";
@@ -46,10 +48,14 @@ const LONG = 30_000;
 
 const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
-/** Why a tray item would show nothing, or null when its image would show (DK-T1). */
+/**
+ * Why a tray item would show nothing, or null when its image would show (DK-T1). The macOS
+ * recording image is the one that is not a template: it holds the red dot (DK-T2).
+ */
 function trayImageFault(
   o: { title?: string; image?: string; template?: boolean },
   platform: string,
+  recording = false,
 ): string | null {
   if (!o.image) return "no image";
   if (!existsSync(o.image)) return "no file";
@@ -64,8 +70,50 @@ function trayImageFault(
   if (w !== h || w < 16) return `a ${w}x${h} image`;
   // Colour type 6: RGBA. A template image is its alpha channel.
   if (b[25] !== 6) return "no alpha channel";
-  if ((platform === "darwin") !== (o.template === true)) return "the template flag is wrong";
+  if ((platform === "darwin" && !recording) !== (o.template === true)) {
+    return "the template flag is wrong";
+  }
   return null;
+}
+
+/** The RGBA pixels of each PNG in a tray file: the file itself, or each frame of an ICO. */
+function trayPixels(file: string): Uint8Array[] {
+  const b = readFileSync(file);
+  const pngs = b.subarray(0, 8).equals(PNG_SIGNATURE)
+    ? [b]
+    : Array.from({ length: b.readUInt16LE(4) }, (_, i) => {
+        const e = 6 + 16 * i;
+        const at = b.readUInt32LE(e + 12);
+        return b.subarray(at, at + b.readUInt32LE(e + 8));
+      });
+  return pngs.map((p) => {
+    const size = p.readUInt32BE(16);
+    let idat = Buffer.alloc(0);
+    for (let at = 8; at < p.length; ) {
+      const len = p.readUInt32BE(at);
+      if (p.toString("ascii", at + 4, at + 8) === "IDAT") {
+        idat = Buffer.concat([idat, p.subarray(at + 8, at + 8 + len)]);
+      }
+      at += 12 + len;
+    }
+    // `scripts/tray-icons.ts` leaves every row unfiltered: a filter byte, then the row.
+    const rows = inflateSync(idat);
+    const px = new Uint8Array(size * size * 4);
+    for (let y = 0; y < size; y++) {
+      px.set(rows.subarray(y * (size * 4 + 1) + 1, (y + 1) * (size * 4 + 1)), y * size * 4);
+    }
+    return px;
+  });
+}
+
+/** How many opaque pixels of an image are red: the recording dot. */
+function redPixels(px: Uint8Array): number {
+  let n = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    const [r = 0, g = 0, b = 0, a = 0] = px.subarray(i, i + 4);
+    if (a > 128 && r > 200 && g < 100 && b < 100) n++;
+  }
+  return n;
 }
 
 /** What `iconutil` would refuse in an iconset: a missing file, or one that is not a PNG of its size. */
@@ -249,9 +297,8 @@ describe("the desktop shell over a fake NativeUi", () => {
       ),
     ).toMatchObject({ checked: true });
     expect(trayTitle({ live: null, share: { active: false } })).toBe("");
-    expect(trayTitle({ live: { state: "recording" } as never, share: { active: false } })).toBe(
-      "● rec",
-    );
+    expect(trayTitle({ live: { state: "recording" } as never, share: { active: false } })).toBe("");
+    expect(trayTitle({ live: { state: "paused" } as never, share: { active: false } })).toBe("❚❚");
     expect(trayTitle({ live: null, share: { active: true } })).toBe("● shared");
     const f = fakeUi();
     const a = fakeApp();
@@ -313,9 +360,70 @@ describe("the desktop shell over a fake NativeUi", () => {
     expect(trayImageFault({ ...trayImage("win32") }, "linux")).toBe("not a PNG");
   });
 
+  test("[DK-T2] A recording call: the tray is the mark with a red dot and no text", async () => {
+    for (const platform of ["darwin", "win32", "linux"]) {
+      const f = fakeUi();
+      const a = fakeApp();
+      // The app's lifecycle events, as the bridge sends one when a call starts or ends.
+      let lifecycle = () => {};
+      const bridge = {
+        ...bridgeStub,
+        watchLifecycle: (fn: () => void) => {
+          lifecycle = fn;
+          return () => {};
+        },
+      } as unknown as Bridge;
+      const shell = new Shell(a.app, bridge, f.ui, { platform, setLoginItem: async () => {} });
+      await shell.start();
+      // Idle: no red anywhere, so the idle icon never reads as recording.
+      for (const px of trayPixels(f.trays[0]?.image ?? "")) expect(redPixels(px)).toBe(0);
+      f.tray("record");
+      await until(() => a.state.live, 1000, "tray record");
+      lifecycle();
+      await until(() => f.trayImages.length === 1, 1000, "the recording image");
+      const rec = f.trayImages[0] ?? { image: "", template: true };
+      expect(rec).toEqual(trayImage(platform, true));
+      expect(trayImageFault(rec, platform, true)).toBeNull();
+      for (const px of trayPixels(rec.image)) expect(redPixels(px)).toBeGreaterThan(0);
+      expect(f.title()).toBe("");
+      // A refresh in the same state sets no image: on macOS each one is a new status item.
+      lifecycle();
+      f.tray("login");
+      const checked = () =>
+        f.trayMenu().some((i) => (i as { action?: string; checked?: boolean }).checked === true);
+      await until(checked, 1000, "the login item checked");
+      expect(f.trayImages).toHaveLength(1);
+      f.tray("stop");
+      await until(() => !a.state.live, 1000, "tray stop");
+      lifecycle();
+      await until(() => f.trayImages.length === 2, 1000, "the idle image");
+      expect(f.trayImages[1]).toEqual(trayImage(platform));
+      expect(trayImageFault(f.trayImages[1] ?? {}, platform)).toBeNull();
+      expect(f.title()).toBe("");
+      await shell.close();
+    }
+    // A paused call is not recording: the idle mark, and its title says paused.
+    expect(trayRecording({ live: { state: "paused" } as never })).toBe(false);
+    expect(trayRecording({ live: { state: "recording" } as never })).toBe(true);
+    expect(trayRecording({ live: null })).toBe(false);
+    // Positive controls: the idle template on a recording macOS item, and the plain recording image
+    // flagged as a template, both fail.
+    expect(trayImageFault(trayImage("darwin"), "darwin", true)).toBe("the template flag is wrong");
+    expect(trayImageFault({ ...trayImage("darwin", true), template: true }, "darwin", true)).toBe(
+      "the template flag is wrong",
+    );
+  });
+
   test("the tray icons on disk are the ones scripts/tray-icons.ts draws", () => {
     const files = trayIconFiles();
-    expect(Object.keys(files).sort()).toEqual(["akou-template.png", "akou.ico", "akou.png"]);
+    expect(Object.keys(files).sort()).toEqual([
+      "akou-recording-macos.png",
+      "akou-recording.ico",
+      "akou-recording.png",
+      "akou-template.png",
+      "akou.ico",
+      "akou.png",
+    ]);
     for (const [name, bytes] of Object.entries(files)) {
       expect(Buffer.from(readFileSync(join(TRAY_DIR, name))).equals(Buffer.from(bytes))).toBe(true);
     }

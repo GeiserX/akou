@@ -24,6 +24,8 @@ export interface FakeUi {
   shortcuts: Map<string, () => void>;
   /** What `createTray` was given, once per call. */
   trays: { title: string; image?: string; template?: boolean }[];
+  /** Every image the shell set on the tray after creating it, in order. */
+  trayImages: { image: string; template: boolean }[];
   /** Every notification shown, in order. */
   notices: { title: string; body: string }[];
   /** The application menu, or null when none was set. */
@@ -151,6 +153,9 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
         setTitle: (t) => {
           title = t;
         },
+        setImage: (o) => {
+          f.trayImages.push({ ...o });
+        },
         onAction: (fn) => {
           action = fn;
         },
@@ -219,6 +224,7 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     log,
     shortcuts,
     trays,
+    trayImages: [],
     notices,
     appMenu: () => appMenu,
     menu: (a) => menuAction(a),

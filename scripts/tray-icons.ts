@@ -1,17 +1,21 @@
 /**
- * Draws the tray icon (docs/ux/DESKTOP.md DK-T1) and writes it per OS into `src/main/window/tray/`:
+ * Draws the tray icons (docs/ux/DESKTOP.md DK-T1, DK-T2) and writes them per OS into
+ * `src/main/window/tray/`:
  *
  *   bun scripts/tray-icons.ts
  *
- * - `akou-template.png`: macOS, a template image. Only its alpha counts: the menu bar recolours it
- *   for a dark or a light bar. 32 px, shown at 16 pt, so it is sharp on a Retina display.
- * - `akou.ico`: Windows, 16 and 32 px PNG frames in one ICO.
- * - `akou.png`: the Linux AppIndicator, 32 px.
+ * - `akou-template.png`: macOS idle, a template image. Only its alpha counts: the menu bar
+ *   recolours it for a dark or a light bar. 32 px, shown at 16 pt, so it is sharp on a Retina display.
+ * - `akou.ico`: Windows idle, 16 and 32 px PNG frames in one ICO.
+ * - `akou.png`: the Linux AppIndicator idle, 32 px.
+ * - `akou-recording-macos.png`, `akou-recording.ico`, `akou-recording.png`: the same files while a
+ *   call records, the dot in the brand red. A template image cannot hold a colour, so the macOS one
+ *   is a plain image whose glyph is a grey that reads on a dark and a light bar alike.
  *
  * The glyph is akou's mark (`assets/brand/akou-mark-mono.svg`): a lowercase a whose counter holds a
  * dot, one shape for the idle state, drawn on the mark's 32-unit grid so every edge of the ring and
- * the stem lands on a whole pixel at 16 px. The dot is the glyph's own colour, never red, so the
- * idle icon never reads as recording. Windows and Linux get a mid blue that reads on a dark and a
+ * the stem lands on a whole pixel at 16 px. The idle dot is the glyph's own colour, never red, so
+ * the idle icon never reads as recording. Windows and Linux get a mid blue that reads on a dark and a
  * light panel; neither recolours a tray image. The files are committed; a test checks they equal
  * what this script draws, so the two never drift.
  */
@@ -31,33 +35,50 @@ const SS = 4;
 type Rgb = readonly [number, number, number];
 const BLACK: Rgb = [0, 0, 0];
 const BLUE: Rgb = [0x2f, 0x7c, 0xf6];
+/** The brand dot (`assets/brand/akou-mark.svg`). */
+const RED: Rgb = [0xff, 0x45, 0x3a];
+/**
+ * The grey whose contrast with white equals its contrast with black (4.6 to 1 each): the macOS
+ * recording glyph, which the menu bar does not recolour.
+ */
+const GREY: Rgb = [0x75, 0x75, 0x75];
 
-/** Is a point (in units) inside the mark? */
-function inside(px: number, py: number): boolean {
+/** Which part of the mark a point (in units) is in: the ring and stem, the dot, or none. */
+function part(px: number, py: number): "glyph" | "dot" | null {
   const h = STROKE / 2;
   const d = Math.hypot(px - RING.cx, py - RING.cy);
-  if (Math.abs(d - RING.r) <= h || d <= DOT_R) return true;
+  if (d <= DOT_R) return "dot";
+  if (Math.abs(d - RING.r) <= h) return "glyph";
   // The stem, with round ends.
   const cy = Math.min(Math.max(py, STEM.top), STEM.bottom);
-  return (px - STEM.x) ** 2 + (py - cy) ** 2 <= h * h;
+  return (px - STEM.x) ** 2 + (py - cy) ** 2 <= h * h ? "glyph" : null;
 }
 
-/** The glyph at `size` pixels, RGBA, straight alpha. */
-function draw(size: number, rgb: Rgb): Uint8Array {
+/**
+ * The mark at `size` pixels, RGBA, straight alpha: the ring and stem in `ink`, the dot in `dot`.
+ * The dot sits apart from the ring, so a pixel's colour is the mean of the parts it covers.
+ */
+function draw(size: number, ink: Rgb, dot: Rgb = ink): Uint8Array {
   const px = new Uint8Array(size * size * 4);
   const unit = UNITS / size;
   for (let y = 0; y < size; y++) {
     for (let x = 0; x < size; x++) {
-      let hit = 0;
+      let glyph = 0;
+      let inDot = 0;
       for (let sy = 0; sy < SS; sy++) {
         for (let sx = 0; sx < SS; sx++) {
-          if (inside((x + (sx + 0.5) / SS) * unit, (y + (sy + 0.5) / SS) * unit)) hit++;
+          const p = part((x + (sx + 0.5) / SS) * unit, (y + (sy + 0.5) / SS) * unit);
+          if (p === "glyph") glyph++;
+          else if (p === "dot") inDot++;
         }
       }
+      const hit = glyph + inDot;
       const i = (y * size + x) * 4;
-      px[i] = rgb[0];
-      px[i + 1] = rgb[1];
-      px[i + 2] = rgb[2];
+      for (let c = 0; c < 3; c++) {
+        px[i + c] = hit
+          ? Math.round(((ink[c] as number) * glyph + (dot[c] as number) * inDot) / hit)
+          : (ink[c] as number);
+      }
       px[i + 3] = Math.round((255 * hit) / (SS * SS));
     }
   }
@@ -158,6 +179,11 @@ export function trayIconFiles(): Record<string, Uint8Array> {
     "akou-template.png": png(32, draw(32, BLACK)),
     "akou.ico": ico([16, 32].map((size) => ({ size, png: png(size, draw(size, BLUE)) }))),
     "akou.png": png(32, draw(32, BLUE)),
+    "akou-recording-macos.png": png(32, draw(32, GREY, RED)),
+    "akou-recording.ico": ico(
+      [16, 32].map((size) => ({ size, png: png(size, draw(size, BLUE, RED)) })),
+    ),
+    "akou-recording.png": png(32, draw(32, BLUE, RED)),
   };
 }
 

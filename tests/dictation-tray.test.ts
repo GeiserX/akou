@@ -48,7 +48,7 @@ describe("DC-O4: the tray's dictation item and title", () => {
     expect(trayTitle(rec, "listening")).toBe("● dictating");
     expect(trayTitle(rec, "transcribing")).toBe("… transcribing");
     expect(trayTitle(rec, "inserting")).toBe("… transcribing");
-    expect(trayTitle(rec, "idle")).toBe("● rec");
+    expect(trayTitle(rec, "idle")).toBe("");
   });
 
   test("a state change reaches the tray at once, and the menu's items call the session door", async () => {
