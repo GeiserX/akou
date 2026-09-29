@@ -71,6 +71,7 @@ report("start");
 const tick = setInterval(() => report("during a pass"), 120_000);
 for (let c = 1; c <= calls; c++) {
   const dir = join(work, `call-${c}`);
+  rmSync(dir, { recursive: true, force: true });
   mkdirSync(join(dir, "audio"), { recursive: true });
   const w = LogWriter.open(dir);
   const files: Record<number, string> = {};
