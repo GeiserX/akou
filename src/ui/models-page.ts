@@ -133,8 +133,12 @@ export class ModelsPage {
   private readonly armed = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private shown = false;
-  /** Bumped by every read, so an older answer that lands late never draws over a newer one. */
-  private reads = 0;
+  /** Bumped by every show and every leave: a show that lands after a newer one draws nothing. */
+  private shows = 0;
+  /** Bumped by every poll and every show: an older poll's answer never draws over a newer one. */
+  private polls = 0;
+  /** A show is reading: the page holds its "Reading" line, and a poll leaves it alone. */
+  private loading = false;
 
   constructor(
     private readonly t: Transport,
@@ -161,7 +165,11 @@ export class ModelsPage {
     await this.saveTyped();
     this.shown = true;
     this.sub = key === "helpers";
-    const n = ++this.reads;
+    // The poll stops while the page reads everything; a poll that lands meanwhile draws nothing.
+    this.stop();
+    this.polls++;
+    this.loading = true;
+    const n = ++this.shows;
     replace(this.col, h("p", { class: "pg-reading" }, "Reading the models…"));
     const [models, cfg, st] = await Promise.all([
       this.t.request<ModelsReply>("GET", "/models").catch(() => null),
@@ -170,7 +178,8 @@ export class ModelsPage {
         ? null
         : this.t.request<{ app?: { platform?: string } }>("GET", "/status").catch(() => null),
     ]);
-    if (n !== this.reads || !this.shown) return;
+    if (n !== this.shows || !this.shown) return;
+    this.loading = false;
     if (st && st.status < 400) this.platform = String(st.body?.app?.platform ?? "");
     if (cfg && cfg.status < 400) this.config(cfg.body);
     else toast(message(cfg?.body, "the settings could not be read"));
@@ -182,7 +191,9 @@ export class ModelsPage {
   /** The page is left: what is still typed into a number is saved, and the page stops following. */
   leave(): void {
     this.shown = false;
-    this.reads++;
+    this.shows++;
+    this.polls++;
+    this.loading = false;
     this.stop();
     void this.saveTyped();
   }
@@ -226,14 +237,15 @@ export class ModelsPage {
 
   /** Reads the models again and redraws them; the settings' fields are left as they are. */
   private async read(): Promise<void> {
-    const n = ++this.reads;
+    if (this.loading) return;
+    const n = ++this.polls;
     let r: { status: number; body: ModelsReply };
     try {
       r = await this.t.request<ModelsReply>("GET", "/models");
     } catch {
       return;
     }
-    if (n !== this.reads || r.status !== 200 || !this.shown) return;
+    if (n !== this.polls || r.status !== 200 || !this.shown || this.loading) return;
     this.take(r.body);
     this.drawModels();
   }

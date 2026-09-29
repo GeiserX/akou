@@ -199,6 +199,17 @@ describe("the Models page", () => {
       await page.click(`${QWEN} [data-action="download"]`);
       await page.waitForSelector(`${QWEN}[data-state="downloading"] [role="progressbar"]`);
       expect(await page.textContent(`${QWEN} .pg-progress`)).toMatch(/\d+ % of /);
+      // Opened again while the download's poll ticks, with a slow read: a tick never leaves the
+      // page on its "Reading" line.
+      await page.route("**/api/v1/config", async (r) => {
+        await new Promise((ok) => setTimeout(ok, 1500));
+        await r.continue().catch(() => {});
+      });
+      await page.click("#models-open");
+      await page.waitForSelector("#page-models .pg-reading");
+      await page.waitForSelector("#page-models .pg-reading", { state: "detached", timeout: 5000 });
+      await page.unroute("**/api/v1/config");
+      await page.waitForSelector(`${QWEN} [data-action="cancel"]`);
       await page.click(`${QWEN} [data-action="cancel"]`);
       await page.waitForSelector(`${QWEN}[data-state="missing"] [data-action="download"]`);
       const listed = (await rig.api("GET", "/models")).body.models as {
