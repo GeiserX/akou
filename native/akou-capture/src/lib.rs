@@ -22,6 +22,7 @@ pub mod engine;
 pub mod file_source;
 pub mod health;
 pub mod json;
+pub mod opus_reader;
 pub mod opus_writer;
 pub mod protocol;
 pub mod pulse_rules;
