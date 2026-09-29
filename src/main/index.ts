@@ -2915,7 +2915,9 @@ export class AkouApp implements ApiApp {
       this.remoteDictation?.close();
       if (this.bestRewarm !== null) this.clock.clearTimeout(this.bestRewarm);
       await this.bestDictation?.stop();
-      await this.liveQwen?.server.stop();
+      const liveQwen = this.liveQwen;
+      this.liveQwen = null;
+      await liveQwen?.server.stop();
       await this.asr?.close();
       await this.page?.stop();
       await this.server?.stop();
