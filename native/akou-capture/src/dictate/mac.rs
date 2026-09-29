@@ -49,7 +49,7 @@ use objc2_application_services::{AXError, AXIsProcessTrusted, AXUIElement, AXVal
 use objc2_core_foundation::{
     CFBoolean, CFDictionary, CFMachPort, CFNumber, CFPreferencesAppSynchronize,
     CFPreferencesCopyAppValue, CFPreferencesSetAppValue, CFRange, CFRetained, CFRunLoop, CFString,
-    CFType, ConcreteType, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
+    CFType, CGPoint, CGSize, ConcreteType, kCFRunLoopCommonModes, kCFRunLoopDefaultMode,
 };
 use objc2_core_graphics::{
     CGEvent, CGEventField, CGEventMask, CGEventSource, CGEventSourceStateID, CGEventTapLocation,
@@ -278,6 +278,37 @@ fn focused(pid: i32) -> Option<CFRetained<AXUIElement>> {
     attr_element(&app, "AXFocusedUIElement")
 }
 
+/// An accessibility value of `el` of type `ty` (a point, a size, a range), read into `T`.
+fn ax_value<T: Copy>(el: &AXUIElement, name: &str, ty: AXValueType, empty: T) -> Option<T> {
+    let v = attr(el, name)?.downcast::<AXValue>().ok()?;
+    let mut out = empty;
+    // SAFETY: `out` is a `T`, the Core Foundation type `ty` names.
+    let ok = unsafe { v.value(ty, NonNull::from(&mut out).cast::<c_void>()) };
+    ok.then_some(out)
+}
+
+/// The frame of the window with the keyboard in application `pid`: its `AXFocusedWindow`'s
+/// position and size, in the same top-left points as `kCGWindowBounds`.
+fn focused_window_frame(pid: i32) -> Option<p::Frame> {
+    // SAFETY: any pid; returns a +1 reference.
+    let app = unsafe { AXUIElement::new_application(pid) };
+    let win = attr_element(&app, "AXFocusedWindow")?;
+    let at = ax_value(
+        &win,
+        "AXPosition",
+        AXValueType::CGPoint,
+        CGPoint::new(0.0, 0.0),
+    )?;
+    let size = ax_value(&win, "AXSize", AXValueType::CGSize, CGSize::new(0.0, 0.0))?;
+    let n = |v: f64| v.is_finite().then(|| v.round() as i64);
+    Some(p::Frame {
+        x: n(at.x)?,
+        y: n(at.y)?,
+        width: n(size.width)?,
+        height: n(size.height)?,
+    })
+}
+
 pub struct Screen;
 
 impl Targets for Screen {
@@ -307,10 +338,13 @@ impl Targets for Screen {
         }
     }
 
-    /// The frontmost normal window of the application with the keyboard: where the pill shows.
+    /// The window with the keyboard, where the pill shows: the focused application's
+    /// `AXFocusedWindow`, else (no grant, a dormant tree) its frontmost normal window.
     fn frame(&mut self) -> Option<p::Frame> {
         let pid = front_pid(&system_wide())?;
-        windows().into_iter().find(|w| w.pid == pid)?.frame
+        focused_window_frame(pid)
+            .filter(|f| f.width > 0 && f.height > 0)
+            .or_else(|| windows().into_iter().find(|w| w.pid == pid)?.frame)
     }
 
     fn secure_input(&mut self) -> bool {
