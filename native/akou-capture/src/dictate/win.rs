@@ -50,7 +50,9 @@ use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver, SyncSender};
 use std::time::Duration;
 
-use windows::Win32::Foundation::{CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{
+    CloseHandle, HANDLE, HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM,
+};
 use windows::Win32::Security::{
     GetSidSubAuthority, GetSidSubAuthorityCount, GetTokenInformation, TOKEN_MANDATORY_LABEL,
     TOKEN_QUERY, TokenIntegrityLevel,
@@ -76,8 +78,8 @@ use windows::Win32::UI::Accessibility::{
 use windows::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetForegroundWindow,
-    GetMessageW, GetWindowThreadProcessId, HC_ACTION, HHOOK, IsIconic, KBDLLHOOKSTRUCT,
-    LLKHF_EXTENDED, MSG, MSLLHOOKSTRUCT, PostMessageW, RegisterClassW, SW_RESTORE,
+    GetMessageW, GetWindowRect, GetWindowThreadProcessId, HC_ACTION, HHOOK, IsIconic,
+    KBDLLHOOKSTRUCT, LLKHF_EXTENDED, MSG, MSLLHOOKSTRUCT, PostMessageW, RegisterClassW, SW_RESTORE,
     SetForegroundWindow, SetWindowsHookExW, ShowWindow, TranslateMessage, UnhookWindowsHookEx,
     WH_KEYBOARD_LL, WH_MOUSE_LL, WINDOW_EX_STYLE, WINDOW_STYLE, WM_KEYDOWN, WM_SYSKEYDOWN,
     WNDCLASSW,
@@ -650,6 +652,22 @@ impl Targets for Screen {
             window: (hwnd.0 as usize).to_string(),
             field: field.into(),
         }
+    }
+
+    /// The foreground window's rectangle, where the pill shows (DC-O1). The helper declares no
+    /// DPI awareness, so Windows scales the rectangle to 96 DPI; that matches the app's display
+    /// areas when every display has the same scale, and at worst names the display beside it.
+    fn frame(&mut self) -> Option<p::Frame> {
+        let (hwnd, _) = foreground()?;
+        let mut r = RECT::default();
+        // SAFETY: a query on a live handle into a local out-parameter.
+        unsafe { GetWindowRect(hwnd, &mut r) }.ok()?;
+        Some(p::Frame {
+            x: i64::from(r.left),
+            y: i64::from(r.top),
+            width: i64::from(r.right - r.left),
+            height: i64::from(r.bottom - r.top),
+        })
     }
 
     fn secure_input(&mut self) -> bool {

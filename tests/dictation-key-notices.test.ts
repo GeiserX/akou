@@ -312,6 +312,7 @@ async function pillApp(settings: Record<string, unknown>, args: string[]) {
     rpc = o.rpc;
     return {
       window: {
+        setFrame: () => {},
         showInactive: () => {},
         hide: () => {},
         close: () => {},
@@ -398,7 +399,7 @@ describe("DC-A2 over a whole app: Secure Input on, the fake helper hears modifie
     await until(() => s.states.some((x) => x.state === "done"), 10_000, "the dictation done");
     // Secure Input on at the key-down: the secure-field guard copies the text, never pastes it and
     // keeps no words of it (DC-N8).
-    expect(s.states.map((x) => x.state)).toEqual(["listening", "transcribing", "done"]);
+    expect(s.states.map((x) => x.state)).toEqual(["pressed", "listening", "transcribing", "done"]);
     expect(s.states.at(-1)).toEqual({ state: "done", how: "copied", note: "⌘V" });
     expect(s.d?.log.items()[0]).toMatchObject({ state: "inserted", text: null });
   });

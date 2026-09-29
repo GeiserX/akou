@@ -107,6 +107,12 @@ function pressedBy(h: Hotkey, key: string, held: readonly string[]): boolean {
 export type EndReason = "release" | "tap" | "key" | "cancel" | "stop";
 
 export type ActivationOut =
+  /**
+   * The hotkey went down and the press may yet become a session (the helper's `press`, DC-O1);
+   * `disarm`: it was not a dictation after all.
+   */
+  | { type: "arm"; at: number }
+  | { type: "disarm" }
   /** A session starts; its audio begins at `at` less the ring. */
   | { type: "start"; at: number }
   | { type: "end"; reason: EndReason }
@@ -180,6 +186,7 @@ export class ActivationMachine {
     switch (st.s) {
       case "idle":
         if (!press) return false;
+        out.push({ type: "arm", at });
         if (chord) {
           out.push({ type: "start", at });
           this.state = { s: "listening", down: at, held: true };
@@ -190,6 +197,7 @@ export class ActivationMachine {
       case "pending":
         // The interrupt rule: another key while the modifier is held is a shortcut.
         this.state = { s: "idle" };
+        out.push({ type: "disarm" });
         return false;
       case "listening": {
         if (press) {
@@ -274,7 +282,7 @@ export class ActivationMachine {
   /** `session.start` from the app: a latched session, as if the key had been tapped. */
   start(at: number, out: ActivationOut[]): void {
     if (this.state.s !== "idle") return;
-    out.push({ type: "start", at });
+    out.push({ type: "arm", at }, { type: "start", at });
     this.state = { s: "listening", down: at, held: false };
   }
 

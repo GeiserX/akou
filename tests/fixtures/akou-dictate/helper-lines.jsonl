@@ -1,4 +1,6 @@
 {"type":"ready","protocol":"akou-dictate/1","version":"@VERSION@","backend":"simulate","swallow_keys":true,"grants":{"mic":"granted","accessibility":"not-needed"}}
+{"type":"press","on":true,"frame":{"x":-1440,"y":120,"width":900,"height":700}}
+{"type":"press","on":false}
 {"type":"session.started","id":"1","target":{"app":"Slack","pid":7,"window":"w1","field":"editable"},"capture_ns":"123456789012345678"}
 {"type":"level","rms":0.25}
 {"type":"key","name":"Shift+Enter"}

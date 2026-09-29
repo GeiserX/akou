@@ -68,6 +68,8 @@
  *                           the app and are never reported
  *   --field KIND            the target field: editable (default), not-editable, unknown, secure
  *   --target-app ID         the target app (default `com.example.editor`)
+ *   --target-frame X,Y,W,H  the frame of the window with the keyboard, sent with `press` at each
+ *                           key-down (DC-O1); without it `press` carries no frame, as on Linux
  *   --ax FILE               the scripted accessibility tree, the same lines as the real helper's
  *                           `--ax fake FILE`: `<ms> {"app","pid","window","field"}` per line, the
  *                           last line at or before a moment being what has the keyboard then (at
@@ -429,6 +431,12 @@ async function runDictate(): Promise<void> {
     window: "w1",
     field,
   };
+  /** The frame of the window with the keyboard, `--target-frame X,Y,W,H` (DC-O1). */
+  const frameArg = opt("--target-frame")?.split(",").map(Number);
+  const frame =
+    frameArg?.length === 4 && frameArg.every(Number.isFinite)
+      ? { x: frameArg[0], y: frameArg[1], width: frameArg[2], height: frameArg[3] }
+      : null;
   const axFile = opt("--ax");
   const ax = axFile ? parseAx(readFileSync(axFile, "utf8")) : null;
   /** What has the keyboard at key time `ms`: the tree's last line at or before it. */
@@ -492,6 +500,8 @@ async function runDictate(): Promise<void> {
   const act = async (outs: ActivationOut[]) => {
     for (const o of outs) {
       if (o.type === "key") say({ type: "key", name: o.name });
+      else if (o.type === "arm") say({ type: "press", on: true, ...(frame ? { frame } : {}) });
+      else if (o.type === "disarm") say({ type: "press", on: false });
       else if (o.type === "start") {
         if (slowMic > 0) await sleep(slowMic);
         open = { id: String(++sessions), at: o.at };

@@ -97,6 +97,14 @@ button:focus-visible {
 .icon {
   flex: none;
 }
+/* At rest: the key is down and the press is not a session yet, a dimmed dot on the smallest
+   island. */
+#dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+}
 #rec {
   width: 8px;
   height: 8px;

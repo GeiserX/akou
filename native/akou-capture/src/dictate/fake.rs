@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use super::insert::{Clipboard, Key, Sink, Snapshot, Targets};
-use super::protocol::Target;
+use super::protocol::{Frame, Target};
 use super::readback::Field;
 use crate::json::Json;
 
@@ -33,6 +33,8 @@ pub struct World {
     /// The window under the cursor, and the scripted ones by time (`--ax fake FILE`).
     pub target: Target,
     pub script: Vec<(u64, Target)>,
+    /// The frame of that window, for the pill's display (DC-O1).
+    pub frame: Option<Frame>,
     pub secure_input: bool,
     pub elevated: bool,
     pub focused: Vec<Target>,
@@ -194,6 +196,9 @@ impl Targets for Screen {
             .rev()
             .find(|(ms, _)| ms * 1_000_000 <= t_ns)
             .map_or_else(|| w.target.clone(), |(_, t)| t.clone())
+    }
+    fn frame(&mut self) -> Option<Frame> {
+        self.0.borrow().frame
     }
     fn secure_input(&mut self) -> bool {
         self.0.borrow().secure_input

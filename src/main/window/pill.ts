@@ -31,6 +31,11 @@
  *   remote failure), which decodes it again and opens the draft box on the new reading; Copy and
  *   Open draft where it has text. Nothing is inserted from the pill: the draft box's Enter does it,
  *   into the app captured when the session began.
+ * - `pressed`, the island at rest, from the dictation key's down until the press is a session
+ *   (a modifier held under the hold time, a mic still opening) or is dropped (another key during
+ *   a modifier-only hold), at most `PRESS_MS`. Before it shows, the shell moves the window to the
+ *   display of the window with the keyboard, when the helper can tell. A dropped press gives back
+ *   the outcome or notice it took the island from, for the time that had left.
  * - hidden otherwise: an empty or cancelled dictation, dictation off, the helper starting.
  * - `notice` for `NOTICE_MS` when the dictation key does nothing (macOS): the helper lost the
  *   Accessibility grant (DC-N1), with a button to its pane, shown once the island is free, so a
@@ -56,6 +61,7 @@ import type {
 } from "../../ui/pill-protocol.ts";
 import { pillPreview } from "../../ui/pill-protocol.ts";
 import { LEARNED_MS } from "../dictation/learner.ts";
+import type { Frame } from "../dictation/protocol.ts";
 import type { DictationFollow, ErrorAction } from "../dictation/service.ts";
 
 type Messages = PillRpc["webview"]["messages"];
@@ -129,6 +135,11 @@ export interface PillOptions {
   label(binding: string, platform: string): string;
   /** Opens the Accessibility pane: the notice's button after the grant was lost (DC-N1). */
   grant?(): Promise<boolean>;
+  /**
+   * Moves the window to the display that holds `frame`, the window with the keyboard at the
+   * key-down, before it shows (DC-O1); null, where the helper cannot tell, leaves it where it is.
+   */
+  place?(frame: Frame | null): void;
 }
 
 export interface PillRpcHandlers {
@@ -158,6 +169,12 @@ export function keyedChord(binding: string): boolean {
     return false;
   }
 }
+
+/**
+ * How long the island stays at rest with nothing after the key-down: a mic that never opened, a
+ * press the helper never settled. A session shows long before (the hold time and a cold mic).
+ */
+export const PRESS_MS = 3000;
 
 /** How long `inserted` or `copied` stays before the pill hides (DC-O1). */
 export const DONE_MS = 1500;
@@ -241,6 +258,13 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
    * notice shows when the island would hide, if the grant is still lost then.
    */
   let grantPending = false;
+  /** When the island's hide timer is due, so a press can hand an outcome back its time. */
+  let hideAt = Number.POSITIVE_INFINITY;
+  /**
+   * The outcome or notice a press took the island from, and when it was due to hide: the dictation
+   * key used in a shortcut (Right ⌘+C) is a dropped press, and gives it back.
+   */
+  let underPress: { s: PillState; until: number } | null = null;
 
   const visible = () => shown.state !== "hidden" || chipUp !== null;
 
@@ -252,6 +276,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         return;
       }
     }
+    if (s.state !== "pressed") underPress = null;
     shown = s;
     send().state(s);
     o.onVisible(visible());
@@ -267,6 +292,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
 
   const hideAfter = (ms: number) => {
     cancelHide();
+    hideAt = o.now() + ms;
     cancelHide = later(ms, () => put({ state: "hidden" }));
   };
 
@@ -304,8 +330,15 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         });
         return;
       case "idle":
-        // An outcome or a notice stays for its time; anything else (empty, cancelled) hides now.
-        if (shown.state === "done" || shown.state === "error" || shown.state === "notice") return;
+        // An outcome or a notice stays for its time, and the dot until the press is a session or
+        // is dropped; anything else (empty, cancelled) hides now.
+        if (
+          shown.state === "done" ||
+          shown.state === "error" ||
+          shown.state === "notice" ||
+          shown.state === "pressed"
+        )
+          return;
         cancelHide();
         if (shown.state !== "hidden") put({ state: "hidden" });
         return;
@@ -370,6 +403,8 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
   /** Secure Input changed: a keyed chord is dead while it is on (DC-A2). */
   const secureInput = (on: boolean) => {
     if (!on) {
+      if (underPress?.s.state === "notice" && underPress.s.reason === "secure-input")
+        underPress = null;
       if (shown.state === "notice" && shown.reason === "secure-input") {
         cancelHide();
         put({ state: "hidden" });
@@ -388,6 +423,40 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     if (o.now() - secureAt < SECURE_REPEAT_MS) return;
     secureAt = o.now();
     showNotice("secure-input");
+  };
+
+  /**
+   * The dictation key went down: the island at rest, on the display of the window with the
+   * keyboard, until the session shows or the press is dropped (DC-O1). A press takes the island
+   * from an outcome or a notice, and a dropped one gives it back for the time it had left, with its
+   * buttons; a session's island is the session's.
+   */
+  const pressed = (on: boolean, frame: Frame | null) => {
+    if (!on) {
+      if (shown.state === "pressed") unpress();
+      return;
+    }
+    if (shown.state === "listening" || shown.state === "transcribing") return;
+    if (shown.state === "done" || shown.state === "error" || shown.state === "notice")
+      underPress = { s: shown, until: hideAt };
+    cancelHide();
+    o.place?.(frame);
+    put({ state: "pressed" });
+    cancelHide = later(PRESS_MS, unpress);
+  };
+
+  /** The dot goes: back to what it took the island from, if that still has time, else hidden. */
+  const unpress = () => {
+    const under = underPress;
+    underPress = null;
+    cancelHide();
+    const left = under ? under.until - o.now() : 0;
+    if (!under || left <= 0) {
+      put({ state: "hidden" });
+      return;
+    }
+    put(under.s);
+    hideAfter(left);
   };
 
   /** A partial's words to the ticker, as the preview's rule allows, with its settled start. */
@@ -445,6 +514,10 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
       }
       if (m.kind === "secure-input") {
         secureInput(m.on);
+        return;
+      }
+      if (m.kind === "press") {
+        pressed(m.on, m.frame);
         return;
       }
       if (m.kind === "busy") {

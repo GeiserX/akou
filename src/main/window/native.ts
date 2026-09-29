@@ -155,6 +155,7 @@ export function electrobunUi(): NativeUi {
       win.setVisibleOnAllWorkspaces(true);
       return {
         window: {
+          setFrame: (f) => win.setFrame(f.x, f.y, f.width, f.height),
           showInactive: () => win.showInactive(),
           hide: () => win.hide(),
           close: () => win.close(),

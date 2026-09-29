@@ -34,7 +34,8 @@ function play(hotkey: string, mode: Activation, script: Script, untilMs: number)
   return { acts, swallowed, m };
 }
 
-const sessions = (acts: [number, ActivationOut][]) => acts.filter(([, a]) => a.type !== "key");
+const sessions = (acts: [number, ActivationOut][]) =>
+  acts.filter(([, a]) => a.type !== "key" && a.type !== "arm" && a.type !== "disarm");
 
 const RC = "RightCommand";
 
@@ -337,4 +338,65 @@ test("bindings: a side-specific modifier or a chord, as the helper reads them", 
     true,
   );
   expect(["C", "Space", "Escape", "RightFn"].some(isModifier)).toBe(false);
+});
+
+describe("DC-O1: the press the pill's dot follows", () => {
+  const presses = (acts: [number, ActivationOut][]) =>
+    acts.filter(([, a]) => a.type === "arm" || a.type === "disarm" || a.type === "start");
+
+  test("a modifier arms at its down and starts at the hold; another key during it disarms", () => {
+    const held = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, RC],
+        [800, false, RC],
+      ],
+      1000,
+    );
+    expect(presses(held.acts)).toEqual([
+      [0, { type: "arm", at: 0 }],
+      [300, { type: "start", at: 0 }],
+    ]);
+    const shortcut = play(
+      RC,
+      "hold-or-toggle",
+      [
+        [0, true, RC],
+        [40, true, "C"],
+        [80, false, "C"],
+        [100, false, RC],
+      ],
+      500,
+    );
+    expect(presses(shortcut.acts)).toEqual([
+      [0, { type: "arm", at: 0 }],
+      [40, { type: "disarm" }],
+    ]);
+  });
+
+  test("a chord arms and starts at once; the door's start arms too", () => {
+    const chord = play(
+      "Control+Shift+Space",
+      "hold-or-toggle",
+      [
+        [0, true, "LeftControl"],
+        [10, true, "LeftShift"],
+        [20, true, "Space"],
+        [500, false, "Space"],
+      ],
+      600,
+    );
+    expect(presses(chord.acts)).toEqual([
+      [20, { type: "arm", at: 20 }],
+      [20, { type: "start", at: 20 }],
+    ]);
+    const m = new ActivationMachine(parseBinding(RC), "hold-or-toggle");
+    const out: ActivationOut[] = [];
+    m.start(5, out);
+    expect(out).toEqual([
+      { type: "arm", at: 5 },
+      { type: "start", at: 5 },
+    ]);
+  });
 });
