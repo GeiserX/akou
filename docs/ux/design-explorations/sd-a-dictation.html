@@ -17,16 +17,16 @@ svg{display:block;flex:none}
 .ico{width:16px;height:16px;fill:none;stroke:currentColor;stroke-width:1.5;stroke-linecap:round;stroke-linejoin:round}
 .num{font-variant-numeric:tabular-nums}
 
-.win{width:1440px;min-height:900px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column;position:relative}
+.win{width:1440px;height:900px;overflow:hidden;background:var(--bg);display:flex;flex-direction:column;position:relative}
 .titlebar{height:40px;flex:none;display:flex;align-items:center;position:relative;background:var(--panel);border-bottom:1px solid var(--line)}
 .lights{display:flex;gap:8px;padding-left:16px}
 .lights i{width:12px;height:12px;border-radius:50%;display:block}
 .lights i:nth-child(1){background:#ff5f57}.lights i:nth-child(2){background:#febc2e}.lights i:nth-child(3){background:#28c840}
 .titlebar .title{position:absolute;left:0;right:0;text-align:center;font-weight:600;font-size:13px;color:var(--dim);pointer-events:none}
-.body{flex:1;display:flex;min-height:0;background:linear-gradient(90deg,var(--panel) 219px,var(--line) 219px 220px,var(--bg) 220px)}
+.body{flex:1;display:flex;min-height:0}
 
 /* sidebar, as B2 */
-.side{width:220px;height:860px;align-self:flex-start;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 8px 0}
+.side{width:220px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column;padding:16px 8px 0}
 .brand{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;margin-bottom:16px}
 .brand svg{height:28px;width:86px}
 .nav a{display:flex;align-items:center;gap:8px;height:32px;padding:0 8px;border-radius:6px;color:var(--dim);text-decoration:none}
@@ -56,23 +56,27 @@ svg{display:block;flex:none}
 .sw i{position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#e9ebee;box-shadow:0 1px 2px rgba(0,0,0,.4)}
 .sw.on{background:#2fb34a}
 .sw.on i{left:16px;background:#fff}
+.sw.big{width:42px;height:24px;border-radius:12px}
+.sw.big i{width:20px;height:20px}
+.sw.big.on i{left:20px}
 .kcap{display:inline-flex;align-items:center;gap:4px;height:26px;padding:0 9px;border-radius:6px;background:var(--raised);border:1px solid var(--line2);border-bottom-width:2px;font-size:12.5px;font-weight:500;color:var(--fg);white-space:nowrap}
 .kcap small{font-size:11px;font-weight:500;color:#c3c7cd}
 .kcap.s{height:20px;padding:0 6px;font-size:11px;border-radius:5px;color:#c3c7cd}
 .kcap.xl{height:44px;padding:0 16px;font-size:20px;border-radius:9px;border-bottom-width:3px;gap:8px}
 .kcap.xl small{font-size:15px}
+.plus{color:var(--faint);font-size:12px;margin:0 2px}
 .btn{display:inline-flex;align-items:center;gap:6px;height:26px;padding:0 10px;border-radius:6px;background:var(--raised);border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
 .btn.ghost{background:none}
 .btn .ico{width:12px;height:12px}
 .link{color:var(--dim);font-size:12px;display:inline-flex;align-items:center;gap:4px;white-space:nowrap}
 .link .ico{width:12px;height:12px}
 .sel{display:inline-flex;align-items:center;justify-content:space-between;gap:8px;height:28px;padding:0 8px 0 10px;border-radius:6px;background:var(--panel);border:1px solid var(--line2);font-size:12px;color:var(--fg);white-space:nowrap}
-.sel em{font-style:normal;color:var(--dim)}
+.sel em{font-style:normal;color:var(--faint)}
 .sel .ico{width:12px;height:12px;color:var(--dim)}
 .input{display:inline-flex;align-items:center;height:28px;padding:0 10px;border-radius:6px;background:var(--bg);border:1px solid var(--line2);font-size:12px;color:var(--fg)}
 .seg{display:inline-flex;height:28px;padding:2px;border-radius:7px;background:var(--panel);border:1px solid var(--line2)}
 .seg span{padding:0 10px;border-radius:5px;font-size:12px;color:var(--dim);display:flex;align-items:center;white-space:nowrap}
-.seg span.on{background:#3a3f46;color:var(--fg)}
+.seg span.on{background:var(--line2);color:var(--fg)}
 .chip{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 6px 0 10px;border-radius:12px;background:var(--raised);border:1px solid var(--line2);font-size:12px;color:var(--fg)}
 .chip .x{color:var(--faint);font-size:11px;width:14px;text-align:center}
 .chip.add{padding:0 10px;background:none;border-style:dashed;color:var(--dim)}
@@ -90,10 +94,20 @@ svg{display:block;flex:none}
 .menu div.hi{background:var(--line2)}
 .menu div .ico{width:13px;height:13px;color:var(--dim)}
 .menu hr{border:0;border-top:1px solid #33373e;margin:4px 2px}
+.tip{position:absolute;z-index:5;height:22px;padding:0 8px;border-radius:5px;background:#26292e;border:1px solid #33373e;font-size:11px;color:var(--fg);display:flex;align-items:center;white-space:nowrap;box-shadow:0 6px 16px rgba(0,0,0,.5)}
 .appico{width:22px;height:22px;border-radius:6px;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;color:#0d0e10;flex:none}
 
+/* The macOS window has no title bar (#177): the traffic lights float over the sidebar's top-left and
+   every column starts under a --titlebar strip of its own colour, which is the drag region. */
+.inset{--titlebar:28px}
+.lights.float{position:absolute;left:14px;top:9px;padding:0;z-index:6}
+.inset .side{padding-top:calc(16px + var(--titlebar))}
+.inset .main .scroll{padding-top:calc(28px + var(--titlebar)) !important}
+.inset .pnav{padding-top:calc(12px + var(--titlebar))}
+.inset .pane{padding-top:calc(22px + var(--titlebar))}
 
-.scroll{position:relative;padding:28px 0 56px}
+
+.scroll{position:absolute;inset:0;overflow:hidden;padding:28px 0 0}
 .col{width:680px;margin:0 auto}
 .phead{display:flex;align-items:flex-start;gap:16px;margin-bottom:20px}
 .phead h1{font-size:22px;line-height:28px;font-weight:650;letter-spacing:-.015em}
@@ -111,35 +125,20 @@ svg{display:block;flex:none}
 .row .lbl .help{margin-top:1px}
 .row .ctl{display:flex;align-items:center;gap:8px;flex:none}
 .row.hover{background:rgba(242,243,245,.03)}
+.row .ck{width:22px;height:22px;border-radius:5px;display:flex;align-items:center;justify-content:center;color:var(--dim);border:1px solid var(--line2);background:var(--raised)}
+.row .ck .ico{width:12px;height:12px}
 .row .more{color:var(--faint);display:flex;align-items:center}
 .row .more .ico{width:12px;height:12px}
 .chips{display:flex;gap:6px;flex-wrap:wrap}
+.fade{position:absolute;left:0;right:0;bottom:0;height:56px;background:linear-gradient(rgba(13,14,16,0),var(--bg));pointer-events:none}
 .app{display:flex;align-items:center;gap:10px}
 .app b{font-weight:500}
-.row .lbl .help{max-width:440px}
-.radio{width:16px;height:16px;border-radius:50%;border:1.5px solid #4a4f57;flex:none;align-self:flex-start;margin-top:2px}
-.radio.on{border:5px solid var(--fg)}
-.row.dis{opacity:.55}
-.tag{height:20px;padding:0 8px;border-radius:10px;background:var(--line2);font-size:11px;color:var(--fg);display:inline-flex;align-items:center;white-space:nowrap}
-.state{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:var(--dim);white-space:nowrap}
-.state .ico{width:13px;height:13px}
-.state.ok .ico{color:var(--ok)}
-.state.warn .ico{color:var(--warn)}
-.sechelp{color:var(--dim);font-size:12px;margin:-2px 0 6px 4px}
-.prog{width:120px;height:4px;border-radius:2px;background:var(--line2);overflow:hidden;display:block}
-.prog i{display:block;width:42%;height:100%;background:var(--dim)}
-.appico.gen{background:var(--raised);border:1px solid var(--line2);color:var(--dim)}
-.appico.gen .ico{width:13px;height:13px}
-.states{width:1440px;padding:28px 48px 44px;background:#000}
-.states h2{font-size:13px;font-weight:600;color:var(--dim);margin:0 0 14px}
-.panels{display:flex;gap:24px;align-items:flex-start}
-.panel{flex:1;min-width:0}
-.panel .cap{font-size:12px;color:var(--dim);margin:0 0 6px 4px}
+
 </style>
 </head>
 <body>
-<div class="win">
-  <div class="titlebar"><div class="lights"><i></i><i></i><i></i></div><div class="title">akou</div></div>
+<div class="win inset">
+  <div class="lights float"><i></i><i></i><i></i></div>
   <div class="body">
 <aside class="side">
   <div class="brand"><svg xmlns="http://www.w3.org/2000/svg" width="267" height="87" viewBox="0 -3 89 29" role="img" aria-label="akou"><g fill="none" stroke="#f2f3f5" stroke-width="4" stroke-linecap="round" stroke-linejoin="round"><circle cx="10" cy="16" r="8"/><path d="M18 8v16M28-1v25M38 8l-10 10.59M32.5 14.5l7 9.5"/><circle cx="54" cy="16" r="8"/><path d="M71 8v8a8 8 0 0 0 16 0m0-8v16"/></g><circle cx="10" cy="16" r="2.5" fill="#ff453a"/></svg></div>
@@ -165,29 +164,17 @@ svg{display:block;flex:none}
     <section class="main">
 <div class="scroll"><div class="col">
   <div class="phead">
-    <div class="grow"><h1>Dictation</h1></div>
+    <div class="grow"><h1>Dictation</h1><div class="help">Hold a key, speak, and the words go where your cursor is.</div></div>
+    <span class="link" style="margin-top:6px"><svg class="ico" viewBox="0 0 16 16"><circle cx="8" cy="8" r="6"/><path d="M8 4.5V8l2.5 1.5"/></svg>History<svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span>
+    <span class="sw big on"><i></i></span>
   </div>
-  <div class="grp"><div class="row"><div class="lbl"><b>Dictation</b><div class="help">Hold a key, speak, and the words go where your cursor is.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>Microphone access</b></div><div class="ctl"><span class="state ok"><svg class="ico" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></svg>Allowed</span></div></div><div class="row"><div class="lbl"><b>Accessibility access</b><div class="help">Lets akou put the words in for you.</div></div><div class="ctl"><span class="state ok"><svg class="ico" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></svg>Allowed</span></div></div><div class="row"><div class="lbl"><b>Run the setup again</b></div><div class="ctl"><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
-  <div class="sec">Keys</div><div class="grp"><div class="row"><div class="lbl"><b>Dictation key</b></div><div class="ctl"><span class="kcap"><small>Right</small>⌘</span><span class="btn">Change</span></div></div><div class="row"><div class="lbl"><b>How the key works</b><div class="help">Hold to talk and let go to insert. A quick tap keeps listening until the next tap.</div></div><div class="ctl"><span class="seg"><span class="on">Hold or tap</span><span>Hold only</span><span>Tap only</span></span></div></div><div class="row"><div class="lbl"><b>While listening</b></div><div class="ctl"><span class="kcap s">esc</span><span class="help">cancel</span><span class="kcap s" style="margin-left:10px">↵</span><span class="help">send</span><span class="kcap s" style="margin-left:10px">⇧</span><span class="kcap s">↵</span><span class="help">edit before inserting</span></div></div><div class="row"><div class="lbl"><b>Fix the last dictation</b><div class="help">Opens it to correct a word, so akou learns it.</div></div><div class="ctl"><span class="kcap s">⇧</span><span class="kcap s">Right ⌘</span><span class="btn">Change</span></div></div><div class="row"><div class="lbl"><b>Dictate into a draft</b><div class="help">A second key. You read and edit the text before it goes in.</div></div><div class="ctl"><span class="help">Not set</span><span class="btn">Set</span></div></div><div class="row"><div class="lbl"><b>Paste the last dictation again</b></div><div class="ctl"><span class="help">Not set</span><span class="btn">Set</span></div></div></div>
-  <div class="sec">Voice</div><div class="grp"><div class="row"><div class="lbl"><b>Languages</b><div class="help">akou picks between these as you speak.</div></div><div class="ctl"><span class="chips"><span class="chip">English<span class="x">✕</span></span><span class="chip">Spanish<span class="x">✕</span></span><span class="chip add">+ Add</span></span></div></div><div class="row"><div class="lbl"><b>Microphone</b></div><div class="ctl"><span class="lvl"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="sel"><span>System default <em>MacBook Pro Microphone</em></span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span></div></div><div class="row"><div class="lbl"><b>Use the built-in mic when a Bluetooth headset is on</b><div class="help">Keeps the headset's sound clear.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>Pause music while you dictate</b><div class="help">It plays again when you stop.</div></div><div class="ctl"><span class="sw"><i></i></span></div></div></div>
-  <div class="sec">Words and history</div><div class="grp"><div class="row"><div class="lbl"><b>Words and replacements</b><div class="help">Names and terms spelled your way.</div></div><div class="ctl"><span class="help">12 words, 3 replacements</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b>History</b><div class="help">Your dictations, to copy or insert again.</div></div><div class="ctl"><span class="help">Kept 30 days</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
-  <div class="sec">Rules per app</div><div class="grp"><div class="row"><div class="lbl"><span class="app"><span class="appico gen"><svg class="ico" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M2.5 6h11"/></svg></span><b>Slack</b></span></div><div class="ctl"><span class="help">Draft first, then send</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><span class="app"><span class="appico gen"><svg class="ico" viewBox="0 0 16 16"><rect x="2.5" y="3" width="11" height="10" rx="2"/><path d="M2.5 6h11"/></svg></span><b>Terminal</b></span></div><div class="ctl"><span class="help">Types the keys, never sends</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><span class="link"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>Add an app</span></div></div>
-  <div class="sec">Engine</div><div class="grp"><div class="row"><div class="lbl"><b>Speed or accuracy</b><div class="help">Fast is instant. Best makes fewer mistakes. Automatic picks Best on this Mac.</div></div><div class="ctl"><span class="seg"><span class="on">Automatic</span><span>Fast</span><span>Best</span></span></div></div><div class="row"><div class="lbl"><b>Use another computer running akou</b><div class="help">Your voice goes to it instead of being turned into text here.</div></div><div class="ctl"><span class="sw"><i></i></span></div></div></div>
-  <div class="sec">Inserting</div><div class="grp"><div class="row"><div class="lbl"><b>How the words go in</b><div class="help">Type is for remote desktops and fields that refuse a paste.</div></div><div class="ctl"><span class="seg"><span class="on">Paste</span><span>Type</span><span>Copy only</span></span></div></div><div class="row"><div class="lbl"><b>Send key</b><div class="help">What akou presses when you send.</div></div><div class="ctl"><span class="sel"><span>Enter</span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span></div></div><div class="row"><div class="lbl"><b>Send after every dictation</b></div><div class="ctl"><span class="sw"><i></i></span></div></div><div class="row"><div class="lbl"><b>Put the clipboard back</b><div class="help">Otherwise the dictation stays in the clipboard.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>Fix the spacing around the words</b><div class="help">Adds the spaces and lower-cases the first word in the middle of a sentence.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>End with a space</b><div class="help">Only where akou can't read the text around the cursor.</div></div><div class="ctl"><span class="sw"><i></i></span></div></div></div>
-  <div class="sec">Cleaning up</div><div class="grp"><div class="row"><div class="lbl"><b>Leave out um and uh</b><div class="help">History keeps what you said.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>Say punctuation</b><div class="help">Say “comma” or “new line” on its own, between pauses.</div></div><div class="ctl"><span class="sw"><i></i></span></div></div><div class="row"><div class="lbl"><b>Say “send it” to send</b></div><div class="ctl"><span class="sw"><i></i></span></div></div><div class="row"><div class="lbl"><b>Tidy the text with AI</b><div class="help">Fixes punctuation and capitals before the text goes in. History keeps what you said.</div></div><div class="ctl"><span class="sel"><span>Off</span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span></div></div></div>
-  <div class="sec">Learning</div><div class="grp"><div class="row"><div class="lbl"><b>Learn my fixes</b><div class="help">When you correct a word akou got wrong.</div></div><div class="ctl"><span class="seg"><span class="on">Ask me</span><span>Automatically</span><span>Off</span></span></div></div><div class="row"><div class="lbl"><b>Read the field I dictated into</b><div class="help">For the spacing and to see your fixes. Never a password field or a terminal.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>Check the audio before offering a word</b><div class="help">akou listens again to make sure you said it.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div></div>
-  <div class="sec">Pill and sounds</div><div class="grp"><div class="row"><div class="lbl"><b>Pill</b><div class="help">Shows that akou is listening.</div></div><div class="ctl"><span class="seg"><span class="on">Top</span><span>Bottom</span><span>Left</span><span>Right</span><span>Off</span></span></div></div><div class="row"><div class="lbl"><b>Show my words on the pill</b><div class="help">A screen share shows them too.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>Sounds</b><div class="help">Automatic plays soft sounds only while the pill is off.</div></div><div class="ctl"><span class="seg"><span class="on">Automatic</span><span>Soft</span><span>Click</span><span>Off</span></span></div></div></div>
-  <div class="sec">Advanced</div><div class="grp"><div class="row"><div class="lbl"><b>Advanced</b><div class="help">Stop after silence, longest dictation, how long the mic stays open, one fixed language, context words, time limits.</div></div><div class="ctl"><span class="help">9 settings</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
-</div></div>
+  <div class="sec">Key</div><div class="grp"><div class="row"><div class="lbl"><b>Dictation key</b></div><div class="ctl"><span class="kcap"><small>Right</small>⌘</span><span class="faint" style="font-size:11.5px">Default</span><span class="btn">Change</span></div></div><div class="row"><div class="lbl"><b>How the key works</b><div class="help">Hold to talk and let go to insert. A quick tap keeps listening until the next tap.</div></div><div class="ctl"><span class="seg"><span class="on">Hold or tap</span><span>Hold only</span><span>Tap only</span></span></div></div><div class="row"><div class="lbl"><b>While listening</b></div><div class="ctl"><span style="display:flex;align-items:center;gap:4px"><span class="kcap s">esc</span> <span class="help">cancel</span><span class="kcap s" style="margin-left:12px">↵</span> <span class="help">send</span><span class="kcap s" style="margin-left:12px">⇧ ↵</span> <span class="help">open the draft</span></span></div></div><div class="row"><div class="lbl"><b>Other keys</b></div><div class="ctl"><span class="help">Fix last</span><span class="kcap s">⇧</span><span class="plus">+</span><span class="kcap s">Right ⌘</span><span class="help" style="margin-left:8px">Draft, paste last: none</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div></div>
+  <div class="sec">Voice</div><div class="grp"><div class="row"><div class="lbl"><b>Languages</b><div class="help">akou picks between these as you speak.</div></div><div class="ctl"><span class="chips"><span class="chip">English<span class="x">✕</span></span><span class="chip">Spanish<span class="x">✕</span></span><span class="chip add">+ Add</span></span></div></div><div class="row hover"><div class="lbl"><b>Microphone</b></div><div class="ctl"><span class="lvl"><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i class="on"></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span><span class="sel"><span>System default <em>MacBook Pro Microphone</em></span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span><span class="ck"><svg class="ico" viewBox="0 0 16 16"><rect x="5.5" y="5.5" width="8" height="8" rx="1.5"/><path d="M10.5 5.5V3.5a1 1 0 0 0-1-1h-6a1 1 0 0 0-1 1v6a1 1 0 0 0 1 1h2"/></svg></span><span class="tip" style="left:calc(100% + 10px);top:11px">Copy config key</span></div></div><div class="row"><div class="lbl"><b>Keep headsets sounding good</b><div class="help">With a Bluetooth headset on, dictate through the built-in mic.</div></div><div class="ctl"><span class="sw on"><i></i></span></div></div></div>
+  <div class="sec">Words</div><div class="grp"><div class="row"><div class="lbl"><b>Words and replacements</b><div class="help">Spelled your way in every dictation.</div></div><div class="ctl"><span class="chips"><span class="chip word">Kubernetes</span><span class="chip word">dot com <span class="arrow">→</span> .com</span><span class="chip word">akou</span><span class="faint" style="font-size:12px;align-self:center">+ 12 more</span></span><span class="btn">Edit</span></div></div></div>
+  <div class="sec">Rules per app</div><div class="grp"><div class="row"><div class="lbl"><b><span class="app"><span class="appico" style="background:#e0b0ff">S</span><b>Slack</b></span></b></div><div class="ctl"><span class="help">Draft first, then send</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b><span class="app"><span class="appico" style="background:#b7bdc6">&gt;_</span><b>Terminal</b></span></b></div><div class="ctl"><span class="help">Types the keys, never sends</span><span class="more"><svg class="ico" viewBox="0 0 16 16"><path d="m6 4 4 4-4 4"/></svg></span></div></div><div class="row"><div class="lbl"><b><span class="link"><svg class="ico" viewBox="0 0 16 16"><path d="M8 3v10M3 8h10"/></svg>Add an app</span></b></div><div class="ctl"><span class="link">Use the app I dictate into next</span></div></div></div>
+  <div class="sec">Engine</div><div class="grp"><div class="row"><div class="lbl"><b>Speed or accuracy</b><div class="help">Automatic uses Best on this Mac.</div></div><div class="ctl"><span class="seg"><span class="on">Automatic</span><span>Fast</span><span>Best</span><span>Another akou</span></span></div></div></div>
+</div><div class="fade"></div></div>
     </section>
-  </div>
-</div>
-<div class="states">
-  <h2>Other states on this page</h2>
-  <div class="panels">
-    <div class="panel"><div class="cap">Accessibility not allowed</div><div class="grp"><div class="row"><div class="lbl"><b>Accessibility access</b><div class="help">Not allowed, so dictations are copied and you paste them.</div></div><div class="ctl"><span class="btn">Open Accessibility settings</span></div></div></div></div>
-    <div class="panel"><div class="cap">Another computer running akou</div><div class="grp"><div class="row"><div class="lbl"><b>Use another computer running akou</b></div><div class="ctl"><span class="sw on"><i></i></span></div></div><div class="row"><div class="lbl"><b>Address</b></div><div class="ctl"><span class="input" style="width:200px">https://studio.example</span></div></div><div class="row"><div class="lbl"><b>Key</b></div><div class="ctl"><span class="input" style="width:200px">••••••••••••</span></div></div><div class="row"><div class="lbl"><b>If it doesn't answer</b></div><div class="ctl"><span class="seg"><span class="on">Use this Mac</span><span>Show the error</span></span></div></div><div class="row"><div class="lbl"><b>Wait up to</b><div class="help">Longer dictations get a little more.</div></div><div class="ctl"><span class="input num" style="width:52px;justify-content:flex-end">6</span><span class="help">seconds</span><span class="btn">Test</span></div></div></div></div>
-    <div class="panel"><div class="cap">Tidy the text with AI, on</div><div class="grp"><div class="row"><div class="lbl"><b>Tidy the text with AI</b></div><div class="ctl"><span class="sel"><span>With Claude Code</span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span></div></div><div class="row"><div class="lbl"><b>Instructions</b></div><div class="ctl"><span class="sel"><span>Standard</span><svg class="ico" viewBox="0 0 16 16"><path d="m5 6 3-3 3 3M5 10l3 3 3-3"/></svg></span></div></div></div></div>
   </div>
 </div>
 </body>
