@@ -1059,6 +1059,144 @@ describe("the side column (WINDOW section 6)", () => {
   );
 });
 
+describe("renaming a call from its title (WINDOW 3.1)", () => {
+  test(
+    "A live call and a saved one renamed from the header: the header, the sidebar row, its search and the window title follow without a reload, from this window or another door",
+    async () => {
+      const t = tempDir("akou-wav-");
+      let saved = "";
+      await withRig(
+        {
+          helperArgs: ["--wav", silentWav(t.dir)],
+          seed: (home) => {
+            saved = seedCall(home, (b) => standardCall(b, "01J8Z6Q4M2VX0K7B3D4E5SAVED0")).id;
+          },
+        },
+        async (rig) => {
+          const live = await rig.startCall({ title: "Standup" });
+          const page = await rig.open(live);
+          await until(async () => (await text(page, "#state")) === "rec", 5000, "recording");
+          const row = (id: string) => page.locator(`#calls li[data-id="${id}"] .what`);
+          await until(async () => (await row(saved).count()) === 1, 5000, "the saved row");
+          await page.evaluate(() => {
+            (window as unknown as { marker: number }).marker = 7;
+          });
+          const renames = async (id: string) =>
+            (await events(rig, id)).filter((e) => e.type === "call.renamed").length;
+
+          // The live call: a click opens the field on the old name, Enter saves.
+          await page.click("#title-text");
+          expect(await page.inputValue("#title-input")).toBe("Standup");
+          await page.fill("#title-input", "Standup with design");
+          await page.press("#title-input", "Enter");
+          await until(
+            async () => (await row(live).textContent()) === "Standup with design",
+            5000,
+            "the live row follows",
+          );
+          expect(await text(page, "#title-text")).toBe("Standup with design");
+          expect(await page.locator("#title-input").count()).toBe(0);
+          await until(
+            async () => (await page.title()) === "Standup with design · akou",
+            5000,
+            "the window title",
+          );
+          expect((await rig.api("GET", "/status")).body.live.title).toBe("Standup with design");
+          expect(await renames(live)).toBe(1);
+
+          // From the keyboard: Enter on the title opens it; Escape keeps the old name, and an
+          // empty title saves nothing.
+          await page.focus("#title-text");
+          await page.keyboard.press("Enter");
+          await page.waitForSelector("#title-input:focus");
+          await page.keyboard.type(" and nothing else");
+          // An Enter that confirms an IME candidate neither saves nor closes the field.
+          await page.dispatchEvent("#title-input", "keydown", { key: "Enter", isComposing: true });
+          expect(await page.locator("#title-input").count()).toBe(1);
+          await page.keyboard.press("Escape");
+          await page.click("#title-text");
+          await page.fill("#title-input", "   ");
+          await page.press("#title-input", "Enter");
+          expect(await page.locator("#title-input").count()).toBe(0);
+          expect(await text(page, "#title-text")).toBe("Standup with design");
+          expect(await renames(live)).toBe(1);
+
+          // The saved call, picked in the sidebar and renamed the same way; leaving the field saves.
+          await page.click(`#calls li[data-id="${saved}"] button`);
+          await until(
+            async () => (await text(page, "#title-text")) === "Weekly sync",
+            5000,
+            "switched",
+          );
+          await page.click("#title-text");
+          await page.fill("#title-input", "Q3 planning");
+          await page.locator("#title-input").blur();
+          await until(
+            async () => (await row(saved).textContent()) === "Q3 planning",
+            5000,
+            "the saved row follows",
+          );
+          expect(await text(page, "#title-text")).toBe("Q3 planning");
+          expect(await renames(saved)).toBe(1);
+
+          // The search finds the call by its new name, and no longer by the old one.
+          const search = page.locator("#calls-search");
+          const items = page.locator("#calls li");
+          await search.fill("q3");
+          await until(async () => (await items.count()) === 1, 5000, "found by the new name");
+          expect(await page.locator("#calls li .what").allTextContents()).toEqual(["Q3 planning"]);
+          await search.fill("weekly");
+          await until(async () => (await items.count()) === 0, 5000, "not by the old one");
+          await search.fill("");
+          await until(async () => (await items.count()) === 2, 5000, "cleared");
+
+          // Another door (the CLI, an agent) renames the live call, which is not the one on
+          // screen: its sidebar row follows too.
+          expect(
+            (await rig.api("PATCH", `/calls/${live}`, { title: "Standup, agreed" })).status,
+          ).toBe(200);
+          await until(
+            async () => (await row(live).textContent()) === "Standup, agreed",
+            5000,
+            "renamed by another door",
+          );
+          // A save that fails leaves the field open to try again; opening another call closes
+          // it, so Enter can never rename the call that was on screen before.
+          await page.route("**/api/v1/calls/*", (route) =>
+            route.request().method() === "PATCH"
+              ? route.fulfill({ status: 409, json: { error: "conflict", message: "try later" } })
+              : route.fallback(),
+          );
+          await page.click("#title-text");
+          await page.fill("#title-input", "Never saved");
+          await page.locator("#title-input").blur();
+          await until(async () => (await text(page, "#toast")) === "try later", 5000, "refused");
+          expect(await page.inputValue("#title-input")).toBe("Never saved");
+          await page.unroute("**/api/v1/calls/*");
+          await page.click(`#calls li[data-id="${live}"] button`);
+          await until(
+            async () => (await text(page, "#title-text")) === "Standup, agreed",
+            5000,
+            "switched back",
+          );
+          expect(await page.locator("#title-input").count()).toBe(0);
+          expect(await page.locator("#title-text").isVisible()).toBe(true);
+          expect(await renames(saved)).toBe(1);
+          expect(await renames(live)).toBe(2);
+
+          // No reload happened on the way.
+          expect(await page.evaluate(() => (window as unknown as { marker: number }).marker)).toBe(
+            7,
+          );
+          await rig.api("POST", "/calls/live/stop");
+        },
+      );
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("enhanced notes and templates (DESIGN 5.2)", () => {
   test(
     "Enhance writes the notes; the user's lines are marked as theirs, the AI's cite lines",

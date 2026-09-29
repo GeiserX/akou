@@ -21,6 +21,7 @@ export const EXAMPLES: Record<string, Record<string, unknown>> = {
     akou: "0.1.0",
     template: "standup",
   },
+  "call.renamed": { rev: 1, title: "Q3 planning", by: "user" },
   "call.ended": { reason: "stop" },
   "call.failed": { stage: "open", error: "exit 77" },
   "part.started": {
