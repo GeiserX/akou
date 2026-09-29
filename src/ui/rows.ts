@@ -73,14 +73,17 @@ export function section(title: string, ...rows: Child[]): HTMLElement {
   return sectionWith(title, null, ...rows);
 }
 
-/** A section with one short line under its title, as "A change applies the next time akou starts." */
+/**
+ * A section with one short line under its title, as "A change applies the next time akou starts."
+ * An empty title draws the panel alone, for a page whose title already names it.
+ */
 export function sectionWith(title: string, help: Child, ...rows: Child[]): HTMLElement {
   const panel = h("div", { class: "pg-grp" });
   append(panel, ...rows);
   return h(
     "section",
     { class: "pg-section", attrs: { "data-section": title } },
-    h("h2", { class: "pg-sec" }, title),
+    title ? h("h2", { class: "pg-sec" }, title) : null,
     help ? h("p", { class: "pg-sechelp" }, help) : null,
     panel,
   );
@@ -145,6 +148,8 @@ export function linkRow(
   );
 }
 
+let choices = 0;
+
 /**
  * One choice of a radio list, the whole row its label: the circle, the name with "(default)" after
  * it when it is the setting's default, one short line of facts, and on the right what the row adds
@@ -162,11 +167,18 @@ export function choiceRow(
   },
   ...controls: Child[]
 ): HTMLLabelElement {
+  // The radio is named by its name and described by its facts, not by the size and buttons beside
+  // them, which the label holds too.
+  const id = `choice-${++choices}`;
   const radio = h("input", {
     type: "radio",
     class: "pg-radio",
     value: o.value,
-    attrs: { name: o.name },
+    attrs: {
+      name: o.name,
+      "aria-labelledby": `${id}-name`,
+      ...(o.help ? { "aria-describedby": `${id}-help` } : {}),
+    },
   });
   radio.checked = o.checked;
   radio.disabled = o.disabled === true;
@@ -181,11 +193,11 @@ export function choiceRow(
       { class: "pg-lbl" },
       h(
         "b",
-        { class: "pg-name" },
+        { class: "pg-name", id: `${id}-name` },
         o.label,
         o.isDefault ? h("span", { class: "pg-default" }, " (default)") : null,
       ),
-      o.help ? h("span", { class: "pg-help" }, o.help) : null,
+      o.help ? h("span", { class: "pg-help", id: `${id}-help` }, o.help) : null,
     ),
     ctl,
   );
@@ -316,7 +328,12 @@ export function progress(pct: number, text: string): HTMLElement {
       {
         class: "pg-bar-track",
         role: "progressbar",
-        attrs: { "aria-valuemin": "0", "aria-valuemax": "100", "aria-valuenow": String(pct) },
+        attrs: {
+          "aria-label": "Download progress",
+          "aria-valuemin": "0",
+          "aria-valuemax": "100",
+          "aria-valuenow": String(pct),
+        },
       },
       fill,
     ),

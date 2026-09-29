@@ -15,10 +15,20 @@ export type { LiveSetupView, LiveView };
 /** Catalog ids the page places by hand (`tests/models-rows.test.ts` checks them against the catalog). */
 export const RECOGNIZER_ID = "parakeet-tdt-0.6b-v3-fp32";
 export const QWEN_ID = "qwen3-asr-1.7b";
-/** The models each speaker setting (`asr.diarizer`) runs on. */
+/**
+ * The model each speaker setting (`asr.diarizer`) adds: removing it frees what that choice alone
+ * needs. TitaNet runs under both, so it is a model of its own, not part of either choice
+ * (`modelsFor` in `asr/models.ts`; `tests/models-rows.test.ts` checks the two agree).
+ */
 export const DIARIZERS: Readonly<Record<string, readonly string[]>> = {
   nemotron: ["nemotron-3-diarization"],
-  embeddings: ["pyannote-segmentation-3.0", "titanet-small"],
+  embeddings: ["pyannote-segmentation-3.0"],
+};
+
+/** The recognizer a job preset runs, so Jobs marks the row a preset in the setting stands for. */
+export const PRESET_ENGINES: Readonly<Record<string, string>> = {
+  fast: RECOGNIZER_ID,
+  best: QWEN_ID,
 };
 
 /** The settings whose home is the Models page; the Settings page leaves them out and links here. */
@@ -42,17 +52,30 @@ const NAMES: Readonly<Record<string, string>> = {
   [QWEN_ID]: "Qwen3-ASR 1.7B",
   "nemotron-3-diarization": "Nemotron diarization",
   "pyannote-segmentation-3.0": "Speech turns",
-  "titanet-small": "Voice fingerprints",
+  "titanet-small": "Speaker voices",
   "silero-vad": "Voice detection",
   "nemotron-en-560": "Nemotron streaming, English",
   "nemotron-3.5-560": "Nemotron streaming, many languages",
   "nemotron-3.5-1120": "Nemotron streaming, many languages, larger",
 };
 
+/** What each build of Qwen3-ASR's program runs on, from the last part of its id. */
+const BUILDS: Readonly<Record<string, string>> = {
+  cpu: "the processor",
+  metal: "the graphics chip",
+  vulkan: "the graphics card, Vulkan",
+  cuda: "an NVIDIA graphics card",
+  rocm: "an AMD graphics card",
+  sycl: "an Intel graphics card",
+};
+
 /** A model's name in words; a model the page has no name for keeps its id. */
 export function modelName(r: Pick<ModelRow, "id" | "job">): string {
   if (NAMES[r.id]) return NAMES[r.id] as string;
-  if (r.id.startsWith("llama-server")) return "Qwen3-ASR's program";
+  if (r.id.startsWith("llama-server")) {
+    const on = BUILDS[r.id.slice(r.id.lastIndexOf("-") + 1)];
+    return on ? `Qwen3-ASR's program for ${on}` : "Qwen3-ASR's program";
+  }
   return r.id;
 }
 
@@ -77,9 +100,9 @@ export function sizeText(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }
 
-/** A model's size as the page gives it: `2.55 GB`, `0.05 GB`, and a small helper's `2 MB`. */
+/** A model's size as the page gives it: `2.55 GB`, `0.40 GB`, and under 0.1 GB `47 MB`, `644 KB`. */
 export function gbText(bytes: number): string {
-  return bytes < 5e6 ? sizeText(bytes) : `${(bytes / 1e9).toFixed(2)} GB`;
+  return bytes < 1e8 ? sizeText(bytes) : `${(bytes / 1e9).toFixed(2)} GB`;
 }
 
 /** How often a word is wrong: `1 word in 5` from 10 % up, `5 words in 100` below. */
@@ -197,7 +220,9 @@ export function speakersHelp(setting: string, rows: readonly ModelRow[]): string
 /** A helper's line: what it is for. */
 export function helperHelp(r: ModelRow): string {
   if (r.id === "silero-vad") return "Finds where someone speaks, for every model.";
-  if (r.id.startsWith("llama-server")) return "The program Qwen3-ASR runs in, for this computer.";
+  if (r.id === "titanet-small")
+    return "Tells voices apart, live and after the call, whichever way speakers are found.";
+  if (r.id.startsWith("llama-server")) return "The program Qwen3-ASR runs in.";
   if (r.kind === "speech" && r.streaming && !r.after_call)
     return [accuracyText(r.accuracy), "Writes the live transcript as words are said."]
       .filter((x) => x)
@@ -213,21 +238,25 @@ function capital(s: string): string {
 /** The page's line under its title: how much is on this computer, and that none of it leaves. */
 export function totalText(rows: readonly ModelRow[], here: string, server: boolean): string {
   const bytes = rows.filter((r) => r.state === "ready").reduce((n, r) => n + r.size, 0);
+  if (bytes === 0) return "Nothing downloaded yet.";
   const gb = (bytes / 1e9).toFixed(1);
   return `${gb} GB on ${here}. Nothing leaves ${server ? "this server" : "this computer"}.`;
 }
 
-/** Last use and what the sweep does with it: kept, deleted on a date, or never deleted. */
+/**
+ * Last use and what the sweep does with it: kept, deleted on a date, or never deleted. A default no
+ * setting chooses (the app's after-call recognizer, the voice detection) is one akou needs.
+ */
 export function keptText(r: ModelRow, unusedDays: number | null): string {
   if (r.state !== "ready") return r.state === "downloading" ? "Downloading" : "Not downloaded";
   const used = r.last_used_at ? `Last used ${when(r.last_used_at)}` : "Not used yet";
-  if (r.default) return `${used}. Kept: the default.`;
+  if (r.default) return `${used}. Kept: ${r.set_default ? "the default" : "akou needs it"}.`;
   if (r.in_use) return `${used}. Kept: in use.`;
   if (r.evicts_at) return `${used}. Deleted on ${when(r.evicts_at)} if still unused.`;
   return unusedDays === 0 ? `${used}. Kept: nothing is deleted for being unused.` : `${used}.`;
 }
 
-/** Why Remove is not offered on a model, or null when it is. */
+/** Why Remove is not offered on a model (the size's tooltip says it), or null when it is. */
 export function removeRefusal(r: ModelRow): string | null {
   if (r.state !== "ready") return r.state === "downloading" ? "It is downloading." : null;
   if (r.default) return "Kept: akou uses it by default. Choose another first.";
@@ -243,4 +272,30 @@ export function percent(bytes: number, size: number): number {
 /** "Needs Qwen3-ASR." for a setup or engine whose models are not all here. */
 export function needsText(missing: readonly ModelRow[]): string {
   return missing.length === 0 ? "" : `Needs ${missing.map((r) => modelName(r)).join(" and ")}.`;
+}
+
+/**
+ * A refused download, cancel or removal, or a stopped download, in plain words: the reason the
+ * server gave, without the ids, keys and byte counts it carries. Empty when there is no plain one.
+ */
+export function reasonText(error: string | null | undefined): string {
+  const e = (error ?? "").toLowerCase();
+  if (/enospc|no space|free space|bytes free|volume has/.test(e))
+    return "there is not enough free disk space";
+  if (/models_max_gb|size cap/.test(e)) return "it would pass the size you keep models under";
+  if (/still starting/.test(e)) return "akou is still starting";
+  if (/auto_download/.test(e)) return "downloading a missing model is turned off";
+  if (/is downloading/.test(e)) return "it is downloading";
+  if (/default/.test(e)) return "akou uses it by default";
+  if (/in use/.test(e)) return "it is in use";
+  if (/enotfound|econn|etimedout|network|fetch failed|timed out|http \d/.test(e))
+    return "the network failed";
+  return "";
+}
+
+/** "A, B and C". */
+export function joinAnd(parts: readonly string[]): string {
+  return parts.length < 2
+    ? (parts[0] ?? "")
+    : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
 }

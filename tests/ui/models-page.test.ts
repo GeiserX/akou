@@ -21,6 +21,8 @@ import { tempDir } from "../helpers.ts";
 import { UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
 
 const PYANNOTE = "pyannote-segmentation-3.0";
+/** In the default set whichever speaker choice runs: the Voice fingerprints choice never holds it. */
+const TITANET = "titanet-small";
 /** The streaming model `nemotron` runs for English: fetched on demand, missing at first. */
 const STREAM = "nemotron-en-560";
 
@@ -45,12 +47,13 @@ beforeAll(async () => {
     reg.entry("silero-vad", ["vad.onnx"]),
     reg.entry(NEMOTRON, ["diar.onnx"]),
     reg.entry(PYANNOTE, ["seg.onnx"]),
+    reg.entry(TITANET, ["t.onnx"]),
     // Qwen fetched on demand only: missing here.
     { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true } as ModelSpecEntry,
     { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true } as ModelSpecEntry,
   ];
   mkdirSync(models, { recursive: true });
-  for (const m of catalog.slice(0, 4)) reg.install(models, m);
+  for (const m of catalog.slice(0, 5)) reg.install(models, m);
   rig = await uiRig({
     modelRegistry: catalog,
     settings: { "asr.modelsDir": models, "asr.diarizer": "nemotron", "asr.languages": ["en"] },
@@ -140,8 +143,32 @@ describe("the Models page", () => {
         "missing",
       );
       // The upgrade needs Qwen, and says so.
-      const upgrade = (await page.textContent(`${LIVE} [data-setup="upgrade"]`)) ?? "";
-      expect(upgrade).toMatch(/Needs .*Qwen3-ASR 1\.7B\./);
+      // The upgrade needs Qwen, and says only that until it is here.
+      const upgrade = (await page.textContent(`${LIVE} [data-setup="upgrade"] .pg-help`)) ?? "";
+      expect(upgrade).toMatch(/^Needs .*Qwen3-ASR 1\.7B\.$/);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a refused download says why in plain words, with the model's name and no id",
+    async () => {
+      const cap = await setting("server.models_max_gb");
+      await rig.api("PATCH", "/config", { "server.models_max_gb": 1e-9 });
+      try {
+        await page.click(`${LIVE} [data-setup="nemotron"] [data-action="download"]`);
+        await until(
+          async () => ((await page.textContent("#toast")) ?? "").includes("size you keep"),
+          5000,
+          "the refusal",
+        );
+        const said = (await page.textContent("#toast")) ?? "";
+        expect(said).toMatch(/^Nemotron streaming, English could not start downloading: /);
+        for (const bad of [STREAM, "server.", "HTTP", "bytes"])
+          expect(`${bad}: ${said.includes(bad)}`).toBe(`${bad}: false`);
+      } finally {
+        await rig.api("PATCH", "/config", { "server.models_max_gb": cap });
+      }
     },
     UI_TIMEOUT,
   );
@@ -171,14 +198,64 @@ describe("the Models page", () => {
   );
 
   test(
-    "Remove is refused on the default with the reason, and asks once more before it removes",
+    "the keyboard stays on the list: each arrow picks, saves, and the next arrow goes on",
+    async () => {
+      const focused = () =>
+        page.evaluate(() => {
+          const el = document.activeElement as HTMLInputElement | null;
+          return el?.name === "models-live" ? el.value : `${el?.tagName}`;
+        });
+      await page.focus(`${LIVE} input[value="auto"]`);
+      await page.keyboard.press("ArrowDown");
+      await until(async () => (await setting("asr.live")) === "nemotron", 5000, "the first arrow");
+      // The pick redrew the list: the new radio has the keyboard.
+      await until(async () => (await marked()).join() === "nemotron", 5000, "the redraw");
+      expect(await focused()).toBe("nemotron");
+      await page.keyboard.press("ArrowDown");
+      await until(async () => (await setting("asr.live")) === "parakeet", 5000, "the second arrow");
+      await until(async () => (await marked()).join() === "parakeet", 5000, "the redraw");
+      expect(await focused()).toBe("parakeet");
+      await page.click(`${LIVE} [data-setup="auto"] .pg-name`);
+      await until(async () => (await setting("asr.live")) === "auto", 5000, "asr.live back");
+      await until(async () => (await marked()).join() === "auto", 5000, "the mark back");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Fast shares After the call's model: while it is missing it offers no download of its own",
+    async () => {
+      await page.route("**/api/v1/models", async (r) => {
+        const res = await r.fetch();
+        const body = (await res.json()) as { models: { id: string; state: string }[] };
+        for (const m of body.models) if (m.id === RECOGNIZER) m.state = "missing";
+        await r.fulfill({ response: res, json: body });
+      });
+      try {
+        await page.click("#models-open");
+        await page.waitForSelector(`${AFTER}[data-state="missing"] [data-action="download"]`);
+        const fast = `#models-dictation [data-model="${RECOGNIZER}"]`;
+        expect(await page.textContent(fast)).toContain("Downloads with After the call.");
+        expect(await page.textContent(fast)).not.toContain("nothing more to download");
+        expect(await page.$(`${fast} button`)).toBeNull();
+      } finally {
+        await page.unroute("**/api/v1/models");
+      }
+      await page.click("#models-open");
+      await page.waitForSelector(`${AFTER}[data-state="ready"]`);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the default draws no Remove and its size says why; Remove asks once more, on that choice's model only",
     async () => {
       await page.hover(AFTER);
-      const kept = `${AFTER} [data-action="remove"]`;
-      expect(await page.isDisabled(kept)).toBe(true);
-      expect(await page.getAttribute(kept, "title")).toContain("by default");
+      expect(await page.$(`${AFTER} [data-action="remove"]`)).toBeNull();
       // The size says when an unused model goes, or why it stays.
-      expect(await page.getAttribute(`${AFTER} .pg-value`, "title")).toContain("Kept: the default");
+      expect(await page.getAttribute(`${AFTER} .pg-value`, "title")).toContain(
+        "Kept: akou needs it",
+      );
 
       await page.hover(PRINTS);
       const remove = `${PRINTS} [data-action="remove"]`;
@@ -188,6 +265,10 @@ describe("the Models page", () => {
       await page.click(remove);
       await page.waitForSelector(`${PRINTS}[data-state="missing"] [data-action="download"]`);
       expect(existsSync(join(models, PYANNOTE))).toBe(false);
+      // TitaNet runs under the chosen Nemotron too: it stays, and is a helper of its own.
+      expect(existsSync(join(models, TITANET))).toBe(true);
+      await page.click(`${PRINTS} [data-action="download"]`);
+      await page.waitForSelector(`${PRINTS}[data-state="ready"]`);
     },
     UI_TIMEOUT,
   );
@@ -222,6 +303,12 @@ describe("the Models page", () => {
       await page.waitForSelector(`${QWEN}[data-state="ready"]`);
       await page.hover(QWEN);
       expect(await page.isDisabled(`${QWEN} [data-action="remove"]`)).toBe(false);
+      // Each radio is named by its name, not by the size and buttons its row holds.
+      const named = await page.$eval('#models-speakers input[value="embeddings"]', (el) => {
+        const id = el.getAttribute("aria-labelledby");
+        return id ? document.getElementById(id)?.textContent : null;
+      });
+      expect(named).toBe("Voice fingerprints");
     },
     UI_TIMEOUT,
   );
@@ -274,7 +361,10 @@ describe("the Models page", () => {
     async () => {
       await page.click("#models-go-helpers");
       await page.waitForSelector("#page-models .pg-back");
-      expect(await page.innerText("#page-models")).toContain("Voice detection");
+      const text = await page.innerText("#page-models");
+      expect(text).toContain("Voice detection");
+      // TitaNet is here, not under a speaker choice.
+      expect(text).toContain("Speaker voices");
       await page.click("#page-models .pg-back");
       await page.waitForSelector(`${LIVE} [data-setup]`);
       expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.id)).toBe(
@@ -310,9 +400,9 @@ describe("the Models page", () => {
   );
 
   test(
-    "a narrow window: nothing scrolls sideways",
+    "the narrowest window (480 px, the shell's minimum): nothing scrolls sideways",
     async () => {
-      await page.setViewportSize({ width: 560, height: 800 });
+      await page.setViewportSize({ width: 480, height: 800 });
       const overflow = await page.$eval("#pages", (d) => d.scrollWidth - d.clientWidth);
       expect(overflow <= 0).toBe(true);
     },

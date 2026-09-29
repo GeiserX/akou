@@ -8,11 +8,12 @@
 
 import { describe, expect, test } from "bun:test";
 import { LIVE_SETUPS, type LiveView } from "../src/main/asr/live-setups.ts";
-import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
+import { LLAMA_CATALOG, QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { type Measure, type NotMeasured, SCORES } from "../src/main/asr/model-scores.ts";
-import { NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import { modelsFor, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { SETTINGS } from "../src/main/config/schema.ts";
 import { scoreView } from "../src/main/server/model-store.ts";
+import { PRESETS } from "../src/main/server/presets.ts";
 import {
   accuracyText,
   afterCallHelp,
@@ -22,13 +23,17 @@ import {
   DIARIZERS,
   gbText,
   hourText,
+  joinAnd,
   keptText,
   liveHelp,
   liveTags,
   MODELS_KEYS,
   type ModelRow,
+  modelName,
+  PRESET_ENGINES,
   QWEN_ID,
   RECOGNIZER_ID,
+  reasonText,
   removeRefusal,
   sizeText,
   speakersHelp,
@@ -189,7 +194,12 @@ describe("[SV-U6] the live transcript's marks", () => {
 
 describe("[SV-U6] kept, removed, or deleted on a date", () => {
   test("the default and a model in use are kept, and say why", () => {
-    expect(keptText(row("d", { default: true }), 30)).toContain("Kept: the default");
+    // A default a setting chooses can be chosen away; one no setting chooses, akou needs.
+    const chosen = { key: "asr.diarizer", value: "nemotron" };
+    expect(keptText(row("d", { default: true, set_default: chosen }), 30)).toContain(
+      "Kept: the default",
+    );
+    expect(keptText(row("d", { default: true }), 30)).toContain("Kept: akou needs it");
     expect(keptText(row("u", { in_use: true }), 30)).toContain("Kept: in use");
     expect(removeRefusal(row("d", { default: true }))).toContain("by default");
     expect(removeRefusal(row("u", { in_use: true }))).toContain("in use");
@@ -209,8 +219,11 @@ describe("[SV-U6] kept, removed, or deleted on a date", () => {
 describe("[SV-U6] sizes and the page's own names", () => {
   test("sizes: the page in GB, the welcome in the nearest unit", () => {
     expect(gbText(2_520_744_288)).toBe("2.52 GB");
-    expect(gbText(47_000_000)).toBe("0.05 GB");
+    expect(gbText(400_000_000)).toBe("0.40 GB");
+    // Under 0.1 GB one unit rule for the whole page: MB, then KB.
+    expect(gbText(47_000_000)).toBe("47 MB");
     expect(gbText(2_000_000)).toBe("2 MB");
+    expect(gbText(643_854)).toBe("644 KB");
     expect(sizeText(2_551_000_000)).toBe("2.55 GB");
     expect(sizeText(40_257_283)).toBe("40 MB");
     expect(sizeText(643_854)).toBe("644 KB");
@@ -222,12 +235,66 @@ describe("[SV-U6] sizes and the page's own names", () => {
     expect(totalText(rows, "this Mac", false)).toBe(
       "6.2 GB on this Mac. Nothing leaves this computer.",
     );
+    expect(totalText([row("c", { state: "missing" })], "this server", true)).toBe(
+      "Nothing downloaded yet.",
+    );
+  });
+
+  test("each build of Qwen3-ASR's program is named by what it runs on, never alike", () => {
+    const builds = LLAMA_CATALOG.filter((m) => m.id.startsWith("llama-server"));
+    const platforms = new Set(builds.flatMap((m) => m.platforms ?? []));
+    expect(platforms.size).toBeGreaterThan(1);
+    for (const p of platforms) {
+      const names = builds
+        .filter((m) => m.platforms?.includes(p))
+        .map((m) => modelName({ id: m.id, job: m.job }));
+      expect(`${p}: ${new Set(names).size}`).toBe(`${p}: ${names.length}`);
+      for (const n of names) expect(n).toMatch(/^Qwen3-ASR's program for (the|an) /);
+    }
+  });
+
+  test("a refusal in plain words: no id, key or byte count", () => {
+    const said: [string, string][] = [
+      [
+        "downloading qwen3-asr-1.7b (2520744288 bytes) would take the models folder past server.models_max_gb (40 GB)",
+        "it would pass the size you keep models under",
+      ],
+      [
+        "downloading qwen3-asr-1.7b needs 2520744288 bytes and 1 GB to spare, and the volume has 1000 bytes free",
+        "there is not enough free disk space",
+      ],
+      ["ENOSPC: no space left on device, write '/x/y'", "there is not enough free disk space"],
+      [
+        "the qwen3-asr-1.7b model is not downloaded and server.auto_download is off",
+        "downloading a missing model is turned off",
+      ],
+      ["qwen3-asr-1.7b is downloading", "it is downloading"],
+      ["akou is still starting", "akou is still starting"],
+      ["fetch failed", "the network failed"],
+      ["something nobody expected at /x/y", ""],
+    ];
+    for (const [server, plain] of said) expect(reasonText(server)).toBe(plain);
+    expect(reasonText(null)).toBe("");
+    expect(joinAnd(["A"])).toBe("A");
+    expect(joinAnd(["A", "b", "c"])).toBe("A, b and c");
   });
 
   test("the ids and defaults the page names are the catalog's and the registry's", () => {
     expect(RECOGNIZER_ID).toBe(RECOGNIZER);
     expect(QWEN_ID).toBe(QWEN_ASR);
     expect(DIARIZERS.nemotron).toEqual([NEMOTRON]);
+    // Each speaker choice holds only what it adds: what the other choice leaves out. TitaNet runs
+    // under both, so neither choice's Remove may reach it.
+    const set = (d: string) => modelsFor({ "asr.diarizer": d }, "darwin-arm64").map((m) => m.id);
+    for (const [d, ids] of Object.entries(DIARIZERS)) {
+      const other = d === "nemotron" ? "embeddings" : "nemotron";
+      expect([d, ids]).toEqual([d, set(d).filter((id) => !set(other).includes(id))]);
+    }
+    // A preset in server.default_model marks the recognizer that preset runs.
+    for (const [name, engine] of Object.entries(PRESET_ENGINES))
+      expect(`${name}: ${PRESETS.find((p) => p.name === name && p.built)?.engines[0]}`).toBe(
+        `${name}: ${engine}`,
+      );
     const reg = SETTINGS as Record<string, { default?: unknown; values?: readonly string[] }>;
     expect(Object.keys(DIARIZERS).sort()).toEqual([...(reg["asr.diarizer"]?.values ?? [])].sort());
     for (const [key, value] of Object.entries(DEFAULTS))
