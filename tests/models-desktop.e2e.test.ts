@@ -170,6 +170,26 @@ describe("[DK-E2, SV-M6] the desktop app lists, pulls and deletes one model at a
     expect((await rig.api("DELETE", `/models/${EXTRA}`)).status).toBe(404);
   });
 
+  test("POST /models/cancel stops a download a pull started; 404 when none runs, 400 with no model", async () => {
+    const release = reg.hold("x.onnx", 1024);
+    try {
+      expect((await rig.api("POST", "/models/pull", { model: EXTRA })).status).toBe(202);
+      expect((await listed(rig))[EXTRA].state).toBe("downloading");
+      const c = await rig.api("POST", "/models/cancel", { model: EXTRA });
+      expect([c.status, c.body]).toEqual([200, { model: EXTRA, cancelled: true }]);
+      expect((await listed(rig))[EXTRA].state).toBe("missing");
+      expect(rig.logs.some((l) => l.msg.startsWith(`model.download ${EXTRA} cancelled`))).toBe(
+        true,
+      );
+      const again = await rig.api("POST", "/models/cancel", { model: EXTRA });
+      expect([again.status, (again.body as Body).error]).toEqual([404, "not_found"]);
+      const none = await rig.api("POST", "/models/cancel", {});
+      expect([none.status, (none.body as Body).error]).toEqual([400, "missing_field"]);
+    } finally {
+      release();
+    }
+  });
+
   test("[DK-E4] a finished final pass is this machine's measured speed for the recognizer", async () => {
     // Before any pass, nothing is measured: the check below can fail.
     expect((await listed(rig))[RECOGNIZER].measured).toBeNull();

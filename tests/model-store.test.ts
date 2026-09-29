@@ -235,6 +235,36 @@ describe("[SV-M1] a missing model is fetched once, whoever waits on it", () => {
     }
   });
 
+  test("[DK-E2] Cancel stops the download, keeps the partial file for the next pull, and says so once", async () => {
+    const r = rig();
+    const release = reg.hold("b.onnx", 1024);
+    const ends: unknown[] = [];
+    r.store.onEnd((e) => ends.push(e));
+    try {
+      expect(r.store.cancel(B, "admin")).toBe(false);
+      r.store.fetch([B]);
+      await until(async () => (r.store.waiting([B])?.bytes ?? 0) >= 1024, 5000, "first bytes");
+      expect(r.store.cancel(B, "admin")).toBe(true);
+      expect(r.store.state(B)).toBe("missing");
+      expect(r.store.downloading()).toEqual([]);
+      expect(ends).toEqual([{ model: B, ok: false, error: "the download was cancelled" }]);
+      expect(r.logs).toContain(`model.download ${B} cancelled key admin`);
+      // The partial file stays, so the next pull resumes from it.
+      expect(existsSync(join(r.dir, B, "b.onnx.part"))).toBe(true);
+      // The aborted try ends quietly, even once the registry would send the rest: no file, no
+      // retry, no second end.
+      release();
+      await Bun.sleep(100);
+      expect(ends).toHaveLength(1);
+      expect(r.store.state(B)).toBe("missing");
+      r.store.fetch([B]);
+      await until(async () => r.store.state(B) === "ready", 5000, "the second pull");
+    } finally {
+      release();
+      r.cleanup();
+    }
+  });
+
   test("with server.auto_download off a missing model is refused with the pull line", () => {
     const r = rig();
     try {

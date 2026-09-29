@@ -48,6 +48,11 @@ export interface LiveSetupInfo {
   title: string;
   /** What writes the live lines, in one sentence. */
   what: string;
+  /**
+   * What the Models page says after the accuracy figure, in plain words: how the lines behave,
+   * and for a setup with no figure on meetings, what is known instead.
+   */
+  plain: string;
   /** Why no call can run it in this version; absent when it can. */
   unavailable?: string;
   accuracy: Measure | NotMeasured;
@@ -65,9 +70,11 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
   parakeet: {
     title: "Parakeet",
     what: "Parakeet decodes each stretch of speech between pauses and re-decodes the open one every second, so words on screen can change",
+    plain: "Words can change as you watch.",
     accuracy: {
       metric: "call-wer",
       value: 36.17,
+      set: "meetings",
       what: "AMI meetings through the live path: 36.17 % WER, and 20.8 words taken back per 100",
       source: LIVE,
     },
@@ -93,9 +100,11 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
   nemotron: {
     title: "Nemotron",
     what: "Streaming Nemotron writes each word once as it is heard and never takes one back",
+    plain: "Words appear as they are said and never change.",
     accuracy: {
       metric: "call-wer",
       value: 18.8,
+      set: "meetings",
       what: "AMI meetings through streaming Nemotron at 560 ms: 18.80 % WER, 0 words taken back",
       source: LIVE,
     },
@@ -121,6 +130,9 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
   upgrade: {
     title: "Nemotron, each line rewritten by Qwen",
     what: "Streaming Nemotron writes the words; when the speaker stops, Qwen rewrites the lines once, about 1 s after the utterance closes",
+    // FLEURS, 20 clips per language: 7.34 to 4.75 % (35 % fewer) and 4.87 to 2.75 % (44 % fewer).
+    plain:
+      "Cleaner lines a second after each speaker stops. Not measured on meetings yet; on read speech it cuts Nemotron's mistakes by a third or more. Uses 10 to 13 GB of memory during a call.",
     accuracy: {
       notMeasured:
         "not run on AMI meetings; on 20 FLEURS clips per language, Qwen's rewrite takes the stream from 7.34 to 4.75 % WER in English and from 4.87 to 2.75 in Spanish",
@@ -145,6 +157,7 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
   voxtral: {
     title: "Voxtral Realtime",
     what: "Voxtral Mini 4B Realtime, the most accurate streaming model measured (7.19 % English and 3.60 % Spanish WER on FLEURS)",
+    plain: "Not available yet: on a Mac's graphics chip it only just keeps up with speech.",
     unavailable:
       "it runs only at real time on an Apple M4 (real-time factor 1.0), so it needs a faster GPU and one channel, and it gives no word times and takes no vocabulary",
     accuracy: { notMeasured: "not run on AMI meetings; 7.19 % and 3.60 % WER on FLEURS" },
@@ -229,6 +242,8 @@ export interface LiveSetupView {
   id: LiveSetupId;
   title: string;
   what: string;
+  /** The Models page's words after the accuracy figure (`LiveSetupInfo.plain`). */
+  plain: string;
   /** Why no call can run it in this version, or null. */
   unavailable: string | null;
   /** The next call runs it: the setting as it resolves on this machine now. */
@@ -271,6 +286,7 @@ export function liveView(
         id,
         title: s.title,
         what: s.what,
+        plain: s.plain,
         unavailable: s.unavailable ?? null,
         selected: next.setup === id,
         running: running === id,

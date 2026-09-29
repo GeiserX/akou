@@ -497,6 +497,54 @@
         "x-akou-access": "admin"
       }
     },
+    "/v1/models/cancel": {
+      "post": {
+        "operationId": "models.cancel",
+        "tags": [
+          "models"
+        ],
+        "description": "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. 404 when the model is not downloading.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "model": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "model"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/models/{id}": {
       "delete": {
         "operationId": "models.delete",
