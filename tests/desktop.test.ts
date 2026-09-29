@@ -521,6 +521,47 @@ describe("[DK-M4] the window reopens where it was left", () => {
   });
 });
 
+describe("[DK-M7] the macOS main window draws no title bar", () => {
+  test("hidden-inset on macOS, the native frame on Windows and Linux", async () => {
+    for (const platform of ["darwin", "win32", "linux"]) {
+      const f = fakeUi();
+      const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+        platform,
+        setLoginItem: async () => {},
+      });
+      await shell.start();
+      shell.show();
+      expect(`${platform}: ${f.titleBars}`).toBe(
+        `${platform}: ${platform === "darwin" ? "hiddenInset" : "default"}`,
+      );
+      await shell.close();
+    }
+  });
+
+  test("the small windows keep no title bar at all, and the main one takes the shell's", () => {
+    // native.ts is the one module the tests cannot load: its source is the check.
+    const src = readFileSync(
+      join(import.meta.dir, "..", "src", "main", "window", "native.ts"),
+      "utf8",
+    );
+    const styles = [...src.matchAll(/titleBarStyle(?::\s*"(\w+)")?,/g)].map((m) => m[1] ?? "shell");
+    expect(styles).toEqual(["shell", "hidden", "hidden", "hidden"]);
+  });
+
+  test("a double-click on the page's title bar strip zooms the window", async () => {
+    const f = fakeUi();
+    const shell = new Shell(fakeApp().app, bridgeStub, f.ui, {
+      platform: "darwin",
+      setLoginItem: async () => {},
+    });
+    await shell.start();
+    shell.show();
+    expect(await f.zoom()).toBe(true);
+    expect(f.log.filter((l) => l === "zoom")).toEqual(["zoom"]);
+    await shell.close();
+  });
+});
+
 describe("[DK-M4] the remembered frame on disk", () => {
   test("shell.json round-trips, and a torn or hand-edited file means the default place", () => {
     const t = tempDir();

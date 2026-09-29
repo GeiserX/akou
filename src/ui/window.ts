@@ -166,6 +166,10 @@ class RpcTransport implements Transport {
       },
     };
   }
+
+  zoomWindow(): void {
+    void rpc.request.zoomWindow({}).catch(() => {});
+  }
 }
 
 boot(new RpcTransport());

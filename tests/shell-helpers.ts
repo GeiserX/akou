@@ -50,6 +50,10 @@ export interface FakeUi {
   onQuit: () => void;
   /** Every frame a window was opened at, in order. */
   frames: (Rect | undefined)[];
+  /** Every main window's title bar style, in order (DK-M7). */
+  titleBars: string[];
+  /** The page's title bar strip is double-clicked (DK-M7). */
+  zoom: () => Promise<unknown>;
   /** The OS moved or resized the window. */
   moveWindow: (r: Rect) => void;
   /** The user closed the window (its close button). */
@@ -99,6 +103,7 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     openWindow: (o) => {
       log.push(`window ${o.url}`);
       f.frames.push(o.frame);
+      f.titleBars.push(o.titleBarStyle);
       rpc = o.rpc;
       booted = false;
       const page = (line: string) => {
@@ -111,6 +116,7 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
             if (focusOnShow) focusFn(true);
           },
           close: () => log.push("close"),
+          zoom: () => log.push("zoom"),
           onClose: (fn) => {
             closeFn = fn;
           },
@@ -239,6 +245,11 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
     },
     onQuit: () => {},
     frames: [],
+    titleBars: [],
+    zoom: async () => {
+      if (!rpc) throw new Error("no window is open");
+      return rpc.handlers.zoomWindow({});
+    },
     moveWindow: (r) => {
       frameFn(r);
     },

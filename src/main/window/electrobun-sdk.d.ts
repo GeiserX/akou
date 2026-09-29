@@ -102,6 +102,10 @@ declare module "electrobun/main" {
     hide(): void;
     focus(): void;
     close(): void;
+    /** Fills the screen, and back: a title bar double-click (DK-M7). */
+    maximize(): void;
+    unmaximize(): void;
+    isMaximized(): boolean;
     setAlwaysOnTop(on: boolean): void;
     setVisibleOnAllWorkspaces(on: boolean): void;
     getFrame(): { x: number; y: number; width: number; height: number };
