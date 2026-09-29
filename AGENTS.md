@@ -1,6 +1,6 @@
 # AGENTS.md
 
-Conventions for anyone, human or agent, working in this repository. The design is in [docs/DESIGN.md](docs/DESIGN.md); read [docs/INDEX.md](docs/INDEX.md) first.
+Conventions for anyone, human or agent, working in this repository. The design is in [docs/DESIGN.md](docs/DESIGN.md); read [docs/index.md](docs/index.md) first.
 
 ## Layout
 

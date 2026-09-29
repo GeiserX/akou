@@ -111,7 +111,7 @@ export function installMessage(o: InstallOutcome): { title: string; detail: stri
       return {
         title: "This build has no command-line tool.",
         detail:
-          "Only the released app carries it. Install the command line from its release archive (docs/install.md).",
+          "Only the released app carries it. Install the command line from its release archive (docs/getting-started.md).",
       };
     case "not-in-place":
       return {
