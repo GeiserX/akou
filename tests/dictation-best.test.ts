@@ -415,8 +415,8 @@ describe("DC-L3: the audio check on best", () => {
     expect(check?.messages.filter((m) => m.role === "system")).toEqual([
       { role: "system", content: "Kubernetes" },
     ]);
-    // Positive control: a dictation's own decode sends no context.
-    expect(dictation?.messages.some((m) => m.role === "system")).toBe(false);
+    // Positive control: a dictation's own decode sends no context (its system turn is empty).
+    expect(dictation?.messages.some((m) => m.role === "system" && m.content)).toBe(false);
   });
 
   test("a failed check throws, and never answers with fast's text", async () => {
