@@ -532,6 +532,8 @@ export interface DownloadOptions {
   fetch?: typeof fetch;
   onProgress?(p: DownloadProgress): void;
   env?: NodeJS.ProcessEnv;
+  /** Stops the download; the partial file stays, so the next one resumes from it. */
+  signal?: AbortSignal;
 }
 
 /**
@@ -558,6 +560,7 @@ export async function downloadFile(
     const res = await (o.fetch ?? fetch)(f.url, {
       headers: have > 0 ? { Range: `bytes=${have}-` } : {},
       redirect: "follow",
+      ...(o.signal ? { signal: o.signal } : {}),
     });
     if (res.status === 200 && have > 0)
       have = 0; // the server ignored the range: start over
@@ -569,6 +572,7 @@ export async function downloadFile(
       let bytes = have;
       if (!res.body) throw new Error(`download of ${f.url} returned no body`);
       for await (const chunk of res.body) {
+        o.signal?.throwIfAborted();
         await fh.write(chunk);
         bytes += chunk.byteLength;
         if (bytes > f.size) throw new ChecksumError(`${f.name} is larger than ${f.size} bytes`);

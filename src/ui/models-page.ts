@@ -1,137 +1,220 @@
 /**
- * The Models page (docs/ux/SERVER.md SV-U6, DESKTOP.md DK-E2): in the app, first the Live section
- * (`asr.live`, akou-chp.23): each live setup with its accuracy, latency, cores and memory bars, the
- * one the next call runs and the one the live call runs marked, its missing models one Download
- * away, and Use to choose it. Then every catalog model in three
- * sections (speech recognition, speaker labels, and the helpers folded), each with what it is for,
- * its size, state, last use and the date the sweep deletes it, two bars for accuracy and speed with
- * the numbers behind them, and Download, Delete and Set as default. Below, the settings that decide
- * what a missing model does and when an unused one goes.
+ * The Models page (docs/ux/design-explorations/sd-a-models.html, direction A; docs/ux/SERVER.md
+ * SV-U6, DESKTOP.md DK-E2): a page of the main window beside the sidebar, and the same page on
+ * server mode's web page. One column of grouped rows:
  *
- * The same page in server mode's web page (`server-page.ts`) and in the desktop window's Models
- * dialog (`app.ts`), over the same routes a script calls: `GET /models`, `POST /models/pull`,
- * `DELETE /models/{id}`, `GET` and `PATCH /config`.
+ * - **Live transcript** (the app only): the live setups as a radio list (`asr.live`), Automatic
+ *   first, Voxtral listed and unavailable; "next call" and "this call" mark what runs.
+ * - **After the call** (the app) or **Jobs** (server mode): the recognizer that writes the
+ *   accurate transcript; in server mode a radio list of the recognizers a job may run by default.
+ * - **Dictation** (the app): Fast and Best, the engines dictation decodes with.
+ * - **Speakers**: who spoke when, a radio list (`asr.diarizer`).
+ * - **On this Mac** (or computer, or server): the graphics chip, the unused-days sweep, the size
+ *   cap, what a job's missing model does (server mode), and a row to the helpers.
+ *
+ * Each fact is a plain sentence from the numbers in `asr/model-scores.ts` and
+ * `asr/live-setups.ts`, each accuracy figure naming its test set (`models-rows.ts`). A model shows
+ * its size where the page owns it and "Already here" where another row does; a missing one is one
+ * Download away, a downloading one shows its progress and Cancel, and a removable one shows Remove
+ * on hover, which asks once more before it acts. The default and a model in use are kept, and say
+ * why.
+ *
+ * Each change saves its key alone through `PATCH /config`; a number saves when its field is left,
+ * and leaving the page saves what is still typed. The routes are the ones a script calls:
+ * `GET /models`, `POST /models/pull`, `POST /models/cancel`, `DELETE /models/{id}`, `GET` and
+ * `PATCH /config`.
  */
 
-import type { ScoreView } from "../main/server/model-store.ts";
 import { h, replace, toast } from "./dom.ts";
 import {
-  bar,
-  deleteRefusal,
+  accuracyText,
+  afterCallHelp,
+  autoHelp,
+  bestHelp,
+  DEFAULTS,
+  DIARIZERS,
+  gbText,
+  helperHelp,
+  hourText,
+  joinAnd,
   keptText,
-  LIVE_BARS,
-  type LiveSetupView,
+  LIVE_ORDER,
   type LiveView,
-  liveHint,
-  liveMissing,
-  liveModelsText,
+  liveHelp,
+  liveName,
+  liveTags,
   type ModelRow,
-  measuredText,
+  modelName,
+  needsText,
+  PRESET_ENGINES,
   percent,
-  purposeText,
-  SECTIONS,
-  SORTS,
-  type SortBy,
-  sizeText,
-  sortRows,
+  QWEN_ID,
+  RECOGNIZER_ID,
+  reasonText,
+  removeRefusal,
+  speakersHelp,
+  totalText,
 } from "./models-rows.ts";
 import { message } from "./notepad.ts";
 import type { ModelsInfo, Transport } from "./protocol.ts";
-import { section, twoStep } from "./server-common.ts";
-import { modelsStateText } from "./server-text.ts";
-import type { ConfigReply } from "./settings.ts";
+import {
+  backLink,
+  choiceRow,
+  field,
+  ICONS,
+  icon,
+  linkRow,
+  pageHead,
+  progress,
+  row,
+  section,
+  sectionWith,
+  segmented,
+  selectBox,
+  tag,
+  toggle,
+  unit,
+} from "./rows.ts";
+import { twoStep } from "./server-common.ts";
+import type { ConfigReply, SchemaEntry } from "./settings.ts";
+import { wordsFor } from "./settings-labels.ts";
 
 type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView };
 
-const SORT_KEY = "akou.models.sort";
+/** The numbers of "On this Mac": each field's id, label, help and unit. */
+const NUMBERS = [
+  {
+    key: "server.models_unused_days",
+    id: "models-unused-days",
+    label: "Delete models unused for",
+    help: "The default and anything in use are never deleted. 0 means never.",
+    unit: "days",
+  },
+  {
+    key: "server.models_max_gb",
+    id: "models-max-gb",
+    label: "Keep all models under",
+    help: "A download that would pass it is refused. 0 means no limit.",
+    unit: "GB",
+  },
+] as const;
 
 export class ModelsPage {
   readonly name = "models" as const;
   readonly title = "Models";
-  readonly root: HTMLElement;
-  private readonly state = h("p", { id: "models-state", attrs: { role: "status" } });
-  private readonly progress = h("progress", { hidden: true, attrs: { max: "1", value: "0" } });
+  readonly root = h("section", {
+    id: "page-models",
+    class: "pg",
+    attrs: { "aria-label": "Models" },
+  });
+  private readonly col = h("div", { class: "pg-col" });
+  private readonly head = h("div", {});
+  private readonly state = h("div", {
+    id: "models-state",
+    class: "pg-help",
+    attrs: { role: "status" },
+  });
   private readonly pullAll = h(
     "button",
-    { id: "models-download", class: "go", type: "button", hidden: true },
-    "Download",
-  );
-  private readonly sort = h(
-    "select",
-    { id: "models-sort", attrs: { "aria-label": "Sort models by" } },
-    ...SORTS.map((s) => h("option", { value: s.by }, s.label)),
+    { id: "models-download", class: "pg-btn", type: "button", hidden: true },
+    icon(...ICONS.download),
+    "Download speech models",
   );
   private readonly lists = h("div", { id: "models-lists" });
-  private readonly liveSection = h("section", {
-    id: "models-live",
-    class: "models-group",
-    hidden: true,
-    attrs: { "data-kind": "live" },
-  });
-  private live: LiveView | null = null;
-  private readonly settings = h("form", {
-    id: "models-settings",
-    attrs: { novalidate: "", "aria-label": "Model settings" },
-  });
-  private readonly armed = new Map<string, number>();
+  private readonly settingsBox = h("div", { id: "models-settings" });
+  private info: ModelsInfo | null = null;
   private rows: ModelRow[] = [];
-  private unusedDays: number | null = null;
+  private live: LiveView | null = null;
+  private schema: Record<string, SchemaEntry> = {};
+  private settings: Record<string, unknown> = {};
+  private issues = new Map<string, string>();
+  /** What each number field held when drawn, so leaving saves only an edit. */
+  private shownNumbers = new Map<string, string>();
+  private platform = "";
+  /** The helpers' page is on screen instead of the page itself. */
+  private sub = false;
+  private readonly armed = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
   private shown = false;
-  /** Bumped by every read, so an older answer that lands late never draws over a newer one. */
-  private reads = 0;
+  /** Bumped by every show and every leave: a show that lands after a newer one draws nothing. */
+  private shows = 0;
+  /** Bumped by every poll and every show: an older poll's answer never draws over a newer one. */
+  private polls = 0;
+  /** A show is reading: the page holds its "Reading" line, and a poll leaves it alone. */
+  private loading = false;
 
   constructor(
     private readonly t: Transport,
-    /** Server mode: jobs from clients exist, so what a missing model does is a choice here. */
+    /** Server mode: jobs pick the recognizer, and what a missing model does is a choice here. */
     private readonly server: boolean,
   ) {
-    let saved: string | null = null;
-    try {
-      saved = localStorage.getItem(SORT_KEY);
-    } catch {}
-    this.sort.value = SORTS.some((s) => s.by === saved) ? (saved as SortBy) : "accuracy";
-    this.sort.addEventListener("change", () => {
-      try {
-        localStorage.setItem(SORT_KEY, this.sort.value);
-      } catch {}
-      this.drawRows();
+    this.root.append(this.col);
+    this.pullAll.addEventListener("click", () => void this.pullSet());
+    this.root.addEventListener("change", (e) => {
+      const el = e.target as HTMLElement;
+      const key = el.dataset?.key;
+      if (key) void this.save(key, el);
     });
-    this.pullAll.addEventListener("click", () => void this.download());
-    this.settings.addEventListener("submit", (e) => {
-      e.preventDefault();
-      void this.saveSettings();
-    });
-    this.root = section(
-      "Models",
-      h(
-        "p",
-        { class: "hint" },
-        "Every file comes from the model's own publisher, pinned to one revision and checked against its SHA-256 before it is used. Where each model comes from is on its row.",
-      ),
-      h("div", { class: "bar models-top" }, this.state, this.progress, this.pullAll),
-      this.liveSection,
-      h(
-        "div",
-        { class: "bar models-sort" },
-        h("label", { attrs: { for: "models-sort" } }, "Sort by"),
-        this.sort,
-      ),
-      this.lists,
-      this.settings,
-    );
-    this.root.classList.add("models-page");
   }
 
-  show(): void {
+  private get here(): string {
+    if (this.server) return "this server";
+    return this.platform === "darwin" ? "this Mac" : "this computer";
+  }
+
+  /** Reads the models and the settings and draws the page; on `key`, goes to that setting. */
+  async show(key?: string): Promise<void> {
+    // Counted before the save, so a leave during it wins and this show draws nothing.
+    const n = ++this.shows;
+    // Shown again while on screen (its sidebar row): what is typed is saved before the redraw.
+    await this.saveTyped();
+    if (n !== this.shows) return;
     this.shown = true;
-    void this.read();
-    void this.readSettings();
+    this.sub = key === "helpers";
+    // The poll stops while the page reads everything; a poll that lands meanwhile draws nothing.
+    this.stop();
+    this.polls++;
+    this.loading = true;
+    replace(this.col, h("p", { class: "pg-reading" }, "Reading the models…"));
+    const [models, cfg, st] = await Promise.all([
+      this.t.request<ModelsReply>("GET", "/models").catch(() => null),
+      this.t.request<ConfigReply>("GET", "/config").catch(() => null),
+      this.server
+        ? null
+        : this.t.request<{ app?: { platform?: string } }>("GET", "/status").catch(() => null),
+    ]);
+    if (n !== this.shows || !this.shown) return;
+    this.loading = false;
+    if (st && st.status < 400) this.platform = String(st.body?.app?.platform ?? "");
+    if (cfg && cfg.status < 400) this.config(cfg.body);
+    else toast(message(cfg?.body, "the settings could not be read"));
+    if (models && models.status === 200) this.take(models.body);
+    this.draw();
+    if (key && key !== "helpers") this.goTo(key);
   }
 
-  hide(): void {
+  /** The page is left: what is still typed into a number is saved, and the page stops following. */
+  leave(): void {
     this.shown = false;
+    this.shows++;
+    this.polls++;
+    this.loading = false;
     this.stop();
+    void this.saveTyped();
+  }
+
+  /** Saves each number whose field holds what was not saved yet. */
+  private async saveTyped(): Promise<void> {
+    const typed = NUMBERS.map((n) => ({
+      key: n.key,
+      el: this.settingsBox.querySelector<HTMLInputElement>(`#${n.id}`),
+    })).filter((x) => x.el && x.el.value !== this.shownNumbers.get(x.key));
+    await Promise.all(typed.map((x) => this.save(x.key, x.el as HTMLInputElement)));
+  }
+
+  /** Server mode's name for leaving. */
+  hide(): void {
+    this.leave();
   }
 
   private stop(): void {
@@ -139,28 +222,16 @@ export class ModelsPage {
     this.timer = null;
   }
 
-  private async read(): Promise<void> {
-    const n = ++this.reads;
-    let r: { status: number; body: ModelsReply };
-    try {
-      r = await this.t.request<ModelsReply>("GET", "/models");
-    } catch {
-      return;
-    }
-    if (n !== this.reads || r.status !== 200) return;
-    this.draw(r.body);
+  private config(c: ConfigReply): void {
+    this.schema = c.schema;
+    this.settings = { ...c.settings };
+    this.issues = new Map(c.issues.map((i) => [i.key, i.message]));
   }
 
-  private draw(m: ModelsReply): void {
-    this.state.textContent = modelsStateText(m);
-    this.pullAll.hidden = m.state === "ready" || m.state === "downloading";
-    this.pullAll.textContent = m.state === "failed" ? "Try again" : "Download";
-    this.progress.hidden = m.state !== "downloading";
-    this.progress.value = m.total > 0 ? m.bytes / m.total : 0;
+  private take(m: ModelsReply): void {
+    this.info = m;
     this.rows = m.models ?? [];
-    this.drawRows();
     this.live = m.live ?? null;
-    this.drawLive();
     const busy =
       m.state === "downloading" ||
       this.rows.some((r) => r.state === "downloading") ||
@@ -169,441 +240,692 @@ export class ModelsPage {
     else this.stop();
   }
 
-  private drawRows(): void {
-    const by = this.sort.value as SortBy;
-    replace(
-      this.lists,
-      ...SECTIONS.map((s) => {
-        const rows = sortRows(
-          this.rows.filter((r) => r.kind === s.kind),
-          by,
-        );
-        if (rows.length === 0) return null;
-        const body = [
-          h("p", { class: "hint" }, s.hint),
-          h("ul", { class: "model-list" }, ...rows.map((r) => this.row(r))),
-        ];
-        if (s.kind === "helper") {
-          const d = h(
-            "details",
-            { class: "models-group", attrs: { "data-kind": s.kind } },
-            h("summary", {}, `${s.title} (${rows.length})`),
-            ...body,
-          );
-          return d;
-        }
-        return h(
-          "section",
-          { class: "models-group", attrs: { "data-kind": s.kind } },
-          h("h3", {}, s.title),
-          ...body,
-        );
-      }),
-    );
+  /** Reads the models again and redraws them; the settings' fields are left as they are. */
+  private async read(): Promise<void> {
+    if (this.loading) return;
+    const n = ++this.polls;
+    let r: { status: number; body: ModelsReply };
+    try {
+      r = await this.t.request<ModelsReply>("GET", "/models");
+    } catch {
+      return;
+    }
+    if (n !== this.polls || r.status !== 200 || !this.shown || this.loading) return;
+    this.take(r.body);
+    this.drawModels();
   }
 
-  private row(r: ModelRow): HTMLElement {
-    const badges = [
-      r.default ? h("span", { class: "badge ok" }, "default") : null,
-      r.in_use ? h("span", { class: "badge" }, "in use") : null,
-      r.kind === "speech" && r.streaming ? h("span", { class: "badge" }, "live") : null,
-    ];
-    const measured = measuredText(r);
-    return h(
-      "li",
-      { class: "model", attrs: { "data-id": r.id, "data-state": r.state } },
-      h(
-        "div",
-        { class: "model-head" },
-        h("strong", { class: "model-name" }, r.id),
-        ...badges,
-        h("span", { class: "model-size" }, sizeText(r.size)),
-      ),
-      h("p", { class: "model-purpose" }, purposeText(r)),
-      h(
-        "div",
-        { class: "model-bars" },
-        this.bar("Accuracy", "accuracy", r),
-        this.bar("Speed", "speed", r),
-      ),
-      measured ? h("p", { class: "model-measured" }, measured) : null,
-      h(
-        "p",
-        { class: "model-kept" },
-        keptText(r, this.unusedDays),
-        h("span", { class: "model-from" }, ` · from ${r.from.join(", ")}`),
-      ),
-      this.actions(r),
-    );
-  }
-
-  private bar(label: string, side: "accuracy" | "speed", r: ModelRow): HTMLElement {
-    return this.meter(label, side, r[side], r.id);
-  }
-
-  /** One bar: its score, the raw number beside it, and the source in its title. */
-  private meter(label: string, side: string, score: ScoreView, of: string): HTMLElement {
-    const b = bar(score);
-    const fill = h("span", { class: "fill" });
-    if (b.value !== null) fill.style.width = `${b.value}%`;
-    return h(
-      "div",
-      {
-        class: `mbar ${side}${b.value === null ? " none" : ""}`,
-        title: b.title,
-        attrs: {
-          "data-side": side,
-          ...(b.value === null ? {} : { "data-value": String(b.value) }),
-        },
-      },
-      h("span", { class: "mbar-label" }, label),
-      h(
-        "span",
-        {
-          class: "track",
-          role: "meter",
-          attrs: {
-            "aria-label": `${label} of ${of}`,
-            "aria-valuemin": "0",
-            "aria-valuemax": "100",
-            ...(b.value === null
-              ? { "aria-valuetext": "not measured" }
-              : { "aria-valuenow": String(b.value) }),
-          },
-        },
-        fill,
-      ),
-      h("span", { class: "mbar-value" }, b.label),
-    );
+  private draw(): void {
+    this.drawSettings();
+    this.drawModels();
+    replace(this.col, this.head, this.lists, this.sub ? null : this.settingsBox);
+    this.root.parentElement?.scrollTo?.({ top: 0 });
   }
 
   // -------------------------------------------------------------------------
-  // The Live section
+  // The models
 
-  private drawLive(): void {
-    const v = this.live;
-    this.liveSection.hidden = v === null;
-    if (!v) return;
-    const auto =
-      v.setting === "auto"
-        ? null
-        : h(
-            "button",
-            {
-              type: "button",
-              id: "models-live-auto",
-              title: "Sets asr.live to auto",
-              on: { click: () => void this.useLive("auto") },
-            },
-            "Back to auto",
-          );
+  /** Redraws the models, keeping the keyboard on the control it was on (or on its row). */
+  private drawModels(): void {
+    const at = this.focused();
+    this.drawLists();
+    if (!at) return;
+    const el = at.map((sel) => this.col.querySelector<HTMLElement>(sel)).find((x) => x);
+    el?.focus({ preventScroll: true });
+  }
+
+  /**
+   * Where the keyboard is on the page, as selectors that find the same control after a redraw:
+   * the control itself, then its row's first control (a Download that became a Cancel).
+   */
+  private focused(): string[] | null {
+    const el = document.activeElement;
+    if (!(el instanceof HTMLElement) || !this.col.contains(el)) return null;
+    if (el.id) return [`#${CSS.escape(el.id)}`];
+    if (el instanceof HTMLInputElement && el.type === "radio" && el.name)
+      return [`input[name="${CSS.escape(el.name)}"][value="${CSS.escape(el.value)}"]`];
+    const r = el.closest<HTMLElement>("[data-setup], [data-diarizer], [data-model]");
+    if (!r) return null;
+    const attr = ["data-setup", "data-diarizer", "data-model"].find((a) => r.hasAttribute(a));
+    const at = `[${attr}="${CSS.escape(r.getAttribute(attr as string) ?? "")}"]`;
+    const action = el.dataset.action;
+    return [
+      ...(action ? [`${at} [data-action="${CSS.escape(action)}"]`] : []),
+      `${at} :is(button, input):not(:disabled)`,
+    ];
+  }
+
+  private drawLists(): void {
+    if (this.sub) {
+      replace(
+        this.head,
+        pageHead("Helpers", {
+          back: backLink("Models", () => {
+            this.sub = false;
+            this.draw();
+            this.col.querySelector<HTMLElement>("#models-go-helpers")?.focus();
+          }),
+        }),
+      );
+      replace(this.lists, ...this.helperSections());
+      return;
+    }
+    this.drawState();
+    replace(this.head, pageHead("Models", { sub: this.state, right: [this.pullAll] }));
+    const sections = this.server
+      ? [this.jobsSection(), this.speakersSection()]
+      : [
+          this.liveSection(),
+          this.afterCallSection(),
+          this.dictationSection(),
+          this.speakersSection(),
+        ];
+    replace(this.lists, ...sections);
+    const helpers = this.settingsBox.querySelector("#models-go-helpers");
+    if (helpers) helpers.replaceWith(this.helpersRow());
+  }
+
+  /** The line under the title: the total here, or the speech models' download. */
+  private drawState(): void {
+    const m = this.info;
+    this.pullAll.hidden = !m || m.state === "ready" || m.state === "downloading";
     replace(
-      this.liveSection,
-      h("h3", {}, "Live transcript"),
-      h("p", { class: "hint", id: "models-live-hint" }, liveHint(v), auto ? " " : null, auto),
-      h("ul", { class: "model-list" }, ...v.setups.map((s) => this.liveRow(s, v))),
+      this.pullAll,
+      icon(...ICONS.download),
+      m?.state === "failed" ? "Try again" : "Download speech models",
+    );
+    if (!m || m.state === "ready") {
+      this.state.textContent = totalText(this.rows, this.here, this.server);
+      return;
+    }
+    if (m.state === "downloading") {
+      replace(
+        this.state,
+        progress(
+          percent(m.bytes, m.total),
+          `Downloading the speech models: ${percent(m.bytes, m.total)} % of ${gbText(m.total)}`,
+        ),
+      );
+      return;
+    }
+    if (m.state === "failed") {
+      const why = reasonText(m.error);
+      this.state.textContent = `The download stopped${why ? `: ${why}` : ""}. Files already verified are kept.`;
+      return;
+    }
+    this.state.textContent = `The speech models are not downloaded yet: ${gbText(m.total)}. ${
+      this.server ? "Jobs are refused" : "Recording waits"
+    } until they are.`;
+  }
+
+  private row(id: string): ModelRow | undefined {
+    return this.rows.find((r) => r.id === id);
+  }
+
+  private rowsOf(ids: readonly string[]): ModelRow[] {
+    return ids.map((id) => this.row(id)).filter((r): r is ModelRow => r !== undefined);
+  }
+
+  /**
+   * What a row shows on its right for the models it needs: its size (where the page owns them) or
+   * "Already here", Download for what is missing, the progress and Cancel while one downloads, and
+   * Remove on hover where they may be removed. `help` is the progress, in place of the row's help,
+   * while it downloads.
+   */
+  private modelSide(
+    models: readonly ModelRow[],
+    owner: boolean,
+  ): { controls: Node[]; help: HTMLElement | null; state: string } {
+    if (models.length === 0) return { controls: [], help: null, state: "none" };
+    const size = models.reduce((n, r) => n + r.size, 0);
+    const downloading = models.filter((r) => r.state === "downloading");
+    const missing = models.filter((r) => r.state === "missing");
+    if (downloading.length > 0) {
+      // The progress of what is still coming, not of the set with what is already here.
+      const coming = models.filter((r) => r.state !== "ready");
+      const pct = percent(
+        coming.reduce((n, r) => n + r.bytes, 0),
+        coming.reduce((n, r) => n + r.size, 0),
+      );
+      if (!owner)
+        return {
+          controls: [h("span", { class: "pg-value" }, `Downloading, ${pct} %`)],
+          help: null,
+          state: "downloading",
+        };
+      const cancel = h(
+        "button",
+        {
+          type: "button",
+          class: "pg-btn ghost",
+          attrs: { "data-action": "cancel" },
+          on: { click: () => void this.cancel(downloading.map((r) => r.id)) },
+        },
+        "Cancel",
+      );
+      return {
+        controls: [cancel],
+        help: progress(pct, `${pct} % of ${gbText(coming.reduce((n, r) => n + r.size, 0))}`),
+        state: "downloading",
+      };
+    }
+    if (missing.length > 0) {
+      const need = missing.reduce((n, r) => n + r.size, 0);
+      const down = h(
+        "button",
+        {
+          type: "button",
+          class: "pg-btn",
+          attrs: { "data-action": "download" },
+          on: { click: () => void this.pull(missing.map((r) => r.id)) },
+        },
+        icon(...ICONS.download),
+        "Download",
+      );
+      return {
+        controls: [h("span", { class: "pg-value" }, gbText(need)), down],
+        help: null,
+        state: "missing",
+      };
+    }
+    if (!owner)
+      return {
+        controls: [h("span", { class: "pg-value" }, "Already here")],
+        help: null,
+        state: "ready",
+      };
+    const days = Number(this.settings["server.models_unused_days"]);
+    const kept = models.find((r) => removeRefusal(r));
+    const sizeEl = h(
+      "span",
+      {
+        class: "pg-value",
+        title: keptText(kept ?? (models[0] as ModelRow), Number.isFinite(days) ? days : null),
+      },
+      gbText(size),
+    );
+    // A kept model draws no Remove; its size's tooltip says why it stays.
+    if (kept) return { controls: [sizeEl], help: null, state: "ready" };
+    const id = models.map((r) => r.id).join("+");
+    const remove = twoStep(
+      {
+        class: "pg-btn ghost pg-remove",
+        label: "Remove",
+        confirm: "Remove: sure?",
+        id: `remove-${id}`,
+        armed: this.armed,
+      },
+      () => void this.remove(models.map((r) => r.id)),
+    );
+    remove.dataset.action = "remove";
+    return { controls: [sizeEl, remove], help: null, state: "ready" };
+  }
+
+  /** A row for models the page owns: its name, its facts, and its models' side. */
+  private modelRow(
+    label: string,
+    help: string,
+    models: readonly ModelRow[],
+    o: { owner?: boolean } = {},
+  ): HTMLElement {
+    const side = this.modelSide(models, o.owner !== false);
+    const r = row({ label, help: side.help ?? help }, ...side.controls);
+    r.dataset.model = models[0]?.id ?? "";
+    r.dataset.state = side.state;
+    return r;
+  }
+
+  private liveSection(): HTMLElement | null {
+    const v = this.live;
+    if (!v) return null;
+    const tags = liveTags(v);
+    const setting = String(this.settings["asr.live"] ?? v.setting);
+    const rows = LIVE_ORDER.map((id) => {
+      const marks = (tags.get(id) ?? []).map((t) => tag(t, t === "this call" ? "running" : "next"));
+      if (id === "auto") {
+        const r = choiceRow(
+          {
+            name: "models-live",
+            value: "auto",
+            label: liveName("auto"),
+            help: autoHelp(v, this.here),
+            checked: setting === "auto",
+            isDefault: DEFAULTS["asr.live"] === "auto",
+          },
+          ...marks,
+        );
+        r.dataset.setup = "auto";
+        return r;
+      }
+      const s = v.setups.find((x) => x.id === id);
+      if (!s) return null;
+      const models = this.rowsOf(s.models.map((m) => m.id));
+      // The streaming Nemotron is this row's own; the others are shown where they belong.
+      const owner = id === "nemotron";
+      const side = s.unavailable ? null : this.modelSide(models, owner);
+      const missing = models.filter((r) => r.state === "missing");
+      // While its models are missing, what it needs replaces its facts.
+      const help = !owner && missing.length > 0 ? needsText(missing) : liveHelp(s);
+      const r = choiceRow(
+        {
+          name: "models-live",
+          value: id,
+          label: liveName(id, s.title),
+          help: side?.help ?? help,
+          checked: setting === id,
+          isDefault: DEFAULTS["asr.live"] === id,
+          disabled: s.unavailable !== null,
+        },
+        ...marks,
+        ...(side?.controls ?? []),
+      );
+      r.dataset.setup = id;
+      r.dataset.state = s.unavailable ? "unavailable" : (side?.state ?? "none");
+      return r;
+    });
+    const running = v.running !== null;
+    const radios = rows.filter((r): r is HTMLLabelElement => r !== null);
+    for (const r of radios) {
+      const input = r.querySelector<HTMLInputElement>("input.pg-radio");
+      input?.addEventListener("change", () => {
+        if (input.checked) void this.patch("asr.live", input.value);
+      });
+    }
+    const s = sectionWith(
+      "Live transcript",
+      running ? "A change applies from the next call." : null,
+      ...radios,
+    );
+    s.id = "models-live";
+    return s;
+  }
+
+  private afterCallSection(): HTMLElement | null {
+    const r = this.row(RECOGNIZER_ID) ?? this.rows.find((x) => x.kind === "speech" && x.default);
+    if (!r) return null;
+    const s = section(
+      "After the call",
+      this.modelRow(modelName(r), afterCallHelp(r, this.here), [r]),
+    );
+    s.id = "models-after";
+    return s;
+  }
+
+  private dictationSection(): HTMLElement | null {
+    const fast = this.row(RECOGNIZER_ID);
+    const best = this.row(QWEN_ID);
+    if (!fast && !best) return null;
+    const rows: HTMLElement[] = [];
+    if (fast && fast.state === "ready")
+      rows.push(
+        this.modelRow(
+          `Fast: ${modelName(fast)}`,
+          "The same model as after the call, so there is nothing more to download.",
+          [fast],
+          { owner: false },
+        ),
+      );
+    else if (fast) {
+      // Not here yet: After the call downloads it, and Fast has nothing of its own to offer.
+      const r = row({ label: `Fast: ${modelName(fast)}`, help: "Downloads with After the call." });
+      r.dataset.model = fast.id;
+      r.dataset.state = fast.state;
+      rows.push(r);
+    }
+    if (best) rows.push(this.modelRow(`Best: ${modelName(best)}`, bestHelp(best), [best]));
+    const s = section("Dictation", ...rows);
+    s.id = "models-dictation";
+    return s;
+  }
+
+  /** Server mode: the recognizer a job runs when it names none, and each one's facts. */
+  private jobsSection(): HTMLElement | null {
+    const speech = this.rows.filter((r) => r.kind === "speech" && r.after_call);
+    if (speech.length === 0) return null;
+    const key = "server.default_model";
+    const set = String(this.settings[key] ?? DEFAULTS[key]);
+    // A preset in the setting marks the recognizer it runs.
+    const value = PRESET_ENGINES[set] ?? set;
+    const radios: HTMLLabelElement[] = [];
+    if (key in this.schema)
+      radios.push(
+        choiceRow({
+          name: "models-jobs",
+          value: "auto",
+          label: "Automatic",
+          help: "Chosen for each job by what this server has.",
+          checked: value === "auto",
+          isDefault: DEFAULTS[key] === "auto",
+        }),
+      );
+    for (const r of speech) {
+      const side = this.modelSide([r], true);
+      const help = [accuracyText(r.accuracy), hourText(r, this.here)].filter((x) => x).join(" ");
+      const c = choiceRow(
+        {
+          name: "models-jobs",
+          value: r.set_default?.value ?? r.id,
+          label: modelName(r),
+          help: side.help ?? help,
+          checked: value === (r.set_default?.value ?? r.id),
+          disabled: !(key in this.schema),
+        },
+        ...side.controls,
+      );
+      c.dataset.model = r.id;
+      c.dataset.state = side.state;
+      radios.push(c);
+    }
+    for (const r of radios) this.pick(r, key);
+    const s = section("Jobs", ...radios);
+    s.id = "models-jobs";
+    return s;
+  }
+
+  private speakersSection(): HTMLElement | null {
+    const key = "asr.diarizer";
+    const value = String(this.settings[key] ?? DEFAULTS[key]);
+    const radios = Object.entries(DIARIZERS)
+      .map(([setting, ids]) => {
+        const models = this.rowsOf(ids);
+        if (models.length === 0) return null;
+        const side = this.modelSide(models, true);
+        const c = choiceRow(
+          {
+            name: "models-speakers",
+            value: setting,
+            label: setting === "nemotron" ? "Nemotron diarization" : "Voice fingerprints",
+            help: side.help ?? speakersHelp(setting, models),
+            checked: value === setting,
+            isDefault: DEFAULTS[key] === setting,
+            disabled: !(key in this.schema),
+          },
+          ...side.controls,
+        );
+        c.dataset.diarizer = setting;
+        c.dataset.model = models[0]?.id ?? "";
+        c.dataset.state = side.state;
+        this.pick(c, key);
+        return c;
+      })
+      .filter((x): x is HTMLLabelElement => x !== null);
+    if (radios.length === 0) return null;
+    const s = sectionWith("Speakers", "A change applies the next time akou starts.", ...radios);
+    s.id = "models-speakers";
+    return s;
+  }
+
+  /** A radio row's pick saves its setting. */
+  private pick(r: HTMLLabelElement, key: string): void {
+    const input = r.querySelector<HTMLInputElement>("input.pg-radio");
+    input?.addEventListener("change", () => {
+      if (input.checked) void this.patch(key, input.value);
+    });
+  }
+
+  /** The models no section above places: the helpers, then any other model. */
+  private others(): { helpers: ModelRow[]; rest: ModelRow[] } {
+    const placed = new Set<string>([
+      RECOGNIZER_ID,
+      QWEN_ID,
+      ...Object.values(DIARIZERS).flat(),
+      ...(this.live?.setups.find((s) => s.id === "nemotron")?.models.map((m) => m.id) ?? []),
+    ]);
+    if (this.server)
+      for (const r of this.rows) if (r.kind === "speech" && r.after_call) placed.add(r.id);
+    const left = this.rows.filter((r) => !placed.has(r.id));
+    return {
+      helpers: left.filter((r) => r.kind === "helper"),
+      rest: left.filter((r) => r.kind !== "helper"),
+    };
+  }
+
+  private helpersRow(): HTMLElement {
+    const { helpers, rest } = this.others();
+    const n = helpers.length + rest.length;
+    const holds = [
+      helpers.some((r) => r.id === "silero-vad") ? "Voice detection" : "",
+      helpers.some((r) => r.id.startsWith("llama-server")) ? "the program Qwen3-ASR runs in" : "",
+      rest.length > 0 ? "other models" : "",
+    ].filter((x) => x);
+    const help = joinAnd(holds);
+    return linkRow(
+      {
+        label: "Helpers",
+        help: help ? `${help.charAt(0).toUpperCase()}${help.slice(1)}.` : "",
+        value: String(n),
+        id: "models-go-helpers",
+      },
+      () => {
+        this.sub = true;
+        this.draw();
+        this.col.querySelector<HTMLElement>(".pg-back")?.focus();
+      },
     );
   }
 
-  private liveRow(s: LiveSetupView, v: LiveView): HTMLElement {
-    const missing = liveMissing(s);
-    const state = s.unavailable ? "unavailable" : missing.length > 0 ? "missing" : "ready";
-    const models = liveModelsText(s);
-    const actions = h("div", { class: "bar model-actions" });
-    if (!s.unavailable && missing.length > 0) {
-      actions.append(
-        h(
-          "button",
-          {
-            class: "go",
-            type: "button",
-            title: `Downloads ${missing.join(", ")}`,
-            attrs: { "data-action": "download" },
-            on: { click: () => void this.downloadAll(missing) },
-          },
-          "Download",
+  private helperSections(): HTMLElement[] {
+    const { helpers, rest } = this.others();
+    const rowsOf = (list: ModelRow[]) =>
+      list.map((r) => this.modelRow(modelName(r), helperHelp(r), [r]));
+    // The page's title already says Helpers; a section title only sets them apart from the others.
+    return [
+      helpers.length > 0 ? section(rest.length > 0 ? "Helpers" : "", ...rowsOf(helpers)) : null,
+      rest.length > 0 ? section("Other models", ...rowsOf(rest)) : null,
+    ].filter((x): x is HTMLElement => x !== null);
+  }
+
+  // -------------------------------------------------------------------------
+  // On this Mac
+
+  private drawSettings(): void {
+    this.shownNumbers.clear();
+    const rows: (HTMLElement | null)[] = [this.acceleratorRow()];
+    for (const n of NUMBERS) {
+      if (!(n.key in this.schema)) continue;
+      const v = String(this.settings[n.key] ?? "");
+      this.shownNumbers.set(n.key, v);
+      const f = field({ id: n.id, label: n.label, value: v, type: "number", width: "narrow" });
+      f.min = "0";
+      f.step = n.key === "server.models_max_gb" ? "any" : "1";
+      f.dataset.key = n.key;
+      rows.push(
+        this.withIssue(
+          row({ label: n.label, help: n.help, key: n.key, for: n.id }, f, unit(n.unit)),
+          n.key,
         ),
       );
     }
-    if (!s.unavailable && v.setting !== s.id) {
-      actions.append(
-        h(
-          "button",
-          {
-            type: "button",
-            title: `Sets asr.live to ${s.id}`,
-            attrs: { "data-action": "use" },
-            on: { click: () => void this.useLive(s.id) },
-          },
-          "Use for calls",
+    if (this.server && "server.auto_download" in this.schema) {
+      const w = wordsFor("server.auto_download");
+      const sw = toggle({
+        id: "models-auto-download",
+        checked: this.settings["server.auto_download"] !== false,
+        label: w.label,
+      });
+      sw.dataset.key = "server.auto_download";
+      rows.push(
+        this.withIssue(
+          row({ label: w.label, help: w.help, key: "server.auto_download", for: sw.id }, sw),
+          "server.auto_download",
         ),
       );
     }
-    return h(
-      "li",
-      { class: "model live-setup", attrs: { "data-setup": s.id, "data-state": state } },
-      h(
-        "div",
-        { class: "model-head" },
-        h("strong", { class: "model-name" }, s.title),
-        s.selected
-          ? h("span", { class: "badge ok", attrs: { "data-mark": "next" } }, "next call")
-          : null,
-        s.running
-          ? h("span", { class: "badge", attrs: { "data-mark": "running" } }, "this call")
-          : null,
-        s.unavailable ? h("span", { class: "badge" }, "unavailable") : null,
+    rows.push(this.helpersRow());
+    const title = this.server ? "On this server" : `On ${this.here}`;
+    replace(this.settingsBox, section(title, ...rows));
+  }
+
+  /** "Use the graphics chip": Automatic, On or Off on a Mac; every choice elsewhere. */
+  private acceleratorRow(): HTMLElement | null {
+    const key = "asr.accelerator";
+    if (!(key in this.schema)) return null;
+    const value = String(this.settings[key] ?? "auto");
+    const id = "models-accelerator";
+    const label = "Use the graphics chip";
+    let control: HTMLElement;
+    if (this.platform === "darwin" && ["auto", "metal", "cpu"].includes(value)) {
+      const seg = segmented({
+        id,
+        label,
+        options: [
+          ["auto", "Automatic"],
+          ["metal", "On"],
+          ["cpu", "Off"],
+        ],
+        value,
+      });
+      seg.input.dataset.key = key;
+      control = seg.root;
+    } else {
+      const values = this.schema[key]?.values;
+      const choices = (wordsFor(key).choices ?? []).filter(([v]) => !values || values.includes(v));
+      control = selectBox({ id, label, options: choices, value });
+      control.dataset.key = key;
+    }
+    return this.withIssue(
+      row(
+        {
+          label,
+          help: "Qwen3-ASR runs on it. The other models use the processor.",
+          key,
+          id: "models-accelerator-row",
+        },
+        control,
       ),
-      h("p", { class: "model-purpose" }, s.what),
-      h(
-        "div",
-        { class: "model-bars" },
-        ...LIVE_BARS.map((b) => this.meter(b.label, b.side, s[b.side], s.title)),
-      ),
-      s.unavailable ? h("p", { class: "model-kept" }, `Unavailable: ${s.unavailable}`) : null,
-      models ? h("p", { class: "model-kept" }, models) : null,
-      actions,
+      key,
     );
   }
 
-  private async downloadAll(ids: readonly string[]): Promise<void> {
+  private withIssue(r: HTMLElement, key: string): HTMLElement {
+    const issue = this.issues.get(key);
+    if (issue) {
+      r.classList.add("refused");
+      r.querySelector(".pg-lbl")?.append(h("small", { class: "issue" }, issue));
+    }
+    return r;
+  }
+
+  /** Goes to a setting's row on the page and focuses its control. */
+  private goTo(key: string): void {
+    const r = this.col.querySelector<HTMLElement>(`.pg-row[data-key="${CSS.escape(key)}"]`);
+    const target =
+      r ??
+      (key === "asr.live"
+        ? this.col.querySelector<HTMLElement>("#models-live")
+        : key === "asr.diarizer"
+          ? this.col.querySelector<HTMLElement>("#models-speakers")
+          : null);
+    if (!target) return;
+    target.scrollIntoView({ block: "center" });
+    const input = target.querySelector<HTMLElement>("input:checked, input, select, button");
+    input?.focus();
+    if (r) {
+      r.classList.add("pg-flash");
+      setTimeout(() => r.classList.remove("pg-flash"), 1600);
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Saving, downloading, removing
+
+  /** Saves the setting a field of "On this Mac" holds. */
+  private async save(key: string, el: HTMLElement): Promise<void> {
+    if (el instanceof HTMLInputElement && el.type === "number") {
+      const was = this.shownNumbers.get(key);
+      if (el.value === was) return;
+      // Marked saved before the answer, so a blur and a leave at once send it once.
+      this.shownNumbers.set(key, el.value);
+      const ok = await this.patch(key, el.value === "" ? null : Number(el.value));
+      if (!ok && was !== undefined) this.shownNumbers.set(key, was);
+      return;
+    }
+    const value =
+      el instanceof HTMLInputElement && el.type === "checkbox"
+        ? el.checked
+        : (el as HTMLInputElement | HTMLSelectElement).value;
+    await this.patch(key, value);
+  }
+
+  /** One key through `PATCH /config`; a refusal shows under its row and in a toast. */
+  private async patch(key: string, value: unknown): Promise<boolean> {
+    const r = await this.t.request<{ note?: string; errors?: string[] }>("PATCH", "/config", {
+      [key]: value,
+    });
+    const at = this.col.querySelector<HTMLElement>(`.pg-row[data-key="${CSS.escape(key)}"]`);
+    at?.classList.remove("refused");
+    at?.querySelector(".issue")?.remove();
+    if (r.status >= 400) {
+      const why = (r.body.errors ?? [message(r.body, "refused")])
+        .map((e) => (e.startsWith(`${key}:`) ? e.slice(key.length + 1).trim() : e))
+        .join("; ");
+      at?.classList.add("refused");
+      at?.querySelector(".pg-lbl")?.append(h("small", { class: "issue" }, why));
+      toast(`Not saved: ${why}`);
+      if (key === "asr.live" || key === "asr.diarizer" || key === "server.default_model")
+        this.drawModels();
+      return false;
+    }
+    this.settings[key] = value;
+    this.issues.delete(key);
+    toast(key === "asr.live" ? "The next call uses this." : "Saved.", "info");
+    if (!key.startsWith("server.models_")) await this.read();
+    return true;
+  }
+
+  private async pull(ids: readonly string[]): Promise<void> {
     for (const id of ids) {
       const r = await this.t.request<ModelsReply>("POST", "/models/pull", { model: id });
       if (r.status >= 400) {
-        toast(message(r.body, `${id} could not start downloading (HTTP ${r.status})`));
+        toast(this.failed(id, "could not start downloading", r.body));
         break;
       }
     }
     await this.read();
   }
 
-  private async useLive(value: string): Promise<void> {
-    const r = await this.t.request<{ note?: string }>("PATCH", "/config", { "asr.live": value });
+  /** The first-run set, in one download. */
+  private async pullSet(): Promise<void> {
+    const r = await this.t.request<ModelsReply>("POST", "/models/pull");
     if (r.status >= 400) {
-      toast(message(r.body, `asr.live could not be set (HTTP ${r.status})`));
-      return;
+      const why = reasonText(message(r.body, ""));
+      toast(`The download could not start${why ? `: ${why}` : ""}.`);
     }
-    toast(r.body.note ?? `The next call's live transcript: ${value}.`, "info");
     await this.read();
   }
 
-  private actions(r: ModelRow): HTMLElement {
-    const out = h("div", { class: "bar model-actions" });
-    if (r.state === "downloading") {
-      const pct = percent(r);
-      out.append(
-        h("progress", { attrs: { max: "100", value: String(pct) } }),
-        h("span", { class: "hint" }, `${pct} % of ${sizeText(r.size)}`),
-      );
-      return out;
+  private async cancel(ids: readonly string[]): Promise<void> {
+    for (const id of ids) {
+      const r = await this.t.request("POST", "/models/cancel", { model: id });
+      // Already finished or stopped: the read below shows where it is.
+      if (r.status >= 400 && r.status !== 404)
+        toast(this.failed(id, "could not be stopped", r.body));
     }
-    if (r.state === "missing") {
-      out.append(
-        h(
-          "button",
-          { class: "go", type: "button", on: { click: () => void this.download(r.id) } },
-          "Download",
-        ),
+    await this.read();
+  }
+
+  private async remove(ids: readonly string[]): Promise<void> {
+    let bytes = 0;
+    for (const id of ids) {
+      const r = await this.t.request<{ bytes?: number }>(
+        "DELETE",
+        `/models/${encodeURIComponent(id)}`,
       );
-    } else {
-      const refused = deleteRefusal(r);
-      const del = twoStep(
-        {
-          class: "stop",
-          label: "Delete",
-          confirm: "Delete: sure?",
-          id: `delete-${r.id}`,
-          armed: this.armed,
-        },
-        () => void this.remove(r.id),
-      );
-      del.dataset.action = "delete";
-      if (refused) {
-        del.disabled = true;
-        del.title = `Kept: ${refused}`;
+      if (r.status >= 400 && r.status !== 404) {
+        toast(this.failed(id, "could not be removed", r.body));
+        await this.read();
+        return;
       }
-      out.append(del);
+      bytes += Number(r.body?.bytes ?? 0);
     }
-    if (r.set_default && !r.default) {
-      const d = r.set_default;
-      out.append(
-        h(
-          "button",
-          {
-            type: "button",
-            title: `Sets ${d.key} to ${d.value}`,
-            attrs: { "data-action": "default" },
-            on: { click: () => void this.makeDefault(d.key, d.value) },
-          },
-          "Set as default",
-        ),
-      );
-    }
-    return out;
-  }
-
-  private async download(id?: string): Promise<void> {
-    const r = await this.t.request<ModelsReply>(
-      "POST",
-      "/models/pull",
-      id === undefined ? undefined : { model: id },
-    );
-    if (r.status >= 400) {
-      toast(message(r.body, `the download could not start (HTTP ${r.status})`));
-      return;
-    }
+    toast(`Removed: ${gbText(bytes)} freed.`, "info");
     await this.read();
   }
 
-  private async remove(id: string): Promise<void> {
-    const r = await this.t.request<{ bytes?: number }>(
-      "DELETE",
-      `/models/${encodeURIComponent(id)}`,
-    );
-    if (r.status >= 400) {
-      toast(message(r.body, `${id} could not be deleted (HTTP ${r.status})`));
-    } else {
-      toast(`Deleted ${id}: ${sizeText(Number(r.body.bytes ?? 0))} freed.`, "info");
-    }
-    await this.read();
-  }
-
-  private async makeDefault(key: string, value: string): Promise<void> {
-    const r = await this.t.request<{ note?: string }>("PATCH", "/config", { [key]: value });
-    if (r.status >= 400) {
-      toast(message(r.body, `${key} could not be set (HTTP ${r.status})`));
-      return;
-    }
-    toast(r.body.note ?? `${key} is ${value}.`, "info");
-    await this.read();
-  }
-
-  // -------------------------------------------------------------------------
-  // The settings: what a missing model does, and when an unused one is deleted
-
-  private async readSettings(): Promise<void> {
-    const r = await this.t.request<ConfigReply>("GET", "/config");
-    if (r.status !== 200) {
-      replace(this.settings, h("p", { class: "hint" }, message(r.body, "settings unreadable")));
-      return;
-    }
-    const v = r.body.settings;
-    const days = Number(v["server.models_unused_days"]);
-    this.unusedDays = Number.isFinite(days) ? days : null;
-    this.drawRows();
-    const auto = v["server.auto_download"] !== false;
-    const choice = (value: "download" | "reject", label: string, hint: string) =>
-      h(
-        "label",
-        { class: "choice" },
-        h("input", {
-          type: "radio",
-          id: `models-on-demand-${value}`,
-          value,
-          attrs: {
-            name: "models-on-demand",
-            ...(auto === (value === "download") ? { checked: "" } : {}),
-          },
-        }),
-        h("span", {}, label, h("small", {}, hint)),
-      );
-    const number = (key: string, id: string, max: string, step: string) =>
-      h("input", {
-        id,
-        type: "number",
-        value: String(v[key] ?? ""),
-        attrs: { min: "0", max, step, "data-key": key, inputmode: "numeric" },
-      });
-    replace(
-      this.settings,
-      h("h3", {}, "Settings"),
-      this.server
-        ? h(
-            "fieldset",
-            { class: "models-on-demand" },
-            h("legend", {}, "When a client asks for a model that isn't here"),
-            choice(
-              "download",
-              "Download it and queue the job",
-              "The job waits while the model downloads, then runs.",
-            ),
-            choice(
-              "reject",
-              "Reject the job",
-              "The client gets 409 preset_unavailable and can try later.",
-            ),
-          )
-        : null,
-      h(
-        "div",
-        { class: "models-numbers" },
-        h(
-          "label",
-          { attrs: { for: "models-unused-days" } },
-          "Delete models unused for",
-          number("server.models_unused_days", "models-unused-days", "3650", "1"),
-          "days (0 = never)",
-        ),
-        h(
-          "label",
-          { attrs: { for: "models-max-gb" } },
-          "Keep the models folder under",
-          number("server.models_max_gb", "models-max-gb", "100000", "any"),
-          "GB (0 = no cap)",
-        ),
-      ),
-      h(
-        "p",
-        { class: "hint" },
-        "The default model, a model in use and one downloading are never deleted.",
-      ),
-      h(
-        "div",
-        { class: "bar" },
-        h("button", { id: "models-settings-save", class: "go", type: "submit" }, "Save"),
-      ),
-    );
-    this.settingsShown = {
-      "server.auto_download": auto,
-      "server.models_unused_days": v["server.models_unused_days"],
-      "server.models_max_gb": v["server.models_max_gb"],
-    };
-  }
-
-  private settingsShown: Record<string, unknown> = {};
-
-  /** True while the settings at the foot hold a change not saved yet. */
-  unsaved(): boolean {
-    return Object.keys(this.settingsPatch()).length > 0;
-  }
-
-  private settingsPatch(): Record<string, unknown> {
-    const patch: Record<string, unknown> = {};
-    const reject = this.settings.querySelector<HTMLInputElement>("#models-on-demand-reject");
-    if (reject && reject.checked === this.settingsShown["server.auto_download"]) {
-      patch["server.auto_download"] = !reject.checked;
-    }
-    for (const el of this.settings.querySelectorAll<HTMLInputElement>("input[data-key]")) {
-      const key = el.dataset.key as string;
-      const now = el.value === "" ? null : Number(el.value);
-      if (now !== this.settingsShown[key]) patch[key] = now;
-    }
-    return patch;
-  }
-
-  private async saveSettings(): Promise<void> {
-    const patch = this.settingsPatch();
-    if (Object.keys(patch).length === 0) {
-      toast("Nothing changed.", "info");
-      return;
-    }
-    const r = await this.t.request<{ note?: string; errors?: string[] }>("PATCH", "/config", patch);
-    if (r.status >= 400) {
-      toast((r.body.errors ?? [message(r.body, "refused")]).join("; "));
-      return;
-    }
-    toast("Saved.", "info");
-    await this.readSettings();
-    await this.read();
+  /** "Qwen3-ASR 1.7B could not be removed: it is in use." The server's reason in plain words. */
+  private failed(id: string, what: string, body: unknown): string {
+    const why = reasonText(message(body, ""));
+    const name = modelName(this.row(id) ?? { id, job: "" });
+    return `${name} ${what}${why ? `: ${why}` : ""}.`;
   }
 }

@@ -39,6 +39,11 @@ export interface Measure {
   value: number;
   /** What was measured, in words: the set, the build, the machine. */
   what: string;
+  /**
+   * An accuracy figure's test set in the plain words the Models page says it in: `read speech`
+   * (FLEURS), `meetings` (AMI), `real calls` (our own recorded calls).
+   */
+  set?: string;
   /** A repository path or a public URL. */
   source: string;
 }
@@ -67,6 +72,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "wer",
       value: (6.03 + 3.07) / 2,
+      set: "read speech",
       what: "FLEURS, 150 English and 150 Spanish clips, greedy: 6.03 % and 3.07 %",
       source: `${BENCH}#parakeet-int8-fp16-and-fp32`,
     },
@@ -81,6 +87,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "wer",
       value: (3.76 + 2.81) / 2,
+      set: "read speech",
       what: "FLEURS, 150 English and 150 Spanish clips, the Q8_0 GGUF through llama.cpp on a Linux arm64 CPU: 3.76 % and 2.81 % (bf16 on Metal reads 3.79 % and 2.89 %)",
       source: `${ARCH}#23-runtimes-akou-bundles-or-downloads-three-no-python`,
     },
@@ -95,6 +102,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "wer",
       value: 9.3,
+      set: "read speech",
       what: "FLEURS, 150 English clips through the live path (an English-only model: no Spanish figure): 9.30 %",
       source: `${ARCH}#31-what-replaces-the-12-s-windows`,
     },
@@ -109,6 +117,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "wer",
       value: (10.16 + 6.31) / 2,
+      set: "read speech",
       what: "FLEURS, 150 English and 150 Spanish clips through the live path, language auto: 10.16 % and 6.31 %",
       source: `${ARCH}#31-what-replaces-the-12-s-windows`,
     },
@@ -123,6 +132,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "wer",
       value: (9.99 + 6.36) / 2,
+      set: "read speech",
       what: "FLEURS, 150 English (language auto) and 150 Spanish (language es) clips through the live path: 9.99 % and 6.36 %",
       source: `${ARCH}#31-what-replaces-the-12-s-windows`,
     },
@@ -135,6 +145,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "der",
       value: (8.7 + 11.1) / 2,
+      set: "real calls",
       what: "final pass on eight real two-channel calls (6.6 h): 8.7 to 11.1 % DER, the middle of that range. The nightly AMI test (two meetings, 0.25 s collar, overlap scored) reads 20.17 % on Linux x64",
       source: `${REQS}`,
     },
@@ -144,6 +155,7 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
     accuracy: {
       metric: "der",
       value: (54 + 64) / 2,
+      set: "real calls",
       what: "the embeddings diarizer (this segmentation with TitaNet clusters) on the same eight real calls: 54 to 64 % DER, the middle of that range",
       source: `${REQS}`,
     },

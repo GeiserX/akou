@@ -18,6 +18,8 @@ import { dictationReview } from "./dictation-review.ts";
 import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
+import { liveTitle } from "./live-options.ts";
+import { LivePicker } from "./live-picker.ts";
 import { SmoothMeters } from "./meter.ts";
 import {
   banner,
@@ -113,24 +115,6 @@ export function askQuit(q: Omit<QuitQuestion, "id">): Promise<boolean> {
   });
 }
 
-/**
- * The Models dialog (DESKTOP.md DK-E2): the Models page of server mode, the same code, over the
- * app's own `/models`. Read when opened, and it stops following when closed.
- */
-function wireModelsDialog(t: Transport): void {
-  const dialog = byId<HTMLDialogElement>("models");
-  const page = new ModelsPage(t, false);
-  byId("models-body").append(page.root);
-  // A change to the models' settings not saved yet keeps the dialog open on a backdrop click.
-  closable(dialog, () => page.unsaved());
-  byId("models-open").addEventListener("click", () => {
-    openModal(dialog);
-    page.show();
-  });
-  byId("models-close").addEventListener("click", () => dialog.close());
-  dialog.addEventListener("close", () => page.hide());
-}
-
 /** The application menu's Settings… opens the Settings page, as its sidebar row does. */
 export function showSettings(): void {
   document.getElementById("settings-open")?.click();
@@ -202,10 +186,14 @@ class App {
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
+  /** The live model the next call runs: the Record row's "Live:" menu. */
+  private readonly livePicker: LivePicker;
   private readonly levels = new SmoothMeters((ch, db) => {
     byId<HTMLMeterElement>(`meter-${ch}`).value = db;
   });
   private blobs = new Map<string, string>();
+  /** What the live menu last read its models for, from the status push. */
+  private liveKey = "";
   /** A start is on its way: Record waits for the answer. */
   private starting = false;
   /** The calls as `GET /calls` last listed them, and the workspaces the user folded. */
@@ -217,7 +205,7 @@ class App {
   private renaming = false;
   /** Closes the open title field without saving; null when none is open. */
   private closeTitle: (() => void) | null = null;
-  /** The sidebar's pages (Settings), in the call workspace's place while one shows. */
+  /** The sidebar's pages (Models, Settings), in the call workspace's place while one shows. */
   private readonly pages: Pages;
 
   constructor(readonly t: Transport) {
@@ -254,17 +242,25 @@ class App {
       () => this.view()?.call?.workspace,
       () => this.review.open(),
     );
+    const openModels = (key?: string) => void this.pages.show("models", key);
     const settings = new SettingsPage(t, {
       workspaces: () => this.calls.map((c) => c.workspace),
-      openModels: () => byId("models-open").click(),
+      openModels,
       openDictionary: () => void dictation.dictionary.open(),
     });
-    this.pages = new Pages(byId("pages"), { settings }, () => this.drawCalls());
+    const models = new ModelsPage(t, false);
+    this.pages = new Pages(byId("pages"), { settings, models }, () => {
+      this.drawCalls();
+      // Back from a page (a download, a delete or Use for calls on Models): the menu reads again.
+      if (!this.pages?.open) void this.livePicker?.load();
+    });
     const openSettings = (key?: string) => void this.pages.show("settings", key);
     byId("settings-open").addEventListener("click", () => openSettings());
+    byId("models-open").addEventListener("click", () => openModels());
     byId("calls-open").addEventListener("click", () => this.pages.leave());
     const fromHash = () => {
       if (location.hash === "#settings") openSettings();
+      if (location.hash === "#models") openModels();
     };
     window.addEventListener("hashchange", fromHash);
     fromHash();
@@ -273,10 +269,7 @@ class App {
       openAgentSettings: () => openSettings("provider.kind"),
       mac: this.platform === "mac",
     });
-    wireModelsDialog(t);
-    byId("models").addEventListener("close", () => {
-      if (this.pages.open === "settings") void settings.refreshLive();
-    });
+    this.livePicker = new LivePicker({ t, openModels: () => openModels() });
     this.review = new ReviewPane({
       t,
       call,
@@ -306,14 +299,6 @@ class App {
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
-    void this.t.request<{ templates?: string[] }>("GET", "/templates").then((r) => {
-      const names = r.body.templates ?? [];
-      replace(
-        byId("template"),
-        h("option", { value: "" }, "Template: automatic"),
-        ...names.map((n) => h("option", { value: n }, n)),
-      );
-    });
     setInterval(() => this.paint(), 1000);
     this.paint();
   }
@@ -330,6 +315,13 @@ class App {
     this.status = s;
     titleBar(this.t.kind === "window" && s.app.platform === "darwin");
     this.modelsCard.update(s.models, true);
+    this.livePicker.follow(s.live);
+    // The live menu reads its models again when the speech models or the live call change.
+    const liveKey = JSON.stringify([s.models?.state, s.live?.call, s.live?.setup]);
+    if (liveKey !== this.liveKey) {
+      this.liveKey = liveKey;
+      void this.livePicker.load();
+    }
     const live = s.live?.call ?? null;
     const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
     if (live) this.seenLive = live;
@@ -662,7 +654,7 @@ class App {
     const setup = running && running.call === this.callId ? running.setup : null;
     const livePill = byId("pill-live");
     livePill.hidden = !setup;
-    livePill.textContent = setup ? `live: ${setup}` : "";
+    livePill.textContent = setup ? `Live: ${liveTitle(setup)}` : "";
     livePill.title = setup && running?.engine ? running.engine : "";
     const share = this.status?.share.shares?.find((x) => x.call === this.callId);
     const pill = byId("pill-share");
@@ -814,7 +806,7 @@ class App {
       this.drawCalls();
     });
     byId("readiness-setup").addEventListener("click", () => {
-      // Back to the welcome, unless a call is recording: then the Models dialog.
+      // Back to the welcome, unless a call is recording: then the Models page.
       this.pages.leave();
       this.chosen = false;
       this.paint();
@@ -1013,13 +1005,13 @@ class App {
     if (this.starting || recordBlocked(this.status?.models) !== null) return;
     this.starting = true;
     this.paint();
-    const template = byId<HTMLSelectElement>("template").value;
+    const live = await this.livePicker.value();
     let r: Reply<{ call?: string; error?: string }>;
     try {
       r = await this.t.request("POST", "/calls", {
         workspace: this.workspaceInput().value.trim() || undefined,
         title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
-        ...(template ? { template } : {}),
+        ...(live ? { live } : {}),
       });
     } finally {
       this.starting = false;

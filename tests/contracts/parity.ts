@@ -321,7 +321,9 @@ export const PARITY: readonly Row[] = [
     cli: { none: "missing: PG-F3" },
     api: ["GET /templates"],
     mcp: { none: "missing: PG-F3" },
-    window: [app('"GET", "/templates"')],
+    window: {
+      none: "the template picker lived on the Enhanced tab, which is hidden from the window on purpose",
+    },
   },
   {
     action: "Settings",
@@ -338,13 +340,14 @@ export const PARITY: readonly Row[] = [
   {
     action: "Speech models",
     cli: ["models"],
-    api: ["GET /models", "POST /models/pull", "DELETE /models/:id"],
+    api: ["GET /models", "POST /models/pull", "POST /models/cancel", "DELETE /models/:id"],
     mcp: {
       none: "no tool: the Models page and `akou models` own downloads and deletes; akou_status reports the models in use",
     },
     window: [
       ui("models-card.ts", '"POST", "/models/pull"'),
       ui("models-page.ts", '"DELETE",'),
+      ui("models-page.ts", '"POST", "/models/cancel"'),
       ui("models-page.ts", '"GET", "/models"'),
     ],
   },
@@ -353,7 +356,12 @@ export const PARITY: readonly Row[] = [
     cli: ["config", "start", "models", "status"],
     api: ["PATCH /config", "POST /calls", "GET /models", "GET /status"],
     mcp: ["akou_status"],
-    window: [ui("models-page.ts", '"asr.live": value'), app("`live: #{setup}`")],
+    window: [
+      ui("models-page.ts", 'this.patch("asr.live"'),
+      ui("live-picker.ts", '"PATCH", "/config", { "asr.live": id }'),
+      app("...(live ? { live } : {})"),
+      app("`Live: #{liveTitle(setup)}`"),
+    ],
     note: "MCP only reads it (akou_status names the live call's setup): the choice is the user's, from the window, `akou config set asr.live`, `akou start --live`, `PATCH /config` or `POST /calls {live}`",
   },
   {
