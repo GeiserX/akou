@@ -4,6 +4,8 @@
  * Rules, in the order they are tried at each word:
  * 1. A heard form matches as a whole word (or a whole run of words), case-insensitive and
  *    accent-folded. Call-scoped pairs are tried before file pairs, longer forms before shorter.
+ *    A form equal to its term apart from case or accents corrects nothing, unless it is call-scoped
+ *    (a fix of a name's spelling, `vercel` to `Vercel`): then it corrects that exact spelling only.
  * 2. A heard form that is a dictionary word, or 3 characters or shorter, is skipped unless the
  *    pair is call-scoped or dictation-scoped. Without a dictionary, akou cannot tell, so only those
  *    pairs apply.
@@ -170,6 +172,8 @@ interface Matcher {
   words: string[];
   term: string;
   scope: RuleScope;
+  /** A form equal to its term apart from case or accents matches only this exact spelling. */
+  exact?: string;
 }
 
 interface FuzzyTerm {
@@ -217,9 +221,15 @@ export function correctText(
     for (const form of rule.heard) {
       if (!heardFormApplies(form, rule.scope, isDict)) continue;
       const words = tokenize(form).map((t) => t.folded);
-      // A heard form equal to the term (apart from case or accents) corrects nothing.
-      if (words.join(" ") === termKey) continue;
-      matchers.push({ words, term: rule.term, scope: rule.scope });
+      // A heard form equal to the term apart from case or accents corrects nothing, except a
+      // call-scoped one, the user's own fix of a name's spelling (`vercel` to `Vercel`): that one
+      // corrects the words written exactly as the form is, and no other spelling.
+      let exact: string | undefined;
+      if (words.join(" ") === termKey) {
+        if (rule.scope !== "call" || form.trim() === rule.term) continue;
+        exact = form.trim();
+      }
+      matchers.push({ words, term: rule.term, scope: rule.scope, exact });
     }
   }
   matchers.sort(
@@ -229,7 +239,12 @@ export function correctText(
   const corrections: Correction[] = [];
   let i = 0;
   while (i < tokens.length) {
-    const hit = matchers.find((m) => matchesAt(tokens, i, m.words));
+    const hit = matchers.find(
+      (m) =>
+        matchesAt(tokens, i, m.words) &&
+        (m.exact === undefined ||
+          raw.slice(tokens[i]?.start, tokens[i + m.words.length - 1]?.end) === m.exact),
+    );
     if (hit) {
       const first = tokens[i] as Token;
       const last = tokens[i + hit.words.length - 1] as Token;

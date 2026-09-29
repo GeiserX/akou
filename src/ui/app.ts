@@ -3,7 +3,7 @@
  * everything hark-viewer did and adds the notepad, the ask box, settings and sharing. This module
  * wires the parts and draws the header: the status dot and label, the title, the pills, the
  * controls, the banner, the final-pass note, the level meters, the list of calls, playback, and the
- * speaker and "Fix this word" menus.
+ * speaker and "Fix this line" menus.
  *
  * Updates arrive pushed: the followed call's events (`follow.ts`) and the app's status after every
  * start, stop, pause or share. Nothing is polled; the one timer redraws the clock and the "for N"
@@ -46,6 +46,12 @@ import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protoc
 import { ReviewPane } from "./review.ts";
 import { SettingsPage } from "./settings-page.ts";
 import { TranscriptPane } from "./transcript.ts";
+
+/** The answer of `POST /calls/{id}/fix`: what each changed word did, and how to take it back. */
+interface FixAnswer {
+  pairs?: { heard: string; term: string; learned: boolean; noted: boolean; lines: number }[];
+  undo?: unknown;
+}
 
 /** A level above this means someone on the call side is audible. */
 const HEARD_DBFS = -60;
@@ -1334,22 +1340,26 @@ class App {
     this.openPopover(anchor, `${label} (${spk})`, rename, ...(merge ? [merge] : []), ...unmerge);
   }
 
+  /**
+   * Fix a line (W4.8): the line as it reads, in one field, the selected word already selected. The
+   * person writes what was said and presses Enter; akou works out which words changed and applies
+   * each to the whole call (`POST /calls/{id}/fix`). A quiet toast says what it learned or noted,
+   * with Undo.
+   */
   private fixWord(lineId: string, anchor: HTMLElement, selected: string): void {
-    const v = this.view();
     const call = this.callId;
-    const line = v?.resolve(lineId);
-    if (!v || !call || !line) return;
-    const heard = h("input", {
-      value: selected,
-      placeholder: "what akou wrote",
-      attrs: { "aria-label": "What akou heard" },
+    const shown = this.transcript.shown(lineId)?.text;
+    if (!call || shown === undefined) return;
+    const field = h("input", {
+      value: shown,
+      class: "fix-line",
+      attrs: { "aria-label": "The line as it should read", spellcheck: "false" },
     });
-    const said = h("input", {
-      placeholder: "what was said",
-      attrs: { "aria-label": "What was said" },
-    });
-    const note = h("p", { class: "hint" }, `In the line: ${line.raw ?? line.text}`);
-    const after = h("div", { class: "pop-row", hidden: true });
+    const note = h(
+      "p",
+      { class: "hint" },
+      "Change what akou got wrong, then press Enter. The same word reads right everywhere in this call.",
+    );
     const form = h(
       "form",
       {
@@ -1357,69 +1367,66 @@ class App {
         on: {
           submit: (e) => {
             e.preventDefault();
-            const term = said.value.trim();
-            const h1 = heard.value.trim();
-            if (term === "" || h1 === "") return;
+            const text = field.value.trim();
+            if (text === "" || text === shown.trim()) {
+              this.closePopover();
+              return;
+            }
             void this.t
-              .request("POST", `/calls/${call}/vocab`, { term, heard: [h1], segs: [lineId] })
+              .request<FixAnswer>("POST", `/calls/${call}/fix`, { line: lineId, text })
               .then((r) => {
                 if (r.status >= 400) {
-                  note.textContent = message(r.body, "that word could not be added");
+                  note.textContent = message(r.body, "the line could not be fixed");
                   return;
                 }
-                note.textContent = `Fixed in this line. Use it more widely?`;
-                replace(
-                  after,
-                  h(
-                    "button",
-                    {
-                      type: "button",
-                      on: {
-                        click: () =>
-                          void this.t
-                            .request("POST", `/calls/${call}/vocab`, { term, heard: [h1] })
-                            .then((x) => {
-                              note.textContent =
-                                x.status >= 400
-                                  ? message(x.body, "not added")
-                                  : "Fixed everywhere in this call.";
-                            }),
-                      },
-                    },
-                    "Everywhere in this call",
-                  ),
-                  h(
-                    "button",
-                    {
-                      type: "button",
-                      on: {
-                        click: () =>
-                          void this.t
-                            .request("POST", "/vocab", {
-                              term,
-                              heard: [h1],
-                              workspace: v.call?.workspace,
-                            })
-                            .then((x) => {
-                              note.textContent =
-                                x.status >= 400
-                                  ? message(x.body, "not added")
-                                  : "Added to the workspace vocabulary.";
-                            }),
-                      },
-                    },
-                    "Add to the workspace vocabulary",
-                  ),
-                );
-                after.hidden = false;
+                this.closePopover();
+                this.fixed(call, r.body);
+              })
+              .catch((err: Error) => {
+                note.textContent = err.message;
               });
           },
         },
       },
-      heard,
-      said,
-      h("button", { type: "submit", class: "go" }, "Fix this word"),
+      field,
+      h("button", { type: "submit", class: "go" }, "Fix"),
     );
-    this.openPopover(anchor, "Fix this word", note, form, after);
+    this.openPopover(anchor, "Fix this line", note, form);
+    const at = selected ? shown.indexOf(selected) : -1;
+    if (at >= 0) field.setSelectionRange(at, at + selected.length);
+  }
+
+  /** What a fix did, in one quiet line, with Undo. */
+  private fixed(call: string, a: FixAnswer): void {
+    const pairs = a.pairs ?? [];
+    if (pairs.length === 0) {
+      toast("Nothing to fix: only punctuation or a capital at the start changed.", "info");
+      return;
+    }
+    const learned = pairs.filter((p) => p.learned);
+    const reworded = pairs.filter((p) => !p.learned);
+    const said: string[] = [];
+    if (learned.length > 0) {
+      const lines = learned.reduce((n, p) => n + p.lines, 0);
+      said.push(
+        `Learned ${learned.map((p) => p.term).join(", ")}: ${lines} ${lines === 1 ? "line" : "lines"} fixed`,
+      );
+    }
+    if (reworded.length > 0) {
+      said.push(`${reworded.map((p) => `${p.heard} → ${p.term}`).join(", ")} fixed on this line`);
+    }
+    const noted = pairs.some((p) => p.noted) ? " Noted for the final transcript." : "";
+    toast(`${said.join("; ")}.${noted}`, "info", {
+      label: "Undo",
+      run: () =>
+        void this.t
+          .request("POST", `/calls/${call}/fix/undo`, a.undo ?? {})
+          .then((r) =>
+            toast(
+              r.status >= 400 ? message(r.body, "the fix could not be undone") : "Fix undone.",
+              r.status >= 400 ? "error" : "info",
+            ),
+          ),
+    });
   }
 }

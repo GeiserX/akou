@@ -126,9 +126,9 @@ describe("read-time correction (DESIGN 5.4)", () => {
     const rule: VocabRule = {
       term: "Kubernetes",
       heard: ["kubernetes", "kubernetis"],
-      scope: "call",
+      scope: "file",
     };
-    const r = correctText("on kubernetes and kubernetis", [rule]);
+    const r = correctText("on kubernetes and kubernetis", [rule], opts);
     expect(r.corrections.map((c) => c.heard)).toEqual(["kubernetis"]);
     expect(r.annotated).toBe('on kubernetes and Kubernetes (heard: "kubernetis")');
   });

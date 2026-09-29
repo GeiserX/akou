@@ -72,7 +72,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | See | `status` · `watch` (CLI-24) · `open [CALL] [-w WS]` | has, except `-w` (CLI-30) |
 | Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
-| Vocabulary | `vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
+| Vocabulary | `vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename CALL TITLE…` · `calls move\|delete\|restore CALL …` **new** (CLI-26) · `import hark-viewer DIR… [-w WS]` | has, except `move`, `delete` and `restore` |
 | Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
@@ -397,7 +397,7 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Mark a moment | `mark` | notes route | `akou_add_note` | mark key | `mark` missing (CLI-34) |
 | Memory | `remember` | `…/remember` | `akou_remember`, `akou_forget` | none | window: no row yet in [WINDOW.md](WINDOW.md) |
 | Memo | none | `GET/PUT …/memo` | `akou_memo_get`, `akou_memo_put` | memo pane | CLI-28 |
-| Vocabulary | `vocab …` | `/vocab…`, `…/vocab…` | `akou_vocab_*` | Fix this word, review pill | none |
+| Vocabulary | `vocab …` | `/vocab…`, `…/vocab…`, `…/fix` | `akou_vocab_*` | Fix on a line, review pill | none |
 | Enhance | `enhance` | `POST …/enhance` | `akou_enhance` | none: hidden on purpose | none |
 | Agent-written notes | none | `GET …/enhance/context`, `PUT …/enhanced` | `akou_enhance_context`, `akou_enhanced_put` | none | CLI-28 |
 | Final pass | `finalize` | `POST …/finalize` | none | Retry on a failed pass only | MCP lacks it (PG-M4); window has no run-again row yet in [WINDOW.md](WINDOW.md) |

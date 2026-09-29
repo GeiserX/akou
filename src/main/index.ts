@@ -1700,6 +1700,13 @@ export class AkouApp implements ApiApp {
     return this.cfg;
   }
 
+  takesWords(id: string): boolean {
+    const beam = this.runningDecoding() === "beam";
+    if (this.manager.live()?.id !== id) return beam;
+    const setup = this.liveRan.get(id)?.setup;
+    return setup === "upgrade" || (setup === "parakeet" && beam);
+  }
+
   vocabChanged(): void {
     this.dictationVocab = null;
     this.vocabCache.clear();

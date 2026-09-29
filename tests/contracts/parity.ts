@@ -200,10 +200,19 @@ export const PARITY: readonly Row[] = [
       "akou_vocab_list",
     ],
     window: [
-      app("`/calls/#{call}/vocab`"),
+      ui("review.ts", "`/calls/#{call}/vocab`"),
       ui("review.ts", "`/vocab/#{action}`"),
       ui("dictation-dictionary.ts", '"POST", "/vocab"'),
     ],
+  },
+  {
+    action:
+      "Fix a line or a word once: the whole call reads it, a term is learned, a rewording noted",
+    cli: ["vocab"],
+    api: ["POST /calls/:id/fix", "POST /calls/:id/fix/undo"],
+    mcp: ["akou_vocab_add"],
+    window: [app("`/calls/#{call}/fix`"), app("`/calls/#{call}/fix/undo`")],
+    note: "Undo is the window's: the CLI and MCP take a word back with `vocab remove` and the notes tools.",
   },
   {
     action: "Words fixed while dictating: review, accept, reject (DC-L5)",

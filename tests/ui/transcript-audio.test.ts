@@ -352,8 +352,8 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
 
           await pick("Fix a word…");
           await page.waitForSelector("#popover:not([hidden])");
-          expect(await text(page, "#popover h3")).toBe("Fix this word");
-          expect(await text(page, "#popover .hint")).toBe("In the line: deploy to hetzner today");
+          expect(await text(page, "#popover h3")).toBe("Fix this line");
+          expect(await page.inputValue("#popover input")).toBe("deploy to hetzner today");
           await page.keyboard.press("Escape");
 
           // A click anywhere else closes the menu and runs nothing.

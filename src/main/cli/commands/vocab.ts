@@ -3,6 +3,7 @@
  *
  *   akou vocab list [-w WS] [--call ID] [--unconfirmed] [--dictation]
  *   akou vocab add TERM [--heard a,b] [--call ID | -w WS] [--no-decode] [--note TEXT]
+ *   akou vocab fix TERM --heard a,b [--call ID]
  *   akou vocab remove TERM [-w WS]  |  akou vocab remove --call ID VID
  *   akou vocab approve|reject TERM… [--call ID] [-w WS] [--dictation]
  *   akou vocab suggest [--text TEXT] [--call ID] [-k N]
@@ -17,7 +18,10 @@
  * the configured provider (the last call by default) and prints what it corrected and proposed.
  *
  * `add` with `--call` is a call-scoped `vocab.add` (mid-call, applies at once); without it the word
- * goes into the workspace file (or the global one). A term the API refuses exits 65.
+ * goes into the workspace file (or the global one). `fix` is what fixing a line in the window does
+ * (`POST /calls/{id}/fix`, the live call by default): the call reads the word corrected everywhere,
+ * a name or jargon word is learned into the workspace's vocabulary too, and a rewording of common
+ * words goes into the call's Notes. A term the API refuses exits 65.
  */
 
 import { readFileSync } from "node:fs";
@@ -73,9 +77,9 @@ function passText(b: Body): string {
 export const vocab: Command = {
   name: "vocab",
   summary:
-    "The custom vocabulary: list, add, remove, approve, reject, suggest, check, import, pass",
+    "The custom vocabulary: list, add, fix, remove, approve, reject, suggest, check, import, pass",
   usage:
-    "akou vocab list|add|remove|approve|reject|suggest|check|import|pass … [-c CALL] [-w WS] [--json]",
+    "akou vocab list|add|fix|remove|approve|reject|suggest|check|import|pass … [-c CALL] [-w WS] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "the workspace's list" },
     call: {
@@ -87,7 +91,7 @@ export const vocab: Command = {
       type: "boolean",
       desc: "list, approve, reject: the words fixed while dictating",
     },
-    heard: { type: "string", value: "A,B", desc: "add: how the recognizer mishears it" },
+    heard: { type: "string", value: "A,B", desc: "add, fix: how the recognizer mishears it" },
     "no-decode": {
       type: "boolean",
       desc: "add: correct it when read, but do not bias the recognizer",
@@ -101,6 +105,7 @@ export const vocab: Command = {
     "akou vocab list -c last --unconfirmed",
     "akou vocab add Hetzner --heard hetzna,hetsner -w work",
     "akou vocab add Kubernetes -c live",
+    "akou vocab fix Vercel --heard versal",
     "akou vocab remove Hetzner -w work",
     "akou vocab approve Hetzner -c last",
     "akou vocab reject Hetsner -c last",
@@ -155,6 +160,23 @@ export const vocab: Command = {
             });
         return finish(ctx, r, (b) =>
           call ? `Added ${term} to call ${b.call} (${b.vocab.id})` : `Added ${term} to ${b.path}`,
+        );
+      }
+      case "fix": {
+        const term = args.join(" ").trim();
+        if (term === "") return usage(ctx, "vocab fix needs a term");
+        const target = call ? enc(call) : "live";
+        const r = await api(ctx, "POST", `/calls/${target}/fix`, {
+          body: { term, heard: list(p, "heard") },
+        });
+        return finish(ctx, r, (b) =>
+          (b.pairs ?? [])
+            .map((x: Body) => {
+              const pair = x.heard ? `${x.heard} -> ${x.term}` : x.term;
+              if (!x.learned) return `Noted ${pair} in the call's notes`;
+              return `Learned ${pair}: ${x.lines} line(s) fixed${x.noted ? ", and noted for the final transcript" : ""}`;
+            })
+            .join("\n"),
         );
       }
       case "remove": {
@@ -221,7 +243,7 @@ export const vocab: Command = {
       default:
         return usage(
           ctx,
-          `vocab needs one of list, add, remove, approve, reject, suggest, check, import, pass`,
+          `vocab needs one of list, add, fix, remove, approve, reject, suggest, check, import, pass`,
         );
     }
   },

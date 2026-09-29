@@ -68,7 +68,7 @@ Below 1248 px wide the sidebar narrows to 10 rem and the side column to 18 rem, 
 
 On macOS the window draws no title bar ([DESKTOP](DESKTOP.md) DK-M7): the traffic lights sit over the sidebar's top, and the sidebar, the composer row, the ask row and a page's header start 28 px down; a page keeps that strip at its top as it scrolls. That strip and those rows move the window and a double-click on them zooms it; the controls in them do not. Windows and Linux keep their native frame and this spacing.
 
-One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
+One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Fix, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -174,7 +174,7 @@ The log is append-only, so an edit is a new revision, never a rewrite: `seg rev+
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W4.8 | "Fix this word", then "Everywhere in this call" and "Add to the workspace vocabulary" | done | DESIGN 7 | Existing tests | has |
+| W4.8 | Fix on a line: the line's text in one field, the person writes what was said and presses Enter. Each changed word applies to the whole call at once; a name, product or jargon word is learned into the call's and the workspace's vocabulary with no review, a rewording stays on its line and goes into Notes as `Fixed: heard -> term` (so does a term while the live engine takes no word list); a quiet toast says what was learned, with Undo | done | DESIGN 5.4 "A fix on a line" | The other line with the same heard form reads corrected; the term is in both lists; a rewording is a Notes line marked "from a fix"; Undo takes all of it back; no raw config key in the popover, the toast or the notes | has |
 | W4.9 | Inline edit of a line: `E` or double-click; Enter or blur saves `seg rev+1 by:user`; Esc cancels; an edited line shows a mark and the raw text on hover | P1 | DESIGN 7 (designed, not built), Descript, anarlog | Edit, save, reload: the line shows the new text and the log has one `seg` revision with `by: user`; the raw heard text is still in the log. Needs the segment edit route PG-A5 | partial (style only) |
 | W4.10 | Change the speaker of one line: a picker, or keys `1` to `9` on a focused line | P1 | MacWhisper, Descript, anarlog | Pressing `2` on a focused line writes `seg rev+1 {spk}` through PG-A5; the chip updates; merge and unmerge still work on clusters | missing |
 | W4.11 | Replace in this call: Find (section 7) plus "Replace all" writes a call-scoped `vocab.add`, the same event as "Everywhere in this call" | P2 | noScribe | Replacing "versal" with "Vercel" changes every match in the view and adds one call-scoped pair; the log keeps raw text | missing |
@@ -200,7 +200,7 @@ The player bar gets real controls. It is a slim bar under the transcript, and it
 
 ## 6. The side pane
 
-The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it, alone: there is no Enhanced tab (section 6.3). The note input is at the foot and stays on screen, because notes are the default action during a call.
+The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it, alone: there is no Enhanced tab (section 6.3). The note input is at the foot and stays on screen, because notes are the default action during a call. A line akou wrote from a fix of a transcript line (`Fixed: versal -> Vercel`) says "from a fix".
 
 ### 6.1 Notes
 
@@ -256,7 +256,7 @@ Moved: W6.12 (presets as files) is PG-F2; the ask box and the palette draw prese
 
 ### 6.3 Enhanced
 
-Hidden: Enhance is not part of the window. The code, `akou enhance`, the API and the MCP tools stay, and notes already written stay in the export's Notes section and `GET /calls/{id}/enhanced`. The rows below wait until Enhance comes back.
+Hidden. Enhance is not part of the window: a word is fixed once, on its line (W4.8), and the final transcript carries the fixes. The code, `akou enhance`, the API and the MCP tools stay, and notes already written stay in the export's Notes section and `GET /calls/{id}/enhanced`. The rows below wait until Enhance comes back.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -300,7 +300,7 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W9.1 | "Fix this word", "Words to review" pill and dialog, raw text on hover, decode list as the tooltip of the call header's line | done | DESIGN 7 | Existing tests | has |
+| W9.1 | Fix on a line (W4.8), "Words to review" pill and dialog, raw text on hover, decode list as the tooltip of the call header's line | done | DESIGN 7 | Existing tests | has |
 | W9.2 | The vocabulary list is editable in the Words dialog: add a term (with heard forms), remove, confirm, change scope | P1 | Audit: read-only panel; Wispr, VoiceInk, Descript | Adding "Vercel" heard "versal" writes the workspace file through the API; the dialog and `akou vocab list` agree | partial: the Dictionary dialog (DICTATION DC-U5) adds, removes and changes scope in the global file, and Settings opens it instead of its old read-only list; confirming and the workspace file are not there yet |
 | W9.3 | An inline edit that changes one word becomes a vocabulary proposal, not an automatic add | P2 | VoiceInk AutoLearn, Descript, Wispr | Editing "versal" to "Vercel" on a line adds a pending proposal to "Words to review"; nothing is written to the vocabulary until Approve | missing |
 | W9.4 | Rejected proposals are never proposed again, and the dialog says so | done | DESIGN, `vocab/pass.ts` | Existing tests | has |

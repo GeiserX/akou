@@ -191,6 +191,8 @@ export interface Note extends Envelope {
   /** Last segment `seq` visible when the note was started. */
   afterSeq: number;
   by: Author;
+  /** `fix`: akou wrote the line from a fix of a transcript line ("Fixed: versal -> Vercel"). */
+  from?: "fix";
 }
 
 export interface NoteDel extends Envelope {
@@ -525,6 +527,7 @@ const SPECS: { [T in EventType]: Spec } = {
     w: req("number"),
     afterSeq: req("int"),
     by: req("noteAuthor"),
+    from: opt(["fix"]),
   },
   "note.del": { id: req("string"), by: req("noteAuthor") },
   remember: { id: req("string"), rev: req("int"), text: req("string|null"), by: req("author") },

@@ -2804,6 +2804,138 @@
         "x-akou-access": "admin"
       }
     },
+    "/v1/calls/{id}/fix": {
+      "post": {
+        "operationId": "callVocab.fix",
+        "tags": [
+          "callVocab"
+        ],
+        "description": "Fix a line, or a word with no line: `line` and `text` (the line as it should read), or `term` and `heard`. Each word the fix changes is applied to the whole call at once. A name, product or jargon word is learned into the call's and the workspace's vocabulary with no review; a rewording of common words stays on its line and goes into the call's Notes, as does any word when the engine transcribing the call takes no word list. `undo` in the answer takes it all back with `POST /calls/{id}/fix/undo`.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "line": {
+                    "type": "string"
+                  },
+                  "text": {
+                    "type": "string"
+                  },
+                  "term": {
+                    "type": "string"
+                  },
+                  "heard": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/fix/undo": {
+      "post": {
+        "operationId": "callVocab.fixUndo",
+        "tags": [
+          "callVocab"
+        ],
+        "description": "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, and the words it put into a vocabulary file taken out again. The log keeps every event.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "vocab": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "notes": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "words": {}
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/dictations": {
       "post": {
         "operationId": "dictations.create",
