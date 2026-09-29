@@ -203,8 +203,11 @@ export class WavParts implements FinalAudio {
  * A part's Ogg Opus file, decoded by the helper that wrote it: `decode --info` for the length,
  * `decode --from F --frames N` for a range, stereo f32 at 16 kHz on stdout. The app has no Opus
  * decoder of its own and writes no WAV (SV-P10). A read decodes only its range, so the energy scan
- * never holds a whole part. The pass reads a chunk of the mic and then the same chunk of the call,
- * so the last range decoded is kept, both channels, and each read is a fresh array.
+ * never holds a whole part. The last range decoded is kept, both channels, and each read is a fresh
+ * array. A part within one chunk is decoded once, since every later read asks for that same range.
+ * A longer part is read one channel at a time (the energy check per channel, the speaker labels the
+ * whole call, the text the whole mic and then the whole call), so the cache rarely hits and the part
+ * is decoded up to three times.
  */
 export class OpusParts implements FinalAudio {
   private readonly lengths = new Map<number, number>();

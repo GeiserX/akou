@@ -10,9 +10,9 @@
   "helper:darwin": { "minPass": 531, "maxSkip": 0 },
   "helper:linux": { "minPass": 509, "maxSkip": 0 },
   "helper:win32": { "minPass": 513, "maxSkip": 0 },
-  "capture-e2e:darwin": { "minPass": 26, "maxSkip": 0 },
-  "capture-e2e:linux": { "minPass": 26, "maxSkip": 0 },
-  "capture-e2e:win32": { "minPass": 26, "maxSkip": 0 },
+  "capture-e2e:darwin": { "minPass": 34, "maxSkip": 0 },
+  "capture-e2e:linux": { "minPass": 34, "maxSkip": 0 },
+  "capture-e2e:win32": { "minPass": 34, "maxSkip": 0 },
   "capture-live-pipewire:linux": { "minPass": 5, "maxSkip": 1 },
   "capture-live-pulseaudio:linux": { "minPass": 5, "maxSkip": 1 },
   "capture-live-windows:win32": { "minPass": 6, "maxSkip": 0 }
