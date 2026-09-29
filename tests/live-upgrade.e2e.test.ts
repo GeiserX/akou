@@ -1,7 +1,7 @@
 /**
  * The `upgrade` live setup through the whole app (ASR-7, akou-chp.23): a call started with it
- * writes each streaming line, then Parakeet's revision of it, then the vote of Qwen and Parakeet,
- * and the Qwen server it started stops when the call ends. Qwen is the fake llama-server
+ * writes each streaming line, then Qwen's one rewrite of it, and the Qwen server it started stops
+ * when the call ends. Qwen is the fake llama-server
  * (`asr.llamaServer`), the recognizer and the streaming engine the fakes of asr-fake.ts, and the
  * catalog a loopback registry of tiny files: nothing is downloaded and no model loads.
  */
@@ -27,7 +27,6 @@ setDefaultTimeout(60_000);
 
 const STREAM = "nemotron-en-560";
 const FAKE_LLAMA = join(import.meta.dir, "fixtures", "fake-llama-server.ts");
-const VOTE = `rover-conf(${QWEN_ASR},fake-parakeet)`;
 
 let reg: ModelRegistry;
 let rig: AppRig;
@@ -95,7 +94,7 @@ const alive = (pid: number) => {
 };
 
 describe("[ASR-7] a call on the upgrade setup", () => {
-  test("each line is written by the stream, then Parakeet, then the vote of Qwen and Parakeet; Qwen stops with the call", async () => {
+  test("each line is written by the stream, then rewritten once by Qwen; Qwen stops with the call", async () => {
     const id = await rig.startCall({});
     const status = async () => (await rig.api("GET", "/status")).body.live;
     await until(async () => (await status())?.setup != null, 10_000, "the live setup");
@@ -103,9 +102,9 @@ describe("[ASR-7] a call on the upgrade setup", () => {
     const segs = async () =>
       (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
     await until(
-      async () => (await segs()).filter((s) => s.model === VOTE).length >= 2,
+      async () => (await segs()).filter((s) => s.model === QWEN_ASR).length >= 2,
       30_000,
-      "both lines voted",
+      "both lines rewritten",
     );
     const stop = await rig.api("POST", "/calls/live/stop");
     expect(stop.status).toBe(200);
@@ -114,9 +113,11 @@ describe("[ASR-7] a call on the upgrade setup", () => {
     // Per line, its revisions in order and the model of each.
     const byLine = new Map<string, string[]>();
     for (const s of all) byLine.set(s.id, [...(byLine.get(s.id) ?? []), `${s.rev} ${s.model}`]);
-    const voted = [...byLine.values()].filter((r) => r.includes(`3 ${VOTE}`));
-    expect(voted.length).toBeGreaterThanOrEqual(2);
-    for (const r of voted) expect(r).toEqual([`1 ${STREAM}`, "2 fake-parakeet", `3 ${VOTE}`]);
+    const rewritten = [...byLine.values()].filter((r) => r.includes(`2 ${QWEN_ASR}`));
+    expect(rewritten.length).toBeGreaterThanOrEqual(2);
+    // Every line has the stream's words and at most Qwen's rewrite: no other revision.
+    const allowed = [[`1 ${STREAM}`], [`1 ${STREAM}`, `2 ${QWEN_ASR}`]];
+    for (const r of byLine.values()) expect(allowed).toContainEqual(r);
     // Qwen heard the lines: one request each, at least.
     expect(llama().filter((x) => x.body !== undefined).length).toBeGreaterThanOrEqual(2);
     // The server the upgrade started is gone once the call has ended: the final pass needs the GPU.
@@ -142,9 +143,9 @@ describe("[ASR-7] one Qwen for the upgrade and dictation", () => {
     const segs = async () =>
       (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
     await until(
-      async () => (await segs()).filter((s) => s.model === VOTE).length >= 2,
+      async () => (await segs()).filter((s) => s.model === QWEN_ASR).length >= 2,
       30_000,
-      "both lines voted",
+      "both lines rewritten",
     );
     expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
     await until(

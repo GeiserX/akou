@@ -1,9 +1,8 @@
 /**
  * The in-call upgrade (docs/research/asr-architecture.md section 3.2, ASR-7): on the `upgrade`
- * setup each streaming line is rewritten during the call, first by Parakeet and then by the
- * confidence vote of Qwen and Parakeet, as new revisions of the same `seg`. The streaming engine,
- * the recognizer and Qwen are fakes (tests/fixtures/asr-fake.ts and a scripted `LineUpgrader`);
- * nothing here loads a model or starts a server.
+ * setup each streaming line is rewritten once during the call, by Qwen, as a new revision of the
+ * same `seg`. The streaming engine, the recognizer and Qwen are fakes (tests/fixtures/asr-fake.ts
+ * and a scripted `LineUpgrader`); nothing here loads a model or starts a server.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -36,7 +35,7 @@ afterEach(async () => {
 });
 
 // ---------------------------------------------------------------------------
-// The Worker: Parakeet's decode of each utterance
+// The Worker: each closed utterance goes to the host, and no recognizer decodes it
 
 function pipeline(o: ConstructorParameters<typeof FakeModels>[0] = {}) {
   const models = new FakeModels(o);
@@ -69,13 +68,13 @@ const twoLines = (gap = 0.8) =>
     silence(2.5),
   );
 
-/** The outputs that matter here, in order: `seg <key> <model>` and `upgrade <keys> <model>`. */
+/** The outputs that matter here, in order: `seg <key> <model>` and `upgrade <keys>`. */
 function trail(out: readonly LiveOut[]): string[] {
   return out.flatMap((x) =>
     x.type === "seg"
       ? [`seg ${x.key} ${x.model}`]
       : x.type === "upgrade"
-        ? [`upgrade ${x.keys.join(",")} ${x.model}`]
+        ? [`upgrade ${x.keys.join(",")}`]
         : [],
   );
 }
@@ -100,26 +99,36 @@ describe("[ASR-7] lines cut back from utterances", () => {
   });
 });
 
-describe("[ASR-7] Parakeet decodes each utterance in the Worker", () => {
-  test("the lines up to a stop of the speaker are one utterance: one Parakeet decode after its last line", async () => {
+describe("[ASR-7] the Worker hands each closed utterance to Qwen", () => {
+  test("the lines up to a stop of the speaker are one utterance, sent after its last line", async () => {
     const { p, out } = pipeline();
     await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
     feed(p, "mic", twoLines());
     await p.endPart(1);
-    expect(trail(out)).toEqual([
-      "seg 1 fake-nemotron",
-      "seg 2 fake-nemotron",
-      "upgrade 1,2 fake-parakeet",
-    ]);
+    expect(trail(out)).toEqual(["seg 1 fake-nemotron", "seg 2 fake-nemotron", "upgrade 1,2"]);
     const u = out.find((x) => x.type === "upgrade");
-    expect([u?.text, u?.lines]).toEqual([
-      "we should move the build to the new box",
-      ["we should move the build", "to the new box"],
-    ]);
-    // The audio Qwen gets next is the utterance's, gained and padded as Parakeet took it.
+    expect(u?.lines).toEqual(["we should move the build", "to the new box"]);
+    // The audio Qwen gets is the utterance's, gained and padded.
     const segs = out.filter((x) => x.type === "seg");
     const span = (segs[1]?.a1 as number) - (segs[0]?.a0 as number);
     expect(u?.samples.length).toBeGreaterThanOrEqual(Math.round(span * RATE));
+  });
+
+  test("Qwen's rewrite is the only one: the recognizer, loaded for the call, decodes nothing of the stream's lines", async () => {
+    const { p, out, models } = pipeline();
+    await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
+    // The app loads the recognizer with the call's decode list, on every setup.
+    p.setDecodeList(null, 0);
+    feed(p, "mic", twoLines(2.5));
+    await p.endPart(1);
+    expect(trail(out)).toEqual([
+      "seg 1 fake-nemotron",
+      "upgrade 1",
+      "seg 2 fake-nemotron",
+      "upgrade 2",
+    ]);
+    expect(models.recognizers.length).toBe(1);
+    expect(models.recognizers.flatMap((r) => r.calls)).toEqual([]);
   });
 
   test("a stop between the lines makes two utterances", async () => {
@@ -129,9 +138,9 @@ describe("[ASR-7] Parakeet decodes each utterance in the Worker", () => {
     await p.endPart(1);
     expect(trail(out)).toEqual([
       "seg 1 fake-nemotron",
-      "upgrade 1 fake-parakeet",
+      "upgrade 1",
       "seg 2 fake-nemotron",
-      "upgrade 2 fake-parakeet",
+      "upgrade 2",
     ]);
   });
 
@@ -159,7 +168,7 @@ describe("[ASR-7] Parakeet decodes each utterance in the Worker", () => {
     feed(plain.p, "mic", twoLines());
     await plain.p.endPart(1);
     expect(trail(plain.out)).toEqual(["seg 1 fake-nemotron", "seg 2 fake-nemotron"]);
-    // Parakeet's own windows are already Parakeet's: asking for the upgrade there changes nothing.
+    // Without a stream there are no stream lines to rewrite: asking for the upgrade changes nothing.
     const windows = pipeline();
     await windows.p.beginCall({ ...noSpeakers, upgrade: true });
     feed(windows.p, "mic", twoLines());
@@ -167,17 +176,13 @@ describe("[ASR-7] Parakeet decodes each utterance in the Worker", () => {
     expect(trail(windows.out).every((x) => x.startsWith("seg "))).toBe(true);
   });
 
-  test("an utterance whose last line waits for its speaker label is decoded right after it, never before", async () => {
+  test("an utterance whose last line waits for its speaker label is sent right after it, never before", async () => {
     // A diarizer that decides 6 s behind the audio: each line waits for its label.
     const { p, out } = pipeline({ diarizer: "nemotron", streamStep: 4, streamLookahead: 2 });
     await p.beginCall({ ...noSpeakers, live: LIVE, upgrade: true });
     feed(p, "call", twoLines());
     await p.endPart(1);
-    expect(trail(out)).toEqual([
-      "seg 1 fake-nemotron",
-      "seg 2 fake-nemotron",
-      "upgrade 1,2 fake-parakeet",
-    ]);
+    expect(trail(out)).toEqual(["seg 1 fake-nemotron", "seg 2 fake-nemotron", "upgrade 1,2"]);
     const segs = out.filter((x) => x.type === "seg");
     expect(segs.map((s) => s.spk)).toEqual(["c1", "c2"]);
   });
@@ -204,15 +209,15 @@ class SlowQwen implements LineUpgrader {
   }
 }
 
-/** Qwen's hypothesis: `text` with every word at `conf`, except `sure` words at 0.95. */
-function qwenSays(text: string, sure: readonly string[] = [], conf = 0.6): Hypothesis {
+/** Qwen's hypothesis of an utterance. */
+function qwenSays(text: string): Hypothesis {
   return {
     engine: "fake-qwen",
     text,
     words: text
       .split(" ")
       .filter((w) => w)
-      .map((w) => ({ w, conf: sure.includes(w) ? 0.95 : conf })),
+      .map((w) => ({ w, conf: 0.6 })),
     lang: "en",
     ms: 10,
   };
@@ -280,8 +285,8 @@ async function rig(qwen: LineUpgrader | null) {
 const revisions = (segs: readonly Seg[]) =>
   segs.map((s) => `${s.id} ${s.rev} ${s.model ?? "-"} ${s.text ?? "-"}`);
 
-describe("[ASR-7] the host writes each line's upgrades as revisions", () => {
-  test("revision order under a slow Qwen: stream, then Parakeet, then the vote of Qwen and Parakeet", async () => {
+describe("[ASR-7] the host writes Qwen's rewrite as each line's one revision", () => {
+  test("revision order under a slow Qwen: the stream, then Qwen's words, and nothing between", async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
     r.play([
@@ -289,29 +294,29 @@ describe("[ASR-7] the host writes each line's upgrades as revisions", () => {
       ["to", "the", "new", "box"],
     ]);
     await until(() => qwen.asked.length === 1, 5000, "the first line at Qwen");
-    // Qwen decodes one line at a time: the second waits behind the first.
-    await until(() => r.segs().length === 4, 5000, "both lines and their Parakeet revisions");
+    // Qwen decodes one utterance at a time: the second waits behind the first, with its line
+    // written by the stream and no revision yet.
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
     expect(qwen.asked.length).toBe(1);
     expect(revisions(r.segs())).toEqual([
       "l000001 1 fake-nemotron we should move the build",
-      "l000001 2 fake-parakeet we should move the build",
       "l000002 1 fake-nemotron to the new box",
-      "l000002 2 fake-parakeet to the new box",
     ]);
-    // Qwen hears "built", surer than Parakeet's unscored "build" (default 0.7): the vote takes it.
-    qwen.asked[0]?.answer(qwenSays("we should move the built", ["built"]));
+    qwen.asked[0]?.answer(qwenSays("we should move the built"));
     await until(() => qwen.asked.length === 2, 5000, "the second line at Qwen");
-    // Qwen's unsure "news" loses to Parakeet's "new".
-    qwen.asked[1]?.answer(qwenSays("to the news box", [], 0.4));
-    await until(() => r.segs().length === 6, 5000, "the votes");
-    expect(revisions(r.segs()).slice(4)).toEqual([
-      "l000001 3 rover-conf(fake-qwen,fake-parakeet) we should move the built",
-      "l000002 3 rover-conf(fake-qwen,fake-parakeet) to the new box",
+    qwen.asked[1]?.answer(qwenSays("to the news box"));
+    await until(() => r.segs().length === 4, 5000, "Qwen's rewrites");
+    expect(revisions(r.segs()).slice(2)).toEqual([
+      "l000001 2 fake-qwen we should move the built",
+      "l000002 2 fake-qwen to the news box",
     ]);
     await r.mgr.stop();
+    // One rewrite per line, ever.
+    expect(r.segs().length).toBe(4);
   });
 
-  test("an utterance of two lines: each stage's words are cut back into the lines they belong to", async () => {
+  test("an utterance of two lines: Qwen's words are cut back into the lines they belong to", async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
     r.play(
@@ -322,15 +327,13 @@ describe("[ASR-7] the host writes each line's upgrades as revisions", () => {
       0.8,
     );
     await until(() => qwen.asked.length === 1, 5000, "the utterance at Qwen");
-    qwen.asked[0]?.answer(qwenSays("we should move the built to the new box", ["built"]));
-    await until(() => r.segs().length === 6, 5000, "the votes");
+    qwen.asked[0]?.answer(qwenSays("we should move the built to the new box"));
+    await until(() => r.segs().length === 4, 5000, "Qwen's rewrites");
     expect(revisions(r.segs())).toEqual([
       "l000001 1 fake-nemotron we should move the build",
       "l000002 1 fake-nemotron to the new box",
-      "l000001 2 fake-parakeet we should move the build",
-      "l000002 2 fake-parakeet to the new box",
-      "l000001 3 rover-conf(fake-qwen,fake-parakeet) we should move the built",
-      "l000002 3 rover-conf(fake-qwen,fake-parakeet) to the new box",
+      "l000001 2 fake-qwen we should move the built",
+      "l000002 2 fake-qwen to the new box",
     ]);
     await r.mgr.stop();
   });
@@ -346,16 +349,13 @@ describe("[ASR-7] the host writes each line's upgrades as revisions", () => {
     await r.mgr.stop();
     expect(asked?.signal.aborted).toBe(true);
     // A Qwen that ignores the abort and answers anyway writes nothing.
-    asked?.answer(qwenSays("deploy the built", ["built"]));
+    asked?.answer(qwenSays("deploy the built"));
     await until(() => r.logs.some((l) => l.includes("dropped")), 5000, "the drop");
     release?.();
     const ended = r.events.findIndex((e) => e.type === "call.ended");
     expect(ended).toBeGreaterThan(0);
     expect(r.events.slice(ended + 1).filter((e) => e.type === "seg")).toEqual([]);
-    expect(revisions(r.segs())).toEqual([
-      "l000001 1 fake-nemotron deploy the build",
-      "l000001 2 fake-parakeet deploy the build",
-    ]);
+    expect(revisions(r.segs())).toEqual(["l000001 1 fake-nemotron deploy the build"]);
   });
 
   test("control: the same answer before the call ends is written", async () => {
@@ -363,49 +363,58 @@ describe("[ASR-7] the host writes each line's upgrades as revisions", () => {
     const r = await rig(qwen);
     r.play([["deploy", "the", "build"]]);
     await until(() => qwen.asked.length === 1, 5000, "the line at Qwen");
-    qwen.asked[0]?.answer(qwenSays("deploy the built", ["built"]));
-    await until(() => r.segs().length === 3, 5000, "the vote");
+    qwen.asked[0]?.answer(qwenSays("deploy the built"));
+    await until(() => r.segs().length === 2, 5000, "Qwen's rewrite");
     await r.mgr.stop();
-    expect(revisions(r.segs()).at(-1)).toBe(
-      "l000001 3 rover-conf(fake-qwen,fake-parakeet) deploy the built",
-    );
+    expect(revisions(r.segs()).at(-1)).toBe("l000001 2 fake-qwen deploy the built");
   });
 
-  test("a line a person edited keeps their text; Qwen hearing nothing does not erase Parakeet's words; a failure changes nothing", async () => {
+  test("a line a person edited keeps their text; Qwen hearing nothing leaves the stream's words; a failure changes nothing", async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
-    r.play([["deploy", "the", "build"], ["thanks"], ["ok"]]);
+    r.play([["deploy", "the", "build"], ["thanks"], ["ok"], ["great"]]);
     await until(() => qwen.asked.length === 1, 5000, "the first line at Qwen");
     const c = r.mgr.controller(r.id);
-    c?.record({ type: "seg", id: "l000001", rev: 3, text: "deploy the bill", by: "user" });
-    qwen.asked[0]?.answer(qwenSays("deploy the built", ["built"]));
+    c?.record({ type: "seg", id: "l000001", rev: 2, text: "deploy the bill", by: "user" });
+    qwen.asked[0]?.answer(qwenSays("deploy the built"));
     await until(() => qwen.asked.length === 2, 5000, "the second line at Qwen");
-    qwen.asked[1]?.answer(qwenSays("", []));
+    qwen.asked[1]?.answer(qwenSays(""));
     await until(() => qwen.asked.length === 3, 5000, "the third line at Qwen");
     qwen.asked[2]?.fail(new Error("llama-server is unavailable"));
+    await until(() => qwen.asked.length === 4, 5000, "the fourth line at Qwen");
+    // Control: a line Qwen does answer is rewritten.
+    qwen.asked[3]?.answer(qwenSays("great."));
     await until(() => r.logs.some((l) => l.includes("Qwen failed")), 5000, "the failure log");
+    await until(() => r.view()?.segment("l000004")?.rev === 2, 5000, "the control's rewrite");
     await r.mgr.stop();
     const view = r.view();
     expect(
-      ["l000001", "l000002", "l000003"].map((id) => {
+      ["l000001", "l000002", "l000003", "l000004"].map((id) => {
         const s = view?.segment(id);
         return [s?.text, s?.model, s?.rev];
       }),
     ).toEqual([
-      ["deploy the bill", "fake-parakeet", 3],
-      ["thanks", "rover-conf(fake-qwen,fake-parakeet)", 3],
-      ["ok", "fake-parakeet", 2],
+      ["deploy the bill", "fake-nemotron", 2],
+      ["thanks", "fake-nemotron", 1],
+      ["ok", "fake-nemotron", 1],
+      ["great.", "fake-qwen", 2],
     ]);
+    expect(r.logs.find((l) => l.includes("Qwen failed"))).toContain("keep the streaming text");
   });
 
-  test(`at most ${UPGRADE_QUEUE_MAX} lines wait for Qwen; past that the oldest keeps Parakeet's text`, async () => {
+  test(`at most ${UPGRADE_QUEUE_MAX} utterances wait for Qwen; past that the oldest keeps the streaming text`, async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
     const words = ["yes", "no", "hello", "world", "thanks", "meeting", "today", "ok", "great"];
     r.play(words.map((w) => [w]));
-    await until(() => r.segs().length === words.length * 2, 5000, "every line and its Parakeet");
-    // One line is at Qwen; of the eight behind it, the two oldest were let go.
-    expect(r.logs.filter((l) => l.includes("Qwen is behind")).length).toBe(2);
+    await until(() => r.segs().length === words.length, 5000, "every stream line");
+    await until(
+      () => r.logs.filter((l) => l.includes("Qwen is behind")).length === 2,
+      5000,
+      "the two let go",
+    );
+    // One utterance is at Qwen; of the eight behind it, the two oldest were let go.
+    expect(r.logs.find((l) => l.includes("Qwen is behind"))).toContain("keep the streaming text");
     for (let i = 0; i < 1 + UPGRADE_QUEUE_MAX; i++) {
       await until(() => qwen.asked.length === i + 1, 5000, `line ${i + 1} at Qwen`);
       qwen.asked[i]?.answer(qwenSays(""));
@@ -428,20 +437,20 @@ describe("[ASR-7] a line reads as its highest revision", () => {
     const q = new CallQuery(view);
     const first = q.read(0, Date.now());
     expect(first.lines.map((l) => [l.id, l.model, l.rev, l.edited])).toEqual([
-      ["l000001", "fake-parakeet", 2, false],
+      ["l000001", "fake-nemotron", 1, false],
     ]);
-    qwen.asked[0]?.answer(qwenSays("deploy the built", ["built"]));
-    await until(() => r.segs().length === 3, 5000, "the vote");
+    qwen.asked[0]?.answer(qwenSays("deploy the built"));
+    await until(() => r.segs().length === 2, 5000, "Qwen's rewrite");
     // A reader following the call gets the line again, with the model that wrote it now.
     const again = q.read(first.cursor, Date.now());
     expect(again.lines.map((l) => [l.id, l.text, l.model, l.rev, l.edited])).toEqual([
-      ["l000001", "deploy the built", "rover-conf(fake-qwen,fake-parakeet)", 3, false],
+      ["l000001", "deploy the built", "fake-qwen", 2, false],
     ]);
     // A person's edit is still an edit.
     r.mgr.controller(r.id)?.record({
       type: "seg",
       id: "l000001",
-      rev: 4,
+      rev: 3,
       text: "deploy the bill",
       by: "user",
     });

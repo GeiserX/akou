@@ -1,8 +1,8 @@
 /**
  * ASR-7 against the real models: public FLEURS clips through the live pipeline on the `upgrade`
- * setup, each utterance decoded by Parakeet in the pipeline and then by the vote of Qwen and
- * Parakeet, and cut back into its lines, as the host does it. It reports the word error rate of
- * each stage and how long each rewrite takes. Model-gated, so it never runs in CI's test jobs and
+ * setup, each utterance the pipeline closes decoded once by Qwen and cut back into its lines, as
+ * the host does it. It reports the word error rate of the stream and of the stream after Qwen's
+ * rewrite, and how long Qwen takes to answer. Model-gated, so it never runs in CI's test jobs and
  * never downloads anything.
  * It needs:
  *
@@ -29,7 +29,6 @@ import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "../src/main/asr/lla
 import { createLlamaServer, llamaBuild } from "../src/main/asr/llama-server.ts";
 import { type Accelerator, hostPlatform, modelFile } from "../src/main/asr/models.ts";
 import { QwenEngine } from "../src/main/asr/qwen.ts";
-import { RoverFuser } from "../src/main/asr/rover.ts";
 import { SherpaModels } from "../src/main/asr/sherpa.ts";
 import { splitToLines } from "../src/main/asr/upgrade.ts";
 
@@ -90,9 +89,8 @@ function qwenServer() {
 
 interface Stages {
   stream: string;
-  parakeet: string;
-  vote: string;
-  /** The vote with Qwen's words in reverse order: the failing control. */
+  qwen: string;
+  /** Qwen's words in reverse order: the failing control. */
   control: string;
 }
 
@@ -105,7 +103,7 @@ if (!READY) {
   describe("[ASR-7] the in-call upgrade with the real models", () => {
     for (const lang of ["en", "es"] as const) {
       test(
-        `${lang}: ${CLIPS} FLEURS clips; the vote of Qwen and Parakeet beats the stream, and a scrambled Qwen fails that`,
+        `${lang}: ${CLIPS} FLEURS clips; Qwen's one rewrite beats the stream, and a scrambled Qwen fails that`,
         async () => {
           const choice = chooseLiveEngine("auto", [lang], () => true).choice as LiveChoice;
           const models = new SherpaModels({
@@ -114,15 +112,14 @@ if (!READY) {
             threads: 4,
             diarizer: "embeddings",
           });
-          const out: { o: LiveOut; at: number }[] = [];
-          const p = new LivePipeline(models, {}, (o) => out.push({ o, at: performance.now() }));
-          // Parakeet loads now, as the app loads it with the call's decode list, not on the first line.
+          const out: { o: LiveOut }[] = [];
+          const p = new LivePipeline(models, {}, (o) => out.push({ o }));
+          // Parakeet loads now, as the app loads it with the call's decode list: it takes no part in
+          // the upgrade, but it holds its memory while Qwen runs, as in a call.
           p.setDecodeList(null, 0);
           const server = qwenServer();
           const qwen = new QwenEngine({ id: QWEN_ASR, server, allowed: [lang] });
-          const fuser = new RoverFuser("rover-conf");
           const rows: (Stages & { ref: string })[] = [];
-          const parakeetS: number[] = [];
           const qwenS: number[] = [];
           try {
             for (const clip of clips(lang, CLIPS)) {
@@ -135,43 +132,35 @@ if (!READY) {
               }
               await p.flush();
               const mine = out.slice(from);
-              // Each line's text after each stage, as the host writes it: a line that gets no
-              // words from a stage keeps the text it had.
+              // Each line's text before and after Qwen, as the host writes it: a line that gets no
+              // words from Qwen keeps the stream's.
               const texts = new Map<number, Stages>();
-              let segAt = 0;
-              for (const { o, at } of mine) {
+              for (const { o } of mine) {
                 if (o.type === "log" && o.level === "error") throw new Error(o.msg);
                 if (o.type === "seg" && o.key !== undefined) {
-                  texts.set(o.key, { stream: o.text, parakeet: o.text, vote: "", control: "" });
-                  segAt = at;
+                  texts.set(o.key, { stream: o.text, qwen: o.text, control: o.text });
                 }
                 if (o.type !== "upgrade") continue;
-                parakeetS.push((at - segAt) / 1000);
                 const apply = (k: keyof Stages, h: Hypothesis) => {
+                  const words = h.words.length > 0 ? h.words.map((x) => x.w) : h.text.split(/\s+/);
                   const parts = splitToLines(
                     o.lines,
-                    h.words.map((x) => x.w),
+                    words.filter((x) => x !== ""),
                   );
                   o.keys.forEach((key, j) => {
                     const cur = texts.get(key);
                     if (cur && parts[j]) cur[k] = parts[j] as string;
                   });
                 };
-                const pk: Hypothesis = { engine: o.model, text: o.text, words: o.words, ms: 0 };
-                apply("parakeet", pk);
-                for (const key of o.keys) {
-                  const cur = texts.get(key);
-                  if (cur) cur.vote = cur.control = cur.parakeet;
-                }
                 const t = performance.now();
                 const q = await qwen.decode({ samples: o.samples, lang, glossary: [] });
                 qwenS.push((performance.now() - t) / 1000);
-                apply("vote", fuser.fuseSync([q, pk]));
-                apply("control", fuser.fuseSync([{ ...q, words: [...q.words].reverse() }, pk]));
+                apply("qwen", q);
+                apply("control", { ...q, words: [...q.words].reverse() });
               }
-              const stages: Stages = { stream: "", parakeet: "", vote: "", control: "" };
+              const stages: Stages = { stream: "", qwen: "", control: "" };
               for (const k of Object.keys(stages) as (keyof Stages)[]) {
-                stages[k] = [...texts.values()].map((x) => x[k] || x.parakeet).join(" ");
+                stages[k] = [...texts.values()].map((x) => x[k]).join(" ");
               }
               rows.push({ ref: clip.ref, ...stages });
             }
@@ -181,9 +170,9 @@ if (!READY) {
           }
           const w = (k: keyof Stages) => wer(rows.map((r) => ({ ref: r.ref, hyp: r[k] })));
           console.log(
-            `upgrade ${choice.engine} ${lang}, ${rows.length} clips: WER stream ${w("stream").toFixed(2)}, Parakeet ${w("parakeet").toFixed(2)}, vote ${w("vote").toFixed(2)}; scrambled-Qwen control ${w("control").toFixed(2)}; Parakeet rewrite p50 ${percentile(parakeetS, 50).toFixed(2)} s (p95 ${percentile(parakeetS, 95).toFixed(2)}), Qwen p50 ${percentile(qwenS, 50).toFixed(2)} s (p95 ${percentile(qwenS, 95).toFixed(2)})`,
+            `upgrade ${choice.engine} ${lang}, ${rows.length} clips, ${qwenS.length} utterances: WER stream ${w("stream").toFixed(2)}, stream + Qwen ${w("qwen").toFixed(2)}; scrambled-Qwen control ${w("control").toFixed(2)}; Qwen answers p50 ${percentile(qwenS, 50).toFixed(2)} s (p95 ${percentile(qwenS, 95).toFixed(2)})`,
           );
-          expect(w("vote")).toBeLessThan(w("stream"));
+          expect(w("qwen")).toBeLessThan(w("stream"));
           expect(w("control")).toBeGreaterThan(w("stream"));
         },
         LONG,
