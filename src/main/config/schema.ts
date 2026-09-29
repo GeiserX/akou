@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
+import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
@@ -452,6 +453,12 @@ export const SETTINGS = {
     default: [],
     apiWritable: false,
     doc: "Command that starts the diarization helper, before its own arguments. Empty: the akou-diarize bundled with the app, else the one on PATH.",
+  },
+  "asr.live.engine": {
+    type: "string",
+    values: LIVE_ENGINE_SETTINGS,
+    default: "auto",
+    doc: "The streaming model that writes the live transcript: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
   },
   "asr.segmentPause": {
     type: "number",

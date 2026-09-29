@@ -77,6 +77,7 @@ import {
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
+import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import { type CallAccess, LiveAsr, type VocabSource } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
 import { type LlamaPlan, llamaPlan, metalHolder } from "./asr/llama-server.ts";
@@ -736,6 +737,19 @@ export class AkouApp implements ApiApp {
     return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
+  /**
+   * The streaming engine the next call runs (`asr.live.engine` and `asr.languages`), only ever one
+   * whose model files are here; null for the recognizer's VAD windows.
+   */
+  private liveChoice(): { choice: LiveChoice | null; note?: string } {
+    const s = this.cfg.settings;
+    const catalog = this.o.modelRegistry ?? MODELS;
+    return chooseLiveEngine(s["asr.live.engine"], s["asr.languages"], (id) => {
+      const m = catalog.find((x) => x.id === id);
+      return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
+    });
+  }
+
   /** The real engines on the models folder, with the speaker-label engine the settings choose. */
   private sherpaSpec(
     s: Settings,
@@ -882,6 +896,13 @@ export class AkouApp implements ApiApp {
         vocab: (callId) => {
           const ws = this.manager.controller(callId)?.view.call?.workspace ?? "";
           return this.vocabCache.get(ws) ?? { entries: [], files: [] };
+        },
+        liveEngine: () => {
+          const { choice, note } = this.liveChoice();
+          if (note) this.log("info", `asr: ${note}`);
+          // A live model a call loads counts as used, so the sweep keeps it.
+          if (choice) this.shelf?.touch([choice.engine]);
+          return choice;
         },
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
@@ -2504,8 +2525,9 @@ export class AkouApp implements ApiApp {
     const jobs = this.jobService;
     if (jobs) return jobs.held();
     if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
+    const live = this.liveChoice().choice?.engine;
     return {
-      defaults: new Set(this.registry().map((m) => m.id)),
+      defaults: new Set([...this.registry().map((m) => m.id), ...(live ? [live] : [])]),
       inUse:
         this.asr !== null || this.finals.size > 0 || this.modelsPull.running
           ? new Set(this.runningSet().map((m) => m.id))
