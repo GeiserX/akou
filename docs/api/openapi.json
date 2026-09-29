@@ -42,6 +42,9 @@
       "name": "calls"
     },
     {
+      "name": "workspaces"
+    },
+    {
       "name": "speakers"
     },
     {
@@ -1050,6 +1053,79 @@
         "responses": {
           "200": {
             "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/workspaces": {
+      "get": {
+        "operationId": "workspaces.list",
+        "tags": [
+          "workspaces"
+        ],
+        "description": "Every workspace, by name, with how many calls it holds: the folders under the recordings folder, empty ones included, and the workspace of every call.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      },
+      "post": {
+        "operationId": "workspaces.add",
+        "tags": [
+          "workspaces"
+        ],
+        "description": "Make a workspace's folder, so it exists before its first call. `name` is letters, digits, dot, dash or underscore. A workspace that exists already answers 200 with `created: false`; a new one 201.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "name": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "name"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
             "content": {
               "application/json": {
                 "schema": {

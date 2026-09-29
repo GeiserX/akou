@@ -295,6 +295,16 @@ export const PARITY: readonly Row[] = [
     window: [app('"PATCH", `/calls/#{encodeURIComponent(id)}`')],
   },
   {
+    action: "List and add workspaces",
+    cli: ["workspaces", "workspace"],
+    api: ["GET /workspaces", "POST /workspaces"],
+    mcp: { none: "akou_start names the workspace and makes its folder; a list is PG-M4" },
+    window: [
+      ui("workspaces.ts", '"GET", "/workspaces"'),
+      ui("workspaces.ts", '"POST", "/workspaces"'),
+    ],
+  },
+  {
     action: "Share a live link",
     cli: ["share"],
     api: ["GET /share", "POST /share", "DELETE /share"],
@@ -306,7 +316,9 @@ export const PARITY: readonly Row[] = [
     cli: { none: "missing: PG-F3" },
     api: ["GET /templates"],
     mcp: { none: "missing: PG-F3" },
-    window: [ui("enhanced.ts", '"GET", "/templates"')],
+    window: {
+      none: "the window always uses the automatic choice; scripts pick one through the API or --template",
+    },
   },
   {
     action: "Settings",

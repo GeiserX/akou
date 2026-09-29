@@ -12,6 +12,7 @@
  *   on a finished call (TRAPS T3.14). `last` never names a failed start.
  */
 
+import { existsSync, mkdirSync, readdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
@@ -189,6 +190,44 @@ export class CallManager {
     return opts.failed
       ? all.filter((c) => c.state === "failed")
       : all.filter((c) => c.state !== "failed");
+  }
+
+  /**
+   * Every workspace: each folder under the root with a workspace's name, empty ones included, and
+   * each workspace a known call is in. By name, with how many calls each holds (failed starts left
+   * out, as `calls()` leaves them out).
+   */
+  workspaces(): { name: string; calls: number }[] {
+    const count = new Map<string, number>();
+    if (existsSync(this.o.root) && statSync(this.o.root).isDirectory()) {
+      for (const d of readdirSync(this.o.root, { withFileTypes: true })) {
+        if (d.isDirectory() && checkWorkspace(d.name) === null) count.set(d.name, 0);
+      }
+    }
+    for (const c of this.calls()) count.set(c.workspace, (count.get(c.workspace) ?? 0) + 1);
+    return [...count]
+      .map(([name, calls]) => ({ name, calls }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /**
+   * Makes a workspace's folder, so an empty workspace survives a restart. One that exists already
+   * is left as it is (`created: false`); the name follows `checkWorkspace`.
+   */
+  addWorkspace(name: string): Outcome<{ workspace: string; created: boolean }> {
+    const bad = checkWorkspace(name);
+    if (bad) return fail(400, "bad_workspace", bad);
+    const dir = join(this.o.root, name);
+    const had = existsSync(dir);
+    if (had && !statSync(dir).isDirectory()) {
+      return fail(
+        409,
+        "workspace_not_folder",
+        `"${name}" exists in the recordings folder and is not a folder`,
+      );
+    }
+    mkdirSync(dir, { recursive: true });
+    return { ok: true, workspace: name, created: !had };
   }
 
   private lastSummary(): CallSummary | null {

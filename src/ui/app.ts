@@ -47,6 +47,7 @@ import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protoc
 import { ReviewPane } from "./review.ts";
 import { SettingsPage } from "./settings-page.ts";
 import { TranscriptPane } from "./transcript.ts";
+import { WorkspacePicker } from "./workspaces.ts";
 
 /** A level above this means someone on the call side is audible. */
 const HEARD_DBFS = -60;
@@ -198,6 +199,8 @@ class App {
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
+  /** The workspace the next call goes in: the Record row's menu and the sidebar's New workspace. */
+  private readonly workspace: WorkspacePicker;
   private readonly levels = new SmoothMeters((ch, db) => {
     byId<HTMLMeterElement>(`meter-${ch}`).value = db;
   });
@@ -250,6 +253,11 @@ class App {
       () => this.view()?.call?.workspace,
       () => this.review.open(),
     );
+    this.workspace = new WorkspacePicker({
+      t,
+      fromCalls: () => this.calls.map((c) => c.workspace),
+      changed: () => this.drawCalls(),
+    });
     const settings = new SettingsPage(t, {
       workspaces: () => this.calls.map((c) => c.workspace),
       openModels: () => byId("models-open").click(),
@@ -296,10 +304,6 @@ class App {
     return this.follower?.view ?? null;
   }
 
-  private workspaceInput(): HTMLInputElement {
-    return byId<HTMLInputElement>("workspace");
-  }
-
   async start(): Promise<void> {
     document.body.dataset.transport = this.t.kind;
     document.addEventListener("dblclick", (e) => {
@@ -314,13 +318,6 @@ class App {
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
-    void this.enhanced.loadTemplates().then((names) => {
-      replace(
-        byId("template"),
-        h("option", { value: "" }, "Template: automatic"),
-        ...names.map((n) => h("option", { value: n }, n)),
-      );
-    });
     setInterval(() => this.paint(), 1000);
     this.paint();
   }
@@ -471,6 +468,7 @@ class App {
     state.title = st.meta;
     const call = v?.call;
     document.title = call ? `${call.title || call.workspace} · akou` : "akou";
+    this.workspace.follow(this.callId, call?.workspace);
     this.welcome();
     this.callHead(v, now, st.meta);
     this.pills(v);
@@ -812,10 +810,7 @@ class App {
       (a, b) => b.createdAt - a.createdAt,
     );
     this.drawCalls();
-    const names = [...new Set(["default", ...this.calls.map((c) => c.workspace)])];
-    replace(byId("workspaces"), ...names.map((n) => h("option", { value: n })));
-    const ws = this.workspaceInput();
-    if (!ws.value) ws.value = this.calls[0]?.workspace ?? "default";
+    await this.workspace.load();
   }
 
   private wireSidebar(): void {
@@ -848,6 +843,7 @@ class App {
       this.callId,
       this.pages?.open ?? null,
       [...this.folded],
+      this.workspace.folders(),
       new Date(now).toDateString(),
     ]);
     if (key === this.drawnCalls) return;
@@ -857,7 +853,7 @@ class App {
     const had = document.activeElement as HTMLElement | null;
     const focus = had && list.contains(had) ? (had.dataset.ws ?? had.dataset.id) : undefined;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const groups = groupCalls(this.calls, query, live);
+    const groups = groupCalls(this.calls, query, live, this.workspace.folders());
     if (groups.length === 0) {
       replace(
         list,
@@ -1027,13 +1023,13 @@ class App {
     if (this.starting || recordBlocked(this.status?.models) !== null) return;
     this.starting = true;
     this.paint();
-    const template = byId<HTMLSelectElement>("template").value;
+    // Notes pick their template automatically (the API still takes one, for scripts).
+    const workspace = this.workspace.value();
     let r: Reply<{ call?: string; error?: string }>;
     try {
       r = await this.t.request("POST", "/calls", {
-        workspace: this.workspaceInput().value.trim() || undefined,
+        workspace,
         title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
-        ...(template ? { template } : {}),
       });
     } finally {
       this.starting = false;
@@ -1042,6 +1038,7 @@ class App {
     const call = r.body.call;
     if (r.status === 201 && call) {
       byId<HTMLInputElement>("newtitle").value = "";
+      this.workspace.used(workspace);
       this.openCall(call, false);
       this.consent();
       return;
