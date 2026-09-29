@@ -5,7 +5,7 @@
  * can show them again, since akou keeps only the key's hash.
  */
 
-import { h, replace, toast } from "./dom.ts";
+import { closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 import { type ServerScreen, section, twoStep } from "./server-common.ts";
@@ -191,7 +191,7 @@ export class KeysPage implements ServerScreen {
     const dialog = h(
       "dialog",
       { id: "key-created", attrs: { "aria-label": `Key ${k.name}` } },
-      h("h2", {}, `Key ${k.name}`),
+      h("div", { class: "dialog-head" }, h("h2", {}, `Key ${k.name}`), closeX()),
       h(
         "p",
         {},
@@ -210,7 +210,9 @@ export class KeysPage implements ServerScreen {
     };
     close.addEventListener("click", () => dialog.close());
     dialog.addEventListener("close", gone);
+    // Shown once: a stray click on the backdrop must not take them away before they are copied.
+    closable(dialog, () => true);
     document.body.append(dialog);
-    dialog.showModal();
+    openModal(dialog);
   }
 }

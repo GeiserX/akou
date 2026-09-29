@@ -262,6 +262,9 @@ describe("SV-U7: the server-mode page", () => {
       expect(s.status).toBe(202);
       await asKey(rig, key, "GET", `/jobs/${s.body.id}?wait=60`);
 
+      // Shown once, so a stray click on the backdrop leaves them there (WINDOW W15.8).
+      await page.mouse.click(4, 4);
+      expect(await page.isVisible("#key-created")).toBe(true);
       await page.click("#key-created-close");
       await until(async () => (await page.$("#key-created")) === null, 3000, "the dialog to go");
       const html = await page.content();

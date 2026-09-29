@@ -8,7 +8,7 @@
  * call that has ended, the same policy as Enhance.
  */
 
-import { byId, h, replace, toast } from "./dom.ts";
+import { byId, closable, h, openModal, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Reply, Transport } from "./protocol.ts";
 
@@ -57,6 +57,7 @@ export class ReviewPane {
   constructor(private readonly d: ReviewDeps) {
     byId("pill-review").addEventListener("click", () => void this.open());
     byId("review-close").addEventListener("click", () => this.dialog.close());
+    closable(this.dialog);
     this.passButton.addEventListener("click", () => void this.pass());
   }
 
@@ -83,7 +84,7 @@ export class ReviewPane {
     });
     // Without a call the rows below carry no call's words, so `call` is never sent empty.
     this.draw(call ?? "", review, more ?? null);
-    if (!this.dialog.open) this.dialog.showModal();
+    openModal(this.dialog);
   }
 
   private draw(call: string, review: Review, more: HTMLElement | null): void {

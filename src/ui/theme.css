@@ -2037,6 +2037,32 @@ dialog {
   width: 90vw;
   max-height: 85vh;
   font-size: 13px;
+  padding-top: 0;
+}
+/* Every dialog's title row, with its × (WINDOW W15.8): it stays at the top while the rest
+   scrolls under it. The dialog has no top padding, so the row sticks at its very edge. */
+.dialog-head {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 -1em;
+  padding: 1em 1em 0.5em;
+  background: var(--bg);
+}
+.dialog-head h2 {
+  flex: 1;
+  margin: 0;
+}
+.dialog-x {
+  font-size: 18px;
+  font-weight: 400;
+}
+/* The Models page's own title: the dialog's row says it. */
+#models-body > .models-page > h2 {
+  display: none;
 }
 .setting {
   display: grid;
