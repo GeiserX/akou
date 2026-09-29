@@ -318,7 +318,7 @@ export class DictationSetup {
       h(
         "p",
         { id: "dictation-setup-note" },
-        "akou listens for these without asking which one before you speak, and shows the one it heard. Add every language you dictate in.",
+        "akou listens for these without asking which one before you speak, and the draft box and history name the one it heard. Add every language you dictate in.",
       ),
       list.root,
       issue,

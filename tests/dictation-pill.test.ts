@@ -351,6 +351,26 @@ describe("DC-O1: the pill's states from the session", () => {
     expect(ran).toHaveLength(4);
   });
 
+  test("a Retry that answers after a new press leaves the island to the new dictation", async () => {
+    const f = pill();
+    let answer: (ok: boolean) => void = () => {};
+    f.d.errorActions = () => ({ actions: ["retry"] });
+    f.d.errorAction = () => new Promise<boolean>((res) => (answer = res));
+    f.to("listening");
+    spoken(f, "d1");
+    f.to("transcribing");
+    f.event({ type: "dictation.failed", id: "d1", error: "remote akou not reachable" });
+    f.to("idle");
+    const retried = f.p.handlers.control({ action: "retry" });
+    expect(f.states().at(-1)?.state).toBe("transcribing");
+    // The user presses again while the retry decodes.
+    f.to("listening");
+    expect(f.states().at(-1)?.state).toBe("listening");
+    answer(true);
+    expect(await retried).toBe(true);
+    expect(f.states().at(-1)?.state).toBe("listening");
+  });
+
   test("a new press drops the last outcome at once, and its timer can no longer hide the pill", () => {
     const f = pill();
     f.to("listening");

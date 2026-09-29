@@ -476,6 +476,76 @@ describe("DC-O1, DC-R3: the buttons of the pill's error sheet", () => {
     expect(inserts.at(-1)).toMatchObject({ text: "hello", method: "clipboard" });
     expect(await r.svc.errorAction(id, "open-draft")).toBe(true);
     expect(opens.at(-1)).toMatchObject({ id, text: "hello", focus: true });
+    // With the helper gone there is nothing to copy with: Copy is not offered.
+    await r.svc.stop();
+    expect(r.svc.errorActions(id)).toEqual({ actions: ["retry", "open-draft"] });
+  });
+
+  test("a remote reading whose insert failed retries on the remote, not locally: the remote was fine", async () => {
+    const fast = fastEngine();
+    const decoded: string[] = [];
+    const named = (name: string): DictationEngine => ({
+      name,
+      decode: async (s, o) => {
+        decoded.push(name);
+        return { ...(await fast.decode(s, o)), engine: name };
+      },
+    });
+    const remote = named("remote");
+    const best = named("best");
+    const r = rig(
+      HOLD,
+      {
+        engine: (name) => (name === "best" ? best : name === "fast" ? fast : remote),
+        draft: { engines: () => ["fast", "best", "remote"] },
+      },
+      ["--no-receipt", "--receipt-timeout-ms", "300"],
+    );
+    const opens = drafts(r);
+    await settledAs(r, "failed");
+    const id = first(r);
+    expect(r.svc.log.item(id)).toMatchObject({
+      engine: "remote",
+      text: "hello",
+      error: "insert: no-receipt",
+    });
+    expect(r.svc.errorActions(id)).toEqual({ actions: ["retry", "copy", "open-draft"] });
+    decoded.length = 0;
+    expect(await r.svc.errorAction(id, "retry")).toBe(true);
+    expect(decoded).toEqual(["remote"]);
+    expect(opens.at(-1)).toMatchObject({ id, text: "hello", focus: true });
+  });
+
+  test("a Retry that answers while a new dictation listens opens the draft without the keyboard", async () => {
+    const fast = fastEngine();
+    let r: Rig | null = null;
+    const remote: DictationEngine = {
+      name: "remote",
+      decode: async () => {
+        throw new Error("remote akou not reachable");
+      },
+    };
+    const best: DictationEngine = {
+      name: "best",
+      decode: async (s, o) => {
+        // The user pressed the key again while the slow decode ran.
+        const session = r?.svc.session();
+        if (session) session.state = "listening";
+        return { ...(await fast.decode(s, o)), engine: "best", model: "qwen" };
+      },
+    };
+    r = rig(HOLD, {
+      engine: (name) => (name === "best" ? best : name === "fast" ? fast : remote),
+      draft: { engines: () => ["fast", "best", "remote"] },
+    });
+    const opens = drafts(r);
+    await settledAs(r, "failed");
+    const id = first(r);
+    expect(await r.svc.errorAction(id, "retry")).toBe(true);
+    expect(opens).toHaveLength(1);
+    expect(opens[0]).toMatchObject({ id, text: "hello", focus: false });
+    const session = r.svc.session();
+    if (session) session.state = "idle";
   });
 
   test("positive control: a failure with no text and no audio kept offers nothing", async () => {

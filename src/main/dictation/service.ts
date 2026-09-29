@@ -526,17 +526,18 @@ export class DictationService {
 
   /**
    * What the pill's error sheet offers for failed dictation `id` (DC-O1, DC-R3): Retry where its
-   * audio is kept and an engine can decode it (`Retry locally` when the remote failed), Copy and
-   * Open draft where it has text.
+   * audio is kept and an engine can decode it (`Retry locally` when the remote's decode failed),
+   * Copy where it has text and a helper runs to copy it, Open draft where it has text.
    */
   errorActions(id: string): { actions: ErrorAction[]; retryLabel?: string } {
     const it = this.log.item(id);
     if (!it) return { actions: [] };
     const actions: ErrorAction[] = [];
-    const engine = this.retryEngineFor(it.engine);
+    const engine = this.retryEngineFor(it);
     if (engine && this.audio.has(id)) actions.push("retry");
-    if (it.text) actions.push("copy", "open-draft");
-    const local = actions.includes("retry") && it.engine === "remote";
+    if (it.text && this.session()) actions.push("copy");
+    if (it.text) actions.push("open-draft");
+    const local = actions.includes("retry") && remoteDecodeFailed(it);
     return { actions, ...(local ? { retryLabel: "Retry locally" } : {}) };
   }
 
@@ -556,7 +557,7 @@ export class DictationService {
       const r = await s.copyText(it.text, it.target ?? NO_TARGET);
       return r.ok;
     }
-    const engine = this.retryEngineFor(it.engine);
+    const engine = this.retryEngineFor(it);
     if (!engine) return false;
     const r = await this.retry(id, { engine });
     if (!r.ok) {
@@ -564,17 +565,20 @@ export class DictationService {
       return false;
     }
     if (r.answer.text === "") return false;
-    return this.draft.open(id, { focus: true, reading: r.answer }).ok;
+    // A new dictation started while this one decoded: the box must not take its keyboard (DC-S1).
+    const s = this.session()?.state;
+    const busy = s === "listening" || s === "transcribing" || s === "inserting";
+    return this.draft.open(id, { focus: !busy, reading: r.answer }).ok;
   }
 
   /**
-   * The engine an error's Retry decodes on: a local one after the remote failed (best when it
-   * runs here, else fast), else the one that failed.
+   * The engine an error's Retry decodes on: a local one after the remote's decode failed (best
+   * when it runs here, else fast), else the one that read it.
    */
-  private retryEngineFor(failed: string): string | null {
+  private retryEngineFor(it: { engine: string; text: string | null }): string | null {
     const here = (this.o.draft?.engines?.() ?? []).filter((e) => e !== "remote");
-    if (failed === "remote") return here.includes("best") ? "best" : (here[0] ?? null);
-    return failed === "fast" || failed === "best" ? failed : (here[0] ?? null);
+    if (remoteDecodeFailed(it)) return here.includes("best") ? "best" : (here[0] ?? null);
+    return ["fast", "best", "remote"].includes(it.engine) ? it.engine : (here[0] ?? null);
   }
 
   /**
@@ -1084,6 +1088,14 @@ export class DictationService {
 }
 
 /** The text rules the service hands each session (DC-E6, DC-L6, DC-S7, DC-S6). */
+/**
+ * The remote's decode failed, so it has no text: a remote reading whose insert failed has its text
+ * and needs no local retry.
+ */
+function remoteDecodeFailed(it: { engine: string; text: string | null }): boolean {
+  return it.engine === "remote" && !it.text;
+}
+
 function textRules(o: TextRules): TextRules {
   const r: TextRules = {};
   if (o.correct) r.correct = o.correct;
