@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://raw.githubusercontent.com/GeiserX/akou/main/docs/images/banner.svg" alt="akou" width="100%">
+  <img src="docs/images/banner.svg" alt="akou" width="100%">
 </p>
 
 # akou
