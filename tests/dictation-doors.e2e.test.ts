@@ -173,6 +173,40 @@ describe("DC-G3: akou dictate start|stop|toggle|cancel", () => {
     expect(starts).toHaveLength(1);
   });
 
+  test("start --language forces the session into it, as the pill's chip does (akou-5v8)", async () => {
+    const r = await rig();
+    const run = rigCli(r);
+    const start = await run(["dictate", "start", "--language", "es"]);
+    expect([start.code, start.out]).toEqual([0, "dictation listening"]);
+    // The pill reads the session's language from here, and shows it as chosen.
+    expect(r.app.dictation()?.languageChoice().chosen).toBe("es");
+    await Bun.sleep(1000);
+    expect((await run(["dictate", "stop"])).code).toBe(0);
+    await until(async () => (await items(r))[0]?.state === "inserted", 10_000, "the insert");
+    // The decode was asked for es; the fake engine is fast, which picks its own, so it says it
+    // did not force it. Without a language the item carries no language_forced at all.
+    expect((await items(r))[0].language_forced).toBe(false);
+    expect(r.app.dictation()?.languageChoice().chosen).toBeNull();
+    const plain = await rig();
+    expect((await plain.api("POST", "/dictation/start")).status).toBe(200);
+    expect(plain.app.dictation()?.languageChoice().chosen).toBeNull();
+    await Bun.sleep(1000);
+    expect((await plain.api("POST", "/dictation/stop")).status).toBe(200);
+    await until(async () => (await items(plain))[0]?.state === "inserted", 10_000, "the insert");
+    expect((await items(plain))[0].language_forced).toBeUndefined();
+  }, 30_000);
+
+  test("--language is refused on stop and cancel, and a tag that is not one is a 422", async () => {
+    const r = await rig();
+    const run = rigCli(r);
+    const stop = await run(["dictate", "stop", "--language", "es"]);
+    expect(stop.code).toBe(64);
+    expect(stop.err).toContain("--language goes with start or toggle");
+    const bad = await r.api("POST", "/dictation/start", { language: "not a tag" });
+    expect([bad.status, bad.body.error]).toEqual([422, "bad_field"]);
+    expect(r.app.dictation()?.status().state).toBe("idle");
+  });
+
   test("with dictation.enabled false, start exits 78 naming the setting", async () => {
     const r = await rig({ "dictation.enabled": false });
     const run = await rigCli(r)(["dictate", "start"]);

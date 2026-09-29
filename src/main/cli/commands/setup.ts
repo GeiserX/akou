@@ -8,7 +8,6 @@
  */
 
 import { copyFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { totalmem } from "node:os";
 import { join } from "node:path";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
@@ -265,7 +264,6 @@ function liveRows(ctx: Ctx, dir: string) {
     setting: settings["asr.live"],
     engine: settings["asr.live.engine"],
     languages: settings["asr.languages"],
-    memoryBytes: totalmem(),
     present: (id) => state(id) === "ready",
     runtime: llamaRuntime(settings, hostPlatform(), all as readonly CatalogEntry[], {
       image: ctx.io.env.AKOU_LLAMA_SERVER,

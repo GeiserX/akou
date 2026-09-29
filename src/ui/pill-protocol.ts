@@ -58,6 +58,11 @@ export type PillState =
       how: "inserted" | "copied";
       /** The paste key (`⌘V`, `Ctrl+V`) after a clipboard-only insert; `best failed, used fast` after a fallback. */
       note?: string;
+      /**
+       * The language the text went in as, a BCP-47 tag, when the user speaks two or more and the
+       * engine named one (akou-5v8): read-only, the language chip of the done island.
+       */
+      language?: string;
     }
   | {
       state: "error";
