@@ -65,12 +65,14 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           await page.waitForSelector("#lines .row >> nth=3");
           expect(await page.locator("#dot").count()).toBe(1);
           expect(await text(page, "#state")).toBe("saved");
-          // The composer row: the workspace chip inside the title field, the template, the Mic
-          // and Call meters with their health dots, and Record, all on screen at once.
+          // The composer row: the workspace chip inside the title field, the live model, the Mic
+          // and Call meters with their health dots, and Record, all on screen at once. The
+          // template is no longer picked here: the live model menu took its place.
+          expect(await page.locator("#template").count()).toBe(0);
           for (const c of [
             "#composer .title-field #workspace",
             "#composer .title-field #newtitle",
-            "#composer #template",
+            "#composer #live",
             "#composer #meter-mic",
             "#composer #meter-call",
             "#composer #health-mic",
@@ -327,14 +329,12 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
-    "Workspace picker, title field, template picker",
+    "Workspace picker and title field; a call started here takes the automatic template",
     async () => {
       await withRig({}, async (rig) => {
         const page = await rig.open();
-        await page.waitForSelector("#template option[value=standup]", { state: "attached" });
         await page.fill("#workspace", "acme");
         await page.fill("#newtitle", "Kickoff");
-        await page.selectOption("#template", "standup");
         await page.click("#record");
         await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
         const live = (await rig.api("GET", "/status")).body.live.call as string;
@@ -346,10 +346,10 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         expect([created.workspace, created.title, created.template]).toEqual([
           "acme",
           "Kickoff",
-          "standup",
+          undefined,
         ]);
         expect(await text(page, "#title")).toBe("Kickoff");
-        expect(await text(page, "#meta")).toContain(" · acme · Template: standup");
+        expect(await text(page, "#meta")).toContain(" · acme · Template: automatic");
         await page.click("#stop");
       });
     },
