@@ -13,8 +13,8 @@
  * The second pass (`asr.review.model`, live-setups.ts, ASR-7) rewrites each streaming line once
  * during the call, as a new revision of the same `seg` (upgrade.ts): once the speaker stops, the
  * Worker hands the utterance's audio to the host, and every `asr.review.everySeconds` the host
- * sends the utterances closed since then to the reviewer (Qwen) in one request and cuts its words
- * back into their lines. A word
+ * sends the utterances closed since then to the reviewer (Qwen in one request; Parakeet, back on
+ * this Worker's recognizer, each utterance alone) and cuts its words back into their lines. A word
  * shown is never taken back while its line is open; the review replaces whole closed lines. A
  * review still waiting when the next one is due is skipped, and a reviewer that falls behind two
  * reviews in a row is off for the rest of the call. A line a person
@@ -521,6 +521,18 @@ export class LivePipeline {
       c: round3(x.conf ?? 0),
     }));
     return { text: r.text.trim(), lang: r.lang, words, model: rec.model, ms };
+  }
+
+  /**
+   * One utterance of the second pass, whole, on the loaded recognizer, with the call's decode list
+   * as its hotwords where the recognizer takes them (`streamHotwords`). Only its text: the words go
+   * back into lines by text.
+   */
+  decodeUtterance(samples: Float32Array): { text: string; model: string; ms: number } {
+    const h = this.hot();
+    const t = performance.now();
+    const r = h.recognizer.decode(prepareSpan(samples), streamHotwords(h));
+    return { text: r.text.trim(), model: h.recognizer.model, ms: performance.now() - t };
   }
 
   private hot(): PreparedHotwords {
@@ -1084,7 +1096,12 @@ export type ToWorker =
    */
   | { type: "decode"; token: number; samples: Float32Array; language?: string }
   /** Whether the dictation VAD hears any speech in a buffer (DC-E6), before any engine decodes it. */
-  | { type: "speech"; token: number; samples: Float32Array };
+  | { type: "speech"; token: number; samples: Float32Array }
+  /**
+   * The second pass's Parakeet review: each utterance decoded alone on the loaded recognizer with
+   * the call's decode list, answered as one `decoded`.
+   */
+  | { type: "review"; token: number; parts: Float32Array[] };
 
 export type FromWorker =
   | { type: "ready"; loads: Record<string, number> }
@@ -1134,6 +1151,9 @@ export class WorkerSide {
         case "decode":
           this.decode(p, m);
           break;
+        case "review":
+          this.review(p, m);
+          break;
         case "speech":
           this.reply({
             type: "speech",
@@ -1168,9 +1188,47 @@ export class WorkerSide {
       this.out({ type: "log", level: "error", msg: `live ASR: ${(err as Error).message}` });
       if (m.type === "init") this.reply({ type: "failed", error: (err as Error).message });
       if (m.type === "flush") this.reply({ type: "flushed", token: m.token });
-      if (m.type === "decode" || m.type === "speech")
+      if (m.type === "decode" || m.type === "speech" || m.type === "review")
         this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
     }
+  }
+
+  /**
+   * A Parakeet review: one utterance per turn of the event loop, like a dictation's spans, so the
+   * call's audio is transcribed between two of them.
+   */
+  private review(p: LivePipeline, m: Extract<ToWorker, { type: "review" }>): void {
+    const texts: string[] = [];
+    let ms = 0;
+    let model = p.recognizerModel;
+    const step = (i: number) => (): void => {
+      try {
+        const part = m.parts[i];
+        if (part) {
+          const r = p.decodeUtterance(part);
+          ms += r.ms;
+          model = r.model;
+          if (r.text !== "") texts.push(r.text);
+          setTimeout(() => {
+            this.queue = this.queue.then(step(i + 1));
+          }, 0);
+          return;
+        }
+        this.reply({
+          type: "decoded",
+          token: m.token,
+          text: texts.join(" "),
+          words: [],
+          language: null,
+          model,
+          ms: Math.round(ms),
+          spans: m.parts.length,
+        });
+      } catch (err) {
+        this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
+      }
+    };
+    step(0)();
   }
 
   /**
@@ -1293,13 +1351,14 @@ interface Transport {
 }
 
 /**
- * The model of a second pass: a review's closed utterances, each gained and padded and joined by
- * `joinUtterances`, to its hypothesis.
+ * The model of a second pass: a review's closed utterances, each gained and padded, to its
+ * hypothesis. `samples` is them joined by `joinUtterances` (what Qwen decodes), `parts` each one
+ * alone (what Parakeet decodes).
  */
 export interface LineUpgrader {
   decode(
     samples: Float32Array,
-    o: { glossary: readonly string[]; signal: AbortSignal },
+    o: { glossary: readonly string[]; signal: AbortSignal; parts: readonly Float32Array[] },
   ): Promise<Hypothesis>;
 }
 
@@ -1544,6 +1603,25 @@ export class LiveAsr {
           ...(o.language ? { language: o.language } : {}),
         },
         [copy.buffer],
+      );
+    });
+  }
+
+  /**
+   * The second pass's Parakeet review of a call's utterances, on the Worker's already loaded
+   * recognizer with the call's decode list: never a second copy of the model. The Worker takes the
+   * call's audio between two utterances.
+   */
+  review(parts: readonly Float32Array[]): Promise<Decoded> {
+    if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
+    if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
+    const token = ++this.decodeToken;
+    const copies = parts.map((p) => p.slice());
+    return new Promise<Decoded>((resolve, reject) => {
+      this.decodes.set(token, { resolve, reject });
+      this.transport.post(
+        { type: "review", token, parts: copies },
+        copies.map((c) => c.buffer),
       );
     });
   }
@@ -1965,15 +2043,14 @@ export class LiveAsr {
       for (;;) {
         const review = u.waiting.shift();
         if (!review || u.ended.signal.aborted || u.off) break;
-        const job = {
-          lines: review.flatMap((j) => j.lines),
-          samples: joinUtterances(review.map((j) => j.samples)),
-        };
+        const parts = review.map((j) => j.samples);
+        const job = { lines: review.flatMap((j) => j.lines), samples: joinUtterances(parts) };
         let qwen: Hypothesis;
         try {
           qwen = await u.qwen.decode(job.samples, {
             glossary: u.glossary,
             signal: u.ended.signal,
+            parts,
           });
         } catch (err) {
           const why = (err as Error).message;

@@ -268,6 +268,7 @@ describe("W3.19: the live model picker in the Record row", () => {
           expect(await reviews(page)).toEqual([
             ["none", "true", "ready"],
             ["qwen", "false", "ready"],
+            ["parakeet", "false", "ready"],
           ]);
           // With the second pass Off there is nothing to time.
           expect(await page.isDisabled('[data-every="120"]')).toBe(true);
@@ -328,6 +329,9 @@ describe("W3.19: the live model picker in the Record row", () => {
           expect(await page.textContent('#live-review-group [data-review="qwen"] .live-line')).toBe(
             "It reviews Nemotron's lines; the live model is Parakeet.",
           );
+          expect(
+            await page.textContent('#live-review-group [data-review="parakeet"] .live-line'),
+          ).toBe("Parakeet already writes the live lines.");
           expect(await reviewName(page)).toBe("Off");
           // Off picked from there saves it.
           await page.click('#live-review-group [data-review="none"]');
@@ -358,6 +362,7 @@ describe("W3.19: the live model picker in the Record row", () => {
         expect(await reviews(page)).toEqual([
           ["none", "true", "ready"],
           ["qwen", "false", "dim"],
+          ["parakeet", "false", "ready"],
         ]);
         await page.click('#live-review-group [data-review="qwen"] .live-get-one');
         await page.waitForSelector('body[data-page="models"] #page-models:not([hidden])');

@@ -150,7 +150,7 @@ describe("the Models page", () => {
       const choices = await page.$$eval(`${REVIEW} [data-review]`, (els) =>
         els.map((e) => (e as HTMLElement).dataset.review),
       );
-      expect(choices).toEqual(["none", "qwen"]);
+      expect(choices).toEqual(["none", "qwen", "parakeet"]);
       expect(await page.isChecked(`${REVIEW} input[value="none"]`)).toBe(true);
       const qwen = (await page.textContent(`${REVIEW} [data-review="qwen"] .pg-help`)) ?? "";
       expect(qwen).toMatch(/^Needs .*Qwen3-ASR 1\.7B\.$/);
@@ -215,10 +215,7 @@ describe("the Models page", () => {
         5000,
         "asr.review.everySeconds",
       );
-      expect(patches).toEqual([
-        { "asr.review.model": "qwen" },
-        { "asr.review.everySeconds": 300 },
-      ]);
+      expect(patches).toEqual([{ "asr.review.model": "qwen" }, { "asr.review.everySeconds": 300 }]);
       await rig.api("PATCH", "/config", {
         "asr.review.model": "none",
         "asr.review.everySeconds": 60,

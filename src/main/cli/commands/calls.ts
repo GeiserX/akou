@@ -46,7 +46,7 @@ const start: Command = {
     review: {
       type: "string",
       value: "MODEL",
-      desc: "the second pass for this call only: none or qwen (default: asr.review.model)",
+      desc: "the second pass for this call only: none, qwen or parakeet (default: asr.review.model)",
     },
     "review-every": {
       type: "string",

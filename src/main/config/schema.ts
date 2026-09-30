@@ -467,7 +467,7 @@ export const SETTINGS = {
     type: "string",
     values: REVIEW_MODELS,
     default: "none",
-    doc: "A second pass during a call: every `asr.review.everySeconds`, the sentences Nemotron finished since the last review are decoded again, whole, and the new words replace the live lines once. `qwen`: Qwen3-ASR, the most accurate, about 10 to 13 GB of memory during a call; it needs its llama-server, a GPU and 16 GB of memory, and it goes off for the rest of a call it cannot keep up with. `none`: the live lines stay as Nemotron wrote them. It reviews Nemotron's lines only, so a call whose live model is Parakeet runs none. A line someone edited keeps their text. `akou start --review` sets it for one call. A change applies from the next call.",
+    doc: "A second pass during a call: every `asr.review.everySeconds`, the sentences Nemotron finished since the last review are decoded again, whole, and the new words replace the live lines once. `qwen`: Qwen3-ASR, the most accurate, about 10 to 13 GB of memory during a call; it needs its llama-server, a GPU and 16 GB of memory, and it goes off for the rest of a call it cannot keep up with. `parakeet`: Parakeet, on the processor, with no extra memory. `none`: the live lines stay as Nemotron wrote them. It reviews Nemotron's lines only, so a call whose live model is Parakeet runs none. A line someone edited keeps their text. `akou start --review` sets it for one call. A change applies from the next call.",
   },
   "asr.review.everySeconds": {
     type: "integer",

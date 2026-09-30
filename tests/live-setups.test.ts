@@ -96,15 +96,16 @@ describe("[akou-chp.23] the live model the next call runs", () => {
     expect(reviewModels("qwen", ctx())).toEqual([QWEN_ASR, RUNTIME]);
     // An own llama-server needs no downloaded build.
     expect(reviewModels("qwen", ctx({ runtime: null }))).toEqual([QWEN_ASR]);
+    expect(reviewModels("parakeet", ctx())).toEqual([RECOGNIZER]);
   });
 });
 
 describe("[ASR-7] the second pass the next call runs", () => {
   test("the chosen model and interval, on Nemotron's lines", () => {
-    expect(chooseLiveSetup(ctx({ review: "qwen", everySeconds: 120 }))).toEqual({
+    expect(chooseLiveSetup(ctx({ review: "parakeet", everySeconds: 120 }))).toEqual({
       setup: "nemotron",
       choice: NEMOTRON,
-      review: { model: "qwen", everySeconds: 120 },
+      review: { model: "parakeet", everySeconds: 120 },
     });
     expect(
       chooseLiveSetup(ctx({ review: "qwen", everySeconds: 300, machine: ROOMY })).review,
@@ -114,20 +115,22 @@ describe("[ASR-7] the second pass the next call runs", () => {
   });
 
   test("an interval out of bounds is kept inside them", () => {
-    expect(chooseLiveSetup(ctx({ review: "qwen", everySeconds: 5 })).review?.everySeconds).toBe(30);
-    expect(chooseLiveSetup(ctx({ review: "qwen", everySeconds: 9999 })).review?.everySeconds).toBe(
-      600,
+    expect(chooseLiveSetup(ctx({ review: "parakeet", everySeconds: 5 })).review?.everySeconds).toBe(
+      30,
     );
+    expect(
+      chooseLiveSetup(ctx({ review: "parakeet", everySeconds: 9999 })).review?.everySeconds,
+    ).toBe(600);
   });
 
-  test("it never reviews a call whose live model is Parakeet, and the note says so in plain words", () => {
-    const c = chooseLiveSetup(ctx({ setting: "parakeet", review: "qwen", machine: ROOMY }));
-    expect([c.setup, c.review]).toEqual(["parakeet", null]);
-    expect(c.note).toContain("the live model is Parakeet");
+  test("neither reviews a call whose live model is Parakeet, and the note says so in plain words", () => {
+    for (const review of ["qwen", "parakeet"]) {
+      const c = chooseLiveSetup(ctx({ setting: "parakeet", review, machine: ROOMY }));
+      expect([review, c.setup, c.review]).toEqual([review, "parakeet", null]);
+      expect(c.note).toMatch(/Parakeet/);
+    }
     // Nemotron not downloaded: the call falls back to Parakeet, and so has no second pass.
-    const fell = chooseLiveSetup(
-      ctx({ review: "qwen", on: new Set([RECOGNIZER, QWEN_ASR, RUNTIME]) }),
-    );
+    const fell = chooseLiveSetup(ctx({ review: "parakeet", on: new Set([RECOGNIZER]) }));
     expect([fell.setup, fell.review]).toEqual(["parakeet", null]);
   });
 
@@ -185,7 +188,7 @@ describe("[ASR-7] the second pass the next call runs", () => {
   test("the old `upgrade` is Nemotron with Qwen's second pass, for a call and in a file or a PATCH", () => {
     expect(legacyLive("upgrade", undefined)).toEqual({ live: "nemotron", review: "qwen" });
     // A call that names its own review keeps it.
-    expect(legacyLive("upgrade", "none")).toEqual({ live: "nemotron", review: "none" });
+    expect(legacyLive("upgrade", "parakeet")).toEqual({ live: "nemotron", review: "parakeet" });
     expect(legacyLive("parakeet", undefined)).toEqual({ live: "parakeet", review: undefined });
     expect(legacyValues({ "asr.live": "upgrade", "asr.languages": ["en"] })).toEqual({
       "asr.live": "nemotron",
@@ -237,7 +240,7 @@ describe("[akou-chp.23] what GET /models and the Models page show", () => {
     const on = new Set(["nemotron-en-560", RECOGNIZER]);
     const v = liveView(
       ctx({ on, review: "qwen", everySeconds: 120, machine: ROOMY }),
-      { setup: "nemotron", review: { model: "qwen", everySeconds: 60 } },
+      { setup: "nemotron", review: { model: "parakeet", everySeconds: 60 } },
       (id) => (on.has(id) ? "ready" : "missing"),
     );
     expect(v.review.setting).toBe("qwen");
@@ -245,21 +248,25 @@ describe("[akou-chp.23] what GET /models and the Models page show", () => {
     // Qwen is not downloaded: the next call runs none, and says why.
     expect(v.review.next).toBeNull();
     expect(v.note).toContain(QWEN_ASR);
-    expect(v.review.running).toEqual({ model: "qwen", everySeconds: 60 });
+    expect(v.review.running).toEqual({ model: "parakeet", everySeconds: 60 });
     const by = Object.fromEntries(v.review.choices.map((c) => [c.id, c]));
-    expect(v.review.choices.map((c) => [c.id, c.title])).toEqual([["qwen", "Qwen"]]);
+    expect(v.review.choices.map((c) => [c.id, c.title])).toEqual([
+      ["qwen", "Qwen"],
+      ["parakeet", "Parakeet"],
+    ]);
     // Missing models are listed as models, not as a reason.
     expect(by.qwen?.models.map((m) => m.state)).toEqual(["missing", "missing"]);
     expect(by.qwen?.blocked).toBeNull();
+    expect(by.parakeet?.blocked).toBeNull();
     // A Mac with too little memory: Qwen's reason in words.
     const small = liveView(ctx({ machine: { gpu: true, memoryGb: 8 } }), null, () => "ready");
     expect(small.review.choices.find((c) => c.id === "qwen")?.blocked).toBe(
       "Needs 16 GB of memory; this computer has 8 GB.",
     );
-    // With Parakeet live, the pass says why it is not offered.
+    // With Parakeet live, Parakeet's pass says why it is not offered.
     const pk = liveView(ctx({ setting: "parakeet" }), null, () => "ready");
-    expect(pk.review.choices.find((c) => c.id === "qwen")?.blocked).toBe(
-      "It reviews Nemotron's lines; the live model is Parakeet.",
+    expect(pk.review.choices.find((c) => c.id === "parakeet")?.blocked).toBe(
+      "Parakeet already writes the live lines.",
     );
   });
 });
