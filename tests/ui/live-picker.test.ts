@@ -165,7 +165,8 @@ describe("W3.19: the live model picker in the Record row", () => {
           10_000,
           "the call runs parakeet",
         );
-        expect(await page.isDisabled("#live")).toBe(true);
+        // The page learns it from the status push, a moment after the API.
+        await until(async () => await page.isDisabled("#live"), 5000, "disabled while recording");
         expect(await label(page)).toBe("Parakeet");
         await until(
           async () => (await page.textContent("#pill-live")) === "Live: Parakeet",
