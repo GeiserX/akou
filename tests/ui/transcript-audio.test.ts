@@ -298,7 +298,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
     "Copy line",
     "Copy with time and speaker",
     "Name this speaker…",
-    "Fix a word…",
+    "Fix this line…",
   ];
   const clipboard = (page: Page) => page.evaluate(() => navigator.clipboard.readText());
   const clear = (page: Page) => page.evaluate(() => navigator.clipboard.writeText("before"));
@@ -350,10 +350,10 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
           await page.keyboard.press("Escape");
           await page.waitForSelector("#popover[hidden]", { state: "attached" });
 
-          await pick("Fix a word…");
+          await pick("Fix this line…");
           await page.waitForSelector("#popover:not([hidden])");
-          expect(await text(page, "#popover h3")).toBe("Fix this word");
-          expect(await text(page, "#popover .hint")).toBe("In the line: deploy to hetzner today");
+          expect(await text(page, "#popover h3")).toBe("Fix this line");
+          expect(await page.inputValue("#popover input")).toBe("deploy to hetzner today");
           await page.keyboard.press("Escape");
 
           // A click anywhere else closes the menu and runs nothing.
@@ -410,7 +410,7 @@ describe("[W4.4] every transcript line has a context menu, reachable by keyboard
           expect((await menu(page)).focused).toBe("Copy line");
           await page.keyboard.press("ArrowUp");
           await page.keyboard.press("ArrowUp");
-          expect((await menu(page)).focused).toBe("Fix a word…");
+          expect((await menu(page)).focused).toBe("Fix this line…");
           await page.keyboard.press("Home");
           await page.keyboard.press("ArrowDown");
           await clear(page);

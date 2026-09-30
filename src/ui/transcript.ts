@@ -334,7 +334,7 @@ export class TranscriptPane {
           ),
           h(
             "button",
-            { class: "fix", type: "button", attrs: { "aria-label": "Fix a word in this line" } },
+            { class: "fix", type: "button", attrs: { "aria-label": "Fix this line" } },
             "Fix",
           ),
         ),

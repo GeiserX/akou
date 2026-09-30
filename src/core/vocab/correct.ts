@@ -4,6 +4,10 @@
  * Rules, in the order they are tried at each word:
  * 1. A heard form matches as a whole word (or a whole run of words), case-insensitive and
  *    accent-folded. Call-scoped pairs are tried before file pairs, longer forms before shorter.
+ *    A form equal to its term apart from case or accents corrects that exact spelling only (a fix
+ *    of a name's spelling, `vercel` to `Vercel`), and only from the call or a vocabulary file.
+ *    A pair kept to one word of a line (`at`) corrects that occurrence only, and on the other lines
+ *    it covers only a form that occurs once there.
  * 2. A heard form that is a dictionary word, or 3 characters or shorter, is skipped unless the
  *    pair is call-scoped or dictation-scoped. Without a dictionary, akou cannot tell, so only those
  *    pairs apply.
@@ -32,6 +36,12 @@ export interface VocabRule {
   scope: RuleScope;
   /** When set, the rule applies only to these segment ids. */
   segs?: readonly string[];
+  /**
+   * A fix of one word of a line: on segment `seg` only the `nth` (0-based) occurrence of the heard
+   * form is corrected; on the other `segs` (the final lines covering it) only a form that occurs
+   * exactly once there.
+   */
+  at?: { seg: string; nth: number };
 }
 
 export interface CorrectOptions {
@@ -170,6 +180,10 @@ interface Matcher {
   words: string[];
   term: string;
   scope: RuleScope;
+  /** A form equal to its term apart from case or accents matches only this exact spelling. */
+  exact?: string;
+  /** Matches only at this token index (a pair kept to one word of a line). */
+  only?: number;
 }
 
 interface FuzzyTerm {
@@ -217,9 +231,22 @@ export function correctText(
     for (const form of rule.heard) {
       if (!heardFormApplies(form, rule.scope, isDict)) continue;
       const words = tokenize(form).map((t) => t.folded);
-      // A heard form equal to the term (apart from case or accents) corrects nothing.
-      if (words.join(" ") === termKey) continue;
-      matchers.push({ words, term: rule.term, scope: rule.scope });
+      // A heard form equal to the term apart from case or accents is a fix of a name's spelling
+      // (`vercel` to `Vercel`), from the call or a file: it corrects the words written exactly as
+      // the form is, and no other spelling.
+      let exact: string | undefined;
+      if (words.join(" ") === termKey) {
+        if ((rule.scope !== "call" && rule.scope !== "file") || form.trim() === rule.term) continue;
+        exact = form.trim();
+      }
+      let only: number | undefined;
+      if (rule.at) {
+        const occ = occurrences(tokens, words);
+        only =
+          opts.segId === rule.at.seg ? occ[rule.at.nth] : occ.length === 1 ? occ[0] : undefined;
+        if (only === undefined) continue;
+      }
+      matchers.push({ words, term: rule.term, scope: rule.scope, exact, only });
     }
   }
   matchers.sort(
@@ -229,7 +256,13 @@ export function correctText(
   const corrections: Correction[] = [];
   let i = 0;
   while (i < tokens.length) {
-    const hit = matchers.find((m) => matchesAt(tokens, i, m.words));
+    const hit = matchers.find(
+      (m) =>
+        matchesAt(tokens, i, m.words) &&
+        (m.only === undefined || m.only === i) &&
+        (m.exact === undefined ||
+          raw.slice(tokens[i]?.start, tokens[i + m.words.length - 1]?.end) === m.exact),
+    );
     if (hit) {
       const first = tokens[i] as Token;
       const last = tokens[i + hit.words.length - 1] as Token;
@@ -260,6 +293,19 @@ export function correctText(
   }
 
   return { ...render(raw, corrections), corrections };
+}
+
+/** Where a run of folded words starts in a token list, left to right, never overlapping. */
+export function occurrences(tokens: readonly Token[], words: readonly string[]): number[] {
+  const out: number[] = [];
+  if (words.length === 0) return out;
+  for (let i = 0; i < tokens.length; ) {
+    if (matchesAt(tokens, i, words)) {
+      out.push(i);
+      i += words.length;
+    } else i++;
+  }
+  return out;
 }
 
 function matchesAt(tokens: readonly Token[], i: number, words: readonly string[]): boolean {

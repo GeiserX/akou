@@ -13,7 +13,7 @@ akou keeps one vocabulary the user owns: plain YAML files of names and product t
 
 Everything you find is a proposal. Use `akou_vocab_propose`, never `akou_vocab_add` with `scope: "workspace"` or `"global"`, and never `akou_vocab_approve` until the user has said yes to those exact words in this conversation. A proposal does nothing until it is approved. If the user says "add them all", that is a yes for the list you just showed, not for words you find later.
 
-The only exception is a word the user states themselves, like "it's Vercel, not versal". That one goes in at once with `akou_vocab_add {scope: "call"}`, as the `akou` skill says.
+The only exception is a word the user states themselves, like "it's Vercel, not versal". That one goes in at once with `akou_vocab_add {scope: "call"}`, as the `akou` skill says: it is the user's own fix, so akou also keeps a name or jargon word for the workspace.
 
 ## 1. Before a call: the invite
 

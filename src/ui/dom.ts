@@ -72,16 +72,44 @@ export function byId<T extends HTMLElement = HTMLElement>(id: string): T {
 
 let toastTimer: ReturnType<typeof setTimeout> | undefined;
 
-/** A short message at the top of the window; errors in red. */
-export function toast(message: string, kind: "error" | "info" = "error"): void {
+/**
+ * A short message at the top of the window; errors in red. An `action` (a fix's Undo) is a button
+ * after the text, and keeps the message up a little longer.
+ */
+export function toast(
+  message: string,
+  kind: "error" | "info" = "error",
+  action?: { label: string; run: () => void },
+): void {
   const el = byId("toast");
   el.textContent = message;
   el.className = kind;
   el.hidden = false;
-  clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => {
+  const hide = () => {
     el.hidden = true;
-  }, 6000);
+  };
+  if (action) {
+    el.append(
+      " ",
+      h(
+        "button",
+        {
+          type: "button",
+          class: "toast-action",
+          on: {
+            click: () => {
+              clearTimeout(toastTimer);
+              hide();
+              action.run();
+            },
+          },
+        },
+        action.label,
+      ),
+    );
+  }
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(hide, action ? 10_000 : 6000);
 }
 
 /** The × of a dialog's title row (WINDOW W15.8), for a dialog built in code. */
