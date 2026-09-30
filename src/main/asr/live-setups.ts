@@ -15,11 +15,12 @@
  *
  * The second pass is the user's choice only, never `auto`'s: every `asr.review.everySeconds`, the
  * utterances Nemotron closed since the last review are decoded again, whole, and their words
- * replace the lines' (upgrade.ts, live-worker.ts). `qwen` runs Qwen on llama-server, when its
- * models are here and the Mac has a GPU for it and `QWEN_MIN_MEMORY_GB` of memory; `parakeet`
- * decodes each utterance alone on the recognizer the live Worker already holds. Both review
- * Nemotron's lines, so neither runs on a call whose live model is Parakeet. A review that cannot
- * run is off for the call, with a note saying why.
+ * replace the lines' (upgrade.ts, live-worker.ts). `qwen` runs Qwen on llama-server when its
+ * models are here (the window offers it only with a GPU for it and `QWEN_MIN_MEMORY_GB` of memory,
+ * `qwenRoom`; chosen elsewhere it runs anyway); `parakeet` decodes each utterance alone on the
+ * recognizer the live Worker already holds, and only when Parakeet hears every one of the call's
+ * languages. Both review Nemotron's lines, so neither runs on a call whose live model is Parakeet.
+ * A review that cannot run is off for the call, with a note saying why.
  *
  * The choice is made when a call takes the recognizer, so a change applies from the next call and
  * a running call keeps its setup.
@@ -36,7 +37,7 @@ import { liveModelName } from "./live-names.ts";
 import { QWEN_ASR } from "./llama-catalog.ts";
 import type { Measure, NotMeasured } from "./model-scores.ts";
 import { REFERENCE_MACHINE } from "./model-scores.ts";
-import { RECOGNIZER } from "./models.ts";
+import { PARAKEET_LANGUAGES, RECOGNIZER } from "./models.ts";
 
 export { liveModelName };
 
@@ -203,8 +204,8 @@ export interface ReviewInfo {
 export const REVIEWS: Readonly<Record<Reviewer, ReviewInfo>> = {
   qwen: {
     what: "Qwen decodes the sentences Nemotron finished since its last review, whole, and its words replace theirs, once",
-    // FLEURS joined into 27 and 34 minute calls, a review a minute: 14.39 to 10.19 % (29 % fewer)
-    // and 8.00 to 4.19 % (48 % fewer).
+    // FLEURS joined into 27 and 34 minute calls, a review a minute, the call's last minute left to
+    // the final pass as the app does: 14.39 to 10.37 % (28 % fewer) and 8.00 to 4.19 % (48 % fewer).
     plain:
       "Rewrites the finished sentences with the most accurate model. On read speech it cuts Nemotron's mistakes by a quarter or more. Uses 10 to 13 GB of memory during a call.",
     line: "The most accurate. Uses 10 to 13 GB of memory during a call.",
@@ -303,14 +304,37 @@ export function qwenRoom(c: LiveSetupContext): string | null {
 }
 
 /**
- * Why a second pass cannot run on the next call, or null when it can: it reviews Nemotron's lines,
- * so the live model must be Nemotron, and its models must be here.
+ * Why a second pass can never run on the next call here, whatever is downloaded, or null: it
+ * reviews Nemotron's lines, so the live model must be Nemotron; and Parakeet hears 25 European
+ * languages, so every one of the call's languages must be among them. An empty `asr.languages`
+ * (any language) blocks Parakeet too: the streaming Nemotron gives no language per utterance, so
+ * nothing tells which utterances Parakeet could hear.
  */
-export function reviewBlock(id: Reviewer, c: LiveSetupContext, live: RunnableSetup): string | null {
+export function reviewCannot(
+  id: Reviewer,
+  c: LiveSetupContext,
+  live: RunnableSetup,
+): string | null {
   if (live !== "nemotron")
     return id === "parakeet"
       ? "Parakeet already writes the live lines."
       : "It reviews Nemotron's lines; the live model is Parakeet.";
+  if (id === "parakeet") {
+    if (c.languages.length === 0)
+      return "Parakeet hears 25 European languages; name this call's languages in Settings to use it.";
+    const out = c.languages.filter((l) => !PARAKEET_LANGUAGES.includes(l));
+    if (out.length > 0) return `Parakeet does not hear ${out.join(", ")}.`;
+  }
+  return null;
+}
+
+/**
+ * Why a second pass cannot run on the next call, or null when it can: `reviewCannot`, then its
+ * models must be here.
+ */
+export function reviewBlock(id: Reviewer, c: LiveSetupContext, live: RunnableSetup): string | null {
+  const cannot = reviewCannot(id, c, live);
+  if (cannot) return cannot;
   const missing = reviewModels(id, c).filter((m) => !c.present(m));
   if (missing.length > 0) return `Needs ${missing.join(", ")} (\`akou models pull <id>\`).`;
   return null;
@@ -453,7 +477,8 @@ export function liveView(
       running: running?.review ?? null,
       choices: REVIEWERS.map((id) => {
         const ids = reviewModels(id, c);
-        const block = reviewBlock(id, c, next.setup) ?? (id === "qwen" ? qwenRoom(c) : null);
+        const cannot = reviewCannot(id, c, next.setup);
+        const here = ids.every((m) => c.present(m));
         return {
           id,
           title: liveModelName(id === "qwen" ? QWEN_ASR : RECOGNIZER),
@@ -461,12 +486,9 @@ export function liveView(
           plain: REVIEWS[id].plain,
           line: REVIEWS[id].line,
           models: models(ids),
-          // A live model it cannot review is said in words whether or not it is here; missing
+          // What it can never do here is said in words whether or not it is downloaded; missing
           // models otherwise show as models, with Get, and the machine's advice waits for them.
-          blocked:
-            next.setup !== "nemotron" || (block !== null && ids.every((m) => c.present(m)))
-              ? block
-              : null,
+          blocked: cannot ?? (here && id === "qwen" ? qwenRoom(c) : null),
         };
       }),
     },

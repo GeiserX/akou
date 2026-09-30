@@ -93,6 +93,7 @@ import {
   type LineUpgrader,
   LiveAsr,
   type LiveReview,
+  recognizerReviewer,
   type VocabSource,
 } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
@@ -851,14 +852,9 @@ export class AkouApp implements ApiApp {
     const reviewer: LineUpgrader =
       r.model === "qwen"
         ? this.liveUpgrader()
-        : {
-            decode: async (_samples, o) => {
-              if (!asr) throw new Error("the recognizer is closed");
-              const d = await asr.review(o.parts);
-              // Its text alone: the words go back into the lines by text.
-              return { engine: d.model, text: d.text, words: [], ms: d.ms };
-            },
-          };
+        : recognizerReviewer((parts, signal) =>
+            asr ? asr.review(parts, signal) : Promise.reject(new Error("the recognizer is closed")),
+          );
     return {
       name: liveModelName(r.model === "qwen" ? QWEN_ASR : RECOGNIZER),
       reviewer,

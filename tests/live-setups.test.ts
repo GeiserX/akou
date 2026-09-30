@@ -185,6 +185,38 @@ describe("[ASR-7] the second pass the next call runs", () => {
     expect(qwenRoom(ctx())).toBeNull();
   });
 
+  test("Parakeet's pass runs only when Parakeet hears every one of the call's languages", () => {
+    const on = new Set([...EVERYTHING, "nemotron-3.5-560"]);
+    const run = (languages: string[]) =>
+      chooseLiveSetup(ctx({ on, review: "parakeet", languages, engine: "nemotron-3.5-560" }));
+    expect(run(["en", "es"]).review?.model).toBe("parakeet");
+    const ja = run(["en", "ja"]);
+    expect([ja.review, ja.note]).toEqual([
+      null,
+      expect.stringContaining("Parakeet does not hear ja."),
+    ]);
+    // Any language: nothing says which utterances Parakeet could hear, so it does not run.
+    const any = run([]);
+    expect([any.review, any.note]).toEqual([
+      null,
+      expect.stringContaining("name this call's languages in Settings"),
+    ]);
+    // Qwen hears them all: the same call reviews with it.
+    expect(
+      chooseLiveSetup(ctx({ on, review: "qwen", languages: ["ja"], engine: "nemotron-3.5-560" }))
+        .review?.model,
+    ).toBe("qwen");
+    // The views say why, downloaded or not.
+    const v = liveView(
+      ctx({ on, languages: ["ja"], engine: "nemotron-3.5-560" }),
+      null,
+      () => "ready",
+    );
+    expect(v.review.choices.find((c) => c.id === "parakeet")?.blocked).toBe(
+      "Parakeet does not hear ja.",
+    );
+  });
+
   test("the old `upgrade` is Nemotron with Qwen's second pass, for a call and in a file or a PATCH", () => {
     expect(legacyLive("upgrade", undefined)).toEqual({ live: "nemotron", review: "qwen" });
     // A call that names its own review keeps it.

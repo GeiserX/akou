@@ -8,6 +8,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent, Seg } from "../src/core/log/events.ts";
 import type { Hypothesis, ModelSpec } from "../src/main/asr/engine.ts";
@@ -19,6 +20,8 @@ import {
   type LiveOut,
   LivePipeline,
   REVIEW_BEHIND_MAX,
+  REVIEW_STALL_MAX_MS,
+  recognizerReviewer,
 } from "../src/main/asr/live-worker.ts";
 import {
   joinUtterances,
@@ -272,9 +275,18 @@ function qwenSays(text: string): Hypothesis {
   };
 }
 
-async function rig(qwen: LineUpgrader | null, o: { everySeconds?: number; name?: string } = {}) {
+async function rig(
+  qwen: LineUpgrader | null,
+  o: {
+    everySeconds?: number;
+    name?: string;
+    /** The reviewer is Parakeet on this rig's own Worker, as the app wires it. */
+    parakeet?: (review: LiveAsr["review"]) => LineUpgrader;
+  } = {},
+) {
   const every = o.everySeconds ?? REVIEW_EVERY_SECONDS;
   const t = tempDir();
+  const decodesFile = join(t.dir, "decodes.log");
   cleanups.push(t.cleanup);
   const clock = new ManualClock();
   const engine = new ScriptedEngine(clock);
@@ -295,14 +307,24 @@ async function rig(qwen: LineUpgrader | null, o: { everySeconds?: number; name?:
     onPacket: (id, part, pk, ingest) => asr?.onPacket(id, part, pk, ingest),
     beforeEnd: (id) => asr?.flush(id) ?? Promise.resolve(),
   });
-  const spec: ModelSpec = { kind: "module", path: FAKE, model: "fake-parakeet", options: {} };
+  const spec: ModelSpec = {
+    kind: "module",
+    path: FAKE,
+    model: "fake-parakeet",
+    options: { decodesFile },
+  };
+  const own = (): LineUpgrader | null =>
+    o.parakeet ? o.parakeet((parts, signal) => (asr as LiveAsr).review(parts, signal)) : qwen;
   asr = new LiveAsr(
     {
       models: spec,
       inThread: true,
       clock,
       liveEngine: () => LIVE,
-      review: () => (qwen ? { name: o.name ?? "Qwen", reviewer: qwen, everySeconds: every } : null),
+      review: () => {
+        const reviewer = own();
+        return reviewer ? { name: o.name ?? "Qwen", reviewer, everySeconds: every } : null;
+      },
       onLog: (_level, msg) => logs.push(msg),
     },
     (id) => mgr.controller(id) as CallAccess | undefined,
@@ -330,7 +352,23 @@ async function rig(qwen: LineUpgrader | null, o: { everySeconds?: number; name?:
   };
   /** Moves the clock one interval (or `ms`) on, for the next review. */
   const minute = (ms = every * 1000) => clock.advance(ms);
-  return { mgr, id, events, segs, logs, play, minute, clock, view: () => mgr.controller(id)?.view };
+  /** The recognizer's decodes so far, each its sample count. */
+  const decodes = () =>
+    existsSync(decodesFile)
+      ? readFileSync(decodesFile, "utf8").trim().split("\n").filter(Boolean).map(Number)
+      : [];
+  return {
+    mgr,
+    id,
+    events,
+    segs,
+    logs,
+    play,
+    minute,
+    clock,
+    decodes,
+    view: () => mgr.controller(id)?.view,
+  };
 }
 
 /** `id rev model text` per revision, in log order. */
@@ -413,6 +451,40 @@ describe("[ASR-7] the host writes Qwen's review as each line's one revision", ()
     await r.mgr.stop();
     await r.minute();
     expect(qwen.asked.length).toBe(0);
+  });
+
+  test("a line a person fixed a word on keeps the fix: the review does not revise it, and the fold still reads the fix", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    r.play([
+      ["we", "should", "move", "the", "build"],
+      ["to", "the", "new", "box"],
+    ]);
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
+    // The Fix dialog's word fix: a line-scoped pair, not a seg revision (`by` stays unset).
+    r.mgr.controller(r.id)?.record({
+      type: "vocab.add",
+      id: "v0001",
+      rev: 1,
+      term: "could",
+      heard: ["should"],
+      segs: ["l000001"],
+      nth: 0,
+      decode: false,
+      by: "user",
+    });
+    expect(r.view()?.resolve("l000001")?.text).toBe("we could move the build");
+    await r.minute();
+    await until(() => qwen.asked.length === 1, 5000, "the review at Qwen");
+    qwen.asked[0]?.answer(qwenSays("we shall move the built to the news box"));
+    await until(() => r.view()?.segment("l000002")?.rev === 2, 5000, "the unfixed line's rewrite");
+    await Bun.sleep(50);
+    await r.mgr.stop();
+    // The fixed line has no revision from the review, and still reads the person's word.
+    expect(r.view()?.segment("l000001")?.rev).toBe(1);
+    expect(r.view()?.resolve("l000001")?.text).toBe("we could move the build");
+    expect(r.view()?.resolve("l000002")?.text).toBe("to the news box");
   });
 
   test("a line a person edited keeps their text; Qwen hearing nothing leaves the stream's words; a failure changes nothing", async () => {
@@ -664,7 +736,20 @@ describe("[ASR-7] Parakeet as the second pass", () => {
     expect(d.words.map((w) => w.w)).toEqual([]);
   });
 
-  test("the Worker decodes each utterance of a review alone, with the call's word list as hotwords", async () => {
+  test("under greedy decoding, the default, the Worker decodes the utterance with no hotwords and does not throw", async () => {
+    const { p, models } = pipeline({ greedy: true });
+    p.setDecodeList(
+      buildDecodeList({ model: "fake-parakeet", callVocab: [], names: ["Hetzner"], files: [] }),
+      1,
+    );
+    const r = p.decodeUtterance(
+      concat(silence(0.3), speak(["deploy", "to", "hetzner"]), silence(0.5)),
+    );
+    expect(r.text).toBe("deploy to hetzna");
+    expect(models.calls.at(-1)?.hotwords).toBeUndefined();
+  });
+
+  test("the Worker decodes each utterance of a review alone, with the call's word list as hotwords when the decoding takes them (beam)", async () => {
     const { p, models } = pipeline();
     p.setDecodeList(
       buildDecodeList({ model: "fake-parakeet", callVocab: [], names: ["Hetzner"], files: [] }),
@@ -682,5 +767,77 @@ describe("[ASR-7] Parakeet as the second pass", () => {
       p.decodeUtterance(concat(silence(0.3), speak(["deploy", "to", "hetzner"]), silence(0.5)))
         .text,
     ).toBe("deploy to hetzna");
+  });
+
+  test("as the app wires it, the Worker decodes each utterance of a review alone, never the joined audio", async () => {
+    const r = await rig(null, { name: "Parakeet", parakeet: recognizerReviewer });
+    r.play([
+      ["we", "should", "move", "the", "build"],
+      ["to", "the", "new", "box"],
+    ]);
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
+    const before = r.decodes().length;
+    await r.minute();
+    await until(() => r.view()?.segment("l000002")?.rev === 2, 5000, "the review's rewrite");
+    // Two utterances in the minute: two decodes, each no longer than one utterance.
+    const decoded = r.decodes().slice(before);
+    expect(decoded.length).toBe(2);
+    await r.mgr.stop();
+  });
+
+  test("a decode that held the live lines too long turns Parakeet's pass off for the call, and says so", async () => {
+    let asked = 0;
+    const slow = () =>
+      recognizerReviewer(async (parts) => {
+        asked++;
+        return {
+          text: parts.map(() => "x").join(" "),
+          words: [],
+          language: null,
+          model: "fake-parakeet",
+          ms: REVIEW_STALL_MAX_MS + 500,
+          spans: parts.length,
+          slowest: REVIEW_STALL_MAX_MS + 500,
+        };
+      });
+    const r = await rig(null, { name: "Parakeet", parakeet: slow });
+    r.play([["deploy", "the", "build"]]);
+    await until(() => r.segs().length === 1, 5000, "the line");
+    await Bun.sleep(20);
+    await r.minute();
+    await until(() => r.logs.some((l) => l.includes("off for the rest of the call")), 5000, "off");
+    expect(r.logs.find((l) => l.includes("off for the rest"))).toContain("holding the live lines");
+    r.play([["thanks"]]);
+    await until(() => r.segs().length === 2, 5000, "the next line");
+    await Bun.sleep(20);
+    await r.minute();
+    await r.mgr.stop();
+    // Nothing was written from the slow review, and nothing was asked after it.
+    expect(asked).toBe(1);
+    expect(r.segs().every((x) => x.rev === 1)).toBe(true);
+  });
+
+  test("at call.ended the Worker decodes no more of a review in flight", async () => {
+    const spec: ModelSpec = { kind: "module", path: FAKE, model: "fake-parakeet", options: {} };
+    const t = tempDir();
+    cleanups.push(t.cleanup);
+    const file = join(t.dir, "decodes.log");
+    const asr = new LiveAsr(
+      { models: { ...spec, options: { decodesFile: file } }, inThread: true },
+      () => undefined,
+    );
+    cleanups.push(() => asr.close());
+    await asr.ready;
+    const utt = (w: string[]) => concat(silence(0.3), speak(w), silence(0.5));
+    const ended = new AbortController();
+    const parts = [utt(["deploy"]), utt(["the"]), utt(["build"]), utt(["thanks"])];
+    const answer = asr.review(parts, ended.signal);
+    ended.abort();
+    await expect(answer).rejects.toThrow("given up");
+    await Bun.sleep(100);
+    const n = existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").length : 0;
+    // The first utterance may already be decoding; none after it is.
+    expect(n).toBeLessThanOrEqual(1);
   });
 });
