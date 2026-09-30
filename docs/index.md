@@ -1,35 +1,141 @@
-# akou
+---
+hide:
+  - navigation
+---
 
-akou is an open-source alternative to Granola: a desktop app that records your calls on your own computer, transcribes them on the machine, and answers questions about a call while it is still running.
+# akou { .ak-visually-hidden }
 
-## Using akou
+<p align="center">
+  <img src="images/banner.svg" alt="akou" width="100%">
+</p>
 
-- [Getting started](getting-started.md): installing the unsigned app and the command line, the first open, the speech models, permissions, uninstalling.
-- [Providers](providers.md): what answers questions and writes notes (your own Claude Code or Codex, an API, a local model), when each runs on its own, session reuse and how it is measured, and the open terms-of-service risk.
-- [Handing calls to your own knowledge system](knowledge-handoff.md): how a finished call leaves akou (export folder, hooks, signed webhook, pull) and how the vocabulary grows only by what you approve.
+<p align="center">
+  <a href="https://github.com/GeiserX/akou/releases"><img alt="Release" src="https://img.shields.io/github/v/release/GeiserX/akou?include_prereleases&style=flat-square"></a>
+  <a href="https://github.com/GeiserX/akou/stargazers"><img alt="GitHub Stars" src="https://img.shields.io/github/stars/GeiserX/akou?style=flat-square&logo=github"></a>
+  <a href="https://hub.docker.com/r/drumsergio/akou"><img alt="Docker Pulls" src="https://img.shields.io/docker/pulls/drumsergio/akou?style=flat-square&logo=docker"></a>
+  <a href="https://github.com/GeiserX/akou/blob/main/LICENSE"><img alt="License: GPL-3.0" src="https://img.shields.io/github/license/GeiserX/akou?style=flat-square"></a>
+</p>
 
-## Design record
+---
 
-The design notes are read on GitHub. One line per document, in the order to read them.
+**akou** is a desktop app for macOS that records your calls on your own computer, transcribes them on the machine, and answers questions about a call while it is still running. There is no bot in the meeting, no account and no cloud. Your own terminal agent, Claude Code, Codex or anything that speaks MCP, can follow and question the call, and the notes land in files you own. Start with [Getting started](getting-started.md), then [Usage](usage.md).
 
-- [README.md](https://github.com/GeiserX/akou/blob/main/README.md): what akou is, the status, the pitch, licence and credit.
-- [POSITIONING.md](https://github.com/GeiserX/akou/blob/main/docs/POSITIONING.md): who it is for, what it does, the comparison with Granola, Minutes, anarlog, Meetily and Otter, and the non-goals.
-- [DESIGN.md](https://github.com/GeiserX/akou/blob/main/docs/DESIGN.md): the architecture, covering processes, capture per OS, recognition, the event log, the query engine, agent surfaces, the window, hand-off, packaging, milestones and risks.
-- [REQUIREMENTS.md](https://github.com/GeiserX/akou/blob/main/docs/REQUIREMENTS.md): every predecessor feature and interface, and whether akou carried, changed or dropped it, plus the new vocabulary requirements.
-- [TRAPS.md](https://github.com/GeiserX/akou/blob/main/docs/TRAPS.md): failures that already happened once, each rewritten as an invariant with a named test and a milestone.
-- [ROADMAP.md](https://github.com/GeiserX/akou/blob/main/docs/ROADMAP.md): M0 gates with pass criteria, then M1 to M4 with checkable exit criteria, and what waits for demand.
-- [ux/PRINCIPLES.md](https://github.com/GeiserX/akou/blob/main/docs/ux/PRINCIPLES.md): the rules every screen, command and tool follows, the one priority scale, the ranked P0 list, rulings where the UX docs disagree, the docs that still lag, and the open decisions.
-- [ux/COMPETITOR-MATRIX.md](https://github.com/GeiserX/akou/blob/main/docs/ux/COMPETITOR-MATRIX.md): every nicety we found in competing tools, where it was seen, and which doc owns it.
-- [ux/WINDOW.md](https://github.com/GeiserX/akou/blob/main/docs/ux/WINDOW.md): the main window, its states, controls, keys, accessibility and languages.
-- [ux/DESKTOP.md](https://github.com/GeiserX/akou/blob/main/docs/ux/DESKTOP.md): the tray, hotkeys, menus, floating indicator, notifications, first run, updates, the model manager and the settings registry.
-- [ux/CLI.md](https://github.com/GeiserX/akou/blob/main/docs/ux/CLI.md): the command line: naming a call, output, exit codes, errors, help, `akou watch`, and parity with the other doors.
-- [ux/PROGRAMMABILITY.md](https://github.com/GeiserX/akou/blob/main/docs/ux/PROGRAMMABILITY.md): the API, the event stream, MCP, skills, hooks, the webhook, `akou://` and the security model.
-- [ux/DICTATION.md](https://github.com/GeiserX/akou/blob/main/docs/ux/DICTATION.md): hold a key, speak, and the text lands where the cursor is: the hotkeys, the pill, the draft box and Send, learning from what you fix, the engines and a remote akou as the engine, the helper per OS, the doors, the tests and the DC- plan.
-- [ux/design-explorations/README.md](https://github.com/GeiserX/akou/blob/main/docs/ux/design-explorations/README.md): the chosen design for a first run that guides instead of warning, and for the call workspace, as rendered mockups, what the nearest apps do on the same screens, and the direction we want.
-- [api/openapi.json](https://github.com/GeiserX/akou/blob/main/docs/api/openapi.json): the OpenAPI 3.1 file of the HTTP API, generated from the route table with `bun run openapi`; CI fails when it drifts.
-- [TESTING.md](https://github.com/GeiserX/akou/blob/main/docs/TESTING.md): which suite proves what, the fakes, the model-gated and hardware tests, and the flake policy.
-- [CI-CD.md](https://github.com/GeiserX/akou/blob/main/docs/CI-CD.md): the pipeline, branch protection, nightly jobs and releases.
-- [gates/M0-results.md](https://github.com/GeiserX/akou/blob/main/docs/gates/M0-results.md): what each M0 gate measured on the reference Mac mini, with the raw outputs beside it.
-- [research/asr-benchmark.md](https://github.com/GeiserX/akou/blob/main/docs/research/asr-benchmark.md): why akou ships the fp32 Parakeet build and stays on Parakeet rather than Qwen3-ASR, with the FLEURS numbers and the method.
-- [research/asr-architecture.md](https://github.com/GeiserX/akou/blob/main/docs/research/asr-architecture.md): how akou makes the best transcript, live and final, from any number of engines: streaming live engines, the in-call upgrade, the final pass fused by confidence ROVER, the settings, what ships per OS, and the ASR- plan, with every benchmark number behind it. It replaces the decision above to stay on Parakeet alone.
-- [research/service-interface.md](https://github.com/GeiserX/akou/blob/main/docs/research/service-interface.md): what a hosted akou exposes to Executor, services with signed callbacks, agents and OpenAI-speaking tools, all from one OpenAPI contract; why OAuth and remote MCP wait; and the SI- plan.
+<div class="grid cards" markdown>
+
+-   :material-download: **[Getting started](getting-started.md)**
+
+    ---
+
+    Install the app, let macOS open it once, download the speech models and record your first call.
+
+-   :material-record-rec: **[Usage](usage.md)**
+
+    ---
+
+    The window: Record, the live transcript, notes with times, Ask, speakers and workspaces.
+
+-   :material-console: **[Agents and the command line](agents.md)**
+
+    ---
+
+    Teach Claude Code or Codex to start, follow and question a call, from the terminal or over MCP.
+
+-   :material-tune: **[Configuration](configuration.md)**
+
+    ---
+
+    Every setting, its default and what it changes.
+
+</div>
+
+## The app
+
+akou is one window: calls on the left, the transcript in the middle, notes and Ask on the right. A saved call shows who spoke and for how long, the transcript with a time on every line, and your notes beside it. See [Usage](usage.md).
+
+![A saved call in akou: the sidebar lists calls by workspace, the header shows three speakers with their talk time, the transcript has a time and a name on every line, and the notes taken during the call sit on the right](images/screenshots/calls.png)
+
+<div class="ak-gallery" markdown>
+<figure markdown>
+![A call being recorded: the elapsed time, the microphone and call meters, Stop, the live transcript, and a note being typed](images/screenshots/recording.png)
+<figcaption>During a call</figcaption>
+</figure>
+<figure markdown>
+![An answer to a question about the call, citing the time of the line it rests on, with the excerpts it was given](images/screenshots/ask.png)
+<figcaption>Ask about the call</figcaption>
+</figure>
+<figure markdown>
+![The first run: the speech models step of the setup, listing the recognizer and the speaker models with their sizes and a download in progress](images/screenshots/first-run.png)
+<figcaption>First run</figcaption>
+</figure>
+<figure markdown>
+![A terminal running akou: the live call attached, its last lines with their times, a speaker named, and a question answered](images/screenshots/agent-terminal.png)
+<figcaption>Your agent on the call</figcaption>
+</figure>
+</div>
+
+Hold a key and speak, and akou types the words where your cursor is, in any app. See [Dictation](dictation.md).
+
+![The Dictation page: the key to hold and how it works, the keys while listening, the languages and the microphone](images/screenshots/dictation.png)
+
+## What it does
+
+- Records the microphone and the call audio on separate channels, with no bot in the meeting and no virtual audio driver. Call audio is the whole computer or one app.
+- Shows a live transcript as people speak. After the call, an accurate pass with speaker labels runs on the Mac, and every line keeps its time of day.
+- Keeps a timestamped notepad while the call runs (`-` bullet, `[]` action, `?` question, `#` section).
+- Answers a question about the call while it runs, from a small context built locally, with the Claude Code or Codex you already pay for, a local model, or your own API key. With no provider, Ask becomes "Search this call". See [Providers](providers.md).
+- Lets your agent start, follow, question and annotate a call from the terminal, the local API or MCP. See [Agents and the command line](agents.md).
+- Types what you dictate into any app, and learns a word you fix only when you say yes. See [Dictation](dictation.md).
+- Keeps one word list you own, so names and product terms come out right across calls.
+- Hands every finished call to your own vault, repository or wiki as Markdown with frontmatter, the event log and the audio, through an export folder, hooks, a signed webhook or the API. See [Hand-off to your knowledge system](knowledge-handoff.md).
+- Runs the same core as a self-hosted transcription server in Docker, with OpenAI-compatible, Wyoming and Bazarr endpoints. See [Server mode](server.md) and [GPUs and presets](server-hardware.md).
+
+## How it runs
+
+```mermaid
+flowchart LR
+    MIC[Microphone] --> CAP[Capture helper<br/>two channels]
+    CALL[Call audio] --> CAP
+    CAP --> ASR[Speech models on this Mac<br/>live pass, then final pass]
+    ASR --> LOG[(Event log<br/>one folder per call)]
+    LOG --> WIN[The window]
+    LOG --> API[Local API<br/>CLI, MCP, skills]
+    WIN --> ASK[Ask]
+    API --> ASK
+    ASK -.-> PROV[Your provider<br/>Claude Code, Codex, a local model, an API key]
+    LOG --> OUT[Export folder, hooks,<br/>signed webhook, pull]
+    OUT --> KB[Your vault, repo or wiki]
+```
+
+- The app runs on Macs with Apple silicon and macOS 14.4 or later. The `akou` command line also runs on Linux and Windows, where it manages models and settings and drives a remote akou, but cannot record.
+- The speech models are one download of about 3.0 GB into Application Support, each file checked against a pinned SHA-256.
+- The final pass runs in its own worker and frees its memory when it ends; a long call does not leave the app large.
+- The server image is `drumsergio/akou`, on linux/amd64 and linux/arm64, with `-vulkan` and `-cuda` variants. There is no `latest` tag.
+- Every action the window has also exists on the local API, so an agent can do anything you can. See [How it works](how-it-works.md).
+
+## What it does not do
+
+- It does not keep a knowledge base across calls: no search across meetings, no people directory. That belongs to the system you hand calls to.
+- It does not join a meeting as a bot, and it never sends anything to a meeting service.
+- It has no cloud, no account and no sync between machines.
+- The desktop app ships for macOS only today. Dictation is macOS only too.
+- The 0.x builds are prereleases and are not signed by Apple, so the first open needs one extra step, and an update may ask for the microphone and system audio grants again.
+
+## Privacy
+
+- The audio, the transcript, the notes and the models stay on your disk. Nothing leaves the Mac unless you turn on one of the options below.
+- Ask, enhanced notes and the vocabulary pass send a small excerpt of the call to the provider you chose: your own Claude Code or Codex (your subscription), a local model (stays on your machine), or an API with your key. `none` sends nothing. See [When akou calls the provider](providers.md#when-akou-calls-the-provider).
+- The export folder, hooks and the webhook run only where you point them, and the webhook is signed and off until both its URL and secret are set.
+- The floating bar shown during a screen share carries no transcript text. The dictation island shows your words only when `dictation.pillPreview` is on.
+- Server mode has no TLS of its own and refuses to listen on every address until you say a reverse proxy is in front of it.
+
+## Getting help
+
+- If something is broken, read [Troubleshooting](troubleshooting.md), then open an issue with the details it lists.
+- To report a security problem, follow the [security policy](https://github.com/GeiserX/akou/blob/main/SECURITY.md) and do not open a public issue.
+- The [changelog on GitHub](https://github.com/GeiserX/akou/blob/main/CHANGELOG.md) lists what changed between releases, and the known limitations of each one.
+- The [FAQ](faq.md) answers the questions people ask first, Granola included.
+- To build it, run the tests or send a fix, read [Development](development.md).
+
+## License
+
+akou is released under the [GPL-3.0-or-later](https://github.com/GeiserX/akou/blob/main/LICENSE) license. It is written from scratch and replaces [hark](https://github.com/PhantomYdn/hark), whose capture design it carries over.
