@@ -315,6 +315,8 @@ describe("SV-U7: the server-mode page", () => {
       for (const key of ["capture.mic", "capture.call", "app.hotkey"]) {
         expect(await page.$(`#page-settings [data-key='${key}']`)).toBeNull();
       }
+      // A server has no first-run setup to run again: no calls to record, no dictation here.
+      expect(await page.$("#settings-setup-open")).toBeNull();
       // Network settings are shown, never editable here.
       expect(await page.isDisabled("#page-settings input[data-key='api.bind']")).toBe(true);
 

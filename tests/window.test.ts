@@ -69,7 +69,7 @@ function rulesUsing(css: string, name: string): string[] {
 }
 
 describe("one accent per screen (the design's rules)", () => {
-  test("theme.css reads --accent only in the welcome's Download and the focus ring", () => {
+  test("theme.css reads --accent only in the welcome's primary action (Download, or the setup's Continue) and the focus ring", () => {
     const css = readFileSync(join(UI_DIR, "theme.css"), "utf8");
     expect(rulesUsing(css, "--accent").sort()).toEqual(["#welcome button.go", ":focus-visible"]);
     // Positive control: one more rule painting with the accent is caught.

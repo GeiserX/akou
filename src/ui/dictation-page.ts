@@ -217,6 +217,12 @@ export interface DictationHooks {
   openWords?: () => void;
   /** Opens the history (DC-H1). */
   openHistory?: () => void;
+  /**
+   * "Run the setup again" opens the window's first-run setup (`setup-wizard.ts`) with what is set
+   * now; absent, it runs dictation's own setup (DC-N3), which the switch still runs for a missing
+   * grant.
+   */
+  runSetup?: () => void;
 }
 
 type Status = {
@@ -472,7 +478,7 @@ export class DictationPage {
       case SETUP:
         return this.grants
           ? linkRow({ label: "Run the setup again", id: "dictation-setup-open" }, () =>
-              this.runSetup(),
+              this.hooks.runSetup ? this.hooks.runSetup() : this.runSetup(),
             )
           : null;
       case WHILE:

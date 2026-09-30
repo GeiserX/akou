@@ -2336,11 +2336,11 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       expect(fx.patches).toEqual([]);
 
       // With every grant there, the switch saves at once (positive control for the intercept).
+      // The page reads the grants again when it is shown again.
       fx.grants = { mic: "granted", accessibility: "granted" };
-      await page.click("#dictation-setup-open");
-      await step(page, "mic");
-      await page.click("#dictation-setup-cancel");
-      await page.waitForSelector("#page-dictation section[data-section='Keys']");
+      await page.click("#calls-open");
+      await page.click("#dictation-open");
+      await page.waitForSelector("#dictation-grant-mic .pg-state");
       await page.click(toggle);
       await until(() => fx.patches.length === 1, 5000, "the switch saved");
       expect(fx.patches).toEqual([{ "dictation.enabled": true }]);
@@ -2352,10 +2352,14 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
   test(
     "the languages step: a refused or failed save says why and keeps the step, then saves once",
     async () => {
-      const { page, fx } = await browserPage({ mic: "granted", accessibility: "granted" });
-      await page.click("#dictation-setup-open");
+      // "Run the setup again" opens the window's first-run setup now; the switch still runs this
+      // one for a missing grant, which arrives while its step waits.
+      const { page, fx } = await browserPage({ mic: "granted", accessibility: "denied" });
+      await page.click(toggle);
       await step(page, "mic");
       await page.click("#dictation-setup-next");
+      await step(page, "accessibility");
+      fx.grants = { mic: "granted", accessibility: "granted" };
       await step(page, "languages");
       fx.refuse.set("dictation.languages", "is a list of ISO 639 codes");
       await page.click("#dictation-setup-next");
@@ -2387,10 +2391,12 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
   test(
     "leaving the page at the setup's last step keeps dictation on: the switch above it follows the setup",
     async () => {
-      const { page, fx } = await browserPage({ mic: "granted", accessibility: "granted" });
-      await page.click("#dictation-setup-open");
+      const { page, fx } = await browserPage({ mic: "granted", accessibility: "denied" });
+      await page.click(toggle);
       await step(page, "mic");
       await page.click("#dictation-setup-next");
+      await step(page, "accessibility");
+      fx.grants = { mic: "granted", accessibility: "granted" };
       await step(page, "languages");
       await page.click("#dictation-setup-next");
       await step(page, "key");

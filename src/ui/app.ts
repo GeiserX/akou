@@ -49,6 +49,7 @@ import { Player } from "./player.ts";
 import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protocol.ts";
 import { ReviewPane } from "./review.ts";
 import { SettingsPage } from "./settings-page.ts";
+import { SetupWizard } from "./setup-wizard.ts";
 import { TranscriptPane } from "./transcript.ts";
 import { WorkspacePicker } from "./workspaces.ts";
 
@@ -197,6 +198,8 @@ class App {
   private readonly askPane: AskPane;
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
+  /** The first-run setup, in the welcome (`setup-wizard.ts`). */
+  private readonly setup: SetupWizard;
   private readonly player: Player;
   /** The workspace the next call goes in: the Record row's menu and the sidebar's New workspace. */
   private readonly workspace: WorkspacePicker;
@@ -258,7 +261,13 @@ class App {
     });
     const dictionary = mountDictionaryDialog(t, () => this.view()?.call?.workspace);
     const history = mountHistoryDialog(t);
+    const runSetup = () => {
+      this.pages.leave();
+      this.chosen = false;
+      void this.setup.start();
+    };
     const dictation = new DictationPage(t, "app", {
+      runSetup,
       openReview: () => this.review.open(),
       openWords: () => void dictionary.open(),
       openHistory: () => void history.open(),
@@ -272,6 +281,7 @@ class App {
       workspaces: () => this.calls.map((c) => c.workspace),
       openModels,
       openDictionary: () => void dictionary.open(),
+      runSetup,
     });
     const models = new ModelsPage(t, false);
     this.pages = new Pages(byId("pages"), { settings, models, dictation }, () => {
@@ -292,10 +302,18 @@ class App {
     };
     window.addEventListener("hashchange", fromHash);
     fromHash();
-    this.modelsCard = new ModelsCard(t, {
+    this.modelsCard = new ModelsCard(t, { changed: () => this.paint() });
+    this.setup = new SetupWizard({
+      t,
+      card: this.modelsCard,
+      workspace: this.workspace,
+      modelsState: () => this.status?.models?.state,
       changed: () => this.paint(),
-      openAgentSettings: () => openSettings("provider.kind"),
-      mac: this.platform === "mac",
+      finish: (use) => {
+        if (use === "dictation") openDictation();
+        else this.pages.leave();
+        this.paint();
+      },
     });
     this.livePicker = new LivePicker({ t, openModels: () => openModels() });
     this.review = new ReviewPane({
@@ -351,8 +369,11 @@ class App {
     const live = s.live?.call ?? null;
     const fresh = live !== null && live !== this.seenLive && !(first && this.chosen);
     if (live) this.seenLive = live;
-    // A new live call takes the window over from a page too (W3.17).
-    if (fresh && !first) this.pages.leave();
+    // A new live call takes the window over from a page, and from the setup, too (W3.17).
+    if (fresh && !first) {
+      this.pages.leave();
+      this.setup.cancel();
+    }
     if (fresh || !this.chosen) {
       const target = live ?? this.callId ?? s.last?.call ?? null;
       if (target && target !== this.callId) this.openCall(target, false);
@@ -500,13 +521,18 @@ class App {
    * and so does a call the user picked from the list; the readiness row brings the welcome back.
    */
   private welcoming(): boolean {
-    return this.modelsCard.missing && !this.status?.live && !this.chosen;
+    if (this.chosen) return false;
+    // The setup shows while it runs, a first run's or one asked for again.
+    return (
+      this.setup.wanted(this.modelsCard.missing) || (this.modelsCard.missing && !this.status?.live)
+    );
   }
 
   private welcome(): void {
     const missing = this.modelsCard.missing;
     const on = this.welcoming();
     byId("welcome").hidden = !on;
+    this.setup.paint(on);
     for (const id of ["scroller", "side"]) byId(id).hidden = on;
     // The transcript header goes with the transcript, and needs a call to describe.
     byId("call-head").hidden = on || !this.view()?.call;
@@ -830,9 +856,10 @@ class App {
       this.drawCalls();
     });
     byId("readiness-setup").addEventListener("click", () => {
-      // Back to the welcome, unless a call is recording: then the Models page.
+      // Back to the welcome on its models step, unless a call is recording: then the Models page.
       this.pages.leave();
       this.chosen = false;
+      this.setup.toModels();
       this.paint();
       if (byId("welcome").hidden) byId("models-open").click();
       else byId("models-pull").focus();

@@ -226,7 +226,7 @@ button.stop {
   color: #fff;
 }
 /* One accent per screen (the design's rules): a primary action is a neutral fill in the text colour,
-   and the accent fill is the welcome's Download alone. */
+   and the accent fill is the welcome's alone: its Download, or the setup's Continue. */
 button.go {
   background: var(--fg);
   border-color: var(--fg);
@@ -1171,59 +1171,11 @@ body.inset #ask-row {
   line-height: 1.55;
   margin: 0 0 32px;
 }
-#welcome .steps {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-#welcome .step {
-  display: grid;
-  grid-template-columns: 40px minmax(0, 1fr);
-  position: relative;
-}
-#welcome .num {
-  margin-top: 20px;
-  width: 24px;
-  height: 24px;
-  border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 12px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  border: 1px solid var(--line2);
-  color: var(--dim);
-  background: var(--bg);
-  position: relative;
-  z-index: 1;
-}
-#welcome .step.current .num {
-  background: var(--fg);
-  border-color: var(--fg);
-  color: var(--bg);
-}
-/* The rail that joins the step numbers. */
-#welcome .step:not(:last-child)::after {
-  content: "";
-  position: absolute;
-  left: 11.5px;
-  top: 44px;
-  bottom: -32px;
-  width: 1px;
-  background: var(--line2);
-}
 #welcome .step-card {
   background: var(--panel);
-  border: 1px solid var(--line);
+  border: 1px solid var(--line2);
   border-radius: 12px;
   padding: 20px 24px;
-}
-#welcome .step.current .step-card {
-  border-color: var(--line2);
 }
 #welcome .step-card-head {
   display: flex;
@@ -1368,18 +1320,6 @@ body.inset #ask-row {
 #models-progress::-moz-progress-bar {
   background: var(--ok);
 }
-#welcome .step.compact .step-card {
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  padding: 16px 24px;
-}
-#welcome .step.compact .txt {
-  flex: 1;
-}
-#welcome .step.compact .step-card p {
-  margin-top: 4px;
-}
 #welcome button.quiet {
   display: inline-flex;
   align-items: center;
@@ -1389,12 +1329,70 @@ body.inset #ask-row {
   font-size: 12px;
   font-weight: 500;
 }
-#welcome .ico.agent {
-  color: var(--agent);
+/* The first-run setup (setup-wizard.ts): one step a screen under the title, in the pages' rows, and
+   a bar with the step count, Back, Skip and Continue. The accent is Continue's, or the download's
+   on the models step, never both. */
+#welcome .pg-section + .pg-section {
+  margin-top: 16px;
 }
-#welcome .foot {
-  margin: 24px 0 0 40px;
+#welcome .pg-col {
+  max-width: none;
+}
+#welcome .pg-sec {
+  margin-top: 0;
+}
+#welcome .pg-row .pg-input.wide {
+  width: 320px;
+}
+#welcome .setup-state {
+  color: var(--dim);
+}
+#welcome .setup-state.ok {
+  color: var(--ok);
+}
+#welcome .setup-reading {
+  color: var(--dim);
+}
+
+#welcome .setup-issue {
+  margin: 12px 0 0;
+  color: var(--rec);
+  font-size: 12px;
+}
+#welcome .setup-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 24px;
+}
+#welcome .setup-count {
+  flex: 1;
   color: var(--faint);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+#welcome .setup-bar button {
+  height: 32px;
+  padding: 0 16px;
+  font-size: 13px;
+}
+#welcome .setup-bar button.go {
+  font-weight: 600;
+}
+#welcome .setup-bar button.go.plain {
+  background: var(--fg);
+  border-color: var(--fg);
+  color: var(--bg);
+}
+#welcome .setup-bar button:disabled {
+  opacity: 0.45;
+}
+#setup-best {
+  margin-top: 8px;
+}
+#setup-best button {
+  height: 28px;
+  padding: 0 12px;
   font-size: 12px;
 }
 

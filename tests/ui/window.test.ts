@@ -54,6 +54,12 @@ async function withRig<T>(
 }
 
 const text = (page: Page, sel: string) => page.locator(sel).first().textContent();
+
+/** The first-run setup was finished before: with the models missing the welcome is their step alone. */
+const setupDone = (page: Page) =>
+  page.addInitScript(() =>
+    localStorage.setItem("akou.setup", JSON.stringify({ done: true, use: "both" })),
+  );
 const rowIds = (page: Page) =>
   page.$$eval("#lines .row", (rows) => rows.map((r) => (r as HTMLElement).dataset.id ?? ""));
 
@@ -2238,7 +2244,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             settings: { "asr.modelsDir": modelsDir, "asr.diarizer": "nemotron" },
           },
           async (rig) => {
-            const page = await rig.open();
+            const page = await rig.open(undefined, { before: setupDone });
             await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
             // No transcript, notes or player: they carry hidden, and the watch checks that hidden
             // means hidden. The sidebar stays, with its empty workspace, and its readiness row
@@ -2256,9 +2262,9 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
               "the readiness row",
             );
             expect(await page.getAttribute("#readiness", "data-state")).toBe("missing");
-            expect(await text(page, "#readiness-setup")).toBe("Setup 1 of 3");
+            expect(await text(page, "#readiness-setup")).toBe("Set up");
             expect(await page.isVisible("#readiness-where")).toBe(false);
-            // Under 1248 px the sidebar narrows; "Setup 1 of 3" must stay inside it and clickable.
+            // Under 1248 px the sidebar narrows; "Set up" must stay inside it and clickable.
             const wide = page.viewportSize() ?? { width: 1280, height: 720 };
             await page.setViewportSize({ width: 1200, height: 800 });
             const bar = await page.locator("#sidebar").boundingBox();
@@ -2272,7 +2278,9 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             expect(await page.evaluate(() => document.activeElement?.id)).toBe("models-pull");
             await page.setViewportSize(wide);
             expect(await page.isVisible("#models-pip")).toBe(true);
-            expect(await text(page, "#welcome h1")).toBe("Welcome to akou");
+            // The setup is done: the welcome is the models step alone, with no step bar.
+            expect(await text(page, "#welcome h1")).toBe("Speech models");
+            expect(await page.isVisible("#setup-bar")).toBe(false);
             // One row per model the download fetches, the recognizer first, each with its size.
             await page.waitForSelector("#models-rows:not([hidden]) li >> nth=1");
             expect(
@@ -2299,18 +2307,10 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
               expect(await page.isVisible(sel)).toBe(false);
             }
 
-            // The agent step's quiet button opens Settings on the provider field.
-            await page.click("#welcome-agent");
+            // A page opened over the welcome (the assistant is the setup's step now, not a card
+            // here); the sidebar's Calls is the way back to the welcome.
+            await page.click("#settings-open");
             await page.waitForSelector("#page-settings:not([hidden])");
-            await until(
-              async () =>
-                (await page.evaluate(
-                  () => (document.activeElement as HTMLElement | null)?.dataset.key,
-                )) === "provider.kind",
-              5000,
-              "the provider setting focused",
-            );
-            // The sidebar's Calls is the way back to the welcome.
             await page.click("#calls-open");
             await page.waitForSelector("#welcome", { state: "visible" });
 
@@ -2363,7 +2363,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
   );
 
   test(
-    "a call picked from the sidebar lifts the welcome; the readiness row brings it back",
+    "a call picked from the sidebar lifts the first-run setup; the readiness row brings it back on the models step",
     async () => {
       // One model file that is not on disk, so the welcome shows; nothing is downloaded.
       const modelRegistry = [
@@ -2382,7 +2382,8 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
         { modelRegistry, seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
         async (rig) => {
           const page = await rig.open();
-          await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
+          // A first run: the setup opens by itself on what akou is for.
+          await page.waitForSelector("#welcome:not([hidden]) [data-use='both'] input:checked");
           // The saved call opens behind the welcome on its own; the word still follows the welcome.
           expect(await text(page, "#state")).toBe("setup");
           // The saved call is listed while the welcome shows, and one click opens it.
@@ -2392,9 +2393,11 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
           expect(await text(page, "#state")).toBe("saved");
           expect(await page.getAttribute("#scroller", "hidden")).toBeNull();
           expect(await text(page, "#readiness-text")).toBe("Models missing");
-          // Setup 1 of 3 goes back to the welcome, on its download.
+          // Set up goes back to the setup, on the models step and its download.
           await page.click("#readiness-setup");
-          await page.waitForSelector("#welcome:not([hidden])");
+          await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
+          expect(await text(page, "#welcome h1")).toBe("Speech models");
+          expect(await text(page, "#setup-count")).toBe("Step 4 of 6");
           expect(await page.getAttribute("#scroller", "hidden")).toBe("");
           expect(await page.evaluate(() => document.activeElement?.id)).toBe("models-pull");
         },
@@ -2419,7 +2422,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
         },
       ];
       await withRig({ modelRegistry }, async (rig) => {
-        const page = await rig.open();
+        const page = await rig.open(undefined, { before: setupDone });
         await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
 
         // The request itself fails (the app quit, the network dropped): the button says so.
