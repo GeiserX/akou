@@ -35,9 +35,13 @@ import {
 } from "../src/main/window/install-cli.ts";
 import { windowRpc } from "../src/main/window/rpc.ts";
 import {
+  fitIndicator,
   hotkeyFor,
+  INDICATOR_MAX_WIDTH,
+  INDICATOR_MIN_WIDTH,
   INDICATOR_SIZE,
   placeFrame,
+  placeIndicator,
   QUIT_QUESTION,
   type Rect,
   Shell,
@@ -990,12 +994,66 @@ describe("[DK-F1] the floating indicator, in the shell", () => {
     expect(a.state.openedOn).toBe("c1");
     expect(Object.keys(handlers).sort()).toEqual([
       "control",
+      "fit",
       "follow",
       "openMain",
       "status",
       "unfollow",
     ]);
     await shell.close();
+  });
+
+  test("the window is made as wide as the pill, keeping its right edge; a width that is no number is refused", async () => {
+    const f = fakeUi();
+    const store = memoryState();
+    const { shell, feed } = await eventShell(f, { state: store });
+    feed("call.created");
+    await until(() => f.indicator() !== null, 1000, "the indicator");
+    const fitTo = f.indicator()?.rpc.handlers.fit as (p: { width: number }) => Promise<boolean>;
+    const right = 1440 - 16;
+    expect(await fitTo({ width: 371.4 })).toBe(true);
+    expect(f.indicator()?.frame).toEqual({ x: right - 372, y: 16, width: 372, height: 40 });
+    expect(await fitTo({ width: 402 })).toBe(true);
+    expect(f.indicator()?.frame).toEqual({ x: right - 402, y: 16, width: 402, height: 40 });
+    for (const width of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0, "400" as unknown as number]) {
+      expect(await fitTo({ width })).toBe(false);
+      expect(f.indicator()?.frame.width).toBe(402);
+    }
+    // Where it was left and how wide it was is what the next one opens with.
+    feed("part.ended", { part: 1, reason: "stop" });
+    expect(store.load().indicator).toEqual({ x: right - 402, y: 16, width: 402, height: 40 });
+    feed("call.created");
+    await until(() => f.indicator()?.opened === 2, 1000, "the second indicator");
+    expect(f.indicator()?.frame).toEqual({ x: right - 402, y: 16, width: 402, height: 40 });
+    await shell.close();
+  });
+});
+
+describe("[DK-F1] fitIndicator and placeIndicator", () => {
+  const areas = [{ x: 0, y: 0, width: 1440, height: 875 }];
+  test("a width is held between the bounds and rounded up; the window stays on its display", () => {
+    const at = { x: 900, y: 16, width: 480, height: 40 };
+    expect(fitIndicator(at, 20, areas).width).toBe(INDICATOR_MIN_WIDTH);
+    expect(fitIndicator(at, 5000, areas).width).toBe(INDICATOR_MAX_WIDTH);
+    expect(fitIndicator(at, 300.2, areas)).toEqual({ x: 1079, y: 16, width: 301, height: 40 });
+    // At the left edge, a pill that grows is pulled back on screen rather than off it.
+    expect(fitIndicator({ x: 0, y: 16, width: 300, height: 40 }, 400, areas).x).toBe(0);
+    // With no display reported, the right edge alone decides.
+    expect(fitIndicator(at, 300, [])).toEqual({ x: 1080, y: 16, width: 300, height: 40 });
+  });
+
+  test("a saved place opens as wide as it was; with none, 480 px at the top right", () => {
+    expect(placeIndicator({ x: 100, y: 50, width: 372, height: 40 }, areas)).toEqual({
+      x: 100,
+      y: 50,
+      width: 372,
+      height: 40,
+    });
+    expect(placeIndicator(undefined, areas)).toEqual({
+      x: 1440 - INDICATOR_SIZE.width - 16,
+      y: 16,
+      ...INDICATOR_SIZE,
+    });
   });
 });
 
@@ -1023,7 +1081,7 @@ describe("[DK-F1] the indicator's RPC carries no call content", () => {
       const ind = indicatorRpc(
         bridge,
         () => ({ followed: (m) => pushes.push(m), status: (m) => pushes.push(m) }),
-        { openMain: async () => void opened++ },
+        { openMain: async () => void opened++, fit: () => {} },
       );
       // The same call through the main window's RPC: the positive control.
       const winPushes: unknown[] = [];

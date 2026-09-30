@@ -3,7 +3,8 @@
  * only. The main side (`src/main/window/indicator.ts`) cuts everything to these shapes, so no
  * title, workspace, line, partial, name or device name can reach the page: the page gets the live
  * call's id, state and mute, the part, pause, resume and health events, and the levels. Its
- * requests are the live call's stop, mute and unmute, and a click that opens the main window.
+ * requests are the live call's stop, mute and unmute, a click that opens the main window, and the
+ * width its pill takes, which the window is sized to.
  */
 
 import type { Levels } from "./protocol.ts";
@@ -42,6 +43,8 @@ export interface IndicatorRpc {
       control: { params: { action: "stop" | "mute" | "unmute" }; response: boolean };
       /** A click on the indicator: the main window on the live call. */
       openMain: { params: Record<string, never>; response: boolean };
+      /** The pill's width, CSS px: the window is made exactly that wide. */
+      fit: { params: { width: number }; response: boolean };
     };
     messages: Record<string, never>;
   };

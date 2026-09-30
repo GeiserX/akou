@@ -1,9 +1,14 @@
 /**
  * How a level bar moves (WINDOW W3.18): the levels arrive four times a second, each the peak of
  * one capture packet, so a bar set straight from them jumps in steps and flickers between loud and
- * quiet packets. The bar is drawn per animation frame instead: it rises to a louder level almost
- * at once (attack) and falls back slowly (release), as a hardware level meter does. The window's
- * two meters and the indicator's two use the same code.
+ * quiet packets. The window's bar is drawn per animation frame instead: it rises to a louder level
+ * almost at once (attack) and falls back slowly (release), as a hardware level meter does.
+ *
+ * The floating indicator's two bars follow the same attack and release, but move only when a level
+ * is pushed (`PushedMeters`). WebKit runs no animation frame in a page it does not count as shown,
+ * which on macOS is the never-activated indicator, and may run its timers only once a second
+ * there, so neither can drive its bars; the pushed levels (the capture's, four a second) always
+ * arrive, which is why its time and state always update.
  */
 
 import type { Levels } from "./protocol.ts";
@@ -82,5 +87,40 @@ export class SmoothMeters {
       if (next !== this.target[ch]) moving = true;
     }
     if (moving) this.frame = this.raf((t2) => this.step(t2));
+  }
+}
+
+/**
+ * The indicator's two bars (DESKTOP DK-F1): each pushed level moves them once, by what the attack
+ * and the release allow in the time since the last push, and draws at once. No frame and no timer,
+ * so they move in a window that gets neither.
+ */
+export class PushedMeters {
+  private shown: Levels = { mic: METER_FLOOR, call: METER_FLOOR };
+  private at: number | null = null;
+
+  constructor(
+    private readonly draw: (ch: Channel, db: number) => void,
+    private readonly now: () => number = () => performance.now(),
+  ) {}
+
+  set(l: Levels): void {
+    const t = this.now();
+    // The first level after a reset is drawn as it is: there is no earlier one to fall from.
+    const dt = this.at === null ? Number.POSITIVE_INFINITY : t - this.at;
+    this.at = t;
+    for (const ch of ["mic", "call"] as const) {
+      const next = meterStep(this.shown[ch], l[ch], dt);
+      if (next !== this.shown[ch]) {
+        this.shown[ch] = next;
+        this.draw(ch, next);
+      }
+    }
+  }
+
+  reset(): void {
+    this.shown = { mic: METER_FLOOR, call: METER_FLOOR };
+    this.at = null;
+    for (const ch of ["mic", "call"] as const) this.draw(ch, METER_FLOOR);
   }
 }
