@@ -11,7 +11,7 @@
 //!
 //! | `type` | fields |
 //! |---|---|
-//! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied`, `not-asked` on a macOS microphone never asked for, or `not-needed`) |
+//! | `ready` | `protocol`, `version`, `backend`, `swallow_keys`, `grants: {mic, accessibility}` (`granted`, `denied`, `not-asked` on a macOS microphone never asked for, or `not-needed`). Said again, with `swallow_keys` true and Accessibility `granted`, when the macOS key tap comes up after the start because the grant was given while the helper ran, once no session or paste is in flight |
 //! | `press` | `on`: `true` when the dictation key went down and the press may become a session, with `frame: {x, y, width, height}` of the window that has the keyboard then (screen points from the top left of the primary display) where the backend can read it, so the pill shows its dot on that display (DC-O1); `false` when the press was not a dictation after all (another key during a modifier-only hold, a rebind). A press that becomes a session says nothing more: `session.started` follows |
 //! | `session.started` | `id`, `target: {app, pid, window, field}`, `capture_ns` (of the session's first sample), and `mic: {transport, why}` when a device backend chose the mic (DC-N5): `transport` `built-in`, `bluetooth` or `other`; `why` `pinned`, `built-in` (instead of a Bluetooth default), `default` or `fallback` |
 //! | `level` | `rms` (linear, 0 to 1), 20 per second while a session runs or `meter` is on |
