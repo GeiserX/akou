@@ -18,6 +18,8 @@
  *   the next pull resumes. 404 when it is not downloading.
  * - `DELETE /models/{id}`: deletes one model under the sweep's rules; 409 `model_in_use` for the
  *   default's set or a model in use.
+ * - `POST /models/import`: `{"dir": path}` copies every catalog file whose SHA-256 matches from that
+ *   folder on this machine, as `akou models import DIR` does.
  *
  * Until the models are there, `POST /calls` answers `503 models_missing`.
  */
@@ -106,6 +108,27 @@ export function modelRoutes(r: Router<ApiApp>): void {
         throw new HttpError(404, "not_found", `${id} is not downloading`, { model: id });
       }
       return json(200, { model: id, cancelled: true });
+    },
+  );
+  r.add(
+    "POST",
+    "/models/import",
+    {
+      id: "models.import",
+      doc: "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing. 404 when the folder does not exist.",
+      access: "admin",
+      modes: ["app", "server"],
+      body: { dir: "string" },
+      ok: 200,
+    },
+    async (c) => {
+      const b = await c.body<{ dir?: unknown }>();
+      if (typeof b.dir !== "string" || b.dir.trim() === "") {
+        throw new HttpError(422, "bad_field", "dir is a folder on this machine", { field: "dir" });
+      }
+      const imp = c.app.importModels;
+      if (!imp) throw new HttpError(404, "not_found", "this akou imports no models");
+      return json(200, await imp.call(c.app, b.dir.trim()));
     },
   );
   r.add(

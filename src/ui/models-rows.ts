@@ -5,8 +5,8 @@
  * Pure, so the tests read it without a browser.
  */
 
-import { everyText } from "../main/asr/live-names.ts";
 import type { LiveSetupView, LiveView, ReviewChoiceView } from "../main/asr/live-setups.ts";
+import { everyText } from "../main/asr/model-text.ts";
 import type { ModelView, ScoreView } from "../main/server/model-store.ts";
 import { when } from "./server-text.ts";
 
@@ -83,9 +83,6 @@ export function modelName(r: Pick<ModelRow, "id" | "job">): string {
   return r.id;
 }
 
-/** The live models on the page, in its order: Automatic first, Voxtral last. */
-export const LIVE_ORDER = ["auto", "nemotron", "parakeet", "voxtral"] as const;
-
 /** A live model's name on the page: Automatic, or the model's own name (`Nemotron 3.5`). */
 export function liveName(id: string, title = id): string {
   return id === "auto" ? "Automatic" : title;
@@ -98,11 +95,6 @@ export const REVIEW_EVERY = [60, 120, 300] as const;
 export function everyLabel(seconds: number): string {
   const t = everyText(seconds);
   return t.charAt(0).toUpperCase() + t.slice(1);
-}
-
-/** A second pass's facts on the page: what stops it here, or what it does. */
-export function reviewHelp(c: ReviewChoiceView): string {
-  return c.blocked ?? c.plain;
 }
 
 /** `2.55 GB`, `40 MB`, `644 KB`, in powers of ten as the settings count them. */
@@ -183,22 +175,6 @@ export function autoHelp(v: LiveView, here: string): string {
   return streams
     ? `Uses ${name}, since it is on ${here}.`
     : `Uses Parakeet until ${name} is on ${here}.`;
-}
-
-/**
- * Where the tags go: "next call" on the row the next call runs, "this call" on the row the live
- * call runs. With Automatic chosen, the setup it resolves to is marked on Automatic's own row.
- * One row both runs now and runs next: it says "this call".
- */
-export function liveTags(v: LiveView): Map<string, string[]> {
-  const rowOf = (id: string) => (v.setting === "auto" && id === v.next ? "auto" : id);
-  const out = new Map<string, string[]>();
-  const add = (row: string, tag: string) => out.set(row, [...(out.get(row) ?? []), tag]);
-  const running = v.running ? rowOf(v.running) : null;
-  if (running) add(running, "this call");
-  const next = rowOf(v.next);
-  if (next !== running) add(next, "next call");
-  return out;
 }
 
 /** The After the call row's facts: what it does, its accuracy, and how fast. */

@@ -1,226 +1,200 @@
 /**
- * What the Record row's live model menu lists (docs/ux/WINDOW.md W3.19, `src/ui/live-options.ts`),
- * without the DOM: the live models by name, a model that is not downloaded dim, never an
- * unavailable one, no Automatic line, the check on what `auto` resolves to, and the second pass's
- * choices and line. The browser suite (`tests/ui/live-picker.test.ts`) checks the same menu on the
+ * What the Record row's live panel shows (docs/ux/WINDOW.md W3.19, `src/ui/live-options.ts`),
+ * without the DOM: each slot's models with the catalog's names and lines, which are downloaded,
+ * the radio on what the next call runs (no Automatic row), the notes, and what the button and the
+ * call header say. The browser suite (`tests/ui/live-picker.test.ts`) checks the same panel on the
  * real page.
  */
 
 import { describe, expect, test } from "bun:test";
-import type {
-  LiveSetupView,
-  LiveView,
-  ReviewChoiceView,
-  ReviewRun,
-} from "../src/main/asr/live-setups.ts";
+import type { LiveView, SlotEntry } from "../src/main/asr/live-setups.ts";
+import type { ModelView } from "../src/main/server/model-store.ts";
 import {
-  liveChecked,
+  buttonLabel,
+  everyShort,
   liveChip,
   liveNote,
-  liveOptions,
-  reviewChecked,
-  reviewLabel,
   reviewNote,
-  reviewOptions,
+  runningLabel,
+  sizeShort,
+  slotRows,
 } from "../src/ui/live-options.ts";
 
-type State = "ready" | "downloading" | "missing";
-const none: LiveSetupView["accuracy"] = { score: null, not_measured: "not measured" };
-const TITLES: Record<string, string> = {
-  nemotron: "Nemotron 3.5",
-  parakeet: "Parakeet",
-  voxtral: "Voxtral Realtime",
-};
+type State = ModelView["state"];
+const none: ModelView["accuracy"] = { score: null, not_measured: "not measured" };
 
-function setup(id: LiveSetupView["id"], models: State[], unavailable: string | null = null) {
+function row(
+  id: string,
+  name: string,
+  lines: ModelView["lines"],
+  state: State = "ready",
+  o: Partial<ModelView> = {},
+): ModelView {
   return {
     id,
-    title: TITLES[id] ?? id,
-    what: id,
-    plain: id,
-    line: `${id} line`,
-    unavailable,
-    selected: false,
-    running: false,
-    models: models.map((state, i) => ({ id: `${id}-${i}`, state })),
+    kind: "speech",
+    job: id,
+    name,
+    short: null,
+    lines,
+    languages: null,
+    streaming: false,
+    after_call: false,
+    from: [],
+    state,
+    bytes: state === "ready" ? 7e8 : 0,
+    size: 7e8,
+    last_used_at: null,
+    evicts_at: null,
+    default: false,
+    in_use: false,
     accuracy: none,
-    latency: none,
-    cores: none,
-    memory: none,
-  } satisfies LiveSetupView;
+    speed: none,
+    measured: null,
+    set_default: null,
+    ...o,
+  };
 }
 
-function choice(id: ReviewChoiceView["id"], models: State[], blocked: string | null = null) {
-  return {
-    id,
-    title: id === "qwen" ? "Qwen" : "Parakeet",
-    what: id,
-    plain: `${id} plain`,
-    line: `${id} line`,
-    models: models.map((state, i) => ({ id: `${id}-${i}`, state })),
-    blocked,
-  } satisfies ReviewChoiceView;
+const NEM = "nemotron-3.5-560";
+const STEADY = "nemotron-3.5-1120";
+const PK = "parakeet-tdt-0.6b-v3-fp32";
+const QWEN = "qwen3-asr-1.7b";
+const RUNTIME = "llama-server-build";
+
+function rows(states: Partial<Record<string, State>> = {}): ModelView[] {
+  return [
+    row(NEM, "Nemotron 3.5", { live: "Words appear as they are said." }, states[NEM]),
+    row(STEADY, "Nemotron 3.5, steadier", { live: "Waits about a second." }, states[STEADY]),
+    row(PK, "Parakeet", { live: "Writes each sentence.", review: "Hears again." }, states[PK]),
+    row(QWEN, "Qwen3-ASR", { review: "Rewrites the lines." }, states[QWEN], { short: "Qwen" }),
+    row(RUNTIME, "", {}, states[RUNTIME], { size: 3e7 }),
+  ];
 }
 
-function view(
-  setting: LiveView["setting"],
-  next: LiveView["next"],
-  s: { parakeet: State[]; nemotron: State[] },
-  review: Partial<LiveView["review"]> = {},
-): LiveView {
+const entry = (id: string, checked = false, models = [id], blocked: string | null = null) =>
+  ({ id, models, checked, blocked }) satisfies SlotEntry;
+
+function view(o: {
+  setting?: string;
+  live?: SlotEntry[];
+  review?: SlotEntry[];
+  reviewSetting?: string;
+  next?: LiveView["review"]["next"];
+  every?: number;
+}): LiveView {
   return {
-    setting,
-    next,
+    setting: o.setting ?? "auto",
+    next: "nemotron",
     note: null,
     running: null,
-    setups: [
-      setup("nemotron", s.nemotron),
-      setup("parakeet", s.parakeet),
-      // Voxtral lists no models and is unavailable: never a line, whatever the disk holds.
-      setup("voxtral", [], "not in this version"),
-    ],
+    runningId: null,
+    setups: [],
     review: {
-      setting: "none",
-      everySeconds: 60,
-      next: null,
+      setting: o.reviewSetting ?? "none",
+      everySeconds: o.every ?? 60,
+      next: o.next ?? null,
       running: null,
-      choices: [choice("qwen", ["ready", "ready"]), choice("parakeet", ["ready"])],
-      ...review,
+      choices: [],
+    },
+    slots: {
+      live: o.live ?? [entry(NEM, true), entry(STEADY), entry(PK)],
+      review: o.review ?? [entry(QWEN, false, [QWEN, RUNTIME]), entry(PK)],
     },
   };
 }
 
-const ids = (v: LiveView) => liveOptions(v).map((o) => [o.id, o.title, o.ready]);
-
-describe("W3.19: the live model menu's lines", () => {
-  test("the models by name, Nemotron first, no Automatic line, never Voxtral", () => {
-    const v = view("auto", "nemotron", { parakeet: ["ready"], nemotron: ["ready"] });
-    expect(ids(v)).toEqual([
-      ["nemotron", "Nemotron 3.5", true],
-      ["parakeet", "Parakeet", true],
+describe("W3.19: the live panel's slots", () => {
+  test("each slot lists its models by the catalog's name and line, no Automatic row", () => {
+    const v = view({});
+    const live = slotRows(v, rows({ [STEADY]: "missing" }), "live");
+    expect(live.map((r) => [r.id, r.name, r.line, r.state, r.checked])).toEqual([
+      [NEM, "Nemotron 3.5", "Words appear as they are said.", "ready", true],
+      [STEADY, "Nemotron 3.5, steadier", "Waits about a second.", "missing", false],
+      [PK, "Parakeet", "Writes each sentence.", "ready", false],
     ]);
-    expect(liveOptions(v).map((o) => o.line)).toEqual(["nemotron line", "parakeet line"]);
-  });
-
-  test("a model not downloaded, or still downloading, is listed but cannot be picked", () => {
-    const v = view("auto", "parakeet", { parakeet: ["ready"], nemotron: ["downloading"] });
-    expect(ids(v)).toEqual([
-      ["nemotron", "Nemotron 3.5", false],
-      ["parakeet", "Parakeet", true],
+    expect(live.some((r) => r.id === "auto")).toBe(false);
+    // The second pass takes each model's own line for that slot.
+    expect(slotRows(v, rows(), "review").map((r) => [r.name, r.line])).toEqual([
+      ["Qwen3-ASR", "Rewrites the lines."],
+      ["Parakeet", "Hears again."],
     ]);
-    expect(liveChecked(v, liveOptions(v))).toBe("parakeet");
   });
 
-  test("nothing downloaded: no line at all", () => {
-    const v = view("auto", "parakeet", { parakeet: ["missing"], nemotron: ["missing"] });
-    expect(liveOptions(v)).toEqual([]);
-    expect(liveChecked(v, liveOptions(v))).toBeNull();
-    expect(liveNote(v, liveOptions(v))).toBeNull();
+  test("a model that needs two downloads is here only when both are, and its size is both", () => {
+    const v = view({});
+    const [qwen] = slotRows(v, rows({ [RUNTIME]: "missing" }), "review");
+    expect([qwen?.state, qwen?.size]).toEqual(["missing", 7e8 + 3e7]);
+    const [going] = slotRows(v, rows({ [QWEN]: "downloading" }), "review");
+    expect(going?.state).toBe("downloading");
   });
 
-  test("with auto the check sits on what auto resolves to; a named model on itself", () => {
-    const both = { parakeet: ["ready"] as State[], nemotron: ["ready"] as State[] };
-    const auto = view("auto", "nemotron", both);
-    expect(liveChecked(auto, liveOptions(auto))).toBe("nemotron");
-    const fell = view("auto", "parakeet", { ...both, nemotron: ["missing"] });
-    expect(liveChecked(fell, liveOptions(fell))).toBe("parakeet");
-    const named = view("parakeet", "parakeet", both);
-    expect(liveChecked(named, liveOptions(named))).toBe("parakeet");
-    expect(liveNote(named, liveOptions(named))).toBeNull();
+  test("the button: the model the next call runs, and the second pass dim beside it", () => {
+    expect(buttonLabel(view({}), rows())).toEqual({
+      name: "Nemotron 3.5",
+      extra: null,
+      none: false,
+    });
+    const on = view({
+      review: [entry(QWEN, true, [QWEN, RUNTIME]), entry(PK)],
+      next: { model: "qwen", everySeconds: 120 },
+    });
+    expect(buttonLabel(on, rows())).toEqual({
+      name: "Nemotron 3.5",
+      extra: "+ Qwen 2 min",
+      none: false,
+    });
+    // No live model downloaded: "no model".
+    const bare = rows({ [NEM]: "missing", [STEADY]: "missing", [PK]: "missing" });
+    expect(buttonLabel(view({ live: [entry(NEM), entry(STEADY), entry(PK)] }), bare)).toEqual({
+      name: "no model",
+      extra: null,
+      none: true,
+    });
   });
 
-  test("a saved model that is not here checks nothing, with a note naming what runs", () => {
-    const gone = view("nemotron", "parakeet", { parakeet: ["ready"], nemotron: ["missing"] });
-    expect(liveChecked(gone, liveOptions(gone))).toBeNull();
-    expect(liveNote(gone, liveOptions(gone))).toBe(
-      "Nemotron 3.5 is not downloaded, so calls run Parakeet until it is.",
+  test("a saved model that is not here: the note names what runs until it is", () => {
+    const v = view({ setting: STEADY, live: [entry(NEM, true), entry(STEADY), entry(PK)] });
+    expect(liveNote(v, rows({ [STEADY]: "missing" }))).toBe(
+      "Nemotron 3.5, steadier is not downloaded, so calls run Nemotron 3.5 until it is.",
     );
-  });
-});
-
-describe("W3.19: the second pass in the menu", () => {
-  const both = { parakeet: ["ready"] as State[], nemotron: ["ready"] as State[] };
-  const run = (model: ReviewRun["model"], everySeconds = 120): ReviewRun => ({
-    model,
-    everySeconds,
+    expect(liveNote(view({}), rows())).toBeNull();
   });
 
-  test("Off, then Qwen and Parakeet; its line names the model and how often", () => {
-    const off = view("auto", "nemotron", both);
-    expect(reviewOptions(off).map((o) => [o.id, o.title, o.state])).toEqual([
-      ["none", "Off", "ready"],
-      ["qwen", "Qwen", "ready"],
-      ["parakeet", "Parakeet", "ready"],
-    ]);
-    expect(reviewLabel(off)).toBe("Off");
-    expect(reviewChecked(off, reviewOptions(off))).toBe("none");
-    const on = view("auto", "nemotron", both, { setting: "qwen", next: run("qwen") });
-    expect(reviewLabel(on)).toBe("Qwen, every 2 min");
-    expect(reviewChecked(on, reviewOptions(on))).toBe("qwen");
-  });
-
-  test("Qwen not downloaded is dim with Get, and chosen it checks nothing and says calls run without it", () => {
-    const v = view("auto", "nemotron", both, {
-      setting: "qwen",
-      choices: [choice("qwen", ["ready", "missing"])],
-    });
-    const o = reviewOptions(v);
-    expect(o.map((x) => [x.id, x.state])).toEqual([
-      ["none", "ready"],
-      ["qwen", "missing"],
-    ]);
-    expect(reviewChecked(v, o)).toBeNull();
-    expect(reviewNote(v, o)).toBe(
-      "Qwen is not downloaded, so calls run with no second pass until it is.",
+  test("a saved second pass that cannot run says why; Off says nothing", () => {
+    expect(reviewNote(view({ reviewSetting: QWEN }), rows({ [QWEN]: "missing" }))).toBe(
+      "Qwen3-ASR is not downloaded, so calls run with no second pass until it is.",
     );
-    expect(reviewLabel(v)).toBe("Off");
-  });
-
-  test("Qwen the Mac is not offered on is dim with the reason; chosen anyway it runs, and keeps its check", () => {
-    const why = "Needs 16 GB of memory; this computer has 8 GB.";
-    const offered = view("auto", "nemotron", both, { choices: [choice("qwen", ["ready"], why)] });
-    expect(reviewOptions(offered)[1]).toEqual({
-      id: "qwen",
-      title: "Qwen",
-      line: why,
-      state: "blocked",
-      why,
-    });
-    const chosen = view("auto", "nemotron", both, {
-      setting: "qwen",
-      next: run("qwen"),
-      choices: [choice("qwen", ["ready"], why)],
-    });
-    expect(reviewChecked(chosen, reviewOptions(chosen))).toBe("qwen");
-    expect(reviewNote(chosen, reviewOptions(chosen))).toBeNull();
-    expect(reviewLabel(chosen)).toBe("Qwen, every 2 min");
-  });
-
-  test("Parakeet's pass with Parakeet live is dim, and says why", () => {
-    const v = view("parakeet", "parakeet", both, {
-      choices: [
-        choice("qwen", ["ready"], "It reviews Nemotron's lines; the live model is Parakeet."),
-        choice("parakeet", ["ready"], "Parakeet already writes the live lines."),
+    const blocked = view({
+      reviewSetting: "parakeet",
+      review: [
+        entry(QWEN, false, [QWEN, RUNTIME]),
+        entry(PK, false, [PK], "Parakeet already writes the live lines."),
       ],
     });
-    const o = reviewOptions(v);
-    expect(o.map((x) => [x.id, x.state, x.line])).toEqual([
-      ["none", "ready", "The live lines stay as they were written."],
-      ["qwen", "blocked", "It reviews Nemotron's lines; the live model is Parakeet."],
-      ["parakeet", "blocked", "Parakeet already writes the live lines."],
-    ]);
+    expect(reviewNote(blocked, rows())).toBe(
+      "Parakeet is chosen, but calls run with no second pass: parakeet already writes the live lines.",
+    );
+    expect(reviewNote(view({}), rows())).toBeNull();
   });
 
-  test("the call header's chip: the model by name, and the second pass when on", () => {
-    expect(liveChip({ setup: "nemotron", engine: "nemotron-3.5-560" })).toBe("Live: Nemotron 3.5");
-    expect(
-      liveChip({
-        setup: "nemotron",
-        engine: "nemotron-en-560",
-        review: { model: "qwen", everySeconds: 120 },
-      }),
-    ).toBe("Live: Nemotron English, Qwen every 2 min");
-    expect(liveChip({ setup: "parakeet", engine: null })).toBe("Live: Parakeet");
+  test("while a call records, the button and the header chip say what that call runs", () => {
+    const live = {
+      setup: "nemotron",
+      engine: NEM,
+      name: "Nemotron 3.5",
+      review: { model: "qwen", everySeconds: 120 },
+      reviewName: "Qwen",
+    };
+    expect(runningLabel(live)).toEqual({ name: "Nemotron 3.5", extra: "+ Qwen 2 min" });
+    expect(liveChip(live)).toBe("Live: Nemotron 3.5 + Qwen 2 min");
+    expect(liveChip({ setup: "parakeet", name: "Parakeet" })).toBe("Live: Parakeet");
     expect(liveChip({ setup: null })).toBeNull();
+    expect([everyShort(60), everyShort(300), everyShort(90)]).toEqual(["1 min", "5 min", "90 s"]);
+    expect([sizeShort(7.3e8), sizeShort(2.55e9), sizeShort(4e7)]).toEqual([
+      "0.7 GB",
+      "2.5 GB",
+      "40 MB",
+    ]);
   });
 });

@@ -353,7 +353,13 @@ export const PARITY: readonly Row[] = [
   {
     action: "Speech models",
     cli: ["models"],
-    api: ["GET /models", "POST /models/pull", "POST /models/cancel", "DELETE /models/:id"],
+    api: [
+      "GET /models",
+      "POST /models/pull",
+      "POST /models/cancel",
+      "DELETE /models/:id",
+      "POST /models/import",
+    ],
     mcp: {
       none: "no tool: the Models page and `akou models` own downloads and deletes; akou_status reports the models in use",
     },
@@ -362,6 +368,7 @@ export const PARITY: readonly Row[] = [
       ui("models-page.ts", '"DELETE",'),
       ui("models-page.ts", '"POST", "/models/cancel"'),
       ui("models-page.ts", '"GET", "/models"'),
+      ui("live-picker.ts", '"POST", "/models/import"'),
     ],
   },
   {
@@ -373,8 +380,7 @@ export const PARITY: readonly Row[] = [
     window: [
       ui("models-page.ts", 'this.patch("asr.live"'),
       ui("models-page.ts", 'this.patch("asr.review.model"'),
-      ui("live-picker.ts", 'this.save("asr.live", id'),
-      ui("live-picker.ts", 'this.save("asr.review.model", o.id)'),
+      ui("live-picker.ts", 'await this.save(KEY[slot], id)'),
       ui("live-picker.ts", 'this.save("asr.review.everySeconds", s)'),
       app("...(live ?? {})"),
       app("liveChip(running)"),

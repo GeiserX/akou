@@ -26,7 +26,6 @@ import {
   joinAnd,
   keptText,
   liveHelp,
-  liveTags,
   MODELS_KEYS,
   type ModelRow,
   modelName,
@@ -48,6 +47,9 @@ function row(id: string, o: Partial<ModelRow> = {}): ModelRow {
     id,
     kind: "speech",
     job: "a recognizer",
+    name: null,
+    short: null,
+    lines: {},
     languages: ["en", "es"],
     streaming: false,
     after_call: true,
@@ -94,6 +96,8 @@ function view(o: Partial<LiveView>): LiveView {
     running: null,
     setups: (["nemotron", "parakeet", "voxtral"] as const).map(setup),
     review: { setting: "none", everySeconds: 60, next: null, running: null, choices: [] },
+    slots: { live: [], review: [] },
+    runningId: null,
     ...o,
   };
 }
@@ -166,29 +170,12 @@ describe("[SV-U6] facts as plain sentences, each accuracy figure naming its test
   });
 });
 
-describe("[SV-U6] the live transcript's marks", () => {
-  test("Automatic chosen: the setup it runs is marked on Automatic's own row", () => {
-    expect([...liveTags(view({}))]).toEqual([["auto", ["next call"]]]);
+describe("[SV-U6] the live transcript's Automatic row", () => {
+  test("it says what it runs here: Nemotron once a streaming model is here, else Parakeet", () => {
     expect(autoHelp(view({}), "this Mac")).toBe("Uses Nemotron, since it is on this Mac.");
     expect(autoHelp(view({ next: "parakeet" }), "this Mac")).toBe(
       "Uses Parakeet until Nemotron is on this Mac.",
     );
-  });
-
-  test("during a call the row it runs says this call, and a change made since says next call", () => {
-    expect([...liveTags(view({ running: "nemotron" }))]).toEqual([["auto", ["this call"]]]);
-    expect([
-      ...liveTags(view({ setting: "parakeet", next: "parakeet", running: "nemotron" })),
-    ]).toEqual([
-      ["nemotron", ["this call"]],
-      ["parakeet", ["next call"]],
-    ]);
-  });
-
-  test("a model chosen by name whose files are missing: the next call's fallback is marked", () => {
-    expect([...liveTags(view({ setting: "nemotron", next: "parakeet" }))]).toEqual([
-      ["parakeet", ["next call"]],
-    ]);
   });
 });
 

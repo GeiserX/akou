@@ -9,7 +9,7 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent, Seg } from "../src/core/log/events.ts";
 import { type Provisional, ProvisionalBoard } from "../src/core/log/fold.ts";
@@ -200,7 +200,7 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
     });
     expect(
       rig.logs.some((l) =>
-        /runs the nemotron live model .*no Qwen second pass: Needs qwen3-asr-1.7b/.test(l.msg),
+        /runs the nemotron live model .*no Qwen3-ASR second pass: Needs qwen3-asr-1.7b/.test(l.msg),
       ),
     ).toBe(true);
     // A call's own `live: "upgrade"` is the same pair.
@@ -210,7 +210,7 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
     expect(
       rig.logs
         .slice(before)
-        .some((l) => /runs the nemotron live model .*no Qwen second pass/.test(l.msg)),
+        .some((l) => /runs the nemotron live model .*no Qwen3-ASR second pass/.test(l.msg)),
     ).toBe(true);
   });
 
@@ -222,7 +222,7 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
       rig.logs
         .slice(before)
         .some((l) =>
-          /runs the nemotron live model .*no Qwen second pass: Needs qwen3-asr-1.7b/.test(l.msg),
+          /runs the nemotron live model .*no Qwen3-ASR second pass: Needs qwen3-asr-1.7b/.test(l.msg),
         ),
     ).toBe(true);
     for (const [body, field] of [
@@ -326,5 +326,28 @@ describe("[akou-chp.23] GET /models lists the live models and the second pass", 
     // The streaming model the next call runs is the app's: never swept, never deleted.
     const row = r.body.models.find((m: Body) => m.id === STREAM);
     expect(row).toMatchObject({ default: true, state: "ready" });
+  });
+});
+
+describe("[W3.19] POST /models/import copies the models found in a folder", () => {
+  test("a model's files in a folder land in the models folder; a missing folder is 404, no folder 400", async () => {
+    const stick = join(home.dir, "stick");
+    mkdirSync(stick, { recursive: true });
+    reg.install(stick, reg.entry(QWEN_ASR, ["q.gguf"]));
+    const state = async () =>
+      (await rig.api("GET", "/models")).body.models.find((m: Body) => m.id === QWEN_ASR)?.state;
+    expect(await state()).toBe("missing");
+    const r = await rig.api("POST", "/models/import", { dir: stick });
+    expect(r.status).toBe(200);
+    expect(r.body.copied).toEqual([`${QWEN_ASR}/q.gguf`]);
+    expect(await state()).toBe("ready");
+    const gone = await rig.api("POST", "/models/import", { dir: join(stick, "nope") });
+    expect([gone.status, gone.body.error]).toEqual([404, "not_found"]);
+    const bad = await rig.api("POST", "/models/import", {});
+    expect([bad.status, bad.body.field]).toEqual([400, "dir"]);
+    // Control: the same folder again copies nothing new, and the model stays.
+    rmSync(join(stick, QWEN_ASR), { recursive: true });
+    expect((await rig.api("POST", "/models/import", { dir: stick })).body.copied).toEqual([]);
+    expect(await state()).toBe("ready");
   });
 });

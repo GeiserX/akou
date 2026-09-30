@@ -16,12 +16,21 @@
  */
 
 import { createHash } from "node:crypto";
-import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
+import {
+  copyFileSync,
+  createReadStream,
+  existsSync,
+  mkdirSync,
+  renameSync,
+  rmSync,
+  statSync,
+} from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import type { DiarizerKind } from "./engine.ts";
 import { LLAMA_CATALOG } from "./llama-catalog.ts";
+import { MODEL_TEXT } from "./model-text.ts";
 
 export interface ModelFileSpec {
   name: string;
@@ -72,6 +81,15 @@ export interface CatalogEntry extends ModelSpecEntry {
    * machine never loads.
    */
   onDemand?: true;
+  /** Its name where a person picks it (model-text.ts). */
+  name?: string;
+  /** A shorter name for the Record row's button; absent: `name`. */
+  short?: string;
+  /**
+   * One plain line per slot it can fill, `live` and `review` (model-text.ts), as the live panel
+   * and the Models page show it. A model in a slot with no line fails tests/live-setups.test.ts.
+   */
+  lines?: { live?: string; review?: string };
 }
 
 /** Parakeet TDT v3's 25 European languages, from its model card. */
@@ -142,6 +160,7 @@ function nemotron35Shared(base: string): ModelFileSpec[] {
 const LIVE_MODELS: readonly CatalogEntry[] = [
   {
     id: "nemotron-en-560",
+    ...MODEL_TEXT["nemotron-en-560"],
     job: "live recognition, English, streaming at 560 ms (asr.live.engine)",
     licence: "NVIDIA Open Model License",
     source: "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b",
@@ -171,6 +190,7 @@ const LIVE_MODELS: readonly CatalogEntry[] = [
   },
   {
     id: "nemotron-3.5-560",
+    ...MODEL_TEXT["nemotron-3.5-560"],
     job: "live recognition, 35 languages and switching between them, streaming at 560 ms (asr.live.engine)",
     licence: "OpenMDW-1.1",
     source: "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
@@ -189,6 +209,7 @@ const LIVE_MODELS: readonly CatalogEntry[] = [
   },
   {
     id: "nemotron-3.5-1120",
+    ...MODEL_TEXT["nemotron-3.5-1120"],
     job: "live recognition, 35 languages, streaming at 1120 ms: the Spanish default (asr.live.engine)",
     licence: "OpenMDW-1.1",
     source: "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
@@ -224,6 +245,7 @@ export const RETIRED_MODELS: readonly string[] = ["parakeet-tdt-0.6b-v3-int8"];
 export const MODELS: readonly CatalogEntry[] = [
   {
     id: RECOGNIZER,
+    ...MODEL_TEXT["parakeet-tdt-0.6b-v3-fp32"],
     job: "live and final recognition, 25 European languages",
     licence: "CC-BY-4.0",
     source: "https://huggingface.co/nvidia/parakeet-tdt-0.6b-v3",
@@ -622,4 +644,39 @@ export async function downloadModels(
     }
   }
   return out;
+}
+
+/**
+ * `models import DIR` and `POST /models/import`: copies every file of `catalog` whose SHA-256
+ * matches from `from/<model>/<file>` or `from/<file>` into `dir`, for machines that cannot
+ * download. Answers the files copied and the files still missing.
+ */
+export async function importModels(
+  from: string,
+  dir: string,
+  catalog: readonly ModelSpecEntry[],
+): Promise<{ copied: string[]; missing: string[] }> {
+  const copied: string[] = [];
+  const missing: string[] = [];
+  for (const m of catalog) {
+    for (const f of m.files) {
+      const target = modelFile(dir, m.id, f.name);
+      const source = [join(from, m.id, f.name), join(from, f.name)].find(
+        (s) => existsSync(s) && statSync(s).size === f.size,
+      );
+      if (!source || (await sha256File(source)) !== f.sha256) {
+        // A file already there counts only at its full size, as `models list` reads it.
+        if (!existsSync(target) || statSync(target).size !== f.size) {
+          missing.push(`${m.id}/${f.name}`);
+        }
+        continue;
+      }
+      mkdirSync(join(dir, m.id), { recursive: true });
+      const tmp = `${target}.import`;
+      copyFileSync(source, tmp);
+      renameSync(tmp, target);
+      copied.push(`${m.id}/${f.name}`);
+    }
+  }
+  return { copied, missing };
 }

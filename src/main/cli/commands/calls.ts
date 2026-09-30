@@ -41,12 +41,12 @@ const start: Command = {
     live: {
       type: "string",
       value: "MODEL",
-      desc: "the live model for this call only: auto, parakeet or nemotron (default: asr.live); upgrade, the old spelling, is nemotron with --review qwen",
+      desc: "the live model for this call only: auto, a model id from `akou models list`, nemotron or parakeet (default: asr.live); upgrade, the old spelling, is nemotron with --review qwen",
     },
     review: {
       type: "string",
       value: "MODEL",
-      desc: "the second pass for this call only: none, qwen or parakeet (default: asr.review.model)",
+      desc: "the second pass for this call only: none, a model id, qwen or parakeet (default: asr.review.model)",
     },
     "review-every": {
       type: "string",
