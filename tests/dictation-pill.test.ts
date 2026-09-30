@@ -24,7 +24,9 @@ import {
   LOADING_NOTE,
   levelDb,
   NOTICE_MS,
+  PILL_MAX_HEIGHT,
   type PillDictation,
+  type PillRpcHandlers,
   type PillSend,
   PRESS_MS,
   pillRpc,
@@ -38,6 +40,7 @@ import {
   PILL_SIZE,
   type PillPlace,
   type PillStyle,
+  pillBase,
   pillPlaces,
   placeDraft,
   placePill,
@@ -46,6 +49,7 @@ import {
   Shell,
   type ShellApp,
   type ShellState,
+  sizePill,
 } from "../src/main/window/shell.ts";
 import { fileState } from "../src/main/window/state.ts";
 import type { Chip, ChipAnswer, PillState } from "../src/ui/pill-protocol.ts";
@@ -613,13 +617,45 @@ describe("DC-E5: the words as you speak on the ticker", () => {
     expect(last).toEqual({ text: "hello there", settled: 0 });
   });
 
-  test("settledWords follows the words as the decoded end of the audio slides left", () => {
+  test("settledWords counts the words the last partial started with too", () => {
     expect(settledWords([], ["a", "b"])).toBe(0);
     expect(settledWords(["a", "b"], ["a", "b", "c"])).toBe(2);
     expect(settledWords(["a", "b", "c"], ["a", "x", "c"])).toBe(1);
-    // The start of a long dictation left the decoded window: the run starts later in the last one.
-    expect(settledWords(["a", "b", "c", "d"], ["c", "d", "e"])).toBe(2);
     expect(settledWords(["a", "b"], ["x", "a", "b"])).toBe(0);
+  });
+
+  test("[H-11] a partial is the whole dictation, however long, and reaches the page whole", () => {
+    const f = pill({ preview: true });
+    f.to("listening");
+    const said = Array.from({ length: 3000 }, (_, i) => `word${i}`);
+    f.tell({ kind: "partial", text: said.slice(0, 2999).join(" "), language: "en" });
+    f.tell({ kind: "partial", text: said.join(" "), language: "en" });
+    const last = f.sent.filter((m) => m.name === "preview").at(-1)?.payload;
+    expect(last).toEqual({ text: said.join(" "), settled: said.slice(0, 2999).join(" ").length });
+  });
+
+  test("[H-11] the page's height reaches the window, bounded; the edge is the page's to pull", async () => {
+    const heights: number[] = [];
+    const f = fakeDictation();
+    const r = recorder();
+    const p = pillRpc(f.d, () => r.send, {
+      platform: "darwin",
+      hotkey: () => "RightCommand",
+      label: hotkeyLabel,
+      now: () => 1000,
+      onVisible: () => {},
+      preview: { setting: () => true },
+      later: manualLater().later,
+      edge: "bottom",
+      resize: (h) => heights.push(h),
+    });
+    cleanups.push(() => p.close());
+    expect(await p.handlers.size({ height: 99.2 })).toBe(true);
+    expect(await p.handlers.size({ height: 10_000 })).toBe(true);
+    for (const bad of [0, -5, Number.NaN, "120"])
+      expect(await p.handlers.size({ height: bad as number })).toBe(false);
+    expect(heights).toEqual([100, PILL_MAX_HEIGHT]);
+    expect(await p.handlers.layout({})).toEqual({ edge: "bottom" });
   });
 });
 
@@ -914,6 +950,35 @@ describe("DC-O1: the pill's window", () => {
     expect(draft.x + draft.width / 2).toBe(pill.x + pill.width / 2);
   });
 
+  test("[H-11] the window grows away from its edge: up at the bottom, down anywhere else, so its row never moves", () => {
+    const base = placePill([], "top", AREAS);
+    expect(sizePill(base, "top", 320)).toEqual({ ...base, height: 320 });
+    const bottom = placePill([], "bottom", AREAS);
+    const tall = sizePill(bottom, "bottom", 320);
+    expect(tall.y + tall.height).toBe(bottom.y + bottom.height);
+    const short = sizePill(bottom, "bottom", 90);
+    expect(short.y + short.height).toBe(bottom.y + bottom.height);
+    // At a side the page still lays its row at the top: the top stays, so Stop and Cancel do not
+    // move as lines are added.
+    for (const edge of ["left", "right"]) {
+      const side = placePill([], edge, AREAS);
+      const grown = sizePill(side, edge, 300);
+      expect(grown.y).toBe(side.y);
+      expect(grown.x).toBe(side.x);
+    }
+    // Never past its display, and never taller than it.
+    const primary = AREAS[0] as Rect;
+    expect(sizePill(bottom, "bottom", 5000, primary)).toMatchObject({
+      y: primary.y,
+      height: primary.height,
+    });
+    // The place kept for a window of any height is the one it grew from.
+    for (const edge of ["top", "bottom", "left", "right"]) {
+      const b = placePill([], edge, AREAS);
+      expect(pillBase(sizePill(b, edge, 137), edge)).toEqual(b);
+    }
+  });
+
   test("a dragged place is kept for its display and edge only, and pulled whole onto that display", () => {
     const { width, height } = PILL_SIZE;
     const second = AREAS[1] as Rect;
@@ -997,6 +1062,8 @@ describe("DC-O1: the pill's window", () => {
       frame: (_r: Rect) => {},
       /** Every move the shell made, and whether the window showed at that moment. */
       moves: [] as { to: Rect; visible: boolean }[],
+      /** The pill's handlers, as the page's requests reach them. */
+      rpc: null as PillRpcHandlers | null,
     };
     const r = recorder();
     const ui: NativeUi = {
@@ -1004,6 +1071,7 @@ describe("DC-O1: the pill's window", () => {
       openPill: (p) => {
         if (o.refuse) throw new Error("no window handle");
         opened.push({ frame: p.frame, style: p.style });
+        win.rpc = p.rpc;
         return {
           window: {
             setFrame: (to) => {
@@ -1150,6 +1218,32 @@ describe("DC-O1: the pill's window", () => {
       },
     ]);
     expect(off.released).toEqual(["d1", "d2"]);
+  });
+
+  test("[H-11] the page's height resizes the window from its edge, and a drag while tall keeps the place", async () => {
+    const s = await shellWith({ platform: "darwin" });
+    const at = s.opened.at(-1)?.frame as Rect;
+    await s.win.rpc?.handlers.size({ height: 96 });
+    const short = s.win.moves.at(-1)?.to as Rect;
+    // Bottom: the window's bottom edge stays, and the width.
+    expect(short).toEqual({ x: at.x, y: at.y + at.height - 96, width: at.width, height: 96 });
+    // Its own resize, reported back as a move, is not a drag.
+    s.win.frame(short);
+    await s.win.rpc?.handlers.size({ height: 260 });
+    const tall = s.win.moves.at(-1)?.to as Rect;
+    expect(tall.y + tall.height).toBe(at.y + at.height);
+    expect(tall.height).toBe(260);
+    // The same height again moves nothing.
+    const moves = s.win.moves.length;
+    await s.win.rpc?.handlers.size({ height: 260 });
+    expect(s.win.moves).toHaveLength(moves);
+    // Dragged while tall: the place kept is the one it would have at the resting size.
+    const dragged = { ...tall, x: tall.x - 100, y: tall.y - 50 };
+    s.win.frame(dragged);
+    s.to("off");
+    expect(s.saved().pillPlaces?.[0]?.frame).toEqual(pillBase(dragged, "bottom"));
+    expect(s.saved().pillPlaces?.[0]?.frame.height).toBe(PILL_SIZE.height);
+    expect(await s.win.rpc?.handlers.layout({})).toEqual({ edge: "bottom" });
   });
 
   test("dictation off closes the window; a drag is remembered and restored at the next open", async () => {

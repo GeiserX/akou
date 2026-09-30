@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>akou H-11 · The island holds the whole dictation</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+html,body{margin:0;background:#0e0e10}
+body{font-family:-apple-system,"SF Pro","SF Pro Text",Helvetica,sans-serif;-webkit-font-smoothing:antialiased;color:#f5f5f7}
+.root{position:relative;width:1440px;height:900px;overflow:hidden;background:#121214}
+
+.hdr{position:absolute;left:32px;top:16px;height:24px;display:flex;align-items:center;gap:8px}
+.tag{font-size:11px;font-weight:600;letter-spacing:.3px;padding:3px 7px;border-radius:6px;background:rgba(255,255,255,.1);color:rgba(255,255,255,.85)}
+.ttl{font-size:15px;font-weight:600;letter-spacing:-.1px}
+.hsub{font-size:12px;color:rgba(255,255,255,.45);margin-left:8px}
+
+.tile{position:absolute;width:448px;height:352px;border-radius:12px;overflow:hidden;box-shadow:0 0 0 .5px rgba(255,255,255,.08),0 12px 40px rgba(0,0,0,.4);
+  background:
+    radial-gradient(420px 260px at 18% 0%,rgba(92,74,150,.55),transparent 70%),
+    radial-gradient(460px 300px at 92% 110%,rgba(30,96,112,.55),transparent 70%),
+    linear-gradient(180deg,#1d1e26,#15161c)}
+.menubar{position:absolute;left:0;right:0;top:0;height:24px;background:rgba(24,24,28,.62);border-bottom:.5px solid rgba(255,255,255,.06);display:flex;align-items:center;justify-content:space-between;padding:0 12px;font-size:12px;color:rgba(255,255,255,.85)}
+.menubar b{font-weight:700;margin-right:12px}
+.dock{position:absolute;left:50%;bottom:6px;transform:translateX(-50%);height:44px;width:260px;border-radius:14px;background:rgba(40,40,46,.55);box-shadow:0 0 0 .5px rgba(255,255,255,.12)}
+.doc{position:absolute;left:40px;right:40px;top:120px;height:180px;border-radius:10px;background:#1e1e21;box-shadow:0 0 0 .5px rgba(255,255,255,.1),0 16px 40px rgba(0,0,0,.45)}
+.doc i{display:block;height:8px;margin:14px 18px 0;border-radius:4px;background:rgba(255,255,255,.08)}
+.doc i:nth-child(2){width:70%}.doc i:nth-child(3){width:84%}.doc i:nth-child(4){width:40%}
+.cap{position:absolute;left:32px;font-size:12px;line-height:16px;color:rgba(255,255,255,.5);width:448px}
+.cap b{display:block;font-size:12.5px;line-height:18px;font-weight:600;color:rgba(255,255,255,.92)}
+
+/* The pill's window: 448 wide here (480 in the app, drawn at the tile's width), transparent. */
+.win{position:absolute;left:0;right:0;display:flex;flex-direction:column;align-items:center;gap:8px;padding:4px 0 16px}
+.win.top{top:24px}
+.win.bottom{bottom:54px;flex-direction:column-reverse;padding:16px 0 4px}
+.win .frame{position:absolute;inset:0;border:1px dashed rgba(255,214,102,.55);border-radius:4px;pointer-events:none}
+
+.island{display:flex;flex-direction:column;border-radius:18px;background:#000;color:#fff;box-shadow:0 0 0 .5px rgba(255,255,255,.1),0 8px 24px rgba(0,0,0,.5);font-size:13px;line-height:18px}
+.bottom .island{flex-direction:column-reverse}
+.island.words{width:424px}
+.row{display:flex;align-items:center;gap:10px;height:36px;padding:0 6px 0 14px}
+.words .row .el{margin-left:auto}
+.rec{width:8px;height:8px;border-radius:50%;background:#ff5a45;box-shadow:0 0 0 3px rgba(255,90,69,.16),0 0 8px rgba(255,90,69,.5);flex:none}
+.lvl{display:flex;gap:3px;flex:none}.lvl i{width:10px;height:6px;border-radius:3px;background:rgba(255,255,255,.16)}.lvl i.on{background:#fff}.lvl i.half{background:rgba(255,255,255,.5)}
+.el{font-variant-numeric:tabular-nums;font-weight:500;letter-spacing:.2px;flex:none}
+.lang{height:20px;padding:0 6px;border-radius:6px;background:rgba(255,255,255,.12);color:rgba(255,255,255,.88);font-size:10.5px;font-weight:600;letter-spacing:.5px;line-height:20px;flex:none}
+.ctl{display:flex;gap:4px;flex:none}.round{display:grid;place-items:center;width:24px;height:24px;border-radius:12px;background:rgba(255,255,255,.11)}
+.text{position:relative;padding:0 14px 12px 14px;overflow-y:auto;overflow-wrap:anywhere}
+.bottom .text{padding:12px 14px 0 14px}
+.text .ch{color:rgba(255,255,255,.42)}
+.text.over{-webkit-mask-image:linear-gradient(to bottom,transparent 0,#000 16px);mask-image:linear-gradient(to bottom,transparent 0,#000 16px)}
+.text::-webkit-scrollbar{width:10px}
+.text::-webkit-scrollbar-thumb{border:3px solid transparent;background-clip:padding-box;border-radius:5px;background-color:rgba(255,255,255,.3)}
+.text::-webkit-scrollbar-track{background:transparent}
+.hints{display:flex;align-items:center;gap:6px;height:22px;padding:0 10px;border-radius:11px;font-size:11px;color:rgba(255,255,255,.58);background:rgba(10,10,11,.94);box-shadow:0 0 0 .5px rgba(255,255,255,.1),0 12px 32px rgba(0,0,0,.35)}
+.key{font-size:10px;font-weight:500;line-height:14px;padding:0 5px;border-radius:4px;background:rgba(255,255,255,.14);color:#fff}
+.sep{opacity:.45}
+.paused{position:absolute;right:26px;bottom:18px;font-size:10.5px;padding:1px 7px;border-radius:9px;background:rgba(255,255,255,.14);color:rgba(255,255,255,.8)}
+.note{position:absolute;font-size:11px;color:rgba(255,214,102,.8)}
+</style>
+</head>
+<body>
+<div class="root">
+  <div class="hdr"><span class="tag">H-11</span><span class="ttl">The island holds the whole dictation</span><span class="hsub">Words from the streaming model as you speak · newest at the bottom · dashed: the window, sized to what it holds</span></div>
+
+  <!-- Top, one line -->
+  <div class="tile" style="left:32px;top:56px">
+    <div class="menubar"><span><b>Notes</b>File Edit View</span><span>10:42</span></div>
+    <div class="doc"><i></i><i></i><i></i><i></i></div>
+    <div class="win top"><div class="frame"></div>
+      <div class="island words">
+        <div class="row"><span class="rec"></span><span class="lvl"><i class="on"></i><i class="on"></i><i class="half"></i><i></i><i></i></span><span class="el">0:03</span><span class="lang">EN</span><span class="ctl"><span class="round"><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="2" fill="#fff"/></svg></span><span class="round"><svg width="10" height="10"><path d="M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span></span></div>
+        <div class="text">Ping the team about the launch <span class="ch">review on</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="cap" style="left:32px;top:414px"><b>Top · one line</b>The words start under the controls as soon as the first ones are heard. The island is wide from the first word, so it never jumps sideways.</div>
+
+  <!-- Top, four lines -->
+  <div class="tile" style="left:496px;top:56px">
+    <div class="menubar"><span><b>Notes</b>File Edit View</span><span>10:42</span></div>
+    <div class="doc"><i></i><i></i><i></i><i></i></div>
+    <div class="win top"><div class="frame"></div>
+      <div class="island words">
+        <div class="row"><span class="rec"></span><span class="lvl"><i class="on"></i><i class="on"></i><i class="on"></i><i class="half"></i><i></i></span><span class="el">0:14</span><span class="lang">EN</span><span class="ctl"><span class="round"><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="2" fill="#fff"/></svg></span><span class="round"><svg width="10" height="10"><path d="M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span></span></div>
+        <div class="text">Ping the team about the launch review on Thursday. We moved it from Wednesday because the design pass needs one more day, and I want the release notes drafted before we meet so we can read them together <span class="ch">in the room</span></div>
+      </div>
+      <div class="hints"><span class="key">↵</span>sends<span class="sep">·</span><span class="key">⇧↵</span>drafts<span class="sep">·</span><span class="key">esc</span>cancels</div>
+    </div>
+  </div>
+  <div class="cap" style="left:496px;top:414px"><b>Top · four lines</b>The island grows downward, wrapping, newest words at the bottom in white; the few still being heard are dimmer. The key hints stay under it.</div>
+
+  <!-- Top, full with scrollbar -->
+  <div class="tile" style="left:960px;top:56px">
+    <div class="menubar"><span><b>Notes</b>File Edit View</span><span>10:42</span></div>
+    <div class="doc"><i></i><i></i><i></i><i></i></div>
+    <div class="win top"><div class="frame"></div>
+      <div class="island words">
+        <div class="row"><span class="rec"></span><span class="lvl"><i class="on"></i><i class="on"></i><i class="half"></i><i></i><i></i></span><span class="el">1:02</span><span class="lang">EN</span><span class="ctl"><span class="round"><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="2" fill="#fff"/></svg></span><span class="round"><svg width="10" height="10"><path d="M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span></span></div>
+        <div class="text over" id="full" style="max-height:156px">Ping the team about the launch review on Thursday. We moved it from Wednesday because the design pass needs one more day, and I want the release notes drafted before we meet so we can read them together in the room. The three things to decide are the order of the rollout, who answers support that first week, and whether the pricing page ships with it or a week later. For the rollout I lean towards the smaller accounts first, since they tell us sooner when something breaks and they are easier to talk to. Support should be two people for the first three days and then one. On pricing I would rather wait a week, so the launch has one message and not two, and so the numbers we show come from real use rather than from the beta. Put the <span class="ch">draft in the shared folder</span></div>
+      </div>
+      <div class="hints"><span class="key">↵</span>sends<span class="sep">·</span><span class="key">⇧↵</span>drafts<span class="sep">·</span><span class="key">esc</span>cancels</div>
+    </div>
+  </div>
+  <div class="cap" style="left:960px;top:414px"><b>Top · full, scrolling</b>At about eight lines (or 40 % of the display, whichever is smaller) it stops growing and scrolls, pinned to the newest words, with a thin scrollbar and the top fading out.</div>
+
+  <!-- Bottom, four lines -->
+  <div class="tile" style="left:32px;top:486px;height:330px">
+    <div class="doc" style="top:40px"><i></i><i></i><i></i><i></i></div>
+    <div class="dock"></div>
+    <div class="win bottom"><div class="frame"></div>
+      <div class="island words">
+        <div class="row"><span class="rec"></span><span class="lvl"><i class="on"></i><i class="on"></i><i class="on"></i><i class="half"></i><i></i></span><span class="el">0:14</span><span class="lang">EN</span><span class="ctl"><span class="round"><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="2" fill="#fff"/></svg></span><span class="round"><svg width="10" height="10"><path d="M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span></span></div>
+        <div class="text">Ping the team about the launch review on Thursday. We moved it from Wednesday because the design pass needs one more day, and I want the release notes drafted before we meet so we can read them together <span class="ch">in the room</span></div>
+      </div>
+      <div class="hints"><span class="key">↵</span>sends<span class="sep">·</span><span class="key">⇧↵</span>drafts<span class="sep">·</span><span class="key">esc</span>cancels</div>
+    </div>
+  </div>
+  <div class="cap" style="left:32px;top:822px"><b>Bottom · four lines</b>Mirrored: the controls stay on the bottom edge, the words grow upward above them and the hints sit on top.</div>
+
+  <!-- Bottom, full with scrollbar -->
+  <div class="tile" style="left:496px;top:486px;height:330px">
+    <div class="doc" style="top:40px"><i></i><i></i><i></i><i></i></div>
+    <div class="dock"></div>
+    <div class="win bottom"><div class="frame"></div>
+      <div class="island words">
+        <div class="row"><span class="rec"></span><span class="lvl"><i class="on"></i><i class="on"></i><i class="half"></i><i></i><i></i></span><span class="el">1:02</span><span class="lang">EN</span><span class="ctl"><span class="round"><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="2" fill="#fff"/></svg></span><span class="round"><svg width="10" height="10"><path d="M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span></span></div>
+        <div class="text over" id="full2" style="max-height:156px">Ping the team about the launch review on Thursday. We moved it from Wednesday because the design pass needs one more day, and I want the release notes drafted before we meet so we can read them together in the room. The three things to decide are the order of the rollout, who answers support that first week, and whether the pricing page ships with it or a week later. For the rollout I lean towards the smaller accounts first, since they tell us sooner when something breaks and they are easier to talk to. Support should be two people for the first three days and then one. On pricing I would rather wait a week, so the launch has one message and not two. Put the <span class="ch">draft in the shared folder</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="cap" style="left:496px;top:822px"><b>Bottom · full, scrolling</b>The same cap and scrollbar; the window's bottom edge never moves.</div>
+
+  <!-- Top, scrolled back -->
+  <div class="tile" style="left:960px;top:486px;height:330px">
+    <div class="menubar"><span><b>Notes</b>File Edit View</span><span>10:43</span></div>
+    <div class="doc"><i></i><i></i><i></i><i></i></div>
+    <div class="win top"><div class="frame"></div>
+      <div class="island words">
+        <div class="row"><span class="rec"></span><span class="lvl"><i class="on"></i><i class="half"></i><i></i><i></i><i></i></span><span class="el">1:09</span><span class="lang">EN</span><span class="ctl"><span class="round"><svg width="10" height="10"><rect x="1" y="1" width="8" height="8" rx="2" fill="#fff"/></svg></span><span class="round"><svg width="10" height="10"><path d="M2.2 2.2l5.6 5.6M7.8 2.2 2.2 7.8" stroke="#fff" stroke-width="1.6" stroke-linecap="round"/></svg></span></span></div>
+        <div class="text" id="back" style="max-height:156px">Ping the team about the launch review on Thursday. We moved it from Wednesday because the design pass needs one more day, and I want the release notes drafted before we meet so we can read them together in the room. The three things to decide are the order of the rollout, who answers support that first week, and whether the pricing page ships with it or a week later. For the rollout I lean towards the smaller accounts first, since they tell us sooner when something breaks and they are easier to talk to. Support should be two people for the first three days and then one. On pricing I would rather wait a week. Put the draft in the shared folder and <span class="ch">ask for comments</span></div>
+      </div>
+    </div>
+  </div>
+  <div class="cap" style="left:960px;top:822px"><b>Top · scrolled back while speaking</b>Scrolling up stops following the newest words; scrolling back to the bottom, or letting go of the key, follows again.</div>
+</div>
+<script>
+for (const id of ["full", "full2"]) { const e = document.getElementById(id); e.scrollTop = e.scrollHeight; }
+</script>
+</body>
+</html>
