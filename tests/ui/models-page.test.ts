@@ -215,10 +215,7 @@ describe("the Models page", () => {
         5000,
         "asr.review.everySeconds",
       );
-      expect(patches).toEqual([
-        { "asr.review.model": "qwen" },
-        { "asr.review.everySeconds": 300 },
-      ]);
+      expect(patches).toEqual([{ "asr.review.model": "qwen" }, { "asr.review.everySeconds": 300 }]);
       await rig.api("PATCH", "/config", {
         "asr.review.model": "none",
         "asr.review.everySeconds": 60,
