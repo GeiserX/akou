@@ -3164,13 +3164,11 @@ input.pg-radio:focus-visible {
   position: absolute;
   right: 14px;
   opacity: 0;
-  pointer-events: none;
 }
 .pg-row:hover .pg-remove,
 .pg-row .pg-remove:focus-visible {
   position: static;
   opacity: 1;
-  pointer-events: auto;
 }
 .pg-row:hover .pg-remove:disabled {
   opacity: 0.5;
@@ -3464,6 +3462,21 @@ ul.pg-list {
 .pg-rest .pg-name {
   font-weight: 400;
 }
+/* A long term wraps, and the forms beside it end in an ellipsis inside the panel. */
+.dictation-dictionary .pg-row {
+  white-space: normal;
+}
+.dictation-dictionary .pg-name {
+  overflow-wrap: anywhere;
+}
+.dictation-dictionary .pg-ctl {
+  min-width: 0;
+}
+.pg-value.where {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 .pg-link.open .pg-more .ico {
   transform: rotate(90deg);
 }
@@ -3488,25 +3501,35 @@ ul.pg-list {
 .hist-row .pg-help.meta {
   max-width: none;
 }
+/* A failure's reason reads like the rest of the line, not as a warning. */
 .hist-row .pg-help .issue {
   display: inline;
   margin: 0;
+  color: inherit;
 }
 .hist-row:hover,
 .hist-row.menu-open {
   background: rgba(242, 243, 245, 0.03);
 }
 /* Out of the row's way until it is under the pointer or the keyboard, so the text runs the
-   row's width. */
+   row's width; then over the row's right end, on the row's own colour, so no row changes height
+   and the list never moves under the pointer. */
 .hist-actions {
   position: absolute;
-  right: 14px;
+  top: 8px;
+  right: 0;
+  max-width: none;
+  padding: 0 14px 0 36px;
+  background: linear-gradient(
+    90deg,
+    transparent,
+    color-mix(in srgb, var(--panel), #f2f3f5 3%) 28px
+  );
   opacity: 0;
 }
 .hist-row:hover .hist-actions,
 .hist-row:focus-within .hist-actions,
 .hist-row.menu-open .hist-actions {
-  position: static;
   opacity: 1;
 }
 .hist-more {
@@ -3545,6 +3568,12 @@ ul.pg-list {
 .hist-menu > button:hover,
 .hist-menu > button:focus-visible {
   background: var(--line2);
+}
+/* The press that deletes, once the first one asked. */
+.pg-textlink.armed,
+.hist-menu > button.armed {
+  color: var(--rec);
+  font-weight: 500;
 }
 .hist-menu hr {
   border: 0;

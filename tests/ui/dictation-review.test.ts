@@ -13,6 +13,7 @@ import {
   readDictationReview,
   reviewRows,
   waitingTerms,
+  when,
 } from "../../src/ui/dictation-review.ts";
 import type { Transport } from "../../src/ui/protocol.ts";
 import { tempDir } from "../helpers.ts";
@@ -79,8 +80,18 @@ describe("DC-L5: the rows", () => {
         heard: ["cooper netties"],
         ignored: false,
         learned: ["kubernetis"],
+        at: T + 2,
       },
     ]);
+  });
+
+  test("the line says the day of the fix as the sidebar says a call's, and nothing without one", () => {
+    const now = Date.parse("2026-09-30T12:00:00Z");
+    expect(when(now - 3_600_000, now, "UTC")).toBe(" today");
+    expect(when(now - 86_400_000, now, "UTC")).toBe(" yesterday");
+    expect(when(Date.parse("2026-09-28T12:00:00Z"), now, "UTC")).toBe(" on Mon");
+    expect(when(Date.parse("2026-08-21T12:00:00Z"), now, "UTC")).toBe(" on 21 Aug");
+    expect(when(undefined, now, "UTC")).toBe("");
   });
 });
 
@@ -174,12 +185,14 @@ describe("DC-L5: To review on the Words page", () => {
       // Waiting first, then learned; a term answered Not a word has nothing left to do.
       expect(states).toEqual(["Kubernetes:waiting", "Vercel:waiting", "Postgres:accepted"]);
       expect(await text(page, `${row("Kubernetes")} .pg-name`)).toBe("Kubernetes");
+      // Each line says the day of its latest fix.
       expect(await text(page, `${row("Kubernetes")} .pg-help`)).toBe(
-        "You changed “kubernetis” and “cooper netties” to this.",
+        `You changed “kubernetis” and “cooper netties” to this${when(T + 5)}.`,
       );
       expect(await text(page, `${row("Vercel")} .pg-help`)).toBe(
-        "You changed “versal” to this and left it unanswered.",
+        `You changed “versal” to this${when(T + 4)} and left it unanswered.`,
       );
+      expect(when(T + 5)).not.toBe("");
       // Rows of one panel, as every page draws them.
       expect(
         await page.locator("#dictionary-list .review-dictation .pg-grp > .pg-row").count(),
@@ -252,6 +265,8 @@ describe("DC-L5: To review on the Words page", () => {
         5000,
         "the refusal said",
       );
+      // A refusal is an error, not a note.
+      expect(await page.getAttribute("#toast", "class")).toContain("error");
       expect(await page.getAttribute(row("Kubernetes"), "data-state")).toBe("waiting");
       expect(await page.isEnabled(`${row("Kubernetes")} button[data-action='approve']`)).toBe(true);
       expect(v.entries).toEqual([]);
@@ -316,7 +331,7 @@ describe("DC-L5: To review on the Words page", () => {
         await page.$$eval(`${row("Kubernetes")} button`, (els) => els.map((e) => e.textContent)),
       ).toEqual(["Learn it", "Ignore and forget"]);
       expect(await text(page, `${row("Kubernetes")} .pg-help`)).toBe(
-        "You changed “cooper netties” to this. Ignore also forgets “kubernetis”, learned before.",
+        `You changed “cooper netties” to this${when(T + 2)}. Ignore also forgets “kubernetis”, learned before.`,
       );
       await page.click(`${row("Kubernetes")} button[data-action='approve']`);
       await page.waitForSelector(`${row("Kubernetes")}[data-state='accepted']`);

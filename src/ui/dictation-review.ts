@@ -15,6 +15,7 @@
  */
 
 import { h } from "./dom.ts";
+import { dayLabel, localZone } from "./model.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 import { row, section, sectionWith } from "./rows.ts";
@@ -76,6 +77,8 @@ interface Row {
   ignored: boolean;
   /** The heard forms already learned; on a waiting row, Reject forgets them too. */
   learned: string[];
+  /** Epoch ms of the latest of the row's own pairs, if the route said. */
+  at?: number;
 }
 
 /**
@@ -93,12 +96,14 @@ export function reviewRows(pairs: readonly DictationPair[]): Row[] {
     const bucket: Bucket =
       waiting.length > 0 ? "waiting" : accepted.length > 0 ? "accepted" : "rejected";
     const own = bucket === "waiting" ? waiting : bucket === "accepted" ? accepted : ps;
+    const times = own.map((p) => p.at).filter((t) => typeof t === "number" && t > 0);
     rows.push({
       term,
       bucket,
       heard: forms(own),
       ignored: waiting.length > 0 && waiting.every((p) => p.status === "ignored"),
       learned: forms(accepted),
+      ...(times.length > 0 ? { at: Math.max(...times) } : {}),
     });
   }
   const order: Bucket[] = ["waiting", "accepted", "rejected"];
@@ -111,10 +116,17 @@ export function quotedForms(forms: readonly string[]): string {
   return q.length < 2 ? (q[0] ?? "") : `${q.slice(0, -1).join(", ")} and ${q.at(-1)}`;
 }
 
+/** When a fix was made, as the end of a sentence: ` today`, ` on Mon`; nothing if unknown. */
+export function when(at: number | undefined, now = Date.now(), tz = localZone()): string {
+  if (at === undefined) return "";
+  const day = dayLabel(at, now, tz);
+  return day === "Today" || day === "Yesterday" ? ` ${day.toLowerCase()}` : ` on ${day}`;
+}
+
 /** The row's one line of help, in plain words. */
 function note(r: Row): string {
   if (r.bucket === "accepted") return `Learned: dictation writes it for ${quotedForms(r.heard)}.`;
-  const said = `You changed ${quotedForms(r.heard)} to this${r.ignored ? " and left it unanswered" : ""}.`;
+  const said = `You changed ${quotedForms(r.heard)} to this${when(r.at)}${r.ignored ? " and left it unanswered" : ""}.`;
   return r.learned.length > 0
     ? `${said} Ignore also forgets ${quotedForms(r.learned)}, learned before.`
     : said;
@@ -124,13 +136,13 @@ function note(r: Row): string {
  * The Words page's "To review" section (sd-a-words): one row per term still waiting, with Learn it
  * and Ignore, then the terms learned while dictating, with Forget. A term answered Not a word has
  * nothing left to do, so it is not listed; with no row left the section is left out. `answered`
- * runs after the route took an answer, with the words to say, so the page can read itself again;
- * a refusal is said and nothing else changes.
+ * runs after every answer with the words to say and whether the route took it, so the page can
+ * read itself again; after a refusal nothing else changes.
  */
 export function dictationReviewSection(
   t: Transport,
   pairs: readonly DictationPair[],
-  answered: (said: string) => void | Promise<void>,
+  answered: (said: string, ok: boolean) => void | Promise<void>,
 ): HTMLElement | null {
   const decide = async (
     term: string,
@@ -159,7 +171,7 @@ export function dictationReviewSection(
     }
     if (!ok)
       for (const b of button.parentElement?.querySelectorAll("button") ?? []) b.disabled = false;
-    await answered(said);
+    await answered(said, ok);
   };
   const button = (
     label: string,

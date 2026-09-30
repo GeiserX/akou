@@ -24,7 +24,7 @@ import {
   isReplacement,
   WORDS_SHOWN,
 } from "../../src/ui/dictation-dictionary.ts";
-import { type DictationRow, dayLabel, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
+import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
 import { type CaptureInput, readMics } from "../../src/ui/dictation-mic.ts";
 import {
   ADVANCED_PAGE,
@@ -38,6 +38,7 @@ import {
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
+import { dayLabel, localZone } from "../../src/ui/model.ts";
 import { PREVIEW_CHARS, previewParts } from "../../src/ui/pill.ts";
 import { type PillState, pillPreview } from "../../src/ui/pill-protocol.ts";
 import type { Transport } from "../../src/ui/protocol.ts";
@@ -1286,11 +1287,20 @@ describe("DC-U1: the Dictation page in the window", () => {
       expect(await text(page, "#dictations-delete")).toBe("Delete all dictations…");
       await page.click("#dictations-delete");
       expect(f.deletes).toBe(0);
+      // The first press arms it, and it looks like the press that deletes.
+      expect(await page.getAttribute("#dictations-delete", "class")).toContain("armed");
       await page.click("#dictations-delete");
       await until(() => f.deletes === 1, 5000, "the delete");
+      expect(await page.getAttribute("#dictations-delete", "class")).not.toContain("armed");
+      // A value typed and left by the back link is saved once, and the row that led here says it.
+      const kept = f.patches.length;
+      await page.fill(on("dictation.retainDays"), "7");
       await page.click("#page-dictation .pg-back");
       await page.waitForSelector("#page-dictation section[data-section='Keys']");
       expect(await page.evaluate(() => document.activeElement?.id)).toBe("dictation-history-open");
+      expect(await text(page, "#dictation-history-open .pg-value")).toBe("Kept 7 days");
+      await new Promise((r) => setTimeout(r, 300));
+      expect(f.patches.slice(kept)).toEqual([{ "dictation.retainDays": 7 }]);
     },
     UI_TIMEOUT,
   );
@@ -1608,7 +1618,9 @@ describe("DC-U5: the dictionary and replacements", () => {
       expect(await page.isHidden("#dictionary-heard")).toBe(true);
       expect(await page.getAttribute("#dictionary-term", "placeholder")).toBe("Add a word");
       await page.click("#dictionary-replace");
-      expect(await page.getAttribute("#dictionary-heard", "placeholder")).toBe("You say");
+      expect(await page.getAttribute("#dictionary-heard", "placeholder")).toBe(
+        "You say (commas for several)",
+      );
       expect(await page.getAttribute("#dictionary-term", "placeholder")).toBe("akou writes");
       await page.fill("#dictionary-heard", "dot com");
       await page.fill("#dictionary-term", ".com");
@@ -1730,6 +1742,82 @@ describe("DC-U5: the dictionary and replacements", () => {
       await page.fill("#dictionary-term", "at");
       await page.click("#dictionary-add");
       await page.waitForSelector("#dictionary-issue", { state: "hidden" });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a word heard many ways stays inside its panel; a refused switch says why and shows the file; the keyboard keeps its place",
+    async () => {
+      const forms = [
+        "cooper netties",
+        "kube er netes",
+        "kubernetees",
+        "coober netties",
+        "cube our nettles",
+      ];
+      const { page, fx } = await openDictionary([
+        global({ term: "Kubernetes", heard: forms, entryScope: "dictation" }),
+        global({ term: "Vercel", heard: ["versal"] }),
+        global({ term: "Postgres" }),
+        global({
+          term: "Grafana",
+          heard: [
+            "graph on a dashboard for the whole platform team",
+            "graffiti on the wall of the old office building",
+          ],
+        }),
+      ]);
+      await page.setViewportSize({ width: 1024, height: 700 });
+      // Two forms and how many more; the open row lists them all.
+      expect(await text(page, `${row("Kubernetes")} .where`)).toBe(
+        "also heard as “cooper netties”, “kube er netes” and 3 more",
+      );
+      // The forms beside a word end inside its row, with the chevron on screen, however long.
+      const fits = (term: string) =>
+        page.$eval(row(term), (li) => {
+          const r = li.getBoundingClientRect();
+          const v = li.querySelector(".where")?.getBoundingClientRect();
+          const c = li.querySelector(".pg-more")?.getBoundingClientRect();
+          return !!v && !!c && v.right <= r.right && c.right <= r.right && v.left >= r.left;
+        });
+      expect(await fits("Kubernetes")).toBe(true);
+      expect(await fits("Grafana")).toBe(true);
+      await openRow(page, "Kubernetes");
+      expect(await text(page, `${row("Kubernetes")} .pg-help`)).toBe(
+        `Also heard as ${forms.map((f) => `“${f}”`).join(", ")}.`,
+      );
+
+      // A refused switch: said at once, and the switch shows what the file still holds.
+      fx.refuse = "the vocabulary file could not be written";
+      await page.click(`${row("Kubernetes")} .calls-too`);
+      await page.waitForFunction(
+        () =>
+          document.getElementById("toast")?.textContent ===
+          "the vocabulary file could not be written",
+      );
+      expect(await page.getAttribute("#toast", "class")).toBe("error");
+      expect(await page.isChecked(`${row("Kubernetes")} .calls-too`)).toBe(false);
+      expect(await page.isHidden("#dictionary-issue")).toBe(true);
+
+      // The keyboard on Remove: the entry goes, and the keyboard is on the row now in its place.
+      await page.focus(`${row("Kubernetes")} .remove`);
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(row("Kubernetes"), { state: "detached" });
+      await page.waitForFunction(
+        () => document.activeElement?.closest("li")?.getAttribute("data-term") === "Vercel",
+      );
+      // The switch of a row kept is focused again after its save.
+      await openRow(page, "Vercel");
+      await page.focus(`${row("Vercel")} .calls-too`);
+      await page.keyboard.press("Space");
+      await until(() => fx.calls.length === 3, 5000, "calls too off");
+      await page.waitForFunction(
+        (sel) =>
+          (document.querySelector(sel) as HTMLInputElement | null)?.checked === false &&
+          document.activeElement === document.querySelector(sel),
+        `${row("Vercel")} .calls-too`,
+      );
     },
     UI_TIMEOUT,
   );
@@ -2627,15 +2715,15 @@ describe("DC-U2 on the real app: a microphone never asked for starts the helper"
 });
 
 describe("DC-H1: the History page's days", () => {
-  test("Today, Yesterday, then the date, in this machine's calendar; another year says its year", () => {
+  test("Today, Yesterday, the weekday, then the date, as the sidebar lists calls; another year says its year", () => {
+    const tz = localZone();
     const now = new Date(2026, 8, 30, 9, 0).getTime();
-    expect(dayLabel(new Date(2026, 8, 30, 0, 5).getTime(), now)).toBe("Today");
-    expect(dayLabel(new Date(2026, 8, 29, 23, 59).getTime(), now)).toBe("Yesterday");
-    expect(dayLabel(new Date(2026, 8, 29, 0, 0).getTime(), now)).toBe("Yesterday");
-    const older = dayLabel(new Date(2026, 8, 28, 12, 0).getTime(), now);
-    expect(older).toContain("28");
-    expect(older).not.toContain("2026");
-    expect(dayLabel(new Date(2025, 8, 28, 12, 0).getTime(), now)).toContain("2025");
+    expect(dayLabel(new Date(2026, 8, 30, 0, 5).getTime(), now, tz)).toBe("Today");
+    expect(dayLabel(new Date(2026, 8, 29, 23, 59).getTime(), now, tz)).toBe("Yesterday");
+    expect(dayLabel(new Date(2026, 8, 29, 0, 0).getTime(), now, tz)).toBe("Yesterday");
+    expect(dayLabel(new Date(2026, 8, 28, 12, 0).getTime(), now, tz)).toBe("Mon");
+    expect(dayLabel(new Date(2026, 7, 21, 12, 0).getTime(), now, tz)).toBe("21 Aug");
+    expect(dayLabel(new Date(2025, 8, 28, 12, 0).getTime(), now, tz)).toBe("28 Sep 2025");
   });
 });
 
@@ -2651,12 +2739,13 @@ describe("DC-H1: the History page", () => {
     t?.cleanup();
   });
 
-  const openHistory = async (history: DictationRow[]) => {
+  const openHistory = async (history: DictationRow[], settings: Record<string, unknown> = {}) => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
       before: async (p) => {
         await p.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
         fx = await dictationFixture(p, { history });
+        Object.assign(fx.settings, settings);
       },
     });
     await page.click("#dictation-open");
@@ -2686,10 +2775,18 @@ describe("DC-H1: the History page", () => {
           language: "es",
         }),
         dictationRow(3, { state: "failed", text: null, error: "remote akou not reachable" }),
+        dictationRow(4, { state: "drafted", engine: "fast", fallback_from: "best" }),
       ]);
       expect(
         await page.$$eval("#dictation-history-list li", (l) => l.map((x) => x.dataset.id)),
-      ).toEqual(["d001", "d002", "d003"]);
+      ).toEqual(["d001", "d002", "d003", "d004"]);
+      // The time is the sidebar's 24-hour clock, whatever the machine's locale.
+      expect(await text(page, `${row("d001")} time`)).toMatch(/^\d{2}:\d{2}$/);
+      // A dictation the engine chosen could not hear says which one did, and one left in the
+      // draft box says so.
+      expect(await text(page, `${row("d004")} .meta`)).toMatch(
+        /^[^·]+ · [^·]+ · Fast instead of Best · Left in the draft box$/,
+      );
       expect(await text(page, `${row("d001")} .text`)).toBe("dictation number 1");
       const meta = await text(page, `${row("d002")} .meta`);
       expect(meta).toMatch(/^[^·]+ · No app · Spanish · Cancelled$/);
@@ -2742,7 +2839,7 @@ describe("DC-H1: the History page", () => {
       await fromMenu(page, "d002", "button.delete");
       await page.waitForSelector(row("d002"), { state: "detached" });
       expect(fx.calls).toEqual([{ method: "DELETE", path: "/dictations/d002" }]);
-      expect(fx.history.map((d) => d.id)).toEqual(["d001", "d003"]);
+      expect(fx.history.map((d) => d.id)).toEqual(["d001", "d003", "d004"]);
     },
     UI_TIMEOUT,
   );
@@ -2750,7 +2847,9 @@ describe("DC-H1: the History page", () => {
   test(
     "Retry with Best shows the second result under the first, and either can be inserted",
     async () => {
-      const { page, fx } = await openHistory([dictationRow(1)]);
+      const { page, fx } = await openHistory([dictationRow(1)], {
+        "dictation.remote.url": "https://studio.example",
+      });
       // The menu offers every engine but the one that ran.
       await page.click(`${row("d001")} .hist-more`);
       expect(
@@ -2821,6 +2920,59 @@ describe("DC-H1: the History page", () => {
       await page.click("#dictation-dictionary-open");
       await page.waitForSelector("#page-dictation #dictionary-list .pg-sechelp");
       expect(await text(page, "#page-dictation h1")).toBe("Words and replacements");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with no other computer set up, the menu offers no retry on one",
+    async () => {
+      const { page } = await openHistory([dictationRow(1)]);
+      await page.click(`${row("d001")} .hist-more`);
+      expect(
+        await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
+      ).toEqual(["Retry with Best", "Delete"]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a row under the pointer keeps its height, and a menu at the window's bottom opens upwards",
+    async () => {
+      const long =
+        "Can we move the review to Thursday? The numbers are not ready and the deck needs another pass.";
+      const { page } = await openHistory(
+        Array.from({ length: 12 }, (_, i) => dictationRow(i + 1, i === 0 ? { text: long } : {})),
+      );
+      await page.setViewportSize({ width: 1024, height: 600 });
+      await page.mouse.move(0, 0);
+      const heights = () =>
+        page.$$eval("#dictation-history-list li", (l) =>
+          l.map((x) => Math.round(x.getBoundingClientRect().height)),
+        );
+      const still = await heights();
+      await page.hover(row("d001"), { position: { x: 30, y: 12 } });
+      await page.waitForFunction(
+        (sel) => getComputedStyle(document.querySelector(sel) as Element).opacity === "1",
+        `${row("d001")} .hist-actions`,
+      );
+      expect(await heights()).toEqual(still);
+
+      // The last row at the bottom of the window: Delete stays on screen.
+      await page.$eval(row("d012"), (el) => el.scrollIntoView({ block: "end" }));
+      await page.click(`${row("d012")} .hist-more`);
+      const box = await page.$eval(`${row("d012")} .hist-menu`, (m) => {
+        const r = m.getBoundingClientRect();
+        return { bottom: r.bottom, view: window.innerHeight, up: m.classList.contains("up") };
+      });
+      expect(box.up).toBe(true);
+      expect(box.bottom).toBeLessThanOrEqual(box.view);
+      // A row near the top still opens its menu below the button.
+      await page.$eval(row("d001"), (el) => el.scrollIntoView({ block: "start" }));
+      await page.click(`${row("d001")} .hist-more`);
+      expect(await page.$eval(`${row("d001")} .hist-menu`, (m) => m.classList.contains("up"))).toBe(
+        false,
+      );
     },
     UI_TIMEOUT,
   );

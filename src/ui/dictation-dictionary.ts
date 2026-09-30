@@ -106,12 +106,37 @@ export function isReplacement(e: Pick<DictionaryEntry, "term" | "heard">): boole
 
 const quote = (forms: readonly string[]) => forms.map((f) => `“${f}”`).join(", ");
 
+/** The forms a closed row names: two, then how many more, since the open row lists them all. */
+export function fewForms(forms: readonly string[]): string {
+  return forms.length <= 2
+    ? quote(forms)
+    : `${quote(forms.slice(0, 2))} and ${forms.length - 2} more`;
+}
+
+/** Where the keyboard was in the list: the entry, the control, and the row's place. */
+interface Spot {
+  term: string | undefined;
+  section: string | undefined;
+  control: string;
+  index: number;
+}
+
+/** The controls of a row, as a selector that finds the same one after a redraw. */
+const CONTROLS = [
+  ".pg-link",
+  ".calls-too",
+  ".remove",
+  "button[data-action='approve']",
+  "button[data-action='reject']",
+  ".pg-rest button",
+];
+
 export class DictationDictionary {
   readonly root = h("div", { class: "dictation-dictionary" });
   private readonly heard = h("input", {
     id: "dictionary-heard",
     class: "pg-input",
-    placeholder: "You say",
+    placeholder: "You say (commas for several)",
     hidden: true,
     attrs: { "aria-label": "What you say", autocomplete: "off", spellcheck: "false" },
   });
@@ -144,6 +169,8 @@ export class DictationDictionary {
   private opened: string | null = null;
   /** The sections showing every entry, not only the first few. */
   private readonly all = new Set<string>();
+  /** Where the keyboard was in the list, until it leaves it. */
+  private spot: Spot | null = null;
 
   constructor(
     private readonly t: Transport,
@@ -172,6 +199,15 @@ export class DictationDictionary {
       ),
     );
     this.mode.addEventListener("click", () => this.switchMode(!this.replacing));
+    // An answer redraws the list, which takes the focused control with it: the keyboard is put
+    // back where it was, or on the row that took the place of the one gone.
+    this.list.addEventListener("focusin", (e) => {
+      this.spot = spotOf(e.target as HTMLElement);
+    });
+    this.list.addEventListener("focusout", (e) => {
+      const to = e.relatedTarget as Node | null;
+      if (to && !this.list.contains(to)) this.spot = null;
+    });
     this.file.addEventListener("change", () => void this.importFile());
     this.switchMode(false);
     this.root.append(
@@ -244,9 +280,9 @@ export class DictationDictionary {
       this.review && "error" in this.review
         ? dictationReviewError(this.review.error)
         : this.review?.pairs
-          ? dictationReviewSection(this.t, this.review.pairs, async (said) => {
-              toast(said, "info");
-              await this.load();
+          ? dictationReviewSection(this.t, this.review.pairs, async (said, ok) => {
+              toast(said, ok ? "info" : "error");
+              if (ok) await this.load();
             })
           : null;
     replace(
@@ -275,6 +311,28 @@ export class DictationDictionary {
         "Used in calls and dictation. Change them in their own file.",
       ),
     );
+    this.refocus();
+  }
+
+  /** Puts the keyboard back after a redraw took the control it was on. */
+  private refocus(): void {
+    const spot = this.spot;
+    const now = document.activeElement;
+    if (!spot || (now && now !== document.body && now.isConnected)) return;
+    const section = spot.section
+      ? this.list.querySelector(`[data-section="${CSS.escape(spot.section)}"]`)
+      : null;
+    const rows = [...(section?.querySelectorAll<HTMLElement>("[data-term], .pg-rest") ?? [])];
+    const same = spot.term
+      ? rows.find((r) => r.dataset.term === spot.term)
+      : rows.find((r) => r.classList.contains("pg-rest"));
+    // The entry is gone (learned, removed): the row now in its place, or the last one left.
+    const at = same ?? rows[Math.min(spot.index, rows.length - 1)];
+    const target =
+      (same ? at?.querySelector<HTMLElement>(spot.control) : null) ??
+      at?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)") ??
+      this.term;
+    target.focus();
   }
 
   /** One section of entries with its count; the first few, then a row that shows the rest. */
@@ -312,7 +370,7 @@ export class DictationDictionary {
   /** What the row says on its right: how else it is heard, and where it applies. */
   private where(e: DictionaryEntry): string {
     return [
-      e.heard.length > 0 && !isReplacement(e) ? `also heard as ${quote(e.heard)}` : "",
+      e.heard.length > 0 && !isReplacement(e) ? `also heard as ${fewForms(e.heard)}` : "",
       // Another list's section says where its words apply, so its rows need not.
       e.scope === "global" && e.entryScope !== "dictation" ? "Calls too" : "",
       e.confirmed ? "" : "Not confirmed yet",
@@ -341,7 +399,11 @@ export class DictationDictionary {
           { class: "pg-row pg-ro" },
           h("span", { class: "pg-lbl" }, name),
           where
-            ? h("span", { class: "pg-ctl" }, h("span", { class: "pg-value where" }, where))
+            ? h(
+                "span",
+                { class: "pg-ctl" },
+                h("span", { class: "pg-value where", title: where }, where),
+              )
             : null,
         ),
       );
@@ -382,7 +444,7 @@ export class DictationDictionary {
       h(
         "span",
         { class: "pg-ctl" },
-        !open && where ? h("span", { class: "pg-value where" }, where) : null,
+        !open && where ? h("span", { class: "pg-value where", title: where }, where) : null,
         h("span", { class: "pg-more" }, icon(...ICONS.chevron)),
       ),
     );
@@ -395,8 +457,13 @@ export class DictationDictionary {
     });
     calls.classList.add("calls-too");
     calls.addEventListener("change", () => {
-      // Calls read it too, under their own rules; off, dictation alone reads it again.
-      void this.write(calls.checked ? kept(e) : { ...kept(e), scope: "dictation" });
+      // Calls read it too, under their own rules; off, dictation alone reads it again. A refusal
+      // is said at once, and the switch shows what the file still holds.
+      void this.write(calls.checked ? kept(e) : { ...kept(e), scope: "dictation" }, false).then(
+        (ok) => {
+          if (!ok) calls.checked = e.entryScope !== "dictation";
+        },
+      );
     });
     li.append(
       row(
@@ -444,11 +511,13 @@ export class DictationDictionary {
     }
   }
 
-  /** Writes one entry; the refusal, if any, is shown under the form. */
-  private async write(body: WriteBody): Promise<boolean> {
+  /** Writes one entry; the refusal, if any, is shown under the form, or said by a row's change. */
+  private async write(body: WriteBody, fromForm = true): Promise<boolean> {
     const r = await this.t.request("POST", "/vocab", body);
     if (r.status >= 400) {
-      this.refused(message(r.body, `the word was not saved (HTTP ${r.status})`));
+      const why = message(r.body, `the word was not saved (HTTP ${r.status})`);
+      if (fromForm) this.refused(why);
+      else toast(why);
       return false;
     }
     this.issue.hidden = true;
@@ -496,4 +565,19 @@ export class DictationDictionary {
     );
     await this.load();
   }
+}
+
+/** The spot of a focused control in the list, or null when it is none of a row's. */
+function spotOf(el: HTMLElement): Spot | null {
+  const control = CONTROLS.find((c) => el.matches(c));
+  const item = el.closest<HTMLElement>("[data-term], .pg-rest");
+  const section = el.closest<HTMLElement>("[data-section]");
+  if (!control || !item || !section) return null;
+  const rows = [...section.querySelectorAll<HTMLElement>("[data-term], .pg-rest")];
+  return {
+    term: item.dataset.term,
+    section: section.dataset.section,
+    control,
+    index: rows.indexOf(item),
+  };
 }

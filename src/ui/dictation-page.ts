@@ -309,6 +309,8 @@ export class DictationPage {
   private readError: string | null = null;
   /** Automatic, Fast or Best: what the engine goes back to when another computer is turned off. */
   private localEngine = "auto";
+  /** The saves on their way, by the change they send. */
+  private readonly saving = new Map<string, Promise<void>>();
 
   constructor(
     private readonly t: Transport,
@@ -317,6 +319,9 @@ export class DictationPage {
   ) {
     this.root.append(this.col);
     this.root.addEventListener("change", (e) => this.changed(e.target as HTMLElement));
+    // History retries on another computer only when one has an address.
+    if (hooks.history)
+      hooks.history.remote = () => String(this.settings[REMOTE_URL_KEY] ?? "").trim() !== "";
   }
 
   /** Reads everything and draws the page; on `key`, goes to that setting. */
@@ -354,10 +359,12 @@ export class DictationPage {
 
   /** "‹ Dictation": back to this page, with the keyboard on the row it came through. */
   private back(): HTMLButtonElement {
-    return backLink("Dictation", () => {
+    return backLink("Dictation", async () => {
       const from = this.sub;
-      void this.saveTyped();
-      this.shows++;
+      const shown = ++this.shows;
+      // Saved first, so the row that led here shows what was typed there.
+      await this.saveTyped();
+      if (shown !== this.shows) return;
       this.sub = null;
       this.draw();
       if (from) this.col.querySelector<HTMLElement>(`#${SUB_ROWS[from]}`)?.focus();
@@ -1442,11 +1449,23 @@ export class DictationPage {
     await Promise.all(rows.map((r) => this.save(r)));
   }
 
-  /** Saves the one key of this row. */
-  private async save(r: HTMLElement): Promise<void> {
+  /**
+   * Saves the one key of this row. The same change already on its way is not sent twice: a field
+   * left by a click saves on its blur, and the page left by that click saves what is typed.
+   */
+  private save(r: HTMLElement): Promise<void> {
     const patch = changedSettings(r, this.schema, this.shown);
+    if (Object.keys(patch).length === 0) return Promise.resolve();
+    const id = JSON.stringify(patch);
+    const going = this.saving.get(id);
+    if (going) return going;
+    const p = this.send(r, patch).finally(() => this.saving.delete(id));
+    this.saving.set(id, p);
+    return p;
+  }
+
+  private async send(r: HTMLElement, patch: Record<string, unknown>): Promise<void> {
     const keys = Object.keys(patch);
-    if (keys.length === 0) return;
     const res = await this.t.request("PATCH", "/config", patch);
     if (res.status >= 400) {
       this.refused(r, keys, res.body);

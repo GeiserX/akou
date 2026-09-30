@@ -21,6 +21,7 @@
 
 import { languageName } from "./dictation-languages.ts";
 import { h, replace, toast } from "./dom.ts";
+import { dayLabel, hourMinute, localZone } from "./model.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 import { ICONS, icon } from "./rows.ts";
@@ -70,7 +71,8 @@ const STATES: Record<string, string> = {
   listening: "Listening",
   transcribing: "Transcribing",
   inserting: "Inserting",
-  drafted: "Sent from the draft box",
+  // Enter in the draft box makes it `inserted` and closing it `discarded`: this one is still there.
+  drafted: "Left in the draft box",
   discarded: "Discarded",
   cancelled: "Cancelled",
   empty: "Nothing heard",
@@ -81,22 +83,6 @@ const STATES: Record<string, string> = {
 export function took(ms: number | null): string {
   if (ms === null) return "";
   return ms < 10_000 ? `${(ms / 1000).toFixed(1)} s` : `${Math.round(ms / 1000)} s`;
-}
-
-/** The day a dictation is listed under, in this machine's local calendar: Today, Yesterday, a date. */
-export function dayLabel(at: number, now = Date.now()): string {
-  const day = (t: number) => new Date(t).toDateString();
-  if (day(at) === day(now)) return "Today";
-  const y = new Date(now);
-  y.setDate(y.getDate() - 1);
-  if (day(at) === day(y.getTime())) return "Yesterday";
-  const d = new Date(at);
-  return d.toLocaleDateString([], {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    ...(d.getFullYear() === new Date(now).getFullYear() ? {} : { year: "numeric" }),
-  });
 }
 
 export class DictationHistory {
@@ -125,6 +111,12 @@ export class DictationHistory {
   private reads = 0;
   private timer: ReturnType<typeof setTimeout> | undefined;
   private readonly armed = new Map<string, number>();
+
+  /**
+   * Whether another computer is set up to retry on; the Dictation page, which reads the settings,
+   * sets it. The menu asks it each time it opens.
+   */
+  remote: () => boolean = () => true;
 
   constructor(private readonly t: Transport) {
     this.search.addEventListener("input", () => {
@@ -190,8 +182,10 @@ export class DictationHistory {
     }
     const days = new Map<string, HTMLElement[]>();
     const now = Date.now();
+    // The same days and times as the calls in the sidebar.
+    const tz = localZone();
     for (const d of this.items) {
-      const label = dayLabel(d.at, now);
+      const label = dayLabel(d.at, now, tz);
       let li = this.rows.get(d.id);
       if (!li) {
         li = this.row(d);
@@ -227,9 +221,11 @@ export class DictationHistory {
           click: () => {
             const open = menu.hidden === true;
             this.closeMenus();
+            if (open) this.fillMenu(menu, d, results);
             menu.hidden = !open;
             moreBtn.setAttribute("aria-expanded", String(open));
             li.classList.toggle("menu-open", open);
+            if (open) placeMenu(menu, moreBtn, li);
           },
         },
       },
@@ -276,10 +272,32 @@ export class DictationHistory {
       ),
       menu,
     );
-    // Retry with every engine but the one that heard it, since that one would most likely hear
-    // the same; then Delete, which asks once more.
-    for (const e of RETRY_ENGINES.filter((x) => x !== d.engine))
-      menu.append(
+    return li;
+  }
+
+  /**
+   * The row's menu as it opens: Retry with every engine but the one that heard it, since that one
+   * would most likely hear the same, and the other computer only when one is set up; then Delete,
+   * which asks once more.
+   */
+  private fillMenu(menu: HTMLElement, d: DictationRow, results: HTMLElement): void {
+    const engines = RETRY_ENGINES.filter(
+      (x) => x !== d.engine && (x !== "remote" || this.remote()),
+    );
+    const del = twoStep(
+      {
+        class: "delete",
+        label: "Delete",
+        confirm: "Delete it and its audio?",
+        id: d.id,
+        armed: this.armed,
+      },
+      () => void this.remove(d.id),
+    );
+    del.setAttribute("role", "menuitem");
+    replace(
+      menu,
+      ...engines.map((e) =>
         h(
           "button",
           {
@@ -296,21 +314,10 @@ export class DictationHistory {
           },
           e === "remote" ? "Retry on the other computer" : `Retry with ${engineName(e)}`,
         ),
-      );
-    menu.append(h("hr", {}));
-    const del = twoStep(
-      {
-        class: "delete",
-        label: "Delete",
-        confirm: "Delete it and its audio?",
-        id: d.id,
-        armed: this.armed,
-      },
-      () => void this.remove(d.id),
+      ),
+      engines.length > 0 ? h("hr", {}) : null,
+      del,
     );
-    del.setAttribute("role", "menuitem");
-    menu.append(del);
-    return li;
   }
 
   /** The line under the text: its time, its app, its language, and what became of it. */
@@ -319,10 +326,20 @@ export class DictationHistory {
       h(
         "time",
         { attrs: { datetime: new Date(d.at).toISOString() } },
-        new Date(d.at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }),
+        hourMinute(d.at, localZone()),
       ),
       ` · ${d.app ?? "No app"}`,
     ];
+    // The engine asked for could not run: the one that heard it instead, as a retry says.
+    if (d.fallback_from)
+      out.push(
+        " · ",
+        h(
+          "span",
+          { class: "fallback" },
+          `${engineName(d.engine)} instead of ${engineName(d.fallback_from)}`,
+        ),
+      );
     if (d.language)
       out.push(
         " · ",
@@ -410,6 +427,24 @@ export class DictationHistory {
     else this.draw();
     toast("Deleted, with its audio.", "info");
   }
+}
+
+/**
+ * Opens the menu under its ⋯ button, or over it when the page has no room below, so Delete is
+ * never past the bottom of the window.
+ */
+function placeMenu(menu: HTMLElement, button: HTMLElement, row: HTMLElement): void {
+  const b = button.getBoundingClientRect();
+  const r = row.getBoundingClientRect();
+  const view = row.closest("#pages")?.getBoundingClientRect();
+  const bottom = Math.min(window.innerHeight, view?.bottom ?? window.innerHeight);
+  // Below the macOS window's title-bar strip, which stays over the page.
+  const bar = document.querySelector("#pages > .pg-bar")?.getBoundingClientRect().height ?? 0;
+  const top = (view?.top ?? 0) + bar;
+  const tall = menu.offsetHeight;
+  const up = b.bottom + 4 + tall > bottom && b.top - 4 - tall >= top;
+  menu.classList.toggle("up", up);
+  menu.style.top = `${Math.round((up ? b.top - 4 - tall : b.bottom + 4) - r.top)}px`;
 }
 
 function copy(text: string): void {
