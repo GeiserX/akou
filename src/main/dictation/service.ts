@@ -85,6 +85,12 @@ export const REGRANT_POLL_MS = 2000;
 
 export type Grants = { mic: Grant; accessibility: Grant };
 
+/**
+ * The key sources that make their key tap again by themselves once Accessibility is given, and say
+ * `ready` again (the macOS helper, akou-qpn): the app never starts them again for that grant.
+ */
+const RETAPS = new Set(["cgeventtap"]);
+
 /** A grant dictation can work with: given, one the OS does not ask for, or one not asked yet. */
 const grantOk = (g: Grant) => g !== "denied";
 
@@ -971,8 +977,11 @@ export class DictationService {
    * The grants as the OS holds them now (DC-U2, DC-N3). The running helper's, while each is given;
    * else a probe's, read without asking, so the setup sees a grant arrive and the switch sees one
    * missing before any helper starts. A helper that started without a grant the probe now finds
-   * is started again once idle, since the macOS key tap is made at the start. Null when nothing
-   * can say.
+   * is started again once idle, once: the microphone opens at the start, and so does a key source
+   * that cannot pick up Accessibility by itself. The macOS helper (`RETAPS`) makes its key tap
+   * again when Accessibility arrives and says `ready` again, so that grant never restarts it; a
+   * restart for it would also spend the one restart a grant given after the microphone needs.
+   * Null when nothing can say.
    */
   async grants(): Promise<Grants | null> {
     const h = this.helper;
@@ -987,7 +996,9 @@ export class DictationService {
       !h.regranted &&
       h.session.state === "idle" &&
       ((!grantOk(ready.mic) && grantOk(fresh.mic)) ||
-        (!grantOk(ready.accessibility) && grantOk(fresh.accessibility)))
+        (!RETAPS.has(h.session.ready?.backend ?? "") &&
+          !grantOk(ready.accessibility) &&
+          grantOk(fresh.accessibility)))
     ) {
       this.restartForGrant(h);
     }

@@ -14,7 +14,10 @@
 //!   follows handy-keys' macOS listener (MIT, Copyright (c) 2026 handy-computer); akou needs its own
 //!   callback because DC-A4 decides per event whether Escape or Enter is swallowed, which a
 //!   registered set of blocked hotkeys cannot say. Events the helper posts itself carry
-//!   `AKOU_EVENT` in their user-data field and pass untouched.
+//!   `AKOU_EVENT` in their user-data field and pass untouched. Without the Accessibility grant
+//!   there is no tap: its thread asks for the grant once a second and makes the tap when it is
+//!   given, and the worker then says `ready` again, so a grant given while akou runs needs no
+//!   restart (akou-qpn).
 //! - **What has the keyboard** (`Screen`): the focused application from the system-wide
 //!   accessibility element, its frontmost on-screen window (`kCGWindowNumber`, a stable id, never a
 //!   title), and the focused element's kind: a secure text field is `secure`, a text role or a
@@ -486,8 +489,49 @@ unsafe extern "C-unwind" fn callback(
     }
 }
 
-/// Starts the tap on its own thread; `Err` when macOS refuses it (no Accessibility grant).
-fn start_tap(gate: Gate) -> Result<(), String> {
+/// How often the tap thread asks for the Accessibility grant while it has none (akou-qpn). The
+/// ask is the non-prompting `AXIsProcessTrusted`, and it stops once the tap is made.
+const TAP_RETRY: Duration = Duration::from_secs(1);
+
+const NO_GRANT: &str = "Accessibility is not granted, so no key reaches dictation";
+
+/// Makes the tap once and adds it to this thread's run loop, enabled; `Err` when macOS refuses it.
+fn make_tap(ctx: &'static Ctx, mask: CGEventMask) -> Result<CFRetained<CFMachPort>, String> {
+    if !trusted() {
+        return Err(NO_GRANT.into());
+    }
+    // SAFETY: the callback matches `CGEventTapCallBack`; `ctx` outlives the tap.
+    let tap = unsafe {
+        CGEvent::tap_create(
+            CGEventTapLocation::SessionEventTap,
+            CGEventTapPlacement::HeadInsertEventTap,
+            CGEventTapOptions::Default,
+            mask,
+            Some(callback),
+            ctx as *const Ctx as *mut c_void,
+        )
+    }
+    .ok_or("macOS refused the key tap (Accessibility)")?;
+    ctx.tap.set(Some(NonNull::from(&*tap)));
+    let (Some(source), Some(rl)) = (
+        CFMachPort::new_run_loop_source(None, Some(&tap), 0),
+        CFRunLoop::current(),
+    ) else {
+        ctx.tap.set(None);
+        return Err("the key tap has no run loop".into());
+    };
+    // SAFETY: a CF constant.
+    rl.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
+    CGEvent::tap_enable(&tap, true);
+    Ok(tap)
+}
+
+/// Starts the tap on its own thread; `Err` when macOS refuses it now (no Accessibility grant).
+/// The thread does not give up: while there is no tap it asks for the grant every `TAP_RETRY`,
+/// makes the tap once the grant is given, and tells the worker (`live::Msg::Tapped`), so a grant
+/// given while akou runs needs no restart (akou-qpn). A tap whose port dies (the grant revoked)
+/// waits for the grant again the same way.
+fn start_tap(gate: Gate, tx: mpsc::Sender<live::Msg>) -> Result<(), String> {
     let (init_tx, init_rx) = mpsc::channel::<Result<(), String>>();
     std::thread::Builder::new()
         .name("akou-dictate-tap".into())
@@ -502,42 +546,44 @@ fn start_tap(gate: Gate) -> Result<(), String> {
                 gate,
                 tap: Cell::new(None),
             }));
-            // SAFETY: the callback matches `CGEventTapCallBack`; `ctx` outlives the tap.
-            let tap = unsafe {
-                CGEvent::tap_create(
-                    CGEventTapLocation::SessionEventTap,
-                    CGEventTapPlacement::HeadInsertEventTap,
-                    CGEventTapOptions::Default,
-                    mask,
-                    Some(callback),
-                    ctx as *const Ctx as *mut c_void,
-                )
-            };
-            let Some(tap) = tap else {
-                let _ = init_tx.send(Err("macOS refused the key tap (Accessibility)".into()));
-                return;
-            };
-            ctx.tap.set(Some(NonNull::from(&*tap)));
-            let (Some(source), Some(rl)) = (
-                CFMachPort::new_run_loop_source(None, Some(&tap), 0),
-                CFRunLoop::current(),
-            ) else {
-                let _ = init_tx.send(Err("the key tap has no run loop".into()));
-                return;
-            };
-            // SAFETY: a CF constant.
-            rl.add_source(Some(&source), unsafe { kCFRunLoopCommonModes });
-            CGEvent::tap_enable(&tap, true);
-            let _ = init_tx.send(Ok(()));
-            // Parked in the run loop: no timer, no polling; recovery is in the callback.
-            while CFMachPort::is_valid(&tap) {
-                CFRunLoop::run();
+            // The first answer goes to `run`, which says `ready`; a later tap to the worker.
+            let mut init = Some(init_tx);
+            loop {
+                let tap = match make_tap(ctx, mask) {
+                    Ok(tap) => tap,
+                    Err(e) => {
+                        if let Some(init) = init.take() {
+                            let _ = init.send(Err(e));
+                        }
+                        std::thread::sleep(TAP_RETRY);
+                        continue;
+                    }
+                };
+                match init.take() {
+                    Some(init) => {
+                        let _ = init.send(Ok(()));
+                    }
+                    None => {
+                        let late = live::Msg::Tapped {
+                            backend: BACKEND,
+                            mic: mic_grant(),
+                        };
+                        if tx.send(late).is_err() {
+                            return;
+                        }
+                    }
+                }
+                // Parked in the run loop: no timer, no polling; recovery is in the callback.
+                while CFMachPort::is_valid(&tap) {
+                    CFRunLoop::run();
+                }
+                ctx.tap.set(None);
+                // The port died (the grant was revoked): the worker re-checks the grant.
+                ctx.gate.event(TapEvent::Disabled {
+                    t_ns: clock::now().awake_ns,
+                    held: &[],
+                });
             }
-            // The port died (the grant was revoked): the worker re-checks the grant.
-            ctx.gate.event(TapEvent::Disabled {
-                t_ns: clock::now().awake_ns,
-                held: &[],
-            });
         })
         .map_err(|e| format!("the key tap thread: {e}"))?;
     init_rx
@@ -715,11 +761,8 @@ pub fn run(cfg: Config) -> i32 {
     let (mic, ax) = grants();
     let mut gate = d.gate();
     gate.set_wake(live::forward_wakes(tx.clone()));
-    let tapped = if ax == "granted" {
-        start_tap(gate)
-    } else {
-        Err("Accessibility is not granted, so no key reaches dictation".into())
-    };
+    // Without the grant the tap thread waits for it, and the tap comes up once it is given.
+    let tapped = start_tap(gate, tx.clone());
     // With no tap nothing is swallowed, so the app shows no Enter hint (DC-A4).
     d.begin(BACKEND, tapped.is_ok(), (mic, ax), &mut out);
     if let Err(e) = tapped {

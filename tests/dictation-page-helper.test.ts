@@ -263,4 +263,44 @@ describe("DC-U2, DC-N3: the grants before and after the helper starts", () => {
     expect(r.svc.session()).toBe(second);
     expect(sent(r, "rebind").length).toBe(2);
   });
+
+  test("[akou-qpn] the macOS helper makes its own tap when Accessibility arrives: no restart for it", async () => {
+    let argv: string[] = [];
+    const r = rig(
+      ["--backend", "cgeventtap", "--grants", "mic", "--probe-grants", "mic,accessibility"],
+      { probe: () => [...argv, "--probe"] },
+    );
+    argv = r.argv;
+    await started(r);
+    const first = r.svc.session();
+    expect(await r.svc.grants()).toEqual({ mic: "granted", accessibility: "granted" });
+    await Bun.sleep(1500);
+    expect(r.svc.session()).toBe(first);
+    expect(sent(r, "rebind").length).toBe(1);
+  });
+
+  test("positive control: the macOS helper is still started again for the microphone", async () => {
+    let argv: string[] = [];
+    const r = rig(
+      [
+        "--backend",
+        "cgeventtap",
+        "--grants",
+        "accessibility",
+        "--probe-grants",
+        "mic,accessibility",
+      ],
+      { probe: () => [...argv, "--probe"] },
+    );
+    argv = r.argv;
+    await started(r);
+    const first = r.svc.session();
+    expect(first?.ready?.grants).toEqual({ mic: "denied", accessibility: "granted" });
+    expect(await r.svc.grants()).toEqual({ mic: "granted", accessibility: "granted" });
+    await until(
+      () => r.svc.session() !== first && r.svc.status().state === "idle",
+      10_000,
+      "the helper started again",
+    );
+  });
 });

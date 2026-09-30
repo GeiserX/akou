@@ -233,6 +233,20 @@ impl Dictate {
         v.swallow
     }
 
+    /// The key tap came up after `ready` (akou-qpn: Accessibility granted while the helper ran):
+    /// keys may be swallowed now, the grant counts as given (so losing it again says `grant.lost`),
+    /// and the app hears a fresh `ready`, which it reads as a start. Said only while no session is
+    /// live and no paste waits for its receipt; false asks the caller to try again later.
+    pub fn tap_started(&mut self, backend: &str, mic: &str, out: &mut dyn Out) -> bool {
+        if self.live.is_some() || self.busy() {
+            return false;
+        }
+        self.gate.lock().act.set_swallows(true);
+        self.accessibility = "granted".into();
+        out.line(p::ready(backend, true, mic, "granted"));
+        true
+    }
+
     /// The machine woke, or a session could not start: a grant present at `ready` may be gone
     /// (revoked, or reset by a re-signed build), which silently kills the tap. Asks the
     /// non-prompting check and says `grant.lost` once.
@@ -1128,6 +1142,61 @@ mod tests {
         d.begin("simulate", true, ("granted", "not-needed"), &mut out);
         d.recheck_grant(&mut out);
         assert!(!types(&out).contains(&"grant.lost".to_string()));
+    }
+
+    /// akou-qpn: a tap that came up after `ready` waits for the live session to end, then says a
+    /// fresh `ready` with keys swallowed and Accessibility granted; from then on Enter is swallowed
+    /// during a session, and losing the grant again says `grant.lost`.
+    #[test]
+    fn a_late_tap_says_ready_again_once_idle_and_counts_the_grant() {
+        let w = World::new();
+        w.borrow_mut().trusted = false;
+        let mut d = dictate(&w);
+        let mut out = Rec::default();
+        d.begin("simulate", false, ("granted", "denied"), &mut out);
+        run(&mut d, &mut out, 0, 1000);
+        d.key(true, "RightCommand", 1000 * MS, &mut out);
+        d.key(false, "RightCommand", 1100 * MS, &mut out);
+        run(&mut d, &mut out, 1100, 1500);
+        // Before the tap: Enter is a plain key (DC-A4).
+        assert!(!d.key(true, "Enter", 1400 * MS, &mut out));
+        d.key(false, "Enter", 1410 * MS, &mut out);
+        w.borrow_mut().trusted = true;
+        assert!(
+            !d.tap_started("simulate", "granted", &mut out),
+            "a session is live"
+        );
+        assert_eq!(types(&out), ["ready", "mic", "session.started"]);
+        d.key(true, "RightCommand", 1500 * MS, &mut out);
+        d.key(false, "RightCommand", 1600 * MS, &mut out);
+        run(&mut d, &mut out, 1600, 2000);
+        assert!(d.tap_started("simulate", "granted", &mut out));
+        let ready: Vec<&String> = out
+            .lines
+            .iter()
+            .filter(|l| l.contains(r#""type":"ready""#))
+            .collect();
+        assert_eq!(ready.len(), 2);
+        assert!(ready[1].contains(r#""swallow_keys":true"#), "{}", ready[1]);
+        assert!(
+            ready[1].contains(r#""accessibility":"granted""#),
+            "{}",
+            ready[1]
+        );
+        // Keys are swallowed now: Enter during the next session is the session's.
+        run(&mut d, &mut out, 2000, 3000);
+        d.key(true, "RightCommand", 3000 * MS, &mut out);
+        d.key(false, "RightCommand", 3100 * MS, &mut out);
+        run(&mut d, &mut out, 3100, 3500);
+        assert!(
+            d.key(true, "Enter", 3500 * MS, &mut out),
+            "Enter is swallowed"
+        );
+        d.key(false, "Enter", 3510 * MS, &mut out);
+        // The grant counts as given: revoked, it is lost.
+        w.borrow_mut().trusted = false;
+        d.recheck_grant(&mut out);
+        assert!(types(&out).contains(&"grant.lost".to_string()));
     }
 
     /// DC-N1: Secure Input turning on and off is reported once each way.

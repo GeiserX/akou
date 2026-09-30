@@ -71,6 +71,14 @@ pub enum Msg {
     Tap,
     /// A line a backend thread has for the app (the portal's `warn portal-bind`).
     Say(String),
+    /// The key tap came up after `ready` (the Accessibility grant arrived while the helper ran,
+    /// akou-qpn): the backend's name and the microphone grant now, for the fresh `ready`. Only
+    /// the macOS tap thread sends it.
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+    Tapped {
+        backend: &'static str,
+        mic: &'static str,
+    },
 }
 
 /// Sleep, seen from two clocks: the awake clock stops while the machine sleeps, the continuous
@@ -352,6 +360,8 @@ pub fn serve_with(
         failing: false,
     };
     let mut sleep = Sleep::default();
+    // A tap that came up late, until no session or paste is in flight to say so (akou-qpn).
+    let mut tapped: Option<(&'static str, &'static str)> = None;
     loop {
         let msg = wait(&rx, Duration::from_millis(STEP_MS));
         let n = now();
@@ -397,10 +407,16 @@ pub fn serve_with(
             }
             Ok(Msg::Mic(_, Event::Warn { code, msg })) => out.line(p::warn(code, &msg)),
             Ok(Msg::Say(l)) => out.line(l),
+            Ok(Msg::Tapped { backend, mic }) => tapped = Some((backend, mic)),
             Ok(Msg::Mic(..) | Msg::Tap) | Err(RecvTimeoutError::Timeout) => {}
         }
         d.pump(t, out);
         d.tick(t, out);
+        if let Some((backend, mic)) = tapped
+            && d.tap_started(backend, mic, out)
+        {
+            tapped = None;
+        }
         mic.follow(d, t, out);
     }
     mic.close();
@@ -639,6 +655,46 @@ mod tests {
         let l = lines.borrow();
         assert!(l.iter().any(|x| x.contains("bad-command")), "{l:?}");
         assert!(!l.iter().any(|x| x.contains("private words")), "{l:?}");
+    }
+
+    /// akou-qpn: the tap thread's late tap reaches the worker, which says `ready` again with keys
+    /// swallowed and Accessibility granted.
+    #[test]
+    fn a_late_tap_says_ready_again() {
+        let w = World::new();
+        let mut d = dictate(&w, Warm::Off);
+        let lines = Rc::new(RefCell::new(Vec::new()));
+        let mut out = Rec(lines.clone());
+        d.begin("test", false, ("granted", "denied"), &mut out);
+        let (tx, rx) = mpsc::channel();
+        let _ = tx.send(Msg::Tapped {
+            backend: "test",
+            mic: "granted",
+        });
+        let _ = tx.send(Msg::Line(None));
+        let mut now = || Now {
+            awake_ns: 10 * MS,
+            cont_ns: 10 * MS,
+        };
+        let mut dev = Dev {
+            fail: false,
+            opens: Rc::default(),
+            events: Rc::default(),
+        };
+        let fwd = tx.clone();
+        serve(&mut d, &mut dev, fwd, rx, &mut now, &mut out);
+        let l = lines.borrow();
+        let ready: Vec<&String> = l
+            .iter()
+            .filter(|x| x.contains(r#""type":"ready""#))
+            .collect();
+        assert_eq!(ready.len(), 2, "{l:?}");
+        assert!(ready[1].contains(r#""swallow_keys":true"#), "{}", ready[1]);
+        assert!(
+            ready[1].contains(r#""accessibility":"granted""#),
+            "{}",
+            ready[1]
+        );
     }
 
     /// A press with no microphone: said once, the grant re-checked, the session never starts and
