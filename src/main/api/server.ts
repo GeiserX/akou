@@ -107,6 +107,8 @@ export interface ApiApp {
   deleteModel?(id: string, by: string): { id: string; deleted: true; bytes: number };
   /** Stops one model's download; false when it is not downloading. */
   cancelModel?(id: string, by: string): boolean;
+  /** Copies the catalog's model files from a folder here (`POST /models/import`). */
+  importModels?(dir: string): Promise<{ copied: string[]; missing: string[] }>;
   /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */
   start(req: StartRequest): Promise<Outcome<StartAnswer>>;
   /** The controller of a known call id (loaded from disk if needed). Throws 404 otherwise. */

@@ -1,13 +1,14 @@
 /**
- * The live model picker in the Record row (docs/ux/WINDOW.md W3.19), on the real page over the
- * headless app: the menu lists the live models by name, a model that is not downloaded dim with
- * Get, no Automatic line and the check on what `auto` resolves to; "Live: no model" with Get
- * models opening the Models page when none is here; the choice saved as `asr.live` and sent as
- * the next call's `live`; the second pass's group saving `asr.review.model` and
- * `asr.review.everySeconds` and sent as the call's `review` and `reviewEvery`; and the button
- * showing the running call's model, disabled, while a call records. The catalog is a loopback
- * registry of tiny files named after the real models, so nothing comes from the network, and the
- * recognizer is the fake one.
+ * The live panel in the Record row (docs/ux/WINDOW.md W3.19, design-explorations/
+ * lm-live-menu-slots.html), on the real page over the headless app: the Live slot's radio rows by
+ * name with no Automatic row and the radio on what `auto` runs, a pick saved as `asr.live` (a model
+ * id) and sent as the next call's `live`; the Second pass slot with its 1 | 2 | 5 min switch, saved
+ * as `asr.review.model` and `asr.review.everySeconds` and sent as `review` and `reviewEvery`;
+ * "+ Add a model" downloading in place with its bar and Cancel, the model landing in its slot
+ * unpicked; "From a folder…"; the no-model state; the button naming what runs, disabled while a
+ * call records; and nothing clipped at 1024 by 700. The catalog is a loopback registry of tiny
+ * files named after the real models, so nothing comes from the network, and the recognizer is the
+ * fake one.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -18,25 +19,25 @@ import type { Probe } from "../../src/main/asr/accelerator.ts";
 import { QWEN_ASR } from "../../src/main/asr/llama-catalog.ts";
 import { type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../../src/main/asr/models.ts";
 import { NO_GPU, speechWav } from "../api-helpers.ts";
-import { modelRegistry } from "../fixtures/model-registry.ts";
+import { type ModelRegistry, modelRegistry } from "../fixtures/model-registry.ts";
 import { tempDir } from "../helpers.ts";
 import { seedCall, standardCall, UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
 
-/** The streaming model the `nemotron` setup runs for English. */
+/** The streaming model `auto` runs for English, and one more that is never downloaded first. */
 const STREAM = "nemotron-en-560";
+const OTHER = "nemotron-3.5-560";
 const FAKE_LLAMA = join(import.meta.dir, "..", "fixtures", "fake-llama-server.ts");
 
 /**
  * A rig whose models folder holds the first `installed` entries of the catalog: the recognizer,
- * the VAD, the speaker model, the English streaming model, then Qwen. With `roomy`, the machine
- * is a Mac with a GPU and 32 GB, and Qwen runs on an own llama-server (the fake one): the menus
- * offer Qwen's second pass.
+ * the VAD, the speaker model, the English streaming model, then Qwen; Nemotron 3.5 is in the
+ * catalog and never installed. With `roomy`, the machine is a Mac with a GPU and 32 GB, and Qwen
+ * runs on an own llama-server (the fake one): the panel offers Qwen's second pass.
  */
 async function withModels<T>(
   installed: number,
-  fn: (rig: UiRig, home: string) => Promise<T>,
-  seed?: (home: string) => void,
-  roomy = false,
+  fn: (rig: UiRig, home: string, reg: ModelRegistry) => Promise<T>,
+  o: { seed?: (home: string) => void; roomy?: boolean } = {},
 ): Promise<T> {
   const home = tempDir("akou-ui-live-");
   const reg = modelRegistry();
@@ -46,11 +47,12 @@ async function withModels<T>(
     reg.entry(NEMOTRON, ["diar.onnx"]),
     { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true } as ModelSpecEntry,
     { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true } as ModelSpecEntry,
+    { ...reg.entry(OTHER, ["s35.onnx"]), onDemand: true } as ModelSpecEntry,
   ];
   const models = join(home.dir, "models");
   mkdirSync(models, { recursive: true });
   for (const m of catalog.slice(0, installed)) reg.install(models, m);
-  seed?.(home.dir);
+  o.seed?.(home.dir);
   const rig = await uiRig({
     home: home.dir,
     modelRegistry: catalog,
@@ -59,9 +61,9 @@ async function withModels<T>(
       "asr.modelsDir": models,
       "asr.diarizer": "nemotron",
       "asr.languages": ["en"],
-      ...(roomy ? { "asr.llamaServer": [process.execPath, FAKE_LLAMA] } : {}),
+      ...(o.roomy ? { "asr.llamaServer": [process.execPath, FAKE_LLAMA] } : {}),
     },
-    ...(roomy
+    ...(o.roomy
       ? {
           accelerator: { probe: { ...(NO_GPU.probe as Probe), platform: "darwin-arm64" } },
           memoryGb: 32,
@@ -69,7 +71,7 @@ async function withModels<T>(
       : {}),
   });
   try {
-    return await fn(rig, home.dir);
+    return await fn(rig, home.dir, reg);
   } finally {
     await rig.close();
     reg.stop();
@@ -78,30 +80,26 @@ async function withModels<T>(
 }
 
 const label = (page: Page) => page.textContent("#live-name");
-const listed = (page: Page) =>
-  page.$$eval("#live-menu .live-item[data-live]", (els) =>
-    els.map((e) => {
-      const item = e.querySelector('[role="menuitemradio"]') ?? e;
-      return [
-        (e as HTMLElement).dataset.live as string,
-        e.querySelector(".live-title")?.textContent ?? "",
-        item.getAttribute("aria-checked"),
-        item.getAttribute("aria-disabled") === "true" ? "dim" : "ready",
-      ];
-    }),
+const extra = (page: Page) =>
+  page.$eval("#live-extra", (e) => ((e as HTMLElement).hidden ? "" : (e.textContent ?? "").trim()));
+/** A slot's radio rows: id, name, checked, and dim when it cannot be picked. */
+const radios = (page: Page, slot: "live" | "review") =>
+  page.$$eval(`#live-menu [data-slot="${slot}"] .live-item`, (els) =>
+    els.map((e) => [
+      (e as HTMLElement).dataset.live ?? (e as HTMLElement).dataset.review ?? "",
+      e.querySelector(".live-title")?.textContent ?? "",
+      e.getAttribute("aria-checked"),
+      (e as HTMLButtonElement).disabled ? "dim" : "ready",
+    ]),
   );
-const reviews = (page: Page) =>
-  page.$$eval("#live-review-group .live-item[data-review]", (els) =>
-    els.map((e) => {
-      const item = e.querySelector('[role="menuitemradio"]') ?? e;
-      return [
-        (e as HTMLElement).dataset.review as string,
-        item.getAttribute("aria-checked"),
-        item.getAttribute("aria-disabled") === "true" ? "dim" : "ready",
-      ];
-    }),
+/** A slot's Add a model box: each model's id and its button. */
+const catalogRows = (page: Page, slot: "live" | "review") =>
+  page.$$eval(`#live-menu [data-cat="${slot}"] .live-cat-row`, (els) =>
+    els.map((e) => [
+      (e as HTMLElement).dataset.model as string,
+      e.querySelector(".live-get")?.textContent ?? "",
+    ]),
   );
-const reviewName = (page: Page) => page.textContent("#live-review-name");
 
 /** Every write the page sends, in order, from the moment the page opens. */
 function writes(): {
@@ -123,43 +121,49 @@ function writes(): {
 const patches = (bodies: { method: string; path: string; body: unknown }[]) =>
   bodies.filter((b) => b.method === "PATCH" && b.path.endsWith("/config")).map((b) => b.body);
 
-describe("W3.19: the live model picker in the Record row", () => {
+async function openPanel(page: Page): Promise<void> {
+  if (await page.isHidden("#live-menu")) await page.click("#live");
+  await page.waitForSelector('#live-menu:not([hidden]) [data-slot="live"]');
+}
+
+describe("W3.19: the live panel in the Record row", () => {
   test(
-    "the models by name with no Automatic line, the check on what auto runs, a pick saved as asr.live and sent with the call, and the running call's model shown, disabled",
+    "the Live slot names the models with no Automatic row, the radio on what auto runs; a pick saves its id and reaches POST /calls; the running call's model shows, disabled",
     async () => {
       await withModels(4, async (rig) => {
         await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
         const w = writes();
         const page = await rig.open(undefined, { before: w.before });
         await page.waitForSelector("#live-pick:not([hidden])");
-        // auto runs the English streaming model here: the button names it.
         await until(async () => (await label(page)) === "Nemotron English", 5000, "the model");
-        await page.click("#live");
-        await page.waitForSelector("#live-menu:not([hidden]) .live-item");
-        expect(await listed(page)).toEqual([
-          ["nemotron", "Nemotron English", "true", "ready"],
-          ["parakeet", "Parakeet", "false", "ready"],
+        expect(await extra(page)).toBe("");
+        await openPanel(page);
+        expect(await radios(page, "live")).toEqual([
+          [STREAM, "Nemotron English", "true", "ready"],
+          [RECOGNIZER, "Parakeet", "false", "ready"],
         ]);
         expect(await page.textContent("#live-menu")).not.toContain("Automatic");
-        // Each model says what it does in plain words.
-        expect(await page.textContent('#live-menu [data-live="nemotron"] .live-line')).toBe(
-          "Words appear as they are said.",
+        expect(await page.textContent(`#live-menu [data-live="${STREAM}"] .live-line`)).toBe(
+          "Words appear as they are said. English only.",
         );
 
-        // Picking saves asr.live, that key only, and the next call asks for it.
-        await page.click('#live-menu [data-live="parakeet"]');
+        // Picking saves asr.live as the model's id, that key only; the panel stays open.
+        await page.click(`#live-menu [data-live="${RECOGNIZER}"]`);
         await until(
-          async () => (await rig.api("GET", "/config")).body.settings["asr.live"] === "parakeet",
+          async () => (await rig.api("GET", "/config")).body.settings["asr.live"] === RECOGNIZER,
           5000,
           "asr.live saved",
         );
-        expect(patches(w.bodies)).toEqual([{ "asr.live": "parakeet" }]);
-        expect(await label(page)).toBe("Parakeet");
+        expect(patches(w.bodies)).toEqual([{ "asr.live": RECOGNIZER }]);
+        await until(async () => (await label(page)) === "Parakeet", 5000, "the label");
+        await page.keyboard.press("Escape");
+        await until(async () => await page.isHidden("#live-menu"), 3000, "closed");
+        expect(await page.evaluate(() => document.activeElement?.id)).toBe("live");
 
         await page.click("#record");
         await until(async () => (await page.textContent("#state")) === "rec", 8000, "recording");
         const start = w.bodies.find((b) => b.method === "POST" && b.path.endsWith("/calls"));
-        expect(start?.body).toMatchObject({ live: "parakeet", review: "none", reviewEvery: 60 });
+        expect(start?.body).toMatchObject({ live: RECOGNIZER, review: "none", reviewEvery: 60 });
         await until(
           async () => (await rig.api("GET", "/status")).body.live?.setup === "parakeet",
           10_000,
@@ -177,8 +181,7 @@ describe("W3.19: the live model picker in the Record row", () => {
         await until(async () => (await page.textContent("#state")) === "saved", 8000, "stopped");
         await until(async () => !(await page.isDisabled("#live")), 5000, "enabled again");
 
-        // A call another door starts on another model: the button shows that call's, not the
-        // choice, and goes back to the choice when it stops.
+        // A call another door starts on another model: the button shows that call's.
         const other = await rig.startCall({ live: "nemotron" });
         await until(
           async () => (await label(page)) === "Nemotron English",
@@ -188,41 +191,71 @@ describe("W3.19: the live model picker in the Record row", () => {
         expect(await page.isDisabled("#live")).toBe(true);
         await rig.api("POST", `/calls/${other}/stop`);
         await until(async () => (await label(page)) === "Parakeet", 8000, "the choice back");
-        expect(await page.isDisabled("#live")).toBe(false);
       });
     },
     UI_TIMEOUT,
   );
 
   test(
-    "a model that is not downloaded is shown dim with Get: it cannot be picked, and Get opens the Models page",
+    "+ Add a model downloads in place: its bar and Cancel while it runs, then it joins the slot, not picked",
     async () => {
-      // Three models: no streaming model, so auto runs Parakeet.
-      await withModels(3, async (rig) => {
+      await withModels(4, async (rig, _home, reg) => {
         await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
         const w = writes();
         const page = await rig.open(undefined, { before: w.before });
-        await until(async () => (await label(page)) === "Parakeet", 5000, "the model");
-        await page.click("#live");
-        await page.waitForSelector("#live-menu:not([hidden]) .live-item");
-        expect(await listed(page)).toEqual([
-          ["nemotron", "Nemotron English", "false", "dim"],
-          ["parakeet", "Parakeet", "true", "ready"],
+        await until(async () => (await label(page)) === "Nemotron English", 5000, "the model");
+        await openPanel(page);
+        expect(await page.isHidden('#live-menu [data-cat="live"]')).toBe(true);
+        await page.click('#live-menu [data-add="live"]');
+        await page.waitForSelector('#live-menu [data-cat="live"]');
+        expect(await page.textContent('#live-menu [data-add="live"] .live-plus')).toBe("−");
+        expect(await catalogRows(page, "live")).toEqual([[OTHER, "Download"]]);
+        const line = await page.textContent(`#live-menu [data-model="${OTHER}"] .live-line`);
+        expect(line).toMatch(
+          /^Words appear as they are said\. 35 languages, mixed in one call\. .+\.$/,
+        );
+        expect(await page.isVisible('#live-menu [data-cat="live"] .live-from')).toBe(true);
+
+        const release = reg.hold("s35.onnx", 1024);
+        await page.click(`#live-menu [data-model="${OTHER}"] .live-get`);
+        await page.waitForSelector(`#live-menu [data-model="${OTHER}"] .live-bar`);
+        expect(await catalogRows(page, "live")).toEqual([[OTHER, "Cancel"]]);
+        await page.click(`#live-menu [data-model="${OTHER}"] .live-get`);
+        await until(
+          async () =>
+            JSON.stringify(await catalogRows(page, "live")) ===
+            JSON.stringify([[OTHER, "Download"]]),
+          5000,
+          "cancelled",
+        );
+        release();
+        await page.click(`#live-menu [data-model="${OTHER}"] .live-get`);
+        await until(
+          async () => (await radios(page, "live")).some((r) => r[0] === OTHER),
+          10_000,
+          "the model in its slot",
+        );
+        // It landed unpicked: the radio stays where it was, and nothing was saved.
+        expect(await radios(page, "live")).toEqual([
+          [OTHER, "Nemotron 3.5", "false", "ready"],
+          [STREAM, "Nemotron English", "true", "ready"],
+          [RECOGNIZER, "Parakeet", "false", "ready"],
         ]);
-        await page.click('#live-menu [data-live="nemotron"] .live-title');
-        await Bun.sleep(300);
         expect(patches(w.bodies)).toEqual([]);
-        expect(await page.isVisible("#live-menu")).toBe(true);
-        await page.click('#live-menu [data-live="nemotron"] .live-get-one');
-        await page.waitForSelector('body[data-page="models"] #page-models:not([hidden])');
-        expect(await page.isHidden("#live-menu")).toBe(true);
+        expect(w.bodies.filter((b) => b.path.endsWith("/models/pull")).map((b) => b.body)).toEqual([
+          { model: OTHER },
+          { model: OTHER },
+        ]);
+        expect(await page.textContent('#live-menu [data-cat="live"]')).toContain(
+          "Every model that fits is already here.",
+        );
       });
     },
     UI_TIMEOUT,
   );
 
   test(
-    "with no live model downloaded the button reads Live: no model, and Get models opens the Models page",
+    "with no live model the button reads Live: no model, and the Live slot says so with its Add a model list open",
     async () => {
       let id = "";
       await withModels(
@@ -232,26 +265,29 @@ describe("W3.19: the live model picker in the Record row", () => {
           const page = await rig.open(id);
           await page.waitForSelector("#live-pick:not([hidden])");
           await until(async () => (await label(page)) === "no model", 5000, "no model");
-          await page.click("#live");
-          await page.waitForSelector("#live-menu:not([hidden]) #live-get");
-          expect(await listed(page)).toEqual([]);
-          expect(await page.textContent("#live-menu .live-none")).toContain(
-            "No live model is downloaded",
+          await openPanel(page);
+          expect(await radios(page, "live")).toEqual([]);
+          expect(await page.textContent('#live-menu [data-slot="live"] .live-none')).toBe(
+            "No model yet.",
           );
-          await page.click("#live-get");
-          await page.waitForSelector('body[data-page="models"] #page-models:not([hidden])');
-          expect(await page.isHidden("#live-menu")).toBe(true);
+          expect(await page.getAttribute('#live-menu [data-add="live"]', "aria-expanded")).toBe(
+            "true",
+          );
+          expect((await catalogRows(page, "live")).map((r) => r[0])).toEqual([
+            OTHER,
+            STREAM,
+            RECOGNIZER,
+          ]);
+          expect(await page.$("#live-get")).toBeNull();
         },
-        (home) => {
-          id = seedCall(home, (b) => standardCall(b)).id;
-        },
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
       );
     },
     UI_TIMEOUT,
   );
 
   test(
-    "the second pass: Off by default; its group saves the model and the interval, stays open, and the next call asks for both; Escape closes the group first",
+    "the Second pass slot: Off by default with the switch dim; a model and 2 min saved, shown dim on the button, and sent with the call; a Parakeet live call dims its models with the reason",
     async () => {
       await withModels(
         5,
@@ -260,135 +296,125 @@ describe("W3.19: the live model picker in the Record row", () => {
           const w = writes();
           const page = await rig.open(undefined, { before: w.before });
           await until(async () => (await label(page)) === "Nemotron English", 5000, "the model");
-          await page.click("#live");
-          await page.waitForSelector("#live-menu:not([hidden]) #live-review");
-          expect(await reviewName(page)).toBe("Off");
-          expect(await page.isHidden("#live-review-group")).toBe(true);
-          await page.click("#live-review");
-          await page.waitForSelector("#live-review-group");
-          expect(await reviews(page)).toEqual([
-            ["none", "true", "ready"],
-            ["qwen", "false", "ready"],
-            ["parakeet", "false", "ready"],
+          await openPanel(page);
+          expect(await radios(page, "review")).toEqual([
+            ["none", "Off", "true", "ready"],
+            [QWEN_ASR, "Qwen3-ASR", "false", "ready"],
+            [RECOGNIZER, "Parakeet", "false", "ready"],
           ]);
-          // With the second pass Off there is nothing to time.
           expect(await page.isDisabled('[data-every="120"]')).toBe(true);
 
-          await page.click('#live-review-group [data-review="qwen"]');
+          await page.click(`#live-menu [data-review="${QWEN_ASR}"]`);
           await until(
-            async () => (await reviewName(page)) === "Qwen, every 1 min",
+            async () => !(await page.isDisabled('[data-every="120"]')),
             5000,
-            "Qwen chosen",
+            "switch on",
           );
-          expect(await page.isVisible("#live-review-group")).toBe(true);
           await page.click('[data-every="120"]');
           await until(
-            async () => (await reviewName(page)) === "Qwen, every 2 min",
+            async () => (await extra(page)) === "+ Qwen 2 min",
             5000,
-            "every 2 minutes",
+            "the button's second part",
           );
           expect(patches(w.bodies)).toEqual([
-            { "asr.review.model": "qwen" },
+            { "asr.review.model": QWEN_ASR },
             { "asr.review.everySeconds": 120 },
           ]);
           expect(await page.getAttribute('[data-every="120"]', "aria-checked")).toBe("true");
+          expect(
+            (await page.$eval("#live-extra", (e) => getComputedStyle(e).color)) !==
+              (await page.$eval("#live-name", (e) => getComputedStyle(e).color)),
+          ).toBe(true);
 
-          // Escape in the group closes the group and leaves the menu open; again, the menu.
-          await page.focus('#live-review-group [data-review="qwen"]');
+          // Arrow keys move between the radio rows.
+          await page.focus(`#live-menu [data-live="${STREAM}"]`);
+          await page.keyboard.press("ArrowDown");
+          expect(
+            await page.evaluate(() => (document.activeElement as HTMLElement)?.dataset.live),
+          ).toBe(RECOGNIZER);
           await page.keyboard.press("Escape");
-          await until(async () => await page.isHidden("#live-review-group"), 3000, "group closed");
-          expect(await page.isVisible("#live-menu")).toBe(true);
-          expect(await page.evaluate(() => document.activeElement?.id)).toBe("live-review");
-          await page.keyboard.press("ArrowRight");
-          await page.waitForSelector("#live-review-group");
-          await page.keyboard.press("Escape");
-          await page.keyboard.press("Escape");
-          await until(async () => await page.isHidden("#live-menu"), 3000, "menu closed");
-          expect(await page.evaluate(() => document.activeElement?.id)).toBe("live");
 
           await page.click("#record");
           await until(async () => (await page.textContent("#state")) === "rec", 8000, "recording");
           const start = w.bodies.find((b) => b.method === "POST" && b.path.endsWith("/calls"));
-          expect(start?.body).toMatchObject({ live: "auto", review: "qwen", reviewEvery: 120 });
+          expect(start?.body).toMatchObject({ live: "auto", review: QWEN_ASR, reviewEvery: 120 });
           await until(
             async () =>
-              (await page.textContent("#pill-live")) === "Live: Nemotron English, Qwen every 2 min",
+              (await page.textContent("#pill-live")) === "Live: Nemotron English + Qwen 2 min",
             10_000,
             "the call header's chip",
           );
-          // Recording: the whole menu, the second pass with it, waits for the next call.
           expect(await page.isDisabled("#live")).toBe(true);
           await page.click("#stop");
           await until(async () => (await page.textContent("#state")) === "saved", 8000, "stopped");
 
-          // Parakeet live: Qwen's second pass is dim, says why, and calls run none.
-          await rig.api("PATCH", "/config", { "asr.live": "parakeet" });
-          // Opening the menu reads the models again, as it does after any change made elsewhere.
-          await page.click("#live");
+          // Parakeet live: the second pass models are dim, each with why.
+          await rig.api("PATCH", "/config", { "asr.live": RECOGNIZER });
+          await openPanel(page);
           await until(async () => (await label(page)) === "Parakeet", 5000, "Parakeet live");
-          await page.click("#live-review");
-          await page.waitForSelector("#live-review-group");
-          expect(await page.textContent('#live-review-group [data-review="qwen"] .live-line')).toBe(
-            "It reviews Nemotron's lines; the live model is Parakeet.",
-          );
-          expect(
-            await page.textContent('#live-review-group [data-review="parakeet"] .live-line'),
-          ).toBe("Parakeet already writes the live lines.");
-          expect(await reviewName(page)).toBe("Off");
-          // Off picked from there saves it.
-          await page.click('#live-review-group [data-review="none"]');
           await until(
             async () =>
-              (await rig.api("GET", "/config")).body.settings["asr.review.model"] === "none",
+              (await radios(page, "review")).every((r) => r[0] === "none" || r[3] === "dim"),
             5000,
-            "Off saved",
+            "dimmed",
           );
+          expect(
+            await page.textContent(`#live-menu [data-review="${RECOGNIZER}"] .live-line`),
+          ).toBe("Parakeet already writes the live lines.");
+          expect(await extra(page)).toBe("");
+          // Qwen stays saved but cannot run: Off is what the next call runs, so Off is checked.
+          expect((await radios(page, "review"))[0]).toEqual(["none", "Off", "true", "ready"]);
           // An interval saved elsewhere shows as itself, checked.
           await rig.api("PATCH", "/config", {
-            "asr.live": "nemotron",
-            "asr.review.model": "qwen",
+            "asr.live": STREAM,
+            "asr.review.model": QWEN_ASR,
             "asr.review.everySeconds": 90,
           });
           await page.keyboard.press("Escape");
-          await page.keyboard.press("Escape");
-          await page.click("#live");
-          await until(async () => (await reviewName(page)) === "Qwen, every 90 s", 5000, "90 s");
-          await page.click("#live-review");
+          await openPanel(page);
+          await until(async () => (await extra(page)) === "+ Qwen 90 s", 5000, "90 s");
           await page.waitForSelector('[data-every="90"]');
           expect(await page.getAttribute('[data-every="90"]', "aria-checked")).toBe("true");
           expect(await page.textContent('[data-every="90"]')).toBe("90 s");
         },
-        undefined,
-        true,
+        { roomy: true },
       );
     },
     UI_TIMEOUT,
   );
 
   test(
-    "Qwen not downloaded is dim with Get in the second pass",
+    "From a folder… copies the models found there, and they join their slot",
     async () => {
-      await withModels(4, async (rig) => {
+      await withModels(4, async (rig, home, reg) => {
         await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
+        const stick = join(home, "stick");
+        mkdirSync(stick, { recursive: true });
+        reg.install(stick, reg.entry(OTHER, ["s35.onnx"]));
         const page = await rig.open();
         await until(async () => (await label(page)) === "Nemotron English", 5000, "the model");
-        await page.click("#live");
-        await page.click("#live-review");
-        await page.waitForSelector("#live-review-group");
-        expect(await reviews(page)).toEqual([
-          ["none", "true", "ready"],
-          ["qwen", "false", "dim"],
-          ["parakeet", "false", "ready"],
-        ]);
-        await page.click('#live-review-group [data-review="qwen"] .live-get-one');
-        await page.waitForSelector('body[data-page="models"] #page-models:not([hidden])');
+        await openPanel(page);
+        await page.click('#live-menu [data-add="live"]');
+        await page.click('#live-menu [data-cat="live"] .live-from');
+        await page.fill("#live-menu .live-folder-path", stick);
+        await page.click('#live-menu .live-folder [type="submit"]');
+        await until(
+          async () => ((await page.textContent("#toast")) ?? "").includes("Copied 1 model files"),
+          5000,
+          "the copy",
+        );
+        await until(
+          async () => (await radios(page, "live")).some((r) => r[0] === OTHER),
+          5000,
+          "in its slot",
+        );
       });
     },
     UI_TIMEOUT,
   );
 
   test(
-    "Record sends the settings as they are now, even when the CLI or API changed them after the window read them; at 1024 by 700 nothing is clipped and the button never covers the state word",
+    "Record sends the settings as they are now; at 1024 by 700 the panel with both boxes open fits and scrolls, the button never covers the state word, and Tab out closes it",
     async () => {
       await withModels(4, async (rig) => {
         await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
@@ -407,39 +433,39 @@ describe("W3.19: the live model picker in the Record row", () => {
           if (!b) throw new Error(`${sel} has no box`);
           return b;
         };
-        // The menu with the second pass open fits the window.
-        await page.click("#live");
-        await page.click("#live-review");
-        await page.waitForSelector("#live-review-group");
-        const menu = await box("#live-menu");
-        expect(menu.x).toBeGreaterThanOrEqual(0);
-        expect(menu.x + menu.width).toBeLessThanOrEqual(1024);
-        expect(menu.y + menu.height).toBeLessThanOrEqual(700);
-        await page.keyboard.press("Escape");
-        await page.keyboard.press("Escape");
+        await openPanel(page);
+        await page.click('#live-menu [data-add="live"]');
+        await page.click('#live-menu [data-cat="live"] .live-from');
+        await page.click('#live-menu [data-add="review"]');
+        await page.waitForSelector('#live-menu [data-cat="review"]');
+        const panel = await box("#live-menu");
+        // Taller than the window's room: it scrolls inside.
+        expect(await page.$eval("#live-menu", (e) => e.scrollHeight > e.clientHeight)).toBe(true);
+        expect(panel.x).toBeGreaterThanOrEqual(0);
+        expect(panel.x + panel.width).toBeLessThanOrEqual(1024);
+        expect(panel.y + panel.height).toBeLessThanOrEqual(700);
+        // Tab out of the panel closes it.
+        await page.focus('#live-menu [data-add="review"]');
+        for (let i = 0; i < 12 && !(await page.isHidden("#live-menu")); i++)
+          await page.keyboard.press("Tab");
+        expect(await page.isHidden("#live-menu")).toBe(true);
 
-        // `akou config set`, with the window idle and its menu closed.
+        // `akou config set`, with the window idle and its panel closed.
         await rig.api("PATCH", "/config", {
-          "asr.live": "parakeet",
+          "asr.live": RECOGNIZER,
           "asr.review.model": "none",
           "asr.review.everySeconds": 300,
         });
         await page.click("#record");
         await until(async () => (await page.textContent("#state")) === "rec", 8000, "recording");
         expect(starts).toEqual([
-          expect.objectContaining({ live: "parakeet", review: "none", reviewEvery: 300 }),
+          expect.objectContaining({ live: RECOGNIZER, review: "none", reviewEvery: 300 }),
         ]);
-        await until(
-          async () => (await rig.api("GET", "/status")).body.live?.setup === "parakeet",
-          10_000,
-          "the call runs parakeet",
-        );
         await page.click("#stop");
         await until(async () => (await page.textContent("#state")) === "saved", 8000, "stopped");
 
-        // The longest name, while recording, in a 1024 px window: the button ends before REC and
-        // cuts its name rather than grow past its box.
-        await rig.api("PATCH", "/config", { "asr.live": "nemotron" });
+        // The longest name, while recording, in a 1024 px window: the button ends before REC.
+        await rig.api("PATCH", "/config", { "asr.live": STREAM });
         await page.click("#record");
         await until(async () => (await page.textContent("#state")) === "rec", 8000, "recording");
         await until(async () => (await label(page)) === "Nemotron English", 5000, "the name");
@@ -460,33 +486,18 @@ describe("W3.19: the live model picker in the Record row", () => {
   );
 
   test(
-    "a saved model that is not here checks nothing and names what runs; picking the one that is saves it",
+    "a saved model that is not here checks what runs instead and says why",
     async () => {
-      // Three models: no streaming model, so asr.live=nemotron falls back to Parakeet.
+      // Three models: no streaming model, so asr.live = the English Nemotron falls back to Parakeet.
       await withModels(3, async (rig) => {
         await until(() => rig.app.recognizer() === "ready", 10_000, "the recognizer");
-        await rig.api("PATCH", "/config", { "asr.live": "nemotron" });
+        await rig.api("PATCH", "/config", { "asr.live": STREAM });
         const page = await rig.open();
         await until(async () => (await label(page)) === "Parakeet", 5000, "the fallback named");
-        await page.click("#live");
-        await page.waitForSelector("#live-menu:not([hidden]) .live-item");
-        expect(await page.$$('#live-menu [data-live][aria-checked="true"]')).toHaveLength(0);
-        expect(await page.textContent("#live-menu .live-note")).toBe(
+        await openPanel(page);
+        expect(await radios(page, "live")).toEqual([[RECOGNIZER, "Parakeet", "true", "ready"]]);
+        expect(await page.textContent('#live-menu [data-slot="live"] .live-note')).toBe(
           "Nemotron English is not downloaded, so calls run Parakeet until it is.",
-        );
-        await page.click('#live-menu [data-live="parakeet"]');
-        await until(
-          async () => (await rig.api("GET", "/config")).body.settings["asr.live"] === "parakeet",
-          5000,
-          "Parakeet saved",
-        );
-        await page.click("#live");
-        await until(
-          async () =>
-            (await page.getAttribute('#live-menu [data-live="parakeet"]', "aria-checked")) ===
-            "true",
-          5000,
-          "Parakeet checked",
         );
       });
     },

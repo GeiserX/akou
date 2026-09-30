@@ -31,16 +31,17 @@ import {
   chooseLiveEngine,
   engineForLanguages,
   isLiveEngine,
+  LIVE_ENGINE_IDS,
   LIVE_ENGINES,
   type LiveChoice,
 } from "./live-engines.ts";
-import { liveModelName } from "./live-names.ts";
 import { QWEN_ASR } from "./llama-catalog.ts";
 import type { Measure, NotMeasured } from "./model-scores.ts";
 import { REFERENCE_MACHINE } from "./model-scores.ts";
+import { liveModelName, shortModelName } from "./model-text.ts";
 import { PARAKEET_LANGUAGES, RECOGNIZER } from "./models.ts";
 
-export { liveModelName };
+export { liveModelName, shortModelName };
 
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS } from "./upgrade.ts";
 
@@ -48,9 +49,28 @@ export const LIVE_SETUP_IDS = ["nemotron", "parakeet", "voxtral"] as const;
 export type LiveSetupId = (typeof LIVE_SETUP_IDS)[number];
 /** The live models a call can run. */
 export type RunnableSetup = Exclude<LiveSetupId, "voxtral">;
-/** The values of `asr.live`. */
-export const LIVE_SETTINGS = ["auto", "parakeet", "nemotron"] as const;
-export type LiveSetting = (typeof LIVE_SETTINGS)[number];
+/**
+ * The models that can fill the live slot, in the panel's order: every streaming Nemotron, then
+ * Parakeet's windows. Each needs a `lines.live` in the catalog (tests/live-setups.test.ts).
+ */
+export const LIVE_SLOT: readonly string[] = [
+  "nemotron-3.5-560",
+  "nemotron-3.5-1120",
+  "nemotron-en-560",
+  ...LIVE_ENGINE_IDS.filter(
+    (id) => !["nemotron-3.5-560", "nemotron-3.5-1120", "nemotron-en-560"].includes(id),
+  ),
+  RECOGNIZER,
+];
+/** The models that can fill the second-pass slot. Each needs a `lines.review` in the catalog. */
+export const REVIEW_SLOT: readonly string[] = [QWEN_ASR, RECOGNIZER];
+
+/**
+ * The values of `asr.live`: `auto`, a live slot model's id, or the older names `nemotron` (the
+ * Nemotron `asr.live.engine` and the languages pick) and `parakeet`.
+ */
+export const LIVE_SETTINGS: readonly string[] = ["auto", "parakeet", "nemotron", ...LIVE_SLOT];
+export type LiveSetting = string;
 /**
  * What a call's own `live` may say (`POST /calls`, `akou start --live`): the values of `asr.live`,
  * and `upgrade`, the old spelling of Nemotron with Qwen's second pass (`legacyLive`).
@@ -58,22 +78,42 @@ export type LiveSetting = (typeof LIVE_SETTINGS)[number];
 export const LIVE_CALL_SETTINGS = [...LIVE_SETTINGS, "upgrade"] as const;
 
 export function isLiveSetting(v: string): v is LiveSetting {
-  return (LIVE_SETTINGS as readonly string[]).includes(v);
+  return LIVE_SETTINGS.includes(v);
 }
 
 export function isLiveCallSetting(v: string): boolean {
   return (LIVE_CALL_SETTINGS as readonly string[]).includes(v);
 }
 
-/** The values of `asr.review.model`: no second pass, or the model that reviews. */
-export const REVIEW_MODELS = ["none", "qwen", "parakeet"] as const;
-export type ReviewModel = (typeof REVIEW_MODELS)[number];
-/** A second pass that runs. */
-export type Reviewer = Exclude<ReviewModel, "none">;
+/** A second pass that runs: the kind of model that reviews. */
+export type Reviewer = "qwen" | "parakeet";
 export const REVIEWERS: readonly Reviewer[] = ["qwen", "parakeet"];
+/**
+ * The values of `asr.review.model`: `none`, a second-pass slot model's id, or the short names
+ * `qwen` and `parakeet`.
+ */
+export const REVIEW_MODELS: readonly string[] = ["none", ...REVIEWERS, ...REVIEW_SLOT];
+export type ReviewModel = string;
 
 export function isReviewModel(v: string): v is ReviewModel {
-  return (REVIEW_MODELS as readonly string[]).includes(v);
+  return REVIEW_MODELS.includes(v);
+}
+
+/** The kind of second pass a value of `asr.review.model` names, or null for none. */
+export function reviewerOf(v: string | undefined): Reviewer | null {
+  if (v === "qwen" || v === QWEN_ASR) return "qwen";
+  if (v === "parakeet" || v === RECOGNIZER) return "parakeet";
+  return null;
+}
+
+/** The catalog id a second pass runs. */
+export function reviewerId(r: Reviewer): string {
+  return r === "qwen" ? QWEN_ASR : RECOGNIZER;
+}
+
+/** Parakeet by its id or its name in `asr.live`. */
+function isParakeet(v: string): boolean {
+  return v === "parakeet" || v === RECOGNIZER;
 }
 
 export { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS };
@@ -236,6 +276,8 @@ export interface LiveSetupContext {
   everySeconds?: number;
   /** Whether a catalog model's files are on disk. */
   present: (id: string) => boolean;
+  /** The ids of the catalog here; absent: every model akou knows. */
+  catalog?: readonly string[];
   /** The llama-server build Qwen runs on here, or null for an own llama-server. */
   runtime: string | null;
   /** What Qwen needs of the machine; absent: not known, and not checked. */
@@ -273,6 +315,7 @@ export function setupModels(id: LiveSetupId, c: LiveSetupContext): string[] {
     case "parakeet":
       return [RECOGNIZER];
     case "nemotron": {
+      if (isLiveEngine(c.setting)) return [c.setting];
       if (isLiveEngine(c.engine)) return [c.engine];
       return [
         chooseLiveEngine(c.engine, c.languages, c.present).choice?.engine ??
@@ -322,7 +365,9 @@ export function reviewCannot(
       ? "Parakeet already writes the live lines."
       : "It reviews Nemotron's lines; the live model is Parakeet.";
   if (id === "parakeet") {
-    const only = isLiveEngine(c.engine) ? LIVE_ENGINES[c.engine] : null;
+    // A Nemotron named by its id in `asr.live` wins over `asr.live.engine`, as in `chooseLiveSetup`.
+    const engine = isLiveEngine(c.setting) ? c.setting : c.engine;
+    const only = isLiveEngine(engine) ? LIVE_ENGINES[engine] : null;
     const languages =
       c.languages.length === 0 && only && !only.multilingual ? only.languages : c.languages;
     if (languages.length === 0)
@@ -331,6 +376,22 @@ export function reviewCannot(
     if (out.length > 0) return `Parakeet does not hear ${out.join(", ")}.`;
   }
   return null;
+}
+
+/**
+ * Why the live panel does not offer a live model for these call languages, or null: it must hear
+ * every one of them, the rule `reviewCannot` applies to Parakeet's pass. Any language (none named):
+ * null. Advice, not a block: a model chosen anyway runs.
+ */
+export function liveCannot(id: string, languages: readonly string[]): string | null {
+  const hears = isLiveEngine(id)
+    ? LIVE_ENGINES[id].languages
+    : id === RECOGNIZER
+      ? PARAKEET_LANGUAGES
+      : null;
+  if (!hears) return null;
+  const out = languages.filter((l) => !hears.includes(l));
+  return out.length > 0 ? `${liveModelName(id)} does not hear ${out.join(", ")}.` : null;
 }
 
 /**
@@ -354,21 +415,22 @@ function every(c: LiveSetupContext): number {
 /** The live model and second pass the next call runs, never one whose models are missing. */
 export function chooseLiveSetup(c: LiveSetupContext): LiveSetupChoice {
   const setting = isLiveSetting(c.setting) ? c.setting : "auto";
-  const stream = chooseLiveEngine(c.engine, c.languages, c.present);
-  const live: Omit<LiveSetupChoice, "review"> =
-    setting === "parakeet"
-      ? { setup: "parakeet", choice: null }
-      : stream.choice
-        ? { setup: "nemotron", choice: stream.choice }
-        : { setup: "parakeet", choice: null, ...(stream.note ? { note: stream.note } : {}) };
-  const asked = c.review && isReviewModel(c.review) ? c.review : "none";
-  if (asked === "none") return { ...live, review: null };
+  // A Nemotron named by its id wins over `asr.live.engine`.
+  const stream = chooseLiveEngine(
+    isLiveEngine(setting) ? setting : c.engine,
+    c.languages,
+    c.present,
+  );
+  const live: Omit<LiveSetupChoice, "review"> = isParakeet(setting)
+    ? { setup: "parakeet", choice: null }
+    : stream.choice
+      ? { setup: "nemotron", choice: stream.choice }
+      : { setup: "parakeet", choice: null, ...(stream.note ? { note: stream.note } : {}) };
+  const asked = reviewerOf(c.review);
+  if (asked === null) return { ...live, review: null };
   const block = reviewBlock(asked, c, live.setup);
   if (block === null) return { ...live, review: { model: asked, everySeconds: every(c) } };
-  const note = [
-    live.note,
-    `no ${liveModelName(asked === "qwen" ? QWEN_ASR : RECOGNIZER)} second pass: ${block}`,
-  ]
+  const note = [live.note, `no ${liveModelName(reviewerId(asked))} second pass: ${block}`]
     .filter((x) => x)
     .join("; ");
   return { ...live, review: null, note };
@@ -428,6 +490,18 @@ export interface ReviewView {
   choices: ReviewChoiceView[];
 }
 
+/** One model of a slot in the live panel: the value a pick saves, and what it needs here. */
+export interface SlotEntry {
+  /** The catalog id a pick saves (`asr.live` or `asr.review.model`). */
+  id: string;
+  /** The models it needs on disk here, in the order a download fetches them. */
+  models: string[];
+  /** The next call runs it. */
+  checked: boolean;
+  /** Why it is not offered here in plain words, or null; a missing download is not a reason. */
+  blocked: string | null;
+}
+
 export interface LiveView {
   /** `asr.live`. */
   setting: LiveSetting;
@@ -438,24 +512,35 @@ export interface LiveView {
   note: string | null;
   /** What the live call runs, or null with no call or no live transcript. */
   running: RunnableSetup | null;
+  /** The catalog id of the model the live call runs, or null. */
+  runningId: string | null;
   setups: LiveSetupView[];
   review: ReviewView;
+  /** The live panel's two slots: every catalog model that can fill each. */
+  slots: { live: SlotEntry[]; review: SlotEntry[] };
 }
 
 export function liveView(
   c: LiveSetupContext,
-  running: { setup: RunnableSetup; review: ReviewRun | null } | null,
+  running: { setup: RunnableSetup; review: ReviewRun | null; engine?: string | null } | null,
   state: (id: string) => "ready" | "downloading" | "missing",
 ): LiveView {
   const next = chooseLiveSetup(c);
   const models = (ids: readonly string[]) => ids.map((m) => ({ id: m, state: state(m) }));
   const review = c.review && isReviewModel(c.review) ? c.review : "none";
+  const inCatalog = (id: string) => !c.catalog || c.catalog.includes(id);
+  const nextId = next.setup === "parakeet" ? RECOGNIZER : (next.choice?.engine ?? null);
   return {
     setting: isLiveSetting(c.setting) ? c.setting : "auto",
     next: next.setup,
     auto: chooseLiveSetup({ ...c, setting: "auto" }).setup,
     note: next.note ?? null,
     running: running?.setup ?? null,
+    runningId: running
+      ? running.setup === "parakeet"
+        ? RECOGNIZER
+        : (running.engine ?? null)
+      : null,
     setups: LIVE_SETUP_IDS.map((id) => {
       const s = LIVE_SETUPS[id];
       const ids = setupModels(id, c);
@@ -495,6 +580,24 @@ export function liveView(
           // models otherwise show as models, with Get, and the machine's advice waits for them.
           blocked: cannot ?? (here && id === "qwen" ? qwenRoom(c) : null),
         };
+      }),
+    },
+    slots: {
+      live: LIVE_SLOT.filter(inCatalog).map((id) => ({
+        id,
+        models: [id],
+        checked: id === nextId,
+        blocked: liveCannot(id, c.languages),
+      })),
+      review: REVIEW_SLOT.filter(inCatalog).map((id) => {
+        const kind = reviewerOf(id) as Reviewer;
+        const ids = reviewModels(kind, c);
+        // Only a reason other than a missing download: that one is the Add a model list's. The
+        // machine's advice on Qwen waits until it is here.
+        const why =
+          reviewCannot(kind, c, next.setup) ??
+          (kind === "qwen" && ids.every((m) => c.present(m)) ? qwenRoom(c) : null);
+        return { id, models: ids, checked: next.review?.model === kind, blocked: why };
       }),
     },
   };

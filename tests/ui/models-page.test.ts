@@ -112,7 +112,7 @@ describe("the Models page", () => {
       expect(await page.textContent(PRINTS)).toContain(
         "about 6 seconds in 10 given to the wrong speaker on real calls",
       );
-      expect(await page.textContent(`${LIVE} [data-setup="parakeet"]`)).toContain(
+      expect(await page.textContent(`${LIVE} [data-setup="${RECOGNIZER}"]`)).toContain(
         "About 1 word in 3 wrong on meetings.",
       );
       const words = await page.innerText("#page-models");
@@ -128,8 +128,8 @@ describe("the Models page", () => {
       const ids = await page.$$eval(`${LIVE} [data-setup]`, (els) =>
         els.map((e) => (e as HTMLElement).dataset.setup),
       );
-      expect(ids).toEqual(["auto", "nemotron", "parakeet", "voxtral"]);
-      expect(await page.textContent(`${LIVE} [data-setup="nemotron"] .pg-name`)).toBe(
+      expect(ids).toEqual(["auto", STREAM, RECOGNIZER, "voxtral"]);
+      expect(await page.textContent(`${LIVE} [data-setup="${STREAM}"] .pg-name`)).toBe(
         "Nemotron English",
       );
       expect(await page.isChecked(`${LIVE} input[value="auto"]`)).toBe(true);
@@ -142,7 +142,7 @@ describe("the Models page", () => {
       expect(await page.textContent(`${LIVE} [data-setup="auto"]`)).toContain(
         "Uses Parakeet until Nemotron English is on",
       );
-      expect(await page.getAttribute(`${LIVE} [data-setup="nemotron"]`, "data-state")).toBe(
+      expect(await page.getAttribute(`${LIVE} [data-setup="${STREAM}"]`, "data-state")).toBe(
         "missing",
       );
       // The second pass: Off by default; Qwen needs its model, and says only that until it is here.
@@ -150,9 +150,9 @@ describe("the Models page", () => {
       const choices = await page.$$eval(`${REVIEW} [data-review]`, (els) =>
         els.map((e) => (e as HTMLElement).dataset.review),
       );
-      expect(choices).toEqual(["none", "qwen", "parakeet"]);
+      expect(choices).toEqual(["none", QWEN_ASR, RECOGNIZER]);
       expect(await page.isChecked(`${REVIEW} input[value="none"]`)).toBe(true);
-      const qwen = (await page.textContent(`${REVIEW} [data-review="qwen"] .pg-help`)) ?? "";
+      const qwen = (await page.textContent(`${REVIEW} [data-review="${QWEN_ASR}"] .pg-help`)) ?? "";
       expect(qwen).toMatch(/^Needs .*Qwen3-ASR 1\.7B\.$/);
       expect(await page.inputValue("#models-review-every")).toBe("60");
     },
@@ -165,7 +165,7 @@ describe("the Models page", () => {
       const cap = await setting("server.models_max_gb");
       await rig.api("PATCH", "/config", { "server.models_max_gb": 1e-9 });
       try {
-        await page.click(`${LIVE} [data-setup="nemotron"] [data-action="download"]`);
+        await page.click(`${LIVE} [data-setup="${STREAM}"] [data-action="download"]`);
         await until(
           async () => ((await page.textContent("#toast")) ?? "").includes("size you keep"),
           5000,
@@ -185,7 +185,7 @@ describe("the Models page", () => {
   test(
     "Download moves Automatic to Nemotron; a pick saves the setting and the mark follows it; the second pass and its interval save their keys",
     async () => {
-      const nemotron = `${LIVE} [data-setup="nemotron"]`;
+      const nemotron = `${LIVE} [data-setup="${STREAM}"]`;
       await page.click(`${nemotron} [data-action="download"]`);
       await page.waitForSelector(`${nemotron}[data-state="ready"]`);
       await until(
@@ -195,17 +195,17 @@ describe("the Models page", () => {
         "Automatic on Nemotron",
       );
       patches.length = 0;
-      await page.click(`${LIVE} [data-setup="parakeet"] .pg-name`);
-      await until(async () => (await setting("asr.live")) === "parakeet", 5000, "asr.live");
-      expect(patches).toEqual([{ "asr.live": "parakeet" }]);
-      await until(async () => (await marked()).join() === "parakeet", 5000, "the mark");
+      await page.click(`${LIVE} [data-setup="${RECOGNIZER}"] .pg-name`);
+      await until(async () => (await setting("asr.live")) === RECOGNIZER, 5000, "asr.live");
+      expect(patches).toEqual([{ "asr.live": RECOGNIZER }]);
+      await until(async () => (await marked()).join() === RECOGNIZER, 5000, "the mark");
       await page.click(`${LIVE} [data-setup="auto"] .pg-name`);
       await until(async () => (await setting("asr.live")) === "auto", 5000, "asr.live back");
       await until(async () => (await marked()).join() === "auto", 5000, "the mark back");
       patches.length = 0;
-      await page.click('#models-review [data-review="qwen"] .pg-name');
+      await page.click(`#models-review [data-review="${QWEN_ASR}"] .pg-name`);
       await until(
-        async () => (await setting("asr.review.model")) === "qwen",
+        async () => (await setting("asr.review.model")) === QWEN_ASR,
         5000,
         "asr.review.model",
       );
@@ -215,7 +215,10 @@ describe("the Models page", () => {
         5000,
         "asr.review.everySeconds",
       );
-      expect(patches).toEqual([{ "asr.review.model": "qwen" }, { "asr.review.everySeconds": 300 }]);
+      expect(patches).toEqual([
+        { "asr.review.model": QWEN_ASR },
+        { "asr.review.everySeconds": 300 },
+      ]);
       // An interval set elsewhere (10 min from the CLI) shows as itself in the list.
       await rig.api("PATCH", "/config", { "asr.review.everySeconds": 600 });
       await page.click("#calls-open");
@@ -243,14 +246,14 @@ describe("the Models page", () => {
         });
       await page.focus(`${LIVE} input[value="auto"]`);
       await page.keyboard.press("ArrowDown");
-      await until(async () => (await setting("asr.live")) === "nemotron", 5000, "the first arrow");
+      await until(async () => (await setting("asr.live")) === STREAM, 5000, "the first arrow");
       // The pick redrew the list: the new radio has the keyboard.
-      await until(async () => (await marked()).join() === "nemotron", 5000, "the redraw");
-      expect(await focused()).toBe("nemotron");
+      await until(async () => (await marked()).join() === STREAM, 5000, "the redraw");
+      expect(await focused()).toBe(STREAM);
       await page.keyboard.press("ArrowDown");
-      await until(async () => (await setting("asr.live")) === "parakeet", 5000, "the second arrow");
-      await until(async () => (await marked()).join() === "parakeet", 5000, "the redraw");
-      expect(await focused()).toBe("parakeet");
+      await until(async () => (await setting("asr.live")) === RECOGNIZER, 5000, "the second arrow");
+      await until(async () => (await marked()).join() === RECOGNIZER, 5000, "the redraw");
+      expect(await focused()).toBe(RECOGNIZER);
       await page.click(`${LIVE} [data-setup="auto"] .pg-name`);
       await until(async () => (await setting("asr.live")) === "auto", 5000, "asr.live back");
       await until(async () => (await marked()).join() === "auto", 5000, "the mark back");
@@ -431,6 +434,32 @@ describe("the Models page", () => {
         5000,
         "the graphics chip focused",
       );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a live model that does not hear the call's languages says why, and cannot be picked",
+    async () => {
+      const row = `${LIVE} [data-setup="${STREAM}"]`;
+      await rig.api("PATCH", "/config", { "asr.languages": ["es"] });
+      try {
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await until(
+          async () =>
+            ((await page.textContent(row)) ?? "").includes("Nemotron English does not hear es."),
+          5000,
+          "the reason",
+        );
+        expect(await page.getAttribute(row, "data-state")).toBe("blocked");
+        expect(await page.isDisabled(`${row} input.pg-radio`)).toBe(true);
+      } finally {
+        await rig.api("PATCH", "/config", { "asr.languages": ["en"] });
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${LIVE} [data-setup]`);
+      }
     },
     UI_TIMEOUT,
   );

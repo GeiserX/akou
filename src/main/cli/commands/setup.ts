@@ -7,8 +7,7 @@
  * `token path` prints where the token is, never the token.
  */
 
-import { copyFileSync, existsSync, mkdirSync, renameSync, statSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, statSync } from "node:fs";
 import { rotateToken } from "../../api/guard.ts";
 import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr/accelerator.ts";
 import { type LiveSetupContext, liveView } from "../../asr/live-setups.ts";
@@ -19,12 +18,12 @@ import {
   DownloadRefused,
   downloadModels,
   hostPlatform,
+  importModels as importModelFiles,
   MODELS,
   type ModelSpecEntry,
   modelFile,
   modelsFor,
   pruneRetiredModels,
-  sha256File,
   verifyModels,
 } from "../../asr/models.ts";
 import { isPreset, PRESET_NAMES, presetModels } from "../../asr/presets.ts";
@@ -158,38 +157,9 @@ function quickState(dir: string, m: ModelSpecEntry): string {
       : `incomplete (${ok}/${m.files.length})`;
 }
 
-/**
- * `models import DIR`: copies every file whose SHA-256 matches from `DIR/<model>/<file>` or
- * `DIR/<file>`, for machines that cannot download.
- */
-async function importModels(
-  ctx: Ctx,
-  from: string,
-): Promise<{ copied: string[]; missing: string[] }> {
-  const dir = modelsDir(ctx);
-  const copied: string[] = [];
-  const missing: string[] = [];
-  for (const m of registry(ctx)) {
-    for (const f of m.files) {
-      const target = modelFile(dir, m.id, f.name);
-      const source = [join(from, m.id, f.name), join(from, f.name)].find(
-        (s) => existsSync(s) && statSync(s).size === f.size,
-      );
-      if (!source || (await sha256File(source)) !== f.sha256) {
-        // A file already there counts only at its full size, as `models list` reads it.
-        if (!existsSync(target) || statSync(target).size !== f.size) {
-          missing.push(`${m.id}/${f.name}`);
-        }
-        continue;
-      }
-      mkdirSync(join(dir, m.id), { recursive: true });
-      const tmp = `${target}.import`;
-      copyFileSync(source, tmp);
-      renameSync(tmp, target);
-      copied.push(`${m.id}/${f.name}`);
-    }
-  }
-  return { copied, missing };
+/** `models import DIR` (models.ts `importModels`), into this machine's models folder. */
+function importModels(ctx: Ctx, from: string): Promise<{ copied: string[]; missing: string[] }> {
+  return importModelFiles(from, modelsDir(ctx), registry(ctx));
 }
 
 /**
