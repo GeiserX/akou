@@ -54,7 +54,7 @@ function setup(id: LiveSetupView["id"], models: State[], unavailable: string | n
 function choice(id: ReviewChoiceView["id"], models: State[], blocked: string | null = null) {
   return {
     id,
-    title: "Qwen",
+    title: id === "qwen" ? "Qwen" : "Parakeet",
     what: id,
     plain: `${id} plain`,
     line: `${id} line`,
@@ -85,7 +85,7 @@ function view(
       everySeconds: 60,
       next: null,
       running: null,
-      choices: [choice("qwen", ["ready", "ready"])],
+      choices: [choice("qwen", ["ready", "ready"]), choice("parakeet", ["ready"])],
       ...review,
     },
   };
@@ -146,11 +146,12 @@ describe("W3.19: the second pass in the menu", () => {
     everySeconds,
   });
 
-  test("Off, then Qwen; its line names the model and how often", () => {
+  test("Off, then Qwen and Parakeet; its line names the model and how often", () => {
     const off = view("auto", "nemotron", both);
     expect(reviewOptions(off).map((o) => [o.id, o.title, o.state])).toEqual([
       ["none", "Off", "ready"],
       ["qwen", "Qwen", "ready"],
+      ["parakeet", "Parakeet", "ready"],
     ]);
     expect(reviewLabel(off)).toBe("Off");
     expect(reviewChecked(off, reviewOptions(off))).toBe("none");
@@ -194,6 +195,21 @@ describe("W3.19: the second pass in the menu", () => {
     expect(reviewChecked(chosen, reviewOptions(chosen))).toBe("qwen");
     expect(reviewNote(chosen, reviewOptions(chosen))).toBeNull();
     expect(reviewLabel(chosen)).toBe("Qwen, every 2 min");
+  });
+
+  test("Parakeet's pass with Parakeet live is dim, and says why", () => {
+    const v = view("parakeet", "parakeet", both, {
+      choices: [
+        choice("qwen", ["ready"], "It reviews Nemotron's lines; the live model is Parakeet."),
+        choice("parakeet", ["ready"], "Parakeet already writes the live lines."),
+      ],
+    });
+    const o = reviewOptions(v);
+    expect(o.map((x) => [x.id, x.state, x.line])).toEqual([
+      ["none", "ready", "The live lines stay as they were written."],
+      ["qwen", "blocked", "It reviews Nemotron's lines; the live model is Parakeet."],
+      ["parakeet", "blocked", "Parakeet already writes the live lines."],
+    ]);
   });
 
   test("the call header's chip: the model by name, and the second pass when on", () => {

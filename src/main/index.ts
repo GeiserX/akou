@@ -93,6 +93,7 @@ import {
   type LineUpgrader,
   LiveAsr,
   type LiveReview,
+  recognizerReviewer,
   type VocabSource,
 } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
@@ -843,13 +844,20 @@ export class AkouApp implements ApiApp {
     );
   }
 
-  /** A call's second pass: Qwen, every interval. */
+  /** A call's second pass: Qwen, or Parakeet on the live Worker's own recognizer. */
   private liveReview(callId: string): LiveReview | null {
     const r = this.liveRan.get(callId)?.review;
     if (!r) return null;
+    const asr = this.asr;
+    const reviewer: LineUpgrader =
+      r.model === "qwen"
+        ? this.liveUpgrader()
+        : recognizerReviewer((parts, signal) =>
+            asr ? asr.review(parts, signal) : Promise.reject(new Error("the recognizer is closed")),
+          );
     return {
-      name: liveModelName(QWEN_ASR),
-      reviewer: this.liveUpgrader(),
+      name: liveModelName(r.model === "qwen" ? QWEN_ASR : RECOGNIZER),
+      reviewer,
       everySeconds: r.everySeconds,
     };
   }
@@ -1786,7 +1794,10 @@ export class AkouApp implements ApiApp {
     const beam = this.runningDecoding() === "beam";
     if (this.manager.live()?.id !== id) return beam;
     const ran = this.liveRan.get(id);
-    return ran?.review?.model === "qwen" || (beam && ran?.setup === "parakeet");
+    return (
+      ran?.review?.model === "qwen" ||
+      (beam && (ran?.setup === "parakeet" || ran?.review?.model === "parakeet"))
+    );
   }
 
   /** What the API key is saved in: the Keychain, or null for the config file. */

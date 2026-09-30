@@ -75,7 +75,7 @@ export interface CatalogEntry extends ModelSpecEntry {
 }
 
 /** Parakeet TDT v3's 25 European languages, from its model card. */
-const PARAKEET_LANGUAGES: readonly string[] =
+export const PARAKEET_LANGUAGES: readonly string[] =
   "bg cs da de el en es et fi fr hr hu it lt lv mt nl pl pt ro ru sk sl sv uk".split(" ");
 
 /** Nemotron 3.5's languages, from its model card. */
