@@ -1,7 +1,8 @@
 /**
  * The Enhanced tab (docs/DESIGN.md sections 5.2 and 7): the notes the provider wrote from the
  * user's notepad, the transcript and a template. "Enhance" after the call, "Enhance so far" during
- * it; a template picker; every revision kept and selectable. When the final transcript lands after
+ * it; the template is always the automatic choice (the API and `akou enhance --template` still
+ * name one); every revision kept and selectable. When the final transcript lands after
  * the notes were written and akou did not re-enhance on its own (notes written by hand, or the
  * harness, which runs only when asked), a "Re-enhance from it" button is offered.
  *
@@ -83,7 +84,6 @@ export function renderNotes(
 
 export class EnhancedPane {
   private readonly box = byId("enhanced-body");
-  private readonly template = byId<HTMLSelectElement>("enhance-template");
   private readonly button = byId<HTMLButtonElement>("enhance");
   private readonly revs = byId<HTMLSelectElement>("enhance-rev");
   private readonly note = byId("enhance-status");
@@ -93,18 +93,6 @@ export class EnhancedPane {
   constructor(private readonly d: EnhancedDeps) {
     this.button.addEventListener("click", () => void this.enhance());
     this.revs.addEventListener("change", () => void this.load(Number(this.revs.value)));
-  }
-
-  /** The template names, into the tab's picker and the header's. */
-  async loadTemplates(): Promise<string[]> {
-    const r = await this.d.t.request<{ templates?: string[] }>("GET", "/templates");
-    const names = r.body.templates ?? [];
-    replace(
-      this.template,
-      h("option", { value: "" }, "template: automatic"),
-      ...names.map((n) => h("option", { value: n }, n)),
-    );
-    return names;
   }
 
   reset(): void {
@@ -151,10 +139,8 @@ export class EnhancedPane {
             type: "button",
             id: "reenhance",
             on: {
-              click: () => {
-                this.template.value = again.template ?? "";
-                void this.enhance();
-              },
+              // The notes are written again on the template they had.
+              click: () => void this.enhance(again.template),
             },
           },
           "Re-enhance from it",
@@ -182,7 +168,8 @@ export class EnhancedPane {
     );
   }
 
-  async enhance(): Promise<void> {
+  /** Writes the notes; the template is the automatic choice unless a re-enhance keeps its own. */
+  async enhance(template?: string): Promise<void> {
     const call = this.d.call();
     if (!call) return;
     this.busy = true;
@@ -193,11 +180,7 @@ export class EnhancedPane {
       error?: string;
       message?: string;
       reason?: string;
-    }>(
-      "POST",
-      `/calls/${call}/enhance`,
-      this.template.value ? { template: this.template.value } : {},
-    );
+    }>("POST", `/calls/${call}/enhance`, template ? { template } : {});
     this.busy = false;
     this.paint();
     if (r.status >= 400) {
