@@ -67,52 +67,41 @@ svg.i{width:12px;height:12px;stroke:var(--dim);fill:none;stroke-width:1.6;stroke
 <div class="meters"><span>Mic<i></i></span><span>Call<i></i></span></div>
 <div class="rec"><u></u>Record</div></div></template>
 
-<div class="shot" id="d1" data-n="Nemotron 3.5" data-x="+ Qwen 2 min" style="--h:470px"><div class="cap"><b>D. Two slots, each takes a model</b>One panel. Live is the model that writes the words; Second pass is the model that re-reads them. Each slot ends in "Add a model".</div>
+<div class="shot" id="d1" data-n="Nemotron 3.5" data-x="+ Qwen 2 min" style="--h:500px"><div class="cap"><b>Two slots, each takes a model</b>One panel. Live is the model that writes the words; Second pass is the model that re-reads them. Each slot ends in "Add a model".</div>
 <div class="body"><div class="panel">
 <div class="ph">Live</div>
-<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Nemotron 3.5</span><span class="l">Words appear as they are said.</span></div></div>
-<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Writes each stretch between pauses.</span></div></div>
+<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Nemotron 3.5</span><span class="l">Words appear as they are said. 35 languages, mixed in one call.</span></div></div>
+<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Writes each sentence when the speaker pauses. 25 European languages.</span></div></div>
 <div class="add"><span class="pl">+</span>Add a model</div>
 <div class="sep"></div>
 <div class="ph">Second pass<div class="seg"><span>1 min</span><span class="on">2 min</span><span>5 min</span></div></div>
 <div class="it"><span class="rd"></span><div class="tx"><span class="t">Off</span></div></div>
-<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Qwen 3 ASR 1.7B</span><span class="l">Re-reads what was said and corrects the lines.</span></div></div>
-<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Hears the same audio again, more carefully.</span></div></div>
+<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Qwen3-ASR</span><span class="l">Hears the last minutes again and rewrites the lines. 30 languages.</span></div></div>
+<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Hears the last minutes again, whole sentences at a time. 25 European languages.</span></div></div>
 <div class="add"><span class="pl">+</span>Add a model</div>
-</div></div></div><div class="shot" id="d2" data-n="Parakeet" style="--h:520px"><div class="cap"><b>D, adding a model</b>"Add a model" opens in place: the models that fit this slot, downloaded right here, and a folder of your own.</div>
+</div></div></div><div class="shot" id="d2" data-n="Parakeet" style="--h:600px"><div class="cap"><b>Adding a model</b>"Add a model" opens in place: the models that fit this slot, downloaded right here, and a folder of your own.</div>
 <div class="body"><div class="panel">
 <div class="ph">Live</div>
-<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Writes each stretch between pauses.</span></div></div>
+<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Writes each sentence when the speaker pauses. 25 European languages.</span></div></div>
 <div class="add" style="color:var(--fg)"><span class="pl">−</span>Add a model</div>
 <div class="cat">
-<div class="c"><div class="tx"><span class="t">Nemotron 3.5</span><span class="l">Words appear as they are said. 25 languages.</span><div class="bar"><i></i></div></div><span class="get">Cancel</span></div>
-<div class="c"><div class="tx"><span class="t">Nemotron 3.5, slower and surer</span><span class="l">Waits a second longer for each word.</span></div><span class="get">Download</span></div>
-<div class="c"><div class="tx"><span class="t">Nemotron English</span><span class="l">English only, lighter.</span></div><span class="get">Download</span></div>
+<div class="c"><div class="tx"><span class="t">Nemotron 3.5</span><span class="l">Words appear as they are said. 35 languages, mixed in one call. 0.7 GB.</span><div class="bar"><i></i></div></div><span class="get">Cancel</span></div>
+<div class="c"><div class="tx"><span class="t">Nemotron 3.5, steadier</span><span class="l">Waits about a second before writing, for fewer wrong words. Best for Spanish. 0.7 GB.</span></div><span class="get">Download</span></div>
+<div class="c"><div class="tx"><span class="t">Nemotron English</span><span class="l">Words appear as they are said. English only. 0.7 GB.</span></div><span class="get">Download</span></div>
 <div class="c"><div class="tx"><span class="t lnk">From a folder…</span></div></div>
 </div>
 <div class="sep"></div>
 <div class="ph">Second pass<div class="seg"><span>1 min</span><span class="on">2 min</span><span>5 min</span></div></div>
 <div class="it"><span class="rd on"></span><div class="tx"><span class="t">Off</span></div></div>
-<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Hears the same audio again, more carefully.</span></div></div>
+<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Hears the last minutes again, whole sentences at a time. 25 European languages.</span></div></div>
 <div class="add"><span class="pl">+</span>Add a model</div>
-</div></div></div><div class="shot" id="e1" data-n="Nemotron 3.5" data-x="+ Qwen 2 min" style="--h:470px"><div class="cap"><b>E. The side menu, with "Add a model…" in both lists</b>Same shape as option B. Each list ends in "Add a model…", which opens the models that fit it.</div>
-<div class="body"><div class="menu" style="right:250px">
-<div class="it"><svg class="ck"><use href="#k"/></svg><div class="tx"><span class="t">Nemotron 3.5</span><span class="l">Words appear as they are said.</span></div></div>
-<div class="it"><svg class="ck off"><use href="#k"/></svg><div class="tx"><span class="t">Parakeet</span><span class="l">Writes each stretch between pauses.</span></div></div>
-<div class="add" style="padding-left:30px">Add a model…</div>
-<div class="sep"></div>
-<div class="it h"><svg class="ck off"><use href="#k"/></svg><div class="tx"><span class="t">Second pass</span><span class="l">Qwen 3 ASR 1.7B, every 2 min</span></div><span class="chev"><svg class="i"><use href="#r"/></svg></span></div>
-</div>
-<div class="sub" style="top:178px">
-<div class="it"><svg class="ck off"><use href="#k"/></svg><div class="tx"><span class="t">Off</span></div></div>
-<div class="it h"><svg class="ck"><use href="#k"/></svg><div class="tx"><span class="t">Qwen 3 ASR 1.7B</span></div></div>
-<div class="it"><svg class="ck off"><use href="#k"/></svg><div class="tx"><span class="t">Parakeet</span></div></div>
-<div class="add" style="padding-left:30px">Add a model…</div>
-<div class="sep"></div>
-<div class="it"><svg class="ck off"><use href="#k"/></svg><div class="tx"><span class="t">Every minute</span></div></div>
-<div class="it"><svg class="ck"><use href="#k"/></svg><div class="tx"><span class="t">Every 2 minutes</span></div></div>
-<div class="it"><svg class="ck off"><use href="#k"/></svg><div class="tx"><span class="t">Every 5 minutes</span></div></div>
-</div></div></div><script>
+</div></div></div><div class="shot" id="s6" style="--h:0px"><div class="cap"><b>While a call records</b>The button names what is running and is locked until the call ends.</div>
+<div class="row" style="border:0"><span class="dot" style="background:var(--rec)"></span><span class="state" style="color:var(--rec);font-weight:600">REC</span>
+<div class="title" style="color:var(--fg)">PDE daily scrum</div>
+<div class="live" style="opacity:.7;border-color:var(--line)"><span class="k">Live:</span> Nemotron 3.5 <span class="x">+ Qwen 2 min</span></div>
+<div class="meters"><span>Mic<i style="background:linear-gradient(90deg,#32d74b 55%,var(--line2) 55%)"></i></span><span>Call<i style="background:linear-gradient(90deg,#32d74b 35%,var(--line2) 35%)"></i></span></div>
+<div class="rec"><u style="border-radius:2px"></u>Stop</div></div></div>
+<script>
 for(const s of document.querySelectorAll('.shot[data-n]')){const r=document.getElementById('rowT').content.cloneNode(true);
 r.querySelector('.n').innerHTML=s.dataset.n+(s.dataset.x?' <span class="x">'+s.dataset.x+'</span>':'');
 s.insertBefore(r,s.querySelector('.body')||s.querySelector('.pg'));}
