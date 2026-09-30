@@ -6,7 +6,8 @@
  * -a A`, and `-i` with `add-generic-password -U -s S -a A -X HEX` lines on stdin.
  *
  * `FAKE_SECURITY_REFUSE=add` makes an add a silent no-op, as `security -i` exits 0 when a command
- * in it fails; `=all` makes every command exit 51, as a locked or missing Keychain does.
+ * in it fails; `=all` makes every command exit 51, as a locked or missing Keychain does; `=hang`
+ * never answers, as a Keychain waiting on a prompt nobody sees.
  */
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -23,6 +24,7 @@ const flag = (a: string[], f: string) => a[a.indexOf(f) + 1] ?? "";
 const id = (a: string[]) => `${flag(a, "-s")}/${flag(a, "-a")}`;
 
 if (refuse === "all") process.exit(51);
+if (refuse === "hang") await Bun.sleep(60_000);
 
 function run(a: string[]): number {
   const items = read();

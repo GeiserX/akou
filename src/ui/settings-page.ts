@@ -786,6 +786,8 @@ export class SettingsPage {
 
   /** The assistant, the Claude Code or Codex named for what was found on this machine. */
   private kindControl(id: string): HTMLSelectElement {
+    const now = assistantUse(this.settings);
+    const base = String(this.settings["provider.baseUrl"] ?? "");
     const select = selectBox({
       id,
       label: "Assistant",
@@ -795,8 +797,19 @@ export class SettingsPage {
         ["ollama", "Local model (Ollama)"],
         ["none", "None"],
       ],
-      value: assistantUse(this.settings),
+      value: now,
     });
+    // The address is the window's to change (an HTTP client may not): in a browser, a use that
+    // changes it is offered and cannot be picked, rather than refused after the pick.
+    if (this.t.kind !== "window")
+      for (const opt of select.options) {
+        const changes =
+          opt.value !== now && (opt.value === "ollama" || (opt.value === "key" && base !== ""));
+        if (changes) {
+          opt.disabled = true;
+          opt.textContent = `${opt.textContent}, in the akou window`;
+        }
+      }
     select.addEventListener("change", (e) => {
       e.stopPropagation();
       const r = select.closest<HTMLElement>(".pg-row");
@@ -867,6 +880,10 @@ export class SettingsPage {
         seg.root,
       );
       service.id = "settings-provider-service";
+      // Back to Anthropic clears an address, which only the window may do.
+      if (this.t.kind !== "window" && kind !== "anthropic" && this.settings["provider.baseUrl"])
+        for (const radio of seg.root.querySelectorAll<HTMLInputElement>("input[value='anthropic']"))
+          radio.disabled = true;
       seg.input.addEventListener("change", (e) => {
         e.stopPropagation();
         const base = String(this.settings["provider.baseUrl"] ?? "");

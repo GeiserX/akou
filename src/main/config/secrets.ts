@@ -37,6 +37,8 @@ export interface KeychainOptions {
   /** A keychain file instead of the default one. */
   keychain?: string;
   service?: string;
+  /** How long one `security` run may take, ms; 10 s by default. */
+  timeoutMs?: number;
 }
 
 /** The macOS Keychain through the `security` command. */
@@ -50,6 +52,8 @@ export function keychainStore(o: KeychainOptions = {}): SecretStore {
       stdout: "pipe",
       stderr: "pipe",
       env: (o.env ?? process.env) as Record<string, string>,
+      // A Keychain that never answers must not hold the app: a killed run is a failed one.
+      timeout: o.timeoutMs ?? 10_000,
     });
     return { code: p.exitCode ?? -1, out: p.stdout.toString() };
   };

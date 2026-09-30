@@ -16,9 +16,10 @@ import { tempDir } from "./helpers.ts";
 const FAKE = join(import.meta.dir, "fixtures", "fake-security.ts");
 const KEY = "sk-ant-test-4f9c2e";
 
-function fakeKeychain(dir: string, refuse = "") {
+function fakeKeychain(dir: string, refuse = "", timeoutMs?: number) {
   const store = join(dir, "keychain.json");
   const secrets = keychainStore({
+    timeoutMs,
     command: [process.execPath, FAKE],
     env: { ...process.env, FAKE_SECURITY_STORE: store, FAKE_SECURITY_REFUSE: refuse },
   });
@@ -34,11 +35,11 @@ function fakeKeychain(dir: string, refuse = "") {
 const configText = (rig: AppRig) => readFileSync(rig.app.config().paths.configFile, "utf8");
 
 async function withRig(
-  o: { settings?: Record<string, unknown>; refuse?: string },
+  o: { settings?: Record<string, unknown>; refuse?: string; timeoutMs?: number },
   fn: (rig: AppRig, kc: ReturnType<typeof fakeKeychain>) => Promise<void>,
 ): Promise<void> {
   const t = tempDir("akou-secrets-");
-  const kc = fakeKeychain(t.dir, o.refuse);
+  const kc = fakeKeychain(t.dir, o.refuse, o.timeoutMs);
   const rig = await appRig({ home: t.dir, settings: o.settings, secrets: kc.secrets });
   try {
     await fn(rig, kc);
@@ -80,6 +81,11 @@ describe("the Keychain store, through the security command", () => {
       expect(() => kc.secrets.set("provider.apiKey", KEY)).toThrow("did not keep the key");
       const locked = fakeKeychain(t.dir, "all");
       expect(() => locked.secrets.get("provider.apiKey")).toThrow("could not be read");
+      // A Keychain that never answers fails after the time limit instead of holding the app.
+      const stuck = fakeKeychain(t.dir, "hang", 300);
+      const at = Date.now();
+      expect(() => stuck.secrets.get("provider.apiKey")).toThrow("could not be read");
+      expect(Date.now() - at).toBeLessThan(4000);
     } finally {
       t.cleanup();
     }
@@ -159,12 +165,37 @@ describe("the app keeps the API key in the Keychain", () => {
         expect(configText(rig)).toContain(KEY);
         expect((await rig.api("GET", "/status")).body.provider.state).toBe("available");
         expect(rig.logs.some((l) => l.msg.includes("stays in the config file"))).toBe(true);
+        // Settings must not say "Saved in Keychain" for a key that is in the file.
+        const schema = (await rig.api("GET", "/config")).body.schema["provider.apiKey"];
+        expect(schema.keychain).toBeUndefined();
         expect(JSON.stringify(rig.logs)).not.toContain(KEY);
         // A later save of another setting keeps it there: it is never dropped from both.
         expect((await rig.api("PATCH", "/config", { "provider.model": "claude-x" })).status).toBe(
           200,
         );
         expect(configText(rig)).toContain(KEY);
+      },
+    );
+  });
+});
+
+describe("server mode", () => {
+  test("keeps the key in the config file, since a server has no login Keychain", async () => {
+    await withRig(
+      {
+        settings: {
+          "server.enabled": true,
+          "api.bind": "127.0.0.1",
+          "provider.kind": "anthropic",
+          "provider.apiKey": KEY,
+        },
+      },
+      async (rig, kc) => {
+        expect(configText(rig)).toContain(KEY);
+        expect(kc.items()).toEqual({});
+        expect((await rig.api("GET", "/config")).body.schema["provider.apiKey"].keychain).toBe(
+          undefined,
+        );
       },
     );
   });

@@ -547,7 +547,14 @@ describe("the assistant on the Settings page", () => {
             5000,
             "the state names Claude Code",
           );
-          // The address decides where the key and the transcripts go: a browser cannot set it.
+          // The address decides where the key and the transcripts go: a browser cannot set it, so
+          // the local model, which sets it, cannot be picked there.
+          expect(
+            await page.$eval("#set-provider-kind option[value='ollama']", (o) => [
+              (o as HTMLOptionElement).disabled,
+              o.textContent,
+            ]),
+          ).toEqual([true, "Local model (Ollama), in the akou window"]);
           await page.selectOption("#set-provider-kind", "key");
           await page.waitForSelector("#settings-provider-service");
           await page.click("#settings-provider-service label:has-text('OpenAI-compatible')");
@@ -574,6 +581,27 @@ describe("the assistant on the Settings page", () => {
             10_000,
             "none found",
           );
+        },
+      );
+      // A server set in the file: going back to Anthropic clears its address, so a browser
+      // cannot pick it, and cannot pick a key over Ollama either.
+      await withRig(
+        {
+          settings: {
+            "provider.kind": "openai-compatible",
+            "provider.baseUrl": "https://llm.example/v1",
+          },
+        },
+        async (rig) => {
+          const page = await rig.open();
+          await openSettings(page);
+          await page.waitForSelector("#settings-provider-service");
+          expect(await page.isDisabled("#settings-provider-service input[value='anthropic']")).toBe(
+            true,
+          );
+          expect(
+            await page.isDisabled("#settings-provider-service input[value='openai-compatible']"),
+          ).toBe(false);
         },
       );
     },

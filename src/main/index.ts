@@ -601,7 +601,8 @@ export class AkouApp implements ApiApp {
     token: { token: string; path: string },
     lockPath: string,
   ) {
-    this.secrets = o.secrets ?? null;
+    // Server mode keeps the key in the file on every system: a server has no login Keychain.
+    this.secrets = cfg.settings["server.enabled"] ? null : (o.secrets ?? null);
     this.cfg = this.adoptSecrets(cfg);
     this.version = o.version ?? APP_VERSION;
     this.clock = o.clock ?? realClock;
@@ -1753,6 +1754,8 @@ export class AkouApp implements ApiApp {
 
   /** What the API key is saved in: the Keychain, or null for the config file. */
   secretStore(): "keychain" | null {
+    // A key the store refused at start is still in the file, and the page must not say otherwise.
+    if (this.secretsInFile.size > 0) return null;
     return this.secrets?.where ?? null;
   }
 
