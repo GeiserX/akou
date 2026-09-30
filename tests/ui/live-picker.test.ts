@@ -362,6 +362,18 @@ describe("W3.19: the live panel in the Record row", () => {
             await page.textContent(`#live-menu [data-review="${RECOGNIZER}"] .live-line`),
           ).toBe("Parakeet already writes the live lines.");
           expect(await extra(page)).toBe("");
+          // An interval saved elsewhere shows as itself, checked.
+          await rig.api("PATCH", "/config", {
+            "asr.live": STREAM,
+            "asr.review.model": QWEN_ASR,
+            "asr.review.everySeconds": 90,
+          });
+          await page.keyboard.press("Escape");
+          await openPanel(page);
+          await until(async () => (await extra(page)) === "+ Qwen 90 s", 5000, "90 s");
+          await page.waitForSelector('[data-every="90"]');
+          expect(await page.getAttribute('[data-every="90"]', "aria-checked")).toBe("true");
+          expect(await page.textContent('[data-every="90"]')).toBe("90 s");
         },
         { roomy: true },
       );

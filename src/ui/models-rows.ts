@@ -88,9 +88,6 @@ export function liveName(id: string, title = id): string {
   return id === "auto" ? "Automatic" : title;
 }
 
-/** How often the second pass may review, as the page offers it, seconds. */
-export const REVIEW_EVERY = [60, 120, 300] as const;
-
 /** An interval's words in the page's list: `Every 2 min`. */
 export function everyLabel(seconds: number): string {
   const t = everyText(seconds);

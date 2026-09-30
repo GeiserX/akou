@@ -60,6 +60,15 @@ export function slotRows(v: LiveView, rows: readonly ModelView[], slot: Slot): S
 /** The intervals the Second pass heading offers, seconds. */
 export const REVIEW_EVERY_CHOICES = [60, 120, 300] as const;
 
+/**
+ * The intervals to draw: the three offered, and the saved one when it is another (90 or 600 s set
+ * from the CLI), so the saved value always shows as itself.
+ */
+export function everyChoices(saved: number): number[] {
+  const all: number[] = [...REVIEW_EVERY_CHOICES];
+  return all.includes(saved) ? all : [...all, saved].sort((a, b) => a - b);
+}
+
 /** An interval as the switch and the button say it: `2 min`, `90 s`. */
 export function everyShort(seconds: number): string {
   return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;

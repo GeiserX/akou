@@ -28,6 +28,7 @@
  */
 
 import { h, replace, toast } from "./dom.ts";
+import { everyChoices } from "./live-options.ts";
 import {
   accuracyText,
   afterCallHelp,
@@ -51,7 +52,6 @@ import {
   percent,
   QWEN_ID,
   RECOGNIZER_ID,
-  REVIEW_EVERY,
   reasonText,
   removeRefusal,
   speakersHelp,
@@ -620,7 +620,7 @@ export class ModelsPage {
     const pick = selectBox({
       id: "models-review-every",
       label: "How often",
-      options: REVIEW_EVERY.map((n) => [String(n), everyLabel(n)] as const),
+      options: everyChoices(every).map((n) => [String(n), everyLabel(n)] as const),
       value: String(every),
     });
     pick.dataset.key = "asr.review.everySeconds";

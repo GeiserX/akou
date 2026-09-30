@@ -51,6 +51,10 @@ const LANGS = (process.env.AKOU_REVIEW_LANGS ?? "en,es").split(",") as ("en" | "
 const GAP = 1;
 const ACCEL = (process.env.AKOU_LIVE_ACCEL ?? "metal") as Accelerator;
 const LONG = 6 * 60 * 60_000;
+/** The recognizer's threads: `asr.threads`, 2 by default in the app. */
+const THREADS = Number(process.env.AKOU_LIVE_THREADS ?? 2);
+/** `parakeet` measures Parakeet's pass alone, without Qwen. */
+const ONLY = process.env.AKOU_REVIEW_ONLY ?? "";
 const READY = !!MODELS && !!DATA && existsSync(modelFile(MODELS, QWEN_ASR, QWEN_MODEL_FILE));
 
 /** The first `n` FLEURS clips of a language joined into one stream, and the joined reference. */
@@ -254,7 +258,7 @@ if (!READY) {
           const models = new SherpaModels({
             dir: MODELS as string,
             cacheDir: join(MODELS as string, ".cache"),
-            threads: 4,
+            threads: THREADS,
             diarizer: "embeddings",
           });
           const { ref, samples } = call(lang, CLIPS);
@@ -303,8 +307,13 @@ if (!READY) {
               return out;
             };
             // Each utterance of the request decoded alone (at most 30 s each), as the app does.
+            let slowest = 0;
             const each: Decoder = async (parts) =>
-              parts.flatMap((s) => words(p.decodeUtterance(s).text));
+              parts.flatMap((s) => {
+                const r = p.decodeUtterance(s);
+                slowest = Math.max(slowest, r.ms);
+                return words(r.text);
+              });
             const parakeets: [string, Decoder][] = [
               ["Parakeet (pause-cut spans)", spans],
               ["Parakeet (each utterance)", each],
@@ -324,10 +333,13 @@ if (!READY) {
                 rows.push(`  ${row(`${name} every ${every} s (cap ${reviewCap(every)} s)`, pr)}`);
               }
             }
+            rows.push(
+              `  Parakeet at ${THREADS} threads: the slowest single utterance held the Worker ${slowest.toFixed(0)} ms`,
+            );
           } finally {
             p.stop();
           }
-          for (const every of EVERY) {
+          for (const every of ONLY === "parakeet" ? [] : EVERY) {
             const reqs = ticks(utts, every, end);
             const server = qwenServer();
             const qwen = new QwenEngine({ id: QWEN_ASR, server, allowed: [lang] });

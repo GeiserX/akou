@@ -32,9 +32,9 @@ import type { ModelView } from "../main/server/model-store.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import {
   buttonLabel,
+  everyChoices,
   everyShort,
   liveNote,
-  REVIEW_EVERY_CHOICES,
   type RunningLive,
   reviewNote,
   runningLabel,
@@ -381,7 +381,7 @@ export class LivePicker {
           ...(off ? { "data-off": "" } : {}),
         },
       },
-      ...REVIEW_EVERY_CHOICES.map((s) =>
+      ...everyChoices(v.review.everySeconds).map((s) =>
         h(
           "button",
           {

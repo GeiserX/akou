@@ -11,6 +11,7 @@ import type { LiveView, SlotEntry } from "../src/main/asr/live-setups.ts";
 import type { ModelView } from "../src/main/server/model-store.ts";
 import {
   buttonLabel,
+  everyChoices,
   everyShort,
   liveChip,
   liveNote,
@@ -196,5 +197,11 @@ describe("W3.19: the live panel's slots", () => {
       "2.5 GB",
       "40 MB",
     ]);
+  });
+
+  test("an interval saved elsewhere (90 s, 10 min) shows as itself beside the three offered", () => {
+    expect(everyChoices(120)).toEqual([60, 120, 300]);
+    expect(everyChoices(90)).toEqual([60, 90, 120, 300]);
+    expect(everyChoices(600)).toEqual([60, 120, 300, 600]);
   });
 });
