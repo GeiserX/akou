@@ -555,7 +555,7 @@ describe("keyboard access to a row's tools", () => {
 
 describe("the confirm bar", () => {
   test(
-    "Share right after Record keeps the consent reminder: each message has its own row and Dismiss",
+    "Record shows no reminder row (the owner dropped it); Share still shows its link in a row with Dismiss",
     async () => {
       const t = tempDir("akou-wav-");
       await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
@@ -563,17 +563,16 @@ describe("the confirm bar", () => {
         await page.waitForSelector("#record", { state: "visible" });
         await page.click("#record");
         await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
+        // The reminder was added right after the start answered: give a late one time to show.
+        await Bun.sleep(500);
+        const rows = page.locator("#confirm .confirm-row");
+        expect(await rows.count()).toBe(0);
+        expect(await page.locator("#confirm").isHidden()).toBe(true);
+        // Positive control: the same check sees the row the share link adds.
         await page.click("#share-start");
         await page.waitForSelector("#pill-share:not([hidden])");
-        const rows = page.locator("#confirm .confirm-row");
-        await until(async () => (await rows.count()) === 2, 5000, "two messages");
-        expect(await rows.nth(0).textContent()).toContain(
-          "Remember to tell the others you are recording",
-        );
-        expect(await rows.nth(1).textContent()).toContain("Read-only link:");
-        await rows.nth(1).getByRole("button", { name: "Dismiss" }).click();
-        expect(await rows.count()).toBe(1);
-        expect(await text(page, "#confirm")).toContain("Remember to tell the others");
+        await until(async () => (await rows.count()) === 1, 5000, "the link's row");
+        expect(await rows.nth(0).textContent()).toContain("Read-only link:");
         await rows.nth(0).getByRole("button", { name: "Dismiss" }).click();
         await page.waitForSelector("#confirm", { state: "hidden" });
         await page.click("#stop");
