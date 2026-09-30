@@ -30,6 +30,7 @@ import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS } from "../asr/upgrade.ts";
+import { DICTATION_FINALS } from "../dictation/engines.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
@@ -675,6 +676,12 @@ export const SETTINGS = {
     values: DICTATION_ENGINES,
     default: "auto",
     doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR, kept warm while dictation is on, falling back to fast when it fails or is too slow, and downloaded when missing (fast until it lands); `auto`: best where Qwen runs on a GPU and is downloaded, fast elsewhere; `remote`: another akou (`dictation.remote.url`), with no local model needed.",
+  },
+  "dictation.final": {
+    type: "string",
+    values: DICTATION_FINALS,
+    default: "live",
+    doc: "The text a dictation inserts, while `dictation.engine` is `auto` (`fast`, `best` and `remote` there win; the Dictation page sets both). `live`, the default and the fastest: the words the streaming model showed as you spoke, inserted the moment you let go, with no second decode, and less accurate than Parakeet; while no streaming model is downloaded, Parakeet inserts. `parakeet`: Parakeet decodes the whole recording at the release, with your word list. `qwen`: Qwen3-ASR, the most accurate, kept warm while dictation is on, as `dictation.engine` `best`. Whatever this says, the words while you speak come from the streaming model when one is downloaded (`akou models pull nemotron-3.5-560`), else from Parakeet twice a second.",
   },
   "dictation.localTimeoutSeconds": {
     type: "integer",

@@ -212,6 +212,11 @@ export interface FakeOptions {
   liveTierMs?: number;
   /** Loading a streaming engine throws (a missing or broken model). */
   liveFails?: boolean;
+  /**
+   * Each streaming engine load busy-waits this long, and the set then holds one engine at a time,
+   * as sherpa's does: loading another lets the one before go.
+   */
+  liveLoadMs?: number;
   /** `release` takes this long before it lets go of the models, ms. */
   releaseMs?: number;
 }
@@ -540,6 +545,10 @@ export class FakeModels implements ModelSet {
     const had = this.liveEngines.find((e) => e.id === id);
     if (had) return had;
     if (this.o.liveFails) throw new Error(`fake: no model files for ${id}`);
+    if (this.o.liveLoadMs !== undefined) {
+      this.liveEngines.length = 0;
+      busyWait(this.o.liveLoadMs);
+    }
     const e = new FakeLiveEngine(id, this.o.liveTierMs ?? 560);
     this.liveEngines.push(e);
     this.count(id);

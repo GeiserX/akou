@@ -360,6 +360,7 @@ export const DICTATION_SCHEMA: Schema = {
   "dictation.preferBuiltInOverBluetooth": bool("The built-in mic over a Bluetooth headset."),
   "dictation.warmMic": pick(["off", "auto", "always"], "Keeps the mic open between dictations."),
   "dictation.engine": pick(["auto", "fast", "best", "remote"], "The engine."),
+  "dictation.final": pick(["live", "parakeet", "qwen"], "The text a dictation inserts."),
   "dictation.localTimeoutSeconds": int(2, 120, "How long a local best may take."),
   "dictation.remote.url": str("The remote akou.", { apiWritable: false }),
   "dictation.remote.key": str("The remote's jobs key.", { secret: true }),
@@ -891,6 +892,9 @@ export async function windowPage(
     lost?: string[];
     /** The answer to `recordDictationKeys`: false, no helper hears keys (DC-N2). */
     hearing?: boolean;
+    /** The streaming model and the resolved text inserted on `GET /dictation` (DC-E7). */
+    live?: string | null;
+    final?: string | null;
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
     devices?: DevicesFixture;
@@ -922,6 +926,8 @@ export async function windowPage(
           state: "idle",
           grants: o.grants ?? { mic: "granted", accessibility: "granted" },
           lost: o.lost ?? [],
+          live: o.live ?? null,
+          final: o.final ?? null,
         },
       };
     if (p.path === "/config" && p.method === "PATCH") {

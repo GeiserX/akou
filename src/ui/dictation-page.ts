@@ -35,11 +35,13 @@ import { remoteParts } from "./dictation-remote.ts";
 import { type DictationReview, readDictationReview, waitingTerms } from "./dictation-review.ts";
 import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
+import { modelName } from "./models-rows.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
 import {
   backLink,
   button,
+  choiceRow,
   field,
   icon,
   keycaps,
@@ -74,6 +76,10 @@ type DictationReply = {
   lost?: unknown;
   engine?: string | null;
   swallow_keys?: boolean;
+  /** The streaming model the words while you speak come from; null for Parakeet (DC-E7). */
+  live?: string | null;
+  /** What a dictation inserts now, as the engines resolve here (DC-E7). */
+  final?: string | null;
 };
 
 /** The master switch, the first row. */
@@ -90,6 +96,14 @@ const PILL_KEY = "dictation.pill";
 const READ_FIELD_KEY = "dictation.readField";
 const LEARN_KEY = "dictation.learn";
 const ENGINE_KEY = "dictation.engine";
+/** What a dictation inserts (DC-E7): while `dictation.engine` is `auto`, this decides. */
+const FINAL_KEY = "dictation.final";
+/** The `dictation.engine` a choice of `dictation.final` saves with it, so what shows is what runs. */
+const FINAL_ENGINE: Readonly<Record<string, string>> = {
+  parakeet: "fast",
+  qwen: "best",
+  live: "auto",
+};
 const FORMAT_KEY = "dictation.format";
 const PROMPT_KEY = "dictation.formatPrompt";
 const FORMAT_WAIT_KEY = "dictation.formatTimeoutSeconds";
@@ -110,7 +124,7 @@ const WHILE = "#while-listening";
 /** The rows, and `show`'s names, of the Words and History pages under this one. */
 export const WORDS = "#words";
 export const HISTORY = "#history";
-const REMOTE = "#remote";
+const LIVE_WORDS = "#live-words";
 const REVIEW = "#review";
 const ADVANCED = "#advanced";
 
@@ -139,7 +153,7 @@ export const DICTATION_GROUPS: readonly DictationGroup[] = [
   },
   { title: "Words and history", keys: [WORDS, HISTORY] },
   { title: "Rules per app", keys: ["dictation.apps"] },
-  { title: "Engine", keys: [ENGINE_KEY, REMOTE, ...REMOTE_KEYS] },
+  { title: "Engine", keys: [LIVE_WORDS, FINAL_KEY, ENGINE_KEY, ...REMOTE_KEYS] },
   {
     title: "Inserting",
     keys: [
@@ -226,6 +240,8 @@ export interface DictationHooks {
    * grant.
    */
   runSetup?: () => void;
+  /** Opens the Models page: the words while you speak need a streaming model (DC-E7). */
+  openModels?: () => void;
 }
 
 /** A page under the Dictation page, reached from its row and left by its back link. */
@@ -500,7 +516,7 @@ export class DictationPage {
     const any = groups.some((g) => g.keys.some((k) => k in this.schema));
     const sections = (any ? groups : [])
       .map((g) => {
-        const rows = g.keys.map((k) => this.item(k)).filter((x): x is HTMLElement => x !== null);
+        const rows = g.keys.flatMap((k) => this.item(k) ?? []);
         return rows.length > 0 ? section(g.title, ...rows) : null;
       })
       .filter((x): x is HTMLElement => x !== null);
@@ -526,8 +542,12 @@ export class DictationPage {
     this.root.parentElement?.scrollTo?.({ top: 0 });
   }
 
-  private item(item: string): HTMLElement | null {
+  private item(item: string): HTMLElement | HTMLElement[] | null {
     switch (item) {
+      case LIVE_WORDS:
+        return this.mode === "app" ? this.liveWordsRow() : null;
+      case FINAL_KEY:
+        return this.finalRows();
       case MIC_GRANT:
         return this.micGrant();
       case A11Y_GRANT:
@@ -553,7 +573,7 @@ export class DictationPage {
           : null;
       case HISTORY:
         return this.hooks.history ? this.historyRow() : null;
-      case REMOTE:
+      case ENGINE_KEY:
         return this.remoteRow();
       case REVIEW:
         return this.reviewRow();
@@ -581,10 +601,7 @@ export class DictationPage {
     if (key in KEY_SETTINGS) controls = this.keyControls(key, id, String(value ?? ""));
     else if (key === "dictation.languages") controls = [this.languagesControl(id, value)];
     else if (key === MIC_KEY) controls = this.micControls(id, String(value ?? ""));
-    else if (key === ENGINE_KEY) {
-      controls = [this.engineControl(id, String(value ?? "auto"))];
-      help = this.engineHelp();
-    } else if (key === FORMAT_KEY) controls = [this.formatControl(id, String(value ?? "off"))];
+    else if (key === FORMAT_KEY) controls = [this.formatControl(id, String(value ?? "off"))];
     else if (key === PROMPT_KEY) controls = [this.promptControl(id, String(value ?? "default"))];
     else if (key === FORMAT_WAIT_KEY) controls = [formatWait(id, w.label, spec, value)];
     else if (key === "dictation.language")
@@ -1024,35 +1041,105 @@ export class DictationPage {
   }
 
   /**
-   * Speed or accuracy: Automatic, Fast or Best, as segments. While another computer turns the
-   * voice into text the segments rest, dimmed, and the saved value is the switch's.
+   * "Words while you speak" (DC-E7): the streaming model they come from, or Parakeet decoding the
+   * audio again twice a second while none is downloaded, with Get leading to the Models page.
    */
-  private engineControl(id: string, value: string): HTMLElement {
-    const w = wordsFor(ENGINE_KEY);
-    const local = (w.choices ?? []).filter(([v]) => v !== "remote");
-    const remote = value === "remote";
-    const seg = segmented({
-      id,
-      label: w.label,
-      options: local,
-      value: remote ? this.localEngine : value,
+  private liveWordsRow(): HTMLElement | null {
+    if (!(FINAL_KEY in this.schema)) return null;
+    const live = this.dictation?.live ?? null;
+    const get =
+      !live && this.hooks.openModels
+        ? button("Get", () => this.hooks.openModels?.(), "dictation-live-get")
+        : null;
+    return row(
+      {
+        label: "Words while you speak",
+        help: live
+          ? "Each word shows as it is heard, and stays."
+          : "Get a streaming model to see each word the moment it is heard.",
+        id: "dictation-live-words",
+      },
+      h(
+        "span",
+        { class: "pg-value", id: "dictation-live-model" },
+        live ? modelName({ id: live, job: "" }) : "Parakeet, refreshed twice a second",
+      ),
+      get,
+    );
+  }
+
+  /**
+   * "Text that gets inserted" (DC-E7): the heading row, which saves `dictation.final`, and one
+   * choice per value with a line on what you notice. The checked one is what runs now, as
+   * `GET /dictation` says; a pick saves `dictation.engine` with it (`FINAL_ENGINE`), so the two keys
+   * never disagree. While another computer turns the voice into text, the choices rest, dimmed.
+   */
+  private finalRows(): HTMLElement[] | null {
+    const spec = this.schema[FINAL_KEY];
+    if (!spec) return null;
+    const engine = String(this.settings[ENGINE_KEY] ?? "auto");
+    const resolved = this.dictation?.final;
+    const now =
+      resolved === "parakeet" || resolved === "qwen" || resolved === "live"
+        ? resolved
+        : engine === "fast"
+          ? "parakeet"
+          : engine === "best"
+            ? "qwen"
+            : String(this.settings[FINAL_KEY] ?? "live");
+    // The control holds what runs now, so any other pick saves, even one the file already says.
+    this.shown[FINAL_KEY] = now;
+    const held = h("input", { type: "hidden", value: now });
+    held.dataset.key = FINAL_KEY;
+    const remote = this.remoteOn();
+    const head = row(
+      {
+        label: wordsFor(FINAL_KEY).label,
+        help: remote
+          ? "The other computer turns your voice into text while it is on."
+          : "Decided when you let go of the key.",
+        key: FINAL_KEY,
+        id: "dictation-final",
+      },
+      held,
+    );
+    const live = this.dictation?.live ?? null;
+    const lines: Record<string, string> = {
+      live: live
+        ? "Goes in the moment you let go, exactly as shown. A few more mistakes than Parakeet."
+        : "Needs a streaming model; Parakeet puts the text in until you get one.",
+      parakeet: "A moment after you let go, reads the whole recording again, with your words.",
+      qwen: "The fewest mistakes. Takes a little longer, and keeps a bigger model loaded.",
+    };
+    const choices = (wordsFor(FINAL_KEY).choices ?? []).filter(([v]) => spec.values?.includes(v));
+    const rows = choices.map(([value, label]) => {
+      const r = choiceRow({
+        name: "dictation-final",
+        value,
+        label,
+        help: lines[value],
+        checked: value === now,
+        isDefault: value === "live",
+        disabled: remote,
+      });
+      r.dataset.final = value;
+      r.querySelector<HTMLInputElement>("input.pg-radio")?.addEventListener("change", (e) => {
+        e.stopPropagation();
+        const radio = e.target as HTMLInputElement;
+        if (!radio.checked) return;
+        held.value = value;
+        held.dispatchEvent(new Event("change", { bubbles: true }));
+      });
+      return r;
     });
-    seg.input.value = value;
-    seg.input.dataset.key = ENGINE_KEY;
-    for (const r of seg.root.querySelectorAll<HTMLInputElement>("input[type=radio]"))
-      r.disabled = remote;
-    return seg.root;
+    return [head, ...rows];
   }
 
-  private engineHelp(): string {
-    if (this.settings[ENGINE_KEY] === "remote")
-      return "The other computer turns your voice into text while it is on.";
-    const now = this.dictation?.engine;
-    const picks = now === "best" ? "Best" : now === "fast" ? "Fast" : null;
-    return `Fast is instant. Best makes fewer mistakes.${picks ? ` Automatic picks ${picks} on ${this.here}.` : ""}`;
-  }
-
-  /** "Use another computer running akou": the engine is `remote` while it is on. */
+  /**
+   * "Use another computer running akou": the engine is `remote` while it is on. The row is
+   * `dictation.engine`'s place on the page, its value held for the save; the choice of the text
+   * inserted sets its local values.
+   */
   private remoteRow(): HTMLElement | null {
     if (this.mode !== "app" || !(ENGINE_KEY in this.schema)) return null;
     if (!this.schema[ENGINE_KEY]?.values?.includes("remote")) return null;
@@ -1065,25 +1152,41 @@ export class DictationPage {
       e.stopPropagation();
       this.remoteSwitch(sw.checked);
     });
-    return row(
+    const held = h("input", { type: "hidden", value: String(this.settings[ENGINE_KEY] ?? "auto") });
+    held.dataset.key = ENGINE_KEY;
+    this.shown[ENGINE_KEY] = held.value;
+    const r = row(
       {
         label: "Use another computer running akou",
         help: "Your voice goes to it instead of being turned into text here.",
         for: "dictation-remote-on",
         id: "dictation-remote-row",
+        key: ENGINE_KEY,
       },
       sw,
+      held,
     );
+    if (this.issues.has(ENGINE_KEY)) {
+      r.classList.add("refused");
+      r.querySelector(".pg-lbl")?.append(
+        h(
+          "small",
+          { class: "issue" },
+          this.remoteAsked()
+            ? "Another computer is on, but it has no address yet."
+            : inWords(this.issues.get(ENGINE_KEY) ?? "", this.keys()),
+        ),
+      );
+    }
+    return r;
   }
 
   private remoteSwitch(on: boolean): void {
-    const engine = this.col.querySelector<HTMLInputElement>(`input[data-key="${ENGINE_KEY}"]`);
     const url = String(this.settings[REMOTE_URL_KEY] ?? "").trim();
     for (const k of REMOTE_KEYS) {
       const r = this.rowOf(k);
       if (r) r.hidden = !on;
     }
-    if (!engine) return;
     if (on && url === "") {
       // The registry refuses `remote` with no address: the address comes first and turns it on.
       this.remotePending = true;
@@ -1091,20 +1194,12 @@ export class DictationPage {
       return;
     }
     this.remotePending = false;
-    const local =
-      engine.parentElement?.querySelector<HTMLInputElement>("input[type=radio]:checked")?.value ??
-      this.localEngine;
-    if (!on && this.remoteAsked()) {
-      // The file still asks for another computer: saying the local engine is what turns it off.
-      this.issues.delete(ENGINE_KEY);
-      void this.saveValue(ENGINE_KEY, local).then((why) => {
-        if (why) toast(`${wordsFor(ENGINE_KEY).label} was not saved: ${why}`);
-        else if (this.root.isConnected) this.redraw();
-      });
-      return;
-    }
-    engine.value = on ? "remote" : local;
-    engine.dispatchEvent(new Event("change", { bubbles: true }));
+    // Off, the engine goes back to what it was here, and the file stops asking for the remote.
+    this.issues.delete(ENGINE_KEY);
+    void this.saveValue(ENGINE_KEY, on ? "remote" : this.localEngine).then((why) => {
+      if (why) toast(`${wordsFor(ENGINE_KEY).label} was not saved: ${why}`);
+      else if (this.root.isConnected) this.redraw();
+    });
   }
 
   /** Tidy the text with AI: off, or with the assistant set on the Settings page, named. */
@@ -1462,6 +1557,10 @@ export class DictationPage {
   private save(r: HTMLElement): Promise<void> {
     const patch = changedSettings(r, this.schema, this.shown);
     if (Object.keys(patch).length === 0) return Promise.resolve();
+    // A choice of the text inserted names its engine too, so neither key overrides the other.
+    const final = patch[FINAL_KEY];
+    if (typeof final === "string" && FINAL_ENGINE[final] && this.settings[ENGINE_KEY] !== "remote")
+      patch[ENGINE_KEY] = FINAL_ENGINE[final];
     const id = JSON.stringify(patch);
     const going = this.saving.get(id);
     if (going) return going;
@@ -1496,7 +1595,8 @@ export class DictationPage {
     // The address is saved: "Use another computer", turned on before it, now turns it on.
     if (keys.includes(REMOTE_URL_KEY) && this.remotePending && String(patch[REMOTE_URL_KEY]).trim())
       this.remoteSwitch(true);
-    if (keys.includes(ENGINE_KEY) && this.root.isConnected) this.redraw();
+    if ((keys.includes(ENGINE_KEY) || keys.includes(FINAL_KEY)) && this.root.isConnected)
+      this.redraw();
   }
 
   /** A refused change: the reason under the row's label, in words, and the same in a toast. */

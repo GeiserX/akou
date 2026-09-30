@@ -77,6 +77,12 @@
  * partial is only ever shown: the inserted text is the decode of the whole buffer at the release. A
  * password field's session has no partials (DC-N8).
  *
+ * The words from a streaming model (DC-E7): when one is downloaded, a session opens a stream on it at
+ * the press (`stream`) and feeds it the audio as it records; each time the model gives new words the
+ * whole text so far goes out as a partial, and nothing is decoded again. A stream that cannot open
+ * falls back to the decodes above. With `dictation.final` `live` the engine is `live`, and its text
+ * is the stream's own words, flushed at the release: no second decode.
+ *
  * The session's language (DC-E4, akou-5v8): the pill's language chip forces one for the session
  * listening (`setLanguage`), and so does `command("start", { language })` for the session it opens
  * (`akou dictate start --language`); its decode at the release asks for that one instead of
@@ -288,6 +294,11 @@ export interface SessionOptions extends TextRules {
   /** A partial of the session listening: shown, never inserted (DC-E5). */
   onPartial?(p: PreviewPartial): void;
   /**
+   * Opens a stream on a streaming model for a session starting now (DC-E7), its whole text so far
+   * to `onText` as words come; null when none is downloaded or nothing needs its words.
+   */
+  stream?(onText: (text: string) => void): WordStream | null;
+  /**
    * A moment of a spoken dictation for its cue (DC-O3): `start` when its audio starts, `stop` once
    * the post-roll ended and it goes to the engine, `cancel` when it is dropped, `done` when its text
    * went in.
@@ -321,6 +332,19 @@ export interface SessionOptions extends TextRules {
    * helper started again while the page shows its meter keeps it moving.
    */
   metering?(): boolean;
+}
+
+/**
+ * A dictation's stream on a streaming model (DC-E7), opened at the press: its audio as it records,
+ * its words to the callback it was opened with, and at the release its last words and the whole.
+ */
+export interface WordStream {
+  /** False once it could not open or died: the preview decodes again instead. */
+  ok(): boolean;
+  push(samples: Float32Array): void;
+  /** Its last words flushed, and every word as a decode; the engine of `dictation.final` `live`. */
+  finish(): Promise<EngineDecoded>;
+  cancel(): void;
 }
 
 /**
@@ -457,6 +481,8 @@ interface Listening {
   /** Where the audio decoded again for the preview starts, and the settled words before it. */
   previewFrom: number;
   previewKept: string;
+  /** The stream on a streaming model opened at the press (DC-E7), or null. */
+  stream: WordStream | null;
   /** The language the pill's chip forced for this session, else null (akou-5v8). */
   language: string | null;
   /** The per-app rule for the app captured at the press (DC-U9), or null. */
@@ -735,7 +761,10 @@ export class DictationSession {
         if (this.cur?.end) this.ended(this.cur);
         // A start with no end before it (a helper that restarted or misbehaved): the old session
         // is dropped, and so is the request it opened, rather than left open on the remote.
-        else this.cur?.hold?.request.cancel();
+        else {
+          this.cur?.hold?.request.cancel();
+          this.cur?.stream?.cancel();
+        }
         const door = this.o.now() - this.doorAt <= DOOR_MS;
         this.doorAt = Number.NEGATIVE_INFINITY;
         const chosen = door ? this.doorLanguage : null;
@@ -762,10 +791,12 @@ export class DictationSession {
           previewing: false,
           previewFrom: 0,
           previewKept: "",
+          stream: null,
           language: chosen,
           rule,
         };
         this.cur = c;
+        c.stream = this.openStream(c);
         const early = this.early.chunks;
         this.early = { chunks: [], samples: 0 };
         this.set("listening");
@@ -920,8 +951,10 @@ export class DictationSession {
     c.chunks.push(samples);
     c.samples += samples.length;
     c.hold?.request.push(samples);
+    // Until the release the stream hears everything, the post-roll included.
+    c.stream?.push(samples);
     if (c.end || c.stopping) return;
-    this.previewTick(c);
+    if (!c.stream?.ok()) this.previewTick(c);
     const a = this.o.autoStop?.();
     if (!a) return;
     const limit = a.maxMinutes * 60 * CAPTURE_RATE;
@@ -1000,6 +1033,23 @@ export class DictationSession {
     if (end - c.heard >= silenceSeconds * CAPTURE_RATE) this.stopBy(c, "silence");
   }
 
+  /**
+   * The session's stream on a streaming model (DC-E7), whose words go out as partials while it
+   * still listens; none for a password field (DC-N8), and none when a stream cannot be had.
+   */
+  private openStream(c: Listening): WordStream | null {
+    if (c.secure || !this.o.stream) return null;
+    try {
+      return this.o.stream((text) => {
+        if (this.cur !== c || c.end || c.stopping) return;
+        this.o.onPartial?.({ text, language: null });
+      });
+    } catch (err) {
+      this.o.onLog?.("warn", `dictation: no live words: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   /** Asks the helper to end the session (DC-A3); its audio is transcribed as for a tap. */
   private stopBy(c: Listening, why: "silence" | "max"): void {
     c.stopping = why;
@@ -1015,6 +1065,7 @@ export class DictationSession {
     this.early = { chunks: [], samples: 0 };
     if (c?.end) clearTimeout(c.end.timer);
     c?.hold?.request.cancel();
+    c?.stream?.cancel();
     if (c) {
       const id = newDictationId(this.o.now());
       this.write({ type: "dictation.started", id, target: c.target, engine: "auto", by: "user" });
@@ -1063,6 +1114,21 @@ export class DictationSession {
       seconds,
       ...(c.warned !== null ? { warned: c.warned } : {}),
     });
+    // `dictation.final` `live`: the stream's own words are the text, flushed now; any other engine
+    // decodes the buffer, and the stream is done.
+    const stream = c.stream;
+    if (engine?.name === "live" && stream?.ok() && !c.hold) {
+      c.hold = {
+        engine,
+        request: {
+          push: () => {},
+          // A stream that died at the release: the engine decodes the buffer itself instead.
+          decode: (samples) => stream.finish().catch(() => engine.decode(samples, {})),
+          cancel: () => stream.cancel(),
+        },
+        language: undefined,
+      };
+    } else stream?.cancel();
     if (reason === "cancel" || reason === "stop") {
       c.hold?.request.cancel();
       this.write({ type: "dictation.cancelled", id });
