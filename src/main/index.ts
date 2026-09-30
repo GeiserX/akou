@@ -83,13 +83,16 @@ import {
   type LiveSetupChoice,
   type LiveSetupContext,
   type LiveView,
+  liveModelName,
   liveView,
+  reviewModels,
   setupModels,
 } from "./asr/live-setups.ts";
 import {
   type CallAccess,
   type LineUpgrader,
   LiveAsr,
+  type LiveReview,
   type VocabSource,
 } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
@@ -797,8 +800,13 @@ export class AkouApp implements ApiApp {
     return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
-  /** What the next call's live setup depends on here: the settings, memory and models on disk. */
-  private liveContext(setting?: string): LiveSetupContext {
+  /**
+   * What the next call's live setup depends on here: the settings (or a call's own `live` and
+   * review), memory and models on disk.
+   */
+  private liveContext(
+    ask: { live?: string; review?: { model?: string; everySeconds?: number } } = {},
+  ): LiveSetupContext {
     const s = this.cfg.settings;
     const catalog = this.o.modelRegistry ?? MODELS;
     const plan = this.llamaPlan();
@@ -806,11 +814,12 @@ export class AkouApp implements ApiApp {
       machine: {
         gpu: plan.accelerator !== "cpu",
         memoryGb: this.o.memoryGb ?? totalmem() / 1024 ** 3,
-        gpuBusy: plan.accelerator === "metal" && this.finalHoldsGpu(),
       },
-      setting: setting ?? s["asr.live"],
+      setting: ask.live ?? s["asr.live"],
       engine: s["asr.live.engine"],
       languages: s["asr.languages"],
+      review: ask.review?.model ?? s["asr.review.model"],
+      everySeconds: ask.review?.everySeconds ?? s["asr.review.everySeconds"],
       present: (id) => {
         const m = catalog.find((x) => x.id === id);
         return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
@@ -820,27 +829,33 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * A final pass's Metal llama-server holds the GPU: one that is neither dictation's warm Qwen nor
-   * the in-call upgrade's own.
+   * The live setup a call runs (`asr.live` and `asr.review.*`, or the call's own), only ever one
+   * whose model files are here: its streaming engine, or null for the recognizer's VAD windows,
+   * and its second pass.
    */
-  private finalHoldsGpu(): boolean {
-    const holder = (this.o.metalHolder ?? metalHolder)(
-      this.llamaSpec(QWEN_ASR).build?.dir,
-      this.bestDictation?.pid() ?? null,
+  private liveChoice(callId: string): LiveSetupChoice {
+    const c = this.manager.controller(callId);
+    return chooseLiveSetup(
+      this.liveContext({
+        ...(c?.liveAsked ? { live: c.liveAsked } : {}),
+        ...(c?.reviewAsked ? { review: c.reviewAsked } : {}),
+      }),
     );
-    return holder !== null && holder !== (this.liveQwen?.server.pid() ?? null);
+  }
+
+  /** A call's second pass: Qwen, every interval. */
+  private liveReview(callId: string): LiveReview | null {
+    const r = this.liveRan.get(callId)?.review;
+    if (!r) return null;
+    return {
+      name: liveModelName(QWEN_ASR),
+      reviewer: this.liveUpgrader(),
+      everySeconds: r.everySeconds,
+    };
   }
 
   /**
-   * The live setup a call runs (`asr.live`, or the call's own `live`), only ever one whose model
-   * files are here: its streaming engine, or null for the recognizer's VAD windows.
-   */
-  private liveChoice(setting?: string): LiveSetupChoice {
-    return chooseLiveSetup(this.liveContext(setting));
-  }
-
-  /**
-   * Qwen for a call's in-call upgrade (ASR-7): the server dictation keeps warm when one runs, so
+   * Qwen for a call's second pass (ASR-7): the server dictation keeps warm when one runs, so
    * one Qwen serves both, else one of its own. Its own gives way to a final pass on Metal instead
    * of stopping it: the lines keep the streaming text meanwhile. A request never starts or
    * restarts a server someone else owns or that was let go of: that process would run untracked.
@@ -870,7 +885,7 @@ export class AkouApp implements ApiApp {
           allowed: langs,
           timeoutMs: LIVE_QWEN_TIMEOUT_MS,
           signal: o.signal,
-          log: (level, msg) => this.log(level, `live upgrade: ${msg}`),
+          log: (level, msg) => this.log(level, `second pass: ${msg}`),
         });
         const [only] = langs;
         return qwen.decode({
@@ -882,14 +897,14 @@ export class AkouApp implements ApiApp {
     };
   }
 
-  /** The in-call upgrade's own llama-server for this spec, made on first use. */
+  /** The second pass's own llama-server for this spec, made on first use. */
   private liveQwenServer(spec: LlamaEngineSpec): LlamaServer {
     const key = JSON.stringify(spec);
     if (this.liveQwen?.key === key) return this.liveQwen.server;
     this.stopLiveQwen();
     const server = createLlamaServer(spec, {
       yieldMetal: true,
-      log: (level, msg) => this.log(level, `live upgrade: ${msg}`),
+      log: (level, msg) => this.log(level, `second pass: ${msg}`),
     });
     this.liveQwen = { server, key };
     return server;
@@ -905,7 +920,8 @@ export class AkouApp implements ApiApp {
   liveModels(): LiveView | null {
     if (this.runMode === "server") return null;
     const live = this.manager.live();
-    const running = live ? (this.liveRan.get(live.id)?.setup ?? null) : null;
+    const ran = live ? this.liveRan.get(live.id) : undefined;
+    const running = ran ? { setup: ran.setup, review: ran.review } : null;
     const shelf = this.shelf;
     const ctx = this.liveContext();
     return liveView(ctx, running, (id) =>
@@ -1063,27 +1079,25 @@ export class AkouApp implements ApiApp {
         liveEngine: (callId) => {
           let ran = this.liveRan.get(callId);
           if (!ran) {
-            ran = this.liveChoice(this.manager.controller(callId)?.liveAsked);
+            ran = this.liveChoice(callId);
             this.liveRan.set(callId, ran);
             this.log(
               "info",
-              `asr: call ${callId} runs the ${ran.setup} live setup${ran.choice ? ` (${ran.choice.engine})` : ""}${ran.note ? `: ${ran.note}` : ""}`,
+              `asr: call ${callId} runs the ${ran.setup} live model${ran.choice ? ` (${ran.choice.engine})` : ""}${ran.review ? `, reviewed by ${ran.review.model} every ${ran.review.everySeconds} s` : ""}${ran.note ? `: ${ran.note}` : ""}`,
             );
             // The status names the live call's setup: the window's pill reads it from the push.
             for (const fn of this.statusWatchers) fn();
           }
           // A live model a call loads counts as used, so the sweep keeps it.
           if (ran.choice) {
-            this.shelf?.touch(
-              ran.setup === "upgrade"
-                ? setupModels("upgrade", this.liveContext())
-                : [ran.choice.engine],
-            );
+            this.shelf?.touch([
+              ran.choice.engine,
+              ...(ran.review ? reviewModels(ran.review.model, this.liveContext()) : []),
+            ]);
           }
           return ran.choice;
         },
-        upgrade: (callId) =>
-          this.liveRan.get(callId)?.setup === "upgrade" ? this.liveUpgrader() : null,
+        review: (callId) => this.liveReview(callId),
         ...(this.o.liveReviewEveryMs ? { reviewEveryMs: this.o.liveReviewEveryMs } : {}),
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
@@ -1127,11 +1141,12 @@ export class AkouApp implements ApiApp {
     if (e.type === "final.done") queueMicrotask(() => void this.reEnhance(id));
     if (e.type === "call.ended") {
       this.levelsByCall.delete(id);
-      // The final pass takes the GPU next; a later call that upgrades starts Qwen again. A call
-      // that started while this one was stopping and upgrades too keeps it.
+      // The final pass takes the GPU next; a later call Qwen reviews starts it again. A call that
+      // started while this one was stopping and has Qwen's review too keeps it.
       const next = this.manager.live();
-      const nextUpgrades = next && next.id !== id && this.liveRan.get(next.id)?.setup === "upgrade";
-      if (this.liveRan.get(id)?.setup === "upgrade" && !nextUpgrades) this.stopLiveQwen();
+      const qwen = (call: string) => this.liveRan.get(call)?.review?.model === "qwen";
+      const nextKeeps = next && next.id !== id && qwen(next.id);
+      if (qwen(id) && !nextKeeps) this.stopLiveQwen();
       // After the event is out, so the pass starts from a log that has it.
       queueMicrotask(() => this.finalAtEnd(id));
     }
@@ -1770,8 +1785,8 @@ export class AkouApp implements ApiApp {
   takesWords(id: string): boolean {
     const beam = this.runningDecoding() === "beam";
     if (this.manager.live()?.id !== id) return beam;
-    const setup = this.liveRan.get(id)?.setup;
-    return setup === "upgrade" || (setup === "parakeet" && beam);
+    const ran = this.liveRan.get(id);
+    return ran?.review?.model === "qwen" || (beam && ran?.setup === "parakeet");
   }
 
   /** What the API key is saved in: the Keychain, or null for the config file. */
@@ -2097,9 +2112,11 @@ export class AkouApp implements ApiApp {
             parts: live.view.parts().length,
             health: live.view.health().map((h) => ({ ch: h.ch, state: h.state, detail: h.detail })),
             lag: live.view.asrLag?.seconds ?? 0,
-            // The live setup and streaming engine this call runs; null before audio reaches the recognizer.
+            // The live model, streaming engine and second pass this call runs; null before audio
+            // reaches the recognizer.
             setup: this.liveRan.get(live.id)?.setup ?? null,
             engine: this.liveRan.get(live.id)?.choice?.engine ?? null,
+            review: this.liveRan.get(live.id)?.review ?? null,
             levels: this.levels(live.id),
           }
         : null,
@@ -2899,7 +2916,11 @@ export class AkouApp implements ApiApp {
     if (jobs) return jobs.held();
     if (this.givenRecognizer()) return { defaults: new Set(), inUse: new Set() };
     const ctx = this.liveContext();
-    const live = setupModels(chooseLiveSetup(ctx).setup, ctx);
+    const next = chooseLiveSetup(ctx);
+    const live = [
+      ...setupModels(next.setup, ctx),
+      ...(next.review ? reviewModels(next.review.model, ctx) : []),
+    ];
     return {
       defaults: new Set([...this.registry().map((m) => m.id), ...live]),
       inUse:

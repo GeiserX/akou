@@ -138,6 +138,8 @@ describe("the Settings page", () => {
           els.map((e) => (e as HTMLElement).dataset.key as string),
         );
         if (await page.$("#page-models input[name='models-live']")) onModels.push("asr.live");
+        if (await page.$("#page-models input[name='models-review']"))
+          onModels.push("asr.review.model");
         if (await page.$("#page-models input[name='models-speakers']"))
           onModels.push("asr.diarizer");
         expect(MODELS_KEYS.filter((k) => !onModels.includes(k))).toEqual([]);

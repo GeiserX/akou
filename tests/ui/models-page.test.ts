@@ -123,12 +123,15 @@ describe("the Models page", () => {
   );
 
   test(
-    "the live transcript: five choices, Automatic chosen and marked, Voxtral listed and unavailable",
+    "the live transcript: four choices by model name, Automatic chosen and marked, Voxtral listed and unavailable; the second pass Off, with Qwen one download away",
     async () => {
       const ids = await page.$$eval(`${LIVE} [data-setup]`, (els) =>
         els.map((e) => (e as HTMLElement).dataset.setup),
       );
-      expect(ids).toEqual(["auto", "nemotron", "parakeet", "upgrade", "voxtral"]);
+      expect(ids).toEqual(["auto", "nemotron", "parakeet", "voxtral"]);
+      expect(await page.textContent(`${LIVE} [data-setup="nemotron"] .pg-name`)).toBe(
+        "Nemotron English",
+      );
       expect(await page.isChecked(`${LIVE} input[value="auto"]`)).toBe(true);
       expect(await page.textContent(`${LIVE} [data-setup="auto"] .pg-name`)).toBe(
         "Automatic (default)",
@@ -137,15 +140,21 @@ describe("the Models page", () => {
       // No streaming model yet: Automatic runs Parakeet, and Nemotron is one Download away.
       expect(await marked()).toEqual(["auto"]);
       expect(await page.textContent(`${LIVE} [data-setup="auto"]`)).toContain(
-        "Uses Parakeet until Nemotron is on",
+        "Uses Parakeet until Nemotron English is on",
       );
       expect(await page.getAttribute(`${LIVE} [data-setup="nemotron"]`, "data-state")).toBe(
         "missing",
       );
-      // The upgrade needs Qwen, and says so.
-      // The upgrade needs Qwen, and says only that until it is here.
-      const upgrade = (await page.textContent(`${LIVE} [data-setup="upgrade"] .pg-help`)) ?? "";
-      expect(upgrade).toMatch(/^Needs .*Qwen3-ASR 1\.7B\.$/);
+      // The second pass: Off by default; Qwen needs its model, and says only that until it is here.
+      const REVIEW = "#models-review";
+      const choices = await page.$$eval(`${REVIEW} [data-review]`, (els) =>
+        els.map((e) => (e as HTMLElement).dataset.review),
+      );
+      expect(choices).toEqual(["none", "qwen"]);
+      expect(await page.isChecked(`${REVIEW} input[value="none"]`)).toBe(true);
+      const qwen = (await page.textContent(`${REVIEW} [data-review="qwen"] .pg-help`)) ?? "";
+      expect(qwen).toMatch(/^Needs .*Qwen3-ASR 1\.7B\.$/);
+      expect(await page.inputValue("#models-review-every")).toBe("60");
     },
     UI_TIMEOUT,
   );
@@ -174,7 +183,7 @@ describe("the Models page", () => {
   );
 
   test(
-    "Download moves Automatic to Nemotron; a pick saves the setting and the mark follows it",
+    "Download moves Automatic to Nemotron; a pick saves the setting and the mark follows it; the second pass and its interval save their keys",
     async () => {
       const nemotron = `${LIVE} [data-setup="nemotron"]`;
       await page.click(`${nemotron} [data-action="download"]`);
@@ -193,6 +202,33 @@ describe("the Models page", () => {
       await page.click(`${LIVE} [data-setup="auto"] .pg-name`);
       await until(async () => (await setting("asr.live")) === "auto", 5000, "asr.live back");
       await until(async () => (await marked()).join() === "auto", 5000, "the mark back");
+      patches.length = 0;
+      await page.click('#models-review [data-review="qwen"] .pg-name');
+      await until(
+        async () => (await setting("asr.review.model")) === "qwen",
+        5000,
+        "asr.review.model",
+      );
+      await page.selectOption("#models-review-every", "300");
+      await until(
+        async () => (await setting("asr.review.everySeconds")) === 300,
+        5000,
+        "asr.review.everySeconds",
+      );
+      expect(patches).toEqual([{ "asr.review.model": "qwen" }, { "asr.review.everySeconds": 300 }]);
+      // An interval set elsewhere (10 min from the CLI) shows as itself in the list.
+      await rig.api("PATCH", "/config", { "asr.review.everySeconds": 600 });
+      await page.click("#calls-open");
+      await page.click("#models-open");
+      await page.waitForSelector("#models-review-every");
+      expect(await page.inputValue("#models-review-every")).toBe("600");
+      expect(await page.textContent('#models-review-every option[value="600"]')).toBe(
+        "Every 10 min",
+      );
+      await rig.api("PATCH", "/config", {
+        "asr.review.model": "none",
+        "asr.review.everySeconds": 60,
+      });
     },
     UI_TIMEOUT,
   );

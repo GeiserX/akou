@@ -26,10 +26,29 @@ import { build, wordKey } from "./rover.ts";
 
 /** The longest utterance the upgrade decodes, seconds: the final pass's longest span. */
 export const UTTERANCE_MAX_SECONDS = 30;
-/** How often Qwen reviews the utterances closed since its last review, seconds. */
+/**
+ * How often the second pass reviews the utterances closed since its last review, seconds: the
+ * default of `asr.review.everySeconds`, and its bounds.
+ */
 export const REVIEW_EVERY_SECONDS = 60;
-/** The most audio one review request carries, seconds; more goes in the next request. */
+export const REVIEW_EVERY_MIN = 30;
+export const REVIEW_EVERY_MAX = 600;
+/** The most audio one review request carries at the default interval, seconds. */
 export const REVIEW_CAP_SECONDS = 90;
+/**
+ * The most audio one request carries at any interval, seconds: a longer interval sends more
+ * requests, never a longer one, so each still finishes well inside `LIVE_QWEN_TIMEOUT_MS`.
+ */
+export const REVIEW_CAP_MAX_SECONDS = 180;
+
+/**
+ * The audio cap of one request for a review every `everySeconds`: an interval and a half, so an
+ * interval of speech with no pause goes in one request (90 s at the default minute), and never
+ * more than `REVIEW_CAP_MAX_SECONDS`.
+ */
+export function reviewCap(everySeconds: number): number {
+  return Math.min(REVIEW_CAP_MAX_SECONDS, Math.round(everySeconds * 1.5));
+}
 /** Silence between two utterances in one request, seconds, so their words do not run together. */
 export const REVIEW_GAP_SECONDS = 0.2;
 
