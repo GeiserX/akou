@@ -122,21 +122,32 @@ function alive(pid: number): boolean {
   }
 }
 
+// `auto` picks by the machine under `dictation.final` `parakeet`; the default, `live`, is DC-E7's.
 describe("DC-E3: auto on this machine", () => {
   test("a Metal accelerator with Qwen on disk: auto is best, and GET /v1/dictation says why", async () => {
-    const { r } = await rig({ "asr.accelerator": "metal" }, { qwen: true });
+    const { r } = await rig(
+      { "asr.accelerator": "metal", "dictation.final": "parakeet" },
+      { qwen: true },
+    );
     const st = (await r.api("GET", "/dictation")).body;
     expect(st).toMatchObject({ engine: "best", verdict: "best on metal", loading: false });
   });
 
   test("on the CPU, auto is fast", async () => {
-    const { r } = await rig({ "asr.accelerator": "cpu" }, { qwen: true });
+    const { r } = await rig(
+      { "asr.accelerator": "cpu", "dictation.final": "parakeet" },
+      { qwen: true },
+    );
     const st = (await r.api("GET", "/dictation")).body;
     expect(st).toMatchObject({ engine: "fast", verdict: "fast: best needs a GPU" });
   });
 
   test("a GPU with Qwen missing: fast, and nothing is downloaded", async () => {
-    const x = await rig({ "asr.accelerator": "metal", "dictation.enabled": true });
+    const x = await rig({
+      "asr.accelerator": "metal",
+      "dictation.final": "parakeet",
+      "dictation.enabled": true,
+    });
     const st = (await x.r.api("GET", "/dictation")).body;
     expect(st).toMatchObject({
       engine: "fast",

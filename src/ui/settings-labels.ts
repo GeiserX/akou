@@ -356,6 +356,14 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["remote", "Another computer running akou"],
     ],
   },
+  "dictation.final": {
+    label: "Text that gets inserted",
+    choices: [
+      ["live", "Same as the live words"],
+      ["parakeet", "Parakeet"],
+      ["qwen", "Qwen3-ASR"],
+    ],
+  },
   "dictation.remote.url": { label: "Address", empty: "https://" },
   "dictation.remote.key": { label: "Key", empty: "Not set" },
   "dictation.remote.fallback": {

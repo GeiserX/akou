@@ -73,6 +73,11 @@ export interface RigOptions {
   openExternal?: (url: string) => Promise<boolean>;
   /** The app's clock; tests that need minutes to pass move a real clock forward. */
   clock?: Clock;
+  /**
+   * False: the recognizer runs on its own Worker, as in the app, so a slow model load holds only
+   * that thread. Default true: in the test's thread.
+   */
+  asrInThread?: boolean;
   /** The file jobs' seams (server mode): the webhook schedule and network. */
   jobs?: AppOptions["jobs"];
   /** The capture engine, instead of the helper `capture.helper` names. */
@@ -137,7 +142,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
         ? o.models
         : { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
     modelRegistry: o.modelRegistry,
-    asrInThread: true,
+    asrInThread: o.asrInThread ?? true,
     finalAudio: o.finalAudio,
     guard: o.guard,
     provider: o.provider,

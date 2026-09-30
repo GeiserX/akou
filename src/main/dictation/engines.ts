@@ -8,9 +8,39 @@
  * - `best` gives way while another Metal llama-server holds the GPU (a call's final pass): only one
  *   fits, and its start would fail, so a press goes straight to `fast` and says why (DC-E2).
  * - `fast` and `remote` are what they say; `remote` never needs a local model.
+ * - `dictation.final` (DC-E7) names the text a local dictation inserts while `dictation.engine` is
+ *   `auto`: `live`, the default and the fastest, is the streaming model's own words (`live`), with
+ *   Parakeet in its place while no streaming model is downloaded; `qwen` is `best` (downloaded as
+ *   `best` is); `parakeet` is `auto` as above, the behaviour before this key. `fast`, `best` and `remote` in
+ *   `dictation.engine` win. The Dictation page writes both keys, so what it shows is what runs, and
+ *   `GET /v1/dictation` names the result as `final`. This is the one rule the page, the API and the
+ *   CLI read.
  */
 
-export type DictationEngineName = "fast" | "best" | "remote";
+export type DictationEngineName = "fast" | "best" | "remote" | "live";
+
+/** The values of `dictation.final`: the text a local dictation inserts (DC-E7). */
+export const DICTATION_FINALS = ["parakeet", "live", "qwen"] as const;
+export type DictationFinal = (typeof DICTATION_FINALS)[number];
+
+/** `dictation.final` as `GET /v1/dictation` names what is inserted now, from the engine used. */
+export function finalOf(engine: string | null): DictationFinal | "remote" | null {
+  return engine === "fast"
+    ? "parakeet"
+    : engine === "best"
+      ? "qwen"
+      : engine === "live"
+        ? "live"
+        : engine === "remote"
+          ? "remote"
+          : null;
+}
+
+/** The pill's line when the streaming model failed at the release and Parakeet decoded instead. */
+export const LIVE_FAILED = "live words failed, used fast";
+
+/** The verdict while `live` is asked for and no streaming model is downloaded. */
+export const LIVE_MISSING_VERDICT = "fast: no streaming model is downloaded for live";
 
 export interface EngineVerdict {
   /** The engine a dictation decodes on now. */
@@ -37,6 +67,10 @@ export function resolveDictationEngine(o: {
   bestReady: boolean;
   /** Another Metal llama-server holds the GPU now, one `best` would have to give way to. */
   gpuBusy?: boolean;
+  /** `dictation.final`, which decides while `setting` is `auto`; absent, `auto` picks as before. */
+  final?: string;
+  /** A streaming model for the dictation's languages is downloaded (DC-E7). */
+  liveReady?: boolean;
 }): EngineVerdict {
   const plain = (engine: DictationEngineName, verdict: string): EngineVerdict => ({
     engine,
@@ -55,7 +89,23 @@ export function resolveDictationEngine(o: {
           yielding: true,
         }
       : plain("best", `best on ${o.accelerator}`);
-  switch (o.setting) {
+  const setting =
+    o.setting === "auto" && (o.final === "qwen" || o.final === "live")
+      ? o.final === "qwen"
+        ? "best"
+        : "live"
+      : o.setting;
+  switch (setting) {
+    case "live":
+      return o.liveReady
+        ? plain("live", "live")
+        : {
+            engine: "fast",
+            verdict: LIVE_MISSING_VERDICT,
+            download: false,
+            wanted: "live",
+            yielding: false,
+          };
     case "remote":
       return plain("remote", "remote");
     case "fast":

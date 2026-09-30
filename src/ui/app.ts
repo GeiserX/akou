@@ -270,6 +270,7 @@ class App {
     // Words and History are pages under Dictation, reached from its rows and by their links.
     const dictation = new DictationPage(t, "app", {
       runSetup,
+      openModels: () => void this.pages.show("models"),
       words: new DictationDictionary(t, () => this.view()?.call?.workspace),
       history: new DictationHistory(t),
     });

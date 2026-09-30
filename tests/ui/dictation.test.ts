@@ -1588,6 +1588,70 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
+    "[DC-E7] the engine section: the words while you speak, and the text inserted, in plain words",
+    async () => {
+      // No streaming model: the default, live, inserts through Parakeet, and the page says so.
+      const w = await windowPage(rig, { platform: "darwin", final: "parakeet" });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-live-words");
+        // No streaming model: Parakeet names the words, and Get leads to Models.
+        expect(await text(p, "#dictation-live-model")).toBe("Parakeet, refreshed twice a second");
+        const choices = () =>
+          p.$$eval("#page-dictation label.pg-choice[data-final]", (l) =>
+            l.map((x) => ({
+              value: (x as HTMLElement).dataset.final,
+              name: x.querySelector(".pg-name")?.textContent,
+              checked: (x.querySelector("input") as HTMLInputElement).checked,
+              help: x.querySelector(".pg-help")?.textContent ?? "",
+            })),
+          );
+        const got = await choices();
+        expect(got.map((c) => [c.value, c.name, c.checked])).toEqual([
+          ["live", "Same as the live words (default)", false],
+          ["parakeet", "Parakeet", true],
+          ["qwen", "Qwen3-ASR", false],
+        ]);
+        for (const c of got) expect(c.help.length).toBeGreaterThan(10);
+        // No config key, model id or setting value is visible text.
+        const words = (await p.textContent("#page-dictation section[data-section='Engine']")) ?? "";
+        expect(words).not.toMatch(/dictation\.|nemotron-|parakeet-tdt|\bfinal\b|\bauto\b/);
+        // A pick saves the text inserted with the engine that runs it, so the two never disagree.
+        await p.click("#page-dictation label.pg-choice[data-final='live']");
+        await until(() => w.patches.length === 1, 5000, "the pick saved");
+        expect(w.patches).toEqual([{ "dictation.final": "live", "dictation.engine": "auto" }]);
+        await p.click("#page-dictation label.pg-choice[data-final='qwen']");
+        await until(() => w.patches.length === 2, 5000, "the second pick saved");
+        expect(w.patches.at(-1)).toEqual({ "dictation.final": "qwen", "dictation.engine": "best" });
+        await p.click("#dictation-live-get");
+        await p.waitForSelector("#page-models", { state: "visible" });
+      } finally {
+        await w.close();
+      }
+      // A streaming model on disk names the words, and the choice checked is what runs now.
+      const m = await windowPage(rig, {
+        platform: "darwin",
+        live: "nemotron-3.5-560",
+        final: "live",
+      });
+      try {
+        const p = m.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-live-words");
+        expect(await text(p, "#dictation-live-model")).toBe("Nemotron streaming, many languages");
+        expect(await p.$("#dictation-live-get")).toBeNull();
+        expect(await p.isChecked("#page-dictation label.pg-choice[data-final='live'] input")).toBe(
+          true,
+        );
+      } finally {
+        await m.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "in the window: another computer waits for its address, then turns on; off, the engine is local again; the AI tidy shows its instructions",
     async () => {
       const w = await windowPage(rig, {
@@ -1616,16 +1680,17 @@ describe("DC-U1: the Dictation page in the window", () => {
           { "dictation.remote.url": "https://studio.example" },
           { "dictation.engine": "remote" },
         ]);
-        // While it is on, the speed choice rests, and says why.
-        await p.waitForFunction(() =>
-          [
+        // While it is on, the choice of the text inserted rests, and says why.
+        await p.waitForFunction(() => {
+          const radios = [
             ...document.querySelectorAll<HTMLInputElement>(
-              "#page-dictation div.pg-row[data-key='dictation.engine'] input[type=radio]",
+              "#page-dictation label.pg-choice[data-final] input.pg-radio",
             ),
-          ].every((r) => r.disabled),
-        );
+          ];
+          return radios.length === 3 && radios.every((r) => r.disabled);
+        });
         expect(
-          await text(p, "#page-dictation div.pg-row[data-key='dictation.engine'] .pg-help"),
+          await text(p, "#page-dictation div.pg-row[data-key='dictation.final'] .pg-help"),
         ).toBe("The other computer turns your voice into text while it is on.");
         expect(await p.isChecked("#dictation-remote-on")).toBe(true);
         // Off: the engine is the local choice again, and the rows go.

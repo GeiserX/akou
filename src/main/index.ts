@@ -78,6 +78,7 @@ import {
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
+import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import {
   chooseLiveSetup,
   type LiveSetupChoice,
@@ -148,14 +149,16 @@ import { SystemCuePlayer } from "./dictation/cues.ts";
 import {
   dictationLanguages,
   type EngineVerdict,
+  LIVE_FAILED,
   resolveDictationEngine,
 } from "./dictation/engines.ts";
 import { formatPass } from "./dictation/format.ts";
+import { LiveWords, liveDecode, type OpenStream } from "./dictation/live.ts";
 import type { Bindings, InsertMethod, SendKey } from "./dictation/protocol.ts";
 import { loadPunctuation } from "./dictation/punctuation.ts";
 import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
-import type { DictationEngine } from "./dictation/session.ts";
+import type { DictationEngine, WordStream } from "./dictation/session.ts";
 import { correctDictation, knowsPair, learnPair, unlearnPair } from "./dictation/vocab.ts";
 import { type ExportResult, exportCall } from "./handoff/export.ts";
 import {
@@ -242,6 +245,9 @@ export const LIVE_QWEN_TIMEOUT_MS = 60_000;
  */
 const WARM_KEYS = [
   "dictation.engine",
+  "dictation.final",
+  "dictation.languages",
+  "asr.languages",
   "asr.accelerator",
   "asr.llamaServer",
   "asr.modelsDir",
@@ -591,6 +597,8 @@ export class AkouApp implements ApiApp {
   private remoteDictation: RemoteEngine | null = null;
   /** The `best` dictation engine: Qwen's llama-server kept warm while dictation is on (DC-E2). */
   private bestDictation: BestEngine | null = null;
+  /** Warm-ups of a dictation's models on the live Worker still running (DC-E7). */
+  private dictationWarming = 0;
   /** The next look at whether `best` may be warmed again, while it gives way to the GPU's holder. */
   private bestRewarm: unknown = null;
   /**
@@ -1106,6 +1114,8 @@ export class AkouApp implements ApiApp {
     );
     this.asr = asr;
     this.asrState = { state: "loading" };
+    // Dictation's models load first: the Worker runs this right after its start (DC-E7).
+    this.warmDictationModels();
     asr.ready.then(
       () => {
         this.asrState = { state: "ready" };
@@ -2480,6 +2490,8 @@ export class AkouApp implements ApiApp {
       engine: (name) => this.dictationEngine(name),
       verdict: () => this.dictationVerdict().verdict,
       loading: () => this.dictationLoading(),
+      stream: (onText) => this.dictationStream(onText),
+      liveModel: () => (this.asr ? (this.dictationStreamChoice()?.engine ?? null) : null),
       language: () => {
         const l = this.cfg.settings["dictation.language"];
         return l === "auto" ? undefined : l;
@@ -2616,6 +2628,7 @@ export class AkouApp implements ApiApp {
     const out: string[] = [];
     if (this.fastEngine()) out.push("fast");
     if (this.bestRuns(this.llamaPlan())) out.push("best");
+    if (this.asr && this.dictationStreamChoice()) out.push("live");
     if (this.cfg.settings["dictation.remote.url"].trim() !== "") out.push("remote");
     return out;
   }
@@ -2667,7 +2680,77 @@ export class AkouApp implements ApiApp {
       accelerator: plan.accelerator,
       bestReady,
       gpuBusy: bestReady && plan.accelerator === "metal" && this.metalBusy(),
+      // Only the setting's own `auto` defers to `dictation.final`; a per-app rule's `auto` too.
+      final: this.cfg.settings["dictation.final"],
+      liveReady: this.asr !== null && this.dictationStreamChoice() !== null,
     });
+  }
+
+  /** The languages a dictation may be in: `dictation.languages`, else `asr.languages`. */
+  private dictationLangs(): readonly string[] {
+    const s = this.cfg.settings;
+    return dictationLanguages(s["dictation.languages"], s["asr.languages"]);
+  }
+
+  /**
+   * The streaming model a dictation's words come from (DC-E7): the one its languages ask for, the
+   * way a call picks under `asr.live.engine` `auto`, and only one on disk; null with none.
+   */
+  private dictationStreamChoice(): LiveChoice | null {
+    return chooseLiveEngine("auto", this.dictationLangs(), this.liveContext().present).choice;
+  }
+
+  /** Opens a dictation's stream on the live Worker for `choice` (DC-E7). */
+  private openDictationStream(asr: LiveAsr, choice: LiveChoice): OpenStream {
+    return (onWords) => {
+      const s = asr.openDictation(choice, this.dictationLangs(), onWords);
+      // A streaming model a dictation uses counts as used, so the sweep keeps it.
+      void s.opened.then((c) => this.shelf?.touch([c.engine])).catch(() => {});
+      return s;
+    };
+  }
+
+  /**
+   * A session's stream on the streaming model (DC-E7), or null: no model for its languages on disk,
+   * or no recognizer.
+   */
+  private dictationStream(onText: (text: string) => void): WordStream | null {
+    const asr = this.asr;
+    const choice = this.dictationStreamChoice();
+    if (!asr || !choice || this.asrState.state === "unavailable") return null;
+    return new LiveWords(this.openDictationStream(asr, choice), onText, {
+      onLog: (msg) => this.log("info", msg),
+    });
+  }
+
+  /**
+   * `live` (DC-E7): the streaming model's words. A dictation whose stream ran inserts its words at
+   * the release (the session's hold); this decodes a buffer that had none, by streaming it whole,
+   * and falls back to `fast` when the stream fails.
+   */
+  private liveEngine(): DictationEngine | null {
+    const asr = this.asr;
+    const choice = this.dictationStreamChoice();
+    if (!asr || !choice) return this.fastEngine();
+    const open = this.openDictationStream(asr, choice);
+    return {
+      name: "live",
+      decode: async (samples, o) => {
+        try {
+          return await liveDecode(open, samples);
+        } catch (err) {
+          const fast = this.fastEngine();
+          if (!fast) throw err;
+          this.log("warn", `dictation live: ${(err as Error).message}; decoding with fast`);
+          return {
+            ...(await fast.decode(samples, o)),
+            engine: "fast",
+            fallback_from: "live",
+            notice: LIVE_FAILED,
+          };
+        }
+      },
+    };
   }
 
   /** Whether another Metal llama-server (a final pass) holds the GPU `best` would need. */
@@ -2696,11 +2779,37 @@ export class AkouApp implements ApiApp {
     });
   }
 
-  /** Whether the engine a press decodes on is loading its model now. */
+  /**
+   * Whether the engine a press decodes on is loading its model now: the pill then says so at the
+   * release, and the press is decoded once it is loaded, never dropped.
+   */
   private dictationLoading(): boolean {
     const v = this.dictationVerdict();
     if (v.engine === "best") return this.bestDictation?.loading() ?? false;
-    return v.engine === "fast" && this.asrState.state === "loading";
+    return (
+      (v.engine === "fast" || v.engine === "live") &&
+      (this.asrState.state === "loading" || this.dictationWarming > 0)
+    );
+  }
+
+  /**
+   * Loads what the next dictation needs on the live Worker (DC-E7): Parakeet, the dictation VAD,
+   * and the streaming model its words come from, so the first press after launch waits for none of
+   * them. Runs when the recognizer starts, ahead of anything else on its Worker, and again whenever
+   * dictation warms (turned on, a model landed, a language changed); a loaded model stays loaded.
+   */
+  private warmDictationModels(): void {
+    const asr = this.asr;
+    const s = this.cfg.settings;
+    if (!asr || this.quitting || !s["dictation.enabled"] || s["dictation.engine"] === "remote")
+      return;
+    this.dictationWarming++;
+    asr
+      .warmDictation(this.dictationStreamChoice())
+      .catch((err: Error) => this.log("warn", `dictation: models not loaded ahead: ${err.message}`))
+      .finally(() => {
+        this.dictationWarming--;
+      });
   }
 
   /**
@@ -2764,6 +2873,7 @@ export class AkouApp implements ApiApp {
     if (this.quitting) return;
     const v = this.dictationVerdict();
     if (v.download) this.fetchQwen();
+    this.warmDictationModels();
     if (v.engine === "best") this.best().warm();
     else void this.bestDictation?.stop();
     // Giving way to a final pass on Metal: warmed once the pass is over.
@@ -2793,6 +2903,7 @@ export class AkouApp implements ApiApp {
   private dictationEngine(name?: string): DictationEngine | null {
     const v = this.dictationVerdict(name);
     if (v.engine === "best") return this.best();
+    if (v.engine === "live") return this.liveEngine();
     if (v.engine === "fast") {
       const fast = this.fastEngine();
       if (!fast || v.wanted === null) return fast;
@@ -2802,7 +2913,8 @@ export class AkouApp implements ApiApp {
           ...(await fast.decode(samples, o)),
           engine: fast.name,
           fallback_from: v.wanted as string,
-          notice: v.verdict,
+          // `live` with no streaming model says so on the Dictation page, not on every insert.
+          ...(v.wanted === "live" ? {} : { notice: v.verdict }),
         }),
       };
     }
