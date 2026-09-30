@@ -201,6 +201,11 @@ describe("[ASR-7] the second pass the next call runs", () => {
       null,
       expect.stringContaining("name this call's languages in Settings"),
     ]);
+    // Any language, but the live model hears English only: every utterance is English.
+    expect(
+      chooseLiveSetup(ctx({ on, review: "parakeet", languages: [], engine: "nemotron-en-560" }))
+        .review?.model,
+    ).toBe("parakeet");
     // Qwen hears them all: the same call reviews with it.
     expect(
       chooseLiveSetup(ctx({ on, review: "qwen", languages: ["ja"], engine: "nemotron-3.5-560" }))

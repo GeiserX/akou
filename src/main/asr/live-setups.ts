@@ -31,6 +31,7 @@ import {
   chooseLiveEngine,
   engineForLanguages,
   isLiveEngine,
+  LIVE_ENGINES,
   type LiveChoice,
 } from "./live-engines.ts";
 import { liveModelName } from "./live-names.ts";
@@ -308,7 +309,8 @@ export function qwenRoom(c: LiveSetupContext): string | null {
  * reviews Nemotron's lines, so the live model must be Nemotron; and Parakeet hears 25 European
  * languages, so every one of the call's languages must be among them. An empty `asr.languages`
  * (any language) blocks Parakeet too: the streaming Nemotron gives no language per utterance, so
- * nothing tells which utterances Parakeet could hear.
+ * nothing tells which utterances Parakeet could hear. A live model that hears one language only
+ * (Nemotron English) answers that: every utterance is in its language.
  */
 export function reviewCannot(
   id: Reviewer,
@@ -320,9 +322,12 @@ export function reviewCannot(
       ? "Parakeet already writes the live lines."
       : "It reviews Nemotron's lines; the live model is Parakeet.";
   if (id === "parakeet") {
-    if (c.languages.length === 0)
+    const only = isLiveEngine(c.engine) ? LIVE_ENGINES[c.engine] : null;
+    const languages =
+      c.languages.length === 0 && only && !only.multilingual ? only.languages : c.languages;
+    if (languages.length === 0)
       return "Parakeet hears 25 European languages; name this call's languages in Settings to use it.";
-    const out = c.languages.filter((l) => !PARAKEET_LANGUAGES.includes(l));
+    const out = languages.filter((l) => !PARAKEET_LANGUAGES.includes(l));
     if (out.length > 0) return `Parakeet does not hear ${out.join(", ")}.`;
   }
   return null;
