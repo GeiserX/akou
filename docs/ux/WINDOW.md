@@ -483,7 +483,7 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 |---|---|---|---|---|---|
 | W16.1 | English and Spanish catalogs; every UI string from the catalog | P1 | Spanish is a first-target language; audit: all strings hard-coded English | A test fails if a key exists in one catalog and not the other, and a lint check fails on a string literal assigned to `textContent`, `title` or `aria-label` outside the catalog | missing |
 | W16.2 | Locale-aware dates and times (no fixed `en-CA`/`en-GB`) | P1 | Audit | With `es`, the call list shows "25 sept 2026" and a wall time in the locale's format; the CLI keeps its own format | missing |
-| W16.3 | Consent reminder and notice text in both languages. The window no longer shows a consent reminder, so there is no notice to translate. We dropped it on 2026-09-30: a row on every start that had to be dismissed each time was noise, and telling the others stays the user's job (the akou skill still reminds the user once) | P1 | REQ F3.8 | Starting a call from the window shows no reminder row (`tests/ui/window.test.ts` "the confirm bar") | dropped |
+| W16.3 | Consent reminder and notice text in both languages. The window no longer shows a consent reminder, so there is no notice to translate. We dropped it on 2026-09-30: a row on every start that had to be dismissed each time was noise, and telling the others stays the user's job. The akou skill no longer reminds the user either | P1 | REQ F3.8 | Starting a call from the window shows no reminder row (`tests/ui/window.test.ts` "the confirm bar") | dropped |
 
 ## 17. Loading, empty and error states
 
