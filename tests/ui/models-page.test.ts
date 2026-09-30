@@ -150,7 +150,7 @@ describe("the Models page", () => {
       const choices = await page.$$eval(`${REVIEW} [data-review]`, (els) =>
         els.map((e) => (e as HTMLElement).dataset.review),
       );
-      expect(choices).toEqual(["none", "qwen", "parakeet"]);
+      expect(choices).toEqual(["none", "qwen"]);
       expect(await page.isChecked(`${REVIEW} input[value="none"]`)).toBe(true);
       const qwen = (await page.textContent(`${REVIEW} [data-review="qwen"] .pg-help`)) ?? "";
       expect(qwen).toMatch(/^Needs .*Qwen3-ASR 1\.7B\.$/);
@@ -203,9 +203,9 @@ describe("the Models page", () => {
       await until(async () => (await setting("asr.live")) === "auto", 5000, "asr.live back");
       await until(async () => (await marked()).join() === "auto", 5000, "the mark back");
       patches.length = 0;
-      await page.click('#models-review [data-review="parakeet"] .pg-name');
+      await page.click('#models-review [data-review="qwen"] .pg-name');
       await until(
-        async () => (await setting("asr.review.model")) === "parakeet",
+        async () => (await setting("asr.review.model")) === "qwen",
         5000,
         "asr.review.model",
       );
@@ -216,7 +216,7 @@ describe("the Models page", () => {
         "asr.review.everySeconds",
       );
       expect(patches).toEqual([
-        { "asr.review.model": "parakeet" },
+        { "asr.review.model": "qwen" },
         { "asr.review.everySeconds": 300 },
       ]);
       await rig.api("PATCH", "/config", {
