@@ -348,7 +348,8 @@ export class DictationPage {
     if (shown !== this.shows) return;
     this.sub = sub;
     this.draw();
-    this.col.querySelector<HTMLElement>(".pg-back")?.focus();
+    // The draw scrolls the page to its top, smoothly; a focus that scrolled would stop it.
+    this.col.querySelector<HTMLElement>(".pg-back")?.focus({ preventScroll: true });
   }
 
   /** "‹ Dictation": back to this page, with the keyboard on the row it came through. */

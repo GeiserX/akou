@@ -3128,6 +3128,7 @@ input.pg-radio:focus-visible {
 .pg-row .pg-remove:focus-visible {
   position: static;
   opacity: 1;
+  pointer-events: auto;
 }
 .pg-row:hover .pg-remove:disabled {
   opacity: 0.5;
