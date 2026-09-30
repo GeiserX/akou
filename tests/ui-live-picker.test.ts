@@ -64,6 +64,20 @@ describe("W3.19: the live model menu's lines", () => {
     for (const o of liveOptions(v)) expect(o.line).not.toMatch(/WER|%/);
   });
 
+  test("Automatic names the Qwen review when the Mac allows it, and Nemotron when it does not", () => {
+    const all: Parameters<typeof view>[1] = {
+      parakeet: ["ready"],
+      nemotron: ["ready"],
+      upgrade: ["ready", "ready", "ready"],
+    };
+    const roomy = { ...view("auto", all), auto: "upgrade" as const };
+    expect(liveOptions(roomy)[0]?.line).toBe(
+      "Picks the best one here: Streaming + Qwen rewrite now.",
+    );
+    const tight = { ...view("auto", all), auto: "nemotron" as const };
+    expect(liveOptions(tight)[0]?.line).toBe("Picks the best one here: Streaming (Nemotron) now.");
+  });
+
   test("a setup with one model missing or still downloading is not listed", () => {
     const v = view("auto", {
       parakeet: ["ready"],

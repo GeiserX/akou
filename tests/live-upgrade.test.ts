@@ -1,7 +1,7 @@
 /**
  * The in-call upgrade (docs/research/asr-architecture.md section 3.2, ASR-7): on the `upgrade`
  * setup each streaming line is rewritten once during the call, by Qwen, as a new revision of the
- * same `seg`. The streaming engine, the recognizer and Qwen are fakes (tests/fixtures/asr-fake.ts
+ * same `seg`, in a review once a minute of the utterances closed since the last one. The streaming engine, the recognizer and Qwen are fakes (tests/fixtures/asr-fake.ts
  * and a scripted `LineUpgrader`); nothing here loads a model or starts a server.
  */
 
@@ -16,9 +16,17 @@ import {
   LiveAsr,
   type LiveOut,
   LivePipeline,
-  UPGRADE_QUEUE_MAX,
+  REVIEW_BEHIND_MAX,
 } from "../src/main/asr/live-worker.ts";
-import { splitToLines, UTTERANCE_MAX_SECONDS } from "../src/main/asr/upgrade.ts";
+import {
+  joinUtterances,
+  REVIEW_CAP_SECONDS,
+  REVIEW_EVERY_SECONDS,
+  REVIEW_GAP_SECONDS,
+  reviewBatches,
+  splitToLines,
+  UTTERANCE_MAX_SECONDS,
+} from "../src/main/asr/upgrade.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { CallQuery } from "../src/main/query/context.ts";
 import { ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
@@ -96,6 +104,41 @@ describe("[ASR-7] lines cut back from utterances", () => {
     expect(splitToLines(["um", "move it"], ["move", "it"])).toEqual(["", "move it"]);
     // Punctuation and case do not move a word to another line.
     expect(splitToLines(["Hello,", "World"], ["hello", "world."])).toEqual(["hello", "world."]);
+  });
+});
+
+describe("[ASR-7] a minute's utterances in requests for Qwen", () => {
+  const utt = (seconds: number, id: string) => ({ id, samples: new Float32Array(seconds * RATE) });
+
+  test(`whole utterances, at most ${REVIEW_CAP_SECONDS} s of audio a request, in order`, () => {
+    const us = [utt(30, "a"), utt(30, "b"), utt(25, "c"), utt(10, "d"), utt(2, "e")];
+    const ids = (bs: { id: string }[][]) => bs.map((b) => b.map((u) => u.id).join(""));
+    // 30 + 30 + 25 = 85 fits; 85 + 10 does not, so d starts the next request.
+    expect(ids(reviewBatches(us))).toEqual(["abc", "de"]);
+    for (const b of reviewBatches(us)) {
+      expect(b.reduce((a, u) => a + u.samples.length, 0) / RATE).toBeLessThanOrEqual(
+        REVIEW_CAP_SECONDS,
+      );
+    }
+    // Exactly at the cap is one request; an utterance never splits, even one past the cap alone.
+    expect(ids(reviewBatches([utt(45, "a"), utt(45, "b")]))).toEqual(["ab"]);
+    const long = reviewBatches([utt(10, "a"), utt(95, "b"), utt(1, "c")]);
+    expect(ids(long)).toEqual(["a", "b", "c"]);
+    expect(long[1]?.[0]?.samples.length).toBe(95 * RATE);
+    expect(reviewBatches([])).toEqual([]);
+  });
+
+  test("a request's audio is its utterances in order, with a short silence between", () => {
+    const a = new Float32Array([0.1, 0.2]);
+    const b = new Float32Array([0.3]);
+    const gap = Math.round(REVIEW_GAP_SECONDS * RATE);
+    const j = joinUtterances([a, b]);
+    expect(j.length).toBe(3 + gap);
+    expect([j[0], j[1], j[2], j[2 + gap]].map((x) => Math.round((x as number) * 10))).toEqual([
+      1, 2, 0, 3,
+    ]);
+    // One utterance goes as it is.
+    expect(joinUtterances([a])).toBe(a);
   });
 });
 
@@ -278,70 +321,54 @@ async function rig(qwen: LineUpgrader | null) {
     const audio = concat(...parts);
     engine.last.play(audio, silence(audio.length / RATE));
   };
-  return { mgr, id, events, segs, logs, play, view: () => mgr.controller(id)?.view };
+  /** Moves the clock a minute (or `ms`) on, for the next review. */
+  const minute = (ms = REVIEW_EVERY_SECONDS * 1000) => clock.advance(ms);
+  return { mgr, id, events, segs, logs, play, minute, clock, view: () => mgr.controller(id)?.view };
 }
 
 /** `id rev model text` per revision, in log order. */
 const revisions = (segs: readonly Seg[]) =>
   segs.map((s) => `${s.id} ${s.rev} ${s.model ?? "-"} ${s.text ?? "-"}`);
 
-describe("[ASR-7] the host writes Qwen's rewrite as each line's one revision", () => {
-  test("revision order under a slow Qwen: the stream, then Qwen's words, and nothing between", async () => {
+describe("[ASR-7] the host writes Qwen's review as each line's one revision", () => {
+  test("nothing goes to Qwen before the minute; then the minute's utterances go in one request and its words are cut back into every line", async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
     r.play([
       ["we", "should", "move", "the", "build"],
       ["to", "the", "new", "box"],
     ]);
-    await until(() => qwen.asked.length === 1, 5000, "the first line at Qwen");
-    // Qwen decodes one utterance at a time: the second waits behind the first, with its line
-    // written by the stream and no revision yet.
     await until(() => r.segs().length === 2, 5000, "both stream lines");
     await Bun.sleep(50);
-    expect(qwen.asked.length).toBe(1);
+    await r.clock.advance(REVIEW_EVERY_SECONDS * 1000 - 1000);
+    expect(qwen.asked.length).toBe(0);
+    await r.minute(1000);
+    await until(() => qwen.asked.length === 1, 5000, "the minute's review at Qwen");
+    // Two utterances in one request: both audios and the silence between them.
+    const spans = r.segs().reduce((a, s) => a + ((s.a1 ?? 0) - (s.a0 ?? 0)), 0);
+    expect(qwen.asked[0]?.samples.length).toBeGreaterThan(Math.round(spans * RATE));
     expect(revisions(r.segs())).toEqual([
       "l000001 1 fake-nemotron we should move the build",
       "l000002 1 fake-nemotron to the new box",
     ]);
-    qwen.asked[0]?.answer(qwenSays("we should move the built"));
-    await until(() => qwen.asked.length === 2, 5000, "the second line at Qwen");
-    qwen.asked[1]?.answer(qwenSays("to the news box"));
+    qwen.asked[0]?.answer(qwenSays("we should move the built to the news box"));
     await until(() => r.segs().length === 4, 5000, "Qwen's rewrites");
     expect(revisions(r.segs()).slice(2)).toEqual([
       "l000001 2 fake-qwen we should move the built",
       "l000002 2 fake-qwen to the news box",
     ]);
     await r.mgr.stop();
-    // One rewrite per line, ever.
+    // One rewrite per line, ever, and one request for the minute.
     expect(r.segs().length).toBe(4);
-  });
-
-  test("an utterance of two lines: Qwen's words are cut back into the lines they belong to", async () => {
-    const qwen = new SlowQwen();
-    const r = await rig(qwen);
-    r.play(
-      [
-        ["we", "should", "move", "the", "build"],
-        ["to", "the", "new", "box"],
-      ],
-      0.8,
-    );
-    await until(() => qwen.asked.length === 1, 5000, "the utterance at Qwen");
-    qwen.asked[0]?.answer(qwenSays("we should move the built to the new box"));
-    await until(() => r.segs().length === 4, 5000, "Qwen's rewrites");
-    expect(revisions(r.segs())).toEqual([
-      "l000001 1 fake-nemotron we should move the build",
-      "l000002 1 fake-nemotron to the new box",
-      "l000001 2 fake-qwen we should move the built",
-      "l000002 2 fake-qwen to the new box",
-    ]);
-    await r.mgr.stop();
+    expect(qwen.asked.length).toBe(1);
   });
 
   test("a Qwen answer that arrives after call.ended is dropped, and the request was given up", async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
     r.play([["deploy", "the", "build"]]);
+    await until(() => r.segs().length === 1, 5000, "the stream line");
+    await r.minute();
     await until(() => qwen.asked.length === 1, 5000, "the line at Qwen");
     const asked = qwen.asked[0];
     // The final pass holds the call's writer open past call.ended, as in the app.
@@ -362,6 +389,8 @@ describe("[ASR-7] the host writes Qwen's rewrite as each line's one revision", (
     const qwen = new SlowQwen();
     const r = await rig(qwen);
     r.play([["deploy", "the", "build"]]);
+    await until(() => r.segs().length === 1, 5000, "the stream line");
+    await r.minute();
     await until(() => qwen.asked.length === 1, 5000, "the line at Qwen");
     qwen.asked[0]?.answer(qwenSays("deploy the built"));
     await until(() => r.segs().length === 2, 5000, "Qwen's rewrite");
@@ -369,19 +398,36 @@ describe("[ASR-7] the host writes Qwen's rewrite as each line's one revision", (
     expect(revisions(r.segs()).at(-1)).toBe("l000001 2 fake-qwen deploy the built");
   });
 
+  test("utterances the call ends on before their minute are never sent", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    r.play([["deploy", "the", "build"]]);
+    await until(() => r.segs().length === 1, 5000, "the stream line");
+    await r.mgr.stop();
+    await r.minute();
+    expect(qwen.asked.length).toBe(0);
+  });
+
   test("a line a person edited keeps their text; Qwen hearing nothing leaves the stream's words; a failure changes nothing", async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
-    r.play([["deploy", "the", "build"], ["thanks"], ["ok"], ["great"]]);
-    await until(() => qwen.asked.length === 1, 5000, "the first line at Qwen");
+    /** One line, then its minute: `segs` stream and edit events so far, `n` reviews so far. */
+    const review = async (words: string[], segs: number, n: number) => {
+      r.play([words]);
+      await until(() => r.segs().length === segs, 5000, `line of review ${n}`);
+      await Bun.sleep(20);
+      await r.minute();
+      await until(() => qwen.asked.length === n, 5000, `review ${n} at Qwen`);
+    };
+    await review(["deploy", "the", "build"], 1, 1);
     const c = r.mgr.controller(r.id);
     c?.record({ type: "seg", id: "l000001", rev: 2, text: "deploy the bill", by: "user" });
     qwen.asked[0]?.answer(qwenSays("deploy the built"));
-    await until(() => qwen.asked.length === 2, 5000, "the second line at Qwen");
+    await review(["thanks"], 3, 2);
     qwen.asked[1]?.answer(qwenSays(""));
-    await until(() => qwen.asked.length === 3, 5000, "the third line at Qwen");
+    await review(["ok"], 4, 3);
     qwen.asked[2]?.fail(new Error("llama-server is unavailable"));
-    await until(() => qwen.asked.length === 4, 5000, "the fourth line at Qwen");
+    await review(["great"], 5, 4);
     // Control: a line Qwen does answer is rewritten.
     qwen.asked[3]?.answer(qwenSays("great."));
     await until(() => r.logs.some((l) => l.includes("Qwen failed")), 5000, "the failure log");
@@ -402,27 +448,73 @@ describe("[ASR-7] the host writes Qwen's rewrite as each line's one revision", (
     expect(r.logs.find((l) => l.includes("Qwen failed"))).toContain("keep the streaming text");
   });
 
-  test(`at most ${UPGRADE_QUEUE_MAX} utterances wait for Qwen; past that the oldest keeps the streaming text`, async () => {
+  test("a review still waiting when the next minute's is due is skipped: its lines keep the streaming text, and the new one goes", async () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
-    const words = ["yes", "no", "hello", "world", "thanks", "meeting", "today", "ok", "great"];
-    r.play(words.map((w) => [w]));
-    await until(() => r.segs().length === words.length, 5000, "every stream line");
-    await until(
-      () => r.logs.filter((l) => l.includes("Qwen is behind")).length === 2,
-      5000,
-      "the two let go",
-    );
-    // One utterance is at Qwen; of the eight behind it, the two oldest were let go.
-    expect(r.logs.find((l) => l.includes("Qwen is behind"))).toContain("keep the streaming text");
-    for (let i = 0; i < 1 + UPGRADE_QUEUE_MAX; i++) {
-      await until(() => qwen.asked.length === i + 1, 5000, `line ${i + 1} at Qwen`);
-      qwen.asked[i]?.answer(qwenSays(""));
-    }
-    await until(() => qwen.asked.length === 1 + UPGRADE_QUEUE_MAX, 5000, "the queue drained");
+    // About 110 s with no stop: utterances end at 30 s, and they fill more than one request.
+    const said: string[][] = [];
+    for (let i = 0; i < 75; i++) said.push(["hello", "world"]);
+    r.play(said, 0.8);
+    await until(() => r.segs().length === 75, 20_000, "every stream line");
+    await Bun.sleep(50);
+    await r.minute();
+    await until(() => qwen.asked.length === 1, 5000, "the first request at Qwen");
+    const first = qwen.asked[0]?.samples.length as number;
+    expect(first / RATE).toBeLessThanOrEqual(REVIEW_CAP_SECONDS + 1);
+    // The next minute comes while the first request is still at Qwen and the second waits.
+    r.play([["thanks"]]);
+    await until(() => r.segs().length === 76, 5000, "the next line");
     await Bun.sleep(20);
-    expect(qwen.asked.length).toBe(1 + UPGRADE_QUEUE_MAX);
+    await r.minute();
+    await until(() => r.logs.some((l) => l.includes("Qwen is behind")), 5000, "the skip");
+    expect(r.logs.find((l) => l.includes("Qwen is behind"))).toContain("keep the streaming text");
+    qwen.asked[0]?.answer(qwenSays(""));
+    await until(() => qwen.asked.length === 2, 5000, "the new minute at Qwen");
+    // The request after the first is the new minute's one line, not the skipped one.
+    qwen.asked[1]?.answer(qwenSays("thanks."));
+    await until(() => r.view()?.segment("l000076")?.rev === 2, 5000, "the new line's rewrite");
+    // Caught up: the next minute is reviewed as usual.
+    r.play([["ok"]]);
+    await until(() => r.segs().length === 78, 5000, "one more line");
+    await Bun.sleep(20);
+    await r.minute();
+    await until(() => qwen.asked.length === 3, 5000, "the next minute at Qwen");
+    // Behind again, once: the minutes behind were counted afresh after catching up, so it stays on.
+    r.play([["great"]]);
+    await until(() => r.segs().length === 79, 5000, "a last line");
+    await Bun.sleep(20);
+    await r.minute();
+    expect(r.logs.some((l) => l.includes("did not keep up"))).toBe(false);
     await r.mgr.stop();
+    const skipped = r.segs().filter((s) => s.id !== "l000076" && s.model === "fake-qwen");
+    expect(skipped).toEqual([]);
+  });
+
+  test(`a Qwen ${REVIEW_BEHIND_MAX} minutes in a row behind is off for the rest of the call, and says so`, async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    const minute = async (words: string[], n: number) => {
+      r.play([words]);
+      await until(() => r.segs().length === n, 5000, `line ${n}`);
+      await Bun.sleep(20);
+      await r.minute();
+    };
+    await minute(["deploy", "the", "build"], 1);
+    await until(() => qwen.asked.length === 1, 5000, "the first review at Qwen");
+    // Qwen never answers the first review.
+    await minute(["thanks"], 2);
+    expect(r.logs.some((l) => l.includes("did not keep up"))).toBe(false);
+    await minute(["ok"], 3);
+    await until(() => r.logs.some((l) => l.includes("did not keep up")), 5000, "the switch off");
+    expect(r.logs.find((l) => l.includes("did not keep up"))).toContain(
+      "the rest of the call keeps the streaming text",
+    );
+    qwen.asked[0]?.answer(qwenSays("deploy the built"));
+    await minute(["great"], 5);
+    await r.minute();
+    await r.mgr.stop();
+    // Nothing after the first request went to Qwen.
+    expect(qwen.asked.length).toBe(1);
   });
 });
 
@@ -431,6 +523,8 @@ describe("[ASR-7] a line reads as its highest revision", () => {
     const qwen = new SlowQwen();
     const r = await rig(qwen);
     r.play([["deploy", "the", "build"]]);
+    await until(() => r.segs().length === 1, 5000, "the stream line");
+    await r.minute();
     await until(() => qwen.asked.length === 1, 5000, "the line at Qwen");
     const view = r.view();
     if (!view) throw new Error("no view");
