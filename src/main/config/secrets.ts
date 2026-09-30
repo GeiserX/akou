@@ -9,6 +9,9 @@
  * The key never reaches a command line, where `ps` would show it: it is written by `security -i`,
  * which reads the command from stdin, as hex (`-X`), so nothing in it needs quoting. No error from
  * here carries what `security` printed, since that could be the key.
+ *
+ * A read is synchronous (the settings need the key at start); a save or a removal is not, so a
+ * Keychain waiting on a password prompt holds only that request, never the rest of the app.
  */
 
 /** The settings kept in the store instead of `config.json`. */
@@ -20,11 +23,17 @@ export interface SecretStore {
   readonly where: "keychain";
   /** The value, or null when the store has none. Throws when the store cannot be read. */
   get(key: StoredSecret): string | null;
-  /** Saves the value, then reads it back. Throws when either fails. */
-  set(key: StoredSecret, value: string): void;
-  /** Removes the value; one that was not there is not an error. Throws when the store refuses. */
-  remove(key: StoredSecret): void;
+  /** Saves the value, then reads it back. Rejects when either fails. */
+  set(key: StoredSecret, value: string): Promise<void>;
+  /** Removes the value; one that was not there is not an error. Rejects when the store refuses. */
+  remove(key: StoredSecret): Promise<void>;
 }
+
+/**
+ * What a key may be: printable ASCII, no spaces. `security find-generic-password -w` prints any
+ * other value as hex, so it could not be read back as it was saved.
+ */
+export const KEY_TEXT = /^[\x21-\x7e]*$/;
 
 /** `security`'s exit status when no item matches. */
 const NOT_FOUND = 44;
@@ -46,39 +55,68 @@ export function keychainStore(o: KeychainOptions = {}): SecretStore {
   const command = o.command ?? ["/usr/bin/security"];
   const service = o.service ?? "akou";
   const at = o.keychain ? [o.keychain] : [];
-  const run = (args: string[], stdin?: string) => {
-    const p = Bun.spawnSync([...command, ...args], {
-      stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
-      stdout: "pipe",
-      stderr: "pipe",
-      env: (o.env ?? process.env) as Record<string, string>,
-      // A Keychain that never answers must not hold the app: a killed run is a failed one.
-      timeout: o.timeoutMs ?? 10_000,
-    });
+  const spawnOptions = {
+    stdout: "pipe",
+    stderr: "pipe",
+    env: (o.env ?? process.env) as Record<string, string>,
+    // A Keychain that never answers must not hold akou: a killed run is a failed one.
+    timeout: o.timeoutMs ?? 10_000,
+  } as const;
+  const run = (args: string[]) => {
+    const p = Bun.spawnSync([...command, ...args], { ...spawnOptions, stdin: "ignore" });
     return { code: p.exitCode ?? -1, out: p.stdout.toString() };
   };
-  const get = (key: StoredSecret): string | null => {
-    const r = run(["find-generic-password", "-s", service, "-a", key, "-w", ...at]);
+  const runAsync = async (args: string[], stdin?: string) => {
+    const p = Bun.spawn([...command, ...args], {
+      ...spawnOptions,
+      stdin: stdin === undefined ? "ignore" : Buffer.from(stdin),
+    });
+    // Both pipes drained, so a chatty `security` never fills one and stalls.
+    const [out] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text()]);
+    return { code: (await p.exited) ?? -1, out };
+  };
+  const found = (r: { code: number; out: string }): string | null => {
     if (r.code === NOT_FOUND) return null;
     if (r.code !== 0) throw new Error(`the Keychain could not be read (security exit ${r.code})`);
     return r.out.replace(/\r?\n$/, "");
   };
+  const find = (key: StoredSecret) => [
+    "find-generic-password",
+    "-s",
+    service,
+    "-a",
+    key,
+    "-w",
+    ...at,
+  ];
+  const get = (key: StoredSecret): string | null => found(run(find(key)));
   return {
     where: "keychain",
     get,
-    set(key, value) {
+    async set(key, value) {
       if (value === "") throw new Error("an empty key is removed, not saved");
+      if (!KEY_TEXT.test(value)) throw new Error("a key is letters, digits and symbols only");
       const hex = Buffer.from(value, "utf8").toString("hex");
       const where = o.keychain ? ` ${o.keychain}` : "";
-      const r = run(["-i"], `add-generic-password -U -s ${service} -a ${key} -X ${hex}${where}\n`);
-      // `security -i` exits 0 when a command in it fails: the read back is the check.
-      if (r.code !== 0 || get(key) !== value)
+      const r = await runAsync(
+        ["-i"],
+        `add-generic-password -U -s ${service} -a ${key} -X ${hex}${where}\n`,
+      );
+      // The exit status of `security -i` is its last command's; the read back also proves the
+      // Keychain holds this value, byte for byte, and not one it changed or dropped.
+      const back =
+        r.code === 0
+          ? await runAsync(find(key))
+              .then(found)
+              .catch(() => null)
+          : null;
+      if (back !== value)
         throw new Error("the Keychain did not keep the key (security refused it)");
     },
-    remove(key) {
-      const r = run(["delete-generic-password", "-s", service, "-a", key, ...at]);
-      if (r.code !== 0 && r.code !== NOT_FOUND)
-        throw new Error(`the Keychain did not remove the key (security exit ${r.code})`);
+    async remove(key) {
+      const { code } = await runAsync(["delete-generic-password", "-s", service, "-a", key, ...at]);
+      if (code !== 0 && code !== NOT_FOUND)
+        throw new Error(`the Keychain did not remove the key (security exit ${code})`);
     },
   };
 }

@@ -33,6 +33,7 @@ import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
 import { checkDictationHotkey, checkExtraHotkey } from "../window/hotkey.ts";
+import { KEY_TEXT } from "./secrets.ts";
 
 export type SettingType =
   | "integer"
@@ -519,6 +520,11 @@ export const SETTINGS = {
     max: 400,
     default: "",
     secret: true,
+    // Never the value in the error: it is the key.
+    check: (v) =>
+      KEY_TEXT.test(v as string)
+        ? null
+        : "must be letters, digits and symbols only, with no spaces",
     doc: "API key for `openai-compatible` (optional) or `anthropic` (required). On macOS it is saved in the Keychain, never in the config file; elsewhere in the config file. Never shown back or logged.",
   },
   "provider.timeoutSeconds": {

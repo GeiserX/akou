@@ -85,7 +85,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "provider.model": { label: "Model", empty: "The default model" },
   "provider.baseUrl": {
     label: "Server address",
-    help: "Your key and transcripts go there. Only this window can change it.",
+    help: "Your key and transcripts go there.",
     empty: "The Anthropic API",
   },
   "provider.timeoutSeconds": {

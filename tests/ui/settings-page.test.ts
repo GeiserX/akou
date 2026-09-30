@@ -428,6 +428,10 @@ describe("the assistant on the Settings page", () => {
           await page.selectOption(use, "key");
           await until(() => sent.length === 1, 5000, "the use saved");
           expect(sent[0]).toEqual({ "provider.kind": "anthropic" });
+          // The assistant applies at once: no word about the next start.
+          await page.waitForFunction(
+            () => document.getElementById("toast")?.textContent === "Saved.",
+          );
           await page.waitForSelector("#settings-provider-service input[value='anthropic']:checked");
           expect(await page.$(".pg-row[data-key='provider.baseUrl']")).toBeNull();
           const field = "#set-provider-apiKey";
@@ -463,43 +467,76 @@ describe("the assistant on the Settings page", () => {
           await page.waitForSelector("#settings-key-saved");
           expect(sent.length).toBe(2);
 
-          // An OpenAI-compatible server: its address and model too.
+          // An OpenAI-compatible server: OpenAI's address as the value, and a model to name.
           await page.click("#settings-provider-service label:has-text('OpenAI-compatible')");
           await until(() => sent.length === 3, 5000, "the service saved");
-          expect(sent[2]).toEqual({ "provider.kind": "openai-compatible" });
+          expect(sent[2]).toEqual({
+            "provider.kind": "openai-compatible",
+            "provider.baseUrl": "https://api.openai.com/v1",
+          });
           await page.waitForSelector(".pg-row[data-key='provider.baseUrl']");
           const address = "#set-provider-baseUrl";
           expect(await page.isDisabled(address)).toBe(false);
+          expect(await page.inputValue(address)).toBe("https://api.openai.com/v1");
+          expect(await page.textContent("#settings-provider-state")).toBe(
+            "The OpenAI-compatible server is not available: Model is not set.",
+          );
           await page.fill(address, "https://llm.example/v1");
           await page.press(address, "Tab");
           await until(() => sent.length === 4, 5000, "the address saved");
           expect(sent[3]).toEqual({ "provider.baseUrl": "https://llm.example/v1" });
-          expect(await page.isVisible(".pg-row[data-key='provider.model']")).toBe(true);
+          const model = "#set-provider-model";
+          await page.fill(model, "gpt-5-mini");
+          await page.press(model, "Tab");
+          await until(() => sent.length === 5, 5000, "the model saved");
+          expect(sent[4]).toEqual({ "provider.model": "gpt-5-mini" });
           expect(await page.inputValue(use)).toBe("key");
 
-          // A local model: Ollama's address, and its model.
+          // A local model: Ollama's address, and a model of its own, not OpenAI's.
           await page.selectOption(use, "ollama");
-          await until(() => sent.length === 5, 5000, "Ollama saved");
-          expect(sent[4]).toEqual({
+          await until(() => sent.length === 6, 5000, "Ollama saved");
+          expect(sent[5]).toEqual({
             "provider.kind": "openai-compatible",
             "provider.baseUrl": "http://127.0.0.1:11434/v1",
+            "provider.model": null,
           });
           await page.waitForSelector("#page-settings:not(:has(#settings-provider-service))");
-          expect(await page.getAttribute("#set-provider-model", "placeholder")).toBe(
+          expect(await page.getAttribute(model, "placeholder")).toBe(
             "The model's name, as Ollama lists it",
           );
+          expect(await page.inputValue(model)).toBe("");
           expect(await page.$("#set-provider-apiKey")).toBeNull();
           expect(await page.inputValue(use)).toBe("ollama");
+          await page.fill(model, "llama3.2");
+          await page.press(model, "Tab");
+          await until(() => sent.length === 7, 5000, "the Ollama model saved");
 
-          // Back to a key: Ollama's address is not the Anthropic API's.
+          // Back to a key: neither Ollama's address nor its model goes to the Anthropic API.
           await page.selectOption(use, "key");
-          await until(() => sent.length === 6, 5000, "the key use saved");
-          expect(sent[5]).toEqual({ "provider.kind": "anthropic", "provider.baseUrl": null });
+          await until(() => sent.length === 8, 5000, "the key use saved");
+          expect(sent[7]).toEqual({
+            "provider.kind": "anthropic",
+            "provider.baseUrl": null,
+            "provider.model": null,
+          });
+          expect(rig.app.config().settings["provider.model"]).toBe("");
+          await page.waitForSelector("#settings-provider-service");
+          expect(await page.textContent("#settings-provider-state")).toBe(
+            "Uses the Anthropic API.",
+          );
+
+          // Claude Code or Codex: the kind, and nothing else.
+          await page.selectOption(use, "harness");
+          await until(() => sent.length === 9, 5000, "the harness saved");
+          expect(sent[8]).toEqual({ "provider.kind": "harness" });
+          await page.waitForSelector("#page-settings:not(:has(#settings-provider-service))");
+          expect(await page.inputValue(use)).toBe("harness");
+          expect(rig.app.config().settings["provider.kind"]).toBe("harness");
 
           // None: no rows under it.
           await page.selectOption(use, "none");
-          await until(() => sent.length === 7, 5000, "none saved");
-          expect(sent[6]).toEqual({ "provider.kind": "none" });
+          await until(() => sent.length === 10, 5000, "none saved");
+          expect(sent[9]).toEqual({ "provider.kind": "none" });
           await page.waitForSelector("#page-settings:not(:has(#settings-provider-service))");
           expect(await page.$("#set-provider-apiKey")).toBeNull();
           expect(await page.textContent("#settings-provider-state")).toBe(
@@ -558,8 +595,20 @@ describe("the assistant on the Settings page", () => {
           await page.selectOption("#set-provider-kind", "key");
           await page.waitForSelector("#settings-provider-service");
           await page.click("#settings-provider-service label:has-text('OpenAI-compatible')");
-          await page.waitForSelector("#set-provider-baseUrl");
-          expect(await page.isDisabled("#set-provider-baseUrl")).toBe(true);
+          // An address this page cannot set reads as a value, with where to set it.
+          await page.waitForSelector("span#set-provider-baseUrl");
+          expect(await page.textContent("#set-provider-baseUrl")).toBe("Not set");
+          expect(await page.textContent(".pg-row[data-key='provider.baseUrl'] .pg-help")).toBe(
+            "Set in the akou window, since your key and transcripts go there.",
+          );
+          // The line under the assistant names no address: that hint is for the command line.
+          await until(
+            async () =>
+              (await page.textContent("#settings-provider-state")) ===
+              "The OpenAI-compatible server is not available: Server address is not set.",
+            5000,
+            "the state without an address",
+          );
         },
       );
       await withRig(

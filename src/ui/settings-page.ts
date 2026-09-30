@@ -64,6 +64,8 @@ const ASSISTANT_USE = "#assistant-use";
 
 /** Ollama's OpenAI-compatible address on this computer: what "Local model (Ollama)" sets. */
 export const OLLAMA_URL = "http://127.0.0.1:11434/v1";
+/** OpenAI's own address: what the OpenAI-compatible service starts from in the window. */
+export const OPENAI_URL = "https://api.openai.com/v1";
 
 /** Whether an address is Ollama's on this computer. */
 export function isOllama(url: string): boolean {
@@ -602,6 +604,8 @@ export class SettingsPage {
     let help: string | undefined = w.help;
     if (key === "app.openAtLogin" && this.platform && this.platform !== "darwin")
       help = help?.replace("the menu bar", "the tray");
+    if (key === "provider.baseUrl" && fileOnly)
+      help = "Set in the akou window, since your key and transcripts go there.";
     let controls: (Node | null)[];
     if (key === "provider.kind") {
       controls = [this.kindControl(id)];
@@ -842,6 +846,8 @@ export class SettingsPage {
   private async chooseUse(r: HTMLElement, use: AssistantUse): Promise<void> {
     const base = String(this.settings["provider.baseUrl"] ?? "");
     const patch: Record<string, unknown> = {};
+    // A model is the previous service's name for one (Ollama's `llama3.2`), not this one's.
+    if (this.settings["provider.model"]) patch["provider.model"] = null;
     if (use === "harness" || use === "none") patch["provider.kind"] = use;
     else if (use === "ollama") {
       patch["provider.kind"] = "openai-compatible";
@@ -887,10 +893,15 @@ export class SettingsPage {
       seg.input.addEventListener("change", (e) => {
         e.stopPropagation();
         const base = String(this.settings["provider.baseUrl"] ?? "");
-        const patch: Record<string, unknown> = { "provider.kind": seg.input.value };
+        const to = seg.input.value;
+        const patch: Record<string, unknown> = { "provider.kind": to };
+        // The other service's model name means nothing to this one.
+        if (this.settings["provider.model"]) patch["provider.model"] = null;
         // An address left from another choice would send the key there.
-        if (base && (seg.input.value === "anthropic" || isOllama(base)))
-          patch["provider.baseUrl"] = null;
+        if (base && (to === "anthropic" || isOllama(base))) patch["provider.baseUrl"] = null;
+        // OpenAI's own address, shown as the value, where the window may set it.
+        if (to === "openai-compatible" && !base && this.t.kind === "window")
+          patch["provider.baseUrl"] = OPENAI_URL;
         void this.saveMany(service, patch);
       });
       rows.push(service);
@@ -909,7 +920,11 @@ export class SettingsPage {
   private useField(key: string, placeholder: string): HTMLElement | null {
     const r = this.keyRow(key);
     const input = r?.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(key)}"]`);
-    if (input) input.placeholder = placeholder;
+    if (!input) return r;
+    input.placeholder = placeholder;
+    // One this page cannot change reads as a value, not as a field that takes no clicks.
+    if (input.disabled)
+      input.replaceWith(h("span", { id: input.id, class: "pg-value" }, input.value || "Not set"));
     return r;
   }
 
@@ -993,7 +1008,8 @@ export class SettingsPage {
 
   /** Text from akou that may name a setting by its key: each key becomes the setting's label. */
   private inWords(text: string): string {
-    return inWords(text, Object.keys(this.schema));
+    // A hint that names an address, as "(for Ollama: http://…)", is for the command line.
+    return inWords(text.replace(/\s*\([^()]*:\/\/[^()]*\)/g, ""), Object.keys(this.schema));
   }
 
   private callAudioControls(id: string, value: string): (Node | null)[] {
@@ -1360,7 +1376,7 @@ export class SettingsPage {
     }
     r.classList.remove("refused");
     r.querySelector(".issue")?.remove();
-    toast(res.body?.note ?? "Saved.", "info");
+    toast(this.savedNote(keys, res.body?.note), "info");
     // What the agent is, and which details apply, follow the kind and the harness.
     if (keys.some((k) => k.startsWith("provider.")) && this.root.isConnected) {
       const st = await this.t.request<Status>("GET", "/status");
@@ -1370,6 +1386,11 @@ export class SettingsPage {
     }
   }
 
+  /** What a save says: the assistant's settings apply at once, so no note about a restart. */
+  private savedNote(keys: string[], note: string | undefined): string {
+    return keys.every((k) => k.startsWith("provider.")) ? "Saved." : (note ?? "Saved.");
+  }
+
   /** Saves several keys at once (the assistant's use), then reads and draws the page again. */
   private async saveMany(r: HTMLElement, patch: Record<string, unknown>): Promise<void> {
     const res = await this.t.request<{ note?: string }>("PATCH", "/config", patch);
@@ -1377,7 +1398,7 @@ export class SettingsPage {
       this.refused(r, Object.keys(patch), res.body);
       return;
     }
-    toast(res.body?.note ?? "Saved.", "info");
+    toast(this.savedNote(Object.keys(patch), res.body?.note), "info");
     await this.load();
     if (this.root.isConnected) this.redraw();
   }

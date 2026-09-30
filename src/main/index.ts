@@ -601,9 +601,10 @@ export class AkouApp implements ApiApp {
     token: { token: string; path: string },
     lockPath: string,
   ) {
-    // Server mode keeps the key in the file on every system: a server has no login Keychain.
-    this.secrets = cfg.settings["server.enabled"] ? null : (o.secrets ?? null);
-    this.cfg = this.adoptSecrets(cfg);
+    // Server mode keeps the key in the file on every system, and never writes it to a Keychain.
+    const server = cfg.settings["server.enabled"];
+    this.secrets = server ? null : (o.secrets ?? null);
+    this.cfg = this.readSecrets(cfg, server ? (o.secrets ?? null) : this.secrets);
     this.version = o.version ?? APP_VERSION;
     this.clock = o.clock ?? realClock;
     this.configDir = cfg.paths.configDir;
@@ -1717,7 +1718,7 @@ export class AkouApp implements ApiApp {
         throw new HttpError(400, "bad_setting", error, { errors: [error] });
       }
     }
-    this.storeSecrets(next);
+    await this.storeSecrets(next);
     writePrivate(this.cfg.paths.configFile, `${JSON.stringify(next, null, 2)}\n`);
     this.cfg = this.withSecrets(loadConfig(env, this.o.platform));
     const after = this.cfg.settings;
@@ -1760,47 +1761,75 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * At start: a key still in `config.json` moves into the store and leaves the file, then the
-   * store's keys are read. A store that refuses the move leaves the key in the file, where it
-   * still works, and says so; one that cannot be read leaves the assistant without a key.
+   * At start: the store's keys are read. A key still in `config.json` stays in use from there
+   * until `moveSecrets` has it in the store. In server mode, which keeps keys in the file, a key
+   * the app moved into the Keychain before is still read from there while the file has none, so
+   * turning server mode on does not lose it. A store that cannot be read leaves no key.
    */
-  private adoptSecrets(cfg: LoadedConfig): LoadedConfig {
-    const store = this.secrets;
+  private readSecrets(cfg: LoadedConfig, store: SecretStore | null): LoadedConfig {
     if (!store) return cfg;
-    const moved: StoredSecret[] = [];
     for (const k of STORED_SECRETS) {
       const inFile = cfg.file[k];
       if (typeof inFile === "string" && inFile !== "") {
-        try {
-          store.set(k, inFile);
-          moved.push(k);
-        } catch (err) {
-          this.log("warn", `${k} stays in the config file: ${(err as Error).message}`);
+        if (this.secrets) {
           this.secretValues.set(k, inFile);
           this.secretsInFile.add(k);
-          continue;
         }
+        continue;
       }
       try {
         const v = store.get(k);
-        if (v) this.secretValues.set(k, v);
+        if (!v) continue;
+        this.secretValues.set(k, v);
+        if (!this.secrets)
+          this.log(
+            "warn",
+            `${k} is read from the Keychain; server mode keeps it in the config file, so set it there`,
+          );
       } catch (err) {
         this.log("warn", `${k}: ${(err as Error).message}; the assistant has no key for now`);
       }
     }
-    if (moved.length > 0) {
-      // The file as it is on disk, keys the registry refused included: only the moved keys go.
-      const raw = JSON.parse(readFileSync(cfg.paths.configFile, "utf8")) as Record<string, unknown>;
-      for (const k of moved) delete raw[k];
-      writePrivate(cfg.paths.configFile, `${JSON.stringify(raw, null, 2)}\n`);
-      this.log("info", `moved ${moved.join(", ")} from the config file into the Keychain`);
-    }
     return this.withSecrets(cfg);
+  }
+
+  /**
+   * At start, after `readSecrets`: a key still in `config.json` moves into the store and leaves
+   * the file. A store that refuses leaves it in the file, where it still works, and says so.
+   */
+  async moveSecrets(): Promise<void> {
+    const store = this.secrets;
+    if (!store) return;
+    const moved: StoredSecret[] = [];
+    for (const k of this.secretsInFile) {
+      try {
+        await store.set(k, this.secretValues.get(k) ?? "");
+        moved.push(k);
+      } catch (err) {
+        this.log("warn", `${k} stays in the config file: ${(err as Error).message}`);
+      }
+    }
+    if (moved.length === 0) return;
+    // The file as it is on disk, keys the registry refused included: only the moved keys go.
+    const file = this.cfg.paths.configFile;
+    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+    for (const k of moved) {
+      delete raw[k];
+      this.secretsInFile.delete(k);
+    }
+    writePrivate(file, `${JSON.stringify(raw, null, 2)}\n`);
+    this.log("info", `moved ${moved.join(", ")} from the config file into the Keychain`);
   }
 
   /** The settings with the stored keys in them, as if the file held them. */
   private withSecrets(cfg: LoadedConfig): LoadedConfig {
-    if (!this.secrets) return cfg;
+    if (!this.secrets) {
+      // Server mode: a key read from the Keychain answers only while the file has none.
+      if (this.secretValues.size === 0) return cfg;
+      const settings = { ...cfg.settings } as Record<string, SettingValue>;
+      for (const [k, v] of this.secretValues) if (!cfg.file[k]) settings[k] = v;
+      return { ...cfg, settings: settings as Settings };
+    }
     const settings = { ...cfg.settings } as Record<string, SettingValue>;
     const file = { ...cfg.file };
     for (const k of STORED_SECRETS) {
@@ -1817,9 +1846,13 @@ export class AkouApp implements ApiApp {
    * store (or removed from it) first. A store that refuses refuses the whole save, so the file
    * never takes the key instead. A key the store refused at start stays in the file until then.
    */
-  private storeSecrets(next: Partial<Record<SettingKey, SettingValue>>): void {
+  private async storeSecrets(next: Partial<Record<SettingKey, SettingValue>>): Promise<void> {
     const store = this.secrets;
-    if (!store) return;
+    if (!store) {
+      // Server mode: a save that changes the key in the file ends the one read from the Keychain.
+      for (const k of STORED_SECRETS) if (next[k] !== this.cfg.file[k]) this.secretValues.delete(k);
+      return;
+    }
     for (const k of STORED_SECRETS) {
       const v = typeof next[k] === "string" ? (next[k] as string) : "";
       if (v === (this.secretValues.get(k) ?? "")) {
@@ -1827,8 +1860,8 @@ export class AkouApp implements ApiApp {
         continue;
       }
       try {
-        if (v) store.set(k, v);
-        else store.remove(k);
+        if (v) await store.set(k, v);
+        else await store.remove(k);
       } catch (err) {
         const error = `${k}: ${(err as Error).message}`;
         throw new HttpError(500, "keychain", error, { errors: [error] });
@@ -3159,6 +3192,7 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
   try {
     const token = ensureToken(cfg.paths.configDir);
     app = new AkouApp(o, cfg, token, lockPath);
+    await app.moveSecrets();
     await app.listen();
     return app;
   } catch (err) {
