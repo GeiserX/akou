@@ -2,7 +2,7 @@
   "name": "akou-ci-executor",
   "private": true,
   "description": "The pinned Executor the `executor` CI job runs (scripts/ci/executor-roundtrip.ts); installed with npm ci from this lockfile.",
-  "license": "GPL-3.0-only",
+  "license": "GPL-3.0-or-later",
   "dependencies": {
     "executor": "1.6.8"
   }

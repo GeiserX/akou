@@ -3,7 +3,7 @@
   "version": "0.5.1",
   "private": true,
   "type": "module",
-  "license": "GPL-3.0-only",
+  "license": "GPL-3.0-or-later",
   "scripts": {
     "check": "bun scripts/ci/bun-version.ts && biome check && tsc --noEmit && tsc --noEmit -p tsconfig.ui.json && bun test --reporter=junit --reporter-outfile=.junit-check.xml && bun scripts/ci/test-floor.ts check .junit-check.xml",
     "lint": "biome check",

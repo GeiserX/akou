@@ -3,7 +3,7 @@ name = "akou-capture"
 version = "0.5.1"
 edition = "2024"
 rust-version = "1.88"
-license = "GPL-3.0-only"
+license = "GPL-3.0-or-later"
 description = "akou's capture helper: mic and call audio as two aligned channels, an Ogg Opus file and akou-capture/1 packets"
 publish = false
 

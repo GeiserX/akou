@@ -5,7 +5,7 @@
   "author": { "name": "GeiserX" },
   "homepage": "https://github.com/GeiserX/akou",
   "repository": "https://github.com/GeiserX/akou",
-  "license": "GPL-3.0-only",
+  "license": "GPL-3.0-or-later",
   "keywords": ["calls", "meetings", "transcription", "recording", "mcp"],
   "mcpServers": {
     "akou": { "command": "akou", "args": ["mcp"] }
