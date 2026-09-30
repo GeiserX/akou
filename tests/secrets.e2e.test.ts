@@ -302,7 +302,7 @@ describe("the assistant's server address", () => {
 // The real `security`, on a keychain file made for the test and deleted after, never the login
 // one: only on a macOS CI runner, so it never touches the owner's Keychain.
 describe.skipIf(process.platform !== "darwin" || !process.env.CI)(
-  "the real security command, on a throwaway keychain",
+  "the real security command, on a throwaway keychain (macOS CI only)",
   () => {
     test("saves, reads back, replaces and removes a key; a failing command exits non-zero", async () => {
       const t = tempDir("akou-real-kc-");
