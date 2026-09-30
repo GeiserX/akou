@@ -267,7 +267,7 @@ describe("[akou-chp.23] what GET /models and the Models page show", () => {
     ]);
     // The name follows the Nemotron the languages pick.
     const es = liveView(ctx({ languages: ["es"] }), null, () => "ready");
-    expect(es.setups[0]?.title).toBe("Nemotron 3.5, steadier");
+    expect(es.setups[0]?.title).toBe("Nemotron 3.5, 1 s");
     const by = Object.fromEntries(v.setups.map((s) => [s.id, s]));
     expect(v.setups.filter((s) => s.selected).map((s) => s.id)).toEqual(["nemotron"]);
     expect(v.setups.filter((s) => s.running).map((s) => s.id)).toEqual(["parakeet"]);
