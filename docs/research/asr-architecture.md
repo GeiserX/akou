@@ -282,7 +282,7 @@ Parakeet on the request joined and cut at pauses by the dictation VAD, the way a
 
 The Worker decodes an utterance between two chunks of the call's audio, so a long one holds the live lines. On the same mini, under the same load, a 30 s utterance (the longest there is) took 1.8 to 2.1 s greedy and 2.1 to 2.5 s under beam at 2 threads, 1.3 to 1.6 s greedy at 4. A decode past 4 s (`REVIEW_STALL_MAX_MS`) turns Parakeet's pass off for the call. Under beam decoding a changed word list reloads the recognizer inside the Worker: 7.5 to 7.9 s, on any call whose list changes, with or without a second pass (the pass itself never reloads it). Under the default greedy it costs nothing.
 
-Parakeet's pass runs only when Parakeet hears every one of the call's languages (25 European languages); with none set it does not run, since the streaming Nemotron gives no language per utterance to tell which ones it could hear.
+Parakeet's pass runs only when Parakeet hears every one of the call's languages (25 European languages); with none set it does not run, since the streaming Nemotron gives no language per utterance to tell which ones it could hear, unless the live model is Nemotron English, whose every utterance is English.
 
     AKOU_LIVE_MODELS=<models> AKOU_FLEURS=<data> AKOU_LIVE_CLIPS=150 AKOU_REVIEW_EVERY=60,120 bun test tests/live-second-pass.test.ts
 
