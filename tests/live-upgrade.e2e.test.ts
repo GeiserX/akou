@@ -1,7 +1,7 @@
 /**
  * The `upgrade` live setup through the whole app (ASR-7, akou-chp.23): a call started with it
- * writes each streaming line, then Qwen's one rewrite of it, and the Qwen server it started stops
- * when the call ends. Qwen is the fake llama-server
+ * writes each streaming line, then Qwen's one rewrite of it at the next review (every second here,
+ * every minute in the app), and the Qwen server it started stops when the call ends. Qwen is the fake llama-server
  * (`asr.llamaServer`), the recognizer and the streaming engine the fakes of asr-fake.ts, and the
  * catalog a loopback registry of tiny files: nothing is downloaded and no model loads.
  */
@@ -56,6 +56,7 @@ beforeAll(async () => {
     modelRegistry: catalog,
     models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
     helperArgs: ["--wav", speechWav(home.dir)],
+    liveReviewEveryMs: 1000,
     settings: {
       "asr.modelsDir": models,
       "asr.languages": ["en"],
@@ -118,8 +119,8 @@ describe("[ASR-7] a call on the upgrade setup", () => {
     // Every line has the stream's words and at most Qwen's rewrite: no other revision.
     const allowed = [[`1 ${STREAM}`], [`1 ${STREAM}`, `2 ${QWEN_ASR}`]];
     for (const r of byLine.values()) expect(allowed).toContainEqual(r);
-    // Qwen heard the lines: one request each, at least.
-    expect(llama().filter((x) => x.body !== undefined).length).toBeGreaterThanOrEqual(2);
+    // Qwen heard the lines: a review carries every utterance closed since the last one.
+    expect(llama().filter((x) => x.body !== undefined).length).toBeGreaterThanOrEqual(1);
     // The server the upgrade started is gone once the call has ended: the final pass needs the GPU.
     const pids = llama().flatMap((x) => (typeof x.pid === "number" ? [x.pid] : []));
     expect(pids.length).toBeGreaterThan(0);
@@ -153,7 +154,7 @@ describe("[ASR-7] one Qwen for the upgrade and dictation", () => {
       10_000,
       "the end",
     );
-    expect(requests()).toBeGreaterThanOrEqual(asked + 2);
+    expect(requests()).toBeGreaterThanOrEqual(asked + 1);
     // Control: the count above is of starts, and dictation's is the only one since.
     expect(started()).toBe(before + 1);
     const pid = llama().findLast((x) => x.argv !== undefined)?.pid as number;
