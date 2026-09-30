@@ -2799,6 +2799,33 @@ describe("DC-H1: the History page", () => {
   );
 
   test(
+    "a request that fails outright still opens History and Words, and says why in the list",
+    async () => {
+      const page = await rig.open(undefined, {
+        before: async (p) => {
+          await dictationFixture(p);
+          await vocabFixture(p);
+          // Registered after the fixtures, so these run first: the app is gone.
+          await p.route(
+            (u) => u.pathname.startsWith("/api/v1/dictations") || u.pathname === "/api/v1/vocab",
+            (route) => route.abort(),
+          );
+        },
+      });
+      await page.click("#dictation-open");
+      await page.click("#dictation-history-open");
+      await page.waitForSelector("#page-dictation #dictation-history-list .pg-sechelp");
+      expect(await text(page, "#page-dictation h1")).toBe("History");
+      expect(await text(page, "#dictation-history-list .pg-sechelp")).not.toBe("");
+      await page.click("#page-dictation .pg-back");
+      await page.click("#dictation-dictionary-open");
+      await page.waitForSelector("#page-dictation #dictionary-list .pg-sechelp");
+      expect(await text(page, "#page-dictation h1")).toBe("Words and replacements");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "deleting the last dictation shown says there are none",
     async () => {
       const { page } = await openHistory([dictationRow(1)]);

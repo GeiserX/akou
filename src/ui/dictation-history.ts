@@ -152,7 +152,10 @@ export class DictationHistory {
     const params = new URLSearchParams({ limit: String(HISTORY_PAGE) });
     if (q) params.set("q", q);
     if (older && this.cursor) params.set("cursor", this.cursor);
-    const r = await this.t.request<Page>("GET", `/dictations?${params}`);
+    // A request that throws (the app gone) is said in the list, so the page still opens.
+    const r = await this.t
+      .request<Page>("GET", `/dictations?${params}`)
+      .catch((err: Error) => ({ status: 599, body: { message: err.message } as unknown as Page }));
     if (read !== this.reads) return;
     if (r.status >= 400) {
       replace(

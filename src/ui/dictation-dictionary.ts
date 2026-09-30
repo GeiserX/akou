@@ -211,11 +211,17 @@ export class DictationDictionary {
   async load(): Promise<void> {
     const read = ++this.reads;
     const ws = this.workspace();
+    // A request that throws (the app gone) is said in the list, so the page still opens.
     const [r, review] = await Promise.all([
-      this.t.request<{ entries?: DictionaryEntry[] }>(
-        "GET",
-        ws ? `/vocab?workspace=${encodeURIComponent(ws)}` : "/vocab",
-      ),
+      this.t
+        .request<{ entries?: DictionaryEntry[] }>(
+          "GET",
+          ws ? `/vocab?workspace=${encodeURIComponent(ws)}` : "/vocab",
+        )
+        .catch((err: Error) => ({
+          status: 599,
+          body: { message: err.message } as { entries?: DictionaryEntry[] },
+        })),
       readDictationReview(this.t),
     ]);
     if (read !== this.reads) return;
