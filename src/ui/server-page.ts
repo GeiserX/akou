@@ -30,7 +30,7 @@ export function bootServer(t: Transport, logout: () => void): void {
     new JobsPage(t),
     new ModelsPage(t, true),
     new KeysPage(t),
-    new DictationPage(t),
+    new DictationPage(t, "server"),
     new SettingsPage(t),
   ];
   const nav = h("nav", { id: "server-nav", attrs: { "aria-label": "Server pages" } });

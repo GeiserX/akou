@@ -44,7 +44,7 @@ import {
   unit,
 } from "./rows.ts";
 import { type ConfigReply, changedSettings, type SchemaEntry, shownValue } from "./settings.ts";
-import { type SettingWords, wordsFor } from "./settings-labels.ts";
+import { inWords, type SettingWords, wordsFor } from "./settings-labels.ts";
 
 /** A page an Advanced row leads to, and what it holds. */
 interface SubPage {
@@ -780,10 +780,7 @@ export class SettingsPage {
 
   /** Text from akou that may name a setting by its key: each key becomes the setting's label. */
   private inWords(text: string): string {
-    let out = text;
-    for (const key of Object.keys(this.schema).sort((a, b) => b.length - a.length))
-      if (out.includes(key)) out = out.split(key).join(wordsFor(key).label);
-    return out.replace(/`/g, "");
+    return inWords(text, Object.keys(this.schema));
   }
 
   private callAudioControls(id: string, value: string): (Node | null)[] {

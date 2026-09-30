@@ -13,7 +13,9 @@
 import { formatZone } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
-import { mountDictationDialog } from "./dictation-page.ts";
+import { mountDictionaryDialog } from "./dictation-dictionary.ts";
+import { mountHistoryDialog } from "./dictation-history.ts";
+import { DictationPage } from "./dictation-page.ts";
 import { dictationReview } from "./dictation-review.ts";
 import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { Follower } from "./follow.ts";
@@ -214,7 +216,7 @@ class App {
   private renaming = false;
   /** Closes the open title field without saving; null when none is open. */
   private closeTitle: (() => void) | null = null;
-  /** The sidebar's pages (Models, Settings), in the call workspace's place while one shows. */
+  /** The sidebar's pages (Dictation, Models, Settings), in the call workspace's place while one shows. */
   private readonly pages: Pages;
 
   constructor(readonly t: Transport) {
@@ -246,30 +248,39 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
-    const dictation = mountDictationDialog(
-      t,
-      () => this.view()?.call?.workspace,
-      () => this.review.open(),
-    );
+    const dictionary = mountDictionaryDialog(t, () => this.view()?.call?.workspace);
+    const history = mountHistoryDialog(t);
+    const dictation = new DictationPage(t, "app", {
+      openReview: () => this.review.open(),
+      openWords: () => void dictionary.open(),
+      openHistory: () => void history.open(),
+    });
+    // An answer given in the words to review changes the count on the Dictation page.
+    document.getElementById("review")?.addEventListener("close", () => {
+      if (this.pages.open === "dictation") void dictation.refreshReview();
+    });
     const openModels = (key?: string) => void this.pages.show("models", key);
     const settings = new SettingsPage(t, {
       workspaces: () => this.calls.map((c) => c.workspace),
       openModels,
-      openDictionary: () => void dictation.dictionary.open(),
+      openDictionary: () => void dictionary.open(),
     });
     const models = new ModelsPage(t, false);
-    this.pages = new Pages(byId("pages"), { settings, models }, () => {
+    this.pages = new Pages(byId("pages"), { settings, models, dictation }, () => {
       this.drawCalls();
       // Back from a page (a download, a delete or Use for calls on Models): the menu reads again.
       if (!this.pages?.open) void this.livePicker?.load();
     });
     const openSettings = (key?: string) => void this.pages.show("settings", key);
+    const openDictation = () => void this.pages.show("dictation");
     byId("settings-open").addEventListener("click", () => openSettings());
     byId("models-open").addEventListener("click", () => openModels());
+    byId("dictation-open").addEventListener("click", () => openDictation());
     byId("calls-open").addEventListener("click", () => this.pages.leave());
     const fromHash = () => {
       if (location.hash === "#settings") openSettings();
       if (location.hash === "#models") openModels();
+      if (location.hash === "#dictation") openDictation();
     };
     window.addEventListener("hashchange", fromHash);
     fromHash();

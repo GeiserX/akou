@@ -333,7 +333,7 @@ export class DictationSetup {
       // The key held alone cannot be bound without the grant; the chord takes its place.
       input.value = FALLBACK_HOTKEY;
       input.dispatchEvent(new Event("input"));
-      note = `Without Accessibility akou binds its key as a Carbon hotkey, which takes chords only, so your key is ${FALLBACK_HOTKEY}. Record another chord if you like.`;
+      note = `Without Accessibility access the key must be a combination, so yours is ${FALLBACK_HOTKEY}. Record another combination if you like.`;
     }
     const issue = h("p", { id: "dictation-setup-issue", class: "issue", attrs: { role: "alert" } });
     issue.hidden = true;

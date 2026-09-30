@@ -17,9 +17,6 @@ const focused = (page: Page) =>
     return a?.id || a?.tagName.toLowerCase() || "";
   });
 
-const isOpen = (page: Page, id: string) =>
-  page.$eval(`#${id}`, (d) => (d as HTMLDialogElement).open).catch(() => false);
-
 /** A point on the backdrop: the window's top-left corner, which no dialog reaches. */
 const backdrop = (page: Page) => page.mouse.click(4, 4);
 
@@ -83,23 +80,22 @@ describe("W15.8: every dialog closes like a window", () => {
         });
         await page.waitForSelector("#pill-review:not([hidden])");
         await closesThreeWays(page, "review", "#pill-review");
-        await closesThreeWays(page, "dictation", "#dictation-open");
+        // Dictation is a page of the window now, not a dialog.
+        expect(await page.$("dialog#dictation")).toBeNull();
 
-        // Over the Dictation page, History and Dictionary close on their own, back to their button.
+        // Over the Dictation page, History and Dictionary close on their own, back to their row.
         await page.click("#dictation-open");
-        await page.waitForSelector("#dictation[open]");
+        await page.waitForSelector("#page-dictation:not([hidden]) #dictation-history-open");
         await closesThreeWays(page, "dictation-history", "#dictation-history-open");
         await closesThreeWays(page, "dictation-dictionary", "#dictation-dictionary-open");
-        expect(await isOpen(page, "dictation")).toBe(true);
-        // While a key is being recorded, Escape stops the recording and leaves the page open.
-        const recorder = "#dictation button.record-key[data-for='dictation.hotkey']";
+        expect(await page.isVisible("#page-dictation")).toBe(true);
+        // While a key is being recorded, Escape stops the recording and leaves the page on screen.
+        const recorder = "#page-dictation button.record-key[data-for='dictation.hotkey']";
         await page.click(recorder);
         expect(await page.getAttribute(recorder, "aria-pressed")).toBe("true");
         await page.keyboard.press("Escape");
         expect(await page.getAttribute(recorder, "aria-pressed")).toBe("false");
-        expect(await isOpen(page, "dictation")).toBe(true);
-        await page.keyboard.press("Escape");
-        await page.waitForSelector("#dictation", { state: "hidden" });
+        expect(await page.isVisible("#page-dictation")).toBe(true);
       } finally {
         await rig.close();
         t.cleanup();
