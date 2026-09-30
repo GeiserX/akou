@@ -67,11 +67,14 @@
  * transcribed like any other. A session is latched when the tray or the CLI started it, when
  * `dictation.activation` is `toggle`, or when the helper says so (`latched`).
  *
- * The words as you speak (DC-E5): while a session listens and someone wants them (`preview`), the
- * last `PREVIEW_TAIL_SECONDS` of its audio are decoded again every `PREVIEW_EVERY_SECONDS` on the
- * preview engine, one decode at a time, and each answer goes out as a partial (`onPartial`) while
- * the same session still listens. A partial is only ever shown: the inserted text is the decode of
- * the whole buffer at the release. A password field's session has no partials (DC-N8).
+ * The words as you speak (DC-E5): while a session listens and someone wants them (`preview`), its
+ * audio since the last settled word is decoded again every `PREVIEW_EVERY_SECONDS` on the preview
+ * engine, one decode at a time, and each answer goes out as a partial (`onPartial`) while the same
+ * session still listens. A partial is the whole dictation so far (H-11): once the audio decoded
+ * again passes `PREVIEW_TAIL_SECONDS`, the words that end `PREVIEW_SETTLE_SECONDS` before its end
+ * are settled and never decoded again, so a decode stays short however long the dictation. A
+ * partial is only ever shown: the inserted text is the decode of the whole buffer at the release. A
+ * password field's session has no partials (DC-N8).
  *
  * The session's language (DC-E4, akou-5v8): the pill's language chip forces one for the session
  * listening (`setLanguage`), and so does `command("start", { language })` for the session it opens
@@ -319,8 +322,14 @@ export interface SessionOptions extends TextRules {
   metering?(): boolean;
 }
 
-/** A decode of the end of the audio so far, for the preview only. */
-export type PreviewDecode = (samples: Float32Array) => Promise<Pick<Decoded, "text" | "language">>;
+/**
+ * A decode of the audio since the last settled word, for the preview only. Its words' times, in
+ * seconds from the start of `samples`, let the session settle the early ones; with none, nothing
+ * settles and the decode keeps at most `PREVIEW_MAX_SECONDS`.
+ */
+export type PreviewDecode = (
+  samples: Float32Array,
+) => Promise<Pick<Decoded, "text" | "language"> & { words?: Decoded["words"] }>;
 
 /** The words heard so far in the session listening, and the language the engine heard them in. */
 export interface PreviewPartial {
@@ -354,12 +363,18 @@ function draftRule(rule: AppRule | null, enterSends: boolean): DraftRule | undef
 /** How often a listening session's audio is decoded again for the preview (DC-E5). */
 export const PREVIEW_EVERY_SECONDS = 0.5;
 /**
- * How much of the end of the audio each preview decode takes. The pill's ticker shows one line, the
- * newest words, so the start of a long dictation is never decoded again and a decode stays short:
- * it shares the live Worker with the release's whole-buffer decode and a recorded call's segments,
- * which wait behind the one in flight.
+ * Past this much audio decoded again, the preview settles its early words (H-11), so a decode stays
+ * short: it shares the live Worker with the release's whole-buffer decode and a recorded call's
+ * segments, which wait behind the one in flight.
  */
 export const PREVIEW_TAIL_SECONDS = 8;
+/** A word settles once this much audio follows it: enough right context not to change again. */
+export const PREVIEW_SETTLE_SECONDS = 3;
+/**
+ * The most audio one preview decode takes: with no word times to settle by, the start of a long
+ * dictation beyond it drops out of the preview, never out of the inserted text.
+ */
+export const PREVIEW_MAX_SECONDS = 20;
 
 /** When a session ends by itself (DC-A3). */
 export interface AutoStop {
@@ -432,6 +447,9 @@ interface Listening {
   /** The samples the last preview decode took, and whether one is running (DC-E5). */
   previewAt: number;
   previewing: boolean;
+  /** Where the audio decoded again for the preview starts, and the settled words before it. */
+  previewFrom: number;
+  previewKept: string;
   /** The language the pill's chip forced for this session, else null (akou-5v8). */
   language: string | null;
   /** The per-app rule for the app captured at the press (DC-U9), or null. */
@@ -735,6 +753,8 @@ export class DictationSession {
           vad: Promise.resolve(),
           previewAt: 0,
           previewing: false,
+          previewFrom: 0,
+          previewKept: "",
           language: chosen,
           rule,
         };
@@ -935,11 +955,13 @@ export class DictationSession {
     if (!decode) return;
     c.previewAt = c.samples;
     c.previewing = true;
-    const tail = lastSamples(c.chunks, c.samples, PREVIEW_TAIL_SECONDS * CAPTURE_RATE);
+    c.previewFrom = Math.max(c.previewFrom, c.samples - PREVIEW_MAX_SECONDS * CAPTURE_RATE);
+    const from = c.previewFrom;
+    const tail = lastSamples(c.chunks, c.samples, c.samples - from);
     void decode(tail)
       .then((d) => {
         if (this.cur !== c || c.end || c.stopping) return;
-        const text = d.text.trim();
+        const text = settlePreview(c, d, from, tail.length);
         if (text !== "") this.o.onPartial?.({ text, language: d.language });
       })
       .catch((err) => this.o.onLog?.("info", `dictation preview: ${(err as Error).message}`))
@@ -1364,6 +1386,52 @@ export function languageForced(
   engine: string,
 ): { language_forced?: boolean } {
   return language ? { language_forced: forcesLanguage(engine) } : {};
+}
+
+/**
+ * The whole preview after a decode of the audio from `from` (`n` samples): the settled words, then
+ * the decoded ones. Past `PREVIEW_TAIL_SECONDS`, the words that end `PREVIEW_SETTLE_SECONDS` before
+ * the decode's end join the settled ones, and the next decode starts between the last of them and
+ * the word after it.
+ */
+function settlePreview(
+  c: Listening,
+  d: Awaited<ReturnType<PreviewDecode>>,
+  from: number,
+  n: number,
+): string {
+  const words = d.words ?? [];
+  const seconds = n / CAPTURE_RATE;
+  let rest = d.text.trim();
+  const timed =
+    words.length > 0 && words.every((w) => Number.isFinite(w.s) && Number.isFinite(w.e));
+  if (timed && seconds > PREVIEW_TAIL_SECONDS && c.previewFrom === from) {
+    let k = 0;
+    while (k < words.length && (words[k] as { e: number }).e <= seconds - PREVIEW_SETTLE_SECONDS)
+      k++;
+    if (k > 0) {
+      const last = words[k - 1] as { e: number };
+      const next = words[k] as { s: number } | undefined;
+      const cut = next ? (last.e + next.s) / 2 : last.e;
+      c.previewKept = joinWords(
+        c.previewKept,
+        words
+          .slice(0, k)
+          .map((w) => w.w)
+          .join(" "),
+      );
+      c.previewFrom = from + Math.round(cut * CAPTURE_RATE);
+      rest = words
+        .slice(k)
+        .map((w) => w.w)
+        .join(" ");
+    }
+  }
+  return joinWords(c.previewKept, rest);
+}
+
+function joinWords(a: string, b: string): string {
+  return a === "" ? b : b === "" ? a : `${a} ${b}`;
 }
 
 /** The last `n` of the `total` samples in `chunks` (all of them when there are fewer). */

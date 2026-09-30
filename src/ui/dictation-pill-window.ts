@@ -31,7 +31,17 @@ new Electroview({ rpc });
 sink = mountPill({
   control: (action) => void rpc.request.control({ action }).catch(() => {}),
   chip: (a) => void rpc.request.chip(a).catch(() => {}),
+  size: (height) => void rpc.request.size({ height }).catch(() => {}),
 });
+
+// The edge the window was opened on: the page mirrors at the bottom (H-11).
+void rpc.request
+  .layout({})
+  .then((l: unknown) => {
+    const edge = (l as { edge?: unknown } | null)?.edge;
+    if (typeof edge === "string") sink?.layout({ edge });
+  })
+  .catch(() => {});
 
 // A state sent before the handlers above existed is lost: pull the one in force now, unless a
 // newer one is pushed while the answer is on its way.

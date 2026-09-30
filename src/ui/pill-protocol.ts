@@ -141,6 +141,13 @@ export interface PillRpc {
        * is lost, and the window is created hidden before the first session.
        */
       state: { params: Record<string, never>; response: PillState };
+      /**
+       * The height the page needs, CSS pixels (H-11): the main side resizes the window to it from
+       * the edge `dictation.pill` names, within the display. False when refused.
+       */
+      size: { params: { height: number }; response: boolean };
+      /** The edge the island is on, pulled once the page has booted: at `bottom` it mirrors. */
+      layout: { params: Record<string, never>; response: { edge: string } };
     };
     messages: Record<string, never>;
   };

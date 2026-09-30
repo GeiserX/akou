@@ -362,9 +362,10 @@ export const INDICATOR_SIZE = { width: 480, height: 40 } as const;
 /** Its distance from the work area's edge the first time it shows. */
 const INDICATOR_MARGIN = 16;
 /**
- * The dictation pill's size: the island at its widest (listening with the preview's ticker) and what
- * hangs under it, the error's sheet or the learn chip, with room for their shadows. The window is
- * transparent; only those are painted (pill.css).
+ * The dictation pill's place-holding size: the island at its widest (listening with its words) and
+ * what hangs under it, the error's sheet or the learn chip, with room for their shadows. Places are
+ * kept at this size; the window itself is as tall as its page asks (`sizePill`, H-11). It is
+ * transparent; only the island and what hangs under it are painted (pill.css).
  */
 export const PILL_SIZE = { width: 480, height: 200 } as const;
 /**
@@ -485,6 +486,37 @@ export function placePill(
           ? { x: area.x + area.width - width - PILL_MARGIN, y: cy }
           : { x: cx, y: area.y + area.height - height - PILL_MARGIN };
   return fitInto({ ...at, width, height }, [area], PILL_SIZE);
+}
+
+/**
+ * The pill's window at `height` for `base`, a place at `PILL_SIZE` (H-11): it grows away from the
+ * edge `dictation.pill` names. At the top its top stays, at the bottom its bottom, and at the left
+ * or right its middle; the width never changes. Pulled whole into `area` when given, and never
+ * taller than it.
+ */
+export function sizePill(base: Rect, edge: string, height: number, area?: Rect): Rect {
+  const h = Math.max(1, Math.round(height));
+  const y =
+    edge === "bottom"
+      ? base.y + base.height - h
+      : edge === "left" || edge === "right"
+        ? base.y + Math.round((base.height - h) / 2)
+        : base.y;
+  const want = { x: base.x, y, width: base.width, height: h };
+  if (!area || !hasArea(area)) return want;
+  return fitInto(want, [area], { width: base.width, height: Math.min(h, area.height) });
+}
+
+/** The place at `PILL_SIZE` of a pill window at any height: `sizePill` the other way round. */
+export function pillBase(frame: Rect, edge: string): Rect {
+  const h = PILL_SIZE.height;
+  const y =
+    edge === "bottom"
+      ? frame.y + frame.height - h
+      : edge === "left" || edge === "right"
+        ? frame.y - Math.round((h - frame.height) / 2)
+        : frame.y;
+  return { x: frame.x, y, width: frame.width, height: h };
 }
 
 /** `places` with `frame`, dragged under `edge`, as the place on the display it is on now. */
@@ -678,6 +710,20 @@ export function trayTitle(s: Pick<AppStatus, "live" | "share">, dictation?: stri
   return s.live?.state === "paused" ? "❚❚" : "";
 }
 
+/** The dictation pill while it is open (DC-O1). */
+interface OpenPill {
+  window: PillWindow;
+  rpc: PillRpcHandlers;
+  edge: string;
+  frame: Rect;
+  area: Rect | undefined;
+  places: PillPlace[];
+  moved: boolean;
+  placed: Rect | null;
+  /** The height the page last asked for (H-11), or null before it asked. */
+  height: number | null;
+}
+
 export class Shell implements WindowShell {
   private window: NativeWindow | null = null;
   private send: WindowSend | null = null;
@@ -707,16 +753,7 @@ export class Shell implements WindowShell {
    * which display, the places dragged per display, whether a drag changed them, and the frame the
    * shell last moved it to, so the move it reports back is not taken for a drag.
    */
-  private pill: {
-    window: PillWindow;
-    rpc: PillRpcHandlers;
-    edge: string;
-    frame: Rect;
-    area: Rect | undefined;
-    places: PillPlace[];
-    moved: boolean;
-    placed: Rect | null;
-  } | null = null;
+  private pill: OpenPill | null = null;
   /** The draft box while dictation runs (DC-S1), hidden between drafts. */
   private draft: {
     window: DraftNativeWindow;
@@ -1184,6 +1221,8 @@ export class Shell implements WindowShell {
       preview: { setting: () => this.app.config().settings["dictation.pillPreview"] },
       grant: () => this.app.openSettingsPane("accessibility"),
       place: (target) => this.placePillOn(target),
+      edge,
+      resize: (height) => this.sizePillTo(height),
     });
     let w: ReturnType<typeof open>;
     try {
@@ -1203,6 +1242,7 @@ export class Shell implements WindowShell {
       places,
       moved: false,
       placed: null as Rect | null,
+      height: null as number | null,
     };
     this.pill = p;
     w.window.onFrame((f) => {
@@ -1213,7 +1253,8 @@ export class Shell implements WindowShell {
       p.placed = null;
       const now = this.ui.workAreas();
       p.area = areaOf(f, now);
-      p.places = rememberPill(p.places, p.edge, f, now);
+      // A place is kept at `PILL_SIZE`, whatever height the window had when it was dragged.
+      p.places = rememberPill(p.places, p.edge, pillBase(f, p.edge), now);
       p.moved = true;
     });
     w.window.onClose(() => {
@@ -1232,8 +1273,27 @@ export class Shell implements WindowShell {
     const areas = this.ui.workAreas();
     const area = areaOf(target, areas);
     if (!area || (p.area && sameRect(p.area, area))) return;
-    const next = placePill(p.places, p.edge, areas, area);
+    const base = placePill(p.places, p.edge, areas, area);
+    const next = p.height === null ? base : sizePill(base, p.edge, p.height, area);
     p.area = area;
+    this.movePill(p, next);
+  }
+
+  /**
+   * The page needs `height` (H-11): the window grows or shrinks to it from its edge, where it is
+   * now, and within its display.
+   */
+  private sizePillTo(height: number): void {
+    const p = this.pill;
+    if (!p || p.height === height) return;
+    p.height = height;
+    const next = sizePill(pillBase(p.frame, p.edge), p.edge, height, p.area);
+    if (sameRect(next, p.frame)) return;
+    this.movePill(p, next);
+  }
+
+  /** The shell's own move or resize of the pill: the frame it reports back is not a drag. */
+  private movePill(p: OpenPill, next: Rect): void {
     p.frame = next;
     p.placed = next;
     try {

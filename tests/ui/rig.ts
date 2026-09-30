@@ -792,8 +792,10 @@ export async function vocabFixture(
 /** A small ElectroBun view (the pill, the draft box) on its own page, with a fake main side. */
 export interface ViewPage {
   page: Page;
-  /** Every request the page made, in order. */
+  /** Every request the page made, in order, but the window's own `size` and `layout`. */
   requests: { name: string; params: unknown }[];
+  /** The heights the pill's page asked the window for, in order (H-11). */
+  sized: number[];
   /** Pushes a message to the page, as the main process does. */
   send(name: string, payload: unknown): Promise<void>;
   close(): Promise<void>;
@@ -845,19 +847,23 @@ export async function viewPage(
   // The page's timers are Playwright's from the start, so a test moves them.
   if (o.clock) await page.clock.install({ time: o.clock });
   const requests: ViewPage["requests"] = [];
+  const sized: number[] = [];
   await page.route("http://akou.test/**", (route) => {
     const file = files[new URL(route.request().url()).pathname.slice(1) || "index.html"];
     if (!file) return route.fulfill({ status: 404, body: "" });
     return route.fulfill({ status: 200, contentType: file.type, body: file.body });
   });
   await page.exposeFunction("__akouRequest", async (name: string, params: unknown) => {
-    requests.push({ name, params });
+    // The pill's window housekeeping (H-11) comes whenever the page's height changes.
+    if (name === "size") sized.push((params as { height: number }).height);
+    else if (name !== "layout") requests.push({ name, params });
     return (await o.answer?.(name, params)) ?? true;
   });
   await page.goto("http://akou.test/index.html");
   return {
     page,
     requests,
+    sized,
     send: (name, payload) =>
       page.evaluate(([n, m]) => window.__akouMessage(n as string, m), [name, payload] as const),
     close: async () => {

@@ -8,8 +8,10 @@
  * transcript in the log never reaches the page. The one way words do, the preview of DC-O2, goes
  * through `pillPreview`, which lets them through only with `dictation.pillPreview` on.
  *
- * With the preview on the pill asks the session for partials (DC-E5): their words go to the ticker,
- * with the part that did not change since the last partial marked as settled. The chip on the
+ * With the preview on the pill asks the session for partials (DC-E5): each is the whole dictation so
+ * far, and goes to the island's words (H-11) with the part that did not change since the last
+ * partial marked as settled. The page asks for the window's height as its words grow (`size`), and
+ * the shell resizes the window from the edge the island is on (`resize`). The chip on the
  * listening island (akou-5v8) is up from the start when the engine takes a forced language: it
  * shows `dictation.language`, or `auto` while the engine chooses, and a click moves the session to
  * the next of the user's languages. A partial that names its language shows it; Parakeet's name
@@ -140,6 +142,10 @@ export interface PillOptions {
    * key-down, before it shows (DC-O1); null, where the helper cannot tell, leaves it where it is.
    */
   place?(frame: Frame | null): void;
+  /** The edge `dictation.pill` put the island on, which the page mirrors at `bottom` (H-11). */
+  edge?: string;
+  /** The page needs this height: the window follows it from its edge (H-11). */
+  resize?(height: number): void;
 }
 
 export interface PillRpcHandlers {
@@ -207,23 +213,22 @@ export function pasteHint(platform: string): string {
   return platform === "darwin" ? "⌘V" : "Ctrl+V";
 }
 
-/**
- * How many words at the start of a partial are settled: the longest run of them the last partial
- * had too, in order, from wherever it began there. The preview decodes the end of the audio, so
- * once a dictation outgrows it the words slide left and the run starts later in the last one.
- */
 /** The chip's tag while the engine chooses the language and no partial has named one. */
 export const AUTO_LANGUAGE = "auto";
 
+/**
+ * How many words at the start of a partial are settled: those the last partial started with too.
+ * A partial is the whole dictation so far (H-11), so only its end changes; one pass over the words,
+ * since a long dictation's partial holds thousands of them twice a second.
+ */
 export function settledWords(last: readonly string[], next: readonly string[]): number {
-  let best = 0;
-  for (let j = 0; j < last.length; j++) {
-    let k = 0;
-    while (j + k < last.length && k < next.length && last[j + k] === next[k]) k++;
-    best = Math.max(best, k);
-  }
-  return best;
+  let k = 0;
+  while (k < last.length && k < next.length && last[k] === next[k]) k++;
+  return k;
 }
+
+/** The tallest the page may ask the window to be, CSS pixels: past it, the display's own limit. */
+export const PILL_MAX_HEIGHT = 2000;
 
 const realLater = (ms: number, fn: () => void) => {
   const t = setTimeout(fn, ms);
@@ -459,7 +464,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
     hideAfter(left);
   };
 
-  /** A partial's words to the ticker, as the preview's rule allows, with its settled start. */
+  /** A partial's words to the island, as the preview's rule allows, with its settled start. */
   const sendPreview = (partial: unknown) => {
     if (shown.state !== "listening") return;
     const p = pillPreview(partial, { pillPreview: o.preview.setting() });
@@ -566,7 +571,7 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         hideAfter(a.actions.length > 0 ? NOTICE_MS : ERROR_MS);
       }
     },
-    // Partials are decoded only for the ticker: Parakeet's carry no language for the chip.
+    // Partials are decoded only for the island's words.
     { partials: () => o.preview.setting() === true },
   );
 
@@ -636,6 +641,12 @@ export function pillRpc(d: PillDictation, send: () => PillSend, o: PillOptions):
         return ok;
       },
       state: async () => shown,
+      size: async ({ height }) => {
+        if (typeof height !== "number" || !Number.isFinite(height) || height <= 0) return false;
+        o.resize?.(Math.min(Math.ceil(height), PILL_MAX_HEIGHT));
+        return true;
+      },
+      layout: async () => ({ edge: o.edge ?? "top" }),
     },
     update,
     preview: sendPreview,

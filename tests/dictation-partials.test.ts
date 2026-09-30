@@ -17,6 +17,7 @@ import {
   type DictationEngine,
   DictationSession,
   PREVIEW_EVERY_SECONDS,
+  PREVIEW_MAX_SECONDS,
   PREVIEW_TAIL_SECONDS,
   type PreviewDecode,
   type PreviewPartial,
@@ -49,12 +50,13 @@ const decoded = (text: string, language: string | null = "en"): Decoded => ({
  */
 function rig(
   o: {
-    preview?: boolean;
     gate?: Promise<void>;
     secure?: boolean;
     remote?: boolean;
     /** `dictation.language`. */
     language?: string;
+    /** A preview decoder of the test's own, given where its audio starts in the session. */
+    preview?: boolean | ((samples: Float32Array, from: number) => ReturnType<PreviewDecode>);
   } = {},
 ) {
   const t = tempDir("akou-dict-partials-");
@@ -91,8 +93,11 @@ function rig(
         }
       : {}),
   };
+  let fed = 0;
+  const own = typeof o.preview === "function" ? o.preview : null;
   const preview: PreviewDecode = async (samples) => {
     previews.push(samples.length);
+    if (own) return own(samples, fed - samples.length);
     await o.gate;
     return decoded(` partial ${previews.length} `, "es");
   };
@@ -137,6 +142,7 @@ function rig(
         fileSeconds: n++ / 10,
         samples: new Float32Array(CAPTURE_RATE / 10).fill(0.1),
       };
+      fed += p.samples.length;
       s.onPacket(p);
       await new Promise((res) => setTimeout(res, 0));
     }
@@ -162,11 +168,38 @@ describe("DC-E5: partials while listening, the whole decode inserted", () => {
     expect(r.log.items()[0]).toMatchObject({ text: FINAL, raw: FINAL });
   });
 
-  test("a long dictation decodes only its last PREVIEW_TAIL_SECONDS for the preview", async () => {
+  test("[H-11] a long dictation's partial holds all of it, while each decode stays short", async () => {
+    // A preview that names one word per second of the audio it was given, each with its time, as
+    // Parakeet's words come: word i is the one said in second i of the whole dictation.
+    const at: number[] = [];
+    const r = rig({
+      preview: async (samples, from) => {
+        at.push(samples.length);
+        const n = Math.floor(samples.length / CAPTURE_RATE);
+        const first = Math.round(from / CAPTURE_RATE);
+        const words = Array.from({ length: n }, (_, i) => ({
+          w: `w${first + i}`,
+          s: i + 0.2,
+          e: i + 0.8,
+          c: 1,
+        }));
+        return { text: words.map((w) => w.w).join(" "), language: null, words };
+      },
+    });
+    await r.feed(30);
+    const all = Array.from({ length: 30 }, (_, i) => `w${i}`).join(" ");
+    expect(r.partials.at(-1)?.text).toBe(all);
+    // Every word appears once, in order, in every partial: settling never repeats or drops one.
+    for (const p of r.partials) expect(all.startsWith(p.text)).toBe(true);
+    // No decode ever took the whole dictation: the settled words are not decoded again.
+    expect(Math.max(...at)).toBeLessThanOrEqual((PREVIEW_TAIL_SECONDS + 1) * CAPTURE_RATE);
+  });
+
+  test("[H-11] with no word times nothing settles, and a decode takes at most PREVIEW_MAX_SECONDS", async () => {
     const r = rig();
-    await r.feed(PREVIEW_TAIL_SECONDS + 2);
-    expect(Math.max(...r.previews)).toBe(PREVIEW_TAIL_SECONDS * CAPTURE_RATE);
-    expect(r.previews).toHaveLength((PREVIEW_TAIL_SECONDS + 2) / PREVIEW_EVERY_SECONDS);
+    await r.feed(PREVIEW_MAX_SECONDS + 2);
+    expect(Math.max(...r.previews)).toBe(PREVIEW_MAX_SECONDS * CAPTURE_RATE);
+    expect(r.previews).toHaveLength((PREVIEW_MAX_SECONDS + 2) / PREVIEW_EVERY_SECONDS);
   });
 
   test("with no preview decoder, no partial", async () => {
