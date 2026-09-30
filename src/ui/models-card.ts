@@ -50,6 +50,10 @@ export class ModelsCard {
   /** When the status push last carried the models. */
   private pushedAt = 0;
   private rows: "none" | "reading" | "read" = "none";
+  /** The last models drawn, to draw again when `add` changes the total. */
+  private last: ModelsInfo | undefined;
+  /** Bytes the setup adds to the one download before it starts (Qwen3-ASR for Best dictation). */
+  private extra = 0;
   private readonly changed: () => void;
   /** The models are not there yet: the window shows the welcome unless a call is recording. */
   missing = false;
@@ -68,7 +72,10 @@ export class ModelsCard {
   /** The models from the status push (`pushed`), a pull's reply or a poll. */
   update(m: ModelsInfo | undefined, pushed = false): void {
     if (pushed && m) this.pushedAt = Date.now();
-    const view = modelsCardText(m);
+    this.last = m;
+    const view = modelsCardText(
+      m?.state === "missing" && this.extra > 0 ? { ...m, total: m.total + this.extra } : m,
+    );
     const was = this.missing;
     this.missing = view !== null;
     if (was !== this.missing) this.changed();
@@ -108,6 +115,13 @@ export class ModelsCard {
     text.classList.remove("failed");
     byId("models-pull").hidden = true;
     byId("models-progress").hidden = true;
+  }
+
+  /** The setup's one download fetches `bytes` more than the speech set: its total says so. */
+  add(bytes: number): void {
+    if (bytes === this.extra) return;
+    this.extra = bytes;
+    if (this.last) this.update(this.last);
   }
 
   /** The step is on screen: its rows are read, if no update read them yet. */

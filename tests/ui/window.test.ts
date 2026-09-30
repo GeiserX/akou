@@ -2397,7 +2397,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
           await page.click("#readiness-setup");
           await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
           expect(await text(page, "#welcome h1")).toBe("Speech models");
-          expect(await text(page, "#setup-count")).toBe("Step 4 of 6");
+          expect(await text(page, "#setup-count")).toBe("Step 5 of 6");
           expect(await page.getAttribute("#scroller", "hidden")).toBe("");
           expect(await page.evaluate(() => document.activeElement?.id)).toBe("models-pull");
         },

@@ -258,6 +258,11 @@ class App {
       changed: () => this.drawCalls(),
     });
     const runSetup = () => {
+      // The setup takes the window, and a live call keeps it (WINDOW section 10).
+      if (this.status?.live) {
+        toast("The setup can run once this call stops.");
+        return;
+      }
       this.pages.leave();
       this.chosen = false;
       void this.setup.start();
@@ -512,11 +517,9 @@ class App {
    * and so does a call the user picked from the list; the readiness row brings the welcome back.
    */
   private welcoming(): boolean {
-    if (this.chosen) return false;
+    if (this.chosen || this.status?.live) return false;
     // The setup shows while it runs, a first run's or one asked for again.
-    return (
-      this.setup.wanted(this.modelsCard.missing) || (this.modelsCard.missing && !this.status?.live)
-    );
+    return this.setup.wanted(this.modelsCard.missing) || this.modelsCard.missing;
   }
 
   private welcome(): void {

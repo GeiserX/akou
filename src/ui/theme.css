@@ -1366,7 +1366,7 @@ body.inset #ask-row {
 }
 #welcome .setup-count {
   flex: 1;
-  color: var(--faint);
+  color: var(--dim);
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
@@ -1665,7 +1665,7 @@ body.inset #ask-row {
 #readiness-setup:hover {
   color: var(--fg);
 }
-/* The narrow sidebar (below 1248 px) is too thin for the row on one line: "Setup 1 of 3" wraps
+/* The narrow sidebar (below 1248 px) is too thin for the row on one line: "Set up" wraps
    under the status instead of spilling across the divider. */
 @media (max-width: 1247px) {
   #readiness {

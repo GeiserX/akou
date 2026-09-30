@@ -1027,6 +1027,9 @@ export class SettingsPage {
         ? `Uses ${name} on ${this.here}.`
         : `Uses ${name}.`;
     const why = p.reason ?? p.detail;
+    // Where akou looked and how to pin a path are for the command line (`akou status`).
+    if (p.id === "harness" && why?.startsWith("no harness found"))
+      return `${capital(name)} was not found on ${this.here}. Install one, or choose another assistant.`;
     return `${capital(name)} is not available${why ? `: ${this.inWords(why)}.` : "."}`.replace(
       /\.\.$/,
       ".",

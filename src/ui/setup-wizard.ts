@@ -5,11 +5,12 @@
  * needs, one screen each, with Back, Skip where a step is optional, and the step count:
  *
  * - where calls go: the recordings folder and the first workspace (calls);
+ * - permissions for what was chosen: the microphone, system audio for calls and Accessibility for
+ *   dictation, each with its state and one button to its privacy pane where there is one to give;
+ *   they come before the dictation key, which needs Accessibility to be a key held alone;
  * - dictation: the key, with the recorder the Dictation page uses, the engine and the languages;
  * - the speech models, with the one download (`models-card.ts`), and Qwen3-ASR when dictation
  *   runs on Best (`dictation.engine` best, or automatic on a machine with a GPU);
- * - permissions for what was chosen: the microphone, system audio for calls and Accessibility for
- *   dictation, each with its state and one button to its privacy pane;
  * - the assistant, as the Settings page offers it (the page's own rows, drawn here).
  *
  * Every step writes through the APIs the pages use: `PATCH /config`, `POST /workspaces`,
@@ -21,7 +22,8 @@
 
 import { dictationHotkeyDefault, hotkeyFor } from "../main/window/hotkey.ts";
 import { firstLanguages, LanguageList } from "./dictation-languages.ts";
-import { KeyRecorder } from "./dictation-recorder.ts";
+import { isAlone, KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
+import { FALLBACK_HOTKEY } from "./dictation-setup.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import type { ModelsCard } from "./models-card.ts";
 import { type ModelRow, QWEN_ID, sizeText } from "./models-rows.ts";
@@ -45,23 +47,26 @@ export const FIRST_WORKSPACE = "Personal";
 export function stepsFor(use: Use): Step[] {
   const out: Step[] = ["use"];
   if (use !== "dictation") out.push("calls");
+  // Before the key: without Accessibility a key held alone cannot be bound (DC-N3's order).
+  out.push("permissions");
   if (use !== "calls") out.push("dictation");
-  out.push("models", "permissions", "assistant");
+  out.push("models", "assistant");
   return out;
 }
 
-/** Steps whose defaults stand when they are skipped. The use and the models are not. */
-const OPTIONAL: ReadonlySet<Step> = new Set(["calls", "dictation", "permissions", "assistant"]);
+/**
+ * Steps where Skip differs from Continue: it leaves their defaults unsaved. The permissions and
+ * the assistant save nothing on Continue, so Continue is their only button.
+ */
+const OPTIONAL: ReadonlySet<Step> = new Set(["calls", "dictation"]);
 
 const TITLES: Record<Step, [title: string, lede: string]> = {
   use: ["Welcome to akou", "What will you use akou for? The next steps set up only that."],
   calls: ["Where calls go", "Each call is a folder with its audio and transcript, in a workspace."],
   dictation: ["Dictation", "Hold a key, speak, and the words go where your cursor is."],
   models: ["Speech models", "akou turns speech into text with these, on this computer."],
-  permissions: [
-    "Permissions",
-    "Your system asks for each the first time akou needs it. You can allow them now.",
-  ],
+  // Drawn for the use and the system: `permissionsLede`.
+  permissions: ["Permissions", ""],
   assistant: [
     "Your assistant",
     "Ask uses it, and dictation can tidy its text with it. Recording and transcripts work without it.",
@@ -125,17 +130,37 @@ export interface SetupDeps {
   finish(use: Use): void;
 }
 
-/** A grant as the step says it. */
-function grantText(g: string | undefined, when: string): { text: string; ok: boolean } {
-  if (g === "granted" || g === "not-needed") return { text: "Allowed", ok: true };
-  if (g === "denied") return { text: "Not allowed", ok: false };
-  return { text: `Asked the first time ${when}`, ok: false };
+/**
+ * A grant as the step says it. `open`: a button to its privacy pane helps, which is only when it
+ * was refused: macOS lists akou in a pane only after it asked (DC-U2).
+ */
+function grantText(
+  g: string | undefined,
+  when: string,
+): { text: string; ok: boolean; open: boolean } {
+  if (g === "granted" || g === "not-needed") return { text: "Allowed", ok: true, open: false };
+  if (g === "denied") return { text: "Not allowed", ok: false, open: true };
+  return { text: `Asked the first time ${when}`, ok: false, open: false };
+}
+
+/** Why the dictation key became a combination. */
+const CHORD_NOTE = `Without Accessibility access the key must be a combination, so yours is ${FALLBACK_HOTKEY}.`;
+
+/** What the permissions step says first: what is asked for, and what is given by hand. */
+export function permissionsLede(mac: boolean, use: Use): string {
+  if (!mac) return "Your system asks for the microphone the first time akou needs it.";
+  const asked =
+    use === "dictation"
+      ? "macOS asks for the microphone the first time akou needs it."
+      : "macOS asks for the microphone and system audio the first time akou needs them.";
+  return use === "calls"
+    ? asked
+    : `${asked} The dictation key needs Accessibility, which you allow in System Settings.`;
 }
 
 export class SetupWizard {
   /** The setup is open: on a first run, or asked for again. */
   running = false;
-  private first = false;
   private started = false;
   private step: Step = "use";
   private use: Use = "both";
@@ -167,16 +192,15 @@ export class SetupWizard {
   wanted(missing: boolean): boolean {
     if (!this.running && !this.started && missing && !readSaved().done) {
       this.started = true;
-      void this.start("use", true);
+      void this.start("use");
     }
     return this.running;
   }
 
   /** Opens the setup on `at`, with what is set now. */
-  async start(at: Step = "use", first = false): Promise<void> {
+  async start(at: Step = "use"): Promise<void> {
     this.started = true;
     this.running = true;
-    this.first = first;
     this.use = readSaved().use;
     this.step = at;
     this.values = null;
@@ -188,7 +212,7 @@ export class SetupWizard {
     this.d.changed();
   }
 
-  /** Closes the setup where it is: a new live call takes the window over. */
+  /** Closes the setup where it is: a live call takes the window over. */
   cancel(): void {
     if (!this.running) return;
     this.leaveStep();
@@ -280,9 +304,10 @@ export class SetupWizard {
     }
     const [title, lede] = TITLES[this.step];
     byId("welcome-title").textContent = title;
-    byId("setup-lede").textContent = lede
-      .replace("this computer", this.here)
-      .replace("Your system", this.values?.platform === "darwin" ? "macOS" : "Your system");
+    byId("setup-lede").textContent =
+      this.step === "permissions"
+        ? permissionsLede(this.values?.platform === "darwin", this.use)
+        : lede.replace("this computer", this.here);
     models.hidden = this.step !== "models";
     byId("setup-best").hidden = true;
     bar.hidden = false;
@@ -290,7 +315,7 @@ export class SetupWizard {
     const at = steps.indexOf(this.step);
     byId("setup-count").textContent = `Step ${at + 1} of ${steps.length}`;
     const back = byId<HTMLButtonElement>("setup-back");
-    back.hidden = at === 0 && this.first;
+    // Cancel on the first step, a first run's too: the welcome is then the models step alone.
     back.textContent = at === 0 ? "Cancel" : "Back";
     byId("setup-skip").hidden = !OPTIONAL.has(this.step);
     const next = byId<HTMLButtonElement>("setup-next");
@@ -439,6 +464,10 @@ export class SetupWizard {
     const input = h("input", { id: "setup-hotkey", type: "text", hidden: true });
     input.value = saved;
     input.dataset.key = "dictation.hotkey";
+    // Without Accessibility a key held alone cannot be bound: the chord takes its place, and the
+    // row says so (DC-N3 does the same).
+    const chord = this.needsChord(saved);
+    if (chord) input.value = FALLBACK_HOTKEY;
     const recorder = new KeyRecorder("dictation.hotkey", input, this.d.t, {
       platform,
       button: "Change",
@@ -449,14 +478,22 @@ export class SetupWizard {
         mac && this.values?.grants?.accessibility === "denied"
           ? "Without Accessibility access the key must be a combination, such as Control+Shift+Space."
           : null,
+      // Every other key the Dictation page refuses too (DC-U3).
       others: () => [
         ["the record shortcut", hotkeyFor(String(this.setting("app.hotkey") ?? ""), platform)],
+        ...Object.entries(KEY_SETTINGS).flatMap(([k, words]): [string, string][] => {
+          const v = this.setting(k);
+          return k !== "dictation.hotkey" && typeof v === "string" ? [[words, v]] : [];
+        }),
       ],
     });
     this.recorder = recorder;
     const rows: HTMLElement[] = [
       row(
-        { label: wordsFor("dictation.hotkey").label, help: wordsFor("dictation.activation").help },
+        {
+          label: wordsFor("dictation.hotkey").label,
+          help: chord ? CHORD_NOTE : wordsFor("dictation.activation").help,
+        },
         recorder.root,
         input,
       ),
@@ -517,6 +554,16 @@ export class SetupWizard {
     return section("", ...rows);
   }
 
+  /** On macOS without Accessibility, a dictation key held alone (`saved`, or the default) is no key. */
+  private needsChord(saved: string): boolean {
+    const platform = this.values?.platform ?? "";
+    return (
+      platform === "darwin" &&
+      this.values?.grants?.accessibility === "denied" &&
+      isAlone(saved || dictationHotkeyDefault(platform))
+    );
+  }
+
   private permissionsBody(): HTMLElement {
     const box = h("div", {});
     const draw = () => {
@@ -528,7 +575,7 @@ export class SetupWizard {
         id: string,
         label: string,
         pane: SettingsPane,
-        state: { text: string; ok: boolean },
+        state: { text: string; ok: boolean; open: boolean },
         help: string,
       ) => {
         const open = button(mac ? "Open System Settings" : "Open Settings", () => {
@@ -537,7 +584,8 @@ export class SetupWizard {
               toast("Open the privacy settings yourself: this window cannot open them here.");
           });
         });
-        open.hidden = state.ok;
+        // Linux has no pane to open (the Dictation page shows none either).
+        open.hidden = !state.open || v?.platform === "linux";
         const r = row(
           { label, help, id: `setup-grant-${id}` },
           h("span", { class: `pg-value setup-state${state.ok ? " ok" : ""}` }, state.text),
@@ -615,6 +663,8 @@ export class SetupWizard {
     const best = rows.find((m) => m.id === QWEN_ID) ?? null;
     if (!best || this.step !== "models" || !this.running) return;
     this.best = best;
+    // Fetched by the one download: its size is in the total that download names.
+    this.d.card.add(best.state === "missing" && this.d.modelsState() !== "ready" ? best.size : 0);
     const done = best.state === "ready";
     const size =
       best.state === "downloading"
@@ -656,7 +706,8 @@ export class SetupWizard {
   }
 
   private async pullBest(): Promise<void> {
-    if (this.best?.state !== "missing") return;
+    // Only the models step's own row: the welcome's download is the speech set's alone.
+    if (!this.running || this.step !== "models" || this.best?.state !== "missing") return;
     try {
       const r = await this.d.t.request("POST", "/models/pull", { model: this.best.id });
       if (r.status >= 400)
@@ -678,7 +729,12 @@ export class SetupWizard {
     this.timer = null;
     if (this.bestTimer) clearInterval(this.bestTimer);
     this.bestTimer = null;
+    this.best = null;
+    this.d.card.add(0);
     if (this.step === "assistant") this.assistant?.leave();
+    // A step left in the hidden welcome would share its ids with the page it borrows from: the
+    // assistant's rows are the Settings page's own.
+    replace(byId("setup-step"));
   }
 
   private go(by: number): void {
@@ -766,14 +822,30 @@ export class SetupWizard {
   }
 
   private async end(): Promise<void> {
-    if (this.use !== "calls" && this.setting("dictation.enabled") !== true) {
-      const why =
-        "dictation.enabled" in (this.values?.schema ?? {})
-          ? await this.patch({ "dictation.enabled": true })
-          : null;
-      if (why) {
-        this.say(why);
-        return;
+    let note: string | null = null;
+    if (
+      this.use !== "calls" &&
+      this.setting("dictation.enabled") !== true &&
+      "dictation.enabled" in (this.values?.schema ?? {})
+    ) {
+      // The grants as they are now: one may have been given since the permissions step.
+      await this.readGrants();
+      const body: Record<string, unknown> = { "dictation.enabled": true };
+      if (this.values?.grants?.mic === "denied") {
+        // As the Dictation page's switch: dictation stays off while the microphone is refused.
+        note =
+          "Dictation stays off: akou may not use the microphone. Allow it, then turn dictation on.";
+      } else {
+        const saved = String(this.setting("dictation.hotkey") ?? "");
+        if (this.needsChord(saved)) {
+          body["dictation.hotkey"] = FALLBACK_HOTKEY;
+          note = CHORD_NOTE.replace("the key", "the dictation key");
+        }
+        const why = await this.patch(body);
+        if (why) {
+          this.say(why);
+          return;
+        }
       }
     }
     writeSaved({ done: true, use: this.use });
@@ -781,5 +853,15 @@ export class SetupWizard {
     this.running = false;
     this.drawn = "";
     this.d.finish(this.use);
+    if (note) toast(note);
+  }
+
+  private async readGrants(): Promise<void> {
+    try {
+      const r = await this.d.t.request<{ grants?: Grants }>("GET", "/dictation");
+      if (r.status < 400 && this.values) this.values.grants = r.body.grants ?? null;
+    } catch {
+      // The grants read when the step opened stand.
+    }
   }
 }

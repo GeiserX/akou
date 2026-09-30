@@ -630,6 +630,15 @@ describe("the assistant on the Settings page", () => {
             10_000,
             "none found",
           );
+          // Where akou looked and how to pin a path are for the command line.
+          await until(
+            async () =>
+              /^Claude Code or Codex was not found on this (Mac|computer)\. Install one, or choose another assistant\.$/.test(
+                (await page.textContent("#settings-provider-state")) ?? "",
+              ),
+            5000,
+            "the plain line",
+          );
         },
       );
       // A server set in the file: going back to Anthropic clears its address, so a browser
