@@ -11,7 +11,7 @@ Versions read for this: sherpa-onnx-node 1.13.8 (`package.json:27`), llama.cpp r
 - **The benchmark holds, with two corrections that change the defaults.** The fusion gains were measured against a Qwen that did not know the call's language, which flatters fusion by about 0.25 points pooled and 2.3 on code-switched speech. And the LLM rewriter beats confidence voting only on read speech. On the four conversational sets it is equal or worse, and it invents words.
 - **Three runtimes, no Python.** sherpa-onnx (in the app) runs the live streaming engines and Parakeet. llama-server (a child process) runs Qwen3-ASR-1.7B. transcribe-cpp (npm) runs Whisper, Cohere and Canary. Three interfaces sit over them, `FinalEngine`, `LiveEngine` and `Fuser`, and `asr.final.engines` takes any number of engines.
 - **Live:** streaming Nemotron, the English model or Nemotron 3.5 depending on the call's language. A word shows 0.46 s after it is spoken, nothing is ever taken back, and it costs 0.39 cores.
-- **During the call, when chosen (`asr.live upgrade`):** each finished utterance is rewritten once, by Qwen, about 1 s after it closes. On 20 FLEURS clips per language that takes the stream from 7.34 to 4.75 % WER in English and from 4.87 to 2.75 in Spanish. It is off by default: the final pass is the accurate transcript, and the upgrade keeps the GPU busy for the whole call.
+- **During the call (`asr.live upgrade`, and `auto` when the Mac allows it):** once a minute, Qwen rewrites the utterances finished since its last review, once each. On FLEURS clips joined into one 27 and one 34 minute call, that takes the stream from 14.39 to 10.19 % WER in English and from 8.00 to 4.19 in Spanish, with under one Qwen request a minute and Qwen busy for 8 to 10 % of the call. The reviewed text lands about 45 s after the words. `auto` runs it with Qwen and its llama-server on disk, a GPU, 16 GB or more and no final pass holding the GPU; the final pass is still the accurate transcript.
 - **Final pass:** Qwen + Parakeet + Whisper, fused by confidence ROVER. Pooled WER 7.97 to 7.98, against 8.63 for Qwen alone with the language set and 11.23 for akou today.
 - **LLM fusion is off by default.** It is available as `pick` or `free` through the existing providers, and the pass keeps the vote when the provider is `none` or fails.
 - **Change now:** Parakeet decodes greedy. Beam search empties whole meeting chunks, and hotwords at boost 3 insert false names.
@@ -191,7 +191,7 @@ Later, macOS-only options that move the load off the CPU. Neither is needed for 
 
 ### 3.2 Upgrading live text during the call
 
-Each utterance the live segmenter closes (0.7 s of silence, at most 30 s) is re-decoded once by Qwen3-ASR-1.7B and written as a new revision of the live line's `seg`. That is the only rewrite: one model, one revision per line. The log already allows a revision that carries only `text` and `model` (`src/core/log/events.ts:110-131`).
+Each utterance the live segmenter closes (0.7 s of silence, at most 30 s) is re-decoded once by Qwen3-ASR-1.7B and written as a new revision of the live line's `seg`. That is the only rewrite: one model, one revision per line. Since the per-minute measurement below, the utterances go to Qwen once a minute, together, instead of one request each. The log already allows a revision that carries only `text` and `model` (`src/core/log/events.ts:110-131`).
 
 The benchmark measured a richer upgrade, a confidence ROVER of Qwen and Parakeet per utterance, on four sets. We ship Qwen alone instead: one rewrite per line, by one model, and on FLEURS through the live path it beat that vote (the table after the list below). The benchmark's numbers for the vote, kept for reference (live words were not a voter: adding them cost +1.16 [+0.35, +1.89] on e22):
 
@@ -204,17 +204,18 @@ The benchmark measured a richer upgrade, a confidence ROVER of Qwen and Parakeet
 
 When Qwen's line lands, alone on the M4, first 80 utterances of the benchmark: 1.43 s (p50) / 4.33 s (p95) after the utterance closes with one channel, and 2.56 / 7.82 s with two. Through akou's live path on 20 FLEURS clips per language, one channel, it answered in 0.74 to 1.04 s (p50) and 2.13 to 2.78 s (p95). The utterance closes 0.5 s after speech ends.
 
-Memory while a call runs: live 2.25 GB, Parakeet 2.7 GB (the live Worker loads it on every setup, for dictation and the decode list), and Qwen (MLX peaked at 7.8 GB in the benchmark; llama-server Q8_0 sat at 4.9 to 5.2 GB on Linux), about 10 to 13 GB in all. That needs a memory guard (`asr.memoryBudgetMb`, section 6), and it is why the upgrade is a setting.
+Memory while a call runs: live 2.25 GB, Parakeet 2.7 GB (the live Worker loads it on every setup, for dictation and the decode list), and Qwen (MLX peaked at 7.8 GB in the benchmark; llama-server Q8_0 sat at 4.9 to 5.2 GB on Linux), about 10 to 13 GB in all. That needs a memory guard (`asr.memoryBudgetMb`, section 6), and it is why `auto` runs the upgrade only on a machine with 16 GB or more.
 
 **Built (ASR-7).** The `upgrade` setup of `asr.live` runs it, in `src/main/asr/live-worker.ts` and `src/main/asr/upgrade.ts`:
 
 - **The unit is an utterance:** the streaming lines from one stop of the speaker to the next, at most 30 s. The speaker stopped when the stream heard nothing new for the pause plus the engine's chunk (section 3.1), or at a flush. A single line is too short a unit. The line cutter breaks at a 0.7 s gap between tokens, which falls inside sentences, and a token's time trails its audio, so a line's audio cuts words at both ends. On 20 FLEURS English clips, Parakeet on each line read 16.63 against 7.34 for the stream.
-- **Qwen.** Right after the utterance's last line is written, the live Worker hands the utterance's audio, gained and padded by `prepareSpan`, to the host. A call line waiting for its speaker label is sent right after it, never before. The host sends the audio to Qwen, one utterance at a time. The glossary is the call's decode list, and the language is `asr.languages` (forced when it names one). The revision's `model` is `qwen3-asr-1.7b`. No other engine decodes the utterance.
-- **Back into lines.** Qwen's words go back into the utterance's lines by text, not by time. They are aligned with the stream's words, and each word goes to the line of the stream word it matches. A word the stream did not have goes with the word before it. Each line gets its share as its next revision. A reader following the call (`akou_read`) gets the line again with its new text and model.
-- **Limits.** At most 6 utterances wait for Qwen. Past that, the oldest keeps the streaming text, so a slow Qwen upgrades the newest lines instead of falling behind. A request past 30 s, or a Qwen that fails, leaves the lines with the streaming text, and the failure is logged once.
+- **Qwen, once a minute.** Right after the utterance's last line is written, the live Worker hands the utterance's audio, gained and padded by `prepareSpan`, to the host. A call line waiting for its speaker label is sent right after it, never before. A minute after an utterance closes with no review armed, the host sends every utterance closed since the last review to Qwen: whole utterances, in one request of at most 90 s of audio (more goes in a second request), 0.2 s of silence between them (`reviewBatches` and `joinUtterances` in `upgrade.ts`). Requests go one at a time. The glossary is the call's decode list, and the language is `asr.languages` (forced when it names one). The revision's `model` is `qwen3-asr-1.7b`. No other engine decodes the utterance.
+- **Back into lines.** Qwen's words go back into the request's lines by text, not by time. They are aligned with the stream's words, and each word goes to the line of the stream word it matches. A word the stream did not have goes with the word before it. Each line gets its share as its next revision. A reader following the call (`akou_read`) gets the line again with its new text and model.
+- **Limits.** A review still waiting when the next minute's is due is skipped: its lines keep the streaming text, and the newest minute goes instead. A Qwen whose review had not finished when the next was due, two minutes in a row, is not keeping up: the review is off for the rest of the call, and the log says so. A request past 60 s, or a Qwen that fails, leaves the lines with the streaming text, and the failure is logged once. Utterances still waiting for their minute when the call ends are never sent; the final pass covers them.
 - **What never changes.** A line a person edited or retracted keeps their text, and so does a line that gets no words from Qwen. `call.ended` gives up the request in flight, and anything that answers later is dropped, since the final pass covers the call.
 - **One Qwen.** Qwen runs on the llama-server dictation keeps warm when there is one, so one Qwen serves both. Otherwise the upgrade starts its own, which gives way to a final pass on Metal instead of stopping it, and stops when its call ends.
 - **No key of its own.** The plan named `asr.live.upgrade`. The upgrade is instead the `upgrade` value of `asr.live`.
+- **When `auto` runs it** (`upgradeRoom` in `live-setups.ts`): Qwen and its llama-server build on disk (an own `asr.llamaServer` needs no build), Qwen on a GPU rather than the CPU, 16 GB of memory or more (the upgrade takes 10 to 13 GB with the rest of a call), and no final pass holding the GPU when the call starts. Otherwise `auto` runs Nemotron, as before.
 
 Measured on the reference Mac mini, 20 FLEURS clips per language, each clip one call through the live pipeline with the real models (`tests/live-upgrade-qwen.test.ts`; the repository's scorer, which does not normalize numbers). FLEURS is read speech; this was not run on AMI meetings. The first version of the upgrade, Parakeet then ROVER(Qwen, Parakeet), is in the last column, measured on the same clips with the same harness:
 
@@ -224,6 +225,35 @@ Measured on the reference Mac mini, 20 FLEURS clips per language, each clip one 
 | es (`nemotron-3.5-1120`) | 4.87 | **2.75** | 1.04 / 2.78 s | 21 | 3.60 |
 
 Qwen's words reversed before they are cut back into the lines, the failing control, read 93.52 and 95.55.
+
+#### Per minute against per utterance
+
+The idea: review each minute with Qwen when the Mac allows it, instead of each utterance as it closes. The rule set before measuring: ship the per-minute cadence only if its WER is within 0.3 points of per-utterance or better, and it cuts Qwen's GPU busy share or its requests per minute by at least 30 %.
+
+Measured on the reference Mac mini (`tests/live-upgrade-minute.test.ts`), with the FLEURS clips of the table above joined into one stream per language, 1 s of silence between clips, so the minutes are real. The live pipeline runs once per language, and the same closed utterances go to Qwen both ways, each on a fresh llama-server. Time is the call's audio clock: a request is ready when its utterance closes (or at its minute), starts when Qwen is free, and ends its measured decode time later. The delay is from a word spoken (spread evenly over its line) to its reviewed text. Busy is Qwen's decode time over the call's length. Memory is llama-server's peak physical footprint. The mini was running other builds at the same time (load 9 to 45), which slows the decodes of both cadences alike.
+
+| Stream | Cadence | WER | Delay p50 / p95 | Qwen requests a minute | Qwen busy | llama-server peak |
+|---|---|---|---|---|---|---|
+| en, 20 clips, 3.9 min (stream 11.45) | per utterance | 8.42 | 6.3 / 15.8 s | 6.68 | 9.6 % | 949 MB |
+| | **per minute** | **7.78** | 41.6 / 79.4 s | **1.03** | 8.1 % | 1,024 MB |
+| es, 20 clips, 4.1 min (stream 8.90) | per utterance | 5.08 | 7.7 / 15.1 s | 5.66 | 10.0 % | 947 MB |
+| | **per minute** | **5.08** | 43.9 / 79.4 s | **0.98** | 9.9 % | 1,012 MB |
+| en, 150 clips, 26.7 min (stream 14.39) | per utterance | 11.36 | 6.3 / 13.3 s | 6.22 | 9.1 % | 968 MB |
+| | **per minute** | **10.19** | 42.7 / 73.1 s | **0.94** | 7.9 % | 1,007 MB |
+| es, 150 clips, 33.5 min (stream 8.00) | per utterance | 4.32 | 8.9 / 18.9 s | 4.69 | 10.6 % | 959 MB |
+| | **per minute** | **4.19** | 48.3 / 78.9 s | **0.93** | 9.9 % | 1,008 MB |
+
+Qwen's words reversed before they are cut back, the failing control, read 90.10 to 95.25 on every row. No request waited for Qwen and none was dropped: a minute's review took 3.4 to 8.6 s.
+
+The per-minute cadence passes the rule on every row: its WER is equal or better (−0.64, 0.00, −1.17, −0.13), and it sends 80 to 85 % fewer requests. Its busy share is only 1 to 16 % lower, since Qwen's time follows the audio it hears, not the number of requests. What it costs is the wait: the reviewed text lands about 45 s after the words (p50) instead of 6 to 9 s, and utterances still waiting for their minute when the call ends are never reviewed live. So it is what the `upgrade` setup does now, and `auto` runs it when the Mac allows.
+
+The measured per-minute cadence also reviews the utterances left at the end of the audio, which the app does not do (they go to the final pass). That is 1 of the 4 requests on the 20-clip rows and at most 60 s of audio on the long ones. Scored at the stream's WER instead, that tail moves English 150 clips from 10.19 to about 10.35, still under per-utterance's 11.36; the rule holds on every row either way.
+
+Qwen hears a minute of speech at once, with more context than one utterance, which is the likely reason it is no worse: the per-line cut read 16.63 because a line's audio cuts words at both ends, and a minute of whole utterances cuts nothing.
+
+The stream reads worse on joined clips than on single clips (English 11.45 on 20 joined clips and 14.39 on 150, against 7.34 on the same 20 one at a time). We have not explained it; both cadences review the same stream.
+
+    AKOU_LIVE_MODELS=<models> AKOU_FLEURS=<data> AKOU_LIVE_CLIPS=150 bun test tests/live-upgrade-minute.test.ts
 
 An LLM per utterance was measured on 20 utterances per set: −1 to −6 errors against ROVER(Q,P) with Opus, +4 / −2 with Sonnet, 3 to 13 s of extra wall time, $0.009 per utterance. The sample is too small to show a gain, and the LLM is too slow for the live view. It is not in the design.
 
@@ -292,7 +322,7 @@ Per call: `akou start --language es --engines qwen3-asr-1.7b,parakeet-tdt-0.6b-v
 | Key | Values | Default | Measured basis |
 |---|---|---|---|
 | `asr.language` | `auto`, an ISO code, or a list (the languages Qwen may choose from) | `auto`. A user who speaks English and Spanish sets `["en","es"]` | `lidc` −0.26 on edacc; forced `es` on code-switched clips 8.06 against 10.34 |
-| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `nemotron` when its model is downloaded, else `parakeet`; never `upgrade`, which runs only when named (the final pass after the call is the accurate transcript, and the upgrade keeps the GPU busy all call); never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; the upgrade itself (ASR-7) in `src/main/asr/live-worker.ts` |
+| `asr.live` | `auto`, `parakeet`, `nemotron`, `upgrade` (Voxtral listed as unavailable until a gate passes) | `auto`: `upgrade` when the Mac allows it (its models on disk, Qwen on a GPU, 16 GB or more, no final pass holding the GPU), else `nemotron` when its model is downloaded, else `parakeet`; never a setup whose models are missing | Live and upgrade tables; memory. Built (akou-chp.23) in `src/main/asr/live-setups.ts`; the upgrade itself (ASR-7) in `src/main/asr/live-worker.ts` |
 | `asr.live.engine` | `auto`, `nemotron-en-560`, `nemotron-3.5-560`, `nemotron-3.5-1120` (`kroko-es` later) | `auto` (by language, section 3.1) | Live table |
 | `asr.final.engines` | Ordered list of registry ids; the first is the tie-breaker and the `first` fallback | `["qwen3-asr-1.7b","parakeet-tdt-0.6b-v3-fp32","whisper-large-v3"]` | Section 4 |
 | `asr.fusion` | `first`, `rover-freq`, `rover-conf` | `rover-conf` | Section 5 |
@@ -344,7 +374,7 @@ The default download on macOS is about 8.7 GB: Parakeet 2.55, live models 0.94, 
 
 - **GPU for sherpa-onnx on Windows and Linux.** The npm builds are CPU-only, so akou would build its own onnxruntime with CUDA or DirectML. Not needed for v1: live RTF is 0.067 on the CPU.
 - **Streaming hotwords.** Needs sherpa-onnx after 1.13.8: build from master, or wait for the release.
-- **Qwen as a true streaming engine on every OS.** Port the re-decode-with-rollback loop onto llama.cpp. The in-call upgrade gives Qwen-quality text 1.5 s after each utterance without it.
+- **Qwen as a true streaming engine on every OS.** Port the re-decode-with-rollback loop onto llama.cpp. The in-call upgrade gives Qwen-quality text about 45 s after the words, once a minute, without it.
 - **Voxtral Mini 4B Realtime live**, the best measured streaming accuracy (7.19 / 3.60 on FLEURS). It runs at RTF 1.0 on the M4, so it needs a faster GPU and one channel, and it has no timestamps and no biasing.
 - **Anything on Windows.** No Windows run exists; every Windows claim comes from release assets. A Windows measurement (ASR-12) is the gate before any Windows default.
 - **Qwen3-ForcedAligner on every OS.** Through CrispASR's GGUF (one clip checked) or an ONNX Runtime session (not run).
@@ -391,6 +421,6 @@ Each is cheap once the harness is in the repo (ASR-11):
 
 - The benchmark holds, with two corrections that change the defaults: fusion gains were measured against a Qwen that did not know the call language (about 0.25 pooled, 2.3 on code-switching), and the LLM rewriter's advantage over confidence ROVER exists only on read speech.
 - Three runtimes: sherpa-onnx in the app for live streaming and Parakeet, llama-server as a child process for Qwen3-ASR-1.7B, transcribe-cpp from npm for Whisper, Cohere and Canary. One registry with `FinalEngine`, `LiveEngine` and `Fuser`; any number of engines in `asr.final.engines`.
-- Defaults: live nemotron-en or Nemotron 3.5 by language; the in-call upgrade (one Qwen rewrite per utterance, about 1 s after it closes) only when chosen; final pass Qwen + Parakeet + Whisper with confidence ROVER (pooled 7.97 to 7.98, against 8.63 for Qwen with the language set and 11.23 for akou today); LLM fusion off.
+- Defaults: live nemotron-en or Nemotron 3.5 by language; the in-call upgrade (one Qwen rewrite per line, once a minute) when chosen, or on `auto` when the Mac allows it; final pass Qwen + Parakeet + Whisper with confidence ROVER (pooled 7.97 to 7.98, against 8.63 for Qwen with the language set and 11.23 for akou today); LLM fusion off.
 - Change now: Parakeet to greedy (ASR-1).
 - Impossible only where Apple hardware is the substrate. Windows is unmeasured, and ASR-12 gates its defaults.

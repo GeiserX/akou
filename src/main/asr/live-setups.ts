@@ -7,15 +7,17 @@
  * |------------|--------------------------------------------------------------|---------|
  * | `parakeet` | Parakeet re-decoding each pause-cut window (words move back)  | 36.17   |
  * | `nemotron` | streaming Nemotron (a word shown is never taken back)         | 18.80   |
- * | `upgrade`  | streaming Nemotron, each closed utterance's lines rewritten   | not run |
- * |            | once by Qwen (FLEURS: en 7.34 to 4.75, es 4.87 to 2.75)       |         |
+ * | `upgrade`  | streaming Nemotron, the lines of the last minute's closed     | not run |
+ * |            | utterances rewritten once by Qwen, once a minute              |         |
  * | `voxtral`  | listed only: unavailable, with its reason                    |         |
  *
- * `auto` picks `nemotron` when a streaming model is on disk, else `parakeet`. It never picks
- * `upgrade`: the accurate transcript is the final pass after the call, and the upgrade keeps the
- * GPU busy for the whole call, so it runs only when chosen by name (the Models page, `asr.live`, a
- * call's `live` at its start). A setup whose models are missing is never run: a named one that
- * cannot run falls back the same way and says why. The choice is made
+ * `auto` picks `upgrade` when the Mac allows it (`upgradeRoom`): Qwen and its llama-server on disk,
+ * a GPU to run Qwen on, `UPGRADE_MIN_MEMORY_GB` of memory or more, and no final pass holding the
+ * GPU. Reviewing once a minute, Qwen was busy for 7.9 to 9.9 % of a call on the reference Mac mini. Otherwise
+ * `auto` picks `nemotron` when a streaming model is on disk, else `parakeet`. A Qwen that does not
+ * keep up during the call turns the review off for that call and says so (live-worker.ts). A setup
+ * whose models are missing is never run: a named one that cannot run falls back the same way and
+ * says why. The choice is made
  * when a call takes the recognizer, so a change applies from the next call and a running call keeps
  * its setup. The in-call upgrade itself (ASR-7) is in live-worker.ts.
  */
@@ -64,6 +66,9 @@ export interface LiveSetupInfo {
 const ARCH = "docs/research/asr-architecture.md";
 const LIVE = `${ARCH}#31-what-replaces-the-12-s-windows`;
 const UPGRADE = `${ARCH}#32-upgrading-live-text-during-the-call`;
+/** Memory `auto` needs before it runs Qwen during a call: the upgrade takes 10 to 13 GB. */
+export const UPGRADE_MIN_MEMORY_GB = 16;
+
 const E22 = `the first 600 s of an Earnings-22 call, one channel, on the ${REFERENCE_MACHINE}`;
 
 export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
@@ -128,24 +133,25 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
     },
   },
   upgrade: {
-    title: "Nemotron, each line rewritten by Qwen",
-    what: "Streaming Nemotron writes the words; when the speaker stops, Qwen rewrites the lines once, about 1 s after the utterance closes",
-    // FLEURS, 20 clips per language: 7.34 to 4.75 % (35 % fewer) and 4.87 to 2.75 % (44 % fewer).
+    title: "Nemotron, reviewed by Qwen each minute",
+    what: "Streaming Nemotron writes the words; once a minute, Qwen rewrites the lines of the sentences finished since, once",
+    // FLEURS joined into 27 and 34 minute calls: 14.39 to 10.19 % (29 % fewer) and 8.00 to 4.19 %
+    // (48 % fewer).
     plain:
-      "Cleaner lines a second after each speaker stops. Not measured on meetings yet; on read speech it cuts Nemotron's mistakes by a third or more. Uses 10 to 13 GB of memory during a call.",
+      "Cleaner lines about a minute after they are said. Not measured on meetings yet; on read speech it cuts Nemotron's mistakes by a quarter or more. Uses 10 to 13 GB of memory during a call.",
     accuracy: {
       notMeasured:
-        "not run on AMI meetings; on 20 FLEURS clips per language, Qwen's rewrite takes the stream from 7.34 to 4.75 % WER in English and from 4.87 to 2.75 in Spanish",
+        "not run on AMI meetings; on FLEURS clips joined into one call per language (27 and 34 min), Qwen's review each minute takes the stream from 14.39 to 10.19 % WER in English and from 8.00 to 4.19 in Spanish",
     },
     latency: {
       metric: "seconds",
       value: 0.46,
-      what: "the words show as Nemotron's (0.46 s p50); Qwen's rewrite lands 0.74 to 1.04 s (p50) after the utterance closes on 20 FLEURS clips per language, 2.1 to 2.8 s (p95)",
+      what: "the words show as Nemotron's (0.46 s p50); Qwen's review lands 43 to 48 s (p50) after a word is said, 73 to 79 s (p95), on FLEURS clips joined into one call per language",
       source: UPGRADE,
     },
     cores: {
       notMeasured:
-        "Nemotron's 0.39 cores per channel plus a Qwen decode per utterance; the two together were not timed",
+        "Nemotron's 0.39 cores per channel, and Qwen on the GPU for 7.9 to 9.9 % of the call; the two together were not timed",
     },
     memory: {
       metric: "gb",
@@ -179,6 +185,15 @@ export interface LiveSetupContext {
   present: (id: string) => boolean;
   /** The llama-server build Qwen runs on here, or null for an own llama-server. */
   runtime: string | null;
+  /** What `auto` needs to know before it runs Qwen during a call; absent: `auto` never does. */
+  machine?: {
+    /** Qwen's llama-server runs on a GPU here (not `cpu`). */
+    gpu: boolean;
+    /** The machine's memory, GB. */
+    memoryGb: number;
+    /** A final pass's llama-server holds the GPU now. */
+    gpuBusy: boolean;
+  };
 }
 
 export interface LiveSetupChoice {
@@ -214,6 +229,23 @@ export function setupModels(id: LiveSetupId, c: LiveSetupContext): string[] {
   }
 }
 
+/**
+ * Why `auto` does not run the upgrade on this machine now, or null when the Mac allows it: every
+ * model of the upgrade on disk, Qwen on a GPU, `UPGRADE_MIN_MEMORY_GB` or more, and no final pass
+ * holding the GPU.
+ */
+export function upgradeRoom(c: LiveSetupContext): string | null {
+  const missing = setupModels("upgrade", c).filter((id) => !c.present(id));
+  if (missing.length > 0) return `needs ${missing.join(", ")}`;
+  const m = c.machine;
+  if (!m) return "not known whether this machine can run Qwen";
+  if (!m.gpu) return "Qwen would run on the CPU here";
+  if (m.memoryGb < UPGRADE_MIN_MEMORY_GB)
+    return `${Math.round(m.memoryGb)} GB of memory, under ${UPGRADE_MIN_MEMORY_GB}`;
+  if (m.gpuBusy) return "a final pass holds the GPU";
+  return null;
+}
+
 /** The setup the next call runs, never one whose models are missing. */
 export function chooseLiveSetup(c: LiveSetupContext): LiveSetupChoice {
   const setting = isLiveSetting(c.setting) ? c.setting : "auto";
@@ -225,6 +257,8 @@ export function chooseLiveSetup(c: LiveSetupContext): LiveSetupChoice {
     return { setup: "parakeet", choice: null, ...(note ? { note } : {}) };
   };
   if (setting === "parakeet") return { setup: "parakeet", choice: null };
+  if (setting === "auto" && stream.choice && upgradeRoom(c) === null)
+    return { setup: "upgrade", choice: stream.choice };
   if (setting === "nemotron" || setting === "auto") return fallback();
   const missing = setupModels("upgrade", c).filter((id) => !c.present(id));
   const upgradeWhy =
@@ -263,6 +297,8 @@ export interface LiveView {
   setting: LiveSetting;
   /** What the next call runs, and why it differs from the setting when it does. */
   next: RunnableSetup;
+  /** What `auto` runs on this machine now. */
+  auto?: RunnableSetup;
   note: string | null;
   /** What the live call runs, or null with no call or no live transcript. */
   running: RunnableSetup | null;
@@ -278,6 +314,7 @@ export function liveView(
   return {
     setting: isLiveSetting(c.setting) ? c.setting : "auto",
     next: next.setup,
+    auto: chooseLiveSetup({ ...c, setting: "auto" }).setup,
     note: next.note ?? null,
     running,
     setups: LIVE_SETUP_IDS.map((id) => {

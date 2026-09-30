@@ -79,6 +79,8 @@ export interface RigOptions {
   accelerator?: AppOptions["accelerator"];
   /** The Metal llama-server beside dictation's own; by default the build's pid file. */
   metalHolder?: AppOptions["metalHolder"];
+  /** How often the in-call upgrade reviews a call's closed utterances, ms; a minute by default. */
+  liveReviewEveryMs?: number;
 }
 
 /** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
@@ -142,6 +144,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     engine: o.engine,
     accelerator: o.accelerator ?? NO_GPU,
     ...(o.metalHolder ? { metalHolder: o.metalHolder } : {}),
+    ...(o.liveReviewEveryMs ? { liveReviewEveryMs: o.liveReviewEveryMs } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;
