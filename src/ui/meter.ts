@@ -1,14 +1,14 @@
 /**
  * How a level bar moves (WINDOW W3.18): the levels arrive four times a second, each the peak of
  * one capture packet, so a bar set straight from them jumps in steps and flickers between loud and
- * quiet packets. The bar is drawn per animation frame instead: it rises to a louder level almost
- * at once (attack) and falls back slowly (release), as a hardware level meter does. The window's
- * two meters and the indicator's two use the same code.
+ * quiet packets. The window's bar is drawn per animation frame instead: it rises to a louder level
+ * almost at once (attack) and falls back slowly (release), as a hardware level meter does.
  *
- * A frame is not guaranteed: WebKit runs no `requestAnimationFrame` in a page it does not count as
- * shown, and on macOS the floating indicator, a window that is never activated, is such a page
- * while its timers and pushed levels still run. So each step waits for whichever comes first, the
- * next frame or a short timer, and a page without frames still moves its bars.
+ * The floating indicator's two bars follow the same attack and release, but move only when a level
+ * is pushed (`PushedMeters`). WebKit runs no animation frame in a page it does not count as shown,
+ * which on macOS is the never-activated indicator, and may run its timers only once a second
+ * there, so neither can drive its bars; the pushed levels (the capture's, four a second) always
+ * arrive, which is why its time and state always update.
  */
 
 import type { Levels } from "./protocol.ts";
@@ -19,8 +19,6 @@ export const METER_FLOOR = -60;
 export const ATTACK_MS = 25;
 /** How fast a bar falls, dB per second. */
 export const RELEASE_DB_PER_S = 24;
-/** How long a step waits for an animation frame before a timer draws it instead, ms. */
-export const FRAME_WAIT_MS = 50;
 
 const clamp = (db: number) => Math.max(METER_FLOOR, Math.min(0, Number.isFinite(db) ? db : -120));
 
@@ -44,36 +42,29 @@ const nextFrame = (fn: (t: number) => void): number =>
     globalThis as unknown as { requestAnimationFrame(f: (t: number) => void): number }
   ).requestAnimationFrame(fn);
 
-/** Runs `fn` after `ms`; returns what cancels it. */
-const timer = (fn: () => void, ms: number): (() => void) => {
-  const id = setTimeout(fn, ms);
-  return () => clearTimeout(id);
-};
-
 /**
  * The two bars of a page. `set` gives each its new level, `reset` empties both at once (another
- * call is shown); between the two, one animation frame at a time moves what is drawn (a timer when
- * the page gets no frame), and the steps stop once both bars reached their level.
+ * call is shown); between the two, one animation frame at a time moves what is drawn, and the
+ * frames stop once both bars reached their level.
  */
 export class SmoothMeters {
   private shown: Levels = { mic: METER_FLOOR, call: METER_FLOOR };
   private target: Levels = { mic: METER_FLOOR, call: METER_FLOOR };
-  private pending = false;
+  private frame: number | null = null;
   private at = 0;
 
   constructor(
     private readonly draw: (ch: Channel, db: number) => void,
-    private readonly raf: (fn: (t: number) => void) => unknown = nextFrame,
+    private readonly raf: (fn: (t: number) => void) => number = nextFrame,
     private readonly now: () => number = () => performance.now(),
-    private readonly after: (fn: () => void, ms: number) => () => void = timer,
   ) {}
 
   set(l: Levels): void {
     this.target = { mic: clamp(l.mic), call: clamp(l.call) };
     const rests = this.shown.mic === this.target.mic && this.shown.call === this.target.call;
-    if (this.pending || rests) return;
+    if (this.frame !== null || rests) return;
     this.at = this.now();
-    this.next();
+    this.frame = this.raf((t) => this.step(t));
   }
 
   reset(): void {
@@ -82,22 +73,8 @@ export class SmoothMeters {
     for (const ch of ["mic", "call"] as const) this.draw(ch, METER_FLOOR);
   }
 
-  /** The next step: on the next frame, or on the timer when no frame came first. */
-  private next(): void {
-    this.pending = true;
-    let done = false;
-    const run = (t: number) => {
-      if (done) return;
-      done = true;
-      cancel();
-      this.step(t);
-    };
-    const cancel = this.after(() => run(this.now()), FRAME_WAIT_MS);
-    this.raf(run);
-  }
-
   private step(t: number): void {
-    this.pending = false;
+    this.frame = null;
     const dt = t - this.at;
     this.at = t;
     let moving = false;
@@ -109,6 +86,41 @@ export class SmoothMeters {
       }
       if (next !== this.target[ch]) moving = true;
     }
-    if (moving) this.next();
+    if (moving) this.frame = this.raf((t2) => this.step(t2));
+  }
+}
+
+/**
+ * The indicator's two bars (DESKTOP DK-F1): each pushed level moves them once, by what the attack
+ * and the release allow in the time since the last push, and draws at once. No frame and no timer,
+ * so they move in a window that gets neither.
+ */
+export class PushedMeters {
+  private shown: Levels = { mic: METER_FLOOR, call: METER_FLOOR };
+  private at: number | null = null;
+
+  constructor(
+    private readonly draw: (ch: Channel, db: number) => void,
+    private readonly now: () => number = () => performance.now(),
+  ) {}
+
+  set(l: Levels): void {
+    const t = this.now();
+    // The first level after a reset is drawn as it is: there is no earlier one to fall from.
+    const dt = this.at === null ? Number.POSITIVE_INFINITY : t - this.at;
+    this.at = t;
+    for (const ch of ["mic", "call"] as const) {
+      const next = meterStep(this.shown[ch], l[ch], dt);
+      if (next !== this.shown[ch]) {
+        this.shown[ch] = next;
+        this.draw(ch, next);
+      }
+    }
+  }
+
+  reset(): void {
+    this.shown = { mic: METER_FLOOR, call: METER_FLOOR };
+    this.at = null;
+    for (const ch of ["mic", "call"] as const) this.draw(ch, METER_FLOOR);
   }
 }

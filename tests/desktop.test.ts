@@ -1015,7 +1015,7 @@ describe("[DK-F1] the floating indicator, in the shell", () => {
     expect(f.indicator()?.frame).toEqual({ x: right - 372, y: 16, width: 372, height: 40 });
     expect(await fitTo({ width: 402 })).toBe(true);
     expect(f.indicator()?.frame).toEqual({ x: right - 402, y: 16, width: 402, height: 40 });
-    for (const width of [Number.NaN, -1, 0, "400" as unknown as number]) {
+    for (const width of [Number.NaN, Number.POSITIVE_INFINITY, -1, 0, "400" as unknown as number]) {
       expect(await fitTo({ width })).toBe(false);
       expect(f.indicator()?.frame.width).toBe(402);
     }

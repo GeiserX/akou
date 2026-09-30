@@ -152,7 +152,7 @@ const bars = (page: Page) =>
 describe("[DK-F1] the indicator's level bars", () => {
   for (const frames of [true, false])
     test(
-      `both bars move with the capture ${frames ? "in a page in front" : "in a page that runs no animation frame, as the always-on-top window on macOS"}`,
+      `both bars move with the capture ${frames ? "in a page in front" : "in a page with no animation frame and no timer under a second, as the never-activated window on macOS may be"}`,
       async () => {
         await withDesktop(
           async (rig) => {
@@ -237,6 +237,75 @@ describe("[DK-F1] the indicator's window is as wide as its pill", () => {
           expect(await fits("past an hour")).toBeGreaterThan(recording);
         },
         { indicatorClock: true },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+/** Where the pill's left edge is on the screen: the window's x plus the pill's place in it. */
+const pillOnScreen = async (rig: DesktopRig, page: Page) =>
+  (rig.indicatorFrame()?.x ?? 0) +
+  (await page.evaluate(() => document.getElementById("bar")?.getBoundingClientRect().left ?? 0));
+
+describe("[DK-F1] the indicator's first fit", () => {
+  test(
+    "the pill does not move when the window first shrinks to it",
+    async () => {
+      let open: () => void = () => {};
+      const held = new Promise<void>((r) => {
+        open = r;
+      });
+      await withDesktop(
+        async (rig) => {
+          await rig.startCall({ title: "Sync" });
+          const page = await indicatorPage(rig);
+          // The window is still at its first 480 px: where the pill shows now is where it stays.
+          expect(rig.indicatorFrame()?.width).toBe(480);
+          const before = await pillOnScreen(rig, page);
+          open();
+          await until(
+            () => (rig.indicatorFrame()?.width ?? 480) < 480,
+            5000,
+            "the window to fit the pill",
+          );
+          await Bun.sleep(100);
+          expect(Math.abs((await pillOnScreen(rig, page)) - before)).toBeLessThanOrEqual(1);
+        },
+        { indicatorFit: async (_w, shell) => held.then(shell) },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a refused fit is asked again, and the window ends as wide as the pill",
+    async () => {
+      // Every fit is refused until the page shows the recording and has asked for its width.
+      let refusing = true;
+      let refused = 0;
+      await withDesktop(
+        async (rig) => {
+          await rig.startCall({ title: "Sync" });
+          const page = await indicatorPage(rig);
+          const width = Math.ceil((await pill(page)).width);
+          await until(() => refused > 0, 5000, "a refused fit");
+          await Bun.sleep(200);
+          expect(rig.indicatorFrame()?.width).toBe(480);
+          refusing = false;
+          await until(
+            () => rig.indicatorFrame()?.width === width,
+            5000,
+            `the window to be asked again for ${width} px`,
+          );
+        },
+        {
+          indicatorFit: async (_w, shell) => {
+            if (!refusing) return shell();
+            refused++;
+            return false;
+          },
+        },
       );
     },
     UI_TIMEOUT,

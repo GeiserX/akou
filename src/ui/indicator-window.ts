@@ -66,6 +66,6 @@ mountIndicator(
   },
   {
     open: () => void rpc.request.openMain({}).catch(() => {}),
-    fit: (width) => void rpc.request.fit({ width }).catch(() => {}),
+    fit: (width) => rpc.request.fit({ width }).catch(() => false),
   },
 );

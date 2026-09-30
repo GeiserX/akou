@@ -86,11 +86,17 @@ export interface DesktopRig extends AppRig {
 
 export interface DesktopRigOptions extends RigOptions {
   /**
-   * The indicator's page runs no animation frame, as a webview in a window that never comes to
-   * the front: WebKit does not run `requestAnimationFrame` for a page it does not count as shown,
-   * while its timers and pushed messages still run.
+   * The indicator's page runs no animation frame and no timer shorter than a second, as a webview
+   * in a window that never comes to the front may: WebKit runs no `requestAnimationFrame` for a
+   * page it does not count as shown and may hold its timers to one a second. Its pushed messages
+   * still arrive.
    */
   indicatorWithoutFrames?: boolean;
+  /**
+   * Answers the indicator's `fit` requests in place of the shell, given the shell's own answer:
+   * a test refuses one to see the page ask again.
+   */
+  indicatorFit?: (width: number, shell: () => Promise<boolean>) => Promise<boolean>;
   /** The indicator's page runs on Playwright's clock, so a test can move its time forward. */
   indicatorClock?: boolean;
 }
@@ -117,6 +123,12 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
       if (view === "indicator" && o.indicatorWithoutFrames)
         await page.addInitScript(() => {
           window.requestAnimationFrame = () => 0;
+          const never = () => 0 as unknown as ReturnType<typeof setTimeout>;
+          const { setTimeout: later, setInterval: every } = window;
+          window.setTimeout = ((fn: TimerHandler, ms = 0, ...a: unknown[]) =>
+            ms < 1000 ? never() : later(fn, ms, ...a)) as typeof setTimeout;
+          window.setInterval = ((fn: TimerHandler, ms = 0, ...a: unknown[]) =>
+            ms < 1000 ? never() : every(fn, ms, ...a)) as typeof setInterval;
         });
       await page.route(`${ORIGIN}/**`, (route) => {
         const name = new URL(route.request().url()).pathname.slice(1) || "index.html";
@@ -181,7 +193,12 @@ export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig>
     },
     openIndicator: (w: { url: string; rpc: IndicatorRpcHandlers; frame: Rect }) => {
       if (w.url !== INDICATOR_URL) throw new Error(`unknown window ${w.url}`);
-      const p = open("indicator", w.rpc.handlers);
+      const shellFit = w.rpc.handlers.fit;
+      const gate = o.indicatorFit;
+      const handlers = gate
+        ? { ...w.rpc.handlers, fit: (p: { width: number }) => gate(p.width, () => shellFit(p)) }
+        : w.rpc.handlers;
+      const p = open("indicator", handlers);
       // The page is as big as the window, as a webview fills its window.
       const size = (f: Rect) =>
         void p.ready.then((page) => page.setViewportSize({ width: f.width, height: f.height }));

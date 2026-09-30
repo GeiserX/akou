@@ -1,15 +1,15 @@
 /**
- * How a level bar moves (WINDOW W3.18): a fast rise, a slow fall, drawn per animation frame (on a
- * timer in a page that gets no frame), and no step at all once both bars rest. Pure code: no page,
- * no device.
+ * How a level bar moves (WINDOW W3.18): a fast rise, a slow fall, drawn per animation frame in
+ * the window, and no frame at all once both bars rest; in the indicator (DESKTOP DK-F1), moved by
+ * each pushed level with no frame and no timer. Pure code: no page, no device.
  */
 
 import { describe, expect, test } from "bun:test";
 import {
   ATTACK_MS,
-  FRAME_WAIT_MS,
   METER_FLOOR,
   meterStep,
+  PushedMeters,
   RELEASE_DB_PER_S,
   SmoothMeters,
 } from "../src/ui/meter.ts";
@@ -57,16 +57,11 @@ describe("[W3.18] SmoothMeters", () => {
   function rig() {
     const drawn: { ch: string; db: number }[] = [];
     const frames: ((t: number) => void)[] = [];
-    const timers = new Set<() => void>();
     let clock = 0;
     const m = new SmoothMeters(
       (ch, db) => drawn.push({ ch, db }),
       (fn) => frames.push(fn),
       () => clock,
-      (fn) => {
-        timers.add(fn);
-        return () => timers.delete(fn);
-      },
     );
     /** Runs the one pending frame 16 ms later; false when none is pending. */
     const frame = () => {
@@ -76,16 +71,7 @@ describe("[W3.18] SmoothMeters", () => {
       fn(clock);
       return true;
     };
-    /** Runs the one pending timer once it is due, with no frame; false when none is pending. */
-    const timer = () => {
-      const [fn] = timers;
-      if (!fn) return false;
-      timers.delete(fn);
-      clock += FRAME_WAIT_MS;
-      fn();
-      return true;
-    };
-    return { m, drawn, frames, timers, frame, timer };
+    return { m, drawn, frames, frame };
   }
 
   test("a level is drawn frame by frame, and the frames stop once both bars rest", () => {
@@ -94,7 +80,6 @@ describe("[W3.18] SmoothMeters", () => {
     // Levels arriving between frames ask for no second frame.
     r.m.set({ mic: -20, call: -30 });
     expect(r.frames.length).toBe(1);
-    expect(r.timers.size).toBe(1);
     let n = 0;
     while (r.frame()) n++;
     expect(n).toBeGreaterThan(2);
@@ -106,34 +91,7 @@ describe("[W3.18] SmoothMeters", () => {
     const before = r.drawn.length;
     r.m.set({ mic: -20, call: -30 });
     expect(r.frames.length).toBe(0);
-    expect(r.timers.size).toBe(0);
     expect(r.drawn.length).toBe(before);
-  });
-
-  test("a page that gets no animation frame moves its bars on the timer (the macOS indicator)", () => {
-    const r = rig();
-    r.m.set({ mic: -20, call: -24 });
-    let n = 0;
-    while (r.timer()) n++;
-    expect(n).toBeGreaterThan(1);
-    const last = (ch: string) => r.drawn.filter((d) => d.ch === ch).at(-1)?.db;
-    expect(last("mic")).toBe(-20);
-    expect(last("call")).toBe(-24);
-    expect(r.timers.size).toBe(0);
-    // A frame that arrives late after its timer drew the step draws nothing twice.
-    const before = r.drawn.length;
-    for (const fn of r.frames.splice(0)) fn(1e9);
-    expect(r.drawn.length).toBe(before);
-  });
-
-  test("a frame that comes first cancels its timer", () => {
-    const r = rig();
-    r.m.set({ mic: -20, call: -24 });
-    r.frame();
-    // The first step's timer is gone; the second step's is the only one left.
-    expect(r.timers.size).toBe(1);
-    while (r.frame());
-    expect(r.timers.size).toBe(0);
   });
 
   test("reset empties both bars at once, without a frame", () => {
@@ -146,5 +104,89 @@ describe("[W3.18] SmoothMeters", () => {
       { ch: "call", db: METER_FLOOR },
     ]);
     expect(r.frames.length).toBe(0);
+  });
+});
+
+describe("[W3.18] SmoothMeters asks for frames only", () => {
+  test("a level waiting for a frame starts no timer: a hidden window runs no step chain", () => {
+    const real = { setTimeout: globalThis.setTimeout, setInterval: globalThis.setInterval };
+    let timers = 0;
+    globalThis.setTimeout = ((...a: Parameters<typeof setTimeout>) => {
+      timers++;
+      return real.setTimeout(...a);
+    }) as typeof setTimeout;
+    globalThis.setInterval = ((...a: Parameters<typeof setInterval>) => {
+      timers++;
+      return real.setInterval(...a);
+    }) as typeof setInterval;
+    try {
+      const frames: ((t: number) => void)[] = [];
+      const drawn: number[] = [];
+      const m = new SmoothMeters(
+        (_ch, db) => drawn.push(db),
+        (fn) => frames.push(fn),
+        () => 0,
+      );
+      m.set({ mic: -20, call: -24 });
+      // No frame comes (a hidden page): one frame is asked for, nothing else runs or draws.
+      expect(frames.length).toBe(1);
+      expect(timers).toBe(0);
+      expect(drawn).toEqual([]);
+    } finally {
+      globalThis.setTimeout = real.setTimeout;
+      globalThis.setInterval = real.setInterval;
+    }
+  });
+});
+
+describe("[DK-F1] PushedMeters", () => {
+  function rig() {
+    const drawn: { ch: string; db: number }[] = [];
+    let clock = 0;
+    const m = new PushedMeters(
+      (ch, db) => drawn.push({ ch, db }),
+      () => clock,
+    );
+    const last = (ch: string) => drawn.filter((d) => d.ch === ch).at(-1)?.db;
+    return { m, drawn, last, advance: (ms: number) => (clock += ms) };
+  }
+
+  test("each pushed level is drawn at once: the first as it is, a louder one at once", () => {
+    const r = rig();
+    r.m.set({ mic: -20, call: -24 });
+    expect(r.last("mic")).toBe(-20);
+    expect(r.last("call")).toBe(-24);
+    r.advance(250);
+    r.m.set({ mic: -6, call: -24 });
+    expect(r.last("mic")).toBe(-6);
+    // A channel that did not change draws nothing new.
+    expect(r.drawn.filter((d) => d.ch === "call").length).toBe(1);
+  });
+
+  test("a quieter level falls at the release rate over the time since the last push", () => {
+    const r = rig();
+    r.m.set({ mic: -10, call: -10 });
+    r.advance(250);
+    r.m.set({ mic: -60, call: -12 });
+    expect(r.last("mic")).toBeCloseTo(-10 - RELEASE_DB_PER_S / 4, 5);
+    expect(r.last("call")).toBe(-12);
+    // Positive control: a bar set straight from the pushes would have dropped to the floor.
+    expect(r.last("mic")).toBeGreaterThan(METER_FLOOR);
+    r.advance(2000);
+    r.m.set({ mic: -60, call: -12 });
+    expect(r.last("mic")).toBe(METER_FLOOR);
+  });
+
+  test("reset empties both bars, and the next level is drawn as it is", () => {
+    const r = rig();
+    r.m.set({ mic: -10, call: -10 });
+    r.m.reset();
+    expect(r.drawn.slice(-2)).toEqual([
+      { ch: "mic", db: METER_FLOOR },
+      { ch: "call", db: METER_FLOOR },
+    ]);
+    r.m.set({ mic: -30, call: -40 });
+    expect(r.last("mic")).toBe(-30);
+    expect(r.last("call")).toBe(-40);
   });
 });

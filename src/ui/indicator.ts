@@ -21,7 +21,7 @@
 
 import { elapsedText, recordedMs } from "./indicator-clock.ts";
 import type { IndicatorEvent, IndicatorStatus } from "./indicator-protocol.ts";
-import { SmoothMeters } from "./meter.ts";
+import { PushedMeters } from "./meter.ts";
 import type { Levels } from "./protocol.ts";
 
 /** What a followed call feeds the page. */
@@ -40,7 +40,8 @@ export interface IndicatorTransport {
 /** What the main process does for the indicator: a click on it, and the pill's width. */
 export interface IndicatorHost {
   open(): void;
-  fit(width: number): void;
+  /** True once the window was made that wide. */
+  fit(width: number): Promise<boolean>;
 }
 
 type Health = Record<"mic" | "call", string>;
@@ -95,7 +96,8 @@ export function mountIndicator(
     e.title = `recording since ${at}`;
   };
 
-  const meters = new SmoothMeters((ch, db) => {
+  // Moved by each pushed level, never by a frame or a timer (meter.ts).
+  const meters = new PushedMeters((ch, db) => {
     el<HTMLMeterElement>(`lvl-${ch}`).value = db;
   });
   const level = (l: Levels) => meters.set(l);
@@ -151,20 +153,33 @@ export function mountIndicator(
     if (live) host.open();
   });
 
-  // The pill is as wide as what it shows (indicator.css); the window follows it.
+  // The pill is as wide as what it shows (indicator.css); the window follows it. A width counts as
+  // fitted only once the main process answered true; one that was refused or failed is asked
+  // again on the next second's tick.
   const bar = el("bar");
   let fitted = 0;
+  let asking = 0;
   const fit = () => {
     const width = Math.ceil(bar.getBoundingClientRect().width);
-    if (width > 0 && width !== fitted) {
-      fitted = width;
-      host.fit(width);
-    }
+    if (width <= 0 || width === fitted || width === asking) return;
+    asking = width;
+    void host.fit(width).then(
+      (ok) => {
+        if (asking === width) asking = 0;
+        if (ok) fitted = width;
+      },
+      () => {
+        if (asking === width) asking = 0;
+      },
+    );
   };
   const sized = new ResizeObserver(fit);
   sized.observe(bar);
 
-  const timer = setInterval(tick, 1000);
+  const timer = setInterval(() => {
+    tick();
+    fit();
+  }, 1000);
   draw();
   fit();
   return {
