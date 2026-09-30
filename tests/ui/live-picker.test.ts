@@ -322,8 +322,9 @@ describe("W3.19: the live model picker in the Record row", () => {
 
           // Parakeet live: Qwen's second pass is dim, says why, and calls run none.
           await rig.api("PATCH", "/config", { "asr.live": "parakeet" });
-          await until(async () => (await label(page)) === "Parakeet", 5000, "Parakeet live");
+          // Opening the menu reads the models again, as it does after any change made elsewhere.
           await page.click("#live");
+          await until(async () => (await label(page)) === "Parakeet", 5000, "Parakeet live");
           await page.click("#live-review");
           await page.waitForSelector("#live-review-group");
           expect(await page.textContent('#live-review-group [data-review="qwen"] .live-line')).toBe(
