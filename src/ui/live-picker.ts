@@ -26,12 +26,13 @@ import { everyText, liveModelName } from "../main/asr/live-names.ts";
 import type { LiveView } from "../main/asr/live-setups.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import {
+  everyChoices,
+  everyShort,
   type LiveOption,
   liveChecked,
   liveNote,
   liveOptions,
   liveTitle,
-  REVIEW_EVERY_CHOICES,
   type ReviewOption,
   reviewChecked,
   reviewLabel,
@@ -462,7 +463,7 @@ export class LivePicker {
         "div",
         { class: "live-every", attrs: { role: "group", "aria-label": "How often" } },
         h("span", { class: "live-every-key" }, "Every"),
-        ...REVIEW_EVERY_CHOICES.map((s) =>
+        ...everyChoices(v.review.everySeconds).map((s) =>
           h(
             "button",
             {
@@ -476,7 +477,7 @@ export class LivePicker {
               },
               on: { click: () => void this.save("asr.review.everySeconds", s) },
             },
-            `${s / 60} min`,
+            everyShort(s),
           ),
         ),
       ),

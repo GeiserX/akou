@@ -76,6 +76,20 @@ export interface ReviewOption {
 /** The intervals the menu offers, seconds. */
 export const REVIEW_EVERY_CHOICES = [60, 120, 300] as const;
 
+/**
+ * The intervals to draw: the three offered, and the saved one when it is another (90 or 600 s set
+ * from the CLI), so the saved value always shows as itself.
+ */
+export function everyChoices(saved: number): number[] {
+  const all: number[] = [...REVIEW_EVERY_CHOICES];
+  return all.includes(saved) ? all : [...all, saved].sort((a, b) => a - b);
+}
+
+/** An interval as the menu's switch says it: `2 min`, `90 s`. */
+export function everyShort(seconds: number): string {
+  return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
+}
+
 export function reviewOptions(v: LiveView): ReviewOption[] {
   const r = v.review;
   return [
@@ -86,7 +100,8 @@ export function reviewOptions(v: LiveView): ReviewOption[] {
         id: c.id,
         title: c.title,
         line: c.blocked ?? c.line,
-        state: missing ? "missing" : c.blocked ? "blocked" : "ready",
+        // Blocked first: a model that could not run anyway offers no Get.
+        state: c.blocked ? "blocked" : missing ? "missing" : "ready",
         ...(c.blocked ? { why: c.blocked } : {}),
       };
     }),

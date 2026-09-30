@@ -445,8 +445,12 @@ export function liveView(
           plain: REVIEWS[id].plain,
           line: REVIEWS[id].line,
           models: models(ids),
-          // Missing models show as models, with Get; any other reason is said in words.
-          blocked: block !== null && ids.every((m) => c.present(m)) ? block : null,
+          // A live model it cannot review is said in words whether or not it is here; missing
+          // models otherwise show as models, with Get, and the machine's advice waits for them.
+          blocked:
+            next.setup !== "nemotron" || (block !== null && ids.every((m) => c.present(m)))
+              ? block
+              : null,
         };
       }),
     },

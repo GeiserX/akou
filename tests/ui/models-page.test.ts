@@ -216,6 +216,15 @@ describe("the Models page", () => {
         "asr.review.everySeconds",
       );
       expect(patches).toEqual([{ "asr.review.model": "qwen" }, { "asr.review.everySeconds": 300 }]);
+      // An interval set elsewhere (10 min from the CLI) shows as itself in the list.
+      await rig.api("PATCH", "/config", { "asr.review.everySeconds": 600 });
+      await page.click("#calls-open");
+      await page.click("#models-open");
+      await page.waitForSelector("#models-review-every");
+      expect(await page.inputValue("#models-review-every")).toBe("600");
+      expect(await page.textContent('#models-review-every option[value="600"]')).toBe(
+        "Every 10 min",
+      );
       await rig.api("PATCH", "/config", {
         "asr.review.model": "none",
         "asr.review.everySeconds": 60,
