@@ -214,6 +214,7 @@ async function checkInner(
     ),
     ...DICTIONARY_LANGUAGES.map((l) => `dictionaries/${l}.txt.gz`),
     "tray/akou-template.png",
+    "tray/akou-recording-macos.png",
     "node_modules/sherpa-onnx-node/addon.js",
     `node_modules/${SHERPA_PLATFORM}/sherpa-onnx.node`,
     ...SHERPA_LIBS.map((l) => `node_modules/${SHERPA_PLATFORM}/${l}`),
