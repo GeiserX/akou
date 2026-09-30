@@ -1586,7 +1586,7 @@ export interface LiveReview {
  * How long a read of the call's lines waits for the second pass to review what has closed, ms:
  * past it the read answers with what is reviewed so far and says how many lines are still not.
  */
-export const REVIEW_READ_WAIT_MS = 20_000;
+export const REVIEW_READ_WAIT_MS = 30_000;
 
 /**
  * Reviews in a row that had not finished when the next one was due, after which the second pass
