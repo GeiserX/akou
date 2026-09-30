@@ -66,7 +66,7 @@ const RUNTIME = "llama-server-build";
 function rows(states: Partial<Record<string, State>> = {}): ModelView[] {
   return [
     row(NEM, "Nemotron 3.5", { live: "Words appear as they are said." }, states[NEM]),
-    row(STEADY, "Nemotron 3.5, steadier", { live: "Waits about a second." }, states[STEADY]),
+    row(STEADY, "Nemotron 3.5, 1 s", { live: "Waits about a second." }, states[STEADY]),
     row(PK, "Parakeet", { live: "Writes each sentence.", review: "Hears again." }, states[PK]),
     row(QWEN, "Qwen3-ASR", { review: "Rewrites the lines." }, states[QWEN], { short: "Qwen" }),
     row(RUNTIME, "", {}, states[RUNTIME], { size: 3e7 }),
@@ -111,7 +111,7 @@ describe("W3.19: the live panel's slots", () => {
     const live = slotRows(v, rows({ [STEADY]: "missing" }), "live");
     expect(live.map((r) => [r.id, r.name, r.line, r.state, r.checked])).toEqual([
       [NEM, "Nemotron 3.5", "Words appear as they are said.", "ready", true],
-      [STEADY, "Nemotron 3.5, steadier", "Waits about a second.", "missing", false],
+      [STEADY, "Nemotron 3.5, 1 s", "Waits about a second.", "missing", false],
       [PK, "Parakeet", "Writes each sentence.", "ready", false],
     ]);
     expect(live.some((r) => r.id === "auto")).toBe(false);
@@ -157,7 +157,7 @@ describe("W3.19: the live panel's slots", () => {
   test("a saved model that is not here: the note names what runs until it is", () => {
     const v = view({ setting: STEADY, live: [entry(NEM, true), entry(STEADY), entry(PK)] });
     expect(liveNote(v, rows({ [STEADY]: "missing" }))).toBe(
-      "Nemotron 3.5, steadier is not downloaded, so calls run Nemotron 3.5 until it is.",
+      "Nemotron 3.5, 1 s is not downloaded, so calls run Nemotron 3.5 until it is.",
     );
     expect(liveNote(view({}), rows())).toBeNull();
   });

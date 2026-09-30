@@ -5,11 +5,11 @@
  * Models page, so every place says the same words. No imports, so the window's bundle can take it.
  *
  * The claims rest on the catalog and the measurements (docs/research/asr-architecture.md): the
- * language counts are each model's list; "fewer errors in spontaneous Spanish" for the 1120 ms
- * tier is the bp set (semi-spontaneous Spanish), 5.91 % WER against 7.19 at 560 ms, while read
- * Spanish (FLEURS) scores the same at both tiers; no tier retracts a word once written, so the line
- * claims no steadier words; "mixed in one call" is Nemotron 3.5, the one engine measured to switch
- * language mid-stream.
+ * language counts are each model's list; "fewer errors on spoken Spanish" for the 1120 ms tier is
+ * the bp set (semi-spontaneous Spanish), 5.91 % WER against 7.19 at 560 ms, while read Spanish
+ * (FLEURS) scores the same at both tiers; no tier retracts a word once written, so neither the
+ * name ("1 s", its chunk) nor the line claims steadier words; "mixed in one call" is Nemotron 3.5,
+ * the one engine measured to switch language mid-stream.
  */
 
 export interface ModelText {
@@ -27,9 +27,9 @@ export const MODEL_TEXT: Readonly<Record<string, ModelText>> = {
     lines: { live: "Words appear as they are said. 35 languages, mixed in one call." },
   },
   "nemotron-3.5-1120": {
-    name: "Nemotron 3.5, steadier",
+    name: "Nemotron 3.5, 1 s",
     lines: {
-      live: "Waits about a second before writing. Fewer errors in spontaneous Spanish. 35 languages.",
+      live: "Waits about a second before writing. Fewer errors on spoken Spanish. 35 languages.",
     },
   },
   "nemotron-en-560": {
