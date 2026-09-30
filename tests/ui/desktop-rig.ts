@@ -74,6 +74,8 @@ export interface DesktopRig extends AppRig {
   indicator(): Page | null;
   /** Whether the shell has the indicator shown (`showInactive`) or hidden. */
   indicatorShown(): boolean;
+  /** The indicator window's frame: where it opened, then each one the shell set. */
+  indicatorFrame(): Rect | null;
   /** Pages the rig opened, in order, for the console. */
   pages: Page[];
   /** Cmd+Q: runs the shell's before-quit; true when the shell cancelled it to ask or clean up. */
@@ -82,7 +84,24 @@ export interface DesktopRig extends AppRig {
   exits(): number;
 }
 
-export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
+export interface DesktopRigOptions extends RigOptions {
+  /**
+   * The indicator's page runs no animation frame and no timer shorter than a second, as a webview
+   * in a window that never comes to the front may: WebKit runs no `requestAnimationFrame` for a
+   * page it does not count as shown and may hold its timers to one a second. Its pushed messages
+   * still arrive.
+   */
+  indicatorWithoutFrames?: boolean;
+  /**
+   * Answers the indicator's `fit` requests in place of the shell, given the shell's own answer:
+   * a test refuses one to see the page ask again.
+   */
+  indicatorFit?: (width: number, shell: () => Promise<boolean>) => Promise<boolean>;
+  /** The indicator's page runs on Playwright's clock, so a test can move its time forward. */
+  indicatorClock?: boolean;
+}
+
+export async function desktopRig(o: DesktopRigOptions = {}): Promise<DesktopRig> {
   const rig = (await appRig(o)) as DesktopRig;
   const browser = await launch();
   const files = await views();
@@ -90,6 +109,7 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
   let main: Page | null = null;
   let indicator: Page | null = null;
   let shown = false;
+  let indicatorFrame: Rect | null = null;
   let beforeQuit: (e: { cancel(): void }) => void = () => {};
   let exits = 0;
 
@@ -99,6 +119,17 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
       const page = await browser.newPage();
       pages.push(page);
       page.on("pageerror", (err) => console.error(`${view} page error: ${err.message}`));
+      if (view === "indicator" && o.indicatorClock) await page.clock.install();
+      if (view === "indicator" && o.indicatorWithoutFrames)
+        await page.addInitScript(() => {
+          window.requestAnimationFrame = () => 0;
+          const never = () => 0 as unknown as ReturnType<typeof setTimeout>;
+          const { setTimeout: later, setInterval: every } = window;
+          window.setTimeout = ((fn: TimerHandler, ms = 0, ...a: unknown[]) =>
+            ms < 1000 ? never() : later(fn, ms, ...a)) as typeof setTimeout;
+          window.setInterval = ((fn: TimerHandler, ms = 0, ...a: unknown[]) =>
+            ms < 1000 ? never() : every(fn, ms, ...a)) as typeof setInterval;
+        });
       await page.route(`${ORIGIN}/**`, (route) => {
         const name = new URL(route.request().url()).pathname.slice(1) || "index.html";
         const body = files[view]?.[name];
@@ -162,11 +193,25 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
     },
     openIndicator: (w: { url: string; rpc: IndicatorRpcHandlers; frame: Rect }) => {
       if (w.url !== INDICATOR_URL) throw new Error(`unknown window ${w.url}`);
-      const p = open("indicator", w.rpc.handlers);
+      const shellFit = w.rpc.handlers.fit;
+      const gate = o.indicatorFit;
+      const handlers = gate
+        ? { ...w.rpc.handlers, fit: (p: { width: number }) => gate(p.width, () => shellFit(p)) }
+        : w.rpc.handlers;
+      const p = open("indicator", handlers);
+      // The page is as big as the window, as a webview fills its window.
+      const size = (f: Rect) =>
+        void p.ready.then((page) => page.setViewportSize({ width: f.width, height: f.height }));
+      indicatorFrame = w.frame;
+      size(w.frame);
       void p.ready.then((page) => {
         indicator = page;
       });
       const window: IndicatorWindow = {
+        setFrame: (f) => {
+          indicatorFrame = f;
+          size(f);
+        },
         showInactive: () => {
           shown = true;
         },
@@ -217,6 +262,7 @@ export async function desktopRig(o: RigOptions = {}): Promise<DesktopRig> {
   rig.main = () => main;
   rig.indicator = () => indicator;
   rig.indicatorShown = () => shown;
+  rig.indicatorFrame = () => indicatorFrame;
   rig.pages = pages;
   rig.exits = () => exits;
   rig.quitRequested = () => {

@@ -97,13 +97,15 @@ export function electrobunUi(): NativeUi {
         handlers: { requests: rpc.handlers, messages: {} },
       });
       // Hidden until the shell shows it, and never activated: it must not take the focus from
-      // the meeting app.
+      // the meeting app. The page paints only its rounded pill (indicator.css) and the shell sizes
+      // the window to it; the corners around it show what is behind.
       const win = new BrowserWindow({
         title: "akou",
         url,
         rpc: defined,
         frame,
         titleBarStyle: "hidden",
+        transparent: true,
         hidden: true,
         activate: false,
       });
@@ -111,6 +113,7 @@ export function electrobunUi(): NativeUi {
       win.setVisibleOnAllWorkspaces(true);
       return {
         window: {
+          setFrame: (f) => win.setFrame(f.x, f.y, f.width, f.height),
           showInactive: () => win.showInactive(),
           hide: () => win.hide(),
           close: () => win.close(),

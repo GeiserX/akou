@@ -6,8 +6,8 @@
  * main side, not by what its page happens to render: the status is cut to the live call's id,
  * state and mute; of a followed call only the part, pause, resume and health events cross, each
  * rebuilt from a list of fields, plus the levels. No title, workspace, line, partial, name or mic
- * device ever reaches the page. Its only controls are stop, mute and unmute of the live call, and
- * a click that opens the main window: no route of the API.
+ * device ever reaches the page. Its only controls are stop, mute and unmute of the live call, a
+ * click that opens the main window, and the width its pill takes: no route of the API.
  */
 
 import type { LogEvent } from "../../core/log/events.ts";
@@ -60,7 +60,7 @@ export function indicatorEvent(e: LogEvent): IndicatorEvent | null {
 export function indicatorRpc(
   bridge: Bridge,
   send: () => IndicatorSend,
-  host: { openMain(): Promise<void> },
+  host: { openMain(): Promise<void>; fit(width: number): void },
 ): IndicatorRpcHandlers {
   const follows = new Map<string, () => void>();
   const status = async () => indicatorStatus(await bridge.app.status());
@@ -122,6 +122,12 @@ export function indicatorRpc(
 
       openMain: async () => {
         await host.openMain();
+        return true;
+      },
+
+      fit: async ({ width }) => {
+        if (typeof width !== "number" || !Number.isFinite(width) || width <= 0) return false;
+        host.fit(width);
         return true;
       },
     },
