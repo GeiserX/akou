@@ -1853,6 +1853,16 @@ main {
   color: var(--agent);
   margin-right: 4px;
 }
+/* With no assistant the box searches the call: a plain glyph, and no suggested questions. */
+#ask-form > .ico.find {
+  color: var(--faint);
+  margin-right: 4px;
+}
+#ask-form:not(.search) > .ico.find,
+#ask-form.search > .ico.agent,
+#ask-form.search > #ask-presets-open {
+  display: none;
+}
 #ask-input {
   flex: 1;
   min-width: 0;
@@ -1978,6 +1988,20 @@ main {
 }
 .card p {
   margin: 2px 0;
+}
+/* The search's excerpts, with no answer card over them: one muted label, then the lines. */
+.qa .found {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--faint);
+}
+.qa .found + .evidence {
+  margin-top: 6px;
+}
+.qa .copy-context {
+  margin-top: 8px;
+  font-size: 12px;
+  padding: 5px 10px;
 }
 /* A citation is a small chip: it scrolls to the line and plays it. */
 button.cite {

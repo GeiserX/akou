@@ -2,7 +2,8 @@
  * All calls of one app run (docs/DESIGN.md sections 1.5, 4.1, 4.5 and 6.2).
  *
  * - **One live call at a time.** A start while a call is starting, recording or paused answers
- *   `409 already_recording`. A call that is stopping does not block a new start: its helper is
+ *   `409 already_recording`, naming that call (`already_recording`: id, title, workspace, start
+ *   and state) so an agent can follow it instead of stopping. A call that is stopping does not block a new start: its helper is
  *   killed within the stop budget whatever happens, and two helpers may hold a tap at once.
  * - **Crash recovery at the next start.** `init()` closes what a previous run left open (see
  *   `recovery.ts`) and indexes every call on disk. `start()` runs it first if nobody did.
@@ -30,7 +31,7 @@ import {
   recoverCall,
   summarize,
 } from "./recovery.ts";
-import { type CallBudgets, DEFAULT_BUDGETS, fail, type Outcome } from "./state.ts";
+import { type CallBudgets, DEFAULT_BUDGETS, fail, type LiveBrief, type Outcome } from "./state.ts";
 
 export interface CallManagerOptions {
   /** `~/Recordings/akou`, or a temporary folder in tests. */
@@ -307,8 +308,12 @@ export class CallManager {
     await this.init();
     // Everything from here to the spawn is synchronous, so two starts cannot both pass the check.
     const live = this.live();
-    if (live)
-      return fail(409, "already_recording", "a call is already recording", { call: live.id });
+    if (live) {
+      return fail(409, "already_recording", "a call is already recording", {
+        call: live.id,
+        already_recording: liveBrief(live),
+      });
+    }
     const workspace = req.workspace ?? "default";
     const bad = checkWorkspace(workspace);
     if (bad) return fail(400, "bad_workspace", bad);
@@ -489,4 +494,16 @@ export class CallManager {
     if (c) await c.stop();
     await Promise.all([...this.controllers.values()].map((x) => x.idle()));
   }
+}
+
+/** The live call as a refused start names it. */
+export function liveBrief(c: CallController): LiveBrief {
+  const call = c.view.call;
+  return {
+    id: c.id,
+    title: call?.title ?? "",
+    workspace: call?.workspace ?? "",
+    startedAt: c.view.parts()[0]?.wallStart ?? call?.t ?? 0,
+    state: c.status,
+  };
 }

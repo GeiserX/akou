@@ -167,7 +167,11 @@ const OUT = {
   start: z.looseObject({
     call: z.string(),
     part: INT,
-    firstAudioMs: z.number(),
+    firstAudioMs: z.number().optional().describe("Absent when the call was already recording."),
+    attached: z
+      .boolean()
+      .optional()
+      .describe("True when a call was already recording: this is that call, not a new one."),
     folder: z.string(),
     url: z.string().nullable(),
   }),
@@ -398,7 +402,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_start",
     {
       description:
-        "Start recording a call now. Make this the first call when the user wants a call recorded: no status check first. Returns once audio is being written. `vocab` takes call-scoped words known before the call (attendee names, title terms). If a call is already recording, says which.",
+        "Start recording a call now. Make this the first call when the user wants a call recorded: no status check first. Returns once audio is being written. `vocab` takes call-scoped words known before the call (attendee names, title terms). If a call is already recording, starts nothing and returns that call with `attached: true`: follow it with akou_context and akou_read like one you started.",
       inputSchema: z.object({
         workspace: z.string().optional(),
         title: z.string().optional(),
@@ -412,10 +416,13 @@ export function createMcpServer(o: McpOptions): McpServer {
       outputSchema: OUT.start,
     },
     async (a) => {
-      const r = await req("POST", "/calls", { body: a });
+      // Idempotent for an agent: a call already recording is handed back, never a dead end.
+      const r = await req("POST", "/calls", { body: { ...a, attach: true } });
       void refreshAsk();
       return asResult(r, (b) => ({
-        text: `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder} url: ${b.url}`,
+        text: b.attached
+          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder} url: ${b.url}`
+          : `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder} url: ${b.url}`,
         data: b,
       }));
     },

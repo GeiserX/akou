@@ -126,7 +126,14 @@ export function describeError(r: ApiResponse): string {
       ? `${msg}; the last call, "${last.title}", ended at ${wall(last.endedAt)} (${last.id})`
       : `${msg}; there are no calls yet`;
   }
-  if (b.error === "already_recording") return `${msg} (${b.call})`;
+  if (b.error === "already_recording") {
+    const live = b.already_recording as
+      | { title: string; workspace: string; startedAt: number }
+      | undefined;
+    return live
+      ? `${msg}: "${live.title}" in ${live.workspace} since ${wall(live.startedAt)} (${b.call})`
+      : `${msg} (${b.call})`;
+  }
   if (typeof b.reason === "string" && !msg.includes(b.reason)) return `${msg} (${b.reason})`;
   return msg;
 }

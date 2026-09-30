@@ -214,9 +214,15 @@ describe("following a call", () => {
       expect(start.isError).toBe(false);
       const id = /Recording call (\S+)/.exec(start.text)?.[1] as string;
       expect(id).toBeTruthy();
+      // A second start is not a dead end: it hands back the call already recording (OW-2).
       const again = await c.call("akou_start", { title: "Other" });
-      expect(again.isError).toBe(true);
-      expect(again.text).toContain("already_recording");
+      expect(again.isError).toBe(false);
+      expect(again.text).toContain(`Already recording call ${id}, "MCP sync" in work since `);
+      expect(again.structured).toMatchObject({ call: id, attached: true, workspace: "work" });
+      const titles = ((await rig.api("GET", "/calls")).body.calls as { title: string }[]).map(
+        (x) => x.title,
+      );
+      expect(titles).not.toContain("Other");
 
       await waitForCallLine(id);
       const ctx = await c.call("akou_context", { question: "what did they say about deploy?" });

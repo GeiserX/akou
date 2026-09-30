@@ -890,6 +890,9 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           provider.answer = () => `Ben said to move the build [${minute} Ben].`;
           // Ask is always on screen, above Notes: no tab to open first.
           expect(await page.locator("#ask-input").isVisible()).toBe(true);
+          // With an assistant the box asks (OW-2): its words say so.
+          expect(await page.getAttribute("#ask-input", "placeholder")).toBe("Ask about this call");
+          expect(await page.getAttribute("#ask-form", "aria-label")).toBe("Ask about this call");
           expect(await page.locator("#ask-presets").isVisible()).toBe(false);
           // The presets are a menu on the input.
           await page.click("#ask-presets-open");
@@ -1003,6 +1006,59 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           );
           expect(await page.locator("#ask-out .qa").count()).toBe(1);
           expect(await text(page, "#ask-out .question")).toBe("who spoke first, again?");
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("the ask box with no assistant (OW-2)", () => {
+  test(
+    "it reads Search this call, has no suggested questions, and shows the excerpts under one label, never an answer card",
+    async () => {
+      let id = "";
+      // No provider passed: the rig's config says `provider.kind` none.
+      await withRig(
+        {
+          seed: (home) => {
+            id = seedCall(home, standardCall).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await until(
+            async () =>
+              (await page.getAttribute("#ask-input", "placeholder")) === "Search this call",
+            5000,
+            "the search box",
+          );
+          expect(await page.getAttribute("#ask-form", "aria-label")).toBe("Search this call");
+          expect(await page.getAttribute("#ask-go", "title")).toBe("Search (Enter)");
+          expect(await page.locator("#ask-presets-open").isVisible()).toBe(false);
+          expect(await page.locator("#ask-form .ico.find").isVisible()).toBe(true);
+          expect(await page.locator("#ask-form .ico.agent").isVisible()).toBe(false);
+          await page.fill("#ask-input", "the build");
+          await page.keyboard.press("Enter");
+          await page.waitForSelector("#ask-out .card");
+          await until(
+            async () => (await text(page, "#ask-out .found")) === "Excerpts from the call",
+            5000,
+            "the label",
+          );
+          await page.waitForSelector("#ask-out .copy-context");
+          expect(await page.locator("#ask-out .a-card").count()).toBe(0);
+          expect(await text(page, "#ask-out .question")).toBe("the build");
+          const out = await text(page, "#ask-out");
+          expect(out).toContain("we should move the build to the new box");
+          // No reason naming a setting, no "No answer", no line ids.
+          for (const bad of ["provider", "No answer", "No model", "#l0"]) {
+            expect(out).not.toContain(bad);
+          }
+          // The excerpt's citation still leads to its line.
+          await page.click("#ask-out .card-cite button.cite >> nth=0");
+          await page.waitForSelector("#lines .row.flash");
         },
       );
     },

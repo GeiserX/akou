@@ -24,7 +24,7 @@ const start: Command = {
   name: "start",
   summary: "Start a call; answers once audio is being written",
   usage:
-    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live SETUP] [--without-models] [--json]",
+    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live SETUP] [--without-models] [--attach] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the call goes in" },
     title: { type: "string", short: "t", value: "TITLE", desc: "the call's title" },
@@ -47,10 +47,16 @@ const start: Command = {
       type: "boolean",
       desc: "record audio now and transcribe later, before the models are downloaded",
     },
+    // Scripts keep exit 75 for "already recording"; an agent attaches and follows that call.
+    attach: {
+      type: "boolean",
+      desc: "if a call is already recording, answer with that call (exit 0) instead of exit 75",
+    },
   },
   examples: [
     'akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform',
     "akou start --live nemotron",
+    "akou start --attach --json",
   ],
   run: async (ctx, p) => {
     // `-t Weekly sync` and `-t "Weekly sync"` both work: loose words after the flags join the title.
@@ -65,12 +71,13 @@ const start: Command = {
         vocab: list(p, "vocab"),
         withoutModels: bool(p, "without-models") || undefined,
         live: str(p, "live"),
+        attach: bool(p, "attach") || undefined,
       },
     });
-    return finish(
-      ctx,
-      r,
-      (b) => `Recording ${b.call} (audio after ${b.firstAudioMs} ms)\nfolder: ${b.folder}`,
+    return finish(ctx, r, (b) =>
+      b.attached
+        ? `Already recording ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}: following it\nfolder: ${b.folder}`
+        : `Recording ${b.call} (audio after ${b.firstAudioMs} ms)\nfolder: ${b.folder}`,
     );
   },
 };

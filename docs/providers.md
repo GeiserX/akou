@@ -7,7 +7,7 @@ A provider is what akou asks when it needs a model: to answer a question in the 
 | `harness` (the default) | Your own Claude Code or Codex, installed on this computer | Wherever that program sends it: your subscription with Anthropic or OpenAI |
 | `openai-compatible` | A server you name: Ollama, LM Studio, llama.cpp, vLLM, or OpenAI | The address in `provider.baseUrl`. A local model keeps it on your machine |
 | `anthropic` | The Anthropic API with your own key | Anthropic, under your API account |
-| `none` | Nothing | Nowhere. Questions get the matching excerpts instead of an answer |
+| `none` | Nothing | Nowhere. Questions get the matching excerpts instead of an answer, and the window's ask box becomes "Search this call" |
 
 When the provider cannot answer (the program is missing, a usage limit is reached, you are logged out, or no answer comes within `provider.timeoutSeconds`), akou says why and shows the excerpts it found. It never queues the request or retries it quietly.
 

@@ -156,6 +156,54 @@ describe("starting and controlling", () => {
       const again = await run(["start", "-t", "Other"]);
       expect(again.code).toBe(EXIT.alreadyRecording);
       expect(again.err).toContain(r.json.call);
+      expect(again.err).toContain('"Weekly sync" in work since ');
+      // Scripts keep exit 75; --json names the live call so an agent can follow it.
+      const json = await run(["start", "-t", "Other", "--json"]);
+      expect(json.code).toBe(EXIT.alreadyRecording);
+      expect(json.json).toMatchObject({
+        error: "already_recording",
+        call: r.json.call,
+        already_recording: {
+          id: r.json.call,
+          title: "Weekly sync",
+          workspace: "work",
+          state: "recording",
+        },
+      });
+      expect(json.json.already_recording.startedAt).toBe(detail.body.startedAt);
+    },
+    LONG,
+  );
+
+  test(
+    "start --attach answers with the call already recording (exit 0), and starts one when none is",
+    async () => {
+      await stopAll();
+      // Nothing records: --attach is a plain start.
+      const first = await run(["start", "--attach", "-w", "work", "-t", "Standup", "--json"]);
+      expect(first.code).toBe(0);
+      expect(first.json.attached).toBeUndefined();
+      expect(first.json).toMatchObject({ part: 1, url: `akou://call/${first.json.call}` });
+      // A call records: --attach hands it back and starts nothing.
+      const again = await run(["start", "--attach", "-t", "Other", "--json"]);
+      expect(again.code).toBe(0);
+      expect(again.json).toMatchObject({
+        call: first.json.call,
+        attached: true,
+        title: "Standup",
+        workspace: "work",
+        state: "recording",
+        part: 1,
+        url: `akou://call/${first.json.call}`,
+      });
+      expect(typeof again.json.startedAt).toBe("number");
+      expect(again.json.folder).toBe(first.json.folder);
+      const human = await run(["start", "--attach"]);
+      expect(human.code).toBe(0);
+      expect(human.out).toContain(`Already recording ${first.json.call}, "Standup" in work since `);
+      const calls = (await rig.api("GET", "/calls")).body.calls as { title: string }[];
+      expect(calls.filter((c) => c.title === "Other")).toEqual([]);
+      await stopAll();
     },
     LONG,
   );
