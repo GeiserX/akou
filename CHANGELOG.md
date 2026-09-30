@@ -2,6 +2,40 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.5.2 — every setting is a page of plain words, and first run asks only what you need
+
+On 0.5.1, Settings, Models and Dictation were dialogs full of config keys that did not close like a normal window. In 0.5.2 each one is a page of the main window with plain rows, and you leave it from the sidebar. A first run now asks what you will use akou for and sets up only that. Your API key moves into the macOS Keychain.
+
+### The window
+- **Settings is a page** of plain rows with a search box. Every change saves on its own, so the Save button is gone (#178).
+- **Models is a page** of plain facts, and a download can be cancelled (#182).
+- **Dictation is a page**, with its permissions, keys, voice, rules per app and engine as rows (#189).
+- **Words and History are pages under Dictation**, so no settings dialog is left (#193).
+- **The first run asks what akou is for**: calls, dictation or both. Then it asks only the steps that use needs: where calls go, permissions, the dictation key and engine, and the assistant (#195).
+- **The workspace in the Record row is a menu.** A click switches it, and New workspace… adds one (#183).
+- **The Record row picks the live transcription model** where the template was. It lists only the models on this Mac, and offers the Models page when there are none (#184).
+- **The notes pane is just your notes.** The window no longer shows Enhance or Find misheard words. Their API routes, CLI commands and MCP tools stay (#185).
+- **The menu bar shows the akou mark with a red dot while a call records**, with no text beside it (#187).
+
+### Transcription
+- **Fix a misheard word once, on its line, and the rest of the call reads it right.** A name or term you fix is learned for the workspace too (#186).
+- **The optional Qwen review of live lines runs once a minute**, with about 80% fewer requests and no worse word error rate on FLEURS. Automatic now picks it when the Mac has Qwen, a GPU and 16 GB or more. The reviewed text lands about 45 s after the words instead of 6 to 9 s (#191).
+
+### Assistant and agents
+- **On macOS your API key lives in the Keychain**, never in `config.json`. A key already in the file moves there on first start. Settings lets you pick Claude Code or Codex, an API key, a local model (Ollama) or none (#194).
+- **Starting a call while one records hands back the live call**, so an agent can follow it. `akou start --attach` and the MCP `akou_start` attach instead of failing. With no assistant set up, Ask becomes "Search this call" (#192).
+
+### Docs
+- **A shorter README** that says what akou is and how to install it. `docs/install.md` is now [docs/getting-started.md](docs/getting-started.md) (#188).
+
+The Telegram-Archive contract keeps its shape. `POST /calls` takes a new optional `attach`, and a refused start names the live call under `already_recording`.
+
+### Known limitations
+- **On Windows and Linux the API key still sits in `config.json`**, and so does server mode's ([docs/providers.md](docs/providers.md)).
+- **The first time a call records, the macOS menu bar item may move** to another spot, because akou replaces it to change its image.
+- **Lines still waiting for their minute when a call ends are not reviewed live.** The final pass covers them.
+- Every item under 0.5.1's Known limitations still applies.
+
 ## 0.5.1 — the final pass no longer fills the disk with swap
 
 On 0.5.0, every final pass left its speech models in the app's memory, about 2.7 GB with Parakeet fp32. The first start of 0.5.0 runs the final pass over every past call that lacks one, so a few calls in a row were enough to grow the app to 10 GB, most of it in swap, until the disk was full. 0.5.1 fixes that and also brings a macOS window without the grey title bar, dialogs that close from the top, and a simpler in-call upgrade.
