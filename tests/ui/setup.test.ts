@@ -110,6 +110,7 @@ describe("the first-run setup (WINDOW section 10)", () => {
             expect(await title(page)).toBe("Welcome to akou");
             expect(await count(page)).toBe("Step 1 of 6");
             expect(await text(page, "#setup-back")).toBe("Cancel");
+            expect(await page.isVisible("#setup-back")).toBe(true);
             expect(await page.isVisible("#setup-skip")).toBe(false);
             expect(await page.isVisible("#welcome-models")).toBe(false);
             await page.click("#setup-next");
