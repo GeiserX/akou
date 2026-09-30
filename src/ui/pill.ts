@@ -18,7 +18,12 @@
  * the page reads each field it draws by name, so an extra field is never shown (DC-D2). The one
  * exception is the words-as-I-speak preview (DC-O2), its own message, which the main side sends
  * only with `dictation.pillPreview` on; the page shows it while listening and drops it after, the
- * words the last partial had too in white and the rest dimmer. The language chip (akou-5v8) shows
+ * words the last partial had too in white and the rest dimmer. It is the whole dictation so far
+ * (H-11): the island grows under its row to hold it, wrapping, newest at the bottom, up to about
+ * eight lines, then scrolls pinned to the newest words; scrolling back stops the pin until the
+ * reader scrolls to the bottom again or the session ends. At the bottom edge (`layout`) the page
+ * mirrors, so the row stays put and the words grow upward. The page asks for the window's height
+ * whenever what it holds changes (`size`), and the main side resizes the window from its edge. The language chip (akou-5v8) shows
  * the session's language between the time and Stop; a click asks for the next of the user's
  * languages when the engine takes a forced one. After an insert it says, read-only, the language
  * the text went in as, when the main side names one.
@@ -34,6 +39,8 @@ type Control = PillRpc["bun"]["requests"]["control"]["params"]["action"];
 export interface PillTransport {
   control(action: Control): void;
   chip(a: ChipAnswer): void;
+  /** The height the page needs, CSS pixels: the window follows it (H-11). */
+  size(height: number): void;
 }
 
 export interface PillSink {
@@ -41,15 +48,36 @@ export interface PillSink {
   level(l: { db: number }): void;
   preview(p: { text: string; settled?: number }): void;
   chip(c: Chip): void;
+  /** The edge `dictation.pill` puts the island on: at `bottom` the page mirrors. */
+  layout(l: { edge: string }): void;
 }
 
 /**
- * The preview keeps the last words of the dictation, at most this many characters: the ticker shows
- * one line of it, newest at the right, and the rest never reaches the page's DOM.
+ * The preview keeps at most this many characters, the newest: an hour of fast speech, the longest
+ * `dictation.maxMinutes` allows, so in practice the whole dictation reaches the page (H-11).
  */
-export const PREVIEW_CHARS = 90;
+export const PREVIEW_CHARS = 72_000;
 
-/** The end of a long preview, from a word start, after an ellipsis. */
+/** The words' line height, CSS pixels, and how many lines the island grows to before it scrolls. */
+export const PREVIEW_LINE_PX = 18;
+export const PREVIEW_LINES = 8;
+/** The words' padding under them, inside the island. */
+const PREVIEW_PAD_PX = 12;
+
+/**
+ * How tall the words may grow before they scroll: `PREVIEW_LINES` lines, or 40 % of the display's
+ * height when that is less (a small display, a large text size).
+ */
+export function previewMaxHeight(displayHeight: number): number {
+  const lines = PREVIEW_LINES * PREVIEW_LINE_PX + PREVIEW_PAD_PX;
+  const share = Number.isFinite(displayHeight) && displayHeight > 0 ? displayHeight * 0.4 : lines;
+  return Math.round(Math.min(lines, share));
+}
+
+/** A scroll this close to the bottom is at the bottom: the pin follows again. */
+const PIN_SLACK_PX = 4;
+
+/** The end of a preview longer than `PREVIEW_CHARS`, from a word start, after an ellipsis. */
 export function previewTail(text: string): string {
   if (text.length <= PREVIEW_CHARS) return text;
   const cut = text.slice(-PREVIEW_CHARS);
@@ -57,7 +85,7 @@ export function previewTail(text: string): string {
 }
 
 /**
- * The preview as the ticker draws it: the end of `text` (`previewTail`) cut where its first
+ * The preview as the page draws it: the end of `text` (`previewTail`) cut where its first
  * `settled` characters end, the settled words and the part still changing. A `settled` that is not a
  * count of characters settles nothing.
  */
@@ -151,6 +179,10 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
   let words = "";
   let settled: unknown = 0;
   let chipUp = false;
+  /** The words follow the newest ones; false once the reader scrolls back (H-11). */
+  let pinned = true;
+  /** The last height asked of the window. */
+  let asked = 0;
   const chip = mountChip(
     el("chip"),
     (a) => t.chip(a),
@@ -191,9 +223,13 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
   const showPreview = () => {
     const shown = s.state === "listening" ? words : "";
     const parts = previewParts(shown, settled);
+    const box = el("preview");
     el("preview-settled").textContent = parts.settled;
     el("preview-changing").textContent = parts.changing;
-    el("preview").hidden = shown === "";
+    box.hidden = shown === "";
+    el("pill").toggleAttribute("data-words", shown !== "");
+    if (pinned) box.scrollTop = box.scrollHeight;
+    box.toggleAttribute("data-over", box.scrollTop > 0);
   };
 
   /**
@@ -292,6 +328,28 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
     });
   };
 
+  const preview = el("preview");
+  preview.style.setProperty(
+    "--preview-max",
+    `${previewMaxHeight(globalThis.screen?.availHeight ?? Number.NaN)}px`,
+  );
+  // Scrolled back, the words stay where the reader is; back at the bottom they follow again.
+  preview.addEventListener("scroll", () => {
+    pinned = preview.scrollHeight - preview.scrollTop - preview.clientHeight <= PIN_SLACK_PX;
+    preview.toggleAttribute("data-over", preview.scrollTop > 0);
+  });
+  // The window is as tall as what the page holds: ask for it whenever that changes.
+  const measure = () => {
+    const pill = el("pill");
+    if (pill.hidden) return;
+    const height = Math.ceil(pill.getBoundingClientRect().height);
+    if (height > 0 && height !== asked) {
+      asked = height;
+      t.size(height);
+    }
+  };
+  if (typeof ResizeObserver === "function") new ResizeObserver(measure).observe(el("pill"));
+
   el("stop").addEventListener("click", () => t.control("stop"));
   el("cancel").addEventListener("click", () => t.control("cancel"));
   el("lang").addEventListener("click", () => {
@@ -307,6 +365,7 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
       if (!same) {
         words = "";
         settled = 0;
+        pinned = true;
       }
       s = next;
       draw();
@@ -323,5 +382,8 @@ export function mountPill(t: PillTransport, now: () => number = () => Date.now()
       paintLevel(Number(db));
     },
     chip: (c) => chip.show(c),
+    layout: ({ edge }) => {
+      if (typeof edge === "string") el("pill").dataset.edge = edge;
+    },
   };
 }

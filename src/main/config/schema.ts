@@ -30,6 +30,7 @@ import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS } from "../asr/upgrade.ts";
+import { DICTATION_FINALS } from "../dictation/engines.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
@@ -461,13 +462,13 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_SETTINGS,
     default: "auto",
-    doc: "The model that writes the live transcript of a call. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `auto` picks `nemotron` when its model is downloaded, else `parakeet`. A model that is not downloaded never runs. `upgrade`, the old value, is read as `nemotron` with `asr.review.model` `qwen`, and saved that way. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its model.",
+    doc: "The model that writes the live transcript of a call: `auto`, or a model's id (`nemotron-3.5-560`, `nemotron-3.5-1120`, `nemotron-en-560`, `parakeet-tdt-0.6b-v3-fp32`), as the Record row's Live panel saves it. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `auto` picks `nemotron` when its model is downloaded, else `parakeet`. A model that is not downloaded never runs. `upgrade`, the old value, is read as `nemotron` with `asr.review.model` `qwen`, and saved that way. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its model.",
   },
   "asr.review.model": {
     type: "string",
     values: REVIEW_MODELS,
     default: "none",
-    doc: "A second pass during a call: every `asr.review.everySeconds`, the sentences Nemotron finished since the last review are decoded again, whole, and the new words replace the live lines once. `qwen`: Qwen3-ASR, the most accurate, about 10 to 13 GB of memory during a call; it needs its llama-server, and it goes off for the rest of a call it cannot keep up with. The window offers it only on a machine with a GPU for it and 16 GB of memory; set here, it runs anyway. `none`: the live lines stay as Nemotron wrote them. It reviews Nemotron's lines only, so a call whose live model is Parakeet runs none. A line someone edited keeps their text. `akou start --review` sets it for one call. A change applies from the next call.",
+    doc: "A second pass during a call, `none` or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same): every `asr.review.everySeconds`, the sentences Nemotron finished since the last review are decoded again, whole, and the new words replace the live lines once. `qwen`: Qwen3-ASR, the most accurate, about 10 to 13 GB of memory during a call; it needs its llama-server, and it goes off for the rest of a call it cannot keep up with. The window offers it only on a machine with a GPU for it and 16 GB of memory; set here, it runs anyway. `parakeet`: Parakeet, on the processor, with no extra memory. `none`: the live lines stay as Nemotron wrote them. It reviews Nemotron's lines only, so a call whose live model is Parakeet runs none. A line someone edited, or fixed a word on, keeps their text. `akou start --review` sets it for one call. A change applies from the next call.",
   },
   "asr.review.everySeconds": {
     type: "integer",
@@ -675,6 +676,12 @@ export const SETTINGS = {
     values: DICTATION_ENGINES,
     default: "auto",
     doc: "What decodes a dictation. `fast`: Parakeet, already loaded, about 0.1 s for 5 s of speech; `best`: Qwen3-ASR, kept warm while dictation is on, falling back to fast when it fails or is too slow, and downloaded when missing (fast until it lands); `auto`: best where Qwen runs on a GPU and is downloaded, fast elsewhere; `remote`: another akou (`dictation.remote.url`), with no local model needed.",
+  },
+  "dictation.final": {
+    type: "string",
+    values: DICTATION_FINALS,
+    default: "live",
+    doc: "The text a dictation inserts, while `dictation.engine` is `auto` (`fast`, `best` and `remote` there win; the Dictation page sets both). `live`, the default and the fastest: the words the streaming model showed as you spoke, inserted the moment you let go, with no second decode, and less accurate than Parakeet; while no streaming model is downloaded, Parakeet inserts. `parakeet`: Parakeet decodes the whole recording at the release, with your word list. `qwen`: Qwen3-ASR, the most accurate, kept warm while dictation is on, as `dictation.engine` `best`. Whatever this says, the words while you speak come from the streaming model when one is downloaded (`akou models pull nemotron-3.5-560`), else from Parakeet twice a second.",
   },
   "dictation.localTimeoutSeconds": {
     type: "integer",

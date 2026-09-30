@@ -1,79 +1,63 @@
 /**
- * The lines of the Record row's live model menu (WINDOW W3.19), without the DOM so the rules can
- * be tested on their own: the live models by name, each with one plain line, a model that is not
- * downloaded listed dim with Get, a model this machine cannot run left out; then the second pass,
- * its model and how often it reviews. The menu itself is `live-picker.ts`.
+ * What the Record row's live panel shows (WINDOW W3.19), without the DOM so the rules can be
+ * tested on their own: the two slots, Live and Second pass, each a list of the catalog models that
+ * can fill it (`GET /models`, its `live.slots`) with their names and lines (the catalog's, through
+ * `models`), which of them are downloaded, which one the next call runs, and what the button says.
+ * The panel itself is `live-picker.ts`.
  */
 
-import { everyText, liveModelName } from "../main/asr/live-names.ts";
-import type { LiveView, ReviewModel, RunnableSetup } from "../main/asr/live-setups.ts";
+import type { LiveView } from "../main/asr/live-setups.ts";
+import { everyText } from "../main/asr/model-text.ts";
+import type { ModelView } from "../main/server/model-store.ts";
 
-/** One live model of the menu: a value of `asr.live`, its name and its plain line. */
-export interface LiveOption {
-  id: RunnableSetup;
-  title: string;
+export type Slot = "live" | "review";
+
+/** One model of a slot, as the panel draws it. */
+export interface SlotRow {
+  /** The catalog id a pick saves. */
+  id: string;
+  name: string;
+  /** Its line for this slot, from the catalog. */
   line: string;
-  /** Every model it loads is on disk: it can be picked. */
-  ready: boolean;
+  /** `ready`: every model it needs is here; `downloading`: one is on its way; else `missing`. */
+  state: "ready" | "downloading" | "missing";
+  /** Bytes on disk and in all, over every model it needs. */
+  bytes: number;
+  size: number;
+  /** The models it needs here, in the order a download fetches them. */
+  models: string[];
+  /** The next call runs it. */
+  checked: boolean;
+  /** Why it cannot be picked here, in plain words, or null. */
+  blocked: string | null;
 }
 
-/** The live models in the menu's order. */
-const MODELS: readonly RunnableSetup[] = ["nemotron", "parakeet"];
-
-/**
- * The menu's models: each one this machine can run, by name, with its line and whether it is
- * downloaded. None at all when not one is downloaded: the menu then says so and offers Get models.
- */
-export function liveOptions(v: LiveView): LiveOption[] {
-  const out: LiveOption[] = [];
-  for (const id of MODELS) {
-    const s = v.setups.find((x) => x.id === id);
-    if (!s || s.unavailable || s.models.length === 0) continue;
-    out.push({
-      id,
-      title: s.title,
-      line: s.line,
-      ready: s.models.every((m) => m.state === "ready"),
-    });
-  }
-  return out.some((o) => o.ready) ? out : [];
+/** A slot's models with their names, lines, state and size, in the panel's order. */
+export function slotRows(v: LiveView, rows: readonly ModelView[], slot: Slot): SlotRow[] {
+  const by = new Map(rows.map((r) => [r.id, r]));
+  return v.slots[slot].map((e) => {
+    const own = by.get(e.id);
+    const parts = e.models.map((id) => by.get(id));
+    const state = parts.every((p) => p?.state === "ready")
+      ? "ready"
+      : parts.some((p) => p?.state === "downloading")
+        ? "downloading"
+        : "missing";
+    return {
+      id: e.id,
+      name: own?.name ?? e.id,
+      line: own?.lines[slot] ?? "",
+      state,
+      bytes: parts.reduce((n, p) => n + (p?.bytes ?? 0), 0),
+      size: parts.reduce((n, p) => n + (p?.size ?? 0), 0),
+      models: e.models,
+      checked: e.checked,
+      blocked: e.blocked,
+    };
+  });
 }
 
-/**
- * The checked model: the one the next call runs when it is the one chosen, `auto` included (the
- * app's own rule); none when `asr.live` names a model that is not here.
- */
-export function liveChecked(v: LiveView, options: readonly LiveOption[]): RunnableSetup | null {
-  const want = v.setting === "auto" ? v.next : v.setting;
-  return options.some((o) => o.id === want && o.ready) ? want : null;
-}
-
-/**
- * Why the saved model is not the one a call runs, in plain words, when `asr.live` names one whose
- * models are not all here; null otherwise. The app then runs `next` instead, the same fallback the
- * CLI and the hotkey get.
- */
-export function liveNote(v: LiveView, options: readonly LiveOption[]): string | null {
-  if (options.length === 0 || liveChecked(v, options) !== null) return null;
-  return `${liveTitle(v, v.setting)} is not downloaded, so calls run ${liveTitle(v, v.next)} until it is.`;
-}
-
-/** A live model's name here: the Nemotron that would run, by its model. */
-export function liveTitle(v: LiveView | null, id: string): string {
-  return v?.setups.find((s) => s.id === id)?.title ?? liveModelName(id);
-}
-
-/** One choice of the second pass: Off, or a model with its line and what stops it here. */
-export interface ReviewOption {
-  id: ReviewModel;
-  title: string;
-  line: string;
-  /** `ready`: it can be picked; `missing`: its models are not downloaded (Get); `blocked`: `why`. */
-  state: "ready" | "missing" | "blocked";
-  why?: string;
-}
-
-/** The intervals the menu offers, seconds. */
+/** The intervals the Second pass heading offers, seconds. */
 export const REVIEW_EVERY_CHOICES = [60, 120, 300] as const;
 
 /**
@@ -85,67 +69,102 @@ export function everyChoices(saved: number): number[] {
   return all.includes(saved) ? all : [...all, saved].sort((a, b) => a - b);
 }
 
-/** An interval as the menu's switch says it: `2 min`, `90 s`. */
+/** An interval as the switch and the button say it: `2 min`, `90 s`. */
 export function everyShort(seconds: number): string {
   return seconds % 60 === 0 ? `${seconds / 60} min` : `${seconds} s`;
 }
 
-export function reviewOptions(v: LiveView): ReviewOption[] {
-  const r = v.review;
-  return [
-    { id: "none", title: "Off", line: "The live lines stay as they were written.", state: "ready" },
-    ...r.choices.map((c): ReviewOption => {
-      const missing = c.models.some((m) => m.state !== "ready");
-      return {
-        id: c.id,
-        title: c.title,
-        line: c.blocked ?? c.line,
-        // Blocked first: a model that could not run anyway offers no Get.
-        state: c.blocked ? "blocked" : missing ? "missing" : "ready",
-        ...(c.blocked ? { why: c.blocked } : {}),
-      };
-    }),
-  ];
+/** The short name of a model, for the button: `Qwen` for Qwen3-ASR. */
+function shortName(rows: readonly ModelView[], id: string): string {
+  const r = rows.find((x) => x.id === id);
+  return r?.short ?? r?.name ?? id;
 }
 
 /**
- * The checked second pass: the one the next call runs, Off when none is chosen, and none when the
- * chosen one cannot run. A Qwen chosen elsewhere on a Mac the menu does not offer it on runs, and
- * keeps its check.
+ * What the button says of the next call: the live model it runs, and with a second pass on, that
+ * pass and how often (`+ Qwen 2 min`, drawn dim). `none` when no live model is downloaded.
  */
-export function reviewChecked(v: LiveView, _options?: readonly ReviewOption[]): ReviewModel | null {
-  if (v.review.next) return v.review.next.model;
-  return v.review.setting === "none" ? "none" : null;
+export function buttonLabel(
+  v: LiveView,
+  rows: readonly ModelView[],
+): { name: string; extra: string | null; none: boolean } {
+  const live = slotRows(v, rows, "live");
+  const checked = live.find((r) => r.checked && r.state === "ready");
+  if (!checked) return { name: "no model", extra: null, none: true };
+  const review = slotRows(v, rows, "review").find((r) => r.checked);
+  const every = v.review.next?.everySeconds ?? v.review.everySeconds;
+  return {
+    name: shortName(rows, checked.id),
+    extra: review ? `+ ${shortName(rows, review.id)} ${everyShort(every)}` : null,
+    none: false,
+  };
 }
 
-/** Why the saved second pass does not run, in plain words; null when it runs or is Off. */
-export function reviewNote(v: LiveView, options: readonly ReviewOption[]): string | null {
-  if (reviewChecked(v) !== null) return null;
-  const o = options.find((x) => x.id === v.review.setting);
-  if (!o) return null;
-  return o.state === "missing"
-    ? `${o.title} is not downloaded, so calls run with no second pass until it is.`
-    : `${o.title} is chosen, but calls run with no second pass: ${lower(o.why ?? "")}`;
-}
-
-/** The second pass the next call runs, as the menu's line says it: `Off`, `Qwen, every 2 min`. */
-export function reviewLabel(v: LiveView): string {
-  const n = v.review.next;
-  return n ? `${liveModelName(n.model)}, ${everyText(n.everySeconds)}` : "Off";
-}
-
-/** The call header's chip: `Live: Nemotron 3.5`, and `, Qwen every 2 min` with a second pass. */
-export function liveChip(live: {
+/** The live call as the status names it: its model, and its second pass when one runs. */
+export interface RunningLive {
   setup?: string | null;
   engine?: string | null;
   review?: { model: string; everySeconds: number } | null;
-}): string | null {
-  if (!live.setup) return null;
-  const model = liveModelName(live.engine ?? live.setup);
+  name?: string;
+  reviewName?: string;
+}
+
+/** What the button says while a call records: what that call runs. */
+export function runningLabel(live: RunningLive): { name: string; extra: string | null } {
   const r = live.review;
-  return `Live: ${model}${r ? `, ${liveModelName(r.model)} ${everyText(r.everySeconds)}` : ""}`;
+  return {
+    name: live.name ?? live.engine ?? live.setup ?? "",
+    extra: r ? `+ ${live.reviewName ?? r.model} ${everyShort(r.everySeconds)}` : null,
+  };
+}
+
+/** The call header's chip: `Live: Nemotron 3.5`, and `+ Qwen 2 min` with a second pass. */
+export function liveChip(live: RunningLive): string | null {
+  if (!live.setup) return null;
+  const l = runningLabel(live);
+  return `Live: ${l.name}${l.extra ? ` ${l.extra}` : ""}`;
+}
+
+/**
+ * Why the saved live model is not the one a call runs, in plain words, when `asr.live` names one
+ * that is not downloaded; null otherwise. The app then runs the checked one instead.
+ */
+export function liveNote(v: LiveView, rows: readonly ModelView[]): string | null {
+  const live = slotRows(v, rows, "live");
+  const checked = live.find((r) => r.checked && r.state === "ready");
+  const saved = live.find((r) => r.id === v.setting);
+  if (!checked || !saved || saved.id === checked.id || saved.state === "ready") return null;
+  return `${saved.name} is not downloaded, so calls run ${checked.name} until it is.`;
+}
+
+/** Why the saved second pass does not run, in plain words; null when it runs or is Off. */
+export function reviewNote(v: LiveView, rows: readonly ModelView[]): string | null {
+  if (v.review.next || v.review.setting === "none") return null;
+  const saved = slotRows(v, rows, "review").find(
+    (r) => r.id === v.review.setting || shortKind(r.id) === v.review.setting,
+  );
+  if (!saved) return null;
+  return saved.state !== "ready"
+    ? `${saved.name} is not downloaded, so calls run with no second pass until it is.`
+    : saved.blocked
+      ? `${saved.name} is chosen, but calls run with no second pass: ${lower(saved.blocked)}`
+      : null;
+}
+
+/** `qwen` or `parakeet` for a second-pass model id, the older values of `asr.review.model`. */
+function shortKind(id: string): string {
+  return id.startsWith("qwen") ? "qwen" : id.startsWith("parakeet") ? "parakeet" : id;
 }
 
 function lower(s: string): string {
   return s.charAt(0).toLowerCase() + s.slice(1);
+}
+
+export { everyText };
+
+/** A download's size as the Add a model list says it: `0.7 GB`, `40 MB`. */
+export function sizeShort(bytes: number): string {
+  if (bytes >= 1e8) return `${(bytes / 1e9).toFixed(1)} GB`;
+  if (bytes >= 1e6) return `${Math.round(bytes / 1e6)} MB`;
+  return `${Math.max(1, Math.round(bytes / 1e3))} KB`;
 }

@@ -548,6 +548,54 @@
         "x-akou-access": "admin"
       }
     },
+    "/v1/models/import": {
+      "post": {
+        "operationId": "models.import",
+        "tags": [
+          "models"
+        ],
+        "description": "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing. 404 when the folder does not exist.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dir": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "dir"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/models/{id}": {
       "delete": {
         "operationId": "models.delete",
@@ -594,7 +642,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, `qwen`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1331,7 +1379,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 20 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
         "parameters": [
           {
             "name": "id",
@@ -1442,6 +1490,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "review",
+            "in": "query",
+            "required": false,
+            "description": "With a second pass on and `format` json: `wait` reviews the live call's closed lines first (at most 20 s); `skip` answers at once, for a follower that reads on every event.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wait",
+                "skip"
+              ],
+              "default": "wait"
+            }
           }
         ],
         "responses": {
@@ -1471,7 +1533,7 @@
         "tags": [
           "calls"
         ],
-        "description": "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. Changes nothing.",
+        "description": "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. With a second pass on, the live call's closed lines are reviewed first, waiting at most 20 s; `unreviewed` counts those it had not reviewed yet, and a line whose review failed keeps the streaming text and is not counted. Changes nothing else.",
         "parameters": [
           {
             "name": "id",
@@ -3088,7 +3150,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto (`dictation.engine`), fast, best (Qwen3-ASR, falling back to fast when it fails or is missing), or remote (the akou at `dictation.remote.url`); `language` a BCP-47 tag or auto (`dictation.language`): best and a remote akou are forced into it, and the fast engine (Parakeet) ignores it, since it detects the language itself, so `language_forced` says whether it was used. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, the decode time, and `fallback_from` when another engine decoded it.",
+        "description": "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto (`dictation.engine`), fast, best (Qwen3-ASR, falling back to fast when it fails or is missing), live (the streaming model's words, falling back to fast when none is downloaded), or remote (the akou at `dictation.remote.url`); `language` a BCP-47 tag or auto (`dictation.language`): best and a remote akou are forced into it, and the fast engine (Parakeet) ignores it, since it detects the language itself, so `language_forced` says whether it was used. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, the decode time, and `fallback_from` when another engine decoded it.",
         "requestBody": {
           "required": true,
           "content": {
@@ -3354,7 +3416,7 @@
         "tags": [
           "dictations"
         ],
-        "description": "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. `language` (a BCP-47 tag, or auto for `dictation.language`) forces the decode into it on best and a remote akou, as the draft box's language chip does; fast detects the language itself. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
+        "description": "Decode a dictation's kept audio again with `engine` (auto, fast, best, live or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. `language` (a BCP-47 tag, or auto for `dictation.language`) forces the decode into it on best and a remote akou, as the draft box's language chip does; fast detects the language itself. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
         "parameters": [
           {
             "name": "id",
@@ -3473,7 +3535,7 @@
         "tags": [
           "dictation"
         ],
-        "description": "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine (\"best on metal\", \"downloading best, using fast\"), whether it is `loading` its model (a press then is kept and decoded once it is ready), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper makes its key tap again by itself once it is), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).",
+        "description": "Dictation now: `enabled` (`dictation.enabled`), the session's `state` (off, starting, idle, listening, transcribing, inserting), the `engine` a press decodes on (null with no model) and the `verdict` saying why on this machine (\"best on metal\", \"downloading best, using fast\"), whether it is `loading` its model (a press then is kept and decoded once it is ready), what a dictation inserts now as `final` (`dictation.final` as it resolves here: parakeet, live or qwen; remote; null with no model) and the streaming model the words while you speak come from as `live` (null: Parakeet, refreshed twice a second), the remote's `fallback` and standing while `dictation.engine` is remote, the `grants` the helper reports (mic and accessibility: granted, denied, not-asked or not-needed; read by a probe of the helper while dictation is off), the grants the running helper `lost` since it started (on macOS a revoked Accessibility grant leaves the dictation key doing nothing until it is given again, and the helper makes its key tap again by itself once it is), its key `backend`, and whether it can hold Escape and Enter during a session (`swallow_keys`).",
         "responses": {
           "200": {
             "description": "OK",

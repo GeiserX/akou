@@ -19,7 +19,7 @@
  * The search finds a setting by its words across the page and its Advanced pages, and goes to it.
  */
 
-import { everyText, liveModelName } from "../main/asr/live-names.ts";
+import { everyText, liveModelName } from "../main/asr/model-text.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
 import { LanguageList, languageName } from "./dictation-languages.ts";
 import { type CaptureInput, readMics } from "./dictation-mic.ts";
@@ -297,7 +297,15 @@ type LiveReply = {
     setting?: string;
     next?: string;
     setups?: { id: string; title: string }[];
-    review?: { next?: { model: string; everySeconds: number } | null };
+    review?: {
+      setting?: string;
+      everySeconds?: number;
+      next?: { model: string; everySeconds: number } | null;
+    };
+    slots?: {
+      live: { id: string; checked: boolean }[];
+      review: { id: string; checked: boolean }[];
+    };
   };
 };
 
@@ -1302,19 +1310,35 @@ export class SettingsPage {
     );
   }
 
-  private liveRow(): HTMLElement | null {
+  /**
+   * The live panel's three values as rows, as the Record row and the Models page show them: the
+   * live model, the second pass and how often. Each opens the Models page, where they are chosen.
+   */
+  private liveRow(): HTMLElement[] | null {
     if (!("asr.live" in this.schema)) return null;
     const l = this.live;
-    const next = l?.setups?.find((s) => s.id === l.next)?.title ?? l?.next ?? "";
+    const liveId = l?.slots?.live.find((e) => e.checked)?.id;
     const setting = String(this.settings["asr.live"] ?? l?.setting ?? "auto");
-    const review = l?.review?.next;
-    const second = review
-      ? `, ${liveModelName(review.model)} ${everyText(review.everySeconds)}`
-      : "";
-    const value = `${setting === "auto" ? `Automatic${next ? `, ${next}` : ""}` : next || setting}${second}`;
-    return linkRow({ label: "Live transcript", value, id: "settings-live" }, () =>
-      this.hooks.openModels?.("asr.live"),
-    );
+    const name = liveId ? liveModelName(liveId) : "No model yet";
+    const live = setting === "auto" && liveId ? `Automatic, ${name}` : name;
+    const reviewId = l?.slots?.review.find((e) => e.checked)?.id;
+    const every = l?.review?.everySeconds ?? Number(this.settings["asr.review.everySeconds"] ?? 60);
+    const open = (key: string) => () => this.hooks.openModels?.(key);
+    return [
+      linkRow({ label: "Live model", value: live, id: "settings-live" }, open("asr.live")),
+      linkRow(
+        {
+          label: "Second pass",
+          value: reviewId ? liveModelName(reviewId) : "Off",
+          id: "settings-review",
+        },
+        open("asr.review.model"),
+      ),
+      linkRow(
+        { label: "Second pass every", value: capitalEvery(every), id: "settings-review-every" },
+        open("asr.review.everySeconds"),
+      ),
+    ];
   }
 
   private afterCallRow(): HTMLElement {
@@ -1491,8 +1515,8 @@ export class SettingsPage {
       for (const item of s.items) {
         if (item === LIVE && "asr.live" in this.schema)
           out.push({
-            label: "Live transcript",
-            help: "",
+            label: "Live model",
+            help: "Second pass",
             where: "Models",
             go: () => this.hooks.openModels?.(),
           });
@@ -1650,4 +1674,10 @@ function capital(s: string): string {
 /** A workspace's name as the list shows it: `default` is "Default". */
 function title(name: string): string {
   return name.charAt(0).toUpperCase() + name.slice(1);
+}
+
+/** `Every 2 min`, as the Models page's list says it. */
+function capitalEvery(seconds: number): string {
+  const t = everyText(seconds);
+  return t.charAt(0).toUpperCase() + t.slice(1);
 }

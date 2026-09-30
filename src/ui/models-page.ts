@@ -42,11 +42,9 @@ import {
   hourText,
   joinAnd,
   keptText,
-  LIVE_ORDER,
   type LiveView,
   liveHelp,
   liveName,
-  liveTags,
   type ModelRow,
   modelName,
   needsText,
@@ -56,7 +54,6 @@ import {
   RECOGNIZER_ID,
   reasonText,
   removeRefusal,
-  reviewHelp,
   speakersHelp,
   totalText,
 } from "./models-rows.ts";
@@ -486,54 +483,74 @@ export class ModelsPage {
   private liveSection(): HTMLElement | null {
     const v = this.live;
     if (!v) return null;
-    const tags = liveTags(v);
     const setting = String(this.settings["asr.live"] ?? v.setting);
-    const rows = LIVE_ORDER.map((id) => {
-      const marks = (tags.get(id) ?? []).map((t) => tag(t, t === "this call" ? "running" : "next"));
-      if (id === "auto") {
-        const r = choiceRow(
-          {
-            name: "models-live",
-            value: "auto",
-            label: liveName("auto"),
-            help: autoHelp(v, this.here),
-            checked: setting === "auto",
-            isDefault: DEFAULTS["asr.live"] === "auto",
-          },
-          ...marks,
-        );
-        r.dataset.setup = "auto";
-        return r;
-      }
-      const s = v.setups.find((x) => x.id === id);
-      if (!s) return null;
-      const models = this.rowsOf(s.models.map((m) => m.id));
-      // The streaming Nemotron is this row's own; Parakeet is shown where it belongs.
-      const owner = id === "nemotron";
-      const side = s.unavailable ? null : this.modelSide(models, owner);
-      const missing = models.filter((r) => r.state === "missing");
-      // While its models are missing, what it needs replaces its facts.
-      const help = !owner && missing.length > 0 ? needsText(missing) : liveHelp(s);
+    const nextId = v.slots.live.find((e) => e.checked)?.id ?? null;
+    const mark = (row: string, id: string | null) => {
+      const out: HTMLElement[] = [];
+      if (v.runningId && id === v.runningId) out.push(tag("this call", "running"));
+      else if (row === (setting === "auto" ? "auto" : nextId)) out.push(tag("next call", "next"));
+      return out;
+    };
+    const auto = choiceRow(
+      {
+        name: "models-live",
+        value: "auto",
+        label: liveName("auto"),
+        help: autoHelp(v, this.here),
+        checked: setting === "auto",
+        isDefault: DEFAULTS["asr.live"] === "auto",
+      },
+      ...mark("auto", setting === "auto" ? nextId : null),
+    );
+    auto.dataset.setup = "auto";
+    const rows: HTMLLabelElement[] = [auto];
+    for (const e of v.slots.live) {
+      const own = this.row(e.id);
+      if (!own) continue;
+      const family = e.id.startsWith("nemotron") ? "nemotron" : "parakeet";
+      const s = v.setups.find((x) => x.id === family);
+      // A streaming Nemotron is this section's own; Parakeet is shown where it belongs.
+      const owner = family === "nemotron";
+      const side = this.modelSide([own], owner);
+      const help = [s ? accuracyText(s.accuracy) : null, own.lines.live].filter((x) => x).join(" ");
+      const checked =
+        setting === e.id ||
+        (setting === "nemotron" && family === "nemotron" && e.checked) ||
+        (setting === "parakeet" && family === "parakeet");
       const r = choiceRow(
         {
           name: "models-live",
-          value: id,
-          label: liveName(id, s.title),
-          help: side?.help ?? help,
-          checked: setting === id,
-          isDefault: DEFAULTS["asr.live"] === id,
-          disabled: s.unavailable !== null,
+          value: e.id,
+          label: own.name ?? e.id,
+          help:
+            side.help ?? (!owner && own.state !== "ready" ? needsText([own]) : (e.blocked ?? help)),
+          checked,
+          isDefault: DEFAULTS["asr.live"] === e.id,
+          // A model that does not hear the call's languages says why, as the second pass does.
+          disabled: e.blocked !== null && !checked,
         },
-        ...marks,
-        ...(side?.controls ?? []),
+        ...mark(e.id, e.id),
+        ...side.controls,
       );
-      r.dataset.setup = id;
-      r.dataset.state = s.unavailable ? "unavailable" : (side?.state ?? "none");
-      return r;
-    });
-    const running = v.running !== null;
-    const radios = rows.filter((r): r is HTMLLabelElement => r !== null);
-    for (const r of radios) {
+      r.dataset.setup = e.id;
+      r.dataset.state = e.blocked ? "blocked" : side.state;
+      rows.push(r);
+    }
+    const vox = v.setups.find((x) => x.id === "voxtral");
+    if (vox) {
+      const r = choiceRow({
+        name: "models-live",
+        value: "voxtral",
+        label: vox.title,
+        help: liveHelp(vox),
+        checked: false,
+        disabled: true,
+      });
+      r.dataset.setup = "voxtral";
+      r.dataset.state = "unavailable";
+      rows.push(r);
+    }
+    for (const r of rows) {
       const input = r.querySelector<HTMLInputElement>("input.pg-radio");
       input?.addEventListener("change", () => {
         if (input.checked) void this.patch("asr.live", input.value);
@@ -541,24 +558,24 @@ export class ModelsPage {
     }
     const s = sectionWith(
       "Live transcript",
-      running ? "A change applies from the next call." : null,
-      ...radios,
+      v.running !== null ? "A change applies from the next call." : null,
+      ...rows,
     );
     s.id = "models-live";
     return s;
   }
 
-  /** The second pass: Off, Qwen or Parakeet, each with what stops it here, and how often. */
+  /** The second pass: Off, then each model that can review, with what stops it here, and how often. */
   private reviewSection(): HTMLElement | null {
     const v = this.live;
     if (!v) return null;
     const r = v.review;
     const setting = String(this.settings["asr.review.model"] ?? r.setting);
-    const running = r.running;
+    const kind = (id: string) => (id.startsWith("qwen") ? "qwen" : "parakeet");
     const mark = (id: string) =>
-      running && running.model === id
+      r.running && r.running.model === kind(id)
         ? [tag("this call", "running")]
-        : !running && r.next?.model === id
+        : !r.running && r.next?.model === kind(id)
           ? [tag("next call", "next")]
           : [];
     const off = choiceRow({
@@ -571,26 +588,29 @@ export class ModelsPage {
     });
     off.dataset.review = "none";
     const rows: HTMLElement[] = [off];
-    for (const c of r.choices) {
-      const models = this.rowsOf(c.models.map((m) => m.id));
+    for (const e of v.slots.review) {
+      const own = this.row(e.id);
+      if (!own) continue;
+      const models = this.rowsOf(e.models);
       const side = this.modelSide(models, false);
       const missing = models.filter((m) => m.state === "missing");
-      const help = missing.length > 0 ? needsText(missing) : reviewHelp(c);
+      const help = missing.length > 0 ? needsText(missing) : (e.blocked ?? own.lines.review ?? "");
+      const chosen = setting === e.id || setting === kind(e.id);
       const row = choiceRow(
         {
           name: "models-review",
-          value: c.id,
-          label: c.title,
+          value: e.id,
+          label: own.name ?? e.id,
           help: side.help ?? help,
-          checked: setting === c.id,
-          isDefault: DEFAULTS["asr.review.model"] === c.id,
-          disabled: c.blocked !== null && setting !== c.id,
+          checked: chosen,
+          isDefault: DEFAULTS["asr.review.model"] === e.id,
+          disabled: e.blocked !== null && !chosen,
         },
-        ...mark(c.id),
+        ...mark(e.id),
         ...side.controls,
       );
-      row.dataset.review = c.id;
-      row.dataset.state = c.blocked ? "blocked" : side.state;
+      row.dataset.review = e.id;
+      row.dataset.state = e.blocked ? "blocked" : side.state;
       rows.push(row);
     }
     for (const x of rows) {

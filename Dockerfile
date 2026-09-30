@@ -40,7 +40,7 @@ RUN cargo build --locked --release && ./target/release/akou-diarize --version
 FROM ${BUN_IMAGE} AS llama
 ARG ACCELERATOR=cpu
 WORKDIR /src
-COPY src/main/asr/llama-builds.ts src/main/asr/llama-catalog.ts src/main/asr/models.ts src/main/asr/
+COPY src/main/asr/llama-builds.ts src/main/asr/llama-catalog.ts src/main/asr/model-text.ts src/main/asr/models.ts src/main/asr/
 RUN bun -e 'await (await import("./src/main/asr/llama-builds.ts")).fetchForHost(process.env.ACCELERATOR, "/opt/llama")'
 
 FROM ${BUN_IMAGE}

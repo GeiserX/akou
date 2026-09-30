@@ -69,7 +69,10 @@ describe("DC-G1: GET /v1/dictation", () => {
       enabled: true,
       state: "idle",
       engine: "fast",
-      verdict: "fast: best needs a GPU",
+      // The default, live, waits for a streaming model; until one is on disk, Parakeet (DC-E7).
+      verdict: "fast: no streaming model is downloaded for live",
+      final: "parakeet",
+      live: null,
       loading: false,
       fallback: null,
       remote: null,

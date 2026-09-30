@@ -35,6 +35,7 @@ import {
 } from "node:fs";
 import { dirname, join } from "node:path";
 import { FORMULAS, type Measure, type NotMeasured, score, scoresOf } from "../asr/model-scores.ts";
+import { MODEL_TEXT } from "../asr/model-text.ts";
 import {
   type CatalogEntry,
   DownloadRefused,
@@ -426,6 +427,12 @@ export interface ModelView {
   kind: ModelKind;
   /** What it does, from the catalog. */
   job: string;
+  /** Its name where a person picks it, or null for a model with none (a helper). */
+  name: string | null;
+  /** A shorter name for the Record row's button, or null for none. */
+  short: string | null;
+  /** One plain line per slot it can fill (`live`, `review`), from the catalog. */
+  lines: { live?: string; review?: string };
   /** ISO 639-1 codes it hears, `any` for a model that hears no words, null when unknown. */
   languages: "any" | readonly string[] | null;
   /** It transcribes while the call runs, not only after. */
@@ -781,6 +788,10 @@ export class ModelStore {
         id: m.id,
         kind: kindOf(m),
         job: m.job,
+        // A catalog of its own (a test's, a registry's) keeps akou's words for a model it knows.
+        name: c.name ?? MODEL_TEXT[m.id]?.name ?? null,
+        short: c.short ?? MODEL_TEXT[m.id]?.short ?? null,
+        lines: { ...(c.lines ?? MODEL_TEXT[m.id]?.lines ?? {}) },
         languages: c.languages ?? null,
         streaming: c.serves?.includes("live") ?? false,
         after_call: c.serves ? c.serves.includes("final") : true,

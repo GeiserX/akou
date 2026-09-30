@@ -36,8 +36,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { totalmem } from "node:os";
-import { join } from "node:path";
+import { homedir, totalmem } from "node:os";
+import { join, resolve } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
 import { type CallView, type FileVocabEntry, fold } from "../core/log/fold.ts";
@@ -78,6 +78,7 @@ import {
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
+import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import {
   chooseLiveSetup,
   type LiveSetupChoice,
@@ -85,14 +86,17 @@ import {
   type LiveView,
   liveModelName,
   liveView,
+  reviewerId,
   reviewModels,
   setupModels,
+  shortModelName,
 } from "./asr/live-setups.ts";
 import {
   type CallAccess,
   type LineUpgrader,
   LiveAsr,
   type LiveReview,
+  recognizerReviewer,
   type VocabSource,
 } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
@@ -107,6 +111,7 @@ import {
   DownloadRefused,
   downloadModels,
   hostPlatform,
+  importModels,
   MODELS,
   type ModelSpecEntry,
   type ModelsStatus,
@@ -148,14 +153,16 @@ import { SystemCuePlayer } from "./dictation/cues.ts";
 import {
   dictationLanguages,
   type EngineVerdict,
+  LIVE_FAILED,
   resolveDictationEngine,
 } from "./dictation/engines.ts";
 import { formatPass } from "./dictation/format.ts";
+import { LiveWords, liveDecode, type OpenStream } from "./dictation/live.ts";
 import type { Bindings, InsertMethod, SendKey } from "./dictation/protocol.ts";
 import { loadPunctuation } from "./dictation/punctuation.ts";
 import { RemoteEngine, remoteFallback } from "./dictation/remote.ts";
 import { DictationService } from "./dictation/service.ts";
-import type { DictationEngine } from "./dictation/session.ts";
+import type { DictationEngine, WordStream } from "./dictation/session.ts";
 import { correctDictation, knowsPair, learnPair, unlearnPair } from "./dictation/vocab.ts";
 import { type ExportResult, exportCall } from "./handoff/export.ts";
 import {
@@ -242,6 +249,9 @@ export const LIVE_QWEN_TIMEOUT_MS = 60_000;
  */
 const WARM_KEYS = [
   "dictation.engine",
+  "dictation.final",
+  "dictation.languages",
+  "asr.languages",
   "asr.accelerator",
   "asr.llamaServer",
   "asr.modelsDir",
@@ -591,6 +601,8 @@ export class AkouApp implements ApiApp {
   private remoteDictation: RemoteEngine | null = null;
   /** The `best` dictation engine: Qwen's llama-server kept warm while dictation is on (DC-E2). */
   private bestDictation: BestEngine | null = null;
+  /** Warm-ups of a dictation's models on the live Worker still running (DC-E7). */
+  private dictationWarming = 0;
   /** The next look at whether `best` may be warmed again, while it gives way to the GPU's holder. */
   private bestRewarm: unknown = null;
   /**
@@ -825,6 +837,7 @@ export class AkouApp implements ApiApp {
         return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
       },
       runtime: plan.build?.id ?? null,
+      catalog: catalog.map((m) => m.id),
     };
   }
 
@@ -843,15 +856,46 @@ export class AkouApp implements ApiApp {
     );
   }
 
-  /** A call's second pass: Qwen, every interval. */
+  /** A call's second pass: Qwen, or Parakeet on the live Worker's own recognizer. */
   private liveReview(callId: string): LiveReview | null {
     const r = this.liveRan.get(callId)?.review;
     if (!r) return null;
+    const asr = this.asr;
+    const reviewer: LineUpgrader =
+      r.model === "qwen"
+        ? this.liveUpgrader()
+        : recognizerReviewer((parts, signal) =>
+            asr ? asr.review(parts, signal) : Promise.reject(new Error("the recognizer is closed")),
+          );
     return {
-      name: liveModelName(QWEN_ASR),
-      reviewer: this.liveUpgrader(),
+      name: liveModelName(r.model === "qwen" ? QWEN_ASR : RECOGNIZER),
+      reviewer,
       everySeconds: r.everySeconds,
+      // A read does not wait on Qwen while a final pass holds its GPU.
+      ...(r.model === "qwen" ? { busy: () => this.finalHoldsGpu() } : {}),
     };
+  }
+
+  /**
+   * A final pass's Metal llama-server holds the GPU: one that is neither dictation's warm Qwen nor
+   * the second pass's own.
+   */
+  private finalHoldsGpu(): boolean {
+    if (this.llamaPlan().accelerator !== "metal") return false;
+    const holder = (this.o.metalHolder ?? metalHolder)(
+      this.llamaSpec(QWEN_ASR).build?.dir,
+      this.bestDictation?.pid() ?? null,
+    );
+    return holder !== null && holder !== (this.liveQwen?.server.pid() ?? null);
+  }
+
+  /**
+   * Review before a read (`GET /calls/{id}/transcript`, `POST /calls/{id}/context`): with a second
+   * pass on for this live call, its closed lines are reviewed first, waiting at most
+   * `REVIEW_READ_WAIT_MS`. Null with no second pass, or once the call has ended.
+   */
+  async settleReview(callId: string): Promise<{ unreviewed: number } | null> {
+    return (await this.asr?.reviewForRead(callId)) ?? null;
   }
 
   /**
@@ -921,7 +965,9 @@ export class AkouApp implements ApiApp {
     if (this.runMode === "server") return null;
     const live = this.manager.live();
     const ran = live ? this.liveRan.get(live.id) : undefined;
-    const running = ran ? { setup: ran.setup, review: ran.review } : null;
+    const running = ran
+      ? { setup: ran.setup, review: ran.review, engine: ran.choice?.engine ?? null }
+      : null;
     const shelf = this.shelf;
     const ctx = this.liveContext();
     return liveView(ctx, running, (id) =>
@@ -1106,6 +1152,8 @@ export class AkouApp implements ApiApp {
     );
     this.asr = asr;
     this.asrState = { state: "loading" };
+    // Dictation's models load first: the Worker runs this right after its start (DC-E7).
+    this.warmDictationModels();
     asr.ready.then(
       () => {
         this.asrState = { state: "ready" };
@@ -1147,6 +1195,9 @@ export class AkouApp implements ApiApp {
       const qwen = (call: string) => this.liveRan.get(call)?.review?.model === "qwen";
       const nextKeeps = next && next.id !== id && qwen(next.id);
       if (qwen(id) && !nextKeeps) this.stopLiveQwen();
+      // A call on another streaming model let the dictation's go: load it again now, so the next
+      // press finds it, and the pill says "loading model" while it loads (DC-E7).
+      this.warmDictationModels();
       // After the event is out, so the pass starts from a log that has it.
       queueMicrotask(() => this.finalAtEnd(id));
     }
@@ -1786,7 +1837,10 @@ export class AkouApp implements ApiApp {
     const beam = this.runningDecoding() === "beam";
     if (this.manager.live()?.id !== id) return beam;
     const ran = this.liveRan.get(id);
-    return ran?.review?.model === "qwen" || (beam && ran?.setup === "parakeet");
+    return (
+      ran?.review?.model === "qwen" ||
+      (beam && (ran?.setup === "parakeet" || ran?.review?.model === "parakeet"))
+    );
   }
 
   /** What the API key is saved in: the Keychain, or null for the config file. */
@@ -2117,6 +2171,8 @@ export class AkouApp implements ApiApp {
             setup: this.liveRan.get(live.id)?.setup ?? null,
             engine: this.liveRan.get(live.id)?.choice?.engine ?? null,
             review: this.liveRan.get(live.id)?.review ?? null,
+            // Their names, as the Record row's button and the call header say them.
+            ...liveNames(this.liveRan.get(live.id)),
             levels: this.levels(live.id),
           }
         : null,
@@ -2480,6 +2536,8 @@ export class AkouApp implements ApiApp {
       engine: (name) => this.dictationEngine(name),
       verdict: () => this.dictationVerdict().verdict,
       loading: () => this.dictationLoading(),
+      stream: (onText) => this.dictationStream(onText),
+      liveModel: () => (this.asr ? (this.dictationStreamChoice()?.engine ?? null) : null),
       language: () => {
         const l = this.cfg.settings["dictation.language"];
         return l === "auto" ? undefined : l;
@@ -2616,6 +2674,7 @@ export class AkouApp implements ApiApp {
     const out: string[] = [];
     if (this.fastEngine()) out.push("fast");
     if (this.bestRuns(this.llamaPlan())) out.push("best");
+    if (this.asr && this.dictationStreamChoice()) out.push("live");
     if (this.cfg.settings["dictation.remote.url"].trim() !== "") out.push("remote");
     return out;
   }
@@ -2667,7 +2726,77 @@ export class AkouApp implements ApiApp {
       accelerator: plan.accelerator,
       bestReady,
       gpuBusy: bestReady && plan.accelerator === "metal" && this.metalBusy(),
+      // Only the setting's own `auto` defers to `dictation.final`; a per-app rule's `auto` too.
+      final: this.cfg.settings["dictation.final"],
+      liveReady: this.asr !== null && this.dictationStreamChoice() !== null,
     });
+  }
+
+  /** The languages a dictation may be in: `dictation.languages`, else `asr.languages`. */
+  private dictationLangs(): readonly string[] {
+    const s = this.cfg.settings;
+    return dictationLanguages(s["dictation.languages"], s["asr.languages"]);
+  }
+
+  /**
+   * The streaming model a dictation's words come from (DC-E7): the one its languages ask for, the
+   * way a call picks under `asr.live.engine` `auto`, and only one on disk; null with none.
+   */
+  private dictationStreamChoice(): LiveChoice | null {
+    return chooseLiveEngine("auto", this.dictationLangs(), this.liveContext().present).choice;
+  }
+
+  /** Opens a dictation's stream on the live Worker for `choice` (DC-E7). */
+  private openDictationStream(asr: LiveAsr, choice: LiveChoice): OpenStream {
+    return (onWords) => {
+      const s = asr.openDictation(choice, this.dictationLangs(), onWords);
+      // A streaming model a dictation uses counts as used, so the sweep keeps it.
+      void s.opened.then((c) => this.shelf?.touch([c.engine])).catch(() => {});
+      return s;
+    };
+  }
+
+  /**
+   * A session's stream on the streaming model (DC-E7), or null: no model for its languages on disk,
+   * or no recognizer.
+   */
+  private dictationStream(onText: (text: string) => void): WordStream | null {
+    const asr = this.asr;
+    const choice = this.dictationStreamChoice();
+    if (!asr || !choice || this.asrState.state === "unavailable") return null;
+    return new LiveWords(this.openDictationStream(asr, choice), onText, {
+      onLog: (msg) => this.log("info", msg),
+    });
+  }
+
+  /**
+   * `live` (DC-E7): the streaming model's words. A dictation whose stream ran inserts its words at
+   * the release (the session's hold); this decodes a buffer that had none, by streaming it whole,
+   * and falls back to `fast` when the stream fails.
+   */
+  private liveEngine(): DictationEngine | null {
+    const asr = this.asr;
+    const choice = this.dictationStreamChoice();
+    if (!asr || !choice) return this.fastEngine();
+    const open = this.openDictationStream(asr, choice);
+    return {
+      name: "live",
+      decode: async (samples, o) => {
+        try {
+          return await liveDecode(open, samples);
+        } catch (err) {
+          const fast = this.fastEngine();
+          if (!fast) throw err;
+          this.log("warn", `dictation live: ${(err as Error).message}; decoding with fast`);
+          return {
+            ...(await fast.decode(samples, o)),
+            engine: "fast",
+            fallback_from: "live",
+            notice: LIVE_FAILED,
+          };
+        }
+      },
+    };
   }
 
   /** Whether another Metal llama-server (a final pass) holds the GPU `best` would need. */
@@ -2696,11 +2825,37 @@ export class AkouApp implements ApiApp {
     });
   }
 
-  /** Whether the engine a press decodes on is loading its model now. */
+  /**
+   * Whether the engine a press decodes on is loading its model now: the pill then says so at the
+   * release, and the press is decoded once it is loaded, never dropped.
+   */
   private dictationLoading(): boolean {
     const v = this.dictationVerdict();
     if (v.engine === "best") return this.bestDictation?.loading() ?? false;
-    return v.engine === "fast" && this.asrState.state === "loading";
+    return (
+      (v.engine === "fast" || v.engine === "live") &&
+      (this.asrState.state === "loading" || this.dictationWarming > 0)
+    );
+  }
+
+  /**
+   * Loads what the next dictation needs on the live Worker (DC-E7): Parakeet, the dictation VAD,
+   * and the streaming model its words come from, so the first press after launch waits for none of
+   * them. Runs when the recognizer starts, ahead of anything else on its Worker, and again whenever
+   * dictation warms (turned on, a model landed, a language changed); a loaded model stays loaded.
+   */
+  private warmDictationModels(): void {
+    const asr = this.asr;
+    const s = this.cfg.settings;
+    if (!asr || this.quitting || !s["dictation.enabled"] || s["dictation.engine"] === "remote")
+      return;
+    this.dictationWarming++;
+    asr
+      .warmDictation(this.dictationStreamChoice())
+      .catch((err: Error) => this.log("warn", `dictation: models not loaded ahead: ${err.message}`))
+      .finally(() => {
+        this.dictationWarming--;
+      });
   }
 
   /**
@@ -2764,6 +2919,7 @@ export class AkouApp implements ApiApp {
     if (this.quitting) return;
     const v = this.dictationVerdict();
     if (v.download) this.fetchQwen();
+    this.warmDictationModels();
     if (v.engine === "best") this.best().warm();
     else void this.bestDictation?.stop();
     // Giving way to a final pass on Metal: warmed once the pass is over.
@@ -2793,6 +2949,7 @@ export class AkouApp implements ApiApp {
   private dictationEngine(name?: string): DictationEngine | null {
     const v = this.dictationVerdict(name);
     if (v.engine === "best") return this.best();
+    if (v.engine === "live") return this.liveEngine();
     if (v.engine === "fast") {
       const fast = this.fastEngine();
       if (!fast || v.wanted === null) return fast;
@@ -2802,7 +2959,8 @@ export class AkouApp implements ApiApp {
           ...(await fast.decode(samples, o)),
           engine: fast.name,
           fallback_from: v.wanted as string,
-          notice: v.verdict,
+          // `live` with no streaming model says so on the Dictation page, not on every insert.
+          ...(v.wanted === "live" ? {} : { notice: v.verdict }),
         }),
       };
     }
@@ -2966,6 +3124,21 @@ export class AkouApp implements ApiApp {
   /** Stops one model's download; the partial file stays for the next pull. */
   cancelModel(id: string, by: string): boolean {
     return this.shelf?.cancel(id, by) ?? false;
+  }
+
+  /** Copies the catalog's model files from a folder on this machine (`POST /models/import`). */
+  async importModels(dir: string): Promise<{ copied: string[]; missing: string[] }> {
+    const from = resolve(dir.startsWith("~/") ? join(homedir(), dir.slice(2)) : dir);
+    if (!existsSync(from) || !statSync(from).isDirectory()) {
+      throw new HttpError(404, "not_found", `no folder ${dir}`, { dir });
+    }
+    const got = await importModels(
+      from,
+      this.cfg.settings["asr.modelsDir"],
+      this.o.modelRegistry ?? MODELS,
+    );
+    for (const fn of this.statusWatchers) fn();
+    return got;
   }
 
   /**
@@ -3282,4 +3455,13 @@ if (import.meta.main) {
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void app.quit());
   await app.closed;
   process.exit(0);
+}
+
+/** The live call's model and second pass by name, for the window: `Nemotron 3.5`, `Qwen`. */
+function liveNames(ran: LiveSetupChoice | undefined): { name?: string; reviewName?: string } {
+  if (!ran) return {};
+  return {
+    name: liveModelName(ran.choice?.engine ?? RECOGNIZER),
+    ...(ran.review ? { reviewName: shortModelName(reviewerId(ran.review.model)) } : {}),
+  };
 }

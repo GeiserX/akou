@@ -1,6 +1,6 @@
 /**
  * The second pass (docs/research/asr-architecture.md section 3.2, ASR-7, `asr.review.*`): with a
- * second pass on, each streaming line is rewritten once during the call, by Qwen, as a
+ * second pass on, each streaming line is rewritten once during the call, by Qwen or Parakeet, as a
  * new revision of the same `seg`, in a review every `asr.review.everySeconds` of the utterances
  * closed since the last one. The streaming engine, the recognizer and Qwen are fakes
  * (tests/fixtures/asr-fake.ts and a scripted `LineUpgrader`); nothing here loads a model or starts
@@ -8,6 +8,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
+import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import type { LogEvent, Seg } from "../src/core/log/events.ts";
 import type { Hypothesis, ModelSpec } from "../src/main/asr/engine.ts";
@@ -19,6 +20,9 @@ import {
   type LiveOut,
   LivePipeline,
   REVIEW_BEHIND_MAX,
+  REVIEW_READ_WAIT_MS,
+  REVIEW_STALL_MAX_MS,
+  recognizerReviewer,
 } from "../src/main/asr/live-worker.ts";
 import {
   joinUtterances,
@@ -33,6 +37,7 @@ import {
 } from "../src/main/asr/upgrade.ts";
 import { CallManager } from "../src/main/call/manager.ts";
 import { CallQuery } from "../src/main/query/context.ts";
+import { buildDecodeList } from "../src/main/vocab/decode-list.ts";
 import { ManualClock, ofType, ScriptedEngine, until } from "./capture-helpers.ts";
 import { concat, FakeModels, RATE, silence, speak } from "./fixtures/asr-fake.ts";
 import { TZ, tempDir } from "./helpers.ts";
@@ -242,6 +247,7 @@ describe("[ASR-7] the Worker hands each closed utterance to Qwen", () => {
 class SlowQwen implements LineUpgrader {
   readonly asked: {
     samples: Float32Array;
+    parts: readonly Float32Array[];
     signal: AbortSignal;
     glossary: readonly string[];
     answer: (h: Hypothesis) => void;
@@ -250,7 +256,7 @@ class SlowQwen implements LineUpgrader {
 
   decode(
     samples: Float32Array,
-    o: { glossary: readonly string[]; signal: AbortSignal },
+    o: { glossary: readonly string[]; signal: AbortSignal; parts: readonly Float32Array[] },
   ): Promise<Hypothesis> {
     return new Promise((answer, fail) => this.asked.push({ samples, ...o, answer, fail }));
   }
@@ -270,9 +276,20 @@ function qwenSays(text: string): Hypothesis {
   };
 }
 
-async function rig(qwen: LineUpgrader | null, o: { everySeconds?: number; name?: string } = {}) {
+async function rig(
+  qwen: LineUpgrader | null,
+  o: {
+    everySeconds?: number;
+    name?: string;
+    /** The reviewer is Parakeet on this rig's own Worker, as the app wires it. */
+    parakeet?: (review: LiveAsr["review"]) => LineUpgrader;
+    /** The reviewer cannot take a request now (Qwen's GPU is a final pass's). */
+    busy?: () => boolean;
+  } = {},
+) {
   const every = o.everySeconds ?? REVIEW_EVERY_SECONDS;
   const t = tempDir();
+  const decodesFile = join(t.dir, "decodes.log");
   cleanups.push(t.cleanup);
   const clock = new ManualClock();
   const engine = new ScriptedEngine(clock);
@@ -293,14 +310,31 @@ async function rig(qwen: LineUpgrader | null, o: { everySeconds?: number; name?:
     onPacket: (id, part, pk, ingest) => asr?.onPacket(id, part, pk, ingest),
     beforeEnd: (id) => asr?.flush(id) ?? Promise.resolve(),
   });
-  const spec: ModelSpec = { kind: "module", path: FAKE, model: "fake-parakeet", options: {} };
+  const spec: ModelSpec = {
+    kind: "module",
+    path: FAKE,
+    model: "fake-parakeet",
+    options: { decodesFile },
+  };
+  const own = (): LineUpgrader | null =>
+    o.parakeet ? o.parakeet((parts, signal) => (asr as LiveAsr).review(parts, signal)) : qwen;
   asr = new LiveAsr(
     {
       models: spec,
       inThread: true,
       clock,
       liveEngine: () => LIVE,
-      review: () => (qwen ? { name: o.name ?? "Qwen", reviewer: qwen, everySeconds: every } : null),
+      review: () => {
+        const reviewer = own();
+        return reviewer
+          ? {
+              name: o.name ?? "Qwen",
+              reviewer,
+              everySeconds: every,
+              ...(o.busy ? { busy: o.busy } : {}),
+            }
+          : null;
+      },
       onLog: (_level, msg) => logs.push(msg),
     },
     (id) => mgr.controller(id) as CallAccess | undefined,
@@ -328,7 +362,24 @@ async function rig(qwen: LineUpgrader | null, o: { everySeconds?: number; name?:
   };
   /** Moves the clock one interval (or `ms`) on, for the next review. */
   const minute = (ms = every * 1000) => clock.advance(ms);
-  return { mgr, id, events, segs, logs, play, minute, clock, view: () => mgr.controller(id)?.view };
+  /** The recognizer's decodes so far, each its sample count. */
+  const decodes = () =>
+    existsSync(decodesFile)
+      ? readFileSync(decodesFile, "utf8").trim().split("\n").filter(Boolean).map(Number)
+      : [];
+  return {
+    mgr,
+    id,
+    events,
+    segs,
+    logs,
+    play,
+    minute,
+    clock,
+    decodes,
+    asr: a,
+    view: () => mgr.controller(id)?.view,
+  };
 }
 
 /** `id rev model text` per revision, in log order. */
@@ -411,6 +462,40 @@ describe("[ASR-7] the host writes Qwen's review as each line's one revision", ()
     await r.mgr.stop();
     await r.minute();
     expect(qwen.asked.length).toBe(0);
+  });
+
+  test("a line a person fixed a word on keeps the fix: the review does not revise it, and the fold still reads the fix", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    r.play([
+      ["we", "should", "move", "the", "build"],
+      ["to", "the", "new", "box"],
+    ]);
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
+    // The Fix dialog's word fix: a line-scoped pair, not a seg revision (`by` stays unset).
+    r.mgr.controller(r.id)?.record({
+      type: "vocab.add",
+      id: "v0001",
+      rev: 1,
+      term: "could",
+      heard: ["should"],
+      segs: ["l000001"],
+      nth: 0,
+      decode: false,
+      by: "user",
+    });
+    expect(r.view()?.resolve("l000001")?.text).toBe("we could move the build");
+    await r.minute();
+    await until(() => qwen.asked.length === 1, 5000, "the review at Qwen");
+    qwen.asked[0]?.answer(qwenSays("we shall move the built to the news box"));
+    await until(() => r.view()?.segment("l000002")?.rev === 2, 5000, "the unfixed line's rewrite");
+    await Bun.sleep(50);
+    await r.mgr.stop();
+    // The fixed line has no revision from the review, and still reads the person's word.
+    expect(r.view()?.segment("l000001")?.rev).toBe(1);
+    expect(r.view()?.resolve("l000001")?.text).toBe("we could move the build");
+    expect(r.view()?.resolve("l000002")?.text).toBe("to the news box");
   });
 
   test("a line a person edited keeps their text; Qwen hearing nothing leaves the stream's words; a failure changes nothing", async () => {
@@ -589,5 +674,384 @@ describe("[ASR-7] the interval the second pass reviews at (asr.review.everySecon
     expect(seconds).toBeLessThanOrEqual(reviewCap(120) + 1);
     qwen.asked[0]?.answer(qwenSays(""));
     await r.mgr.stop();
+  });
+});
+
+describe("[ASR-7] Parakeet as the second pass", () => {
+  test("the host hands it each utterance alone, writes its words as the lines' one revision, keeps an edit, and names it in the log", async () => {
+    const parakeet = new SlowQwen();
+    const r = await rig(parakeet, { name: "Parakeet" });
+    r.play([
+      ["we", "should", "move", "the", "build"],
+      ["to", "the", "new", "box"],
+    ]);
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
+    r.mgr.controller(r.id)?.record({
+      type: "seg",
+      id: "l000002",
+      rev: 2,
+      text: "to the new books",
+      by: "user",
+    });
+    await r.minute();
+    await until(() => parakeet.asked.length === 1, 5000, "the review at Parakeet");
+    const asked = parakeet.asked[0];
+    // Each utterance alone, and the same audio joined for a reviewer that takes it whole.
+    expect(asked?.parts.length).toBe(2);
+    expect(asked?.samples).toEqual(joinUtterances(asked?.parts ?? []));
+    asked?.answer({
+      ...qwenSays("we should move the built to the news box"),
+      engine: "fake-parakeet",
+    });
+    await until(() => r.view()?.segment("l000001")?.rev === 2, 5000, "Parakeet's rewrite");
+    await r.mgr.stop();
+    expect(revisions(r.segs())).toEqual([
+      "l000001 1 fake-nemotron we should move the build",
+      "l000002 1 fake-nemotron to the new box",
+      "l000002 2 - to the new books",
+      "l000001 2 fake-parakeet we should move the built",
+    ]);
+  });
+
+  test("a Parakeet that falls behind is named in the log, and goes off like Qwen", async () => {
+    const parakeet = new SlowQwen();
+    const r = await rig(parakeet, { name: "Parakeet" });
+    const minute = async (words: string[], n: number) => {
+      r.play([words]);
+      await until(() => r.segs().length === n, 5000, `line ${n}`);
+      await Bun.sleep(20);
+      await r.minute();
+    };
+    await minute(["deploy", "the", "build"], 1);
+    await until(() => parakeet.asked.length === 1, 5000, "the first review");
+    await minute(["thanks"], 2);
+    await minute(["ok"], 3);
+    await until(
+      () => r.logs.some((l) => l.includes("Parakeet did not keep up")),
+      5000,
+      "the switch off",
+    );
+    await r.mgr.stop();
+    expect(parakeet.asked.length).toBe(1);
+  });
+
+  test("a review through the Worker comes back as one answer, each utterance decoded in turn", async () => {
+    const spec: ModelSpec = { kind: "module", path: FAKE, model: "fake-parakeet", options: {} };
+    const asr = new LiveAsr({ models: spec, inThread: true }, () => undefined);
+    cleanups.push(() => asr.close());
+    await asr.ready;
+    const utt = (w: string[]) => concat(silence(0.3), speak(w), silence(0.5));
+    const d = await asr.review([utt(["deploy", "the", "build"]), utt(["thanks"])]);
+    expect([d.text, d.spans, d.model]).toEqual(["deploy the build thanks", 2, "fake-parakeet"]);
+    expect(d.words.map((w) => w.w)).toEqual([]);
+  });
+
+  test("under greedy decoding, the default, the Worker decodes the utterance with no hotwords and does not throw", async () => {
+    const { p, models } = pipeline({ greedy: true });
+    p.setDecodeList(
+      buildDecodeList({ model: "fake-parakeet", callVocab: [], names: ["Hetzner"], files: [] }),
+      1,
+    );
+    const r = p.decodeUtterance(
+      concat(silence(0.3), speak(["deploy", "to", "hetzner"]), silence(0.5)),
+    );
+    expect(r.text).toBe("deploy to hetzna");
+    expect(models.calls.at(-1)?.hotwords).toBeUndefined();
+  });
+
+  test("the Worker decodes each utterance of a review alone, with the call's word list as hotwords when the decoding takes them (beam)", async () => {
+    const { p, models } = pipeline();
+    p.setDecodeList(
+      buildDecodeList({ model: "fake-parakeet", callVocab: [], names: ["Hetzner"], files: [] }),
+      1,
+    );
+    const r = p.decodeUtterance(
+      concat(silence(0.3), speak(["deploy", "to", "hetzner"]), silence(0.5)),
+    );
+    expect(r.text).toBe("deploy to Hetzner");
+    expect(r.model).toBe("fake-parakeet");
+    expect(models.calls.at(-1)?.hotwords).toBe("Hetzner");
+    // Control: with no list the engine hears it as it sounds.
+    p.setDecodeList(null, 2);
+    expect(
+      p.decodeUtterance(concat(silence(0.3), speak(["deploy", "to", "hetzner"]), silence(0.5)))
+        .text,
+    ).toBe("deploy to hetzna");
+  });
+
+  test("as the app wires it, the Worker decodes each utterance of a review alone, never the joined audio", async () => {
+    const r = await rig(null, { name: "Parakeet", parakeet: recognizerReviewer });
+    r.play([
+      ["we", "should", "move", "the", "build"],
+      ["to", "the", "new", "box"],
+    ]);
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
+    const before = r.decodes().length;
+    await r.minute();
+    await until(() => r.view()?.segment("l000002")?.rev === 2, 5000, "the review's rewrite");
+    // Two utterances in the minute: two decodes, each no longer than one utterance.
+    const decoded = r.decodes().slice(before);
+    expect(decoded.length).toBe(2);
+    await r.mgr.stop();
+  });
+
+  test("a decode that held the live lines too long turns Parakeet's pass off for the call, and says so", async () => {
+    let asked = 0;
+    const slow = () =>
+      recognizerReviewer(async (parts) => {
+        asked++;
+        return {
+          text: parts.map(() => "x").join(" "),
+          words: [],
+          language: null,
+          model: "fake-parakeet",
+          ms: REVIEW_STALL_MAX_MS + 500,
+          spans: parts.length,
+          slowest: REVIEW_STALL_MAX_MS + 500,
+        };
+      });
+    const r = await rig(null, { name: "Parakeet", parakeet: slow });
+    r.play([["deploy", "the", "build"]]);
+    await until(() => r.segs().length === 1, 5000, "the line");
+    await Bun.sleep(20);
+    await r.minute();
+    await until(() => r.logs.some((l) => l.includes("off for the rest of the call")), 5000, "off");
+    expect(r.logs.find((l) => l.includes("off for the rest"))).toContain("holding the live lines");
+    r.play([["thanks"]]);
+    await until(() => r.segs().length === 2, 5000, "the next line");
+    await Bun.sleep(20);
+    await r.minute();
+    await r.mgr.stop();
+    // Nothing was written from the slow review, and nothing was asked after it.
+    expect(asked).toBe(1);
+    expect(r.segs().every((x) => x.rev === 1)).toBe(true);
+  });
+
+  test("at call.ended the Worker decodes no more of a review in flight", async () => {
+    const spec: ModelSpec = { kind: "module", path: FAKE, model: "fake-parakeet", options: {} };
+    const t = tempDir();
+    cleanups.push(t.cleanup);
+    const file = join(t.dir, "decodes.log");
+    const asr = new LiveAsr(
+      { models: { ...spec, options: { decodesFile: file } }, inThread: true },
+      () => undefined,
+    );
+    cleanups.push(() => asr.close());
+    await asr.ready;
+    const utt = (w: string[]) => concat(silence(0.3), speak(w), silence(0.5));
+    const ended = new AbortController();
+    const parts = [utt(["deploy"]), utt(["the"]), utt(["build"]), utt(["thanks"])];
+    const answer = asr.review(parts, ended.signal);
+    ended.abort();
+    await expect(answer).rejects.toThrow("given up");
+    await Bun.sleep(100);
+    const n = existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").length : 0;
+    // The first utterance may already be decoding; none after it is.
+    expect(n).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("[ASR-7] review before a read: an agent reads lines the second pass has corrected", () => {
+  /** Two utterances closed, and no review due yet. */
+  const two = async (qwen: LineUpgrader | null, o: Parameters<typeof rig>[1] = {}) => {
+    const r = await rig(qwen, o);
+    r.play([
+      ["we", "should", "move", "the", "build"],
+      ["to", "the", "new", "box"],
+    ]);
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
+    return r;
+  };
+
+  test("a read runs the pass over what has closed, before the timer, and answers once the lines are corrected", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    const read = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    qwen.asked[0]?.answer(qwenSays("we should move the built to the news box"));
+    expect(await read).toEqual({ unreviewed: 0 });
+    expect(r.view()?.segment("l000001")?.text).toBe("we should move the built");
+    // The timer finds nothing left: a read right after costs nothing either.
+    await r.minute();
+    expect(await r.asr.reviewForRead(r.id)).toEqual({ unreviewed: 0 });
+    expect(qwen.asked.length).toBe(1);
+    await r.mgr.stop();
+  });
+
+  test(`the wait is bounded: past ${REVIEW_READ_WAIT_MS / 1000} s the read answers with how many lines are still unreviewed`, async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    let answered = null as { unreviewed: number } | null;
+    const read = r.asr.reviewForRead(r.id).then((x) => {
+      answered = x;
+    });
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    await r.clock.advance(REVIEW_READ_WAIT_MS - 1000);
+    await Bun.sleep(20);
+    expect(answered).toBeNull();
+    await r.clock.advance(1000);
+    await read;
+    expect(answered).toEqual({ unreviewed: 2 });
+    qwen.asked[0]?.answer(qwenSays(""));
+    await r.mgr.stop();
+  });
+
+  test("two reads at once share one pass", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    const a = r.asr.reviewForRead(r.id);
+    const b = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the review");
+    await Bun.sleep(50);
+    expect(qwen.asked.length).toBe(1);
+    qwen.asked[0]?.answer(qwenSays("we should move the built to the news box"));
+    expect(await Promise.all([a, b])).toEqual([{ unreviewed: 0 }, { unreviewed: 0 }]);
+    await r.mgr.stop();
+  });
+
+  test("with the second pass Off, a read reviews nothing and says nothing", async () => {
+    const r = await two(null);
+    expect(await r.asr.reviewForRead(r.id)).toBeNull();
+    expect(r.segs().every((x) => x.rev === 1)).toBe(true);
+    await r.mgr.stop();
+  });
+
+  test("after call.ended a read reviews nothing: the final pass owns the call", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    await r.mgr.stop();
+    expect(await r.asr.reviewForRead(r.id)).toBeNull();
+    expect(qwen.asked.length).toBe(0);
+  });
+
+  test("a read with more than the cap pending reviews the newest cap's worth, and leaves the rest to the timer", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    // About 110 s of speech closed and no review yet: more than a minute's 90 s cap.
+    const said: string[][] = [];
+    for (let i = 0; i < 75; i++) said.push(["hello", "world"]);
+    r.play(said, 0.8);
+    await until(() => r.segs().length === 75, 20_000, "every stream line");
+    await Bun.sleep(50);
+    const read = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    await Bun.sleep(50);
+    // One request, the newest ones, within the cap; nothing else asked yet.
+    expect(qwen.asked.length).toBe(1);
+    expect((qwen.asked[0]?.samples.length as number) / RATE).toBeLessThanOrEqual(
+      REVIEW_CAP_SECONDS + 1,
+    );
+    qwen.asked[0]?.answer(qwenSays(""));
+    const got = await read;
+    expect(got?.unreviewed).toBeGreaterThan(0);
+    // The timer takes the older ones.
+    await r.minute();
+    await until(() => qwen.asked.length === 2, 5000, "the timer's review");
+    qwen.asked[1]?.answer(qwenSays(""));
+    await r.mgr.stop();
+  });
+
+  test("a line a person fixed a word on keeps the fix through a read's pass", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    r.mgr.controller(r.id)?.record({
+      type: "vocab.add",
+      id: "v0001",
+      rev: 1,
+      term: "could",
+      heard: ["should"],
+      segs: ["l000001"],
+      nth: 0,
+      decode: false,
+      by: "user",
+    });
+    const read = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    qwen.asked[0]?.answer(qwenSays("we shall move the built to the news box"));
+    await read;
+    expect(r.view()?.resolve("l000001")?.text).toBe("we could move the build");
+    await r.mgr.stop();
+  });
+
+  /** One utterance of `words` closed, then the clock moved one interval on. */
+  const utterance = async (r: Awaited<ReturnType<typeof rig>>, words: string[], n: number) => {
+    r.play([words]);
+    await until(() => r.segs().length === n, 5000, `line ${n}`);
+    await Bun.sleep(20);
+  };
+
+  test("a timer due during a read's pass neither drops the read's request nor counts it behind", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    await utterance(r, ["deploy", "the", "build"], 1);
+    await r.minute();
+    await until(() => qwen.asked.length === 1, 5000, "the timer's review at Qwen");
+    // A read while the timer's request is at Qwen: its own request waits behind it.
+    await utterance(r, ["to", "the", "new", "box"], 2);
+    const read = r.asr.reviewForRead(r.id);
+    await Bun.sleep(20);
+    // The next interval comes while both are pending.
+    await utterance(r, ["thanks"], 3);
+    await r.minute();
+    await Bun.sleep(20);
+    qwen.asked[0]?.answer(qwenSays("deploy the built"));
+    await until(() => qwen.asked.length === 2, 5000, "the read's request at Qwen");
+    qwen.asked[1]?.answer(qwenSays("to the news box"));
+    await until(() => qwen.asked.length === 3, 5000, "the timer's next request");
+    qwen.asked[2]?.answer(qwenSays("thanks."));
+    // The read stopped waiting at its bound when the clock moved a minute; its pass went on.
+    await read;
+    await until(() => r.view()?.segment("l000003")?.rev === 2, 5000, "the last line's rewrite");
+    expect(r.view()?.segment("l000002")?.text).toBe("to the news box");
+    expect(await r.asr.reviewForRead(r.id)).toEqual({ unreviewed: 0 });
+    expect(r.logs.filter((l) => l.includes("behind") || l.includes("keep up"))).toEqual([]);
+    await r.mgr.stop();
+  });
+
+  test("reads one after another do not hide a reviewer that falls behind: it goes off like without them", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    await utterance(r, ["deploy", "the", "build"], 1);
+    await r.minute();
+    await until(() => qwen.asked.length === 1, 5000, "the first review at Qwen");
+    // Qwen never answers; a reader keeps a pass open the whole time.
+    void r.asr.reviewForRead(r.id);
+    await utterance(r, ["thanks"], 2);
+    await r.minute();
+    void r.asr.reviewForRead(r.id);
+    await utterance(r, ["ok"], 3);
+    await r.minute();
+    expect(r.logs.some((l) => l.includes("did not keep up"))).toBe(false);
+    void r.asr.reviewForRead(r.id);
+    await utterance(r, ["great"], 4);
+    await r.minute();
+    await until(() => r.logs.some((l) => l.includes("did not keep up")), 5000, "the switch off");
+    // Off: a read reviews nothing more.
+    expect(await r.asr.reviewForRead(r.id)).toBeNull();
+    expect(qwen.asked.length).toBe(1);
+    await r.mgr.stop();
+  });
+
+  test("while a final pass holds Qwen's GPU, a read does not wait: it answers at once with what is unreviewed", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen, { busy: () => true });
+    const read = r.asr.reviewForRead(r.id);
+    const first = await Promise.race([read, Bun.sleep(500).then(() => "still waiting")]);
+    expect(first).toEqual({ unreviewed: 2 });
+    expect(qwen.asked.length).toBe(0);
+    await r.mgr.stop();
+  });
+
+  test("a read the call ends under answers at once, with no count a later read could bring down", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    const read = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    await r.mgr.stop();
+    const got = await Promise.race([read, Bun.sleep(500).then(() => "still waiting")]);
+    expect(got).toBeNull();
   });
 });

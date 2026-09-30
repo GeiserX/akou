@@ -39,7 +39,7 @@ import { LineSplitter, PacketDecoder } from "../capture/protocol.ts";
 import type { AppRule } from "../config/schema.ts";
 import { DICTATION_AUDIO, DictationAudio } from "./audio.ts";
 import { DraftBox, type DraftBoxOptions, NO_TARGET } from "./draft.ts";
-import { forcesLanguage } from "./engines.ts";
+import { type DictationFinal, finalOf, forcesLanguage } from "./engines.ts";
 import { Learner } from "./learner.ts";
 import {
   type Bindings,
@@ -61,6 +61,7 @@ import {
   type SessionState,
   type TextRules,
   textEvent,
+  type WordStream,
 } from "./session.ts";
 import { DICTATION_DIR, DictationLog, expiredDictations, FINAL, newDictationId } from "./store.ts";
 
@@ -173,6 +174,13 @@ export interface DictationServiceOptions extends TextRules {
   verdict?(): string;
   /** Whether the engine is loading its model now: a press is kept and decoded once it is ready. */
   loading?(): boolean;
+  /**
+   * A stream on the streaming model for a session starting now (DC-E7), or null with none for the
+   * dictation's languages on disk.
+   */
+  stream?(onText: (text: string) => void): WordStream | null;
+  /** The streaming model a dictation's words would come from now, or null with none (DC-E7). */
+  liveModel?(): string | null;
   /** The remote engine's standing while `dictation.engine` is `remote`, else null (DC-R3). */
   remote?(): DictationRemoteStatus | null;
   /**
@@ -248,6 +256,12 @@ export interface DictationStatus {
   verdict: string | null;
   /** The engine is loading its model: a press now is kept and decoded once it is ready. */
   loading: boolean;
+  /**
+   * What a dictation inserts now (DC-E7): `dictation.final` as it resolves here, `remote`, or null
+   * with no model; and the streaming model its words come from as you speak, null for Parakeet.
+   */
+  final: DictationFinal | "remote" | null;
+  live: string | null;
   grants: Grants | null;
   /** The grants the running helper lost since it started (DC-N1): its key does nothing now. */
   lost: string[];
@@ -597,7 +611,7 @@ export class DictationService {
   private retryEngineFor(it: { engine: string; text: string | null }): string | null {
     const here = (this.o.draft?.engines?.() ?? []).filter((e) => e !== "remote");
     if (remoteDecodeFailed(it)) return here.includes("best") ? "best" : (here[0] ?? null);
-    return ["fast", "best", "remote"].includes(it.engine) ? it.engine : (here[0] ?? null);
+    return ["fast", "best", "live", "remote"].includes(it.engine) ? it.engine : (here[0] ?? null);
   }
 
   /**
@@ -684,6 +698,11 @@ export class DictationService {
     };
   }
 
+  /** Whether a follower wants the words as you speak now (the pill with its preview on). */
+  private wantsPartials(): boolean {
+    return [...this.partialWants.values()].some((wants) => wants());
+  }
+
   /**
    * The preview's decoder (DC-E5): the local `fast` engine, which decodes a few seconds in a
    * fraction of a second, whatever engine the dictation's own text comes from. Parakeet names no
@@ -691,7 +710,7 @@ export class DictationService {
    * is loaded.
    */
   private previewDecode(): PreviewDecode | null {
-    if (![...this.partialWants.values()].some((wants) => wants())) return null;
+    if (!this.wantsPartials()) return null;
 
     const fast = this.o.engine("fast");
     if (!fast) return null;
@@ -792,10 +811,13 @@ export class DictationService {
 
   status(): DictationStatus {
     const s = this.helper?.session;
+    const engine = this.o.engine()?.name ?? null;
     return {
       enabled: this.helper !== null,
       state: s ? s.state : "off",
-      engine: this.o.engine()?.name ?? null,
+      engine,
+      final: finalOf(engine),
+      live: this.o.liveModel?.() ?? null,
       verdict: this.o.verdict?.() ?? null,
       loading: this.o.loading?.() ?? false,
       grants: s?.ready?.grants ?? null,
@@ -855,6 +877,11 @@ export class DictationService {
       ...(this.o.spokenSend ? { spokenSend: this.o.spokenSend } : {}),
       onEdit: (id, hunks) => void this.fromField(id, hunks),
       preview: () => this.previewDecode(),
+      // The streaming model's words, while someone shows them or they are what goes in (DC-E7).
+      stream: (onText) =>
+        this.wantsPartials() || this.o.engine()?.name === "live"
+          ? (this.o.stream?.(onText) ?? null)
+          : null,
       onPartial: (p) => this.tell({ kind: "partial", ...p }),
       onCue: (m) => this.o.cue?.(m),
       onRecordedKey: (name) => this.recorder?.(name),

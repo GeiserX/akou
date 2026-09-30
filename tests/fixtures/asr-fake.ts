@@ -13,7 +13,7 @@
  *   stream's hotwords.
  */
 
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import type { Channel } from "../../src/core/log/events.ts";
 import type {
   DiarizedSpan,
@@ -192,6 +192,8 @@ export interface FakeOptions {
    * Real Worker only: in-thread it would kill the test runner.
    */
   crashOnceFile?: string;
+  /** Each recognizer decode appends its sample count as a line here, for a test that counts them. */
+  decodesFile?: string;
   /** `nemotron`: live labels from `FakeStreamDiarizer`. Default: embedding clusters. */
   diarizer?: "nemotron" | "embeddings";
   /** The fake stream diarizer's step and look-ahead, seconds (Nemotron live: 1.68 and 0.32). */
@@ -210,6 +212,11 @@ export interface FakeOptions {
   liveTierMs?: number;
   /** Loading a streaming engine throws (a missing or broken model). */
   liveFails?: boolean;
+  /**
+   * Each streaming engine load busy-waits this long, and the set then holds one engine at a time,
+   * as sherpa's does: loading another lets the one before go.
+   */
+  liveLoadMs?: number;
   /** `release` takes this long before it lets go of the models, ms. */
   releaseMs?: number;
 }
@@ -243,6 +250,7 @@ export class FakeRecognizer implements Recognizer {
       hotwords,
       args: hotwords === undefined ? 0 : 1,
     });
+    if (this.o.decodesFile) appendFileSync(this.o.decodesFile, `${samples.length}\n`);
     if (hotwords !== undefined && this.kind !== "transducer") {
       // What sherpa-onnx does: log and exit the process. The test sees a throw instead.
       throw new Error("Only transducer models support contextual biasing.");
@@ -537,6 +545,10 @@ export class FakeModels implements ModelSet {
     const had = this.liveEngines.find((e) => e.id === id);
     if (had) return had;
     if (this.o.liveFails) throw new Error(`fake: no model files for ${id}`);
+    if (this.o.liveLoadMs !== undefined) {
+      this.liveEngines.length = 0;
+      busyWait(this.o.liveLoadMs);
+    }
     const e = new FakeLiveEngine(id, this.o.liveTierMs ?? 560);
     this.liveEngines.push(e);
     this.count(id);

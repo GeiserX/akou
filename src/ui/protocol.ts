@@ -149,6 +149,9 @@ export interface AppStatus {
     engine?: string | null;
     /** The call's second pass (`asr.review.*`), or null for none; absent from an older app. */
     review?: { model: string; everySeconds: number } | null;
+    /** The live model's and the second pass's names, as the button says them; absent from an older app. */
+    name?: string;
+    reviewName?: string;
   } | null;
   last: { call: string; title: string; state: string; endedAt: number | null } | null;
   asr: { state: string; reason?: string; model?: string };

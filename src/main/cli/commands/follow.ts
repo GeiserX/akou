@@ -55,16 +55,24 @@ const tail: Command = {
     const colors = format === "txt" && ctx.color ? new SpeakerColors(true) : undefined;
     const last = duration(p, "last");
     const call = ref(p);
+    const follow = bool(p, "follow");
     const query = {
       format: "json",
       since: int(p, "since", 0, Number.MAX_SAFE_INTEGER),
       from: last !== undefined ? Date.now() - last * 1000 : undefined,
+      // A one-off read gets the second pass's text first; a follower does not wait on each event.
+      review: follow ? "skip" : undefined,
     };
     const first = await api(ctx, "GET", `/calls/${call}/transcript`, { query });
     if (first.status !== 200) return finish(ctx, first, () => "");
     const id = first.body.call as string;
     for (const l of first.body.lines) ctx.io.out(lineText(l, format, colors));
-    if (!bool(p, "follow")) return EXIT.ok;
+    if (!follow) {
+      const n = Number(first.body.unreviewed ?? 0);
+      if (n > 0 && format !== "json")
+        ctx.io.err(`akou: ${n} line${n === 1 ? " is" : "s are"} still waiting for the second pass`);
+      return EXIT.ok;
+    }
     // Follow by id, so `live` cannot move to another call under us. Two cursors: the transcript
     // read can already hold lines committed after the events answer, and must not print them twice.
     let eventCursor = first.body.cursor as number;
@@ -81,7 +89,7 @@ const tail: Command = {
       }
       if (ev.events.length === 0) continue;
       const r = await api(ctx, "GET", `/calls/${id}/transcript`, {
-        query: { format: "json", since: lineCursor },
+        query: { format: "json", since: lineCursor, review: "skip" },
       });
       if (r.status !== 200) return finish(ctx, r, () => "");
       for (const l of r.body.lines) ctx.io.out(lineText(l, format, colors));
@@ -123,7 +131,7 @@ const context: Command = {
       ctx,
       r,
       (b) =>
-        `${b.pack}\n\ncursor ${b.cursor} · ${b.state}${b.memoStale ? " · memo stale" : ""} · ${b.tokens} tokens`,
+        `${b.pack}\n\ncursor ${b.cursor} · ${b.state}${b.memoStale ? " · memo stale" : ""} · ${b.tokens} tokens${b.unreviewed ? ` · ${b.unreviewed} lines still waiting for the second pass` : ""}`,
     );
   },
 };

@@ -67,11 +67,21 @@
  * transcribed like any other. A session is latched when the tray or the CLI started it, when
  * `dictation.activation` is `toggle`, or when the helper says so (`latched`).
  *
- * The words as you speak (DC-E5): while a session listens and someone wants them (`preview`), the
- * last `PREVIEW_TAIL_SECONDS` of its audio are decoded again every `PREVIEW_EVERY_SECONDS` on the
- * preview engine, one decode at a time, and each answer goes out as a partial (`onPartial`) while
- * the same session still listens. A partial is only ever shown: the inserted text is the decode of
- * the whole buffer at the release. A password field's session has no partials (DC-N8).
+ * The words as you speak (DC-E5): while a session listens and someone wants them (`preview`), its
+ * audio since the last settled word is decoded again every `PREVIEW_EVERY_SECONDS` on the preview
+ * engine, one decode at a time, and each answer goes out as a partial (`onPartial`) while the same
+ * session still listens. A partial is the whole dictation so far (H-11): once the audio decoded
+ * again passes `PREVIEW_TAIL_SECONDS`, the words that end `PREVIEW_SETTLE_SECONDS` before its end,
+ * up to a pause of `PREVIEW_CUT_GAP_SECONDS`, are settled and never decoded again, so a decode
+ * stays short however long the dictation. A
+ * partial is only ever shown: the inserted text is the decode of the whole buffer at the release. A
+ * password field's session has no partials (DC-N8).
+ *
+ * The words from a streaming model (DC-E7): when one is downloaded, a session opens a stream on it at
+ * the press (`stream`) and feeds it the audio as it records; each time the model gives new words the
+ * whole text so far goes out as a partial, and nothing is decoded again. A stream that cannot open
+ * falls back to the decodes above. With `dictation.final` `live` the engine is `live`, and its text
+ * is the stream's own words, flushed at the release: no second decode.
  *
  * The session's language (DC-E4, akou-5v8): the pill's language chip forces one for the session
  * listening (`setLanguage`), and so does `command("start", { language })` for the session it opens
@@ -284,6 +294,11 @@ export interface SessionOptions extends TextRules {
   /** A partial of the session listening: shown, never inserted (DC-E5). */
   onPartial?(p: PreviewPartial): void;
   /**
+   * Opens a stream on a streaming model for a session starting now (DC-E7), its whole text so far
+   * to `onText` as words come; null when none is downloaded or nothing needs its words.
+   */
+  stream?(onText: (text: string) => void): WordStream | null;
+  /**
    * A moment of a spoken dictation for its cue (DC-O3): `start` when its audio starts, `stop` once
    * the post-roll ended and it goes to the engine, `cancel` when it is dropped, `done` when its text
    * went in.
@@ -319,8 +334,27 @@ export interface SessionOptions extends TextRules {
   metering?(): boolean;
 }
 
-/** A decode of the end of the audio so far, for the preview only. */
-export type PreviewDecode = (samples: Float32Array) => Promise<Pick<Decoded, "text" | "language">>;
+/**
+ * A dictation's stream on a streaming model (DC-E7), opened at the press: its audio as it records,
+ * its words to the callback it was opened with, and at the release its last words and the whole.
+ */
+export interface WordStream {
+  /** False once it could not open or died: the preview decodes again instead. */
+  ok(): boolean;
+  push(samples: Float32Array): void;
+  /** Its last words flushed, and every word as a decode; the engine of `dictation.final` `live`. */
+  finish(): Promise<EngineDecoded>;
+  cancel(): void;
+}
+
+/**
+ * A decode of the audio since the last settled word, for the preview only. Its words' times, in
+ * seconds from the start of `samples`, let the session settle the early ones; with none, nothing
+ * settles and the decode keeps at most `PREVIEW_MAX_SECONDS`.
+ */
+export type PreviewDecode = (
+  samples: Float32Array,
+) => Promise<Pick<Decoded, "text" | "language"> & { words?: Decoded["words"] }>;
 
 /** The words heard so far in the session listening, and the language the engine heard them in. */
 export interface PreviewPartial {
@@ -354,12 +388,24 @@ function draftRule(rule: AppRule | null, enterSends: boolean): DraftRule | undef
 /** How often a listening session's audio is decoded again for the preview (DC-E5). */
 export const PREVIEW_EVERY_SECONDS = 0.5;
 /**
- * How much of the end of the audio each preview decode takes. The pill's ticker shows one line, the
- * newest words, so the start of a long dictation is never decoded again and a decode stays short:
- * it shares the live Worker with the release's whole-buffer decode and a recorded call's segments,
- * which wait behind the one in flight.
+ * Past this much audio decoded again, the preview settles its early words (H-11), so a decode stays
+ * short: it shares the live Worker with the release's whole-buffer decode and a recorded call's
+ * segments, which wait behind the one in flight.
  */
 export const PREVIEW_TAIL_SECONDS = 8;
+/** A word settles once this much audio follows it: enough right context not to change again. */
+export const PREVIEW_SETTLE_SECONDS = 3;
+/**
+ * The shortest gap the preview cuts in after a settled word. Parakeet's word ends come from token
+ * durations and are off by tens of ms, so a cut between words said closer than this can land in
+ * the settled word's tail, and the next decode would start on a fragment of it.
+ */
+export const PREVIEW_CUT_GAP_SECONDS = 0.15;
+/**
+ * The most audio one preview decode takes: with no word times to settle by, the start of a long
+ * dictation beyond it drops out of the preview, never out of the inserted text.
+ */
+export const PREVIEW_MAX_SECONDS = 20;
 
 /** When a session ends by itself (DC-A3). */
 export interface AutoStop {
@@ -432,6 +478,11 @@ interface Listening {
   /** The samples the last preview decode took, and whether one is running (DC-E5). */
   previewAt: number;
   previewing: boolean;
+  /** Where the audio decoded again for the preview starts, and the settled words before it. */
+  previewFrom: number;
+  previewKept: string;
+  /** The stream on a streaming model opened at the press (DC-E7), or null. */
+  stream: WordStream | null;
   /** The language the pill's chip forced for this session, else null (akou-5v8). */
   language: string | null;
   /** The per-app rule for the app captured at the press (DC-U9), or null. */
@@ -710,7 +761,10 @@ export class DictationSession {
         if (this.cur?.end) this.ended(this.cur);
         // A start with no end before it (a helper that restarted or misbehaved): the old session
         // is dropped, and so is the request it opened, rather than left open on the remote.
-        else this.cur?.hold?.request.cancel();
+        else {
+          this.cur?.hold?.request.cancel();
+          this.cur?.stream?.cancel();
+        }
         const door = this.o.now() - this.doorAt <= DOOR_MS;
         this.doorAt = Number.NEGATIVE_INFINITY;
         const chosen = door ? this.doorLanguage : null;
@@ -735,10 +789,14 @@ export class DictationSession {
           vad: Promise.resolve(),
           previewAt: 0,
           previewing: false,
+          previewFrom: 0,
+          previewKept: "",
+          stream: null,
           language: chosen,
           rule,
         };
         this.cur = c;
+        c.stream = this.openStream(c);
         const early = this.early.chunks;
         this.early = { chunks: [], samples: 0 };
         this.set("listening");
@@ -893,8 +951,10 @@ export class DictationSession {
     c.chunks.push(samples);
     c.samples += samples.length;
     c.hold?.request.push(samples);
+    // Until the release the stream hears everything, the post-roll included.
+    c.stream?.push(samples);
     if (c.end || c.stopping) return;
-    this.previewTick(c);
+    if (!c.stream?.ok()) this.previewTick(c);
     const a = this.o.autoStop?.();
     if (!a) return;
     const limit = a.maxMinutes * 60 * CAPTURE_RATE;
@@ -935,11 +995,13 @@ export class DictationSession {
     if (!decode) return;
     c.previewAt = c.samples;
     c.previewing = true;
-    const tail = lastSamples(c.chunks, c.samples, PREVIEW_TAIL_SECONDS * CAPTURE_RATE);
+    c.previewFrom = Math.max(c.previewFrom, c.samples - PREVIEW_MAX_SECONDS * CAPTURE_RATE);
+    const from = c.previewFrom;
+    const tail = lastSamples(c.chunks, c.samples, c.samples - from);
     void decode(tail)
       .then((d) => {
         if (this.cur !== c || c.end || c.stopping) return;
-        const text = d.text.trim();
+        const text = settlePreview(c, d, from, tail.length);
         if (text !== "") this.o.onPartial?.({ text, language: d.language });
       })
       .catch((err) => this.o.onLog?.("info", `dictation preview: ${(err as Error).message}`))
@@ -971,6 +1033,23 @@ export class DictationSession {
     if (end - c.heard >= silenceSeconds * CAPTURE_RATE) this.stopBy(c, "silence");
   }
 
+  /**
+   * The session's stream on a streaming model (DC-E7), whose words go out as partials while it
+   * still listens; none for a password field (DC-N8), and none when a stream cannot be had.
+   */
+  private openStream(c: Listening): WordStream | null {
+    if (c.secure || !this.o.stream) return null;
+    try {
+      return this.o.stream((text) => {
+        if (this.cur !== c || c.end || c.stopping) return;
+        this.o.onPartial?.({ text, language: null });
+      });
+    } catch (err) {
+      this.o.onLog?.("warn", `dictation: no live words: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
   /** Asks the helper to end the session (DC-A3); its audio is transcribed as for a tap. */
   private stopBy(c: Listening, why: "silence" | "max"): void {
     c.stopping = why;
@@ -986,6 +1065,7 @@ export class DictationSession {
     this.early = { chunks: [], samples: 0 };
     if (c?.end) clearTimeout(c.end.timer);
     c?.hold?.request.cancel();
+    c?.stream?.cancel();
     if (c) {
       const id = newDictationId(this.o.now());
       this.write({ type: "dictation.started", id, target: c.target, engine: "auto", by: "user" });
@@ -1034,6 +1114,21 @@ export class DictationSession {
       seconds,
       ...(c.warned !== null ? { warned: c.warned } : {}),
     });
+    // `dictation.final` `live`: the stream's own words are the text, flushed now; any other engine
+    // decodes the buffer, and the stream is done.
+    const stream = c.stream;
+    if (engine?.name === "live" && stream?.ok() && !c.hold) {
+      c.hold = {
+        engine,
+        request: {
+          push: () => {},
+          // A stream that died at the release: the engine decodes the buffer itself instead.
+          decode: (samples) => stream.finish().catch(() => engine.decode(samples, {})),
+          cancel: () => stream.cancel(),
+        },
+        language: undefined,
+      };
+    } else stream?.cancel();
     if (reason === "cancel" || reason === "stop") {
       c.hold?.request.cancel();
       this.write({ type: "dictation.cancelled", id });
@@ -1364,6 +1459,58 @@ export function languageForced(
   engine: string,
 ): { language_forced?: boolean } {
   return language ? { language_forced: forcesLanguage(engine) } : {};
+}
+
+/**
+ * The whole preview after a decode of the audio from `from` (`n` samples): the settled words, then
+ * the decoded ones. Past `PREVIEW_TAIL_SECONDS`, the words that end `PREVIEW_SETTLE_SECONDS` before
+ * the decode's end join the settled ones, up to the last of them followed by a gap of at least
+ * `PREVIEW_CUT_GAP_SECONDS`, and the next decode starts in that gap.
+ */
+function settlePreview(
+  c: Listening,
+  d: Awaited<ReturnType<PreviewDecode>>,
+  from: number,
+  n: number,
+): string {
+  const words = d.words ?? [];
+  const seconds = n / CAPTURE_RATE;
+  let rest = d.text.trim();
+  const timed =
+    words.length > 0 && words.every((w) => Number.isFinite(w.s) && Number.isFinite(w.e));
+  if (timed && seconds > PREVIEW_TAIL_SECONDS && c.previewFrom === from) {
+    let k = 0;
+    while (k < words.length && (words[k] as { e: number }).e <= seconds - PREVIEW_SETTLE_SECONDS)
+      k++;
+    // Back to a word followed by a real pause; with none, nothing settles this time.
+    while (k > 0 && k < words.length) {
+      const gap = (words[k] as { s: number }).s - (words[k - 1] as { e: number }).e;
+      if (gap >= PREVIEW_CUT_GAP_SECONDS) break;
+      k--;
+    }
+    if (k > 0) {
+      const last = words[k - 1] as { e: number };
+      const next = words[k] as { s: number } | undefined;
+      const cut = next ? (last.e + next.s) / 2 : last.e;
+      c.previewKept = joinWords(
+        c.previewKept,
+        words
+          .slice(0, k)
+          .map((w) => w.w)
+          .join(" "),
+      );
+      c.previewFrom = from + Math.round(cut * CAPTURE_RATE);
+      rest = words
+        .slice(k)
+        .map((w) => w.w)
+        .join(" ");
+    }
+  }
+  return joinWords(c.previewKept, rest);
+}
+
+function joinWords(a: string, b: string): string {
+  return a === "" ? b : b === "" ? a : `${a} ${b}`;
 }
 
 /** The last `n` of the `total` samples in `chunks` (all of them when there are fewer). */

@@ -1,5 +1,6 @@
 /* The dictation pill (DC-O1) as the island at the top (docs/ux/design-explorations/README.md):
-   a black island that only changes width, black in both appearances like a notch. Red is the
+   a black island that changes width, and grows to hold the words while listening (H-11), black in
+   both appearances like a notch. Red is the
    recording dot only, green the inserted check only. The hint line, the error sheet and the learn
    chip hang under it and switch material with the appearance. */
 :root {
@@ -33,8 +34,8 @@
   /* biome-ignore lint/complexity/noImportantStyles: the attribute must beat every display rule, whatever its specificity */
   display: none !important;
 }
-/* The window is transparent and larger than the island, which leaves room for what hangs under
-   it: only the island and those are painted. */
+/* The window is transparent and sized to what the page holds (the page asks for its height): only
+   the island and what hangs under it are painted. */
 html,
 body {
   margin: 0;
@@ -68,31 +69,50 @@ button:focus-visible {
   outline-offset: 1px;
 }
 
-/* The island. */
+/* At the bottom edge everything mirrors: what hangs under the island hangs over it, and the words
+   grow upward above the island's row, so the row and its buttons never move (DC-O2). */
+#pill[data-edge="bottom"] {
+  flex-direction: column-reverse;
+  padding: 16px 12px 4px;
+}
+/* The island: its row, and under it the words while listening. */
 #island {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  height: 36px;
+  flex-direction: column;
   box-sizing: border-box;
   min-width: 126px;
-  padding: 0 16px;
   border-radius: 18px;
   background: var(--island);
   color: var(--island-fg);
-  white-space: nowrap;
-  justify-content: center;
   box-shadow:
     0 0 0 0.5px var(--island-ring),
     0 8px 24px rgba(0, 0, 0, 0.5);
   cursor: grab;
 }
-#pill[data-state="listening"] #island {
+#pill[data-edge="bottom"] #island {
+  flex-direction: column-reverse;
+}
+#row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 36px;
+  box-sizing: border-box;
+  padding: 0 16px;
+  white-space: nowrap;
+  justify-content: center;
+}
+#pill[data-state="listening"] #row {
   padding: 0 6px 0 14px;
 }
-#pill[data-state="transcribing"] #island {
+#pill[data-state="transcribing"] #row {
   gap: 8px;
   padding: 0 16px 0 8px;
+}
+/* With words the island is wide from the first one, so it never jumps sideways as they come; the
+   time, the chip and the buttons sit at its right (`#elapsed` below). */
+#pill[data-words] #island {
+  width: 424px;
 }
 .icon {
   flex: none;
@@ -157,18 +177,38 @@ button:focus-visible {
 #level i.half {
   background: rgba(255, 255, 255, 0.5);
 }
-/* The preview: one line, the newest words at the right, the oldest fading out at the left. */
+/* The words so far, the whole dictation: wrapping, newest at the bottom, up to `--preview-max`
+   (about eight lines, or 40 % of the display when that is less), then scrolling with a thin
+   scrollbar, pinned to the newest words unless scrolled back. */
 #preview {
-  display: flex;
-  justify-content: flex-end;
-  width: 184px;
-  flex: none;
-  overflow: hidden;
-  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 32px);
-  mask-image: linear-gradient(to right, transparent 0, #000 32px);
+  box-sizing: border-box;
+  max-height: var(--preview-max, 144px);
+  padding: 0 14px 12px;
+  overflow-y: auto;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 18px;
+  cursor: text;
 }
-#preview-words {
-  white-space: nowrap;
+#pill[data-edge="bottom"] #preview {
+  padding: 12px 14px 0;
+}
+/* Scrolled: the top fades, saying there is more above. */
+#preview[data-over] {
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 16px);
+}
+#preview::-webkit-scrollbar {
+  width: 10px;
+}
+#preview::-webkit-scrollbar-track {
+  background: transparent;
+}
+#preview::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 5px;
+  background-clip: padding-box;
+  background-color: rgba(255, 255, 255, 0.3);
 }
 /* Words the last partial had too are white; the phrase still changing is dimmer. */
 #preview-changing {
@@ -225,6 +265,9 @@ button:focus-visible {
 }
 #elapsed:empty {
   display: none;
+}
+#pill[data-words] #elapsed {
+  margin-left: auto;
 }
 #pill[data-state="transcribing"] #elapsed {
   color: rgba(255, 255, 255, 0.55);

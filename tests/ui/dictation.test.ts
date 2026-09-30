@@ -39,7 +39,13 @@ import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
 import { dayLabel, localZone } from "../../src/ui/model.ts";
-import { PREVIEW_CHARS, previewParts } from "../../src/ui/pill.ts";
+import {
+  PREVIEW_CHARS,
+  PREVIEW_LINE_PX,
+  PREVIEW_LINES,
+  previewMaxHeight,
+  previewParts,
+} from "../../src/ui/pill.ts";
 import { type PillState, pillPreview } from "../../src/ui/pill-protocol.ts";
 import type { Transport } from "../../src/ui/protocol.ts";
 import { WORDS } from "../../src/ui/settings-labels.ts";
@@ -341,7 +347,7 @@ describe("DC-O1: the pill, the island at the top", () => {
   );
 
   test(
-    "[DC-O2] the preview ticks the words in one line while listening, only the tail when long, and never after",
+    "[DC-O2] the preview shows the whole dictation while listening, wrapping, and never after",
     async () => {
       const p = v.page;
       const shown = () => text(p, "#preview");
@@ -361,29 +367,27 @@ describe("DC-O1: the pill, the island at the top", () => {
       await state({ state: "listening", since, keys: ["escape"], hotkey: "Right ⌘" });
       expect(await shown()).toBe("ping the team");
 
+      // A long one reaches the page whole, from its first word, wrapping under the row.
       const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
       await v.send("preview", { text: long });
-      const tail = await shown();
-      expect(tail.startsWith("…word")).toBe(true);
-      expect(tail.endsWith("word39")).toBe(true);
-      expect(tail.length).toBeLessThanOrEqual(PREVIEW_CHARS + 1);
-      // One line, the newest word at the right edge of the ticker.
-      const box = await p.$eval("#preview", (e) => {
-        const r = e.getBoundingClientRect();
-        const w = (e.firstElementChild as HTMLElement).getBoundingClientRect();
-        return {
-          lines: r.height / Number.parseFloat(getComputedStyle(e).lineHeight),
-          right: r.right,
-          wordsRight: w.right,
-        };
+      expect(await shown()).toBe(long);
+      const lines = await p.$eval(
+        "#preview",
+        (e) => e.scrollHeight / Number.parseFloat(getComputedStyle(e).lineHeight),
+      );
+      expect(Math.floor(lines)).toBeGreaterThan(1);
+      const under = await p.evaluate(() => {
+        const row = (document.getElementById("row") as HTMLElement).getBoundingClientRect();
+        const words = (document.getElementById("preview") as HTMLElement).getBoundingClientRect();
+        return words.top >= row.bottom - 1;
       });
-      expect(Math.round(box.lines)).toBe(1);
-      expect(Math.abs(box.right - box.wordsRight)).toBeLessThan(1);
+      expect(under).toBe(true);
 
       // Listening ends: the words go, and a partial arriving late is dropped.
       await state({ state: "transcribing", since });
       expect(await visible(p, "#preview")).toBe(false);
       expect(await onPage("word39")).toBe(false);
+      expect(await p.getAttribute("#pill", "data-words")).toBeNull();
       await v.send("preview", { text: "late partial" });
       expect(await onPage("late partial")).toBe(false);
       // A new session starts with none.
@@ -421,11 +425,14 @@ describe("DC-O2: settled words and the phrase still changing", () => {
     // A count that is not one settles nothing; one past the end settles all.
     expect(previewParts("ping the team", "8")).toEqual({ settled: "", changing: "ping the team" });
     expect(previewParts("ping", 99)).toEqual({ settled: "ping", changing: "" });
-    const long = Array.from({ length: 40 }, (_, i) => `word${i}`).join(" ");
-    const upTo38 = long.lastIndexOf(" word39");
-    const parts = previewParts(long, upTo38);
-    expect(parts.settled.startsWith("…word")).toBe(true);
-    expect(parts.changing).toBe(" word39");
+    // Only past PREVIEW_CHARS, an hour of speech, does the start give way to an ellipsis.
+    const words = Math.ceil(PREVIEW_CHARS / 6) + 100;
+    const long = Array.from({ length: words }, (_, i) => `w${i}`).join(" ");
+    const last = `w${words - 1}`;
+    const parts = previewParts(long, long.lastIndexOf(` ${last}`));
+    expect(parts.settled.startsWith("…w")).toBe(true);
+    expect(parts.changing).toBe(` ${last}`);
+    expect(parts.settled.length + parts.changing.length).toBeLessThanOrEqual(PREVIEW_CHARS + 1);
     // Settled words that all fell off the front leave only the changing part, ellipsis included.
     expect(previewParts(long, 5).settled).toBe("");
   });
@@ -508,6 +515,149 @@ describe("DC-O2: settled words and the phrase still changing", () => {
         // Positive control: a done state with no language has no chip.
         await v.send("state", { state: "done", how: "inserted" });
         expect((await read()).hidden).toBe(true);
+      } finally {
+        await v.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("H-11: the island holds the whole dictation", () => {
+  const listening = { state: "listening", since: 1, keys: ["escape"], hotkey: "Right ⌘" };
+  const words = (n: number, from = 0) =>
+    Array.from({ length: n }, (_, i) => `word${from + i}`).join(" ");
+  /** The words' box: its height, how far it scrolled, and whether it shows the newest line. */
+  const box = (p: Page) =>
+    p.$eval("#preview", (e) => ({
+      height: e.clientHeight,
+      max: Number.parseFloat(getComputedStyle(e).maxHeight),
+      scroll: e.scrollTop,
+      atEnd: e.scrollHeight - e.scrollTop - e.clientHeight <= 4,
+      overflows: e.scrollHeight > e.clientHeight,
+      over: e.hasAttribute("data-over"),
+      overflowY: getComputedStyle(e).overflowY,
+    }));
+  const sizes = (v: ViewPage) => v.sized;
+  const pillHeight = (p: Page) =>
+    p.$eval("#pill", (e) => Math.ceil(e.getBoundingClientRect().height));
+
+  test("the cap is eight lines, or 40 % of the display when that is less", () => {
+    expect(previewMaxHeight(1080)).toBe(PREVIEW_LINES * PREVIEW_LINE_PX + 12);
+    expect(previewMaxHeight(300)).toBe(120);
+    expect(previewMaxHeight(Number.NaN)).toBe(PREVIEW_LINES * PREVIEW_LINE_PX + 12);
+  });
+
+  test(
+    "it grows line by line, stops at the cap and scrolls pinned to the newest words; the window follows",
+    async () => {
+      const v = await viewPage("pill", { screen: { width: 480, height: 900, scale: 1 } });
+      try {
+        const p = v.page;
+        await v.send("state", listening);
+        await v.send("preview", { text: "ping" });
+        const one = await box(p);
+        const oneLine = await pillHeight(p);
+        await until(() => sizes(v).at(-1) === oneLine, 5000, "the one-line height");
+        await v.send("preview", { text: words(40) });
+        const four = await box(p);
+        expect(four.height).toBeGreaterThan(one.height + 2 * PREVIEW_LINE_PX);
+        expect(four.overflows).toBe(false);
+        const grown = await pillHeight(p);
+        await until(() => sizes(v).at(-1) === grown, 5000, "the grown height");
+        expect(grown).toBeGreaterThan(oneLine);
+
+        await v.send("preview", { text: words(400) });
+        const full = await box(p);
+        expect(full.height).toBeLessThanOrEqual(full.max);
+        expect(full.overflows).toBe(true);
+        expect(full.overflowY).toBe("auto");
+        expect(full.atEnd).toBe(true);
+        expect(full.over).toBe(true);
+        const capped = await pillHeight(p);
+        await until(() => sizes(v).at(-1) === capped, 5000, "the capped height");
+        // More words past the cap: the window stays, the words follow.
+        await v.send("preview", { text: words(500) });
+        expect((await box(p)).atEnd).toBe(true);
+        expect(await pillHeight(p)).toBe(capped);
+      } finally {
+        await v.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "scrolled back, the words stay put; back at the bottom, or a new session, they follow again",
+    async () => {
+      const v = await viewPage("pill", { screen: { width: 480, height: 900, scale: 1 } });
+      try {
+        const p = v.page;
+        await v.send("state", listening);
+        await v.send("preview", { text: words(400) });
+        await p.$eval("#preview", (e) => {
+          e.scrollTop = 0;
+          e.dispatchEvent(new Event("scroll"));
+        });
+        await v.send("preview", { text: words(450) });
+        const back = await box(p);
+        expect(back.scroll).toBe(0);
+        expect(back.atEnd).toBe(false);
+        await p.$eval("#preview", (e) => {
+          e.scrollTop = e.scrollHeight;
+          e.dispatchEvent(new Event("scroll"));
+        });
+        await v.send("preview", { text: words(500) });
+        expect((await box(p)).atEnd).toBe(true);
+        // Scrolled back again, then the session ends: the next one follows from its first word.
+        await p.$eval("#preview", (e) => {
+          e.scrollTop = 0;
+          e.dispatchEvent(new Event("scroll"));
+        });
+        // Chromium fires a scroll when the box empties, which pins again by itself; a WebView that
+        // does not would leave it unpinned. The page's own handler is kept from those events here,
+        // so only the new session's reset can pin.
+        await p.$eval("#preview", (e) => {
+          e.addEventListener("scroll", (ev) => ev.stopImmediatePropagation(), { capture: true });
+        });
+        await v.send("state", { state: "transcribing", since: 2 });
+        await v.send("state", { ...listening, since: 3 });
+        await v.send("preview", { text: words(400, 1000) });
+        expect((await box(p)).atEnd).toBe(true);
+      } finally {
+        await v.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "at the bottom edge it mirrors: the words above the row, the hints above the island",
+    async () => {
+      const v = await viewPage("pill", {
+        answer: (name) => (name === "layout" ? { edge: "bottom" } : true),
+      });
+      try {
+        const p = v.page;
+        await until(
+          () => p.getAttribute("#pill", "data-edge").then((e) => e === "bottom"),
+          5000,
+          "the edge",
+        );
+        await v.send("state", listening);
+        await v.send("preview", { text: words(40) });
+        const at = await p.evaluate(() => {
+          const r = (id: string) =>
+            (document.getElementById(id) as HTMLElement).getBoundingClientRect();
+          return {
+            row: r("row").top,
+            words: r("preview").top,
+            island: r("island").top,
+            hints: r("hints").top,
+          };
+        });
+        expect(at.words).toBeLessThan(at.row);
+        expect(at.hints).toBeLessThan(at.island);
       } finally {
         await v.close();
       }
@@ -1444,6 +1594,70 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
+    "[DC-E7] the engine section: the words while you speak, and the text inserted, in plain words",
+    async () => {
+      // No streaming model: the default, live, inserts through Parakeet, and the page says so.
+      const w = await windowPage(rig, { platform: "darwin", final: "parakeet" });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-live-words");
+        // No streaming model: Parakeet names the words, and Get leads to Models.
+        expect(await text(p, "#dictation-live-model")).toBe("Parakeet, refreshed twice a second");
+        const choices = () =>
+          p.$$eval("#page-dictation label.pg-choice[data-final]", (l) =>
+            l.map((x) => ({
+              value: (x as HTMLElement).dataset.final,
+              name: x.querySelector(".pg-name")?.textContent,
+              checked: (x.querySelector("input") as HTMLInputElement).checked,
+              help: x.querySelector(".pg-help")?.textContent ?? "",
+            })),
+          );
+        const got = await choices();
+        expect(got.map((c) => [c.value, c.name, c.checked])).toEqual([
+          ["live", "Same as the live words (default)", false],
+          ["parakeet", "Parakeet", true],
+          ["qwen", "Qwen3-ASR", false],
+        ]);
+        for (const c of got) expect(c.help.length).toBeGreaterThan(10);
+        // No config key, model id or setting value is visible text.
+        const words = (await p.textContent("#page-dictation section[data-section='Engine']")) ?? "";
+        expect(words).not.toMatch(/dictation\.|nemotron-|parakeet-tdt|\bfinal\b|\bauto\b/);
+        // A pick saves the text inserted with the engine that runs it, so the two never disagree.
+        await p.click("#page-dictation label.pg-choice[data-final='live']");
+        await until(() => w.patches.length === 1, 5000, "the pick saved");
+        expect(w.patches).toEqual([{ "dictation.final": "live", "dictation.engine": "auto" }]);
+        await p.click("#page-dictation label.pg-choice[data-final='qwen']");
+        await until(() => w.patches.length === 2, 5000, "the second pick saved");
+        expect(w.patches.at(-1)).toEqual({ "dictation.final": "qwen", "dictation.engine": "best" });
+        await p.click("#dictation-live-get");
+        await p.waitForSelector("#page-models", { state: "visible" });
+      } finally {
+        await w.close();
+      }
+      // A streaming model on disk names the words, and the choice checked is what runs now.
+      const m = await windowPage(rig, {
+        platform: "darwin",
+        live: "nemotron-3.5-560",
+        final: "live",
+      });
+      try {
+        const p = m.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-live-words");
+        expect(await text(p, "#dictation-live-model")).toBe("Nemotron streaming, many languages");
+        expect(await p.$("#dictation-live-get")).toBeNull();
+        expect(await p.isChecked("#page-dictation label.pg-choice[data-final='live'] input")).toBe(
+          true,
+        );
+      } finally {
+        await m.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "in the window: another computer waits for its address, then turns on; off, the engine is local again; the AI tidy shows its instructions",
     async () => {
       const w = await windowPage(rig, {
@@ -1472,16 +1686,17 @@ describe("DC-U1: the Dictation page in the window", () => {
           { "dictation.remote.url": "https://studio.example" },
           { "dictation.engine": "remote" },
         ]);
-        // While it is on, the speed choice rests, and says why.
-        await p.waitForFunction(() =>
-          [
+        // While it is on, the choice of the text inserted rests, and says why.
+        await p.waitForFunction(() => {
+          const radios = [
             ...document.querySelectorAll<HTMLInputElement>(
-              "#page-dictation div.pg-row[data-key='dictation.engine'] input[type=radio]",
+              "#page-dictation label.pg-choice[data-final] input.pg-radio",
             ),
-          ].every((r) => r.disabled),
-        );
+          ];
+          return radios.length === 3 && radios.every((r) => r.disabled);
+        });
         expect(
-          await text(p, "#page-dictation div.pg-row[data-key='dictation.engine'] .pg-help"),
+          await text(p, "#page-dictation div.pg-row[data-key='dictation.final'] .pg-help"),
         ).toBe("The other computer turns your voice into text while it is on.");
         expect(await p.isChecked("#dictation-remote-on")).toBe(true);
         // Off: the engine is the local choice again, and the rows go.
@@ -2860,7 +3075,7 @@ describe("DC-H1: the History page", () => {
       await page.click(`${row("d001")} .hist-more`);
       expect(
         await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
-      ).toEqual(["Retry with Best", "Retry on the other computer", "Delete"]);
+      ).toEqual(["Retry with Best", "Retry with Live", "Retry on the other computer", "Delete"]);
       fx.calls.length = 0;
       await fromMenu(page, "d001", "button.retry[data-engine='best']");
       await page.waitForSelector(`${row("d001")} .result.retry`);
@@ -2937,7 +3152,7 @@ describe("DC-H1: the History page", () => {
       await page.click(`${row("d001")} .hist-more`);
       expect(
         await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
-      ).toEqual(["Retry with Best", "Delete"]);
+      ).toEqual(["Retry with Best", "Retry with Live", "Delete"]);
     },
     UI_TIMEOUT,
   );

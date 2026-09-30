@@ -360,6 +360,7 @@ export const DICTATION_SCHEMA: Schema = {
   "dictation.preferBuiltInOverBluetooth": bool("The built-in mic over a Bluetooth headset."),
   "dictation.warmMic": pick(["off", "auto", "always"], "Keeps the mic open between dictations."),
   "dictation.engine": pick(["auto", "fast", "best", "remote"], "The engine."),
+  "dictation.final": pick(["live", "parakeet", "qwen"], "The text a dictation inserts."),
   "dictation.localTimeoutSeconds": int(2, 120, "How long a local best may take."),
   "dictation.remote.url": str("The remote akou.", { apiWritable: false }),
   "dictation.remote.key": str("The remote's jobs key.", { secret: true }),
@@ -792,8 +793,10 @@ export async function vocabFixture(
 /** A small ElectroBun view (the pill, the draft box) on its own page, with a fake main side. */
 export interface ViewPage {
   page: Page;
-  /** Every request the page made, in order. */
+  /** Every request the page made, in order, but the window's own `size` and `layout`. */
   requests: { name: string; params: unknown }[];
+  /** The heights the pill's page asked the window for, in order (H-11). */
+  sized: number[];
   /** Pushes a message to the page, as the main process does. */
   send(name: string, payload: unknown): Promise<void>;
   close(): Promise<void>;
@@ -845,19 +848,23 @@ export async function viewPage(
   // The page's timers are Playwright's from the start, so a test moves them.
   if (o.clock) await page.clock.install({ time: o.clock });
   const requests: ViewPage["requests"] = [];
+  const sized: number[] = [];
   await page.route("http://akou.test/**", (route) => {
     const file = files[new URL(route.request().url()).pathname.slice(1) || "index.html"];
     if (!file) return route.fulfill({ status: 404, body: "" });
     return route.fulfill({ status: 200, contentType: file.type, body: file.body });
   });
   await page.exposeFunction("__akouRequest", async (name: string, params: unknown) => {
-    requests.push({ name, params });
+    // The pill's window housekeeping (H-11) comes whenever the page's height changes.
+    if (name === "size") sized.push((params as { height: number }).height);
+    else if (name !== "layout") requests.push({ name, params });
     return (await o.answer?.(name, params)) ?? true;
   });
   await page.goto("http://akou.test/index.html");
   return {
     page,
     requests,
+    sized,
     send: (name, payload) =>
       page.evaluate(([n, m]) => window.__akouMessage(n as string, m), [name, payload] as const),
     close: async () => {
@@ -885,6 +892,9 @@ export async function windowPage(
     lost?: string[];
     /** The answer to `recordDictationKeys`: false, no helper hears keys (DC-N2). */
     hearing?: boolean;
+    /** The streaming model and the resolved text inserted on `GET /dictation` (DC-E7). */
+    live?: string | null;
+    final?: string | null;
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
     devices?: DevicesFixture;
@@ -916,6 +926,8 @@ export async function windowPage(
           state: "idle",
           grants: o.grants ?? { mic: "granted", accessibility: "granted" },
           lost: o.lost ?? [],
+          live: o.live ?? null,
+          final: o.final ?? null,
         },
       };
     if (p.path === "/config" && p.method === "PATCH") {

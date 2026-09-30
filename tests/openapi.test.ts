@@ -159,6 +159,7 @@ describe("[PG-A2] the committed file is generated from the route table", () => {
       "query:from",
       "query:to",
       "query:speaker",
+      "query:review",
     ]);
     const start = doc.paths["/v1/calls"]?.post?.requestBody as {
       content: Record<string, { schema: { properties: object; additionalProperties: boolean } }>;

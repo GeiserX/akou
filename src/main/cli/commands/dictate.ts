@@ -22,7 +22,7 @@ import { EXIT, Unreachable } from "../client.ts";
 import { api, type Body, type Command, type Ctx, finish, wall } from "../context.ts";
 import { usage } from "./calls.ts";
 
-const ENGINES = ["auto", "fast", "best", "remote"];
+const ENGINES = ["auto", "fast", "best", "live", "remote"];
 const SESSION = ["start", "stop", "toggle", "cancel"];
 
 /** A session command, which never launches the app: a key binding must not open akou by itself. */
