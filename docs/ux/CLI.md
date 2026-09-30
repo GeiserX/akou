@@ -398,7 +398,7 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Memory | `remember` | `…/remember` | `akou_remember`, `akou_forget` | none | window: no row yet in [WINDOW.md](WINDOW.md) |
 | Memo | none | `GET/PUT …/memo` | `akou_memo_get`, `akou_memo_put` | memo pane | CLI-28 |
 | Vocabulary | `vocab …` | `/vocab…`, `…/vocab…` | `akou_vocab_*` | Fix this word, review pill | none |
-| Enhance | `enhance` | `POST …/enhance` | `akou_enhance` | Enhanced tab | none |
+| Enhance | `enhance` | `POST …/enhance` | `akou_enhance` | none: hidden on purpose | none |
 | Agent-written notes | none | `GET …/enhance/context`, `PUT …/enhanced` | `akou_enhance_context`, `akou_enhanced_put` | none | CLI-28 |
 | Final pass | `finalize` | `POST …/finalize` | none | Retry on a failed pass only | MCP lacks it (PG-M4); window has no run-again row yet in [WINDOW.md](WINDOW.md) |
 | Export, hooks | `export`, `hooks run` | `POST …/export`, `…/hooks` | `akou_export` | hand-off status | none for the CLI |

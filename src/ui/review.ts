@@ -4,13 +4,14 @@
  * here changes a vocabulary file until the user presses Approve; approving writes the entry into
  * the workspace file with `source: call:<id>`, rejecting keeps it from being proposed again.
  *
- * "Find misheard words" runs the pass on the configured provider, only when pressed and only on a
- * call that has ended, the same policy as Enhance.
+ * The window has no button for the post-call vocabulary pass: a word is fixed once on its line
+ * (`POST /calls/{id}/fix`). The pass stays in the API, the CLI (`akou vocab pass`) and its
+ * proposals still land here.
  */
 
 import { byId, closable, h, openModal, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
-import type { Reply, Transport } from "./protocol.ts";
+import type { Transport } from "./protocol.ts";
 
 interface ReviewLine {
   id: string;
@@ -36,8 +37,6 @@ interface Review {
 export interface ReviewDeps {
   t: Transport;
   call(): string | null;
-  /** The call has ended, so the pass may run. */
-  ended(): boolean;
   /** Scrolls to a line and plays it. */
   cite(lineId: string): void;
   /**
@@ -51,19 +50,11 @@ export class ReviewPane {
   private readonly dialog = byId<HTMLDialogElement>("review");
   private readonly list = byId("review-list");
   private readonly status = byId("review-status");
-  private readonly passButton = byId<HTMLButtonElement>("vocab-pass");
-  private busy = false;
 
   constructor(private readonly d: ReviewDeps) {
     byId("pill-review").addEventListener("click", () => void this.open());
     byId("review-close").addEventListener("click", () => this.dialog.close());
     closable(this.dialog);
-    this.passButton.addEventListener("click", () => void this.pass());
-  }
-
-  paint(): void {
-    this.passButton.hidden = !this.d.ended();
-    this.passButton.disabled = this.busy;
   }
 
   async open(): Promise<void> {
@@ -192,36 +183,5 @@ export class ReviewPane {
         ? `${term} is in the vocabulary now (${r.body.path ?? "the workspace file"}).`
         : `${term} will not be proposed again.`;
     await this.open();
-  }
-
-  /** Runs the pass, then shows what it found. */
-  async pass(): Promise<void> {
-    const call = this.d.call();
-    if (!call || this.busy) return;
-    this.busy = true;
-    this.paint();
-    toast("Checking the transcript for misheard words…", "info");
-    let r: Reply<{ corrections?: unknown[]; proposals?: unknown[]; error?: string }>;
-    try {
-      r = await this.d.t.request("POST", `/calls/${call}/vocab/pass`, {});
-    } catch (err) {
-      toast(`The words could not be checked: ${(err as Error).message}`);
-      return;
-    } finally {
-      this.busy = false;
-      this.paint();
-    }
-    if (r.status >= 400) {
-      toast(
-        r.body.error === "provider_unavailable"
-          ? "No provider can check the words; choose one in Settings."
-          : message(r.body, "the words could not be checked"),
-      );
-      return;
-    }
-    const fixed = r.body.corrections?.length ?? 0;
-    const proposed = r.body.proposals?.length ?? 0;
-    await this.open();
-    this.status.textContent = `The pass corrected ${fixed} ${fixed === 1 ? "word" : "words"} and proposed ${proposed}.`;
   }
 }
