@@ -323,7 +323,7 @@ Competitors lead with these. akou does not build them; the hand-off and the user
 | Scheduled reports and keyword trackers | tl;dv | Hooks into the user's own tools |
 | Folders, recurring auto-add, related meetings | Granola | Workspaces and template matching by title |
 | Sending email, chat or calendar invites | Granola | Drafts only; the harness sends with its own tools |
-| Posting a recording notice into the meeting chat | Fathom, tl;dv | The consent reminder (DK-F3) gives a notice to copy; akou never posts |
+| Posting a recording notice into the meeting chat | Fathom, tl;dv | Telling the others is the user's; akou never posts, and no longer shows a reminder (DK-F3, dropped) |
 | Consent emails before the meeting | Fathom, tl;dv | A harness step, not akou |
 | Meeting bot | Otter, Fireflies | Never; akou hears the machine |
 | Phone and watch capture | Granola, Bluedot, Jamie | decision (6); the share link lets a phone watch a live call |
