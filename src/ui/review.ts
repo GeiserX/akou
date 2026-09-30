@@ -6,7 +6,8 @@
  *
  * The window has no button for the post-call vocabulary pass: a word is fixed once on its line
  * (`POST /calls/{id}/fix`). The pass stays in the API, the CLI (`akou vocab pass`) and its
- * proposals still land here.
+ * proposals still land here. The words fixed while dictating are on the Words page, under
+ * Dictation (`dictation-review.ts`), since they belong to no call.
  */
 
 import { byId, closable, h, openModal, replace, toast } from "./dom.ts";
@@ -39,11 +40,6 @@ export interface ReviewDeps {
   call(): string | null;
   /** Scrolls to a line and plays it. */
   cite(lineId: string): void;
-  /**
-   * More words under their own heading after the call's, with or without a call: those fixed while
-   * dictating (DC-L5, `dictation-review.ts`). `answered` reads the list again and says `said`.
-   */
-  more?(answered: (said: string) => Promise<void>): Promise<HTMLElement | null>;
 }
 
 export class ReviewPane {
@@ -59,26 +55,17 @@ export class ReviewPane {
 
   async open(): Promise<void> {
     const call = this.d.call();
-    if (!call && !this.d.more) return;
-    let review: Review = { proposals: [], unconfirmed: [] };
-    if (call) {
-      const r = await this.d.t.request<{ review?: Review }>("GET", `/calls/${call}/vocab`);
-      if (r.status >= 400 || !r.body.review) {
-        toast(message(r.body, "the words to review could not be read"));
-        return;
-      }
-      review = r.body.review;
+    if (!call) return;
+    const r = await this.d.t.request<{ review?: Review }>("GET", `/calls/${call}/vocab`);
+    if (r.status >= 400 || !r.body.review) {
+      toast(message(r.body, "the words to review could not be read"));
+      return;
     }
-    const more = await this.d.more?.(async (said) => {
-      await this.open();
-      this.status.textContent = said;
-    });
-    // Without a call the rows below carry no call's words, so `call` is never sent empty.
-    this.draw(call ?? "", review, more ?? null);
+    this.draw(call, r.body.review);
     openModal(this.dialog);
   }
 
-  private draw(call: string, review: Review, more: HTMLElement | null): void {
+  private draw(call: string, review: Review): void {
     const items = review.proposals.map((p) =>
       h(
         "li",
@@ -159,11 +146,11 @@ export class ReviewPane {
         ),
       ),
     );
-    if (items.length + extra.length === 0 && !more) {
+    if (items.length + extra.length === 0) {
       replace(this.list, h("li", { class: "hint" }, "No words to review."));
       return;
     }
-    replace(this.list, ...items, ...extra, more);
+    replace(this.list, ...items, ...extra);
   }
 
   private async decide(call: string, term: string, action: "approve" | "reject"): Promise<void> {

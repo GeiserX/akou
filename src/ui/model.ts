@@ -632,6 +632,11 @@ export function workspaceNameProblem(name: string, known: readonly string[]): st
   return null;
 }
 
+/** This machine's time zone, the one the sidebar lists calls in. */
+export function localZone(): string {
+  return Intl.DateTimeFormat().resolvedOptions().timeZone;
+}
+
 /** The calendar date of `t` in `tz`. */
 function dateIn(t: number, tz: string): { year: number; month: number; day: number } {
   const p = new Intl.DateTimeFormat("en-CA", {
@@ -685,7 +690,7 @@ export function callMeta(c: CallSummary, now: number, tz: string, live: boolean)
 }
 
 /** `14:02`: a wall-clock time to the minute, local to `tz`. */
-function hourMinute(t: number, tz: string): string {
+export function hourMinute(t: number, tz: string): string {
   return new Intl.DateTimeFormat("en-GB", {
     timeZone: tz,
     hour: "2-digit",
