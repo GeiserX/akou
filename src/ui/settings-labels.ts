@@ -302,13 +302,232 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   "server.max_upload_mb": { label: "Largest upload", unit: "MB" },
   "server.dictation_slots": {
     label: "Dictations at once for other computers",
-    help: "0 turns dictation off for them.",
+    help: "0: their dictations wait in the queue like any job.",
     unit: "at once",
   },
   "server.dictation_engine": {
     label: "Engine for other computers' dictation",
   },
+
+  // The Dictation page (docs/ux/design-explorations/sd-a-dictation.html).
+  "dictation.enabled": {
+    label: "Dictation",
+    help: "Hold a key, speak, and the words go where your cursor is.",
+  },
+  "dictation.hotkey": { label: "Dictation key" },
+  "dictation.activation": {
+    label: "How the key works",
+    help: "Hold to talk and let go to insert. A quick tap keeps listening until the next tap.",
+    choices: [
+      ["hold-or-toggle", "Hold or tap"],
+      ["hold", "Hold only"],
+      ["toggle", "Tap only"],
+    ],
+  },
+  "dictation.hotkeyFixLast": {
+    label: "Fix the last dictation",
+    help: "Opens it to correct a word, so akou learns it.",
+  },
+  "dictation.hotkeyDraft": {
+    label: "Dictate into a draft",
+    help: "A second key. You read and edit the text before it goes in.",
+  },
+  "dictation.hotkeyPasteLast": { label: "Paste the last dictation again" },
+  "dictation.languages": {
+    label: "Languages",
+    help: "akou picks between these as you speak.",
+    empty: "The languages of calls",
+  },
+  "dictation.mic": { label: "Microphone" },
+  "dictation.preferBuiltInOverBluetooth": {
+    label: "Use the built-in mic when a Bluetooth headset is on",
+    help: "Keeps the headset's sound clear.",
+  },
+  "dictation.muteMedia": {
+    label: "Pause music while you dictate",
+    help: "It plays again when you stop.",
+  },
+  "dictation.engine": {
+    label: "Speed or accuracy",
+    choices: [
+      ["auto", "Automatic"],
+      ["fast", "Fast"],
+      ["best", "Best"],
+      ["remote", "Another computer running akou"],
+    ],
+  },
+  "dictation.remote.url": { label: "Address", empty: "https://" },
+  "dictation.remote.key": { label: "Key", empty: "Not set" },
+  "dictation.remote.fallback": {
+    label: "If it doesn't answer",
+    choices: [
+      ["local", "Use this computer"],
+      ["error", "Show the error"],
+    ],
+  },
+  "dictation.remote.timeoutSeconds": {
+    label: "Wait up to",
+    help: "Longer dictations get a little more.",
+    unit: "seconds",
+  },
+  "dictation.insert": {
+    label: "How the words go in",
+    help: "Type is for remote desktops and fields that refuse a paste.",
+    choices: [
+      ["paste", "Paste"],
+      ["type", "Type"],
+      ["clipboard", "Copy only"],
+    ],
+  },
+  "dictation.sendKey": {
+    label: "Send key",
+    help: "What akou presses when you send.",
+    choices: [
+      ["Enter", "Enter"],
+      ["Ctrl+Enter", "Control+Enter"],
+      ["Cmd+Enter", "Command+Enter"],
+      ["Shift+Enter", "Shift+Enter"],
+      ["none", "None, never send"],
+    ],
+  },
+  "dictation.sendAlways": { label: "Send after every dictation" },
+  "dictation.restoreClipboard": {
+    label: "Put the clipboard back",
+    help: "Otherwise the dictation stays in the clipboard.",
+  },
+  "dictation.smartSpacing": {
+    label: "Fix the spacing around the words",
+    help: "Adds the spaces and lower-cases the first word in the middle of a sentence.",
+  },
+  "dictation.trailingSpace": {
+    label: "End with a space",
+    help: "Only where akou can't read the text around the cursor.",
+  },
+  "dictation.fillers": { label: "Leave out um and uh", help: "History keeps what you said." },
+  "dictation.spokenPunctuation": {
+    label: "Say punctuation",
+    help: "Say “comma” or “new line” on its own, between pauses.",
+  },
+  "dictation.spokenSend": { label: "Say “send it” to send" },
+  "dictation.format": {
+    label: "Tidy the text with AI",
+    help: "Fixes punctuation and capitals before the text goes in. History keeps what you said.",
+    choices: [
+      ["off", "Off"],
+      ["provider", "With your assistant"],
+    ],
+  },
+  "dictation.formatPrompt": { label: "Instructions" },
+  "dictation.learn": {
+    label: "Learn my fixes",
+    help: "When you correct a word akou got wrong.",
+    choices: [
+      ["ask", "Ask me"],
+      ["auto", "Automatically"],
+      ["off", "Off"],
+    ],
+  },
+  "dictation.readField": {
+    label: "Read the field I dictated into",
+    help: "For the spacing and to see your fixes. Never a password field or a terminal.",
+  },
+  "dictation.learn.audioCheck": {
+    label: "Check the audio before offering a word",
+    help: "akou listens again to make sure you said it.",
+  },
+  "dictation.apps": { label: "Rules per app" },
+  "dictation.pill": {
+    label: "Pill",
+    help: "Shows that akou is listening.",
+    choices: [
+      ["top", "Top"],
+      ["bottom", "Bottom"],
+      ["left", "Left"],
+      ["right", "Right"],
+      ["off", "Off"],
+    ],
+  },
+  "dictation.pillPreview": {
+    label: "Show my words on the pill",
+    help: "A screen share shows them too.",
+  },
+  "dictation.sounds": {
+    label: "Sounds",
+    help: "Automatic plays soft sounds only while the pill is off.",
+    choices: [
+      ["auto", "Automatic"],
+      ["soft", "Soft"],
+      ["click", "Click"],
+      ["off", "Off"],
+    ],
+  },
+  "dictation.silenceStopSeconds": {
+    label: "Stop after silence",
+    help: "A dictation you tapped on stops after this much quiet. 0 never stops it.",
+    unit: "seconds",
+  },
+  "dictation.maxMinutes": {
+    label: "Longest dictation",
+    help: "akou warns you a minute before, and keeps what you said.",
+    unit: "minutes",
+  },
+  "dictation.warmMic": {
+    label: "Keep the microphone open",
+    help: "Kept open longer, a quick second dictation keeps its first word. Never on a Bluetooth mic.",
+    choices: [
+      ["auto", "30 seconds after each dictation"],
+      ["always", "While dictation is on"],
+      ["off", "Only while the key is down"],
+    ],
+  },
+  "dictation.language": {
+    label: "One fixed language",
+    help: "Best and another computer use it for every dictation. Fast picks its own.",
+  },
+  "dictation.glossary": {
+    label: "Send my words as context",
+    help: "Your learned words are always replaced either way.",
+    choices: [
+      ["off", "Off"],
+      ["on", "On"],
+    ],
+  },
+  "dictation.glossaryMax": { label: "Most words sent as context", unit: "words" },
+  "dictation.localTimeoutSeconds": {
+    label: "Wait for Best up to",
+    help: "Then Fast turns it into text instead. Longer dictations get a little more.",
+    unit: "seconds",
+  },
+  "dictation.formatTimeoutSeconds": {
+    label: "Wait for the AI tidy up to",
+    help: "Then the text goes in as you said it. Automatic waits 15 seconds for Claude Code, 4 for an API.",
+  },
+  "asr.qwenIdleMinutes": {
+    label: "Unload Best after",
+    help: "Frees its memory when you stop dictating. 0 keeps it loaded.",
+    unit: "idle minutes",
+  },
+  "dictation.retainDays": {
+    label: "Keep dictations for",
+    help: "0 keeps only the last one, for fixing or pasting it again.",
+    unit: "days",
+  },
+  "dictation.keepAudio": {
+    label: "Keep the audio",
+    help: "Needed to retry a dictation and to check a word before akou learns it.",
+  },
 };
+
+/**
+ * Text from akou that may name a setting by its key (a refusal, an engine's reason): each key
+ * becomes the setting's label, and code quotes go.
+ */
+export function inWords(text: string, keys: readonly string[]): string {
+  let out = text;
+  for (const key of [...keys].sort((a, b) => b.length - a.length))
+    if (out.includes(key)) out = out.split(key).join(wordsFor(key).label);
+  return out.replace(/`/g, "");
+}
 
 /** The words for a key; a key with none gets its last part, spaced, never the key itself. */
 export function wordsFor(key: string): SettingWords {

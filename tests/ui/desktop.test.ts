@@ -354,6 +354,7 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
         // The page header's tops on macOS, which the other platforms draw 28 px higher.
         const onMac: number[] = [];
         const modelsOnMac: number[] = [];
+        const dictationOnMac: number[] = [];
         for (const platform of ["darwin", "win32", "linux"]) {
           const w = await windowPage(rig, { platform });
           const { page } = w;
@@ -459,6 +460,32 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
               for (const p of [models, helpers])
                 expect(`${platform}: ${p.bar} ${p.drag}`).toBe(`${platform}: 0 `);
               expect([models.title, helpers.title]).toEqual(modelsOnMac.map((top) => top - 28));
+            }
+            // The Dictation page and its Advanced page start under the same strip, with the same drag.
+            await page.click("#dictation-open");
+            await page.waitForSelector("#page-dictation .pg-top h1");
+            const dictation = await pageTitleBar(page, "#page-dictation");
+            await page.click("#dictation-advanced");
+            await page.waitForSelector("#page-dictation .pg-back");
+            // The click scrolled the row into view; the page under it opens at its top, smoothly.
+            await page.waitForFunction(() => document.getElementById("pages")?.scrollTop === 0);
+            const advanced = await pageTitleBar(page, "#page-dictation");
+            if (platform === "darwin") {
+              for (const p of [dictation, advanced]) {
+                expect(p.bar).toBe(28);
+                expect(p.title).toBeGreaterThanOrEqual(28 + 28);
+                expect(p.drag).toEqual(["pg-bar", "pg-top"]);
+                expect(p.loose).toEqual([]);
+              }
+              // The back link is a control inside the dragging header.
+              expect(advanced.controls).toBeGreaterThan(0);
+              dictationOnMac.push(dictation.title, advanced.title);
+            } else {
+              for (const p of [dictation, advanced])
+                expect(`${platform}: ${p.bar} ${p.drag}`).toBe(`${platform}: 0 `);
+              expect([dictation.title, advanced.title]).toEqual(
+                dictationOnMac.map((top) => top - 28),
+              );
             }
           } finally {
             await w.close();

@@ -130,15 +130,17 @@ export function keycaps(value: string, platform: string): string[] {
     const s = SYMBOLS[name.toLowerCase()];
     return s ? (platform === "darwin" ? s[0] : s[1]) : name;
   };
-  if (isAlone(value)) {
-    const m = /^(Left|Right)(.+)$/.exec(value.trim());
-    return [m ? `${m[1]} ${sym(m[2] as string)}` : sym(value.trim())];
-  }
+  // A modifier with its side (`RightCommand`, alone or last in fix last's `Shift+RightCommand`).
+  const sided = (p: string) => {
+    const m = /^(Left|Right)(.+)$/.exec(p);
+    return m ? `${m[1]} ${sym(m[2] as string)}` : sym(p);
+  };
+  if (isAlone(value)) return [sided(value.trim())];
   return value
     .split("+")
     .map((p) => p.trim())
     .filter((p) => p !== "")
-    .map(sym);
+    .map(sided);
 }
 
 export interface RecorderContext {
@@ -153,10 +155,16 @@ export interface RecorderContext {
   button?: string;
   /** False: keys come from the page alone, never from the dictation helper, and no `Use Fn`. */
   helper?: boolean;
+  /** False: Fn from the helper is still taken, but the row draws no `Use Fn` of its own. */
+  fnButton?: boolean;
   /** The binding in force while the field is empty (its default), drawn as the keycaps. */
   fallback?: string;
   /** What the binding is for, so the button's name says it and the binding (the keycaps are hidden from screen readers). */
   label?: string;
+  /** With no binding and no default: the words shown in the keycaps' place ("Not set"). */
+  unset?: string;
+  /** With no binding and no default: the button's word instead of `button` ("Set"). */
+  setButton?: string;
 }
 
 const SPOKEN: Record<string, [mac: string, other: string]> = {
@@ -211,11 +219,11 @@ export class KeyRecorder {
         attrs: { "aria-pressed": "false", "data-for": key },
         on: { click: () => (this.live ? this.stop() : this.start()) },
       },
-      ctx.button ?? "Record",
+      this.word(),
     );
     // Fn reaches akou only through the helper, which the window alone hears (DC-N2).
     const fn =
-      ctx.platform === "darwin" && ctx.helper !== false && t.dictationKeys
+      ctx.platform === "darwin" && ctx.helper !== false && ctx.fnButton !== false && t.dictationKeys
         ? h(
             "button",
             {
@@ -238,8 +246,17 @@ export class KeyRecorder {
 
   private draw(): void {
     const value = this.input.value || this.ctx.fallback || "";
-    replace(this.caps, ...keycaps(value, this.ctx.platform).map((k) => h("kbd", {}, k)));
+    if (!value && this.ctx.unset)
+      replace(this.caps, h("span", { class: "recorder-unset" }, this.ctx.unset));
+    else replace(this.caps, ...keycaps(value, this.ctx.platform).map((k) => h("kbd", {}, k)));
+    if (!this.live) this.button.textContent = this.word();
     this.name();
+  }
+
+  /** The button's word while not recording: `Set` for a key with nothing bound, where asked. */
+  private word(): string {
+    const none = !this.input.value && !this.ctx.fallback;
+    return (none ? this.ctx.setButton : undefined) ?? this.ctx.button ?? "Record";
   }
 
   /** The button's accessible name while not recording: what it changes, and the binding now. */
@@ -249,7 +266,7 @@ export class KeyRecorder {
     else
       this.button.setAttribute(
         "aria-label",
-        `${this.ctx.button ?? "Record"} ${this.ctx.label}${value ? `, now ${spokenKeys(value, this.ctx.platform)}` : ""}`,
+        `${this.word()} ${this.ctx.label}${value ? `, now ${spokenKeys(value, this.ctx.platform)}` : ""}`,
       );
   }
 
@@ -324,7 +341,7 @@ export class KeyRecorder {
     this.live?.close();
     this.live = null;
     this.alone = null;
-    this.button.textContent = this.ctx.button ?? "Record";
+    this.button.textContent = this.word();
     this.button.setAttribute("aria-pressed", "false");
     this.name();
   }
@@ -375,7 +392,7 @@ export class KeyRecorder {
     const only = this.ctx.chordsOnly();
     if (only && isAlone(value)) {
       this.say(
-        `${keycaps(value, this.ctx.platform).join(" ")} alone cannot be bound: ${only}`,
+        `${keycaps(value, this.ctx.platform).join(" ")} alone cannot be bound. ${only}`,
         true,
       );
       return;
