@@ -2858,7 +2858,7 @@
         "tags": [
           "callVocab"
         ],
-        "description": "Fix a line, or a word with no line: `line` and `text` (the line as it should read), or `term` and `heard`. Each word the fix changes is applied to the whole call at once. A name, product or jargon word is learned into the call's and the workspace's vocabulary with no review; a rewording of common words stays on its line and goes into the call's Notes, as does any word when the engine transcribing the call takes no word list. `undo` in the answer takes it all back with `POST /calls/{id}/fix/undo`.",
+        "description": "Fix a line, or a word with no line: `line` and `text` (the line as it should read, with the line's `rev` as it was shown, so a line rewritten meanwhile answers 409), or `term` and `heard`. A name, product or jargon word is learned into the call's and the workspace's vocabulary with no review, and every line of the call with the same heard form reads corrected, unless that form is a common word: then only the fixed line does. A rewording of common words stays on the one word of its line and goes into the call's Notes, as does any word when the engine transcribing the call takes no word list. A word written back as heard under a correction takes that correction off the call (`reverted`). `undo` in the answer takes the fix back with `POST /calls/{id}/fix/undo`.",
         "parameters": [
           {
             "name": "id",
@@ -2882,6 +2882,9 @@
                   },
                   "text": {
                     "type": "string"
+                  },
+                  "rev": {
+                    "type": "number"
                   },
                   "term": {
                     "type": "string"

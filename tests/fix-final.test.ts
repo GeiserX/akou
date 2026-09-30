@@ -38,6 +38,7 @@ function fixedCall(fixes: boolean): LogEvent[] {
       heard: ["should"],
       by: "user",
       segs: ["l000002"],
+      nth: 0,
       decode: false,
     });
   }

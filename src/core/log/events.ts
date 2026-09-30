@@ -272,6 +272,11 @@ export interface VocabAdd extends Envelope {
   by: Author;
   /** Restrict the read-time pair to these segment ids. */
   segs?: string[];
+  /**
+   * With `segs`: a fix of one word of the first segment, the `nth` (0-based) occurrence of the heard
+   * form there. The other segments of `segs` read it only where the form occurs once.
+   */
+  nth?: number;
   /** Also a decode entry unless false. */
   decode?: boolean;
 }
@@ -569,6 +574,7 @@ const SPECS: { [T in EventType]: Spec } = {
     heard: opt("string[]"),
     by: req("author"),
     segs: opt("string[]"),
+    nth: opt("int"),
     decode: opt("boolean"),
   },
   "vocab.propose": {

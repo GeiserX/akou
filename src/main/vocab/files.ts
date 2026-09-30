@@ -178,11 +178,12 @@ function checkEntry(raw: unknown, i: number, errors: VocabIssue[], warnings: Voc
       return fail(`a heard form is at most ${MAX_TERM_LENGTH} characters (term "${term}")`);
     }
     heard = (e.heard as string[]).map((h) => h.trim()).filter((h) => h !== "");
-    const key = termKey(term);
-    const same = heard.filter((h) => termKey(h) === key);
+    // A form in another case or with other accents stays: it corrects that exact spelling
+    // (`vercel` for `Vercel`, core/vocab/correct.ts); only the term's own spelling is dropped.
+    const same = heard.filter((h) => h === term.trim());
     if (same.length > 0) {
       warnings.push({ entry: i, message: `heard form equal to the term ignored: "${same[0]}"` });
-      heard = heard.filter((h) => termKey(h) !== key);
+      heard = heard.filter((h) => h !== term.trim());
     }
   }
   if (typeof e.source !== "string" || !SOURCE.test(e.source)) {

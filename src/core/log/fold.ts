@@ -221,6 +221,8 @@ export interface CallVocabEntry {
   heard: string[];
   by: string;
   segs?: string[];
+  /** With `segs`: the occurrence of the heard form on the first segment, for a one-word fix. */
+  nth?: number;
   decode: boolean;
   seq: number;
 }
@@ -719,7 +721,9 @@ export class CallView {
     if (e.model !== undefined) cur.model = e.model;
     if (e.echo !== undefined) cur.echo = e.echo;
     if (e.by !== undefined) cur.by = e.by;
-    if (cur.layer === "final" && (e.a0 !== undefined || e.a1 !== undefined)) this.coverChanged();
+    if (cur.layer === "final" && (e.a0 !== undefined || e.a1 !== undefined || e.text === null)) {
+      this.coverChanged();
+    }
     this.changeLog.push(cur.id);
     this.indexTokens(cur.id, cur.text);
   }
@@ -735,6 +739,7 @@ export class CallView {
       heard: [...heard],
       by: e.by,
       segs: e.segs ?? (e.term === null ? cur?.segs : undefined),
+      nth: e.nth ?? (e.term === null ? cur?.nth : undefined),
       decode: e.decode ?? (e.term === null ? (cur?.decode ?? true) : true),
       seq: cur?.seq ?? e.seq,
       retracted: e.term === null,
@@ -982,6 +987,9 @@ export class CallView {
         heard: v.heard,
         scope: "call",
         segs: v.segs ? this.withCover(v.segs) : undefined,
+        ...(v.segs?.[0] !== undefined && v.nth !== undefined
+          ? { at: { seg: v.segs[0], nth: v.nth } }
+          : {}),
       });
     }
     for (const f of this.options.vocabFiles ?? []) {
@@ -1001,17 +1009,18 @@ export class CallView {
   }
 
   /**
-   * A pair kept to some live lines (a fix of one line) also reads on the final lines that cover
-   * the same audio, so the fix outlives the final pass.
+   * A pair kept to some lines (a fix of one line) also reads on the final lines that cover the
+   * same audio, so the fix outlives the final pass: a live line's, and a retracted final line's
+   * when the final pass runs again and writes new ones.
    */
   private withCover(ids: readonly string[]): string[] {
     const out = new Set(ids);
     for (const id of ids) {
-      const live = this.segs.get(id);
-      if (live?.layer !== "live") continue;
+      const s = this.segs.get(id);
+      if (!s || (s.layer !== "live" && s.text !== null)) continue;
       for (const f of this.segs.values()) {
-        if (f.layer !== "final" || f.part !== live.part || f.ch !== live.ch) continue;
-        if (f.a0 < live.a1 && f.a1 > live.a0) out.add(f.id);
+        if (f.layer !== "final" || f.text === null || f.part !== s.part || f.ch !== s.ch) continue;
+        if (f.a0 < s.a1 && f.a1 > s.a0) out.add(f.id);
       }
     }
     return [...out];

@@ -21,7 +21,7 @@
  * goes into the workspace file (or the global one). `fix` is what fixing a line in the window does
  * (`POST /calls/{id}/fix`, the live call by default): the call reads the word corrected everywhere,
  * a name or jargon word is learned into the workspace's vocabulary too, and a rewording of common
- * words goes into the call's Notes. A term the API refuses exits 65.
+ * words stays in this call and goes into the call's Notes. A term the API refuses exits 65.
  */
 
 import { readFileSync } from "node:fs";
@@ -173,8 +173,9 @@ export const vocab: Command = {
           (b.pairs ?? [])
             .map((x: Body) => {
               const pair = x.heard ? `${x.heard} -> ${x.term}` : x.term;
-              if (!x.learned) return `Noted ${pair} in the call's notes`;
-              return `Learned ${pair}: ${x.lines} line(s) fixed${x.noted ? ", and noted for the final transcript" : ""}`;
+              if (!x.learned)
+                return `Fixed ${pair}: ${x.lines} line(s), and added to the call's Notes`;
+              return `Learned ${pair}: ${x.lines} line(s) fixed${x.noted ? ", and added to the call's Notes" : ""}`;
             })
             .join("\n"),
         );

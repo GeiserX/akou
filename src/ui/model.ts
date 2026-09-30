@@ -640,19 +640,18 @@ export interface CallHeadInput {
   /** The audio recorded, in seconds; null while the call is live (the state says how long). */
   seconds: number | null;
   workspace: string;
-  template?: string;
   /** What the state adds (`stateLabel`'s meta): lines, a failure, how long it has recorded. */
   note: string;
 }
 
 /**
- * The line under the open call's title: `Today, 14:02 · 38 min 12 s · work · Template: standup`,
- * then what the state adds, such as `4 lines` or `open: permission denied`.
+ * The line under the open call's title: `Today, 14:02 · 38 min 12 s · work`, then what the state
+ * adds, such as `4 lines` or `open: permission denied`. No template: the window has no Enhance.
  */
 export function callHeadMeta(i: CallHeadInput): string {
   const bits = [`${dayLabel(i.createdAt, i.now, i.tz)}, ${hourMinute(i.createdAt, i.tz)}`];
   if (i.seconds !== null && i.seconds > 0) bits.push(formatDuration(i.seconds));
-  bits.push(i.workspace, `Template: ${i.template || "automatic"}`);
+  bits.push(i.workspace);
   if (i.note) bits.push(...i.note.split(/\s+·\s+/));
   return bits.filter(Boolean).join(" · ");
 }

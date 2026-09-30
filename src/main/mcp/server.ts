@@ -782,7 +782,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_vocab_add",
     {
       description:
-        'Pass on a word the user stated ("it\'s Vercel, not versal"), with how it was heard. Scope "call" (the default) is the same as the user fixing a line: every line of the live call with that heard form reads corrected at once; a name, product or jargon word is also learned into the call\'s and the workspace\'s vocabulary with no review, while a rewording of common words goes into the call\'s Notes as "Fixed: heard -> term" instead (so does any word while the live engine takes no word list). `decode: false` only corrects the reading of this call. "workspace" or "global" only writes the vocabulary file. Never add a word you inferred; propose it with akou_vocab_propose.',
+        'Pass on a word the user stated ("it\'s Vercel, not versal"), with how it was heard. Scope "call" (the default) works like the user fixing a line: every line of the live call with that heard form reads corrected at once. A name, product or jargon word is also learned into the call\'s and the workspace\'s vocabulary with no review; a rewording of common words stays in this call only and goes into the call\'s Notes as "Fixed: heard -> term" (so does any word while the live engine takes no word list). `decode: false` only corrects the reading of this call. "workspace" or "global" only writes the vocabulary file. Never add a word you inferred; propose it with akou_vocab_propose.',
       inputSchema: z.object({
         term: z.string().min(1),
         heard: z.array(z.string()).optional(),
@@ -812,8 +812,8 @@ export function createMcpServer(o: McpOptions): McpServer {
           const noted = pairs.some((p) => p.noted);
           const what = pairs.map((p) => (p.heard ? `${p.heard} -> ${p.term}` : p.term)).join(", ");
           const text = learned
-            ? `Fixed ${what} in call ${b.call}: learned into the call's and the workspace's vocabulary${noted ? ", and noted for the final transcript" : ""}`
-            : `Noted ${what} in the Notes of call ${b.call}: a rewording of common words is not learned`;
+            ? `Fixed ${what} in call ${b.call}: learned into the call's and the workspace's vocabulary${noted ? ", and added to the call's Notes" : ""}`
+            : `Fixed ${what} in call ${b.call} and added it to the call's Notes: a rewording of common words is not learned for later calls`;
           return {
             text,
             data: { term: a.term, scope: a.scope, id: b.undo?.vocab?.[0], learned, noted },

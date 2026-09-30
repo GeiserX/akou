@@ -770,18 +770,19 @@ describe("the calls list (WINDOW section 13)", () => {
 describe("the composer row and the call header (WINDOW section 3.1)", () => {
   const H = 3600_000;
 
-  test("the line under the title: day and start, length, workspace, template, then what the state adds", () => {
+  test("the line under the title: day and start, length, workspace, then what the state adds", () => {
     const base = { createdAt: T0, tz: TZ, now: T0 + H, workspace: "work", note: "" };
-    expect(callHeadMeta({ ...base, seconds: 38 * 60 + 12, template: "standup" })).toBe(
-      "Today, 15:36 · 38 min 12 s · work · Template: standup",
+    // No template: the window has no Enhance to pick one for.
+    expect(callHeadMeta({ ...base, seconds: 38 * 60 + 12 })).toBe(
+      "Today, 15:36 · 38 min 12 s · work",
     );
-    // No template is the automatic one; no length yet (live) leaves the length out.
+    // No length yet (live) leaves the length out.
     expect(
       callHeadMeta({ ...base, seconds: null, note: "recording for 2 s · last line 1 s ago" }),
-    ).toBe("Today, 15:36 · work · Template: automatic · recording for 2 s · last line 1 s ago");
+    ).toBe("Today, 15:36 · work · recording for 2 s · last line 1 s ago");
     // A saved call with no audio has no length to show, and a failure is its own item.
     expect(callHeadMeta({ ...base, seconds: 0, note: "open: permission denied" })).toBe(
-      "Today, 15:36 · work · Template: automatic · open: permission denied",
+      "Today, 15:36 · work · open: permission denied",
     );
   });
 

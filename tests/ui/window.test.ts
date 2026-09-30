@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { Page, Route } from "playwright-core";
 import { formatWall } from "../../src/core/log/clock.ts";
-import type { LogEvent } from "../../src/core/log/events.ts";
+import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import { NEMOTRON, RECOGNIZER } from "../../src/main/asr/models.ts";
 import { renderExport } from "../../src/main/handoff/export.ts";
 import { stereoWav } from "../fixtures/audio.ts";
@@ -1553,13 +1553,18 @@ describe("playback and Fix this line", () => {
         // A quiet one-line toast says what was learned, with Undo.
         await page.waitForSelector("#toast.info:not([hidden])");
         expect(await text(page, "#toast")).toBe(
-          "Learned Hetzner: 2 lines fixed. Noted for the final transcript. Undo",
+          "Learned Hetzner: 2 lines fixed. Added to Notes. Undo",
         );
-        // In the workspace's vocabulary with no review (a file keeps no heard form that differs
-        // from its term only in case), and in the Notes as a fix.
+        // In the workspace's vocabulary with no review, with the exact spelling heard, so a later
+        // call reads it corrected too; and in the Notes as a fix.
         const words = (await rig.api("GET", "/vocab?workspace=work")).body.entries;
         expect(words).toContainEqual(
-          expect.objectContaining({ term: "Hetzner", source: "correction", confirmed: true }),
+          expect.objectContaining({
+            term: "Hetzner",
+            heard: ["hetzner"],
+            source: "correction",
+            confirmed: true,
+          }),
         );
         await page.waitForSelector("#notes li.note.fix");
         expect(await text(page, "#notes li.note.fix .note-text")).toBe("Fixed: hetzner -> Hetzner");
@@ -1602,7 +1607,7 @@ describe("playback and Fix this line", () => {
         await page.keyboard.press("Enter");
         await page.waitForSelector("#toast.info:not([hidden])");
         expect(await text(page, "#toast")).toBe(
-          "should → could fixed on this line. Noted for the final transcript. Undo",
+          "should -> could fixed on this line. Added to Notes. Undo",
         );
         // The toast answers the request; the line redraws when the fold's push arrives.
         await until(
@@ -1616,6 +1621,49 @@ describe("playback and Fix this line", () => {
         expect(await text(page, "#notes li.note.fix .note-text")).toBe("Fixed: should -> could");
         const words = (await rig.api("GET", "/vocab?workspace=work")).body.entries ?? [];
         expect(words.map((e: { term: string }) => e.term)).not.toContain("could");
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W4.8] Fix this line: a line rewritten while the popover is open is shown again, not fixed",
+    async () => {
+      let id = "";
+      await withRig({ seed: (home) => (id = seedCall(home, twice).id) }, async (rig) => {
+        const page = await rig.open(id);
+        await page.waitForSelector("#lines .row >> nth=2");
+        await page.hover('#lines .row[data-id="l000002"]');
+        await page.click('#lines .row[data-id="l000002"] .fix');
+        await page.waitForSelector("#popover:not([hidden])");
+        await page.fill("#popover input", "deploy to Hetzner today");
+        // The in-call rewrite changes the line meanwhile.
+        await rig.app.write(id, {
+          type: "seg",
+          id: "l000002",
+          rev: 2,
+          text: "deploy it to hetzner today",
+        } as EventDraft);
+        await until(
+          async () =>
+            (await text(page, '#lines .row[data-id="l000002"] .text')) ===
+            "deploy it to hetzner today",
+          5000,
+          "the line rewritten",
+        );
+        await page.keyboard.press("Enter");
+        await until(
+          async () => (await page.inputValue("#popover input")) === "deploy it to hetzner today",
+          5000,
+          "the popover shows the line again",
+        );
+        expect(await text(page, "#popover .hint")).toBe(
+          "The line changed while you were fixing it. Check it, then press Enter again.",
+        );
+        // Nothing was learned from the stale text.
+        const words = (await rig.api("GET", "/vocab?workspace=work")).body.entries ?? [];
+        expect(words).toEqual([]);
+        expect(await shownText(page)).not.toMatch(RAW_KEY);
       });
     },
     UI_TIMEOUT,

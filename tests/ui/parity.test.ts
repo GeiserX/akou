@@ -116,10 +116,10 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           ).toBe(0);
           expect(await page.locator("#composer .pill, #composer #title").count()).toBe(0);
           // The call header over the transcript: the title, then day and start, length,
-          // workspace, template and what the state adds; the speakers with their talk time.
+          // workspace and what the state adds; the speakers with their talk time.
           expect(await text(page, "#call-head #title")).toBe("Weekly sync");
           expect(await text(page, "#call-head #meta")).toMatch(
-            /^[^·]+, 15:36 · 12 s · work · Template: standup · 4 lines$/,
+            /^[^·]+, 15:36 · 12 s · work · 4 lines$/,
           );
           expect(await page.locator("#meta").getAttribute("title")).toContain("Times are local");
           expect(await page.locator("#people li").count()).toBe(3);
@@ -349,7 +349,8 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           undefined,
         ]);
         expect(await text(page, "#title")).toBe("Kickoff");
-        expect(await text(page, "#meta")).toContain(" · acme · Template: automatic");
+        expect(await text(page, "#meta")).toContain(" · acme");
+        expect(await text(page, "#meta")).not.toContain("Template");
         await page.click("#stop");
       });
     },

@@ -51,7 +51,16 @@ import { TranscriptPane } from "./transcript.ts";
 
 /** The answer of `POST /calls/{id}/fix`: what each changed word did, and how to take it back. */
 interface FixAnswer {
-  pairs?: { heard: string; term: string; learned: boolean; noted: boolean; lines: number }[];
+  pairs?: {
+    heard: string;
+    term: string;
+    learned: boolean;
+    learnedTerm?: string;
+    noted: boolean;
+    lines: number;
+  }[];
+  /** Corrections the person wrote back as heard, now off the call. */
+  reverted?: { heard: string; term: string }[];
   undo?: unknown;
 }
 
@@ -511,7 +520,7 @@ class App {
 
   /**
    * The transcript header (WINDOW section 3.1): the call's title, the line under it (day and start,
-   * length, workspace, template, then what the state adds) and who spoke for how long.
+   * length, workspace, then what the state adds) and who spoke for how long.
    */
   private callHead(v: CallView | null, now: number, note: string): void {
     const call = v?.call;
@@ -531,7 +540,6 @@ class App {
       now,
       seconds,
       workspace: call.workspace,
-      template: call.template,
       note,
     });
     const tz = call.tz;
@@ -1192,7 +1200,7 @@ class App {
       },
       {
         id: "line.fix-word",
-        label: "Fix a word…",
+        label: "Fix this line…",
         run: (id, anchor) => {
           const sel = getSelection()?.toString().trim() ?? "";
           this.fixWord(id, anchor, sel.length <= 60 ? sel : "");
@@ -1340,7 +1348,9 @@ class App {
    */
   private fixWord(lineId: string, anchor: HTMLElement, selected: string): void {
     const call = this.callId;
-    const shown = this.transcript.shown(lineId)?.text;
+    let shown = this.transcript.shown(lineId)?.text;
+    // The revision shown: a line rewritten meanwhile (the in-call upgrade) is read again first.
+    let rev = this.view()?.resolve(lineId)?.rev;
     if (!call || shown === undefined) return;
     const field = h("input", {
       value: shown,
@@ -1350,7 +1360,7 @@ class App {
     const note = h(
       "p",
       { class: "hint" },
-      "Change what akou got wrong, then press Enter. The same word reads right everywhere in this call.",
+      "Change what akou got wrong, then press Enter. A name or term is fixed on every line of this call; other words only here.",
     );
     const form = h(
       "form",
@@ -1360,13 +1370,25 @@ class App {
           submit: (e) => {
             e.preventDefault();
             const text = field.value.trim();
-            if (text === "" || text === shown.trim()) {
+            if (text === "" || text === shown?.trim()) {
               this.closePopover();
               return;
             }
             void this.t
-              .request<FixAnswer>("POST", `/calls/${call}/fix`, { line: lineId, text })
+              .request<FixAnswer>("POST", `/calls/${call}/fix`, {
+                line: lineId,
+                text,
+                ...(rev !== undefined ? { rev } : {}),
+              })
               .then((r) => {
+                if (r.status === 409) {
+                  shown = this.transcript.shown(lineId)?.text ?? shown;
+                  rev = this.view()?.resolve(lineId)?.rev;
+                  field.value = shown ?? "";
+                  note.textContent =
+                    "The line changed while you were fixing it. Check it, then press Enter again.";
+                  return;
+                }
                 if (r.status >= 400) {
                   note.textContent = message(r.body, "the line could not be fixed");
                   return;
@@ -1391,23 +1413,34 @@ class App {
   /** What a fix did, in one quiet line, with Undo. */
   private fixed(call: string, a: FixAnswer): void {
     const pairs = a.pairs ?? [];
+    const reverted = a.reverted ?? [];
+    const said: string[] = [];
+    if (reverted.length > 0) {
+      said.push(
+        `${reverted.map((p) => `${p.heard} no longer reads as ${p.term}`).join(", ")} in this call`,
+      );
+    }
     if (pairs.length === 0) {
-      toast("Nothing to fix: only punctuation or a capital at the start changed.", "info");
+      toast(
+        said.length > 0
+          ? `${said.join("; ")}.`
+          : "No word changed. Punctuation, and the capital that starts a sentence, stay as heard.",
+        "info",
+      );
       return;
     }
     const learned = pairs.filter((p) => p.learned);
     const reworded = pairs.filter((p) => !p.learned);
-    const said: string[] = [];
     if (learned.length > 0) {
       const lines = learned.reduce((n, p) => n + p.lines, 0);
       said.push(
-        `Learned ${learned.map((p) => p.term).join(", ")}: ${lines} ${lines === 1 ? "line" : "lines"} fixed`,
+        `Learned ${learned.map((p) => p.learnedTerm ?? p.term).join(", ")}: ${lines} ${lines === 1 ? "line" : "lines"} fixed`,
       );
     }
     if (reworded.length > 0) {
-      said.push(`${reworded.map((p) => `${p.heard} → ${p.term}`).join(", ")} fixed on this line`);
+      said.push(`${reworded.map((p) => `${p.heard} -> ${p.term}`).join(", ")} fixed on this line`);
     }
-    const noted = pairs.some((p) => p.noted) ? " Noted for the final transcript." : "";
+    const noted = pairs.some((p) => p.noted) ? " Added to Notes." : "";
     toast(`${said.join("; ")}.${noted}`, "info", {
       label: "Undo",
       run: () =>

@@ -47,7 +47,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "app.hotkey": { label: "Record shortcut" },
   "provider.kind": {
-    label: "Answers and enhanced notes",
+    label: "Answers",
     choices: [
       ["harness", "Claude Code or Codex"],
       ["anthropic", "Anthropic API"],

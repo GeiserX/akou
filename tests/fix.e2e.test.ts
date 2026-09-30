@@ -2,8 +2,9 @@
  * Fix once, applied everywhere, over the API (docs/DESIGN.md section 5.4, "A fix on a line"): a
  * headless app on a seeded, ended call. A fix of one line corrects every other line with the same
  * heard form; a term lands in the call's and the workspace's vocabulary with no review step; a
- * rewording stays on its line and lands in the Notes; the note is written for a term too while the
- * engine takes no word list; Undo takes every part back. No test runs a real model.
+ * rewording stays on its one word and lands in the Notes; a common word's case or a word added never
+ * spreads; the note is written for a term too while the engine takes no word list; Undo takes every
+ * part back, and so does writing a corrected word back as heard. No test runs a real model.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -27,7 +28,12 @@ function seed(home: string): void {
   line("l000002", 3, "versal is down again");
   line("l000003", 5, "the universal plan is their plan");
   line("l000004", 7, "their plan works");
-  b.partEnded(1, "stop", 12);
+  line("l000005", 9, "go to the store to buy it");
+  line("l000006", 11, "we write it in go");
+  line("l000007", 13, "let's go to the next step");
+  line("l000008", 15, "we deploy it on");
+  line("l000009", 17, "turn it on today");
+  b.partEnded(1, "stop", 20);
   b.add({ type: "call.ended", reason: "stop" });
   const dir = join(home, "Recordings", "akou", "work", "2026-09-23_153612_f6g7h");
   mkdirSync(join(dir, "audio"), { recursive: true });
@@ -127,6 +133,8 @@ describe("a fix of one line", () => {
       const t = await texts(rig);
       expect(t.l000004).toBe("there plan works");
       expect(t.l000003).toBe("the universal plan is their plan");
+      const add = (await events(rig)).find((e) => e.type === "vocab.add");
+      expect(add).toMatchObject({ segs: ["l000004"], nth: 0, decode: false });
       const notes = (await rig.api("GET", `/calls/${CALL}/notes`)).body.notes;
       expect(notes).toEqual([
         expect.objectContaining({ text: "Fixed: their -> there", from: "fix", w: T0 + 7000 }),
@@ -210,6 +218,155 @@ describe("a fix of one line", () => {
       });
       // Only the capital at the start and a full stop changed: nothing new to fix.
       expect(none.body.pairs).toEqual([]);
+    },
+    LONG,
+  );
+  test(
+    "a rewording changes only the word the person changed, not its other copies on the line",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000005",
+        text: "go to the store and buy it",
+      });
+      expect((await texts(rig)).l000005).toBe("go to the store and buy it");
+    },
+    LONG,
+  );
+
+  test(
+    "a common word's new capital, or one after a full stop, is kept to its line and never learned",
+    async () => {
+      const rig = await rigWith();
+      const r = await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000006",
+        text: "we write it in Go",
+      });
+      expect(r.body.pairs).toEqual([
+        { heard: "go", term: "Go", kind: "rewording", learned: false, noted: true, lines: 1 },
+      ]);
+      const t = await texts(rig);
+      expect(t.l000006).toBe("we write it in Go");
+      expect(t.l000005).toBe("go to the store to buy it");
+      expect(t.l000007).toBe("let's go to the next step");
+      expect((await workspaceWords(rig)).map((e) => e.term)).toEqual([]);
+      const sentence = await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000007",
+        text: "let's go. To the next step",
+      });
+      expect(sentence.body.pairs).toEqual([]);
+    },
+    LONG,
+  );
+
+  test(
+    "a word added is learned on its own and changes only its line",
+    async () => {
+      const rig = await rigWith();
+      const r = await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000008",
+        text: "we deploy it on Vercel",
+      });
+      expect(r.body.pairs).toEqual([
+        {
+          heard: "on",
+          term: "on Vercel",
+          kind: "term",
+          learned: true,
+          learnedTerm: "Vercel",
+          noted: true,
+          lines: 1,
+        },
+      ]);
+      const t = await texts(rig);
+      expect(t.l000008).toBe("we deploy it on Vercel");
+      expect(t.l000009).toBe("turn it on today");
+      expect(await workspaceWords(rig)).toEqual([
+        expect.objectContaining({ term: "Vercel", heard: [], confirmed: true }),
+      ]);
+    },
+    LONG,
+  );
+
+  test(
+    "writing a corrected word back as heard takes the correction off the call and the file",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000001",
+        text: "deploy to Vercel today",
+      });
+      expect((await texts(rig)).l000002).toBe("Vercel is down again");
+      const r = await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000002",
+        text: "versal is down again",
+      });
+      expect(r.status).toBe(200);
+      expect(r.body.pairs).toEqual([]);
+      expect(r.body.reverted).toEqual([{ heard: "versal", term: "Vercel" }]);
+      const t = await texts(rig);
+      expect(t.l000001).toBe("deploy to versal today");
+      expect(t.l000002).toBe("versal is down again");
+      expect(await workspaceWords(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: [] }),
+      );
+    },
+    LONG,
+  );
+
+  test(
+    "a line rewritten since it was shown is refused, so no word the person left is learned",
+    async () => {
+      const rig = await rigWith();
+      // The seeded line is at its first revision; the window sends the revision it shows.
+      const shown = { rev: 1 };
+      const stale = await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000001",
+        text: "deploy to Vercel today",
+        rev: shown.rev + 1,
+      });
+      expect(stale.status).toBe(409);
+      expect(stale.body.text).toBe("deploy to versal today");
+      const ok = await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000001",
+        text: "deploy to Vercel today",
+        rev: shown.rev,
+      });
+      expect(ok.status).toBe(200);
+    },
+    LONG,
+  );
+
+  test(
+    "undoing a fix keeps the heard form a later fix added to the same word",
+    async () => {
+      const rig = await rigWith();
+      const first = await rig.api("POST", `/calls/${CALL}/fix`, { term: "Vercel" });
+      await rig.api("POST", `/calls/${CALL}/fix`, {
+        line: "l000001",
+        text: "deploy to Vercel today",
+      });
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, first.body.undo);
+      expect(await workspaceWords(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: ["versal"] }),
+      );
+    },
+    LONG,
+  );
+
+  test(
+    "a stated rewording applies to the whole call, is noted, and stays out of the file",
+    async () => {
+      const rig = await rigWith();
+      const r = await rig.api("POST", `/calls/${CALL}/fix`, { term: "there", heard: ["their"] });
+      expect(r.body.pairs[0]).toMatchObject({ kind: "rewording", learned: false, noted: true });
+      const t = await texts(rig);
+      expect(t.l000003).toBe("the universal plan is there plan");
+      expect(t.l000004).toBe("there plan works");
+      expect((await workspaceWords(rig)).map((e) => e.term)).not.toContain("there");
+      expect((await rig.api("GET", `/calls/${CALL}/notes`)).body.notes).toEqual([
+        expect.objectContaining({ text: "Fixed: their -> there", from: "fix" }),
+      ]);
     },
     LONG,
   );
