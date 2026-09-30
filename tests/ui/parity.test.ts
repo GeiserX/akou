@@ -66,9 +66,9 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           expect(await page.locator("#dot").count()).toBe(1);
           expect(await text(page, "#state")).toBe("saved");
           // The composer row: the workspace chip inside the title field, the live model, the Mic
-          // and Call meters with their health dots, and Record, all on screen at once. The
-          // template is no longer picked here: the live model menu took its place.
-          expect(await page.locator("#template").count()).toBe(0);
+          // and Call meters with their health dots, and Record, all on screen at once. No template
+          // picker here or on the Enhanced tab: notes pick their template automatically.
+          expect(await page.locator("#template, #enhance-template").count()).toBe(0);
           for (const c of [
             "#composer .title-field #workspace",
             "#composer .title-field #newtitle",
@@ -329,11 +329,14 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
-    "Workspace picker and title field; a call started here takes the automatic template",
+    "Workspace menu and title field; the template is the automatic choice, and a script's shows in the header",
     async () => {
       await withRig({}, async (rig) => {
+        await rig.api("POST", "/workspaces", { name: "acme" });
         const page = await rig.open();
-        await page.fill("#workspace", "acme");
+        await page.waitForFunction(() => document.getElementById("state")?.textContent !== "…");
+        await page.click("#workspace");
+        await page.click('#workspace-menu [data-ws="acme"]');
         await page.fill("#newtitle", "Kickoff");
         await page.click("#record");
         await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
@@ -349,8 +352,18 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           undefined,
         ]);
         expect(await text(page, "#title")).toBe("Kickoff");
-        expect(await text(page, "#meta")).toContain(" · acme · Template: automatic");
+        expect(await text(page, "#meta")).toContain(" · acme");
+        expect(await text(page, "#meta")).not.toContain("Template");
         await page.click("#stop");
+        await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
+        // A template a script names still reaches the call, and its header says so.
+        const scripted = await rig.startCall({ workspace: "acme", template: "standup" });
+        await until(
+          async () => ((await text(page, "#meta")) ?? "").includes("Template: standup"),
+          8000,
+          "scripted",
+        );
+        await rig.api("POST", `/calls/${scripted}/stop`);
       });
     },
     UI_TIMEOUT,

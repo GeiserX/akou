@@ -52,6 +52,7 @@ import { queryRoutes } from "./routes/query.ts";
 import { rootRoutes, serverRoutes } from "./routes/server.ts";
 import { settingsRoutes } from "./routes/settings.ts";
 import { vocabRoutes } from "./routes/vocab.ts";
+import { workspaceRoutes } from "./routes/workspaces.ts";
 
 export const API_PREFIX = "/v1";
 export const DEFAULT_PORT = 8476;
@@ -227,6 +228,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   settingsRoutes(r);
   modelRoutes(r);
   callRoutes(r);
+  workspaceRoutes(r);
   followRoutes(r);
   queryRoutes(r);
   notesRoutes(r);
@@ -286,7 +288,7 @@ export async function routeRequest(
   }
   try {
     // Calls are known once recovery has indexed the root; a route that names a call waits for it.
-    if (/^\/v1\/(calls|window|share)(\/|$)/.test(url.pathname)) await app.manager.init();
+    if (/^\/v1\/(calls|workspaces|window|share)(\/|$)/.test(url.pathname)) await app.manager.init();
     return await m.handler({
       req,
       url,

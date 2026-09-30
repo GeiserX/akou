@@ -549,6 +549,7 @@ export function groupCalls(
   calls: readonly CallSummary[],
   query = "",
   live: string | null = null,
+  empty: readonly string[] = [],
 ): CallGroup[] {
   const q = query.trim().toLowerCase();
   const rank = (c: CallSummary) => (c.id === live ? Number.POSITIVE_INFINITY : c.createdAt);
@@ -564,7 +565,71 @@ export function groupCalls(
     calls: list.sort((a, b) => rank(b) - rank(a)),
   }));
   const top = (g: CallGroup) => rank(g.calls[0] as CallSummary);
-  return out.sort((a, b) => top(b) - top(a) || a.workspace.localeCompare(b.workspace));
+  out.sort((a, b) => top(b) - top(a) || a.workspace.localeCompare(b.workspace));
+  // A workspace with no calls yet is a group too, after the ones with calls, unless a search runs.
+  if (q) return out;
+  // A Mac's disk does not tell `Work` from `work`: a folder a call already fills, in any case, is
+  // that call's group, never a second, empty one.
+  const seen = new Set([...groups.keys()].map((w) => w.toLowerCase()));
+  const idle: string[] = [];
+  for (const w of empty) {
+    if (seen.has(w.toLowerCase())) continue;
+    seen.add(w.toLowerCase());
+    idle.push(w);
+  }
+  idle.sort((a, b) => a.localeCompare(b));
+  return [...out, ...idle.map((workspace) => ({ workspace, calls: [] }))];
+}
+
+// ---------------------------------------------------------------------------
+// Workspaces (WINDOW section 3.1): the folder a new call goes in
+
+/**
+ * The workspace a new call goes in: the last one the user picked or recorded in holds until they
+ * change it; with none, the workspace of the call on screen, else "default". Opening another call
+ * to read it never moves it.
+ */
+export function defaultWorkspace(last: string | null, onScreen: string | undefined): string {
+  return last || onScreen || "default";
+}
+
+/**
+ * Every workspace the menu lists: those the app knows and the chosen one, by name, each once in
+ * any case (a Mac's disk does not tell `Work` from `work`), under the first spelling given, so the
+ * folders go first.
+ */
+export function workspaceNames(known: readonly string[], chosen: string): string[] {
+  const out = new Map<string, string>();
+  for (const w of [...known, chosen]) if (!out.has(w.toLowerCase())) out.set(w.toLowerCase(), w);
+  return [...out.values()].sort((a, b) => a.localeCompare(b));
+}
+
+/**
+ * Why a new workspace cannot have this name, or null. Not empty, no slash, unique (a Mac's disk
+ * does not tell `Work` from `work`), and one folder name the app accepts: letters, digits, dot,
+ * dash or underscore, starting with a letter or a digit, at most 64.
+ */
+export function workspaceNameProblem(name: string, known: readonly string[]): string | null {
+  const n = name.trim();
+  if (n === "") return "Give it a name.";
+  if (/[/\\]/.test(n)) return "A name cannot have a slash.";
+  if (n.length > 64) return "Keep it to 64 characters.";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(n)) {
+    // Say it plainly and offer the nearest name that works: "Acme Corp" becomes "Acme-Corp".
+    const near = n
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/\s+/g, "-")
+      .replace(/[^A-Za-z0-9._-]/g, "")
+      .replace(/^[._-]+/, "");
+    const what = /\s/.test(n) ? "No spaces" : "Only letters, digits, dots, dashes and underscores";
+    return near && near !== n
+      ? `${what}. Try ${near}.`
+      : `${what}, starting with a letter or digit.`;
+  }
+  const same = known.find((k) => k.toLowerCase() === n.toLowerCase());
+  if (same !== undefined) return `There is a workspace called ${same} already.`;
+  return null;
 }
 
 /** The calendar date of `t` in `tz`. */
@@ -646,13 +711,15 @@ export interface CallHeadInput {
 }
 
 /**
- * The line under the open call's title: `Today, 14:02 · 38 min 12 s · work · Template: standup`,
- * then what the state adds, such as `4 lines` or `open: permission denied`.
+ * The line under the open call's title: `Today, 14:02 · 38 min 12 s · work`, with
+ * `Template: standup` after the workspace when a script picked one, then what the state adds,
+ * such as `4 lines` or `open: permission denied`.
  */
 export function callHeadMeta(i: CallHeadInput): string {
   const bits = [`${dayLabel(i.createdAt, i.now, i.tz)}, ${hourMinute(i.createdAt, i.tz)}`];
   if (i.seconds !== null && i.seconds > 0) bits.push(formatDuration(i.seconds));
-  bits.push(i.workspace, `Template: ${i.template || "automatic"}`);
+  // Notes pick their template automatically; one a script named is still a fact of the call.
+  bits.push(i.workspace, i.template ? `Template: ${i.template}` : "");
   if (i.note) bits.push(...i.note.split(/\s+·\s+/));
   return bits.filter(Boolean).join(" · ");
 }

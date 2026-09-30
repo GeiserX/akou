@@ -49,6 +49,7 @@ import type { AppStatus, Levels, QuitQuestion, Reply, Transport } from "./protoc
 import { ReviewPane } from "./review.ts";
 import { SettingsPage } from "./settings-page.ts";
 import { TranscriptPane } from "./transcript.ts";
+import { WorkspacePicker } from "./workspaces.ts";
 
 /** A level above this means someone on the call side is audible. */
 const HEARD_DBFS = -60;
@@ -180,6 +181,8 @@ class App {
   private readonly askPane: AskPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
+  /** The workspace the next call goes in: the Record row's menu and the sidebar's New workspace. */
+  private readonly workspace: WorkspacePicker;
   /** The live model the next call runs: the Record row's "Live:" menu. */
   private readonly livePicker: LivePicker;
   private readonly levels = new SmoothMeters((ch, db) => {
@@ -231,6 +234,11 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
+    this.workspace = new WorkspacePicker({
+      t,
+      fromCalls: () => this.calls.map((c) => c.workspace),
+      changed: () => this.drawCalls(),
+    });
     // Words and History are pages under Dictation, reached from its rows and by their links.
     const dictation = new DictationPage(t, "app", {
       words: new DictationDictionary(t, () => this.view()?.call?.workspace),
@@ -276,10 +284,6 @@ class App {
 
   view(): CallView | null {
     return this.follower?.view ?? null;
-  }
-
-  private workspaceInput(): HTMLInputElement {
-    return byId<HTMLInputElement>("workspace");
   }
 
   async start(): Promise<void> {
@@ -445,6 +449,7 @@ class App {
     state.title = st.meta;
     const call = v?.call;
     document.title = call ? `${call.title || call.workspace} · akou` : "akou";
+    this.workspace.follow(this.callId, call?.workspace);
     this.welcome();
     this.callHead(v, now, st.meta);
     this.pills(v);
@@ -786,10 +791,7 @@ class App {
       (a, b) => b.createdAt - a.createdAt,
     );
     this.drawCalls();
-    const names = [...new Set(["default", ...this.calls.map((c) => c.workspace)])];
-    replace(byId("workspaces"), ...names.map((n) => h("option", { value: n })));
-    const ws = this.workspaceInput();
-    if (!ws.value) ws.value = this.calls[0]?.workspace ?? "default";
+    await this.workspace.load();
   }
 
   private wireSidebar(): void {
@@ -822,6 +824,7 @@ class App {
       this.callId,
       this.pages?.open ?? null,
       [...this.folded],
+      this.workspace.folders(),
       new Date(now).toDateString(),
     ]);
     if (key === this.drawnCalls) return;
@@ -831,7 +834,7 @@ class App {
     const had = document.activeElement as HTMLElement | null;
     const focus = had && list.contains(had) ? (had.dataset.ws ?? had.dataset.id) : undefined;
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
-    const groups = groupCalls(this.calls, query, live);
+    const groups = groupCalls(this.calls, query, live, this.workspace.folders());
     if (groups.length === 0) {
       replace(
         list,
@@ -840,7 +843,10 @@ class App {
           : this.groupEl({ workspace: "default", calls: [] }, 0, "", now, tz),
       );
     } else {
-      replace(list, ...groups.map((g, i) => this.groupEl(g, i, query, now, tz, live)));
+      replace(
+        list,
+        ...groups.map((g, i) => this.groupEl(g, i, query, now, tz, live, groups.length)),
+      );
     }
     if (focus === undefined) return;
     for (const el of list.querySelectorAll<HTMLElement>("button[data-ws], button[data-id]")) {
@@ -859,6 +865,7 @@ class App {
     now: number,
     tz: string,
     live: string | null = null,
+    of = 1,
   ): HTMLElement {
     // A search shows every call it finds, folded or not.
     const open = !this.folded.has(g.workspace) || query.trim() !== "";
@@ -886,10 +893,11 @@ class App {
       },
       chevron,
       h("span", { class: "ws-name" }, g.workspace),
-      g.calls.length > 0 && h("span", { class: "cnt" }, String(g.calls.length)),
+      (g.calls.length > 0 || of > 1) && h("span", { class: "cnt" }, String(g.calls.length)),
     );
+    // Only a lone empty workspace says "No calls yet"; beside others, its header with 0 is enough.
     const body =
-      g.calls.length === 0
+      g.calls.length === 0 && of === 1
         ? h("p", { class: "none", id, hidden: !open }, "No calls yet")
         : h(
             "ul",
@@ -1001,11 +1009,13 @@ class App {
     if (this.starting || recordBlocked(this.status?.models) !== null) return;
     this.starting = true;
     this.paint();
+    // Notes pick their template automatically (the API still takes one, for scripts).
+    const workspace = this.workspace.value();
     const live = await this.livePicker.value();
     let r: Reply<{ call?: string; error?: string }>;
     try {
       r = await this.t.request("POST", "/calls", {
-        workspace: this.workspaceInput().value.trim() || undefined,
+        workspace,
         title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
         ...(live ? { live } : {}),
       });
@@ -1016,6 +1026,7 @@ class App {
     const call = r.body.call;
     if (r.status === 201 && call) {
       byId<HTMLInputElement>("newtitle").value = "";
+      this.workspace.used(workspace);
       this.openCall(call, false);
       this.consent();
       return;
