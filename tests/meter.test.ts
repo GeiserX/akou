@@ -1,11 +1,13 @@
 /**
- * How a level bar moves (WINDOW W3.18): a fast rise, a slow fall, drawn per animation frame, and
- * no frame at all once both bars rest. Pure code: no page, no device.
+ * How a level bar moves (WINDOW W3.18): a fast rise, a slow fall, drawn per animation frame (on a
+ * timer in a page that gets no frame), and no step at all once both bars rest. Pure code: no page,
+ * no device.
  */
 
 import { describe, expect, test } from "bun:test";
 import {
   ATTACK_MS,
+  FRAME_WAIT_MS,
   METER_FLOOR,
   meterStep,
   RELEASE_DB_PER_S,
@@ -55,11 +57,16 @@ describe("[W3.18] SmoothMeters", () => {
   function rig() {
     const drawn: { ch: string; db: number }[] = [];
     const frames: ((t: number) => void)[] = [];
+    const timers = new Set<() => void>();
     let clock = 0;
     const m = new SmoothMeters(
       (ch, db) => drawn.push({ ch, db }),
       (fn) => frames.push(fn),
       () => clock,
+      (fn) => {
+        timers.add(fn);
+        return () => timers.delete(fn);
+      },
     );
     /** Runs the one pending frame 16 ms later; false when none is pending. */
     const frame = () => {
@@ -69,7 +76,16 @@ describe("[W3.18] SmoothMeters", () => {
       fn(clock);
       return true;
     };
-    return { m, drawn, frames, frame };
+    /** Runs the one pending timer once it is due, with no frame; false when none is pending. */
+    const timer = () => {
+      const [fn] = timers;
+      if (!fn) return false;
+      timers.delete(fn);
+      clock += FRAME_WAIT_MS;
+      fn();
+      return true;
+    };
+    return { m, drawn, frames, timers, frame, timer };
   }
 
   test("a level is drawn frame by frame, and the frames stop once both bars rest", () => {
@@ -78,6 +94,7 @@ describe("[W3.18] SmoothMeters", () => {
     // Levels arriving between frames ask for no second frame.
     r.m.set({ mic: -20, call: -30 });
     expect(r.frames.length).toBe(1);
+    expect(r.timers.size).toBe(1);
     let n = 0;
     while (r.frame()) n++;
     expect(n).toBeGreaterThan(2);
@@ -89,7 +106,34 @@ describe("[W3.18] SmoothMeters", () => {
     const before = r.drawn.length;
     r.m.set({ mic: -20, call: -30 });
     expect(r.frames.length).toBe(0);
+    expect(r.timers.size).toBe(0);
     expect(r.drawn.length).toBe(before);
+  });
+
+  test("a page that gets no animation frame moves its bars on the timer (the macOS indicator)", () => {
+    const r = rig();
+    r.m.set({ mic: -20, call: -24 });
+    let n = 0;
+    while (r.timer()) n++;
+    expect(n).toBeGreaterThan(1);
+    const last = (ch: string) => r.drawn.filter((d) => d.ch === ch).at(-1)?.db;
+    expect(last("mic")).toBe(-20);
+    expect(last("call")).toBe(-24);
+    expect(r.timers.size).toBe(0);
+    // A frame that arrives late after its timer drew the step draws nothing twice.
+    const before = r.drawn.length;
+    for (const fn of r.frames.splice(0)) fn(1e9);
+    expect(r.drawn.length).toBe(before);
+  });
+
+  test("a frame that comes first cancels its timer", () => {
+    const r = rig();
+    r.m.set({ mic: -20, call: -24 });
+    r.frame();
+    // The first step's timer is gone; the second step's is the only one left.
+    expect(r.timers.size).toBe(1);
+    while (r.frame());
+    expect(r.timers.size).toBe(0);
   });
 
   test("reset empties both bars at once, without a frame", () => {

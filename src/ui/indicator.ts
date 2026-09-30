@@ -14,6 +14,9 @@
  *
  * A degraded capture turns the dot into the warning mark with one word, never by colour alone
  * (PRINCIPLES 12).
+ *
+ * The window is exactly as wide as the pill: the page measures the pill and asks for that width
+ * each time it changes (the time gains a digit, Mute becomes Unmute, a warning replaces the word).
  */
 
 import { elapsedText, recordedMs } from "./indicator-clock.ts";
@@ -34,9 +37,10 @@ export interface IndicatorTransport {
   control(action: "stop" | "mute" | "unmute"): Promise<unknown>;
 }
 
-/** What the main process does for a click on the indicator. */
+/** What the main process does for the indicator: a click on it, and the pill's width. */
 export interface IndicatorHost {
   open(): void;
+  fit(width: number): void;
 }
 
 type Health = Record<"mic" | "call", string>;
@@ -147,10 +151,25 @@ export function mountIndicator(
     if (live) host.open();
   });
 
+  // The pill is as wide as what it shows (indicator.css); the window follows it.
+  const bar = el("bar");
+  let fitted = 0;
+  const fit = () => {
+    const width = Math.ceil(bar.getBoundingClientRect().width);
+    if (width > 0 && width !== fitted) {
+      fitted = width;
+      host.fit(width);
+    }
+  };
+  const sized = new ResizeObserver(fit);
+  sized.observe(bar);
+
   const timer = setInterval(tick, 1000);
   draw();
+  fit();
   return {
     close: () => {
+      sized.disconnect();
       clearInterval(timer);
       status.close();
       follow?.close();

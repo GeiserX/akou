@@ -1,4 +1,8 @@
-/* The floating indicator (DK-F1): one row, readable over any desktop, in dark and light. */
+/*
+ * The floating indicator (DK-F1): one row, readable over any desktop, in dark and light. Only the
+ * pill is painted: the window is transparent and the shell makes it exactly as wide as #bar, which
+ * takes the width of what it holds, never the window's.
+ */
 :root {
   color-scheme: light dark;
   --bg: #fdfdfd;
@@ -18,7 +22,7 @@ html,
 body {
   margin: 0;
   height: 100%;
-  background: var(--bg);
+  background: transparent;
   color: var(--fg);
   font:
     13px / 1.2 -apple-system,
@@ -30,6 +34,8 @@ body {
 }
 #bar {
   display: flex;
+  width: max-content;
+  background: var(--bg);
   align-items: center;
   gap: 6px;
   height: 100%;

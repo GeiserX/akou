@@ -9,7 +9,7 @@ import { describe, expect, test } from "bun:test";
 import type { Page } from "playwright-core";
 import type { EventDraft } from "../../src/core/log/events.ts";
 import { tempDir } from "../helpers.ts";
-import { type DesktopRig, desktopRig } from "./desktop-rig.ts";
+import { type DesktopRig, type DesktopRigOptions, desktopRig } from "./desktop-rig.ts";
 import { seg, silentWav, UI_TIMEOUT, uiRig, until, windowPage } from "./rig.ts";
 
 /** Markers carried by the call's title, its lines and its speaker's name. */
@@ -23,10 +23,13 @@ function leaked(page: Page): Promise<string[]> {
   }, MARKS);
 }
 
-async function withDesktop(fn: (rig: DesktopRig, dir: string) => Promise<void>): Promise<void> {
+async function withDesktop(
+  fn: (rig: DesktopRig, dir: string) => Promise<void>,
+  o: DesktopRigOptions = {},
+): Promise<void> {
   const t = tempDir("akou-ui-desk-");
   const wav = silentWav(t.dir);
-  const rig = await desktopRig({ home: t.dir, helperArgs: ["--from-wav", wav] });
+  const rig = await desktopRig({ ...o, home: t.dir, helperArgs: ["--from-wav", wav] });
   try {
     await fn(rig, t.dir);
   } finally {
@@ -133,6 +136,108 @@ describe("[DK-F1] the floating indicator", () => {
         );
         await until(() => rig.indicator() === null, 5000, "the indicator closed");
       });
+    },
+    UI_TIMEOUT,
+  );
+});
+
+/** The indicator's two bars, as drawn. */
+const bars = (page: Page) =>
+  page.evaluate(() =>
+    (["mic", "call"] as const).map(
+      (ch) => (document.getElementById(`lvl-${ch}`) as HTMLMeterElement).value,
+    ),
+  );
+
+describe("[DK-F1] the indicator's level bars", () => {
+  for (const frames of [true, false])
+    test(
+      `both bars move with the capture ${frames ? "in a page in front" : "in a page that runs no animation frame, as the always-on-top window on macOS"}`,
+      async () => {
+        await withDesktop(
+          async (rig) => {
+            await rig.startCall({ title: "Sync" });
+            const page = await indicatorPage(rig);
+            // The fake helper sends the mic at -20 dBFS and the call at -24, four times a second.
+            await until(
+              async () => (await bars(page)).every((db) => db > -40),
+              8000,
+              "both indicator bars to move",
+            );
+          },
+          { indicatorWithoutFrames: !frames },
+        );
+      },
+      UI_TIMEOUT,
+    );
+});
+
+/** The pill's width, CSS px, and what the page paints around it. */
+const pill = (page: Page) =>
+  page.evaluate(() => {
+    const bg = (e: Element) => getComputedStyle(e).backgroundColor;
+    return {
+      width: (document.getElementById("bar") as HTMLElement).getBoundingClientRect().width,
+      around: [bg(document.documentElement), bg(document.body)],
+      own: bg(document.getElementById("bar") as HTMLElement),
+    };
+  });
+
+describe("[DK-F1] the indicator's window is as wide as its pill", () => {
+  test(
+    "recording, muted, paused and past an hour: the window follows the pill, and nothing around it is painted",
+    async () => {
+      await withDesktop(
+        async (rig) => {
+          const id = await rig.startCall({ title: "Sync" });
+          const page = await indicatorPage(rig);
+          const fits = async (what: string) => {
+            await until(
+              async () =>
+                Math.abs((await pill(page)).width - (rig.indicatorFrame()?.width ?? 0)) <= 1,
+              5000,
+              `${what}: the window ${rig.indicatorFrame()?.width} px wide, the pill ${(await pill(page)).width} px`,
+            );
+            return (await pill(page)).width;
+          };
+          const text = (sel: string, want: RegExp) =>
+            page.waitForFunction(
+              ([s, w]) =>
+                new RegExp(w as string).test(
+                  document.querySelector(s as string)?.textContent ?? "",
+                ),
+              [sel, want.source],
+            );
+
+          const recording = await fits("recording");
+          // The window opens 480 px wide; the pill is narrower, so the fit really moved it.
+          expect(recording).toBeLessThan(480);
+          const p = await pill(page);
+          expect(p.around).toEqual(["rgba(0, 0, 0, 0)", "rgba(0, 0, 0, 0)"]);
+          expect(p.own).not.toBe("rgba(0, 0, 0, 0)");
+          // It keeps its right edge: from the top right corner it stays 16 px from the edge.
+          const f = rig.indicatorFrame();
+          expect((f?.x ?? 0) + (f?.width ?? 0)).toBe(1440 - 16);
+
+          await page.click("#mute");
+          await text("#mute", /^Unmute$/);
+          expect(await fits("muted")).toBeGreaterThan(recording);
+          await page.click("#mute");
+          await text("#mute", /^Mute$/);
+          expect(await fits("unmuted")).toBe(recording);
+
+          expect((await rig.api("POST", `/calls/${id}/pause`)).status).toBeLessThan(300);
+          await text("#state", /^Paused$/);
+          await fits("paused");
+          expect((await rig.api("POST", `/calls/${id}/resume`)).status).toBeLessThan(300);
+          await text("#state", /^Recording$/);
+
+          await page.clock.fastForward("01:00:00");
+          await text("#elapsed", /^1:00:\d\d$/);
+          expect(await fits("past an hour")).toBeGreaterThan(recording);
+        },
+        { indicatorClock: true },
+      );
     },
     UI_TIMEOUT,
   );

@@ -192,6 +192,9 @@ export function fakeUi(opts: { focusOnShow?: boolean } = {}): FakeUi {
       ind = me;
       return {
         window: {
+          setFrame: (r) => {
+            me.frame = r;
+          },
           showInactive: () => {
             me.visible = true;
           },
