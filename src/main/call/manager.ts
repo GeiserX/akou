@@ -2,8 +2,10 @@
  * All calls of one app run (docs/DESIGN.md sections 1.5, 4.1, 4.5 and 6.2).
  *
  * - **One live call at a time.** A start while a call is starting, recording or paused answers
- *   `409 already_recording`. A call that is stopping does not block a new start: its helper is
- *   killed within the stop budget whatever happens, and two helpers may hold a tap at once.
+ *   `409 already_recording`, naming that call (`already_recording`: id, title, workspace, start
+ *   and state); with `attach` it answers with that call instead, so an agent follows it. A call
+ *   that is stopping does not block a new start: its helper is killed within the stop budget
+ *   whatever happens, and two helpers may hold a tap at once.
  * - **Crash recovery at the next start.** `init()` closes what a previous run left open (see
  *   `recovery.ts`) and indexes every call on disk. `start()` runs it first if nobody did.
  * - **`live` and `last`.** Every call reference is a call id, `live` or `last`. `live` with
@@ -30,7 +32,7 @@ import {
   recoverCall,
   summarize,
 } from "./recovery.ts";
-import { type CallBudgets, DEFAULT_BUDGETS, fail, type Outcome } from "./state.ts";
+import { type CallBudgets, DEFAULT_BUDGETS, fail, type LiveBrief, type Outcome } from "./state.ts";
 
 export interface CallManagerOptions {
   /** `~/Recordings/akou`, or a temporary folder in tests. */
@@ -82,7 +84,16 @@ export interface StartRequest {
    * first reaches the recognizer.
    */
   live?: string;
+  /**
+   * An agent's start: when a call is already starting, recording or paused, start nothing and
+   * answer with that call (`attached`) instead of `409 already_recording`. A call still starting
+   * is answered once its capture opened, or with its failure.
+   */
+  attach?: boolean;
 }
+
+/** A start's answer: the new call, or with `attach` the live call it found (`attached`). */
+export type StartAnswer = StartOk & { attached?: LiveBrief };
 
 export type CallRef = string;
 
@@ -96,6 +107,8 @@ export class CallManager {
   /** Calls being read from disk for a restart, so two restarts of one call share one controller. */
   private readonly loading = new Map<string, Promise<CallController>>();
   private readonly index = new Map<string, CallSummary>();
+  /** The start or reopen of a call still `starting`, so an attach waits for it to open. */
+  private readonly opening = new Map<string, Promise<Outcome>>();
   private warm = false;
   private initP: Promise<RecoveryAction[]> | null = null;
   /** Folders recovery could not read. They are skipped, never fatal. */
@@ -303,12 +316,17 @@ export class CallManager {
    * `POST /calls`. Creates the folder and the log, spawns the helper, and answers once it
    * reports `capturing`.
    */
-  async start(req: StartRequest = {}): Promise<Outcome<StartOk>> {
+  async start(req: StartRequest = {}): Promise<Outcome<StartAnswer>> {
     await this.init();
     // Everything from here to the spawn is synchronous, so two starts cannot both pass the check.
     const live = this.live();
-    if (live)
-      return fail(409, "already_recording", "a call is already recording", { call: live.id });
+    if (live) {
+      if (req.attach) return this.attachTo(live);
+      return fail(409, "already_recording", "a call is already recording", {
+        call: live.id,
+        already_recording: liveBrief(live),
+      });
+    }
     const workspace = req.workspace ?? "default";
     const bad = checkWorkspace(workspace);
     if (bad) return fail(400, "bad_workspace", bad);
@@ -366,7 +384,48 @@ export class CallManager {
         by: req.by ?? "user",
       });
     });
-    return c.begin();
+    return this.track(id, c.begin());
+  }
+
+  /**
+   * The live call for an attach, or null when none is live: a start with `attach` that finds one
+   * answers before any start check (models, vocabulary), since it starts nothing.
+   */
+  async attachLive(): Promise<Outcome<StartAnswer> | null> {
+    await this.init();
+    const live = this.live();
+    return live ? this.attachTo(live) : null;
+  }
+
+  /**
+   * The live call, handed back to an attach. A call still starting is answered once its capture
+   * opened, so "attached" means audio is being written, as it does for a start; a start that then
+   * fails answers with that failure.
+   */
+  private async attachTo(live: CallController): Promise<Outcome<StartAnswer>> {
+    const opening = live.status === "starting" ? this.opening.get(live.id) : undefined;
+    if (opening) {
+      const r = await opening;
+      if (!r.ok) return r;
+    }
+    return {
+      ok: true,
+      call: live.id,
+      folder: live.dir,
+      part: live.view.parts().at(-1)?.part ?? 1,
+      startMs: 0,
+      attached: liveBrief(live),
+    };
+  }
+
+  /** Remembers a call's start or reopen while it runs, for `attachTo`. */
+  private track<T extends Outcome>(id: string, p: Promise<T>): Promise<T> {
+    this.opening.set(id, p);
+    const clear = () => {
+      if (this.opening.get(id) === p) this.opening.delete(id);
+    };
+    p.then(clear, clear);
+    return p;
   }
 
   // -------------------------------------------------------------------------
@@ -423,7 +482,10 @@ export class CallManager {
     if (!c?.live) {
       const other = this.live();
       if (other && other.id !== r.id) {
-        return fail(409, "already_recording", "another call is recording", { call: other.id });
+        return fail(409, "already_recording", "another call is recording", {
+          call: other.id,
+          already_recording: liveBrief(other),
+        });
       }
     }
     if (!c) {
@@ -434,10 +496,13 @@ export class CallManager {
       c = loaded;
       const other = this.live();
       if (other && other !== c) {
-        return fail(409, "already_recording", "another call is recording", { call: other.id });
+        return fail(409, "already_recording", "another call is recording", {
+          call: other.id,
+          already_recording: liveBrief(other),
+        });
       }
     }
-    return c.restart(opts);
+    return this.track(c.id, c.restart(opts));
   }
 
   /**
@@ -489,4 +554,16 @@ export class CallManager {
     if (c) await c.stop();
     await Promise.all([...this.controllers.values()].map((x) => x.idle()));
   }
+}
+
+/** The live call as a refused start names it, and as an attach hands it back. */
+export function liveBrief(c: CallController): LiveBrief {
+  const call = c.view.call;
+  return {
+    id: c.id,
+    title: call?.title ?? "",
+    workspace: call?.workspace ?? "",
+    startedAt: c.view.parts()[0]?.wallStart ?? call?.t ?? 0,
+    state: c.status,
+  };
 }

@@ -306,6 +306,8 @@ export interface RouteDoc extends RouteMeta {
   params?: Readonly<Record<string, string>>;
   /** The status of a success. */
   ok: number;
+  /** Other success statuses, same body type: `POST /calls` answers 200 when it attaches. */
+  alsoOk?: readonly number[];
   /** What a success carries. Default `json`. */
   type?: "json" | "sse" | "text" | "markdown" | "audio" | "wav";
 }

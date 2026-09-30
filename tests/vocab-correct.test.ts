@@ -122,15 +122,20 @@ describe("read-time correction (DESIGN 5.4)", () => {
     expect(correctText("on cuber netes", [short]).text).toBe("on Cube netes");
   });
 
-  test("a heard form equal to its own term corrects nothing", () => {
-    const rule: VocabRule = {
+  test("a heard form equal to its own term corrects nothing; one in another case, that spelling only", () => {
+    const same: VocabRule = {
       term: "Kubernetes",
-      heard: ["kubernetes", "kubernetis"],
-      scope: "call",
+      heard: ["Kubernetes", "kubernetis"],
+      scope: "file",
     };
-    const r = correctText("on kubernetes and kubernetis", [rule]);
+    const r = correctText("on Kubernetes and kubernetis", [same], opts);
     expect(r.corrections.map((c) => c.heard)).toEqual(["kubernetis"]);
-    expect(r.annotated).toBe('on kubernetes and Kubernetes (heard: "kubernetis")');
+    expect(r.annotated).toBe('on Kubernetes and Kubernetes (heard: "kubernetis")');
+    // A fix of the name's casing (`kubernetes` to `Kubernetes`) corrects that exact spelling.
+    const cased: VocabRule = { ...same, heard: ["kubernetes"] };
+    const c = correctText("on kubernetes, KUBERNETES and Kubernetes", [cased], opts);
+    expect(c.corrections.map((x) => x.heard)).toEqual(["kubernetes"]);
+    expect(c.text).toBe("on Kubernetes, KUBERNETES and Kubernetes");
   });
 
   test("fuzzy: every word of a full speaker name is matched on its own", () => {

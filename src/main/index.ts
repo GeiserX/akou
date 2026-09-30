@@ -36,6 +36,7 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { totalmem } from "node:os";
 import { join } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
@@ -114,9 +115,9 @@ import {
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import { QwenEngine } from "./asr/qwen.ts";
-import type { CallController, StartOk } from "./call/call.ts";
+import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
-import { CallManager, type StartRequest } from "./call/manager.ts";
+import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
@@ -222,10 +223,10 @@ const REBIND_ANSWER_MS = 3_000;
 /** How often dictation looks whether a final pass still holds the GPU `best` gave way to (DC-E2). */
 export const BEST_REWARM_MS = 5_000;
 /**
- * One Qwen request of the in-call upgrade. A line takes 1.5 to 2.5 s; one past this keeps the
- * streaming text, so a stuck server never holds the lines behind it for long.
+ * One Qwen request of the in-call upgrade: a minute's utterances took 4.5 to 7.9 s on the reference
+ * Mac mini. One past a minute keeps the streaming text, since Qwen would not keep up with the call.
  */
-export const LIVE_QWEN_TIMEOUT_MS = 30_000;
+export const LIVE_QWEN_TIMEOUT_MS = 60_000;
 /**
  * The settings that decide which engine a dictation runs and how `best`'s server starts and idles
  * (DC-E2, DC-E3): a changed idle time arms its timer now, not after the next dictation.
@@ -343,6 +344,10 @@ export interface AppOptions {
    * by `asr.llamaServer` has no build folder to hold the file.
    */
   metalHolder?: (lockDir: string | undefined, except: number | null) => number | null;
+  /** The machine's memory in GB, which `auto` reads before it runs Qwen in a call. Tests only. */
+  memoryGb?: number;
+  /** How often the in-call upgrade reviews a call's closed utterances, ms. Tests only. */
+  liveReviewEveryMs?: number;
   version?: string;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
 }
@@ -772,7 +777,13 @@ export class AkouApp implements ApiApp {
   private liveContext(setting?: string): LiveSetupContext {
     const s = this.cfg.settings;
     const catalog = this.o.modelRegistry ?? MODELS;
+    const plan = this.llamaPlan();
     return {
+      machine: {
+        gpu: plan.accelerator !== "cpu",
+        memoryGb: this.o.memoryGb ?? totalmem() / 1024 ** 3,
+        gpuBusy: plan.accelerator === "metal" && this.finalHoldsGpu(),
+      },
       setting: setting ?? s["asr.live"],
       engine: s["asr.live.engine"],
       languages: s["asr.languages"],
@@ -780,8 +791,20 @@ export class AkouApp implements ApiApp {
         const m = catalog.find((x) => x.id === id);
         return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
       },
-      runtime: this.llamaPlan().build?.id ?? null,
+      runtime: plan.build?.id ?? null,
     };
+  }
+
+  /**
+   * A final pass's Metal llama-server holds the GPU: one that is neither dictation's warm Qwen nor
+   * the in-call upgrade's own.
+   */
+  private finalHoldsGpu(): boolean {
+    const holder = (this.o.metalHolder ?? metalHolder)(
+      this.llamaSpec(QWEN_ASR).build?.dir,
+      this.bestDictation?.pid() ?? null,
+    );
+    return holder !== null && holder !== (this.liveQwen?.server.pid() ?? null);
   }
 
   /**
@@ -1037,6 +1060,7 @@ export class AkouApp implements ApiApp {
         },
         upgrade: (callId) =>
           this.liveRan.get(callId)?.setup === "upgrade" ? this.liveUpgrader() : null,
+        ...(this.o.liveReviewEveryMs ? { reviewEveryMs: this.o.liveReviewEveryMs } : {}),
         clock: this.clock,
         onLog: (level, msg) => this.log(level, `asr: ${msg}`),
       },
@@ -1700,6 +1724,13 @@ export class AkouApp implements ApiApp {
     return this.cfg;
   }
 
+  takesWords(id: string): boolean {
+    const beam = this.runningDecoding() === "beam";
+    if (this.manager.live()?.id !== id) return beam;
+    const setup = this.liveRan.get(id)?.setup;
+    return setup === "upgrade" || (setup === "parakeet" && beam);
+  }
+
   vocabChanged(): void {
     this.dictationVocab = null;
     this.vocabCache.clear();
@@ -1777,8 +1808,10 @@ export class AkouApp implements ApiApp {
     }
   }
 
-  async start(req: StartRequest): Promise<Outcome<StartOk>> {
+  async start(req: StartRequest): Promise<Outcome<StartAnswer>> {
     const r = await this.startCall(req);
+    // An attach started nothing: no "started" and no "refused" banner for it.
+    if (r.ok && r.attached) return r;
     const by = req.by ?? "user";
     this.announce(
       r.ok
@@ -1788,8 +1821,13 @@ export class AkouApp implements ApiApp {
     return r;
   }
 
-  private async startCall(req: StartRequest): Promise<Outcome<StartOk>> {
+  private async startCall(req: StartRequest): Promise<Outcome<StartAnswer>> {
     if (this.quitting) return fail(503, "quitting", "akou is quitting");
+    // An attach to the live call starts nothing, so the start checks below do not apply to it.
+    if (req.attach) {
+      const attached = await this.manager.attachLive();
+      if (attached) return attached;
+    }
     this.recognizerOnNewModels();
     // Without the speech models a call records audio that nothing transcribes: only when asked.
     const ready =

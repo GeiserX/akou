@@ -756,7 +756,7 @@ export class SettingsPage {
     const choices = (wordsFor("provider.kind").choices ?? []).map(([v, l]) =>
       v === "harness" ? ([v, `${who} on ${this.here}`] as const) : ([v, l] as const),
     );
-    return selectBox({ id, label: "Answers and enhanced notes", options: choices, value });
+    return selectBox({ id, label: "Answers", options: choices, value });
   }
 
   /** What answers now, as a sentence: the agent's state, read only. */

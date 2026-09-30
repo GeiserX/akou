@@ -114,6 +114,7 @@ export function buildPayload(o: {
       w: n.w,
       clock: formatWall(n.w, tz),
       by: n.by,
+      ...(n.from ? { from: n.from } : {}),
     })),
     remember: v.remembered().map((r) => ({ id: r.id, text: r.text, by: r.by })),
     enhancedMd,

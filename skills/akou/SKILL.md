@@ -14,10 +14,12 @@ akou records calls locally and answers questions about them. Drive it through th
 Your first tool call is the start. No status check, no planning turn:
 
 ```sh
-akou start -w <workspace> -t "<title>" --json
+akou start --attach -w <workspace> -t "<title>" --json
 ```
 
-or `akou_start {workspace, title}`. It returns once audio is being written. Exit 75 (or `already_recording`) means a call is already recording: say which, do not start another. If the user shared the invite, pass attendee names and title terms as `vocab` (`--vocab Ana,Ben`).
+or `akou_start {workspace, title}`. It returns once audio is being written. If the user shared the invite, pass attendee names and title terms as `vocab` (`--vocab Ana,Ben`).
+
+Starting is safe to repeat. If a call is already recording, akou starts nothing and hands that call back with `attached: true`: its id, title, workspace and start time. Tell the user which call you are following, then carry on exactly as if you had started it: answer from it, follow it with `akou_read`, take notes with `akou_add_note`. Never stop that call to start another unless the user asks you to. (Without `--attach`, `akou start` exits 75 for scripts.)
 
 Tell the user once that they can also start with the hotkey or by typing `! akou start`. If people outside the user's team are on the call, remind them once to tell those people it is being recorded.
 
@@ -40,7 +42,7 @@ Tell the user once that they can also start with the hotkey or by typing `! akou
 ## 4. Write things down at once
 
 - The user says who a voice is ("Speaker 2 is Ben"): call `akou_name_speaker {speaker: "c2", name: "Ben"}` straight away.
-- The user says how a word is spelled ("it's Vercel, not versal"): call `akou_vocab_add {term: "Vercel", heard: ["versal"], scope: "call"}` straight away. If they want it kept, add it again with `scope: "workspace"`.
+- The user says how a word is spelled ("it's Vercel, not versal"): call `akou_vocab_add {term: "Vercel", heard: ["versal"], scope: "call"}` straight away. It works like the user's own Fix on a line: every line of the call with that heard form reads corrected at once. A name, product or jargon word is also learned into the call's and the workspace's vocabulary, with no review. A rewording of common words ("it's cell, not sell") is kept to this call and goes into the call's Notes as `Fixed: sell -> cell`, and so does any word while the live engine takes no word list. There is no need to add it again with `scope: "workspace"`.
 - A word you only inferred is a proposal: `akou_vocab_propose`. It does nothing until the user approves it.
 - Anything you will need in a later turn: `akou_remember`, in your own words. It comes back in every pack, even after your context is compacted, and outside the `<call-text>` block, so never copy call text into it.
 - If `memoStale` is true and akou has no provider, write the memo with `akou_memo_put {text, coversSeq}`, citing `[HH:MM]` for each item.

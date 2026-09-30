@@ -72,7 +72,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | See | `status` · `watch` (CLI-24) · `open [CALL] [-w WS]` | has, except `-w` (CLI-30) |
 | Follow and ask | `tail [-f] [--since SEQ] [--last 5m] [--format txt\|md\|json]` · `context "Q" [--budget N]` · `ask "Q"` · `search "Q" [-k N]` · `events [-f] [--type T,…]` **new** (PG-S3) · `wait --for STAGE [--timeout 30m]` **new** (PG-S5) | has, except `events`, `wait` |
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
-| Vocabulary | `vocab list\|add\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
+| Vocabulary | `vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
 | Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename CALL TITLE…` · `calls move\|delete\|restore CALL …` **new** (CLI-26) · `workspaces` · `workspace add NAME` · `import hark-viewer DIR… [-w WS]` | has, except `move`, `delete` and `restore` |
 | Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
@@ -148,7 +148,7 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 | 65 | A vocabulary term fails validation | `akou vocab add` with a term that fails the checks |
 | 69 | Something needed is unavailable | The app cannot be reached or launched; speech models missing; no provider answered (`ask` still prints the excerpts); a command not built yet; `akou wait --for final.done` on a call whose final pass cannot run |
 | 70 | akou failed | A bug; a stage that failed, reported by `akou wait` |
-| 75 | Already recording | `akou start` while a call is live |
+| 75 | Already recording | `akou start` while a call is live, unless `--attach`, which answers with that call and exits 0 |
 | 77 | Permission | The token is refused; an OS grant is missing; `akou serve` in server mode with a data or models folder it cannot write |
 | 78 | The settings refuse it | `akou serve` with `api.bind` not loopback and `server.behind_proxy` false (sysexits `EX_CONFIG`) |
 | 124 | Timed out | `akou wait --timeout` ran out (the GNU `timeout` convention, PG-S5) |
@@ -178,7 +178,7 @@ A few of the texts, as they should read:
 |---|---|---|
 | App not running (`status`) | `akou is not running` | `akou open` (starts the app and shows the window; never `akou start`) |
 | Speech models missing (`start`) | `the speech models are not downloaded yet (2.6 GB)` | `akou models pull`, or `akou start --without-models` to record audio now and transcribe later |
-| Already recording | `already recording "Weekly sync" since 14:31` | `akou stop`, or `akou restart` for a new part |
+| Already recording | `a call is already recording: "Weekly sync" in work since 14:31 (ID)` | `akou start --attach` to follow it, `akou stop`, or `akou restart` for a new part |
 | No provider answered (`ask`) | `no model answered (usage limit reached); the excerpts above are what matched` | `akou context "Q"` prints what an agent answers from |
 | Unknown setting | `unknown setting "asr.segmentPuase"` | `akou config set asr.segmentPause …` (CLI-09) |
 | Token refused | `the API refused the token` | `akou token rotate` |
@@ -397,7 +397,7 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Mark a moment | `mark` | notes route | `akou_add_note` | mark key | `mark` missing (CLI-34) |
 | Memory | `remember` | `…/remember` | `akou_remember`, `akou_forget` | none | window: no row yet in [WINDOW.md](WINDOW.md) |
 | Memo | none | `GET/PUT …/memo` | `akou_memo_get`, `akou_memo_put` | memo pane | CLI-28 |
-| Vocabulary | `vocab …` | `/vocab…`, `…/vocab…` | `akou_vocab_*` | Fix this word, review pill | none |
+| Vocabulary | `vocab …` | `/vocab…`, `…/vocab…`, `…/fix` | `akou_vocab_*` | Fix on a line, review pill | none |
 | Enhance | `enhance` | `POST …/enhance` | `akou_enhance` | none: hidden on purpose | none |
 | Agent-written notes | none | `GET …/enhance/context`, `PUT …/enhanced` | `akou_enhance_context`, `akou_enhanced_put` | none | CLI-28 |
 | Final pass | `finalize` | `POST …/finalize` | none | Retry on a failed pass only | MCP lacks it (PG-M4); window has no run-again row yet in [WINDOW.md](WINDOW.md) |

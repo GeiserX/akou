@@ -2,7 +2,9 @@
  * Starting, listing, reading and controlling calls (docs/DESIGN.md sections 1.5 and 6.2).
  *
  * `POST /calls` answers `201` only once the helper reports `capturing`, which is before any model
- * loads; `409 already_recording {call}`, `403 permission`, `503 capture_failed {stage}` otherwise.
+ * loads; `409 already_recording {call, already_recording}`, `403 permission`, `503 capture_failed
+ * {stage}` otherwise. With `attach`, a call already recording answers `200 {attached: true}` with
+ * that call, so an agent's start is idempotent and it follows the call instead of stopping.
  * The live controls refuse `last` with 400; `restart` and a rename accept it. `PATCH /calls/{id}`
  * renames a call at any time, live or saved, with a `call.renamed` event.
  */
@@ -103,7 +105,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live setup (`auto`, `parakeet`, `nemotron`, `upgrade`) instead of `asr.live`. One call at a time: a second start answers 409.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live setup (`auto`, `parakeet`, `nemotron`, `upgrade`) instead of `asr.live`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -115,8 +117,10 @@ export function callRoutes(r: Router<ApiApp>): void {
         "vocab?": "string[]",
         "withoutModels?": "boolean",
         "live?": "string",
+        "attach?": "boolean",
       },
       ok: 201,
+      alsoOk: [200],
     },
     async (c) => {
       const b = await c.body<{
@@ -128,6 +132,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         vocab?: string[];
         withoutModels?: boolean;
         live?: unknown;
+        attach?: boolean;
       }>();
       if (b.live !== undefined && (typeof b.live !== "string" || !isLiveSetting(b.live))) {
         throw new HttpError(422, "bad_field", `live is one of ${LIVE_SETTINGS.join(", ")}`, {
@@ -150,8 +155,20 @@ export function callRoutes(r: Router<ApiApp>): void {
         by: c.by,
         withoutModels: b.withoutModels,
         live: b.live as string | undefined,
+        attach: b.attach === true,
       });
       if (!res.ok) return outcome(res);
+      if (res.attached) {
+        const { id, ...brief } = res.attached;
+        return json(200, {
+          call: id,
+          attached: true,
+          ...brief,
+          part: res.part,
+          folder: res.folder,
+          url: `akou://call/${id}`,
+        });
+      }
       return json(201, {
         call: res.call,
         folder: res.folder,

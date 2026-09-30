@@ -7,7 +7,9 @@
  * Each line has a time gutter: clicking it scrolls the transcript there and plays from it. Lines an
  * agent wrote (`by: agent:<client>`) are drawn in another colour and say which agent, so the user
  * and the agent are two visible authors of one notepad (TRAPS "Agent-authored notes
- * indistinguishable from the user's"). Markers: `- `, `[] ` (action), `? ` (question), `# `.
+ * indistinguishable from the user's"). A line akou wrote from a fix of a transcript line
+ * ("Fixed: versal -> Vercel", `from: fix`) says so. Markers: `- `, `[] ` (action), `? ` (question),
+ * `# `.
  */
 
 import { formatWall } from "../core/log/clock.ts";
@@ -150,7 +152,7 @@ export class NotepadPane {
     return h(
       "li",
       {
-        class: `note ${kind}${agent ? " agent" : " human"}`,
+        class: `note ${kind}${agent ? " agent" : " human"}${n.from === "fix" ? " fix" : ""}`,
         attrs: { "data-id": n.id, "data-w": String(n.w), "data-text": n.text },
       },
       h(
@@ -162,6 +164,7 @@ export class NotepadPane {
       marker?.said ? h("span", { class: "vh" }, marker.said) : null,
       h("span", { class: "note-text" }, shown),
       agent ? h("span", { class: "author" }, `agent ${n.client ?? n.by.slice(6)}`) : null,
+      n.from === "fix" ? h("span", { class: "author" }, "from a fix") : null,
       h(
         "button",
         { class: "edit", type: "button", attrs: { "aria-label": "Edit this note" } },

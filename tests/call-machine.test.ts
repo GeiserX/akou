@@ -229,6 +229,58 @@ describe("start", () => {
     const r = await s.mgr.start({ workspace: "work" });
     expect(r).toMatchObject({ ok: false, status: 409, code: "already_recording", call: a.call });
   });
+
+  test("an attach to a call still starting answers once its capture opened, never while starting (OW-2)", async () => {
+    const s = setup();
+    const first = s.mgr.start({ workspace: "work", title: "Sync" });
+    await flush();
+    expect(s.mgr.live()?.status).toBe("starting");
+    let answered = false;
+    const attach = s.mgr.start({ workspace: "other", title: "Other", attach: true }).then((r) => {
+      answered = true;
+      return r;
+    });
+    await s.clock.advance(500);
+    expect(answered).toBe(false);
+    s.engine.last.capturing();
+    const a = await first;
+    const r = await attach;
+    if (!a.ok || !r.ok) throw new Error("a start failed");
+    expect(r).toMatchObject({
+      call: a.call,
+      folder: a.folder,
+      part: 1,
+      attached: { id: a.call, title: "Sync", workspace: "work", state: "recording" },
+    });
+    expect(s.engine.sessions.length).toBe(1);
+  });
+
+  test("an attach to a start that fails answers with that failure, not a dead call id (OW-2)", async () => {
+    const s = setup();
+    const first = s.mgr.start({ workspace: "work", title: "Sync" });
+    await flush();
+    const attach = s.mgr.start({ workspace: "work", attach: true });
+    await flush();
+    s.engine.last.exit(1);
+    expect(await first).toMatchObject({ ok: false, status: 503, code: "capture_failed" });
+    expect(await attach).toMatchObject({ ok: false, status: 503, code: "capture_failed" });
+    expect(s.mgr.live()).toBeNull();
+  });
+
+  test("a restart of another call while one records names the live call, as a start does", async () => {
+    const s = setup();
+    const a = await started(s, "Old");
+    await s.mgr.stop("live");
+    const b = await started(s, "Now");
+    const r = await s.mgr.restart(a.call);
+    expect(r).toMatchObject({
+      ok: false,
+      status: 409,
+      code: "already_recording",
+      call: b.call,
+      already_recording: { id: b.call, title: "Now", workspace: "work", state: "recording" },
+    });
+  });
 });
 
 describe("stop", () => {

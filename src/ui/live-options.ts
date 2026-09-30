@@ -25,7 +25,7 @@ const TITLE: Record<LiveSetting, string> = {
 
 const LINE: Record<Exclude<LiveSetting, "auto">, string> = {
   nemotron: "Words appear as they are said and never change.",
-  upgrade: "Streams the words, then rewrites each sentence once when the speaker stops.",
+  upgrade: "Streams the words, then Qwen rewrites the last minute's sentences once a minute.",
   parakeet: "Writes each stretch between pauses; words can change for a moment.",
 };
 
@@ -36,7 +36,8 @@ export function liveTitle(id: string): string {
 /**
  * The menu's lines: only the setups whose every model is on disk, Automatic first when at least
  * one is. Automatic's line names what it runs here (streaming when its model is on disk, else
- * Parakeet), the rule the app follows when the call starts.
+ * Parakeet, or the Qwen review when the Mac allows it), the rule the app follows when the call
+ * starts.
  */
 export function liveOptions(v: LiveView): LiveOption[] {
   const ready = new Set(
@@ -48,7 +49,8 @@ export function liveOptions(v: LiveView): LiveOption[] {
   );
   const setups = SETUPS.filter((id) => ready.has(id));
   if (setups.length === 0) return [];
-  const auto = ready.has("nemotron") ? "nemotron" : "parakeet";
+  const auto =
+    v.auto && ready.has(v.auto) ? v.auto : ready.has("nemotron") ? "nemotron" : "parakeet";
   return [
     { id: "auto", title: TITLE.auto, line: `Picks the best one here: ${TITLE[auto]} now.` },
     ...setups.map((id) => ({ id, title: TITLE[id], line: LINE[id] })),

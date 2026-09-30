@@ -191,6 +191,8 @@ export interface Note extends Envelope {
   /** Last segment `seq` visible when the note was started. */
   afterSeq: number;
   by: Author;
+  /** `fix`: akou wrote the line from a fix of a transcript line ("Fixed: versal -> Vercel"). */
+  from?: "fix";
 }
 
 export interface NoteDel extends Envelope {
@@ -270,6 +272,11 @@ export interface VocabAdd extends Envelope {
   by: Author;
   /** Restrict the read-time pair to these segment ids. */
   segs?: string[];
+  /**
+   * With `segs`: a fix of one word of the first segment, the `nth` (0-based) occurrence of the heard
+   * form there. The other segments of `segs` read it only where the form occurs once.
+   */
+  nth?: number;
   /** Also a decode entry unless false. */
   decode?: boolean;
 }
@@ -525,6 +532,7 @@ const SPECS: { [T in EventType]: Spec } = {
     w: req("number"),
     afterSeq: req("int"),
     by: req("noteAuthor"),
+    from: opt(["fix"]),
   },
   "note.del": { id: req("string"), by: req("noteAuthor") },
   remember: { id: req("string"), rev: req("int"), text: req("string|null"), by: req("author") },
@@ -566,6 +574,7 @@ const SPECS: { [T in EventType]: Spec } = {
     heard: opt("string[]"),
     by: req("author"),
     segs: opt("string[]"),
+    nth: opt("int"),
     decode: opt("boolean"),
   },
   "vocab.propose": {

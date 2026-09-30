@@ -120,11 +120,12 @@ describe("vocabulary files: format (REQUIREMENTS V1)", () => {
       '  - {term: "BadDate", heard: [], source: "user", confirmed: true, added_at: "2026-02-30"}',
       '  - {term: "Typo", heard: [], source: "user", confirmed: true, added_at: "2026-09-23", boost: 4}',
       '  - {term: "good", heard: [], source: "user", confirmed: true, added_at: "2026-09-23"}',
-      '  - {term: "Self", heard: ["self", "slf"], source: "user", confirmed: true, added_at: "2026-09-23"}',
+      '  - {term: "Self", heard: ["Self", "self", "slf"], source: "user", confirmed: true, added_at: "2026-09-23"}',
     ].join("\n");
     const r = parseVocab(text);
     expect(r.file.entries.map((e) => e.term)).toEqual(["Good", "Self"]);
-    expect(r.file.entries[1]?.heard).toEqual(["slf"]);
+    // The term's own spelling is dropped with a warning; another case is a heard form of its own.
+    expect(r.file.entries[1]?.heard).toEqual(["self", "slf"]);
     expect(r.errors.map((e) => e.entry)).toEqual([1, 2, 3, 4]);
     expect(r.warnings).toHaveLength(1);
     expect(parseVocab("version: 2\nentries: []").errors[0]?.message).toContain("version");

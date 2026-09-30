@@ -106,7 +106,8 @@ function header(q: CallQuery, now: number): string[] {
 
 /** The user's own notepad lines (agents' lines are context, not kept verbatim). */
 export function userNotes(view: CallView): NoteView[] {
-  return view.notes().filter((n) => n.author === "human");
+  // A fix's note ("Fixed: versal -> Vercel") is akou's record of a correction, not the user's words.
+  return view.notes().filter((n) => n.author === "human" && n.from !== "fix");
 }
 
 /** Splits the transcript into 15-minute stretches from its first line. */

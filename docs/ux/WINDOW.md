@@ -39,7 +39,7 @@ Columns:
 │ [⌕ Search  ] ├ banner, when something needs attention ──┤ What did Ben say?           │
 │ ▾ PRODUCT  2 ├ call header ─────────────────────────────┤ ┌ ✦ Answer ───────────────┐ │
 │   Weekly…  ● │ Weekly sync       [review] Restart Share │ │ Move the build [15:41 Ben]│ │
-│   1:1 Ana    │ Wed, 15:36 · 27 min · work · Template: … │ └─────────────────────────┘ │
+│   1:1 Ana    │ Wed, 15:36 · 27 min · work               │ └─────────────────────────┘ │
 │ ▸ HIRING   1 │ (● Ben 14 min) (● You 9 min)             ├─────────────────────────────┤
 │              ├──────────────────────────────────────────┤ Notes 3                     │
 │   Dictation  │ transcript                               │ 15:38 • budget review first │
@@ -56,7 +56,7 @@ Columns:
 | Region | Holds | Reads from |
 |---|---|---|
 | Composer row | the state word and dot; idle: the workspace chip inside the title field, the live model menu, the Mic and Call meters with their health dots, and the round red Record with the global hotkey where the shell registers one; recording: the live model the call runs (disabled), the elapsed time, the round Stop, and Mute and Pause as icon buttons | `status` push, `GET /models`, the fold |
-| Call header | the open call's title; its day and start, length, workspace, template and what the state adds; the speakers with their talk time; the words to review, languages and shared pills; Restart, Share, Copy transcript | the fold |
+| Call header | the open call's title; its day and start, length, workspace, a template a script named and what the state adds; the speakers with their talk time; the words to review, languages and shared pills; Restart, Share, Copy transcript | the fold |
 | Banner | one message at a time, highest severity first, with at most one action button | `health`, provider, models |
 | Sidebar | the wordmark, Calls with a search and the calls grouped by workspace, Dictation, Models and Settings, and the readiness row | the metadata list, `status` |
 | Transcript | committed lines, the provisional row, the find bar when open | the fold |
@@ -68,11 +68,11 @@ Below 1248 px wide the sidebar narrows to 10 rem and the side column to 18 rem, 
 
 On macOS the window draws no title bar ([DESKTOP](DESKTOP.md) DK-M7): the traffic lights sit over the sidebar's top, and the sidebar, the composer row, the ask row and a page's header start 28 px down; a page keeps that strip at its top as it scrolls. That strip and those rows move the window and a double-click on them zooms it; the controls in them do not. Windows and Linux keep their native frame and this spacing.
 
-One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
+One accent per screen. The accent fill is the welcome's Download alone (`#welcome button.go`). Every other primary action (Save, Fix, Log in, Back to live) keeps the `go` class and draws as a neutral fill in the text colour. Red means recording: Record and Stop are red discs. Green means ready or saved: the readiness row's Ready and the saved dot. The open call in the sidebar and the line being played use a neutral fill. Info glyphs and the answer's citation chips are teal (`--info`), never a button. The focus ring stays the accent. The light theme follows the same rules with its own values.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W1.1 | The notes pane is Notes alone: no tabs, no Enhanced pane, no Enhance and no "Find misheard words" | P0 | Audit: the Notes and Enhanced panes once showed stacked. Enhance is not part of the window now: a word is fixed on its line (W4.8) | None of those controls is in the DOM, and the side pane names neither. The general "hidden means hidden" invariant with its positive control is TESTING TS-15 | has |
+| W1.1 | The notes pane is Notes alone: no tabs, no Enhanced pane, no Enhance and no "Find misheard words" | P0 | Audit: the Notes and Enhanced panes once showed stacked. Enhance is not part of the window now: a word is fixed on its line (W4.8) ([the pane](design-explorations/built/hide-enhance-notes-dark.png)) | None of those controls is in the DOM, and the side pane names neither. The general "hidden means hidden" invariant with its positive control is TESTING TS-15 | has |
 | W1.3 | Narrow layouts: calls column collapses under 900 px, side pane becomes a drawer under 640 px | P2 | Audit: at 800 px the sidebar keeps its width | Screenshots at 1280, 800 and 600 px show the described layout; no horizontal scroll | missing |
 
 Moved: W1.2 (tests assert computed visibility) is TESTING TS-15. W1.4 (remember the window frame) is DESKTOP DK-M4.
@@ -163,7 +163,7 @@ Live speaker labels are guesses until the final pass ([DESIGN 3.2](../DESIGN.md#
 | W4.1 | Rows, chips, hues, provisional row, pinned scroll, font keys | done | DESIGN 7 | Existing tests | has |
 | W4.2 | Live speaker labels look provisional until named or final | P1 | Intent: live labels are provisional, the final pass is authoritative | A live cluster chip has the provisional style and `c3?`; after `final.done` the same speaker's chip is solid; a named speaker is solid at once | has |
 | W4.3 | With `asr.liveLabels` off, live rows show You or Them by channel | P2 | Intent: every choice a setting | With the setting off, live rows show You or Them and no `c<N>` | missing |
-| W4.4 | Right-click (and `Shift+F10`) on a line: Play from here, Copy line, Copy with time and speaker, Edit, Change speaker, Fix a word, Mark | P1 | Descript, anarlog; audit: no context menu | Each item runs its registry action; keyboard users reach the same menu | partial: Play from here, Copy line, Copy with time and speaker, Name this speaker and Fix a word, by mouse, `Shift+F10` and the Menu key; Edit and Change speaker wait for PG-A5, Mark for W3.2 |
+| W4.4 | Right-click (and `Shift+F10`) on a line: Play from here, Copy line, Copy with time and speaker, Edit, Change speaker, Fix this line, Mark | P1 | Descript, anarlog; audit: no context menu | Each item runs its registry action; keyboard users reach the same menu | partial: Play from here, Copy line, Copy with time and speaker, Name this speaker and Fix this line, by mouse, `Shift+F10` and the Menu key; Edit and Change speaker wait for PG-A5, Mark for W3.2 |
 | W4.6 | Per-segment confidence shading, once engines report it | P2 | Meetily; intent: multi-engine fusion gives agreement per word | Lines or words under a threshold get a dotted underline; hover shows the agreement; depends on `seg` carrying confidence | missing |
 
 ### 4.2 Editing
@@ -179,7 +179,7 @@ The log is append-only, so an edit is a new revision, never a rewrite: `seg rev+
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W4.8 | "Fix this word", then "Everywhere in this call" and "Add to the workspace vocabulary" | done | DESIGN 7 | Existing tests | has |
+| W4.8 | Fix this line: the line's text in one field, the person writes what was said and presses Enter. A name, product or jargon word is learned into the call's and the workspace's vocabulary with no review, and every line of the call with the same heard form reads corrected, unless that form is a common word; a rewording, or a word added or removed, stays on its one word of the line and goes into Notes as `Fixed: heard -> term` (so does a term while the live engine takes no word list); a quiet toast says what was learned, with Undo; writing a corrected word back as heard takes the correction off the call; a line rewritten while the popover was open is shown again ([popover](design-explorations/built/fix-1-popover-dark.png), [learned](design-explorations/built/fix-2-learned-dark.png), [noted](design-explorations/built/fix-3-noted-dark.png)) | done | DESIGN 5.4 "A fix on a line" | The other line with the same heard form reads corrected; the term is in both lists; a rewording is a Notes line marked "from a fix" and changes only its word; a case change of a common word or after a full stop learns nothing; Undo takes all of it back; no raw config key in the popover, the toast or the notes | has |
 | W4.9 | Inline edit of a line: `E` or double-click; Enter or blur saves `seg rev+1 by:user`; Esc cancels; an edited line shows a mark and the raw text on hover | P1 | DESIGN 7 (designed, not built), Descript, anarlog | Edit, save, reload: the line shows the new text and the log has one `seg` revision with `by: user`; the raw heard text is still in the log. Needs the segment edit route PG-A5 | partial (style only) |
 | W4.10 | Change the speaker of one line: a picker, or keys `1` to `9` on a focused line | P1 | MacWhisper, Descript, anarlog | Pressing `2` on a focused line writes `seg rev+1 {spk}` through PG-A5; the chip updates; merge and unmerge still work on clusters | missing |
 | W4.11 | Replace in this call: Find (section 7) plus "Replace all" writes a call-scoped `vocab.add`, the same event as "Everywhere in this call" | P2 | noScribe | Replacing "versal" with "Vercel" changes every match in the view and adds one call-scoped pair; the log keeps raw text | missing |
@@ -205,7 +205,7 @@ The player bar gets real controls. It is a slim bar under the transcript, and it
 
 ## 6. The side pane
 
-The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it, alone: there is no Enhanced tab (section 6.3). The note input is at the foot and stays on screen, because notes are the default action during a call.
+The side column has three parts, top to bottom. Ask is always on top, so asking never hides the notes. Notes sit under it, alone: there is no Enhanced tab (section 6.3). The note input is at the foot and stays on screen, because notes are the default action during a call. A line akou wrote from a fix of a transcript line (`Fixed: versal -> Vercel`) says "from a fix".
 
 ### 6.1 Notes
 
@@ -244,9 +244,21 @@ A note's marker (`- `, `[] `, `? `, `# `) is drawn as a glyph before the text, a
 
 The column shows one question and its answer: the last one asked here, or, until one is, the call's last answered question from the log, marked with who asked it when an agent did. The answer card is in the agent's colour; its citations are chips that scroll to the line and play it. Enter asks; the presets are a menu on the input (arrow keys move, Escape closes), never a row of buttons.
 
+With no assistant set up, the same box is a search of the call. It reads "Search this call" behind a plain magnifier, with no presets, and what comes back is only the lines that contain the words, under the muted label "Excerpts from the call", with each excerpt's time and speaker as a chip, or "No line has these words." when none does. There is no answer card and no reason: nothing failed. A search writes nothing to the call, so it never shows up as a question in the context an agent reads later. "Speaker 2 is Ben" still names the speaker. "Copy context for my agent" stays under the excerpts. Until akou says whether an assistant is set up, the box shows neither Ask's words nor Search's. As soon as an assistant is set up, the box is Ask again. What shipped: [the search box](design-explorations/built/ow-2-search-dark.png), [its excerpts](design-explorations/built/ow-2-search-excerpts-dark.png), [a search that matches nothing](design-explorations/built/ow-2-search-miss-dark.png) and [Ask with an assistant](design-explorations/built/ow-2-ask-dark.png).
+
+```
+ [ ⌕ Search this call                              ↵ ]
+ ─────────────────────────────────────────────────────
+ the build
+ Excerpts from the call
+   [15:41 Ben]  15:41:07 Ben: we should move the build to the new box
+ [ Copy context for my agent ]
+```
+
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W6.6 | Ask box, presets, evidence within 300 ms, streamed answer, clickable citations, "Copy context for my agent" when no provider | done | DESIGN 5.3, 7 | Existing tests | has |
+| W6.25 | With no assistant, the ask box is "Search this call": no presets, only the lines that match under one muted label ("No line has these words." for none), no answer card and no reason naming a setting, and nothing written to the call; with one, it is Ask | done | Owner: each question runs on the configured provider, and none means excerpts | `tests/ui/window.test.ts` "the ask box with no assistant": the words, the magnifier, no presets, the label, no answer card, no line ids, and a citation that leads to its line; a miss shows no lines and the call's log gains no `ask`; it fails when the box ignores the provider or searches through Ask. The ask box test checks the Ask words with a provider | has |
 | W6.7 | Stop a running answer | P1 | Audit | Stop aborts the provider process; the log has the partial `answer` marked stopped; the box is ready for the next question | missing |
 | W6.8 | Past questions and answers of the call are drawn from the log on open and on call switch | P1 | Audit: they vanish on switch; intent: the log is the truth | Ask, switch calls, switch back: the Q&A is there; answers an agent asked through MCP are listed too, marked by client | partial: the last answered one shows, marked by client |
 | W6.9 | Copy an answer (with citations as `[15:41 Ben]`) | P1 | Granola, audit | Copy puts the answer text on the clipboard with wall-time citations | missing |
@@ -261,7 +273,7 @@ Moved: W6.12 (presets as files) is PG-F2; the ask box and the palette draw prese
 
 ### 6.3 Enhanced
 
-Hidden: Enhance is not part of the window. The code, `akou enhance`, the API and the MCP tools stay, and notes already written stay in the export's Notes section and `GET /calls/{id}/enhanced`. The rows below wait until Enhance comes back.
+Hidden. Enhance is not part of the window: a word is fixed once, on its line (W4.8), and the final transcript carries the fixes. The code, `akou enhance`, the API and the MCP tools stay, and notes already written stay in the export's Notes section and `GET /calls/{id}/enhanced`. The rows below wait until Enhance comes back.
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
@@ -305,7 +317,7 @@ The vocabulary is the one thing that carries across calls, and nothing enters it
 
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
-| W9.1 | "Fix this word", "Words to review" pill and dialog, raw text on hover, decode list as the tooltip of the call header's line | done | DESIGN 7 | Existing tests | has |
+| W9.1 | Fix on a line (W4.8), "Words to review" pill and dialog, raw text on hover, decode list as the tooltip of the call header's line | done | DESIGN 7 | Existing tests | has |
 | W9.2 | The vocabulary list is editable in the Words dialog: add a term (with heard forms), remove, confirm, change scope | P1 | Audit: read-only panel; Wispr, VoiceInk, Descript | Adding "Vercel" heard "versal" writes the workspace file through the API; the dialog and `akou vocab list` agree | partial: the Words page under Dictation (DICTATION DC-U5, W11.13) adds, removes and switches Use in calls too both ways in the global file, and Settings opens it instead of its old read-only list; the shown call's workspace words are listed read only; confirming and editing the workspace file are not there yet |
 | W9.3 | An inline edit that changes one word becomes a vocabulary proposal, not an automatic add | P2 | VoiceInk AutoLearn, Descript, Wispr | Editing "versal" to "Vercel" on a line adds a pending proposal to "Words to review"; nothing is written to the vocabulary until Approve | missing |
 | W9.4 | Rejected proposals are never proposed again, and the dialog says so | done | DESIGN, `vocab/pass.ts` | Existing tests | has |
@@ -333,7 +345,7 @@ Moved: W10.2 (guided first run) is DK-O2. W10.3 (3 s capture test) is DK-O1. W10
 
 Settings is a page of the window, not a dialog: the sidebar's Settings row, the application menu's Settings… (`Mod+,`), and the welcome's "Choose an agent" open it in the place of the call workspace, and the sidebar's Calls, or any call in its list, leads back. The design is direction A of [design-explorations](design-explorations/README.md) ([sd-a-settings.png](design-explorations/sd-a-settings.png)); what shipped is [st-1-settings-dark.png](design-explorations/built/st-1-settings-dark.png).
 
-The page is one centred column of sections, each a rounded panel of rows: a human label and at most one short line of muted help on the left, the control on the right (a switch, a segmented choice, a select, a field with its unit, keycaps). A default shows as its value. No row names a setting's key, a path of akou's own or a value in code quotes; the words are in [settings-labels.ts](../../src/ui/settings-labels.ts), and [settings-labels.test.ts](../../tests/ui/settings-labels.test.ts) fails on a key without words or words that quote a key. The sections are General, Workspaces and recordings, Calls, Notes and AI, Privacy and sharing, and Advanced, whose rows (Speech engines, Audio capture, Word lists, Export and ports, Server mode) each lead to a page of their own under a back link and say what that page holds. Every key the registry has and the Dictation page and the Models page do not show lives on the page or one of those pages; a key the layout does not place yet lands on an "Other settings" page rather than out of reach. The live transcript's row leads to Models, where it is chosen, and the search finds the Models page's settings (the graphics chip, who spoke, the unused-days sweep, the size cap) and goes there. A key the registry keeps file only is shown read only, and the page opens the config file in the system's text editor. The foot says the version and the speech engine's state in words, never the engine's own reason (it names a folder and a command), with a way to Models while the speech models are not downloaded; the agent's state is the help line of "Answers and enhanced notes". Share links open to the tailnet, the local network, only this computer, or an address typed into a field. The record shortcut's Change button says the shortcut to a screen reader, and Use default goes back to the default. A search at the title's right finds a setting by its words across the page and its Advanced pages and goes to it.
+The page is one centred column of sections, each a rounded panel of rows: a human label and at most one short line of muted help on the left, the control on the right (a switch, a segmented choice, a select, a field with its unit, keycaps). A default shows as its value. No row names a setting's key, a path of akou's own or a value in code quotes; the words are in [settings-labels.ts](../../src/ui/settings-labels.ts), and [settings-labels.test.ts](../../tests/ui/settings-labels.test.ts) fails on a key without words or words that quote a key. The sections are General, Workspaces and recordings, Calls, Notes and AI, Privacy and sharing, and Advanced, whose rows (Speech engines, Audio capture, Word lists, Export and ports, Server mode) each lead to a page of their own under a back link and say what that page holds. Every key the registry has and the Dictation page and the Models page do not show lives on the page or one of those pages; a key the layout does not place yet lands on an "Other settings" page rather than out of reach. The live transcript's row leads to Models, where it is chosen, and the search finds the Models page's settings (the graphics chip, who spoke, the unused-days sweep, the size cap) and goes there. A key the registry keeps file only is shown read only, and the page opens the config file in the system's text editor. The foot says the version and the speech engine's state in words, never the engine's own reason (it names a folder and a command), with a way to Models while the speech models are not downloaded; the agent's state is the help line of "Answers". Share links open to the tailnet, the local network, only this computer, or an address typed into a field. The record shortcut's Change button says the shortcut to a screen reader, and Use default goes back to the default. A search at the title's right finds a setting by its words across the page and its Advanced pages and goes to it.
 
 Each change saves that key alone through `PATCH /config`, which validates it as the file is validated; a refusal shows under the row's label. A field saves when it is left, and leaving the page, or opening it again from its sidebar row, saves what is still typed into one. Server mode's Settings page (SERVER SV-U2) is the same page with the server's sections.
 
@@ -395,7 +407,6 @@ hark-viewer's other page parameter, `?quiet=SECONDS`, is dropped on purpose. The
 | `Mod+K` | Command palette | window |
 | `Mod+F` | Find in this call | window |
 | `Mod+J` | Focus the ask box | window |
-| `Mod+1` | Notes (focus the note input) | window |
 | `Mod+Shift+C` | Copy transcript so far | window |
 | `Mod+,` | Settings | window |
 | `Alt+↑` `Alt+↓` | Previous / next call | window |
@@ -475,7 +486,7 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 | Recording, disk | n/a | n/a | amber banner at the low-disk threshold: "Disk almost full: about N minutes left", then the stop reason `low-disk` in the call header if it runs out |
 | Calls list | the default workspace with "No calls yet"; a search that matches nothing says so | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
 | Notes | the input's placeholder, "Type a note, Enter to add it", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
-| Ask | the input with its presets menu, and the call's last answered question if it has one | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has) |
+| Ask | the input with its presets menu, and the call's last answered question if it has one; with no assistant, "Search this call" with no presets | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has); with no assistant the excerpts are the reply, labelled, with no reason |
 | Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
 | Models | the welcome with each model, its size and the one Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
 | Settings | n/a | n/a | the registry's refusal per key (has) |

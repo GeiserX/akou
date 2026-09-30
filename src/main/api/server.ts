@@ -10,8 +10,8 @@
 import type { EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { AcceleratorState } from "../asr/accelerator.ts";
 import type { ModelsStatus } from "../asr/models.ts";
-import type { CallController, StartOk } from "../call/call.ts";
-import type { CallManager, StartRequest } from "../call/manager.ts";
+import type { CallController } from "../call/call.ts";
+import type { CallManager, StartAnswer, StartRequest } from "../call/manager.ts";
 import type { Outcome } from "../call/state.ts";
 import type { HookStage, LoadedConfig, SettingKey, SettingValue } from "../config/schema.ts";
 import type { ExportResult } from "../handoff/export.ts";
@@ -39,6 +39,7 @@ import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { dictationRoutes } from "./routes/dictation.ts";
+import { fixRoutes } from "./routes/fix.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
 import { jobRoutes } from "./routes/jobs.ts";
@@ -107,7 +108,7 @@ export interface ApiApp {
   /** Stops one model's download; false when it is not downloading. */
   cancelModel?(id: string, by: string): boolean;
   /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */
-  start(req: StartRequest): Promise<Outcome<StartOk>>;
+  start(req: StartRequest): Promise<Outcome<StartAnswer>>;
   /** The controller of a known call id (loaded from disk if needed). Throws 404 otherwise. */
   call(id: string): Promise<CallController>;
   /** The query engine over a call's view, kept per call so its index updates incrementally. */
@@ -135,6 +136,12 @@ export interface ApiApp {
   ): Promise<LoadedConfig>;
   /** Vocabulary files changed on disk: forget what was read. */
   vocabChanged(): void;
+  /**
+   * Whether the engine transcribing this call now can be given a word list: a live call's setup
+   * (Qwen's in-call rewrite, or Parakeet decoding with beam search), or for an ended call the final
+   * pass's recognizer (Parakeet with beam search). Absent: it cannot.
+   */
+  takesWords?(id: string): boolean;
   /** Runs the final pass for an ended call. */
   finalize(
     id: string,
@@ -233,6 +240,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   queryRoutes(r);
   notesRoutes(r);
   vocabRoutes(r);
+  fixRoutes(r);
   dictationRoutes(r);
   postCallRoutes(r);
   handoffRoutes(r);

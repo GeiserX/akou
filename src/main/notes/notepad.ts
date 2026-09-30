@@ -116,6 +116,11 @@ export function linesAround(
 
 /** One notepad line for a model or a person: `15:41:07 (you) build -> new box?`. */
 export function renderNote(n: NoteView, tz: string): string {
-  const who = n.author === "human" ? "you" : `agent ${n.client ?? n.by.slice(6)}`;
+  const who =
+    n.from === "fix"
+      ? "from a fix"
+      : n.author === "human"
+        ? "you"
+        : `agent ${n.client ?? n.by.slice(6)}`;
   return `${formatWall(n.w, tz)} (${who}) ${n.text}`;
 }
