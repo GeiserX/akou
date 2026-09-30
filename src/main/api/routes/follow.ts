@@ -385,7 +385,7 @@ export function followRoutes(r: Router<ApiApp>): void {
     "/calls/:id/transcript",
     {
       id: "calls.transcript",
-      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 20 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -432,7 +432,7 @@ export function followRoutes(r: Router<ApiApp>): void {
           type: "string",
           values: ["wait", "skip"],
           default: "wait",
-          doc: "With a second pass on and `format` json: `wait` reviews the live call's closed lines first (at most 20 s); `skip` answers at once, for a follower that reads on every event.",
+          doc: "With a second pass on and `format` json: `wait` reviews the live call's closed lines first (at most 30 s); `skip` answers at once, for a follower that reads on every event.",
         },
       },
       ok: 200,
