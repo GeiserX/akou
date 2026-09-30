@@ -223,6 +223,12 @@ describe("following a call", () => {
         (x) => x.title,
       );
       expect(titles).not.toContain("Other");
+      expect(again.text).not.toContain("paused");
+      // A paused call is handed back as paused, never announced as recording.
+      expect((await rig.api("POST", "/calls/live/pause")).status).toBe(200);
+      const paused = await c.call("akou_start", {});
+      expect(paused.text).toContain(", paused now; nothing new was started");
+      expect((await rig.api("POST", "/calls/live/resume")).status).toBe(200);
 
       await waitForCallLine(id);
       const ctx = await c.call("akou_context", { question: "what did they say about deploy?" });

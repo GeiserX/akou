@@ -19,7 +19,7 @@ akou start --attach -w <workspace> -t "<title>" --json
 
 or `akou_start {workspace, title}`. It returns once audio is being written. If the user shared the invite, pass attendee names and title terms as `vocab` (`--vocab Ana,Ben`).
 
-Starting is safe to repeat. If a call is already recording, akou starts nothing and hands that call back with `attached: true`: its id, title, workspace and start time. Tell the user which call you are following, then carry on exactly as if you had started it: answer from it, follow it with `akou_read`, take notes with `akou_add_note`. Never stop there, and never stop that call to start another. (Without `--attach`, `akou start` exits 75 for scripts.)
+Starting is safe to repeat. If a call is already recording, akou starts nothing and hands that call back with `attached: true`: its id, title, workspace and start time. Tell the user which call you are following, then carry on exactly as if you had started it: answer from it, follow it with `akou_read`, take notes with `akou_add_note`. Never stop that call to start another unless the user asks you to. (Without `--attach`, `akou start` exits 75 for scripts.)
 
 Tell the user once that they can also start with the hotkey or by typing `! akou start`. If people outside the user's team are on the call, remind them once to tell those people it is being recorded.
 

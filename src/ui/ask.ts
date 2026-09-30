@@ -14,12 +14,15 @@
  * text, never markup.
  *
  * With no assistant (`provider.kind` none) the box is a search of the call: it reads "Search this
- * call", has no suggested questions, and what comes back is the excerpts, labelled as excerpts,
- * with no answer card and no reason naming a setting. With an assistant it is Ask again.
+ * call", has no suggested questions, and shows only the lines that match, labelled as excerpts,
+ * with no answer card and no reason naming a setting. A search writes nothing to the call. Until
+ * the first status says which, the box shows neither Ask's words nor Search's. With an assistant
+ * it is Ask again.
  */
 
 import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
+import { parseNaming } from "../main/query/classify.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { presets, resolveTimeCitation, splitCitations } from "./model.ts";
 import type { AskAnswer, Transport } from "./protocol.ts";
@@ -88,8 +91,8 @@ export class AskPane {
   private readonly form = byId<HTMLFormElement>("ask-form");
   private readonly input = byId<HTMLInputElement>("ask-input");
   private readonly go = byId<HTMLButtonElement>("ask-go");
-  /** No assistant: the box searches the call instead of asking it. */
-  private searching = false;
+  /** No assistant: the box searches the call instead of asking it. Null until the first status. */
+  private searching: boolean | null = null;
   private readonly menuButton = byId<HTMLButtonElement>("ask-presets-open");
   private readonly presetsBox = byId("ask-presets");
   private readonly out = byId("ask-out");
@@ -141,6 +144,7 @@ export class AskPane {
     if (on === this.searching) return;
     this.searching = on;
     const w = on ? WORDS.search : WORDS.ask;
+    this.form.classList.remove("unset");
     this.form.classList.toggle("search", on);
     this.form.setAttribute("aria-label", w.box);
     this.input.placeholder = w.box;
@@ -333,8 +337,10 @@ export class AskPane {
   }
 
   /**
-   * No assistant: the question is a search, and the excerpts are the whole reply. They come under
-   * one muted label, never in an answer card, and no reason is shown: nothing failed.
+   * No assistant: the words are a search of the call (`GET /calls/{id}/search`), which writes
+   * nothing to the call and shows only lines that match, under one muted label, never an answer
+   * card. "Speaker 2 is Ben" still names the speaker. "Copy context for my agent" copies the pack
+   * of `POST /calls/{id}/context`, which changes nothing either.
    */
   private search(call: string, q: string): void {
     const found = h(
@@ -351,38 +357,60 @@ export class AskPane {
       cards,
     );
     replace(this.out, root);
-    this.running = this.d.t.ask(call, q, {
-      excerpts: (data) => {
-        replace(cards, ...this.cards(data.excerpts));
-        found.textContent =
-          data.excerpts.length > 0 ? "Excerpts from the call" : "Nothing in this call yet.";
-      },
-      token: () => {},
-      answer: (a: AskAnswer) => {
-        this.running = null;
-        // "Speaker 2 is Ben" names the speaker whatever the box is.
-        if (a.kind === "naming") {
+    const failed = (message: string) => {
+      found.textContent = `The search failed: ${message}`;
+      found.classList.add("failed");
+    };
+    if (parseNaming(q)) {
+      this.running = this.d.t.ask(call, q, {
+        excerpts: () => {},
+        token: () => {},
+        answer: (a: AskAnswer) => {
+          this.running = null;
           found.textContent = a.text;
-          return;
-        }
-        // An assistant set up since the last status answers as one.
-        if (a.answered) {
-          found.textContent = a.model ? `Answered by ${a.model}` : "";
-          cards.before(
-            h(
-              "div",
-              { class: "answer" },
-              ...citedText(a.text, this.d.view(), a.cites, this.d.cite),
-            ),
+        },
+        error: (e) => {
+          this.running = null;
+          failed(e.message);
+        },
+      });
+      return;
+    }
+    let cancelled = false;
+    const run = { cancel: () => (cancelled = true) };
+    this.running = run;
+    const path = `/calls/${encodeURIComponent(call)}`;
+    void this.d.t
+      .request<{ hits?: { citation: string; lines: string[] }[]; message?: string }>(
+        "GET",
+        `${path}/search?q=${encodeURIComponent(q)}`,
+      )
+      .then(
+        (r) => {
+          if (cancelled) return;
+          if (this.running === run) this.running = null;
+          if (r.status !== 200 || !r.body?.hits) {
+            failed(r.body?.message ?? `HTTP ${r.status}`);
+            return;
+          }
+          const hits = r.body.hits;
+          replace(cards, ...this.cards(hits));
+          found.textContent =
+            hits.length > 0 ? "Excerpts from the call" : "No line has these words.";
+          // The pack is fetched now, not on the click: WebKit copies only inside the click itself.
+          void this.d.t.request<{ pack?: string }>("POST", `${path}/context`, { question: q }).then(
+            (c) => {
+              if (!cancelled && c.status === 200 && typeof c.body?.pack === "string")
+                root.append(this.copyContext(c.body.pack));
+            },
+            () => {},
           );
-          return;
-        }
-        if (a.context) root.append(this.copyContext(a.context));
-      },
-      error: (e) => {
-        this.running = null;
-        found.textContent = `The search failed: ${e.message}`;
-      },
-    });
+        },
+        (err: Error) => {
+          if (cancelled) return;
+          if (this.running === run) this.running = null;
+          failed(err.message);
+        },
+      );
   }
 }

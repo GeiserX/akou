@@ -12,24 +12,11 @@
 import { formatWall } from "../../../core/log/clock.ts";
 import { isLiveSetting, LIVE_SETTINGS } from "../../asr/live-setups.ts";
 import type { CallController } from "../../call/call.ts";
-import { LIVE_CONTROLS, liveBrief } from "../../call/manager.ts";
+import { LIVE_CONTROLS } from "../../call/manager.ts";
 import { validateTerm } from "../../vocab/files.ts";
 import { HttpError, json, outcome, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { CALL_ID, callOf, resolveRef } from "./common.ts";
-
-/** The live call, as a start with `attach` hands it back: what the agent needs to follow it. */
-function attached(live: CallController) {
-  const { id, ...brief } = liveBrief(live);
-  return {
-    call: id,
-    attached: true,
-    ...brief,
-    part: live.view.parts().at(-1)?.part ?? 1,
-    folder: live.dir,
-    url: `akou://call/${live.id}`,
-  };
-}
 
 /** Header, parts, roster, health and final state of one call. */
 export function callDetail(c: CallController, app: ApiApp, now: number) {
@@ -133,6 +120,7 @@ export function callRoutes(r: Router<ApiApp>): void {
         "attach?": "boolean",
       },
       ok: 201,
+      alsoOk: [200],
     },
     async (c) => {
       const b = await c.body<{
@@ -167,13 +155,19 @@ export function callRoutes(r: Router<ApiApp>): void {
         by: c.by,
         withoutModels: b.withoutModels,
         live: b.live as string | undefined,
+        attach: b.attach === true,
       });
-      if (!res.ok) {
-        const live = c.app.manager.live();
-        if (b.attach === true && res.code === "already_recording" && live) {
-          return json(200, attached(live));
-        }
-        return outcome(res);
+      if (!res.ok) return outcome(res);
+      if (res.attached) {
+        const { id, ...brief } = res.attached;
+        return json(200, {
+          call: id,
+          attached: true,
+          ...brief,
+          part: res.part,
+          folder: res.folder,
+          url: `akou://call/${id}`,
+        });
       }
       return json(201, {
         call: res.call,

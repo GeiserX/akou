@@ -162,6 +162,17 @@ describe("starting a call", () => {
       url: `akou://call/${id}`,
     });
     expect((await rig.api("GET", "/calls")).body.calls.length).toBe(before);
+    // An attach started nothing and refused nothing: no "started" or "refused" banner for it.
+    const told: unknown[] = [];
+    const off = rig.app.onAnnounce((a) => told.push(a));
+    try {
+      expect((await rig.api("POST", "/calls", { attach: true })).status).toBe(200);
+      expect(told).toEqual([]);
+      expect((await rig.api("POST", "/calls", {})).status).toBe(409);
+      expect(told).toMatchObject([{ what: "start", ok: false, code: "already_recording" }]);
+    } finally {
+      off();
+    }
     // attach is a boolean like every other flag.
     const bad = await rig.api("POST", "/calls", { attach: "yes" });
     expect(bad.status).toBe(400);

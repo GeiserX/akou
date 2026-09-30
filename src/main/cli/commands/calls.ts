@@ -76,7 +76,7 @@ const start: Command = {
     });
     return finish(ctx, r, (b) =>
       b.attached
-        ? `Already recording ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}: following it\nfolder: ${b.folder}`
+        ? `Already recording ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}: following it\nfolder: ${b.folder}`
         : `Recording ${b.call} (audio after ${b.firstAudioMs} ms)\nfolder: ${b.folder}`,
     );
   },

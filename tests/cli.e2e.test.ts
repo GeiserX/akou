@@ -201,6 +201,12 @@ describe("starting and controlling", () => {
       const human = await run(["start", "--attach"]);
       expect(human.code).toBe(0);
       expect(human.out).toContain(`Already recording ${first.json.call}, "Standup" in work since `);
+      expect(human.out).not.toContain("paused");
+      // A paused call is handed back as paused, never announced as recording.
+      expect((await run(["pause"])).code).toBe(0);
+      const paused = await run(["start", "--attach"]);
+      expect(paused.code).toBe(0);
+      expect(paused.out).toContain(", paused now: following it");
       const calls = (await rig.api("GET", "/calls")).body.calls as { title: string }[];
       expect(calls.filter((c) => c.title === "Other")).toEqual([]);
       await stopAll();

@@ -421,7 +421,7 @@ export function createMcpServer(o: McpOptions): McpServer {
       void refreshAsk();
       return asResult(r, (b) => ({
         text: b.attached
-          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder} url: ${b.url}`
+          ? `Already recording call ${b.call}, "${b.title}" in ${b.workspace} since ${wall(b.startedAt)}${b.state === "paused" ? ", paused now" : ""}; nothing new was started. Follow it with akou_context and akou_read. folder: ${b.folder} url: ${b.url}`
           : `Recording call ${b.call} (audio after ${b.firstAudioMs} ms). folder: ${b.folder} url: ${b.url}`,
         data: b,
       }));
