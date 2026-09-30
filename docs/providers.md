@@ -19,8 +19,8 @@ Nothing runs on your subscription unless you asked, with two exceptions that you
 flowchart LR
   subgraph asked["Only when you ask"]
     A["Ask box, akou ask, akou_ask"]
-    E["Enhance, Enhance so far, akou enhance"]
-    V["Find misheard words, akou vocab pass"]
+    E["akou enhance, akou_enhance"]
+    V["akou vocab pass"]
   end
   subgraph own["On its own"]
     M["Rolling memo during a call"]
@@ -37,10 +37,10 @@ flowchart LR
 | Feature | Runs | With the harness |
 |---|---|---|
 | Ask | When you press Ask or an agent calls `akou_ask` | Yes, on your request |
-| Enhance | When you press Enhance, or "Enhance so far" during a call | Yes, on your request |
-| Vocabulary pass | When you press "Find misheard words" or run `akou vocab pass`, on a call that has ended | Yes, on your request |
+| Enhance | When you run `akou enhance` or an agent calls `akou_enhance` (the window does not offer it) | Yes, on your request |
+| Vocabulary pass | When you run `akou vocab pass` on a call that has ended (the window fixes words on their line instead) | Yes, on your request |
 | Rolling memo | After at least 3 minutes and 1,500 tokens of new speech, every time | Off unless `memo.provider` is `on` |
-| Re-enhance after the final layer | Once, when the final transcript lands after notes were written from the live one | Never on its own: the window offers a button |
+| Re-enhance after the final layer | Once, when the final transcript lands after notes were written from the live one | Never on its own: run `akou enhance` again (the window does not offer it) |
 
 `memo.provider` is `auto` by default: on for `openai-compatible` and `anthropic`, off for `harness`, because it would spend your subscription every few minutes while you are not looking. Set it to `off` to stop it for every provider. An agent following the call can still write the memo with `akou_memo_put`.
 

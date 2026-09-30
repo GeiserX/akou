@@ -1,9 +1,9 @@
 /**
  * The window (docs/DESIGN.md section 7): one page, plain TypeScript and DOM, no framework. It keeps
- * everything hark-viewer did and adds the notepad, the ask box, the Enhanced tab, settings and
- * sharing. This module wires the parts and draws the header: the status dot and label, the title,
- * the pills, the controls, the banner, the final-pass note, the level meters, the list of calls,
- * playback, and the speaker and "Fix this word" menus.
+ * everything hark-viewer did and adds the notepad, the ask box, settings and sharing. This module
+ * wires the parts and draws the header: the status dot and label, the title, the pills, the
+ * controls, the banner, the final-pass note, the level meters, the list of calls, playback, and the
+ * speaker and "Fix this word" menus.
  *
  * Updates arrive pushed: the followed call's events (`follow.ts`) and the app's status after every
  * start, stop, pause or share. Nothing is polled; the one timer redraws the clock and the "for N"
@@ -13,10 +13,11 @@
 import { formatZone } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
 import { AskPane } from "./ask.ts";
-import { mountDictationDialog } from "./dictation-page.ts";
+import { mountDictionaryDialog } from "./dictation-dictionary.ts";
+import { mountHistoryDialog } from "./dictation-history.ts";
+import { DictationPage } from "./dictation-page.ts";
 import { dictationReview } from "./dictation-review.ts";
 import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
-import { EnhancedPane } from "./enhanced.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
 import { liveTitle } from "./live-options.ts";
@@ -178,7 +179,6 @@ class App {
   private readonly transcript: TranscriptPane;
   private readonly notepad: NotepadPane;
   private readonly askPane: AskPane;
-  private readonly enhanced: EnhancedPane;
   private readonly review: ReviewPane;
   private readonly modelsCard: ModelsCard;
   private readonly player: Player;
@@ -201,7 +201,7 @@ class App {
   private renaming = false;
   /** Closes the open title field without saving; null when none is open. */
   private closeTitle: (() => void) | null = null;
-  /** The sidebar's pages (Models, Settings), in the call workspace's place while one shows. */
+  /** The sidebar's pages (Dictation, Models, Settings), in the call workspace's place while one shows. */
   private readonly pages: Pages;
 
   constructor(readonly t: Transport) {
@@ -233,30 +233,39 @@ class App {
     });
     const cite = (id: string) => this.cite(id);
     this.askPane = new AskPane({ t, call, view, cite });
-    const dictation = mountDictationDialog(
-      t,
-      () => this.view()?.call?.workspace,
-      () => this.review.open(),
-    );
+    const dictionary = mountDictionaryDialog(t, () => this.view()?.call?.workspace);
+    const history = mountHistoryDialog(t);
+    const dictation = new DictationPage(t, "app", {
+      openReview: () => this.review.open(),
+      openWords: () => void dictionary.open(),
+      openHistory: () => void history.open(),
+    });
+    // An answer given in the words to review changes the count on the Dictation page.
+    document.getElementById("review")?.addEventListener("close", () => {
+      if (this.pages.open === "dictation") void dictation.refreshReview();
+    });
     const openModels = (key?: string) => void this.pages.show("models", key);
     const settings = new SettingsPage(t, {
       workspaces: () => this.calls.map((c) => c.workspace),
       openModels,
-      openDictionary: () => void dictation.dictionary.open(),
+      openDictionary: () => void dictionary.open(),
     });
     const models = new ModelsPage(t, false);
-    this.pages = new Pages(byId("pages"), { settings, models }, () => {
+    this.pages = new Pages(byId("pages"), { settings, models, dictation }, () => {
       this.drawCalls();
       // Back from a page (a download, a delete or Use for calls on Models): the menu reads again.
       if (!this.pages?.open) void this.livePicker?.load();
     });
     const openSettings = (key?: string) => void this.pages.show("settings", key);
+    const openDictation = () => void this.pages.show("dictation");
     byId("settings-open").addEventListener("click", () => openSettings());
     byId("models-open").addEventListener("click", () => openModels());
+    byId("dictation-open").addEventListener("click", () => openDictation());
     byId("calls-open").addEventListener("click", () => this.pages.leave());
     const fromHash = () => {
       if (location.hash === "#settings") openSettings();
       if (location.hash === "#models") openModels();
+      if (location.hash === "#dictation") openDictation();
     };
     window.addEventListener("hashchange", fromHash);
     fromHash();
@@ -266,22 +275,11 @@ class App {
       mac: this.platform === "mac",
     });
     this.livePicker = new LivePicker({ t, openModels: () => openModels() });
-    this.enhanced = new EnhancedPane({
-      t,
-      call,
-      view,
-      cite,
-      openSettings: (key) => openSettings(key),
-    });
     this.review = new ReviewPane({
       t,
       call,
       cite,
       more: dictationReview(t),
-      ended: () => {
-        const v = this.view();
-        return !!v?.call && !v.live;
-      },
     });
   }
 
@@ -302,12 +300,10 @@ class App {
     this.wireControls();
     this.wireSidebar();
     byId("title-text").addEventListener("click", () => this.editTitle());
-    this.wireTabs();
     this.wirePopover();
     const pinned = new URLSearchParams(location.search).get("call");
     if (pinned) this.openCall(pinned, true);
     this.t.watchStatus((s) => this.onStatus(s));
-    void this.enhanced.loadTemplates();
     setInterval(() => this.paint(), 1000);
     this.paint();
   }
@@ -370,7 +366,6 @@ class App {
     this.transcript.reset();
     this.notepad.reset();
     this.askPane.reset();
-    this.enhanced.reset();
     this.player.stop();
     this.meters(null);
     this.drawPeople(null);
@@ -395,9 +390,6 @@ class App {
           if (e.type === "note" || e.type === "note.del") notes = true;
           if (e.type.startsWith("speaker.")) speakers = true;
           if (e.type === "ask" || e.type === "answer") asked = true;
-          if (e.type === "enhanced") this.enhanced.refresh();
-          // Notes written before the final layer may now be offered a re-enhance.
-          if (e.type === "final.done") void this.enhanced.load();
         }
         if (notes) this.notepad.render();
         if (speakers) this.askPane.renderPresets();
@@ -428,7 +420,6 @@ class App {
     });
     this.follower = f;
     this.askPane.renderPresets();
-    this.enhanced.paint();
     this.drawCalls();
     this.paint();
   }
@@ -440,8 +431,6 @@ class App {
     const v = this.view();
     const now = Date.now();
     const s = this.status;
-    this.enhanced.paint();
-    this.review.paint();
     const st = stateLabel({
       view: v,
       status: s,
@@ -1140,31 +1129,6 @@ class App {
     );
     bar.append(row);
     bar.hidden = false;
-  }
-
-  // ---------------------------------------------------------------------------
-  // Tabs: Notes and Enhanced. Ask sits above them and is never a tab (WINDOW section 6).
-
-  private wireTabs(): void {
-    const tabs = [...document.querySelectorAll<HTMLButtonElement>("[role=tab]")];
-    const select = (tab: HTMLButtonElement) => {
-      for (const t of tabs) {
-        const on = t === tab;
-        t.setAttribute("aria-selected", String(on));
-        t.tabIndex = on ? 0 : -1;
-        byId(t.getAttribute("aria-controls") as string).hidden = !on;
-      }
-    };
-    for (const [i, tab] of tabs.entries()) {
-      tab.addEventListener("click", () => select(tab));
-      tab.addEventListener("keydown", (e) => {
-        const d = e.key === "ArrowRight" ? 1 : e.key === "ArrowLeft" ? -1 : 0;
-        if (!d) return;
-        const next = tabs[(i + d + tabs.length) % tabs.length] as HTMLButtonElement;
-        select(next);
-        next.focus();
-      });
-    }
   }
 
   // ---------------------------------------------------------------------------

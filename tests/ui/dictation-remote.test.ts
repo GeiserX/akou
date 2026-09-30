@@ -11,7 +11,7 @@ import type { Page } from "playwright-core";
 import { REMOTE_PROBE_MS } from "../../src/main/server/remotes.ts";
 import { type RemoteReply, remoteStanding } from "../../src/ui/dictation-remote.ts";
 import { tempDir } from "../helpers.ts";
-import { UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
+import { UI_TIMEOUT, type UiRig, uiRig, until, windowPage } from "./rig.ts";
 
 const RIGHT = "k-right-remote-7";
 const WRONG = "k-wrong-remote-7";
@@ -69,9 +69,12 @@ async function openPage(
     if (new URL(r.url()).pathname === "/api/v1/dictation") n++;
   });
   await page.click("#dictation-open");
-  await page.waitForSelector("#dictation fieldset[data-group='Engine'] #dictation-remote-test", {
-    state: "visible",
-  });
+  await page.waitForSelector(
+    "#page-dictation section[data-section='Engine'] #dictation-remote-test",
+    {
+      state: "visible",
+    },
+  );
   return page;
 }
 
@@ -123,7 +126,7 @@ describe("DC-R4: the Test button on the real app", () => {
 
       const ok = await runTest(page);
       expect(ok.line).toMatch(/^ok, best on cpu, no biasing, \d+ ms$/);
-      expect(ok.cls).toBe("hint");
+      expect(ok.cls).toBe("pg-help");
       expect(remote.seen).toEqual(["/v1/server", "/v1/keys/me"]);
 
       // A wrong key: the refusal's status, and no trace of the key on the page.
@@ -148,7 +151,7 @@ describe("DC-R4: the Test button on the real app", () => {
       // One with the lane switched off (server.dictation_slots: 0) says that instead.
       remote.state.caps = { interactive: false };
       expect((await runTest(page)).line).toEndWith(
-        "this akou has no dictation slots (server.dictation_slots); dictation will queue",
+        "this akou has no dictation slots (Dictations at once for other computers); dictation will queue",
       );
 
       expect([...browserHosts]).not.toContain(new URL(remote.url).host);
@@ -169,7 +172,7 @@ describe("DC-R4: the Test button on the real app", () => {
       const page = await openPage(rig);
       await page.waitForSelector("#dictation-remote-standing:not([hidden])");
       expect(await text(page, "#dictation-remote-standing")).toBe(
-        "No local model is installed, so a dictation the remote akou does not answer ends in an error instead of falling back.",
+        "No local model is installed, so a dictation the other computer does not answer ends in an error instead of falling back.",
       );
     },
     UI_TIMEOUT,
@@ -201,7 +204,7 @@ describe("DC-R3: the remote's standing on the page", () => {
 
   test("down after three dictations in a row, with the reason and the probe's interval", () => {
     expect(remoteStanding({ fallback: "local", remote: down }, "local")).toBe(
-      `The remote akou is down: 3 dictations in a row failed: http://127.0.0.1:9 is unreachable. akou checks it every ${REMOTE_PROBE_MS / 1000} s and clears this once it answers.`,
+      `The other computer is down: 3 dictations in a row failed: http://127.0.0.1:9 is unreachable. akou checks it every ${REMOTE_PROBE_MS / 1000} s and clears this once it answers.`,
     );
   });
 
@@ -249,13 +252,63 @@ describe("DC-R3: the remote's standing on the page", () => {
       );
       await page.waitForSelector("#dictation-remote-standing:not([hidden])");
       expect(await text(page, "#dictation-remote-standing")).toStartWith(
-        "The remote akou is down: 3 dictations in a row failed: http://127.0.0.1:9 is unreachable.",
+        "The other computer is down: 3 dictations in a row failed: http://127.0.0.1:9 is unreachable.",
       );
       expect(await colour(page, "#dictation-remote-standing")).toBe(await colour(page, null));
       // No address set: the app's refusal, not a test result.
       const r = await runTest(page);
-      expect(r.line).toBe("dictation.remote.url is empty: set the akou to test");
+      // In the page's words: the setting is named by its label, never its key.
+      expect(r.line).toBe("Address is empty: set the akou to test");
       expect(r.cls).toBe("issue");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the file asks for the remote with no address: the switch waits for it, and the address turns it on",
+    async () => {
+      const w = await windowPage(rig, { platform: "darwin" });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-remote-on");
+        expect(await p.isChecked("#dictation-remote-on")).toBe(true);
+        const engine = "#page-dictation div.pg-row[data-key='dictation.engine']";
+        expect(await text(p, `${engine} .issue`)).toBe(
+          "Another computer is on, but it has no address yet.",
+        );
+        const url = "#page-dictation [data-key='dictation.remote.url']:not(div)";
+        await p.fill(url, "https://studio.example");
+        await p.press(url, "Tab");
+        await until(() => w.patches.length === 2, 5000, "the address, then the engine");
+        expect(w.patches).toEqual([
+          { "dictation.remote.url": "https://studio.example" },
+          { "dictation.engine": "remote" },
+        ]);
+      } finally {
+        await w.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "the file asks for the remote with no address: turning it off saves the local engine",
+    async () => {
+      const w = await windowPage(rig, { platform: "darwin" });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-remote-on:checked");
+        await p.click("#dictation-remote-on");
+        await until(() => w.patches.length === 1, 5000, "the engine saved");
+        expect(w.patches).toEqual([{ "dictation.engine": "auto" }]);
+        await p.waitForSelector("#page-dictation div.pg-row[data-key='dictation.engine'] .issue", {
+          state: "detached",
+        });
+      } finally {
+        await w.close();
+      }
     },
     UI_TIMEOUT,
   );

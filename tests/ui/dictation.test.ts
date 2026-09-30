@@ -17,14 +17,16 @@ import { MODELS, modelFile } from "../../src/main/asr/models.ts";
 import { SETTINGS } from "../../src/main/config/schema.ts";
 import { parseVocab } from "../../src/main/vocab/files.ts";
 import { DRAFT_SIZE, PILL_SIZE } from "../../src/main/window/shell.ts";
-import { NEXT_APP_LABEL, NEXT_APP_WAITING } from "../../src/ui/dictation-apps.ts";
+import { APP_RULE_GLOBAL, NEXT_APP_LABEL, NEXT_APP_WAITING } from "../../src/ui/dictation-apps.ts";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
 import { type CaptureInput, readMics } from "../../src/ui/dictation-mic.ts";
 import {
+  ADVANCED_PAGE,
   DICTATION_GROUPS,
   type DictationGrants,
+  dictationKeys,
   ENABLE_KEY,
   onDictationPage,
 } from "../../src/ui/dictation-page.ts";
@@ -34,6 +36,7 @@ import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
 import { PREVIEW_CHARS, previewParts } from "../../src/ui/pill.ts";
 import { type PillState, pillPreview } from "../../src/ui/pill-protocol.ts";
 import type { Transport } from "../../src/ui/protocol.ts";
+import { WORDS } from "../../src/ui/settings-labels.ts";
 import { concat, silence, speak } from "../fixtures/asr-fake.ts";
 import { monoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
@@ -1133,6 +1136,14 @@ describe("DC-U1: the Dictation page in the window", () => {
     t?.cleanup();
   });
 
+  const on = (key: string) => `#page-dictation [data-key='${key}']:not(div)`;
+  /** A segment of a row's segmented choice, by its value. */
+  const seg = (key: string, value: string) =>
+    `#page-dictation div.pg-row[data-key='${key}'] label:has(input[data-value='${value}'])`;
+  const advancedKeys = ADVANCED_PAGE.groups
+    .flatMap((g) => g.keys)
+    .filter((k) => !k.startsWith("#"));
+
   test(
     "akou-5v8: the languages are chips with a list to add one, and each change saves the whole list",
     async () => {
@@ -1145,14 +1156,18 @@ describe("DC-U1: the Dictation page in the window", () => {
       });
       const f = fx as unknown as DictationFixture;
       await page.click("#dictation-open");
-      await page.waitForSelector("#dictation fieldset[data-group='Engine'] #dictation-languages");
+      await page.waitForSelector(
+        "#page-dictation section[data-section='Voice'] #dictation-languages",
+      );
       const chips = () =>
         page.$$eval("#dictation-languages .language-chip", (l) =>
           l.map((x) => (x as HTMLElement).dataset.code),
         );
       expect(await chips()).toEqual(["en"]);
       // The text box stays the saved value, out of sight.
-      expect(await page.isHidden("#dictation textarea[data-key='dictation.languages']")).toBe(true);
+      expect(await page.isHidden("#page-dictation textarea[data-key='dictation.languages']")).toBe(
+        true,
+      );
       await page.selectOption("#dictation-languages-add", "es");
       await until(() => f.patches.length === 1, 5000, "the added language saved");
       expect(f.patches).toEqual([{ "dictation.languages": ["en", "es"] }]);
@@ -1165,7 +1180,7 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
-    "shows every group, saves one key per change, and shows a refusal beside its key",
+    "shows every section and its Advanced page, saves one key per change, and shows a refusal in words",
     async () => {
       let fx: Awaited<ReturnType<typeof dictationFixture>> | null = null;
       const page = await rig.open(undefined, {
@@ -1175,75 +1190,96 @@ describe("DC-U1: the Dictation page in the window", () => {
       });
       const f = fx as unknown as Awaited<ReturnType<typeof dictationFixture>>;
       await page.click("#dictation-open");
-      await page.waitForSelector("#dictation fieldset[data-group='Keys']", { state: "visible" });
-      const groups = await page.$$eval("#dictation fieldset", (g) =>
-        g.map((x) => x.getAttribute("data-group")),
+      await page.waitForSelector("#page-dictation section[data-section='Keys']", {
+        state: "visible",
+      });
+      const sections = () =>
+        page.$$eval("#page-dictation section.pg-section", (g) =>
+          g.map((x) => x.getAttribute("data-section")),
+        );
+      expect(await sections()).toEqual(DICTATION_GROUPS.map((g) => g.title));
+      // Every fixture key is on the page or its Advanced page, and no key is named anywhere.
+      const keys = () =>
+        page.$$eval("#page-dictation [data-key]:not(div)", (e) =>
+          e.map((x) => (x as HTMLElement).dataset.key as string),
+        );
+      const main = await keys();
+      expect(main.sort()).toEqual(
+        Object.keys(DICTATION_SCHEMA)
+          .filter((k) => !advancedKeys.includes(k))
+          .sort(),
       );
-      expect(groups).toEqual([
-        "Keys",
-        "Microphone",
-        "Engine",
-        "Insert",
-        "Learning",
-        "Per app",
-        "Pill and sounds",
-        "Privacy",
-      ]);
-      // Every fixture key is on the page, the master switch above the groups.
-      const keys = await page.$$eval("#dictation [data-key]:not(div)", (e) =>
-        e.map((x) => (x as HTMLElement).dataset.key),
-      );
-      expect(keys.sort()).toEqual(Object.keys(DICTATION_SCHEMA).sort());
-      expect(await page.$(".dictation-enable [data-key='dictation.enabled']")).not.toBeNull();
+      const words = (await page.textContent("#page-dictation")) ?? "";
+      expect(Object.keys(DICTATION_SCHEMA).filter((k) => words.includes(k))).toEqual([]);
 
-      await page.check("#dictation [data-key='dictation.enabled']:not(div)");
+      await page.check(on("dictation.enabled"));
       await until(() => f.patches.length === 1, 5000, "the switch saved");
-      await page.selectOption("#dictation [data-key='dictation.activation']:not(div)", "toggle");
+      await page.click(seg("dictation.activation", "toggle"));
       await until(() => f.patches.length === 2, 5000, "the activation saved");
       expect(f.patches).toEqual([
         { "dictation.enabled": true },
         { "dictation.activation": "toggle" },
       ]);
 
-      f.refuse.set("dictation.maxMinutes", "must be at most 60");
-      await page.fill("#dictation [data-key='dictation.maxMinutes']:not(div)", "90");
-      await page.press("#dictation [data-key='dictation.maxMinutes']:not(div)", "Tab");
-      await page.waitForSelector("#dictation div.setting.refused[data-key='dictation.maxMinutes']");
-      expect(await text(page, "#dictation div.setting.refused .issue")).toBe(
-        "dictation.maxMinutes: must be at most 60",
-      );
-      expect(f.patches.at(-1)).toEqual({ "dictation.maxMinutes": 90 });
-
+      // The other computer's rows show once "Use another computer" is on; with no address yet
+      // the switch waits for one rather than save a value the registry refuses.
+      expect(await page.isHidden(on("dictation.remote.key"))).toBe(true);
+      await page.click("#dictation-remote-on");
+      expect(await page.isVisible(on("dictation.remote.key"))).toBe(true);
+      expect(f.patches).toHaveLength(2);
       // Once saved, the page keeps no copy of a secret.
-      const remoteKey = "#dictation [data-key='dictation.remote.key']:not(div)";
+      const remoteKey = on("dictation.remote.key");
       await page.fill(remoteKey, "k-123");
       await page.press(remoteKey, "Tab");
-      await until(() => f.patches.length === 4, 5000, "the key saved");
+      await until(() => f.patches.length === 3, 5000, "the key saved");
       expect(f.patches.at(-1)).toEqual({ "dictation.remote.key": "k-123" });
       await page.waitForFunction(
         (sel) => (document.querySelector(sel) as HTMLInputElement).value === "",
         remoteKey,
       );
-      expect(await page.getAttribute(remoteKey, "placeholder")).toBe(
-        "set (hidden); type to replace",
-      );
-
+      expect(await page.getAttribute(remoteKey, "placeholder")).toBe("Set, type to replace");
       // The remote's address is shown in a browser and cannot be changed from it.
-      expect(await page.isDisabled("#dictation [data-key='dictation.remote.url']:not(div)")).toBe(
-        true,
+      expect(await page.isDisabled(on("dictation.remote.url"))).toBe(true);
+
+      await page.click("#dictation-advanced");
+      await page.waitForSelector("#page-dictation .pg-back");
+      expect(await sections()).toEqual(ADVANCED_PAGE.groups.map((g) => g.title));
+      expect((await keys()).sort()).toEqual(
+        advancedKeys.filter((k) => k in DICTATION_SCHEMA).sort(),
       );
+      f.refuse.set("dictation.maxMinutes", "must be at most 60");
+      await page.fill(on("dictation.maxMinutes"), "90");
+      await page.press(on("dictation.maxMinutes"), "Tab");
+      await page.waitForSelector(
+        "#page-dictation div.pg-row.refused[data-key='dictation.maxMinutes']",
+      );
+      expect(await text(page, "#page-dictation div.pg-row.refused .issue")).toBe(
+        "Must be at most 60",
+      );
+      expect(f.patches.at(-1)).toEqual({ "dictation.maxMinutes": 90 });
+      // Off or On is a switch, saved in the setting's own words.
+      expect(await page.getAttribute("#set-dictation-glossary", "role")).toBe("switch");
+      const before = f.patches.length;
+      await page.click("#set-dictation-glossary");
+      await until(() => f.patches.length === before + 1, 5000, "the switch saved");
+      expect(f.patches.at(-1)).toEqual({ "dictation.glossary": "on" });
 
       // Delete all asks once more before it acts.
-      await page.click("#dictation button.stop");
+      await page.click("#dictations-delete");
       expect(f.deletes).toBe(0);
-      await page.click("#dictation button.stop");
+      await page.click("#dictations-delete");
       await until(() => f.deletes === 1, 5000, "the delete");
+
+      // The back link leads to the page, with the keyboard on the row it came through.
+      await page.click("#page-dictation .pg-back");
+      await page.waitForSelector("#page-dictation section[data-section='Keys']");
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe("dictation-advanced");
     },
     UI_TIMEOUT,
   );
 
   test(
-    "on the real registry: every group, every dictation key, and a change saved as that key alone",
+    "on the real registry: every section, every dictation key, and a change saved as that key alone",
     async () => {
       // No fixture: the keys, the values and the save are the app's own.
       const page = await rig.open();
@@ -1252,26 +1288,35 @@ describe("DC-U1: the Dictation page in the window", () => {
         if (r.method() === "PATCH" && r.url().endsWith("/config")) patches.push(r.postDataJSON());
       });
       await page.click("#dictation-open");
-      await page.waitForSelector("#dictation fieldset[data-group='Keys']", { state: "visible" });
-      const groups = await page.$$eval("#dictation fieldset", (g) =>
-        g.map((x) => x.getAttribute("data-group")),
+      await page.waitForSelector("#page-dictation section[data-section='Keys']", {
+        state: "visible",
+      });
+      const keys = async () =>
+        page.$$eval("#page-dictation [data-key]:not(div)", (e) =>
+          e.map((x) => (x as HTMLElement).dataset.key as string),
+        );
+      const main = await keys();
+      await page.click("#dictation-advanced");
+      await page.waitForSelector("#page-dictation .pg-back");
+      // The tidy's wait shows its default by name, never a bare 0.
+      expect(await text(page, `${on("dictation.formatTimeoutSeconds")} option:checked`)).toBe(
+        "Automatic",
       );
-      expect(groups).toEqual(DICTATION_GROUPS.map((g) => g.title));
+      const all = [...main, ...(await keys())];
       // Settings hides every dictation key, so each must be here, and the page names none the
       // registry lacks.
-      const keys = await page.$$eval("#dictation [data-key]:not(div)", (e) =>
-        e.map((x) => (x as HTMLElement).dataset.key),
-      );
       const registry = Object.keys(SETTINGS).filter((k) => k.startsWith("dictation."));
-      expect(registry.filter((k) => !keys.includes(k))).toEqual([]);
-      expect(keys.sort()).toEqual(
-        [ENABLE_KEY, ...DICTATION_GROUPS.flatMap((g) => g.keys)]
+      expect(registry.filter((k) => !all.includes(k))).toEqual([]);
+      expect(all.sort()).toEqual(
+        dictationKeys()
           .filter((k) => k in SETTINGS)
           .sort(),
       );
-      expect(DICTATION_GROUPS.flatMap((g) => g.keys).filter((k) => !(k in SETTINGS))).toEqual([]);
+      expect(dictationKeys().filter((k) => !(k in SETTINGS))).toEqual([]);
+      // Every key it shows has its words: no label is a key's last part spelled out.
+      expect(dictationKeys().filter((k) => !WORDS[k])).toEqual([]);
 
-      const days = "#dictation [data-key='dictation.retainDays']:not(div)";
+      const days = on("dictation.retainDays");
       await page.fill(days, "45");
       await page.press(days, "Tab");
       await page.waitForFunction(() => document.getElementById("toast")?.textContent === "Saved.");
@@ -1283,7 +1328,7 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 
   test(
-    "the Settings page leaves the dictation keys out; the sidebar and #dictation open the page",
+    "the Settings page leaves the dictation keys out; the sidebar and #dictation open the page, Calls leaves it",
     async () => {
       const page = await rig.open(undefined, { before: (p) => dictationFixture(p) });
       await page.click("#settings-open");
@@ -1296,14 +1341,20 @@ describe("DC-U1: the Dictation page in the window", () => {
         [],
       );
       await page.click("#dictation-open");
-      await page.waitForSelector("#dictation[open]");
-      await page.click("#dictation-close");
+      await page.waitForSelector("#page-dictation:not([hidden]) .pg-row[data-key]");
+      // A page, not a dialog: the sidebar marks it and the call workspace makes way.
+      expect(await page.$("dialog#dictation")).toBeNull();
+      expect(await page.getAttribute("#dictation-open", "aria-current")).toBe("page");
+      expect(await page.isHidden("#page-settings")).toBe(true);
+      await page.click("#calls-open");
+      expect(await page.isHidden("#page-dictation")).toBe(true);
+      expect(await page.getAttribute("#dictation-open", "aria-current")).toBeNull();
 
       // The address opens the page, as a link to it would.
       await page.evaluate(() => {
         location.hash = "#dictation";
       });
-      await page.waitForSelector("#dictation[open] fieldset[data-group='Keys']");
+      await page.waitForSelector("#page-dictation:not([hidden]) section[data-section='Keys']");
     },
     UI_TIMEOUT,
   );
@@ -1330,12 +1381,138 @@ describe("DC-U1: the Dictation page in the window", () => {
           ),
       });
       await page.click("#dictation-open");
-      await page.waitForSelector("#dictation [data-empty]");
-      expect(await page.$$("#dictation fieldset")).toEqual([]);
-      await page.click("#dictation-close");
+      await page.waitForSelector("#page-dictation [data-empty]");
+      expect(await page.$$("#page-dictation [data-key]")).toEqual([]);
       await page.click("#settings-open");
       await page.waitForSelector("#page-settings .pg-row[data-key]");
       expect(await page.$("#page-settings [data-key^='dictation.']")).toBeNull();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a settings read that fails says why where the settings go, not that there are none",
+    async () => {
+      const page = await rig.open(undefined, {
+        before: (p) =>
+          p.route(
+            (u) => u.pathname === "/api/v1/config",
+            (route) =>
+              route.request().method() === "GET"
+                ? route.fulfill({ status: 500, json: { error: "internal", message: "disk gone" } })
+                : route.continue(),
+          ),
+      });
+      await page.click("#dictation-open");
+      await page.waitForSelector("#page-dictation [data-empty]");
+      expect(await text(page, "#page-dictation [data-empty]")).toBe(
+        "The dictation settings could not be read: disk gone",
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "in the window: another computer waits for its address, then turns on; off, the engine is local again; the AI tidy shows its instructions",
+    async () => {
+      const w = await windowPage(rig, {
+        platform: "darwin",
+        settings: { "dictation.formatPrompt": "default" },
+      });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#dictation-remote-on");
+        const url = on("dictation.remote.url");
+        expect(await p.isHidden(url)).toBe(true);
+        // No address yet: the rows show, the address has the keyboard, and nothing is saved,
+        // since the registry refuses the remote engine without one.
+        await p.click("#dictation-remote-on");
+        expect(await p.isVisible(url)).toBe(true);
+        expect(await p.evaluate(() => document.activeElement?.getAttribute("data-key"))).toBe(
+          "dictation.remote.url",
+        );
+        expect(w.patches).toEqual([]);
+        // The window may write the address; saved, it turns the remote on.
+        await p.fill(url, "https://studio.example");
+        await p.press(url, "Tab");
+        await until(() => w.patches.length === 2, 5000, "the address, then the engine");
+        expect(w.patches).toEqual([
+          { "dictation.remote.url": "https://studio.example" },
+          { "dictation.engine": "remote" },
+        ]);
+        // While it is on, the speed choice rests, and says why.
+        await p.waitForFunction(() =>
+          [
+            ...document.querySelectorAll<HTMLInputElement>(
+              "#page-dictation div.pg-row[data-key='dictation.engine'] input[type=radio]",
+            ),
+          ].every((r) => r.disabled),
+        );
+        expect(
+          await text(p, "#page-dictation div.pg-row[data-key='dictation.engine'] .pg-help"),
+        ).toBe("The other computer turns your voice into text while it is on.");
+        expect(await p.isChecked("#dictation-remote-on")).toBe(true);
+        // Off: the engine is the local choice again, and the rows go.
+        await p.click("#dictation-remote-on");
+        await until(() => w.patches.length === 3, 5000, "the engine back");
+        expect(w.patches.at(-1)).toEqual({ "dictation.engine": "auto" });
+        await p.waitForSelector(url, { state: "hidden" });
+
+        // Tidy the text with AI: its instructions show once it is on, Standard by default.
+        const prompt = "#page-dictation div.pg-row[data-key='dictation.formatPrompt']";
+        expect(await p.isHidden(prompt)).toBe(true);
+        await p.selectOption(on("dictation.format"), "provider");
+        await until(() => w.patches.length === 4, 5000, "the tidy saved");
+        expect(w.patches.at(-1)).toEqual({ "dictation.format": "provider" });
+        expect(await p.isVisible(prompt)).toBe(true);
+        expect(await text(p, `${prompt} option:checked`)).toBe("Standard");
+      } finally {
+        await w.close();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "on the macOS window: the keys as keycaps, Set for a key with none, and the header under the title bar",
+    async () => {
+      const w = await windowPage(rig, {
+        platform: "darwin",
+        // Saved as its default, as a setup leaves it.
+        settings: { "dictation.hotkey": "RightCommand" },
+      });
+      try {
+        const p = w.page;
+        await p.click("#dictation-open");
+        await p.waitForSelector("#page-dictation div.pg-row[data-key='dictation.hotkey']");
+        const caps = (key: string) =>
+          p.$$eval(`#page-dictation div.pg-row[data-key='${key}'] .keycaps > *`, (l) =>
+            l.map((x) => x.textContent),
+          );
+        // The key shows as keycaps; fix last's default is Shift before it, with its side.
+        expect(await caps("dictation.hotkey")).toEqual(["Right ⌘"]);
+        expect(await caps("dictation.hotkeyFixLast")).toEqual(["⇧", "Right ⌘"]);
+        expect(await caps("dictation.hotkeyDraft")).toEqual(["Not set"]);
+        expect(
+          await text(p, "#page-dictation div.pg-row[data-key='dictation.hotkeyDraft'] .record-key"),
+        ).toBe("Set");
+        expect(
+          await text(p, "#page-dictation div.pg-row[data-key='dictation.hotkey'] .record-key"),
+        ).toBe("Change");
+        // The default needs no way back to itself.
+        expect(await p.isHidden("#page-dictation .key-reset[data-for='dictation.hotkey']")).toBe(
+          true,
+        );
+
+        // DK-M7: under the macOS window's title bar the header starts below the strip and drags.
+        await p.evaluate(() => document.body.classList.add("inset"));
+        await p.evaluate(() => document.body.style.setProperty("--titlebar", "28px"));
+        const top = await p.$eval("#page-dictation .pg-head", (e) => e.getBoundingClientRect().top);
+        expect(top).toBeGreaterThanOrEqual(28);
+      } finally {
+        await w.close();
+      }
     },
     UI_TIMEOUT,
   );
@@ -1623,8 +1800,9 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
     t?.cleanup();
   });
 
-  const rows = "#dictation fieldset[data-group='Per app'] .apps-rules tbody tr";
+  const rows = "#page-dictation section[data-section='Rules per app'] .apps-rules .apps-rule";
   const cell = (n: number, field: string) => `${rows}:nth-child(${n}) [data-field='${field}']`;
+  const head = (n: number) => `${rows}:nth-child(${n}) .apps-head`;
 
   test(
     "a rule is saved once it names its app, every edit writes the whole list, a refusal shows beside it",
@@ -1643,24 +1821,31 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       await page.click("#dictation-open");
       await page.waitForSelector(rows);
       expect(await page.$$(rows)).toHaveLength(1);
+      // The rule's row says it in words, and opens to its fields.
+      expect(await text(page, `${rows}:nth-child(1) .apps-summary`)).toBe(
+        "Types the keys, never sends",
+      );
+      expect(await page.isHidden(cell(1, "mode"))).toBe(true);
+      await page.click(head(1));
+      expect(await page.getAttribute(head(1), "aria-expanded")).toBe("true");
       expect(await page.inputValue(cell(1, "app"))).toBe("com.example.term");
       expect(await page.inputValue(cell(1, "insert"))).toBe("type");
       expect(await page.inputValue(cell(1, "sendKey"))).toBe("none");
       // A field the rule leaves out follows the global setting.
       expect(await page.inputValue(cell(1, "mode"))).toBe("");
-      expect(await text(page, `${cell(1, "mode")} option:checked`)).toBe("global");
+      expect(await text(page, `${cell(1, "mode")} option:checked`)).toBe(APP_RULE_GLOBAL);
 
-      // The table fits the dialog: no column clipped, Remove reachable without scrolling sideways.
-      const fit = await page.$eval("#dictation", (d) => {
+      // The open rule fits its panel: no field clipped, Remove reachable without scrolling sideways.
+      const fit = await page.$eval("#pages", (d) => {
+        const panel = d.querySelector(".pg-apps") as HTMLElement;
         const remove = d.querySelector(".apps-remove") as HTMLElement;
-        const spill = [...d.querySelectorAll<HTMLElement>(".apps-rules tbody td > *")].filter(
-          (el) =>
-            el.getBoundingClientRect().right >
-            (el.parentElement as HTMLElement).getBoundingClientRect().right + 0.5,
+        const right = panel.getBoundingClientRect().right + 0.5;
+        const spill = [...panel.querySelectorAll<HTMLElement>("[data-field]")].filter(
+          (el) => el.getBoundingClientRect().right > right,
         );
         return {
           overflow: d.scrollWidth - d.clientWidth,
-          removeInside: remove.getBoundingClientRect().right <= d.getBoundingClientRect().right,
+          removeInside: remove.getBoundingClientRect().right <= right,
           spill: spill.map((el) => el.dataset.field ?? el.className),
         };
       });
@@ -1670,7 +1855,7 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       await page.selectOption(cell(1, "insert"), "type");
 
       // A new row saves nothing until it names its app.
-      await page.click("#dictation .apps-add");
+      await page.click("#page-dictation .apps-add");
       await page.selectOption(cell(2, "mode"), "draft-send");
       await page.fill(cell(2, "app"), "com.example.chat");
       await page.press(cell(2, "app"), "Tab");
@@ -1694,15 +1879,21 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
 
       // The registry's validator has the last word, shown beside the setting.
       f.refuse.set("dictation.apps", "rule 1: language must be auto or an ISO 639 code");
-      await page.fill(cell(1, "language"), "english");
-      await page.press(cell(1, "language"), "Tab");
-      await page.waitForSelector("#dictation div.setting.refused[data-key='dictation.apps']");
+      await page.selectOption(cell(1, "language"), "en");
+      await page.waitForSelector("#page-dictation div.pg-apps.refused[data-key='dictation.apps']");
       expect(
-        await text(page, "#dictation div.setting.refused[data-key='dictation.apps'] .issue"),
-      ).toBe("dictation.apps: rule 1: language must be auto or an ISO 639 code");
+        await text(page, "#page-dictation div.pg-apps.refused[data-key='dictation.apps'] .issue"),
+      ).toBe("Rule 1: language must be auto or an ISO 639 code");
+      // The reason ends the panel, never inside a rule's header button.
+      expect(
+        await page.$eval(
+          "#page-dictation div.pg-apps.refused[data-key='dictation.apps'] .issue",
+          (el) => el.parentElement?.matches("div.pg-apps") && el.closest("button") === null,
+        ),
+      ).toBe(true);
       expect(f.patches).toHaveLength(4);
       expect(f.patches[3]).toEqual({
-        "dictation.apps": [{ app: "com.example.chat", language: "english" }],
+        "dictation.apps": [{ app: "com.example.chat", language: "en" }],
       });
     },
     UI_TIMEOUT,
@@ -1724,8 +1915,8 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       const f = fx as unknown as DictationFixture;
       const base = dictationRow(0).at;
       const polls = () => f.calls.filter((c) => c.path.includes("since=")).length;
-      const next = "#dictation .apps-next";
-      const note = "#dictation .apps-next-note";
+      const next = "#page-dictation .apps-next";
+      const note = "#page-dictation .apps-next-note";
       await page.click("#dictation-open");
       await page.waitForSelector(rows);
 
@@ -1790,7 +1981,7 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       expect(await page.$$(rows)).toHaveLength(2);
 
       // With dictation off no dictation comes: the page says so and asks for nothing.
-      await page.click(`#dictation input[data-key='${ENABLE_KEY}']`);
+      await page.click(`#page-dictation input[data-key='${ENABLE_KEY}']`);
       await until(() => f.patches.length === 2, 5000, "dictation turned off");
       const off = f.calls.length;
       await page.click(next);
@@ -1824,13 +2015,13 @@ describe("DC-U9: per-app rules on the Dictation page", () => {
       });
       const f = fx as unknown as DictationFixture;
       await page.click("#dictation-open");
-      await page.click("#dictation .apps-next");
+      await page.click("#page-dictation .apps-next");
       await page.waitForFunction(
         (sel) =>
           document.querySelector(sel)?.textContent === "dictation runs in the desktop app only",
-        "#dictation .apps-next-note",
+        "#page-dictation .apps-next-note",
       );
-      expect(await text(page, "#dictation .apps-next")).toBe(NEXT_APP_LABEL);
+      expect(await text(page, "#page-dictation .apps-next")).toBe(NEXT_APP_LABEL);
       expect(f.patches).toHaveLength(0);
     },
     UI_TIMEOUT,
@@ -1888,16 +2079,16 @@ describe("DC-U9 on the real app: the app of the next dictation", () => {
     async () => {
       const page = await rig.open();
       await page.click("#dictation-open");
-      await page.click("#dictation .apps-next");
-      expect(await text(page, "#dictation .apps-next-note")).toBe(NEXT_APP_WAITING);
+      await page.click("#page-dictation .apps-next");
+      expect(await text(page, "#page-dictation .apps-next-note")).toBe(NEXT_APP_WAITING);
       const d = rig.app.dictation();
       if (!d) throw new Error("no dictation");
       await d.rebind();
       await page.waitForFunction(
         () =>
-          [...document.querySelectorAll<HTMLInputElement>("#dictation [data-field='app']")].some(
-            (el) => el.value === "com.example.chat",
-          ),
+          [
+            ...document.querySelectorAll<HTMLInputElement>("#page-dictation [data-field='app']"),
+          ].some((el) => el.value === "com.example.chat"),
         undefined,
         { timeout: 15_000 },
       );
@@ -1925,9 +2116,9 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
     t?.cleanup();
   });
 
-  const toggle = "#dictation .dictation-enable input[data-key='dictation.enabled']";
+  const toggle = "#page-dictation input[data-key='dictation.enabled']";
   const step = (page: Page, s: string) =>
-    page.waitForSelector(`#dictation .dictation-setup[data-step='${s}']`);
+    page.waitForSelector(`#page-dictation .dictation-setup[data-step='${s}']`);
   const browserPage = async (
     grants: DictationGrants,
     platform = "darwin",
@@ -1962,7 +2153,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         await p.click("#dictation-open");
         await p.waitForSelector(toggle);
         expect(await text(p, "#dictation-off-reason")).toBe(
-          "Dictation stays off: akou has no access to the microphone.",
+          "Stays off until akou may use the microphone.",
         );
 
         // Turned on with the microphone refused: the setup opens and the switch stays off.
@@ -2024,7 +2215,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         await step(p, "key");
         expect(w.patches).toEqual([{ "dictation.languages": ["en", "es"] }]);
         expect(
-          await p.$$eval("#dictation .dictation-setup .keycaps kbd", (k) =>
+          await p.$$eval("#page-dictation .dictation-setup .keycaps kbd", (k) =>
             k.map((x) => x.textContent),
           ),
         ).toEqual(["Right ⌘"]);
@@ -2041,11 +2232,11 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         expect(await p.inputValue("#dictation-try")).toBe("ok");
 
         await p.click("#dictation-setup-done");
-        await p.waitForSelector("#dictation fieldset[data-group='Keys']");
+        await p.waitForSelector("#page-dictation section[data-section='Keys']");
         expect(await p.isChecked(toggle)).toBe(true);
-        expect(await text(p, "#dictation-permissions")).toBe(
-          "Permissions: Microphone ok, Accessibility ok. Run the setup again",
-        );
+        expect(await text(p, "#dictation-grant-mic .pg-state")).toBe("Allowed");
+        expect(await text(p, "#dictation-grant-accessibility .pg-state")).toBe("Allowed");
+        expect(await p.isVisible("#dictation-setup-open")).toBe(true);
         // The page read the grants and opened panes; it never asked the OS for one.
         expect(JSON.stringify(w.requests)).not.toContain("prompt");
       } finally {
@@ -2063,9 +2254,11 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         "darwin",
         { "dictation.languages": ["es", "en"] },
       );
-      expect(await text(page, "#dictation-permissions")).toBe(
-        "Permissions: Microphone ok, Accessibility not granted (clipboard only). Run the setup again",
+      expect(await text(page, "#dictation-grant-mic .pg-state")).toBe("Allowed");
+      expect(await text(page, "#dictation-grant-accessibility .pg-help")).toBe(
+        "Not allowed, so dictations are copied and you paste them.",
       );
+      expect(await page.isVisible("#dictation-grant-open-accessibility")).toBe(true);
       await page.click(toggle);
       await step(page, "mic");
       // A browser cannot hear the helper, so the meter is the window's.
@@ -2092,14 +2285,14 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       ).toEqual(["es", "en"]);
       await page.click("#dictation-setup-next");
       await step(page, "key");
-      const key = "#dictation .dictation-setup input[data-key='dictation.hotkey']";
+      const key = "#page-dictation .dictation-setup input[data-key='dictation.hotkey']";
       expect(await page.inputValue(key)).toBe("Control+Shift+Space");
-      expect(await text(page, "#dictation-setup-note")).toContain("takes chords only");
-      await page.click("#dictation .dictation-setup button.record-key");
+      expect(await text(page, "#dictation-setup-note")).toContain("must be a combination");
+      await page.click("#page-dictation .dictation-setup button.record-key");
       await page.keyboard.down("MetaRight");
       await page.waitForTimeout(HOLD_ALONE_MS + 100);
       await page.keyboard.up("MetaRight");
-      expect(await text(page, "#dictation .dictation-setup .recorder-note")).toContain(
+      expect(await text(page, "#page-dictation .dictation-setup .recorder-note")).toContain(
         "Right ⌘ alone cannot be bound",
       );
       expect(fx.patches).toEqual([]);
@@ -2109,7 +2302,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       await page.click("#dictation-setup-next");
       await page.waitForSelector("#dictation-setup-issue:not([hidden])");
       expect(await text(page, "#dictation-setup-issue")).toBe(
-        "dictation.enabled: the helper did not start",
+        "Dictation: the helper did not start",
       );
       await page.click("#dictation-setup-next");
       await step(page, "try");
@@ -2130,7 +2323,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
     async () => {
       const { page, fx } = await browserPage({ mic: "denied", accessibility: "granted" });
       expect(await text(page, "#dictation-off-reason")).toBe(
-        "Dictation stays off: akou has no access to the microphone.",
+        "Stays off until akou may use the microphone.",
       );
       await page.click(toggle);
       await step(page, "mic");
@@ -2138,7 +2331,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       expect(await page.isVisible("#dictation-setup-open-microphone")).toBe(true);
       expect(await page.$("#dictation-setup-next")).toBeNull();
       await page.click("#dictation-setup-cancel");
-      await page.waitForSelector("#dictation fieldset[data-group='Keys']");
+      await page.waitForSelector("#page-dictation section[data-section='Keys']");
       expect(await page.isChecked(toggle)).toBe(false);
       expect(fx.patches).toEqual([]);
 
@@ -2147,11 +2340,11 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       await page.click("#dictation-setup-open");
       await step(page, "mic");
       await page.click("#dictation-setup-cancel");
-      await page.waitForSelector("#dictation fieldset[data-group='Keys']");
+      await page.waitForSelector("#page-dictation section[data-section='Keys']");
       await page.click(toggle);
       await until(() => fx.patches.length === 1, 5000, "the switch saved");
       expect(fx.patches).toEqual([{ "dictation.enabled": true }]);
-      expect(await page.$("#dictation .dictation-setup")).toBeNull();
+      expect(await page.$("#page-dictation .dictation-setup")).toBeNull();
     },
     UI_TIMEOUT,
   );
@@ -2168,7 +2361,7 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
       await page.click("#dictation-setup-next");
       await page.waitForSelector("#dictation-setup-issue:not([hidden])");
       expect(await text(page, "#dictation-setup-issue")).toBe(
-        "dictation.languages: is a list of ISO 639 codes",
+        "Languages: is a list of ISO 639 codes",
       );
       expect(await page.isDisabled("#dictation-setup-next")).toBe(false);
       // The request itself fails: the step names it rather than leaving the button dead.
@@ -2187,6 +2380,30 @@ describe("DC-U2, DC-N3: the master switch and the setup", () => {
         { "dictation.languages": ["en"] },
         { "dictation.languages": ["en"] },
       ]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "leaving the page at the setup's last step keeps dictation on: the switch above it follows the setup",
+    async () => {
+      const { page, fx } = await browserPage({ mic: "granted", accessibility: "granted" });
+      await page.click("#dictation-setup-open");
+      await step(page, "mic");
+      await page.click("#dictation-setup-next");
+      await step(page, "languages");
+      await page.click("#dictation-setup-next");
+      await step(page, "key");
+      await page.click("#dictation-setup-next");
+      await step(page, "try");
+      expect(await page.isChecked(toggle)).toBe(true);
+      const saved = fx.patches.length;
+      expect(fx.patches.at(-1)).toEqual({ "dictation.enabled": true });
+      // Leaving saves what is typed: nothing, since the switch holds what the setup saved.
+      await page.click("#calls-open");
+      await page.waitForTimeout(500);
+      expect(fx.patches).toHaveLength(saved);
+      expect(fx.settings["dictation.enabled"]).toBe(true);
     },
     UI_TIMEOUT,
   );
@@ -2227,15 +2444,15 @@ describe("DC-U2 on the real app: a missing grant opens the setup, never the help
   test(
     "the switch runs the setup at the microphone and stays off; no dictate process starts",
     async () => {
-      const toggle = "#dictation .dictation-enable input[data-key='dictation.enabled']";
+      const toggle = "#page-dictation input[data-key='dictation.enabled']";
       const page = await rig.open();
       await page.click("#dictation-open");
       await page.waitForSelector(toggle);
       expect(await text(page, "#dictation-off-reason")).toBe(
-        "Dictation stays off: akou has no access to the microphone.",
+        "Stays off until akou may use the microphone.",
       );
       await page.click(toggle);
-      await page.waitForSelector("#dictation .dictation-setup[data-step='mic']");
+      await page.waitForSelector("#page-dictation .dictation-setup[data-step='mic']");
       expect(await page.isChecked(toggle)).toBe(false);
       expect(rig.app.config().settings["dictation.enabled"]).toBe(false);
       expect(rig.app.dictation()?.status()).toMatchObject({ enabled: false, state: "off" });
@@ -2268,7 +2485,7 @@ describe("DC-U2 on the real app: a microphone never asked for starts the helper"
   test(
     "the switch saves and a dictate process starts, with no setup and no off reason",
     async () => {
-      const toggle = "#dictation .dictation-enable input[data-key='dictation.enabled']";
+      const toggle = "#page-dictation input[data-key='dictation.enabled']";
       const page = await rig.open();
       await page.click("#dictation-open");
       await page.waitForSelector(toggle);
@@ -2280,7 +2497,7 @@ describe("DC-U2 on the real app: a microphone never asked for starts the helper"
         "the switch saved",
       );
       await until(() => existsSync(commands), 10_000, "a dictate process started");
-      expect(await page.locator("#dictation .dictation-setup").count()).toBe(0);
+      expect(await page.locator("#page-dictation .dictation-setup").count()).toBe(0);
     },
     UI_TIMEOUT,
   );
@@ -2701,14 +2918,14 @@ describe("DC-U3: the dictation key recorder", () => {
     t?.cleanup();
   });
 
-  const input = (key: string) => `#dictation input[data-key='${key}']`;
-  const record = (key: string) => `#dictation button.record-key[data-for='${key}']`;
+  const input = (key: string) => `#page-dictation input[data-key='${key}']`;
+  const record = (key: string) => `#page-dictation button.record-key[data-for='${key}']`;
   const caps = (page: Page, key: string) =>
-    page.$$eval(`#dictation div.setting[data-key='${key}'] .keycaps kbd`, (k) =>
+    page.$$eval(`#page-dictation div.pg-row[data-key='${key}'] .keycaps kbd`, (k) =>
       k.map((x) => x.textContent),
     );
   const note = (page: Page, key: string) =>
-    text(page, `#dictation div.setting[data-key='${key}'] .recorder-note`);
+    text(page, `#page-dictation div.pg-row[data-key='${key}'] .recorder-note`);
   const openPage = async (o: { grants?: DictationGrants } = {}) => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
@@ -2764,7 +2981,7 @@ describe("DC-U3: the dictation key recorder", () => {
       expect(await page.getAttribute(record("dictation.hotkeyFixLast"), "aria-pressed")).toBe(
         "false",
       );
-      expect(await page.isVisible("#dictation")).toBe(true);
+      expect(await page.isVisible("#page-dictation")).toBe(true);
       expect(fx.patches).toHaveLength(3);
     },
     UI_TIMEOUT,
@@ -2777,9 +2994,7 @@ describe("DC-U3: the dictation key recorder", () => {
       // The recording hotkey's macOS default.
       await page.click(record("dictation.hotkey"));
       await page.keyboard.press("Alt+Meta+KeyR");
-      expect(await note(page, "dictation.hotkey")).toBe(
-        "⌥ ⌘ R is already the recording hotkey (app.hotkey).",
-      );
+      expect(await note(page, "dictation.hotkey")).toBe("⌥ ⌘ R is already the record shortcut.");
       expect(fx.patches).toEqual([]);
       expect(await page.getAttribute(record("dictation.hotkey"), "aria-pressed")).toBe("true");
       // Another dictation key's binding, however it was written.
@@ -2787,9 +3002,7 @@ describe("DC-U3: the dictation key recorder", () => {
       await until(() => fx.patches.length === 1, 5000, "the free chord saved");
       await page.click(record("dictation.hotkeyDraft"));
       await page.keyboard.press("Shift+Control+KeyD");
-      expect(await note(page, "dictation.hotkeyDraft")).toBe(
-        "⌃ ⇧ D is already the dictation key (dictation.hotkey).",
-      );
+      expect(await note(page, "dictation.hotkeyDraft")).toBe("⌃ ⇧ D is already the dictation key.");
       expect(fx.patches).toEqual([{ "dictation.hotkey": "Control+Shift+D" }]);
     },
     UI_TIMEOUT,
@@ -2800,12 +3013,14 @@ describe("DC-U3: the dictation key recorder", () => {
     async () => {
       const { page, fx } = await openPage({ grants: { mic: "granted", accessibility: "denied" } });
       await page.click(record("dictation.hotkey"));
-      expect(await note(page, "dictation.hotkey")).toContain("takes chords only");
+      expect(await note(page, "dictation.hotkey")).toBe(
+        "Without Accessibility access the key must be a combination, such as Control+Shift+Space.",
+      );
       await page.keyboard.down("MetaRight");
       await page.waitForTimeout(HOLD_ALONE_MS + 100);
       await page.keyboard.up("MetaRight");
       expect(await note(page, "dictation.hotkey")).toBe(
-        "Right ⌘ alone cannot be bound: without the Accessibility grant akou binds its key as a Carbon hotkey, which takes chords only, such as Control+Shift+Space.",
+        "Right ⌘ alone cannot be bound. Without Accessibility access the key must be a combination, such as Control+Shift+Space.",
       );
       expect(fx.patches).toEqual([]);
       await page.keyboard.press("Control+Shift+Space");
@@ -2884,15 +3099,18 @@ describe("DC-U3: the dictation key recorder", () => {
           w.requests.filter((r) => r.name === "recordDictationKeys").map((r) => r.params),
         ).toEqual([{ on: true }, { on: false }]);
 
-        // A recorder left open when the page closes lets go of the helper's keys too.
+        // A recorder left open when the page is left lets go of the helper's keys too.
         await p.click(record("dictation.hotkeyDraft"));
-        await p.click("#dictation-close");
+        await p.click("#calls-open");
         await until(
           () => w.requests.filter((r) => r.name === "recordDictationKeys").length === 4,
           5000,
           "the close stopped the recorder",
         );
-        expect(w.requests.at(-1)?.params).toEqual({ on: false });
+        // Leaving a page also reads the live model menu again, so the last helper request counts.
+        expect(w.requests.filter((r) => r.name === "recordDictationKeys").at(-1)?.params).toEqual({
+          on: false,
+        });
         await w.send("dictationKey", { name: "Fn" });
         expect(w.patches).toHaveLength(1);
       } finally {
@@ -2930,7 +3148,7 @@ describe("DC-L2: the read-back waits for the Accessibility grant on macOS", () =
       },
     });
     await page.click("#dictation-open");
-    await page.waitForSelector("#dictation div.setting[data-key='dictation.readField']");
+    await page.waitForSelector("#page-dictation div.pg-row[data-key='dictation.readField']");
     return page;
   };
 
@@ -2941,9 +3159,9 @@ describe("DC-L2: the read-back waits for the Accessibility grant on macOS", () =
       expect(
         await text(
           denied,
-          "#dictation div.setting[data-key='dictation.readField'] #dictation-read-waiting",
+          "#page-dictation div.pg-row[data-key='dictation.readField'] #dictation-read-waiting",
         ),
-      ).toContain("Waiting for the Accessibility grant");
+      ).toContain("Waits for Accessibility access");
       // The controls: the same page with the grant, and Linux, which needs none.
       const granted = await openPage("darwin", { mic: "granted", accessibility: "granted" });
       expect(await granted.locator("#dictation-read-waiting").count()).toBe(0);
@@ -2972,16 +3190,22 @@ describe("DC-L2: the read-back waits for the Accessibility grant on macOS", () =
     async () => {
       const page = await openPage("darwin", { mic: "granted", accessibility: "denied" });
       const note = page.locator("#dictation-read-waiting");
-      const box = "#dictation input[data-key='dictation.readField']";
-      const learn = "#dictation [data-key='dictation.learn']:not(div)";
+      const box = "#page-dictation input[data-key='dictation.readField']";
+      const learn = (v: string) =>
+        `#page-dictation div.pg-row[data-key='dictation.learn'] label:has(input[data-value='${v}'])`;
+      const help =
+        "#page-dictation div.pg-row[data-key='dictation.readField'] .pg-lbl > div.pg-help";
       expect(await note.count()).toBe(1);
+      // One line of help at most: the note replaces the help.
+      expect(await page.isVisible(help)).toBe(false);
       await page.click(box);
       expect(await note.count()).toBe(0);
+      expect(await page.isVisible(help)).toBe(true);
       await page.click(box);
       expect(await note.count()).toBe(1);
-      await page.selectOption(learn, "off");
+      await page.click(learn("off"));
       expect(await note.count()).toBe(0);
-      await page.selectOption(learn, "ask");
+      await page.click(learn("ask"));
       expect(await note.count()).toBe(1);
     },
     UI_TIMEOUT,
@@ -3023,7 +3247,7 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
     { id: "mic-usb", name: "Desk Mic", transport: "usb" },
     { id: "mic-bt", name: "Headset", transport: "bluetooth" },
   ];
-  const mic = "#dictation [data-key='dictation.mic']:not(div)";
+  const mic = "#page-dictation [data-key='dictation.mic']:not(div)";
   const options = (page: Page) =>
     page.$$eval(`${mic} option`, (o) =>
       o.map((x) => [(x as HTMLOptionElement).value, x.textContent]),
@@ -3047,7 +3271,7 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
       const { page, fx } = await openPage({ devices: MICS });
       expect(await page.$eval(mic, (e) => e.tagName)).toBe("SELECT");
       expect(await options(page)).toEqual([
-        ["", "System default (Built-in Microphone (built-in))"],
+        ["", "System default, Built-in Microphone"],
         ["mic-builtin", "Built-in Microphone (built-in)"],
         ["mic-usb", "Desk Mic (USB)"],
         ["mic-bt", "Headset (Bluetooth)"],
@@ -3073,7 +3297,7 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
       });
       expect(await page.inputValue(mic)).toBe("mic-gone");
       expect((await options(page)).at(-1)).toEqual(["mic-gone", "mic-gone (not connected)"]);
-      await page.click("#dictation-close");
+      await page.click("#calls-open");
       await page.click("#dictation-open");
       await page.waitForSelector(mic);
       expect(await page.inputValue(mic)).toBe("mic-gone");
@@ -3123,7 +3347,7 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
         expect(
           await p.$eval(
             "#dictation-mic-level",
-            (m) => (m.previousElementSibling as HTMLElement).dataset.key,
+            (m) => (m.nextElementSibling as HTMLElement).dataset.key,
           ),
         ).toBe("dictation.mic");
         await until(() => asked().length === 1, 5000, "the meter asked");
@@ -3135,8 +3359,8 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
         await w.send("dictationLevel", { db: -38 });
         expect(await meter()).toBe(-38);
 
-        // Closing the page lets go of the mic.
-        await p.click("#dictation-close");
+        // Leaving the page lets go of the mic.
+        await p.click("#calls-open");
         await until(() => asked().length === 2, 5000, "the meter stopped");
         expect(asked()).toEqual([{ on: true }, { on: false }]);
       } finally {
@@ -3152,14 +3376,21 @@ describe("DC-U4, DC-U7: the microphone picker and the sounds on the Dictation pa
       const { page, fx } = await openPage({});
       const now = () => text(page, "#dictation-sounds-now");
       const pick = (key: string, v: string) =>
-        page.selectOption(`#dictation [data-key='${key}']:not(div)`, v);
+        page.click(
+          `#page-dictation div.pg-row[data-key='${key}'] label:has(input[data-value='${v}'])`,
+        );
       expect(fx.settings["dictation.sounds"]).toBe("auto");
       expect(fx.settings["dictation.pill"]).toBe("bottom");
-      expect(await now()).toBe("Now: silent, since the pill shows.");
+      // Silent while the pill shows is what the help says: no second line.
+      const help = "#page-dictation div.pg-row[data-key='dictation.sounds'] .pg-lbl > div.pg-help";
+      expect(await now()).toBe("");
+      expect(await page.isVisible(help)).toBe(true);
       await pick("dictation.pill", "off");
-      expect(await now()).toBe("Now: soft sounds, since the pill is off.");
+      expect(await now()).toBe("Now soft sounds, since the pill is off.");
+      // One line of help at most: the news replaces the help.
+      expect(await page.isVisible(help)).toBe(false);
       await pick("dictation.sounds", "off");
-      expect(await now()).toBe("Now: a dictation neither shows nor sounds.");
+      expect(await now()).toBe("Now a dictation neither shows nor sounds.");
       await pick("dictation.sounds", "click");
       expect(await now()).toBe("");
       await until(() => fx.patches.length === 3, 5000, "each change saved");

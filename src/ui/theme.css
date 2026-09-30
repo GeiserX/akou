@@ -1649,8 +1649,8 @@ main {
   font-size: 0.8em;
 }
 
-/* The side column (WINDOW section 6): Ask on top with the last answer, then Notes with the
-   Notes | Enhanced toggle, then the note input at the foot. */
+/* The side column (WINDOW section 6): Ask on top with the last answer, then Notes, then the
+   note input at the foot. */
 #side {
   border-left: 1px solid var(--line);
   display: flex;
@@ -1861,32 +1861,8 @@ button.cite:hover {
   font-size: 12px;
   font-variant-numeric: tabular-nums;
 }
-/* Notes | Enhanced: a two-way toggle, the selected half in a neutral fill. */
-[role="tablist"] {
-  margin-left: auto;
-  display: flex;
-  height: 24px;
-  padding: 2px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  background: var(--panel);
-}
-[role="tab"] {
-  display: flex;
-  align-items: center;
-  padding: 0 8px;
-  border: none;
-  border-radius: 4px;
-  background: transparent;
-  color: var(--dim);
-  font-size: 11px;
-  font-weight: 500;
-}
-[role="tab"][aria-selected="true"] {
-  background: var(--line2);
-  color: var(--fg);
-}
-[role="tabpanel"] {
+/* The notes pane, between the Notes heading and the note input. */
+#pane-notes {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
@@ -1894,12 +1870,6 @@ button.cite:hover {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-#pane-enhanced {
-  padding: 0 16px 8px;
-}
-#pane-enhanced .bar {
-  flex-wrap: wrap;
 }
 #notes {
   list-style: none;
@@ -2058,18 +2028,6 @@ button.cite:hover {
     border-color: color-mix(in srgb, var(--agent) 22%, transparent);
   }
 }
-#enhanced-body li.mine {
-  color: var(--fg);
-  font-weight: 600;
-}
-#enhanced-body li.ai {
-  color: var(--dim);
-}
-#enhanced-body .who-note {
-  font-size: 11px;
-  color: var(--dim);
-}
-.enhanced-meta,
 .hint {
   font-size: 12px;
   color: var(--faint);
@@ -2232,53 +2190,8 @@ dialog {
   font-size: 18px;
   font-weight: 400;
 }
-.setting {
-  display: grid;
-  gap: 2px;
-  margin: 8px 0;
-}
-.setting label {
-  font-weight: 700;
-  font-family: ui-monospace, monospace;
-}
-.setting small {
-  color: var(--dim);
-}
-.setting.refused input,
-.setting.refused textarea {
-  border-color: var(--rec);
-}
-.setting .issue,
-.dictation-enable .issue,
-.dictation-dictionary .issue,
-.dictation-remote .issue {
+.dictation-dictionary .issue {
   color: var(--rec);
-}
-.apps-rules {
-  border-collapse: collapse;
-  table-layout: fixed;
-  width: 100%;
-}
-.apps-rules th,
-.apps-rules td {
-  padding: 2px;
-  text-align: left;
-}
-.apps-rules th:first-child {
-  width: 26%;
-}
-.apps-rules th:last-child {
-  width: 36px;
-}
-.apps-rules input,
-.apps-rules select {
-  box-sizing: border-box;
-  min-width: 0;
-  padding: 6px 4px;
-  width: 100%;
-}
-.apps-rules button {
-  padding: 6px 8px;
 }
 .dictation-dictionary ul {
   list-style: none;
@@ -2291,7 +2204,7 @@ dialog {
   flex-wrap: wrap;
 }
 /* The user's languages (akou-5v8): one chip each, then the list that adds another. */
-.dictation-languages {
+.dictation-setup .dictation-languages {
   margin: 4px 0 10px;
 }
 .language-chips {
@@ -2747,9 +2660,12 @@ input.pg-switch:disabled {
   outline: 2px solid var(--fg);
   outline-offset: 1px;
 }
+/* A resting choice keeps the dim colour, never fainter: the chosen one loses its bright text. */
 .pg-seg label:has(input:disabled) {
   cursor: default;
-  opacity: 0.6;
+}
+.pg-seg label:has(input:disabled:checked) {
+  color: var(--dim);
 }
 select.pg-select,
 .pg-row .language-chips + select,
@@ -3127,4 +3043,194 @@ input.pg-radio:focus-visible {
 }
 #page-models .pg-head {
   margin-bottom: 20px;
+}
+
+/* The Dictation page (docs/ux/design-explorations/sd-a-dictation.html): a grant's state, the keys
+   that work while listening, the microphone's level as bars, the rules per app that open in their
+   panel, and the setup, drawn in a panel of its own while it runs. */
+.pg-row .dictation-languages {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
+}
+.pg-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--dim);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.pg-state.ok .ico {
+  width: 12px;
+  height: 12px;
+  color: #2fb34a;
+}
+.pg-keys {
+  display: inline-flex;
+  gap: 4px;
+}
+.pg-while {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.pg-while .pg-value + .pg-keys {
+  margin-left: 8px;
+}
+.pg-row .recorder-unset {
+  color: var(--dim);
+  font-size: 12px;
+}
+.pg-row .record-fn {
+  height: 26px;
+  padding: 0 10px;
+  border-radius: 6px;
+  background: none;
+  border: 1px solid var(--line2);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--fg);
+}
+/* The level: a meter drawn as a row of twelve bars, lit from the left. */
+meter.pg-lvl {
+  width: 58px;
+  height: 12px;
+  -webkit-mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px 5px);
+  mask: repeating-linear-gradient(90deg, #000 0 3px, transparent 3px 5px);
+  background: var(--line2);
+  border: 0;
+}
+meter.pg-lvl::-webkit-meter-bar {
+  background: var(--line2);
+  border: 0;
+  border-radius: 0;
+  height: 12px;
+}
+meter.pg-lvl::-webkit-meter-optimum-value,
+meter.pg-lvl::-webkit-meter-suboptimum-value,
+meter.pg-lvl::-webkit-meter-even-less-good-value {
+  background: #2fb34a;
+}
+#page-dictation .pg-row[hidden],
+#page-dictation .apps-body[hidden] {
+  display: none;
+}
+.apps-rule + .apps-rule,
+.apps-rules:not(:empty) + .apps-add-row {
+  border-top: 1px solid var(--line);
+}
+.apps-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font-size: 13px;
+  font-weight: 400;
+}
+.apps-add:hover {
+  color: var(--fg);
+}
+.apps-add .ico {
+  width: 12px;
+  height: 12px;
+}
+.apps-next-note:empty {
+  display: none;
+}
+.apps-rule:first-child > .apps-head {
+  border-radius: 10px 10px 0 0;
+}
+.apps-app {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.apps-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 5px;
+  background: var(--raised);
+  border: 1px solid var(--line2);
+  color: var(--dim);
+}
+.apps-icon .ico {
+  width: 12px;
+  height: 12px;
+}
+.apps-rule.open .apps-head .pg-more {
+  transform: rotate(90deg);
+}
+.apps-body {
+  border-top: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.12);
+}
+.apps-body .pg-row {
+  padding-left: 46px;
+}
+.apps-body .pg-lbl:empty {
+  display: none;
+}
+.apps-body .pg-row:has(.apps-remove) {
+  justify-content: flex-end;
+}
+.pg-apps > .issue {
+  display: block;
+  padding: 0 14px 10px;
+  color: var(--rec);
+  font-size: 12px;
+}
+.pg-setup {
+  margin-top: 16px;
+  padding: 4px 16px 16px;
+}
+.pg-setup h4 {
+  margin: 12px 0 4px;
+  font-size: 13px;
+}
+.pg-setup p:not(.issue) {
+  margin: 4px 0;
+  color: var(--dim);
+  font-size: 12px;
+}
+/* The setup's buttons sit in a row with a gap, never touching. */
+.pg-setup button {
+  margin: 12px 8px 0 0;
+}
+.pg-setup meter {
+  display: block;
+  width: 240px;
+  height: 3px;
+  margin: 10px 0;
+  appearance: none;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line2);
+}
+.pg-setup meter::-webkit-meter-bar {
+  height: 3px;
+  border: 0;
+  border-radius: 2px;
+  background: var(--line2);
+}
+.pg-setup meter::-webkit-meter-optimum-value,
+.pg-setup meter::-webkit-meter-suboptimum-value,
+.pg-setup meter::-webkit-meter-even-less-good-value {
+  border-radius: 2px;
+  background: var(--ok);
+}
+.pg-setup meter::-moz-meter-bar {
+  border-radius: 2px;
+  background: var(--ok);
+}
+.dictation-server {
+  margin: -8px 0 12px;
 }

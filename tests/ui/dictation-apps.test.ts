@@ -147,7 +147,7 @@ describe("DC-U9 on the Dictation page: closing it ends the wait", () => {
   });
 
   test(
-    "Close stops reading the dictation log; reopened, the button waits for nothing",
+    "leaving the page stops reading the dictation log; reopened, the button waits for nothing",
     async () => {
       let fx: DictationFixture | null = null;
       const page = await rig.open(undefined, {
@@ -162,18 +162,20 @@ describe("DC-U9 on the Dictation page: closing it ends the wait", () => {
         if (u.pathname.endsWith("/dictations")) reads.push(u.search);
       });
       await page.click("#dictation-open");
-      await page.click("#dictation .apps-next");
-      expect((await page.textContent("#dictation .apps-next-note"))?.trim()).toBe(NEXT_APP_WAITING);
+      await page.click("#page-dictation .apps-next");
+      expect((await page.textContent("#page-dictation .apps-next-note"))?.trim()).toBe(
+        NEXT_APP_WAITING,
+      );
       // The newest dictation, then at least one poll after it.
       await until(() => reads.some((q) => q.includes("since=")), 5000, "a poll");
-      await page.click("#dictation-close");
+      await page.click("#calls-open");
       const at = reads.length;
       await page.waitForTimeout(2500);
       expect(reads.length).toBe(at);
       await page.click("#dictation-open");
       // The page draws itself again on open, with the button back on its label.
       await page.waitForFunction(
-        (label) => document.querySelector("#dictation .apps-next")?.textContent === label,
+        (label) => document.querySelector("#page-dictation .apps-next")?.textContent === label,
         NEXT_APP_LABEL,
       );
       expect(reads.length).toBe(at);

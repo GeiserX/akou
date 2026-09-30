@@ -1,8 +1,9 @@
 /**
  * The editor for per-app dictation rules, the `apps` setting type (docs/ux/DICTATION.md DC-U9):
  * one row per app, keyed by what the session captured as the app with the keyboard (a bundle id
- * on macOS, an executable name on Windows, a window class on Linux), each field a choice or
- * `global`, which leaves it out of the rule so the global setting applies.
+ * on macOS, an executable name on Windows, a window class on Linux), saying its rule in a few
+ * words and opening to its fields. Each field is a choice or "Like everywhere else", which leaves
+ * it out of the rule so the global setting applies.
  *
  * The rules travel as one JSON list in a hidden input carrying the setting's `data-key`, so the
  * settings code saves them like any other key: every edit writes the whole list through
@@ -13,27 +14,100 @@
  * dictation in the dictation log and adds a rule for the app it went to (`nextDictatedApp`).
  */
 
+import { QWEN_LANGUAGE_CODES } from "../main/asr/llama-catalog.ts";
+import { languageName } from "./dictation-languages.ts";
 import { h } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Reply, Transport } from "./protocol.ts";
+import { button, ICONS, icon, row } from "./rows.ts";
 
 /**
  * A rule's fields and their choices, as the registry's `apps` validator takes them
- * (`src/main/config/schema.ts`). `null`: typed, not picked.
+ * (`src/main/config/schema.ts`), each named in words. `null`: typed, not picked.
  */
-export const APP_RULE_FIELDS: readonly { name: string; label: string; values: string[] | null }[] =
-  [
-    { name: "mode", label: "Mode", values: ["direct", "draft", "draft-send"] },
-    { name: "insert", label: "Insert", values: ["paste", "type", "clipboard"] },
-    {
-      name: "sendKey",
-      label: "Send key",
-      values: ["Enter", "Ctrl+Enter", "Cmd+Enter", "Shift+Enter", "none"],
-    },
-    { name: "engine", label: "Engine", values: ["auto", "fast", "best", "remote"] },
-    { name: "language", label: "Language", values: null },
-    { name: "format", label: "Format", values: ["off", "provider"] },
-  ];
+export const APP_RULE_FIELDS: readonly {
+  name: string;
+  label: string;
+  values: readonly (readonly [value: string, label: string])[] | null;
+}[] = [
+  {
+    name: "mode",
+    label: "What a dictation does",
+    values: [
+      ["direct", "Goes straight in"],
+      ["draft", "Draft first"],
+      ["draft-send", "Draft first, then send"],
+    ],
+  },
+  {
+    name: "insert",
+    label: "How the words go in",
+    values: [
+      ["paste", "Paste"],
+      ["type", "Types the keys"],
+      ["clipboard", "Copy only"],
+    ],
+  },
+  {
+    name: "sendKey",
+    label: "Send key",
+    values: [
+      ["Enter", "Enter"],
+      ["Ctrl+Enter", "Control+Enter"],
+      ["Cmd+Enter", "Command+Enter"],
+      ["Shift+Enter", "Shift+Enter"],
+      ["none", "Never sends"],
+    ],
+  },
+  {
+    name: "engine",
+    label: "Speed or accuracy",
+    values: [
+      ["auto", "Automatic"],
+      ["fast", "Fast"],
+      ["best", "Best"],
+      ["remote", "Another computer"],
+    ],
+  },
+  {
+    name: "language",
+    label: "Language",
+    values: QWEN_LANGUAGE_CODES.map((c) => [c, languageName(c)] as const),
+  },
+  {
+    name: "format",
+    label: "Tidy the text with AI",
+    values: [
+      ["off", "Off"],
+      ["provider", "On"],
+    ],
+  },
+];
+
+/** What a field left out of a rule means: the setting everywhere else applies. */
+export const APP_RULE_GLOBAL = "Like everywhere else";
+
+/** A rule in a few words, for its row: "Draft first, then send", "Types the keys, never sends". */
+export function ruleSummary(rule: Readonly<Record<string, string>>): string {
+  const words = (name: string): string | null => {
+    const v = rule[name];
+    if (!v) return null;
+    const f = APP_RULE_FIELDS.find((x) => x.name === name);
+    const named = f?.values?.find(([x]) => x === v)?.[1];
+    if (name === "language") return `in ${named ?? v}`;
+    if (name === "engine") return named ? `${named.toLowerCase()} engine` : v;
+    if (name === "format") return v === "provider" ? "tidied with AI" : "never tidied";
+    if (name === "sendKey") return v === "none" ? "never sends" : `sends with ${named ?? v}`;
+    return named ?? v;
+  };
+  const parts = ["mode", "insert", "sendKey", "engine", "language", "format"]
+    .map(words)
+    .filter((x): x is string => x !== null)
+    .map((x, i) => (i === 0 ? x : x.charAt(0).toLowerCase() + x.slice(1)));
+  if (parts.length === 0) return APP_RULE_GLOBAL;
+  const out = parts.join(", ");
+  return out.charAt(0).toUpperCase() + out.slice(1);
+}
 
 type Rule = Record<string, string>;
 
@@ -117,9 +191,10 @@ export function nextDictatedApp(
 }
 
 /**
- * The editor for one `apps` setting. `input` holds the rules as JSON and fires `change` after each
- * edit; `shown` is the value as it came, for the settings code to tell an edit from none. With
- * `next`, a button adds a rule for the app of the next dictation.
+ * The editor for one `apps` setting, as rows of the page's panel: one row per app, saying its rule
+ * in a few words, which opens to the rule's fields; a row to add an app, and "Use the app I
+ * dictate into next". `input` holds the rules as JSON and fires `change` after each edit; `shown`
+ * is the value as it came, for the settings code to tell an edit from none.
  */
 export function appsEditor(
   id: string,
@@ -128,92 +203,132 @@ export function appsEditor(
   next?: NextApp,
 ): { root: HTMLElement; input: HTMLInputElement; shown: string } {
   const input = h("input", { id, type: "hidden" });
-  const body = h("tbody", {});
-  const rules = () => {
-    const out: Rule[] = [];
-    for (const tr of body.querySelectorAll<HTMLTableRowElement>("tr")) {
-      const rule: Rule = {};
-      for (const el of tr.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-field]")) {
-        const v = el.value.trim();
-        if (v !== "") rule[el.dataset.field as string] = v;
-      }
-      if (rule.app) out.push(rule);
+  const list = h("div", { class: "apps-rules" });
+  const readRule = (el: Element): Rule => {
+    const rule: Rule = {};
+    for (const f of el.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-field]")) {
+      const v = f.value.trim();
+      if (v !== "") rule[f.dataset.field as string] = v;
     }
-    return out;
+    return rule;
   };
+  const rules = () =>
+    [...list.querySelectorAll(".apps-rule")].map(readRule).filter((r) => r.app !== undefined);
   const changed = () => {
+    for (const el of list.querySelectorAll<HTMLElement>(".apps-rule")) paint(el);
     const now = JSON.stringify(rules());
     if (now === input.value) return;
     input.value = now;
     input.dispatchEvent(new Event("change", { bubbles: true }));
   };
-  const row = (rule: Record<string, unknown>) => {
+  /** The rule's row says its app and its rule as they stand in its fields. */
+  const paint = (el: HTMLElement) => {
+    const rule = readRule(el);
+    const name = el.querySelector(".apps-name");
+    const sum = el.querySelector(".apps-summary");
+    if (name) name.textContent = rule.app ?? "A new app";
+    if (sum) sum.textContent = rule.app ? ruleSummary(rule) : "Name the app to save its rule";
+  };
+  const open = (el: HTMLElement, yes: boolean) => {
+    const body = el.querySelector<HTMLElement>(".apps-body");
+    const head = el.querySelector<HTMLElement>(".apps-head");
+    if (body) body.hidden = !yes;
+    head?.setAttribute("aria-expanded", String(yes));
+    el.classList.toggle("open", yes);
+  };
+  const ruleEl = (rule: Record<string, unknown>, expanded = false) => {
     const app = h("input", {
       type: "text",
+      class: "pg-input",
       value: String(rule.app ?? ""),
-      placeholder: "com.example.chat",
+      placeholder: "Such as com.example.chat",
       attrs: { "data-field": "app", "aria-label": "App" },
       on: { change: changed },
     });
     const fields = APP_RULE_FIELDS.map((f) => {
       const v = typeof rule[f.name] === "string" ? (rule[f.name] as string) : "";
-      const el =
-        f.values === null
-          ? h("input", {
-              type: "text",
-              value: v,
-              placeholder: "global",
-              attrs: { size: "6" },
-            })
-          : h(
-              "select",
-              {},
-              h("option", { value: "" }, "global"),
-              // A value the list does not hold (a hand-edited file) stays shown as it is.
-              ...(v === "" || f.values.includes(v) ? f.values : [v, ...f.values]).map((x) =>
-                h("option", { value: x }, x),
-              ),
-            );
+      let el: HTMLInputElement | HTMLSelectElement;
+      if (f.values === null) {
+        el = h("input", {
+          type: "text",
+          class: "pg-input",
+          value: v,
+          placeholder: APP_RULE_GLOBAL,
+        });
+      } else {
+        // A value the list does not hold (a hand-edited file) stays shown as it is.
+        const values =
+          v === "" || f.values.some(([x]) => x === v) ? f.values : [[v, v], ...f.values];
+        el = h(
+          "select",
+          { class: "pg-select" },
+          h("option", { value: "" }, APP_RULE_GLOBAL),
+          ...values.map(([x, l]) => h("option", { value: x }, l)),
+        );
+      }
       el.value = v;
       el.dataset.field = f.name;
       el.setAttribute("aria-label", f.label);
       el.addEventListener("change", changed);
-      return h("td", {}, el);
+      return row({ label: f.label }, el);
     });
-    const tr = h(
-      "tr",
-      {},
-      h("td", {}, app),
-      ...fields,
+    const remove = button("Remove this rule", () => {
+      el.remove();
+      changed();
+    });
+    remove.classList.add("apps-remove");
+    const head = h(
+      "button",
+      {
+        type: "button",
+        class: "pg-row pg-link apps-head",
+        attrs: { "aria-expanded": "false" },
+        on: { click: () => open(el, el.querySelector<HTMLElement>(".apps-body")?.hidden === true) },
+      },
       h(
-        "td",
-        {},
+        "span",
+        { class: "pg-lbl apps-app" },
         h(
-          "button",
-          {
-            type: "button",
-            class: "apps-remove",
-            title: "Remove this rule",
-            attrs: { "aria-label": "Remove this rule" },
-            on: {
-              click: () => {
-                tr.remove();
-                changed();
-              },
-            },
-          },
-          "×",
+          "span",
+          { class: "apps-icon" },
+          icon(
+            "M4.5 3h7a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2h-7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z",
+            "M2.5 6h11",
+          ),
         ),
+        h("b", { class: "pg-name apps-name" }),
+      ),
+      h(
+        "span",
+        { class: "pg-ctl" },
+        h("span", { class: "pg-value apps-summary" }),
+        h("span", { class: "pg-more" }, icon(...ICONS.chevron)),
       ),
     );
-    for (const el of tr.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
+    const body = h(
+      "div",
+      { class: "apps-body", hidden: true },
+      row(
+        {
+          label: "App",
+          help: "Use the app I dictate into next fills this in.",
+        },
+        app,
+      ),
+      ...fields,
+      row({ label: "" }, remove),
+    );
+    const el = h("div", { class: "apps-rule" }, head, body);
+    for (const c of body.querySelectorAll<HTMLInputElement | HTMLSelectElement | HTMLButtonElement>(
       "input, select, button",
     ))
-      el.disabled = disabled;
-    return tr;
+      c.disabled = disabled;
+    paint(el);
+    open(el, expanded);
+    return el;
   };
   for (const r of Array.isArray(value) ? value : []) {
-    if (typeof r === "object" && r !== null) body.append(row(r as Record<string, unknown>));
+    if (typeof r === "object" && r !== null) list.append(ruleEl(r as Record<string, unknown>));
   }
   // What was shown, in the shape an edit writes: a saved rule whose keys come in another order is
   // no edit.
@@ -226,43 +341,46 @@ export function appsEditor(
       class: "apps-add",
       on: {
         click: () => {
-          const tr = row({});
-          body.append(tr);
-          tr.querySelector("input")?.focus();
+          const el = ruleEl({}, true);
+          list.append(el);
+          el.querySelector<HTMLElement>("[data-field='app']")?.focus();
         },
       },
     },
-    "+ Add app",
+    icon("M8 3v10M3 8h10"),
+    "Add an app",
   );
   add.disabled = disabled;
-  const nextNote = h("small", { class: "apps-next-note hint", attrs: { role: "status" } });
+  const nextNote = h("span", { class: "apps-next-note pg-help", attrs: { role: "status" } });
   let watch: { stop(): void } | null = null;
   const idle = (note: string) => {
     watch = null;
     nextButton.textContent = NEXT_APP_LABEL;
     nextNote.textContent = note;
   };
-  /** A rule for `app`: the one there is, or a new row saved with the app alone. */
+  /** A rule for `app`: the one there is, or a new one saved with the app alone. */
   const take = (app: string) => {
-    const known = [...body.querySelectorAll<HTMLInputElement>("[data-field='app']")].find(
+    const known = [...list.querySelectorAll<HTMLInputElement>("[data-field='app']")].find(
       (el) => el.value.trim() === app,
     );
     if (known) {
       nextNote.textContent = `${app} has a rule already.`;
-      known.closest("tr")?.querySelector("select")?.focus();
+      const el = known.closest<HTMLElement>(".apps-rule");
+      if (el) open(el, true);
+      el?.querySelector<HTMLElement>("select")?.focus();
       return;
     }
-    const tr = row({ app });
-    body.append(tr);
+    const el = ruleEl({ app }, true);
+    list.append(el);
     changed();
     nextNote.textContent = `Added ${app}.`;
-    tr.querySelector("select")?.focus();
+    el.querySelector<HTMLElement>("select")?.focus();
   };
   const nextButton = h(
     "button",
     {
       type: "button",
-      class: "apps-next",
+      class: "pg-btn apps-next",
       on: {
         click: () => {
           if (!next) return;
@@ -294,28 +412,13 @@ export function appsEditor(
     NEXT_APP_LABEL,
   );
   nextButton.disabled = disabled;
-  const root = h(
+  // "Add an app" on the left, the next dictation's app on the right, what the wait says under it.
+  const addRow = h(
     "div",
-    { class: "apps-editor" },
-    h(
-      "table",
-      { class: "apps-rules" },
-      h(
-        "thead",
-        {},
-        h(
-          "tr",
-          {},
-          h("th", {}, "App"),
-          ...APP_RULE_FIELDS.map((f) => h("th", {}, f.label)),
-          h("th", {}, ""),
-        ),
-      ),
-      body,
-    ),
-    add,
-    next ? nextButton : null,
-    next ? nextNote : null,
+    { class: "pg-row apps-add-row" },
+    h("div", { class: "pg-lbl" }, add, next ? nextNote : null),
+    next ? h("div", { class: "pg-ctl" }, nextButton) : null,
   );
+  const root = h("div", { class: "apps-editor" }, list, addRow, input);
   return { root, input, shown };
 }
