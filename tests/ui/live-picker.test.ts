@@ -303,13 +303,14 @@ describe("W3.19: the live panel in the Record row", () => {
             [RECOGNIZER, "Parakeet", "false", "ready"],
           ]);
           expect(await page.isDisabled('[data-every="120"]')).toBe(true);
-          // Under the heading, dim: the pass also runs before an agent reads; the Live slot has no such line.
+          // Under the heading, dimmer than a model's name: the pass also runs before an agent
+          // reads. The Live slot has no such line.
           const before = '#live-menu [data-slot="review"] .live-before';
           expect(await page.textContent(before)).toBe("Also runs before an agent reads the call.");
           expect(
             (await page.$eval(before, (e) => getComputedStyle(e).color)) !==
               (await page.$eval(
-                '#live-menu [data-slot="review"] .live-head-name',
+                '#live-menu [data-slot="review"] .live-title',
                 (e) => getComputedStyle(e).color,
               )),
           ).toBe(true);
