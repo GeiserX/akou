@@ -257,6 +257,34 @@ The stream reads worse on joined clips than on single clips (English 11.45 on 20
 
 An LLM per utterance was measured on 20 utterances per set: −1 to −6 errors against ROVER(Q,P) with Opus, +4 / −2 with Sonnet, 3 to 13 s of extra wall time, $0.009 per utterance. The sample is too small to show a gain, and the LLM is too slow for the live view. It is not in the design.
 
+### 3.3 Dictation: the streaming model's words, or a second decode
+
+A dictation shows the streaming model's words while you speak. `dictation.final` picks what goes in at the release. `live`, the default, inserts those same words after the stream's last flush. `parakeet` decodes the recording again, and `qwen` sends it to Qwen3-ASR.
+
+We measured each on the 20 FLEURS clips per language the sections above use. Each clip is one dictation of about 5 to 20 s, run through the code the app runs: the live Worker's dictation stream fed in 0.1 s pieces with the 250 ms post-roll, the Worker's Parakeet decode, and a warm Qwen asked as `best` asks it, with the language on `auto` inside the dictation's languages. We ran two setups. One language uses the streaming model `auto` picks for it. English with Spanish uses `nemotron-3.5-560`, which follows a switch. The wait runs from the release to the text: the stream's flush for `live`, the decode for the others. The harness is [tests/dictation-final-accuracy.test.ts](../../tests/dictation-final-accuracy.test.ts).
+
+| Language | Text inserted | WER | Wait p50 / p95, s |
+|---|---|---|---|
+| English | live, English only (`nemotron-en-560`) | 7.34 | 0.21 / 0.30 |
+| English | live, English and Spanish (`nemotron-3.5-560`) | 8.21 | 0.16 / 0.22 |
+| English | parakeet, as the app runs it (cut at the VAD's pauses) | 21.60 | 0.26 / 0.61 |
+| English | parakeet, the whole recording in one decode | 4.32 | not timed quietly |
+| English | qwen, English only or English and Spanish | 3.02 | 0.95 / 1.48 |
+| Spanish | live, Spanish only (`nemotron-3.5-1120`) | 4.87 | 0.13 / 0.15 |
+| Spanish | live, English and Spanish (`nemotron-3.5-560`) | 5.72 | 0.16 / 0.26 |
+| Spanish | parakeet, as the app runs it (cut at the VAD's pauses) | 5.51 | 0.36 / 1.49 |
+| Spanish | parakeet, the whole recording in one decode | 4.24 | not timed quietly |
+| Spanish | qwen, Spanish only or English and Spanish | 2.33 | 1.18 / 1.53 |
+| Both | control: each clip's live text against the next clip's reference | 113 | |
+
+- **What `live` costs in accuracy.** Against Parakeet's engine on the whole recording, 3.0 points in English (7.34 against 4.32) and 0.6 in Spanish (4.87 against 4.24), one point more with the two-language model. Against Qwen, 4.3 and 2.5 points.
+- **What `live` saves in wait.** The text is ready 0.1 to 0.3 s after the release, against about 0.3 to 0.6 s for Parakeet on these clips and about 1 to 1.5 s for a warm Qwen. It also never waits for a second model to load.
+- **Parakeet as the app runs it loses words on quiet English audio.** The Worker cuts a dictation at the pauses its VAD finds. That VAD hears the raw signal, with no gain. On the quiet FLEURS English clips it dropped the end of several sentences and found no span at all in 2 of the 20 clips, which then come back empty. The same clips decoded whole read 4.32. On quiet audio today's `parakeet` is worse than `live`. The fix belongs in the cutter.
+- **The waits are from a shared Mac mini** (load average about 10). A second run at load 19 to 29 gave the same WERs to the hundredth and waits two to ten times longer for Parakeet, which is why the whole-recording decode has no quiet timing. `live` was the fastest in both runs.
+- The control reads 113, so the harness pairs each hypothesis with its own reference and the scorer sees errors. Qwen scored the same under both setups.
+
+    AKOU_LIVE_MODELS=<models> AKOU_FLEURS=<data> bun test tests/dictation-final-accuracy.test.ts
+
 ## 4. Final pass: default engines and what N engines buy
 
 Units stay as today: the whole timeline, Silero cut points, merged at pauses up to 30 s (`maxSpanSeconds`, `src/main/asr/finalize-worker.ts:66-68`), each gained and padded by `prepareSpan`. Every engine in `asr.final.engines` decodes every unit, then the fuser runs.
