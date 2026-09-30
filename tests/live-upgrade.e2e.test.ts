@@ -233,3 +233,35 @@ describe("[ASR-7] a call with Parakeet's second pass", () => {
     expect(started()).toBe(before);
   });
 });
+
+describe("[ASR-7] review before a read, through the app", () => {
+  test("GET transcript and POST context say how many lines are unreviewed with a pass on; review=skip and Off say nothing", async () => {
+    await rig.api("PATCH", "/config", { "asr.review.model": "qwen", "dictation.enabled": false });
+    const id = await rig.startCall({});
+    const status = async () => (await rig.api("GET", "/status")).body.live;
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    const segs = async () =>
+      (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
+    await until(async () => (await segs()).length >= 2, 15_000, "the lines");
+    const read = await rig.api("GET", `/calls/${id}/transcript?format=json`);
+    expect(read.status).toBe(200);
+    expect(typeof read.body.unreviewed).toBe("number");
+    const ctx = await rig.api("POST", `/calls/${id}/context`, { question: "what was said?" });
+    expect(typeof ctx.body.unreviewed).toBe("number");
+    const skip = await rig.api("GET", `/calls/${id}/transcript?format=json&review=skip`);
+    expect("unreviewed" in skip.body).toBe(false);
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
+    // Ended: the final pass owns it, and a read says nothing of a second pass.
+    const after = await rig.api("GET", `/calls/${id}/transcript?format=json`);
+    expect("unreviewed" in after.body).toBe(false);
+    // Off: nothing either.
+    await rig.api("PATCH", "/config", { "asr.review.model": "none" });
+    const off = await rig.startCall({});
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    const r = await rig.api("GET", `/calls/${off}/transcript?format=json`);
+    expect("unreviewed" in r.body).toBe(false);
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
+  });
+});

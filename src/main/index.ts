@@ -863,7 +863,31 @@ export class AkouApp implements ApiApp {
       name: liveModelName(r.model === "qwen" ? QWEN_ASR : RECOGNIZER),
       reviewer,
       everySeconds: r.everySeconds,
+      // A read does not wait on Qwen while a final pass holds its GPU.
+      ...(r.model === "qwen" ? { busy: () => this.finalHoldsGpu() } : {}),
     };
+  }
+
+  /**
+   * A final pass's Metal llama-server holds the GPU: one that is neither dictation's warm Qwen nor
+   * the second pass's own.
+   */
+  private finalHoldsGpu(): boolean {
+    if (this.llamaPlan().accelerator !== "metal") return false;
+    const holder = (this.o.metalHolder ?? metalHolder)(
+      this.llamaSpec(QWEN_ASR).build?.dir,
+      this.bestDictation?.pid() ?? null,
+    );
+    return holder !== null && holder !== (this.liveQwen?.server.pid() ?? null);
+  }
+
+  /**
+   * Review before a read (`GET /calls/{id}/transcript`, `POST /calls/{id}/context`): with a second
+   * pass on for this live call, its closed lines are reviewed first, waiting at most
+   * `REVIEW_READ_WAIT_MS`. Null with no second pass, or once the call has ended.
+   */
+  async settleReview(callId: string): Promise<{ unreviewed: number } | null> {
+    return (await this.asr?.reviewForRead(callId)) ?? null;
   }
 
   /**

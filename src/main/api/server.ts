@@ -107,6 +107,11 @@ export interface ApiApp {
   deleteModel?(id: string, by: string): { id: string; deleted: true; bytes: number };
   /** Stops one model's download; false when it is not downloading. */
   cancelModel?(id: string, by: string): boolean;
+  /**
+   * Review before a read: with a second pass on for the live call, reviews its closed lines first
+   * (bounded) and answers how many are still not reviewed; null otherwise.
+   */
+  settleReview?(callId: string): Promise<{ unreviewed: number } | null>;
   /** Copies the catalog's model files from a folder here (`POST /models/import`). */
   importModels?(dir: string): Promise<{ copied: string[]; missing: string[] }>;
   /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */

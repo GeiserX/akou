@@ -33,7 +33,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
     "/calls/:id/context",
     {
       id: "calls.context",
-      doc: "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. Changes nothing.",
+      doc: "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. With a second pass on, the live call's closed lines are reviewed first, waiting at most 20 s; `unreviewed` counts those it had not reviewed yet, and a line whose review failed keeps the streaming text and is not counted. Changes nothing else.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -47,6 +47,8 @@ export function queryRoutes(r: Router<ApiApp>): void {
         throw new HttpError(400, "bad_field", `budget must be 1 to ${MAX_BUDGET}`);
       }
       const q = await c.app.query(callId(c, { allowLast: true }));
+      // Review before a read, as the transcript route does.
+      const review = q.view.call ? await c.app.settleReview?.(q.view.call.id) : null;
       const pack = q.context(b.question, { now: c.app.now(), budget: b.budget ?? MCP_BUDGET });
       return json(200, {
         call: q.view.call?.id ?? null,
@@ -62,6 +64,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
         provisional: pack.provisional,
         analysis: pack.analysis.line,
         blocks: pack.blocks,
+        ...(review ? { unreviewed: review.unreviewed } : {}),
       });
     },
   );
