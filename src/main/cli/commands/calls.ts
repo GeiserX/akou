@@ -1,7 +1,7 @@
 /**
  * Starting, controlling and listing calls, and the app itself (docs/DESIGN.md sections 1.5 and 6.1):
  * `start`, `stop`, `pause`, `resume`, `mute`, `unmute`, `restart`, `status`, `open`, `calls` and
- * `calls rename`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
+ * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
 import { bool, int, list, str } from "../args.ts";
@@ -228,6 +228,44 @@ const calls: Command = {
   },
 };
 
+const workspaces: Command = {
+  name: "workspaces",
+  summary: "List the workspaces, empty ones included, with how many calls each holds",
+  usage: "akou workspaces [--json]",
+  flags: {},
+  examples: ["akou workspaces"],
+  run: async (ctx, p) => {
+    if (p.positional.length > 0)
+      return usage(ctx, "workspaces takes no words; add one with: workspace add NAME");
+    const r = await api(ctx, "GET", "/workspaces");
+    return finish(ctx, r, (b) =>
+      (b.workspaces as Body[]).length === 0
+        ? "No workspaces."
+        : (b.workspaces as Body[])
+            .map((w) => `${w.name}  ${w.calls} call${w.calls === 1 ? "" : "s"}`)
+            .join("\n"),
+    );
+  },
+};
+
+const workspace: Command = {
+  name: "workspace",
+  summary: "Add a workspace, so it exists before its first call",
+  usage: "akou workspace add NAME [--json]",
+  flags: {},
+  examples: ["akou workspace add Personal"],
+  run: async (ctx, p) => {
+    const [sub, name, ...more] = p.positional;
+    if (sub !== "add" || !name || more.length > 0) {
+      return usage(ctx, "workspace needs add and one name: workspace add Personal");
+    }
+    const r = await api(ctx, "POST", "/workspaces", { body: { name } });
+    return finish(ctx, r, (b) =>
+      b.created ? `Added workspace ${b.workspace}` : `Workspace ${b.workspace} already exists`,
+    );
+  },
+};
+
 const show: Command = {
   name: "show",
   summary: "One call's transcript",
@@ -354,6 +392,8 @@ export const callCommands: Command[] = [
   status,
   open,
   calls,
+  workspaces,
+  workspace,
   show,
   finalize,
   enhance,

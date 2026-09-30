@@ -1073,6 +1073,214 @@ describe("the side column (WINDOW section 6)", () => {
   );
 });
 
+describe("the workspace menu (WINDOW 3.1)", () => {
+  const chip = (page: Page) => text(page, "#workspace-name");
+  const listed = (page: Page) =>
+    page.$$eval("#workspace-menu [role=menuitemradio]", (items) =>
+      items.map((i) => `${(i as HTMLElement).dataset.ws} ${i.getAttribute("aria-checked")}`),
+    );
+
+  test(
+    "a click opens every workspace with a check on the chosen one; a pick and a new one move the chip, and opening another call does not",
+    async () => {
+      const ids = { work: "01J8Z6Q4M2VX0K7B3D4E5WSWORK", hiring: "01J8Z6Q4M2VX0K7B3D4E5WSHIRE" };
+      await withRig(
+        {
+          seed: (home) => {
+            seedCall(home, (b) => b.created({ id: ids.work, workspace: "work", title: "Weekly" }));
+            seedCall(home, (b) =>
+              b.created({ id: ids.hiring, workspace: "hiring", title: "Loop" }, T0 + 3_600_000),
+            );
+            // An empty workspace is a folder with no call in it.
+            mkdirSync(join(home, "Recordings", "akou", "clients"), { recursive: true });
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(ids.work);
+          await until(async () => (await chip(page)) === "work", 5000, "the call's workspace");
+          // It is a menu button, and nothing is listed until it is clicked.
+          expect(await page.getAttribute("#workspace", "aria-haspopup")).toBe("menu");
+          expect(await page.isVisible("#workspace-menu")).toBe(false);
+          await page.click("#workspace");
+          await page.waitForSelector("#workspace-menu", { state: "visible" });
+          expect(await page.getAttribute("#workspace", "aria-expanded")).toBe("true");
+          expect(await listed(page)).toEqual(["clients false", "hiring false", "work true"]);
+          expect(await text(page, "#workspace-menu .ws-add")).toBe("New workspace…");
+          // The keyboard is on the chosen one; Escape closes and gives the focus back.
+          expect(
+            await page.evaluate(() => (document.activeElement as HTMLElement).dataset.ws),
+          ).toBe("work");
+          await page.keyboard.press("Escape");
+          await page.waitForSelector("#workspace-menu", { state: "hidden" });
+          expect(await page.evaluate(() => document.activeElement?.id)).toBe("workspace");
+
+          // A pick moves the chip and is remembered as the last one used.
+          await page.click("#workspace");
+          await page.click('#workspace-menu [data-ws="clients"]');
+          await page.waitForSelector("#workspace-menu", { state: "hidden" });
+          expect(await chip(page)).toBe("clients");
+          expect(await page.evaluate(() => localStorage.getItem("akou.workspace"))).toBe("clients");
+
+          // New workspace… turns into a name field; a bad name says why and sends nothing.
+          await page.click("#workspace");
+          await page.click("#workspace-menu .ws-add");
+          const field = page.locator("#workspace-menu .ws-name-input");
+          await field.waitFor();
+          expect(await page.evaluate(() => document.activeElement?.className)).toBe(
+            "ws-name-input",
+          );
+          const problem = page.locator("#workspace-menu .ws-problem");
+          await field.fill("a/b");
+          await field.press("Enter");
+          expect(await problem.textContent()).toBe("A name cannot have a slash.");
+          await field.fill("WORK");
+          await field.press("Enter");
+          expect(await problem.textContent()).toBe("There is a workspace called work already.");
+          await field.fill("");
+          await field.press("Enter");
+          expect(await problem.textContent()).toBe("Give it a name.");
+          // Escape goes back to the list, New workspace… again.
+          await field.press("Escape");
+          await page.waitForSelector("#workspace-menu .ws-add");
+          expect(await field.count()).toBe(0);
+          expect(await page.isVisible("#workspace-menu")).toBe(true);
+          // Enter makes the folder and picks it.
+          await page.click("#workspace-menu .ws-add");
+          await field.fill("Personal");
+          await field.press("Enter");
+          await page.waitForSelector("#workspace-menu", { state: "hidden" });
+          expect(await chip(page)).toBe("Personal");
+          const all = (await rig.api("GET", "/workspaces")).body.workspaces as { name: string }[];
+          expect(all.map((w) => w.name)).toContain("Personal");
+          // The sidebar shows it at once, as an empty group: beside other groups, its header with
+          // a count of 0, no "No calls yet" box.
+          await page.waitForSelector('#calls .ws-group[data-workspace="Personal"]');
+          for (const w of ["Personal", "clients"]) {
+            expect(await text(page, `#calls .ws-group[data-workspace="${w}"] .cnt`)).toBe("0");
+            expect(
+              await page.locator(`#calls .ws-group[data-workspace="${w}"] .none`).count(),
+            ).toBe(0);
+          }
+
+          // Opening another call to read it keeps the pick; the header shows the call's own.
+          await page.click(`#calls li[data-id="${ids.hiring}"] button`);
+          await until(
+            async () => ((await text(page, "#meta")) ?? "").includes(" · hiring"),
+            5000,
+            "open",
+          );
+          expect(await chip(page)).toBe("Personal");
+          await page.click(`#calls li[data-id="${ids.work}"] button`);
+          await until(
+            async () => ((await text(page, "#meta")) ?? "").includes(" · work"),
+            5000,
+            "back",
+          );
+          expect(await chip(page)).toBe("Personal");
+          // And so does a restart, which opens the last call again.
+          await page.reload();
+          await until(
+            async () => ((await text(page, "#meta")) ?? "").includes(" · "),
+            5000,
+            "reopened",
+          );
+          expect(await chip(page)).toBe("Personal");
+          // The keyboard leaving the open menu closes it.
+          await page.click("#workspace");
+          await page.waitForSelector("#workspace-menu", { state: "visible" });
+          await page.focus("#newtitle");
+          await page.waitForSelector("#workspace-menu", { state: "hidden" });
+          expect(await page.getAttribute("#workspace", "aria-expanded")).toBe("false");
+          // A click outside closes an open menu.
+          await page.click("#workspace");
+          await page.waitForSelector("#workspace-menu", { state: "visible" });
+          await page.mouse.click(700, 500);
+          await page.waitForSelector("#workspace-menu", { state: "hidden" });
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "under a full list, the sidebar field's refusal is on screen, in plain words",
+    async () => {
+      await withRig(
+        {
+          seed: (home) => {
+            for (let i = 0; i < 18; i++) {
+              const id = `01J8Z6Q4M2VX0K7B3D4E5WS${String(i).padStart(3, "0")}`;
+              seedCall(home, (b) =>
+                b.created({ id, workspace: i % 2 ? "work" : "hiring", title: `Call ${i}` }, T0 + i),
+              );
+            }
+          },
+        },
+        async (rig) => {
+          const page = await rig.open();
+          await page.setViewportSize({ width: 1024, height: 700 });
+          await page.waitForSelector("#calls li >> nth=17");
+          await page.click("#workspace-new");
+          const field = page.locator("#sidebar .ws-name-input");
+          await field.waitFor();
+          expect(await field.getAttribute("placeholder")).toBe("Name, Enter to add it");
+          await field.fill("Acme Corp");
+          await field.press("Enter");
+          const problem = page.locator("#sidebar .ws-problem");
+          expect(await problem.textContent()).toBe("No spaces. Try Acme-Corp.");
+          // The line is what the user sees at its own spot, not a row drawn over it.
+          await until(
+            () =>
+              problem.evaluate((el) => {
+                const r = el.getBoundingClientRect();
+                const at = document.elementFromPoint(r.left + 8, r.top + r.height / 2);
+                return at === el || el.contains(at);
+              }),
+            3000,
+            "the refusal on screen",
+          );
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with no call on screen: default, then the sidebar's New workspace, kept after a reload, and Record starts there",
+    async () => {
+      await withRig({}, async (rig) => {
+        const page = await rig.open();
+        await page.waitForFunction(() => document.getElementById("state")?.textContent !== "…");
+        expect(await chip(page)).toBe("default");
+        await page.click("#workspace-new");
+        const field = page.locator("#sidebar .ws-name-input");
+        await field.waitFor();
+        expect(await page.isVisible("#workspace-new")).toBe(false);
+        // Escape puts the button back and makes nothing.
+        await field.press("Escape");
+        await page.waitForSelector("#workspace-new", { state: "visible" });
+        expect(await field.count()).toBe(0);
+        await page.click("#workspace-new");
+        await field.fill("Personal");
+        await field.press("Enter");
+        await page.waitForSelector("#workspace-new", { state: "visible" });
+        expect(await chip(page)).toBe("Personal");
+        await page.waitForSelector('#calls .ws-group[data-workspace="Personal"]');
+        // The last one used survives a reload, with no call on screen to override it.
+        await page.reload();
+        await page.waitForFunction(() => document.getElementById("state")?.textContent !== "…");
+        await until(async () => (await chip(page)) === "Personal", 5000, "kept");
+        await page.click("#record");
+        await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
+        const live = (await rig.api("GET", "/status")).body.live.call as string;
+        expect((await rig.api("GET", `/calls/${live}`)).body.workspace).toBe("Personal");
+        await page.click("#stop");
+      });
+    },
+    UI_TIMEOUT,
+  );
+});
+
 describe("renaming a call from its title (WINDOW 3.1)", () => {
   test(
     "A live call and a saved one renamed from the header: the header, the sidebar row, its search and the window title follow without a reload, from this window or another door",
@@ -1871,7 +2079,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             // that word never says ready while nothing can record.
             expect(await page.isVisible("#state")).toBe(true);
             expect(await text(page, "#state")).toBe("setup");
-            for (const sel of ["#record", "#newtitle", "#live", "#meters"]) {
+            for (const sel of ["#record", "#newtitle", "#workspace", "#live", "#meters"]) {
               expect(await page.isVisible(sel)).toBe(false);
             }
 

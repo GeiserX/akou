@@ -301,6 +301,16 @@ export const PARITY: readonly Row[] = [
     window: [app('"PATCH", `/calls/#{encodeURIComponent(id)}`')],
   },
   {
+    action: "List and add workspaces",
+    cli: ["workspaces", "workspace"],
+    api: ["GET /workspaces", "POST /workspaces"],
+    mcp: { none: "akou_start names the workspace and makes its folder; a list is PG-M4" },
+    window: [
+      ui("workspaces.ts", '"GET", "/workspaces"'),
+      ui("workspaces.ts", '"POST", "/workspaces"'),
+    ],
+  },
+  {
     action: "Share a live link",
     cli: ["share"],
     api: ["GET /share", "POST /share", "DELETE /share"],
@@ -313,7 +323,7 @@ export const PARITY: readonly Row[] = [
     api: ["GET /templates"],
     mcp: { none: "missing: PG-F3" },
     window: {
-      none: "the template picker lived on the Enhanced tab, which is hidden from the window on purpose",
+      none: "the window always uses the automatic choice and has no Enhanced tab; scripts pick one through the API or --template",
     },
   },
   {

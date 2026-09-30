@@ -14,6 +14,7 @@ import {
   callHeadMeta,
   callMeta,
   dayLabel,
+  defaultWorkspace,
   finalNote,
   formatDuration,
   groupCalls,
@@ -39,6 +40,8 @@ import {
   stepRate,
   suggestReopen,
   talkTime,
+  workspaceNameProblem,
+  workspaceNames,
   YOU_HUE,
 } from "../src/ui/model.ts";
 import type { ModelRow } from "../src/ui/models-rows.ts";
@@ -698,6 +701,53 @@ describe("[W5.3] the player's position is a wall time", () => {
   });
 });
 
+describe("the workspace a new call goes in (WINDOW section 3.1)", () => {
+  test("the last one picked holds over the call on screen; with none, the call's, else default", () => {
+    expect(defaultWorkspace("Personal", "work")).toBe("Personal");
+    expect(defaultWorkspace(null, "work")).toBe("work");
+    expect(defaultWorkspace(null, undefined)).toBe("default");
+    expect(defaultWorkspace("", "")).toBe("default");
+  });
+
+  test("the menu lists the known workspaces and the chosen one once, by name", () => {
+    expect(workspaceNames(["work", "hiring", "work"], "default")).toEqual([
+      "default",
+      "hiring",
+      "work",
+    ]);
+    expect(workspaceNames([], "Personal")).toEqual(["Personal"]);
+    // Once in any case, under the folder's spelling (the folders come first).
+    expect(workspaceNames(["Work", "hiring", "work"], "WORK")).toEqual(["hiring", "Work"]);
+  });
+
+  test("a new name: not empty, no slash, unique in any case, one folder name", () => {
+    const known = ["work", "Personal"];
+    expect(workspaceNameProblem("clients", known)).toBeNull();
+    expect(workspaceNameProblem("  Q3.planning_2-b ", known)).toBeNull();
+    expect(workspaceNameProblem("   ", known)).toBe("Give it a name.");
+    expect(workspaceNameProblem("a/b", known)).toBe("A name cannot have a slash.");
+    expect(workspaceNameProblem("a\\b", known)).toBe("A name cannot have a slash.");
+    expect(workspaceNameProblem("WORK", known)).toBe("There is a workspace called work already.");
+    expect(workspaceNameProblem("personal", known)).toBe(
+      "There is a workspace called Personal already.",
+    );
+    // Refused in plain words, with the nearest name that works.
+    expect(workspaceNameProblem("Acme Corp", known)).toBe("No spaces. Try Acme-Corp.");
+    expect(workspaceNameProblem("Café  Río", known)).toBe("No spaces. Try Cafe-Rio.");
+    expect(workspaceNameProblem("café", known)).toBe(
+      "Only letters, digits, dots, dashes and underscores. Try cafe.",
+    );
+    expect(workspaceNameProblem(".hidden", known)).toBe(
+      "Only letters, digits, dots, dashes and underscores. Try hidden.",
+    );
+    expect(workspaceNameProblem("!!", known)).toBe(
+      "Only letters, digits, dots, dashes and underscores, starting with a letter or digit.",
+    );
+    expect(workspaceNameProblem("x".repeat(65), known)).toBe("Keep it to 64 characters.");
+    expect(workspaceNameProblem("x".repeat(64), known)).toBeNull();
+  });
+});
+
 describe("the calls list (WINDOW section 13)", () => {
   const H = 3_600_000;
   const call = (id: string, workspace: string, createdAt: number, title = id): CallSummary => ({
@@ -735,6 +785,25 @@ describe("the calls list (WINDOW section 13)", () => {
   test("positive control: a search that ignored the query would keep every call", () => {
     const all = shape(groupCalls(calls));
     expect(shape(groupCalls(calls, "sync"))).not.toEqual(all);
+  });
+
+  test("a workspace with no calls yet is an empty group after the others, by name; a search hides it", () => {
+    const empty = ["Personal", "work", "clients", "Personal"];
+    expect(shape(groupCalls(calls, "", null, empty))).toEqual([
+      "work: c a",
+      "hiring: b",
+      "clients: ",
+      "Personal: ",
+    ]);
+    expect(shape(groupCalls(calls, "sync", null, empty))).toEqual(["work: a"]);
+    expect(shape(groupCalls([], "", null, ["Personal"]))).toEqual(["Personal: "]);
+    // A Mac's disk does not tell Work from work: a folder a call fills in another case is that
+    // call's group, not a second, empty one.
+    expect(shape(groupCalls(calls, "", null, ["WORK", "Hiring", "clients", "CLIENTS"]))).toEqual([
+      "work: c a",
+      "hiring: b",
+      "clients: ",
+    ]);
   });
 
   test("the day: Today, Yesterday, the weekday within a week, then the date", () => {
@@ -775,13 +844,14 @@ describe("the composer row and the call header (WINDOW section 3.1)", () => {
     expect(callHeadMeta({ ...base, seconds: 38 * 60 + 12, template: "standup" })).toBe(
       "Today, 15:36 · 38 min 12 s · work · Template: standup",
     );
-    // No template is the automatic one; no length yet (live) leaves the length out.
+    // No template is the automatic choice, which the line leaves out; no length yet (live) leaves
+    // the length out.
     expect(
       callHeadMeta({ ...base, seconds: null, note: "recording for 2 s · last line 1 s ago" }),
-    ).toBe("Today, 15:36 · work · Template: automatic · recording for 2 s · last line 1 s ago");
+    ).toBe("Today, 15:36 · work · recording for 2 s · last line 1 s ago");
     // A saved call with no audio has no length to show, and a failure is its own item.
     expect(callHeadMeta({ ...base, seconds: 0, note: "open: permission denied" })).toBe(
-      "Today, 15:36 · work · Template: automatic · open: permission denied",
+      "Today, 15:36 · work · open: permission denied",
     );
   });
 
