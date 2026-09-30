@@ -1436,11 +1436,17 @@ export interface DictationStream {
   finish(): Promise<void>;
   /** Drops it: no more words come. */
   cancel(): void;
+  /**
+   * Settles when the stream is lost after it opened (the Worker failed or refused it): no more
+   * words come, and the preview decodes again instead. Never settles for a stream that ends well.
+   */
+  readonly lost: Promise<Error>;
 }
 
 interface HostDictationStream {
   onWords(tokens: LiveToken[]): void;
   opened: { resolve(c: LiveChoice & { ms: number }): void; reject(e: Error): void };
+  lost(e: Error): void;
   done: { resolve(): void; reject(e: Error): void } | null;
   cancelled: boolean;
 }
@@ -1682,6 +1688,7 @@ export class LiveAsr {
     for (const d of this.dstreams.values()) {
       d.opened.reject(new Error(why));
       d.done?.reject(new Error(why));
+      d.lost(new Error(why));
     }
     this.dstreams.clear();
     for (const w of this.warms.values()) w.reject(new Error(why));
@@ -1721,9 +1728,14 @@ export class LiveAsr {
       rejectOpened = rej;
     });
     opened.catch(() => {});
+    let lose!: (e: Error) => void;
+    const lost = new Promise<Error>((res) => {
+      lose = res;
+    });
     const d: HostDictationStream = {
       onWords,
       opened: { resolve: resolveOpened, reject: rejectOpened },
+      lost: lose,
       done: null,
       cancelled: false,
     };
@@ -1742,6 +1754,7 @@ export class LiveAsr {
     }
     return {
       opened,
+      lost,
       push: (samples) => {
         if (d.cancelled || !this.dstreams.has(token)) return;
         const copy = samples.slice();
@@ -2062,6 +2075,7 @@ export class LiveAsr {
         this.dstreams.delete(m.token);
         d?.opened.reject(new Error(m.error));
         d?.done?.reject(new Error(m.error));
+        d?.lost(new Error(m.error));
         return;
       }
       case "dwarmed": {

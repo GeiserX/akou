@@ -92,6 +92,12 @@ export class LiveWords implements WordStream {
         o.onLog?.(`dictation: no live words (${err.message})`);
       },
     );
+    // Lost after it opened (the Worker died mid-dictation): the preview decodes again from here.
+    void this.stream.lost.then((err) => {
+      if (this.failed) return;
+      this.failed = true;
+      o.onLog?.(`dictation: live words lost (${err.message})`);
+    });
   }
 
   /** False once the stream could not open or died: the preview falls back to re-decoding. */

@@ -51,7 +51,7 @@ interface Page {
 }
 
 /** The engines a retry can ask for; the route refuses one this machine cannot run, and says why. */
-export const RETRY_ENGINES = ["fast", "best", "remote"] as const;
+export const RETRY_ENGINES = ["fast", "best", "live", "remote"] as const;
 
 /** An engine as a person reads it. */
 export function engineName(engine: string): string {

@@ -1157,6 +1157,9 @@ export class AkouApp implements ApiApp {
       const qwen = (call: string) => this.liveRan.get(call)?.review?.model === "qwen";
       const nextKeeps = next && next.id !== id && qwen(next.id);
       if (qwen(id) && !nextKeeps) this.stopLiveQwen();
+      // A call on another streaming model let the dictation's go: load it again now, so the next
+      // press finds it, and the pill says "loading model" while it loads (DC-E7).
+      this.warmDictationModels();
       // After the event is out, so the pass starts from a log that has it.
       queueMicrotask(() => this.finalAtEnd(id));
     }

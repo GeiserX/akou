@@ -10,8 +10,9 @@
  * - `fast` and `remote` are what they say; `remote` never needs a local model.
  * - `dictation.final` (DC-E7) names the text a local dictation inserts while `dictation.engine` is
  *   `auto`: `live`, the default and the fastest, is the streaming model's own words (`live`), with
- *   Parakeet in its place while no streaming model is downloaded; `qwen` is `best` (downloaded as
- *   `best` is); `parakeet` is `auto` as above, the behaviour before this key. `fast`, `best` and `remote` in
+ *   Parakeet in its place while no streaming model is downloaded; `parakeet` is `fast`; `qwen` is
+ *   `best` (downloaded as `best` is). `auto` with no `dictation.final` (a caller that passes none)
+ *   still picks by the machine as above. `fast`, `best` and `remote` in
  *   `dictation.engine` win. The Dictation page writes both keys, so what it shows is what runs, and
  *   `GET /v1/dictation` names the result as `final`. This is the one rule the page, the API and the
  *   CLI read.
@@ -22,6 +23,13 @@ export type DictationEngineName = "fast" | "best" | "remote" | "live";
 /** The values of `dictation.final`: the text a local dictation inserts (DC-E7). */
 export const DICTATION_FINALS = ["parakeet", "live", "qwen"] as const;
 export type DictationFinal = (typeof DICTATION_FINALS)[number];
+
+/** The engine each `dictation.final` runs on while `dictation.engine` is `auto`. */
+const FINAL_ENGINE: Readonly<Record<string, string>> = {
+  live: "live",
+  parakeet: "fast",
+  qwen: "best",
+};
 
 /** `dictation.final` as `GET /v1/dictation` names what is inserted now, from the engine used. */
 export function finalOf(engine: string | null): DictationFinal | "remote" | null {
@@ -90,10 +98,8 @@ export function resolveDictationEngine(o: {
         }
       : plain("best", `best on ${o.accelerator}`);
   const setting =
-    o.setting === "auto" && (o.final === "qwen" || o.final === "live")
-      ? o.final === "qwen"
-        ? "best"
-        : "live"
+    o.setting === "auto" && o.final !== undefined
+      ? (FINAL_ENGINE[o.final] ?? o.setting)
       : o.setting;
   switch (setting) {
     case "live":

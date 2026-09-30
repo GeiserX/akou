@@ -3069,7 +3069,7 @@ describe("DC-H1: the History page", () => {
       await page.click(`${row("d001")} .hist-more`);
       expect(
         await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
-      ).toEqual(["Retry with Best", "Retry on the other computer", "Delete"]);
+      ).toEqual(["Retry with Best", "Retry with Live", "Retry on the other computer", "Delete"]);
       fx.calls.length = 0;
       await fromMenu(page, "d001", "button.retry[data-engine='best']");
       await page.waitForSelector(`${row("d001")} .result.retry`);
@@ -3146,7 +3146,7 @@ describe("DC-H1: the History page", () => {
       await page.click(`${row("d001")} .hist-more`);
       expect(
         await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
-      ).toEqual(["Retry with Best", "Delete"]);
+      ).toEqual(["Retry with Best", "Retry with Live", "Delete"]);
     },
     UI_TIMEOUT,
   );

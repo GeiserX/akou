@@ -122,36 +122,33 @@ function alive(pid: number): boolean {
   }
 }
 
-// `auto` picks by the machine under `dictation.final` `parakeet`; the default, `live`, is DC-E7's.
+// Under `dictation.engine` `auto`, `dictation.final` decides (DC-E7): `qwen` is best where it can
+// run, `parakeet` is always Parakeet, and the default `live` waits for a streaming model.
 describe("DC-E3: auto on this machine", () => {
-  test("a Metal accelerator with Qwen on disk: auto is best, and GET /v1/dictation says why", async () => {
+  test("a Metal accelerator with Qwen on disk: qwen is best, and GET /v1/dictation says why", async () => {
     const { r } = await rig(
-      { "asr.accelerator": "metal", "dictation.final": "parakeet" },
+      { "asr.accelerator": "metal", "dictation.final": "qwen" },
       { qwen: true },
     );
     const st = (await r.api("GET", "/dictation")).body;
     expect(st).toMatchObject({ engine: "best", verdict: "best on metal", loading: false });
   });
 
-  test("on the CPU, auto is fast", async () => {
+  test("parakeet is Parakeet, even with Qwen on disk and a GPU for it", async () => {
     const { r } = await rig(
-      { "asr.accelerator": "cpu", "dictation.final": "parakeet" },
+      { "asr.accelerator": "metal", "dictation.final": "parakeet" },
       { qwen: true },
     );
     const st = (await r.api("GET", "/dictation")).body;
-    expect(st).toMatchObject({ engine: "fast", verdict: "fast: best needs a GPU" });
+    expect(st).toMatchObject({ engine: "fast", final: "parakeet" });
   });
 
-  test("a GPU with Qwen missing: fast, and nothing is downloaded", async () => {
-    const x = await rig({
-      "asr.accelerator": "metal",
-      "dictation.final": "parakeet",
-      "dictation.enabled": true,
-    });
+  test("a GPU with Qwen missing: the default runs Parakeet until a streaming model lands, and nothing is downloaded", async () => {
+    const x = await rig({ "asr.accelerator": "metal", "dictation.enabled": true });
     const st = (await x.r.api("GET", "/dictation")).body;
     expect(st).toMatchObject({
       engine: "fast",
-      verdict: "fast: best (Qwen3-ASR) is not downloaded",
+      verdict: "fast: no streaming model is downloaded for live",
     });
     expect(x.fetched).toEqual([]);
   });

@@ -681,7 +681,7 @@ export const SETTINGS = {
     type: "string",
     values: DICTATION_FINALS,
     default: "live",
-    doc: "The text a dictation inserts, while `dictation.engine` is `auto` (`fast`, `best` and `remote` there win; the Dictation page sets both). `live`, the default and the fastest: the words the streaming model showed as you spoke, inserted the moment you let go, with no second decode, and less accurate than Parakeet; while no streaming model is downloaded, Parakeet inserts. `parakeet`: as `dictation.engine` `auto` picked before this key, Parakeet decoding the whole recording at the release with your word list, or Qwen3-ASR where it runs on a GPU and is downloaded. `qwen`: Qwen3-ASR, the most accurate, kept warm while dictation is on, as `dictation.engine` `best`. Whatever this says, the words while you speak come from the streaming model when one is downloaded (`akou models pull nemotron-3.5-560`), else from Parakeet twice a second.",
+    doc: "The text a dictation inserts, while `dictation.engine` is `auto` (`fast`, `best` and `remote` there win; the Dictation page sets both). `live`, the default and the fastest: the words the streaming model showed as you spoke, inserted the moment you let go, with no second decode, and less accurate than Parakeet; while no streaming model is downloaded, Parakeet inserts. `parakeet`: Parakeet decodes the whole recording at the release, with your word list. `qwen`: Qwen3-ASR, the most accurate, kept warm while dictation is on, as `dictation.engine` `best`. Whatever this says, the words while you speak come from the streaming model when one is downloaded (`akou models pull nemotron-3.5-560`), else from Parakeet twice a second.",
   },
   "dictation.localTimeoutSeconds": {
     type: "integer",

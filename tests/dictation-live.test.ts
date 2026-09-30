@@ -245,16 +245,12 @@ describe("DC-E7: dictation.final picks the source of the inserted text", () => {
       });
     expect(at("auto", "live").engine).toBe("live");
     expect(at("auto", "qwen").engine).toBe("best");
-    // parakeet, the default, is auto as it always was: best where Qwen runs on a GPU.
-    expect(at("auto", "parakeet").engine).toBe("best");
+    // parakeet is Parakeet, even where Qwen runs on a GPU and is downloaded.
+    expect(at("auto", "parakeet")).toMatchObject({ engine: "fast", wanted: null });
+    // A caller that passes no dictation.final keeps auto's pick by the machine.
     expect(
-      resolveDictationEngine({
-        setting: "auto",
-        accelerator: "cpu",
-        bestReady: false,
-        final: "parakeet",
-      }).engine,
-    ).toBe("fast");
+      resolveDictationEngine({ setting: "auto", accelerator: "metal", bestReady: true }).engine,
+    ).toBe("best");
     expect(at("fast", "live").engine).toBe("fast");
     expect(at("best", "live").engine).toBe("best");
     expect(at("remote", "live").engine).toBe("remote");
@@ -286,18 +282,40 @@ describe("DC-E7: the stream's words", () => {
     ]);
   });
 
-  /** A fake stream on the Worker: it hears one token per push and one more at the flush. */
-  function fakeOpen(): (onWords: (t: LiveToken[]) => void) => DictationStream {
+  /**
+   * A fake stream on the Worker: it hears one token per push and one more at the flush, and is
+   * lost when `lost` settles.
+   */
+  function fakeOpen(
+    lost: Promise<Error> = new Promise(() => {}),
+  ): (onWords: (t: LiveToken[]) => void) => DictationStream {
     return (onWords) => {
       let n = 0;
       return {
         opened: Promise.resolve({ engine: "nemotron-en-560", lang: "en", ms: 0 }),
+        lost,
         push: () => onWords([tok(` w${n++}`, n)]),
         finish: async () => onWords([tok(" last", 99)]),
         cancel: () => {},
       };
     };
   }
+
+  test("a stream lost after it opened stops being ok, so the preview decodes again", async () => {
+    let lose!: (e: Error) => void;
+    const w = new LiveWords(
+      fakeOpen(
+        new Promise<Error>((res) => {
+          lose = res;
+        }),
+      ),
+      () => {},
+    );
+    await Promise.resolve();
+    expect(w.ok()).toBe(true);
+    lose(new Error("the recognizer failed"));
+    await until(() => !w.ok(), 1000, "the stream lost");
+  });
 
   test("LiveWords sends the whole text so far, and finishes with every word", async () => {
     const seen: string[] = [];
@@ -387,5 +405,20 @@ describe("DC-E7: the live Worker shares its streaming model", () => {
     expect(words).toEqual(["hello", "world"]);
     // Finished, it is gone: a second finish is refused.
     await expect(s.finish()).rejects.toThrow();
+  });
+
+  test("through the host: a stream open when the recognizer goes away is lost, and says why", async () => {
+    const asr = new LiveAsr(
+      {
+        models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: {} },
+        inThread: true,
+      },
+      () => undefined,
+    );
+    await asr.ready;
+    const s = asr.openDictation({ engine: "nemotron-en-560", lang: "en" }, ["en"], () => {});
+    await s.opened;
+    await asr.close();
+    expect((await s.lost).message).toMatch(/closed/);
   });
 });

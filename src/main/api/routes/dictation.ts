@@ -79,7 +79,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations",
     {
       id: "dictations.create",
-      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto (`dictation.engine`), fast, best (Qwen3-ASR, falling back to fast when it fails or is missing), or remote (the akou at `dictation.remote.url`); `language` a BCP-47 tag or auto (`dictation.language`): best and a remote akou are forced into it, and the fast engine (Parakeet) ignores it, since it detects the language itself, so `language_forced` says whether it was used. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, the decode time, and `fallback_from` when another engine decoded it.",
+      doc: "Transcribe one clip through the dictation path: the dictation engine, the dictation log, no key and nothing inserted anywhere. `file` is a 16 kHz WAV or any format ffmpeg reads; `engine` is auto (`dictation.engine`), fast, best (Qwen3-ASR, falling back to fast when it fails or is missing), live (the streaming model's words, falling back to fast when none is downloaded), or remote (the akou at `dictation.remote.url`); `language` a BCP-47 tag or auto (`dictation.language`): best and a remote akou are forced into it, and the fast engine (Parakeet) ignores it, since it detects the language itself, so `language_forced` says whether it was used. Answers the dictation with its text, the detected language, per-word times and confidences where the engine gives them, the decode time, and `fallback_from` when another engine decoded it.",
       access: "admin",
       modes: ["app"],
       body: { multipart: { file: "file", "engine?": "string", "language?": "string" } },
@@ -232,7 +232,7 @@ export function dictationRoutes(r: Router<ApiApp>): void {
     "/dictations/:id/retry",
     {
       id: "dictations.retry",
-      doc: "Decode a dictation's kept audio again with `engine` (auto, fast, best or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. `language` (a BCP-47 tag, or auto for `dictation.language`) forces the decode into it on best and a remote akou, as the draft box's language chip does; fast detects the language itself. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
+      doc: "Decode a dictation's kept audio again with `engine` (auto, fast, best, live or remote, as in dictations.create), through the same silence guard, vocabulary and text rules as a new dictation. `language` (a BCP-47 tag, or auto for `dictation.language`) forces the decode into it on best and a remote akou, as the draft box's language chip does; fast detects the language itself. Answers the new reading (`text`, `raw`, `language`, `words`, `engine`, `model`, `ms`, `fallback_from` when another engine decoded it) beside the dictation, which is not changed; `text` is empty when no speech is heard. `no_audio` when the dictation has none kept.",
       access: "admin",
       modes: ["app"],
       params: { id: "The dictation id, from dictations.list." },

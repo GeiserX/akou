@@ -13,13 +13,15 @@ import { NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
 import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
 import { concat, silence, speak } from "./fixtures/asr-fake.ts";
-import { monoWav } from "./fixtures/audio.ts";
+import { stereoWav } from "./fixtures/audio.ts";
 import { modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
 
 setDefaultTimeout(60_000);
 
 const STREAM = "nemotron-en-560";
+/** The two-language streaming model a call on English and Spanish runs. */
+const CALL_STREAM = "nemotron-3.5-560";
 /** What the fake mic says: its length decides how long a dictation records. */
 const SPEECH = speak(["hello", "world"]);
 
@@ -39,6 +41,8 @@ async function rig(o: {
   off?: boolean;
   models?: Record<string, unknown>;
   worker?: boolean;
+  /** More settings, over the rig's own. */
+  settings?: Record<string, unknown>;
 }): Promise<AppRig> {
   const home = tempDir("akou-dict-live-e2e-");
   cleanups.push(home.cleanup);
@@ -49,12 +53,15 @@ async function rig(o: {
     reg.entry("silero-vad", ["vad.onnx"]),
     reg.entry(NEMOTRON, ["diar.onnx"]),
     { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true } as ModelSpecEntry,
+    { ...reg.entry(CALL_STREAM, ["c.onnx"]), onDemand: true } as ModelSpecEntry,
   ];
   const models = join(home.dir, "models");
   mkdirSync(models, { recursive: true });
-  for (const m of catalog.slice(0, o.stream ? 4 : 3)) reg.install(models, m);
+  for (const m of catalog.slice(0, o.stream ? 5 : 3)) reg.install(models, m);
   const wav = join(home.dir, "mic.wav");
-  writeFileSync(wav, monoWav(concat(SPEECH, silence(3))));
+  // Stereo, the same speech on both channels: a call captures both, and dictation averages them.
+  const said = concat(SPEECH, silence(3));
+  writeFileSync(wav, stereoWav(said, said));
   const r = await appRig({
     modelRegistry: catalog,
     models: { kind: "module", path: FAKE_MODELS, model: "fake-parakeet", options: o.models ?? {} },
@@ -65,6 +72,7 @@ async function rig(o: {
       "asr.languages": ["en"],
       "dictation.enabled": !o.off,
       ...(o.final ? { "dictation.final": o.final } : {}),
+      ...o.settings,
     },
   });
   cleanups.push(() => r.close());
@@ -94,6 +102,10 @@ async function dictate(r: AppRig): Promise<void> {
     "the insert",
   );
 }
+
+/** The Worker's model loads, by model, as `GET /v1/status` reports them. */
+const loads = async (r: AppRig): Promise<Record<string, number>> =>
+  (await r.api("GET", "/status")).body.asr.loads;
 
 describe("DC-E7: the streaming model through the app", () => {
   test("live is the default: with the streaming model on disk, its words go in", async () => {
@@ -132,10 +144,6 @@ describe("DC-E7: the streaming model through the app", () => {
 });
 
 describe("DC-E7: dictation's models load first at launch", () => {
-  /** The Worker's model loads, by model, as `GET /v1/status` reports them. */
-  const loads = async (r: AppRig): Promise<Record<string, number>> =>
-    (await r.api("GET", "/status")).body.asr.loads;
-
   test("with dictation on, Parakeet and the streaming model are loaded before any press", async () => {
     const r = await rig({ stream: true });
     await until(
@@ -170,5 +178,58 @@ describe("DC-E7: dictation's models load first at launch", () => {
       engine: "live",
     });
     expect((await r.api("GET", "/dictation")).body.loading).toBe(false);
+  });
+
+  test("after a call on another streaming model, the dictation's loads again and the status says so", async () => {
+    // The call hears English and Spanish, the dictation English only: two models, and the set
+    // holds one, so the call's replaces the dictation's.
+    const r = await rig({
+      stream: true,
+      worker: true,
+      models: { liveLoadMs: 1500 },
+      settings: {
+        "asr.languages": ["en", "es"],
+        "dictation.languages": ["en"],
+        "asr.live": "nemotron",
+      },
+    });
+    await until(
+      async () => (await r.api("GET", "/dictation")).body.loading === false,
+      10_000,
+      "the dictation's model loaded",
+    );
+    const call = await r.startCall();
+    await until(
+      async () =>
+        (await r.app.events(call, 0)).some(
+          (e) => e.type === "seg" && (e as { model?: string }).model === CALL_STREAM,
+        ),
+      15_000,
+      "a line from the call's model",
+    );
+    expect((await r.api("POST", "/calls/live/stop")).status).toBe(200);
+    // The dictation's model loads again once the call is over, and the pill would say so.
+    await until(
+      async () => (await r.api("GET", "/dictation")).body.loading === true,
+      10_000,
+      "loading after the call",
+    );
+    await until(
+      async () => (await loads(r))[STREAM] === 2,
+      15_000,
+      "the dictation's model loaded again",
+    );
+    await until(
+      async () => (await r.api("GET", "/dictation")).body.loading === false,
+      10_000,
+      "loaded",
+    );
+    await dictate(r);
+    const id = (await r.api("GET", "/dictations")).body.items[0].id;
+    expect((await r.api("GET", `/dictations/${id}`)).body).toMatchObject({
+      text: "hello world",
+      engine: "live",
+      model: STREAM,
+    });
   });
 });
