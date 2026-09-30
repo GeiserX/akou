@@ -439,6 +439,32 @@ describe("the Models page", () => {
   );
 
   test(
+    "a live model that does not hear the call's languages says why, and cannot be picked",
+    async () => {
+      const row = `${LIVE} [data-setup="${STREAM}"]`;
+      await rig.api("PATCH", "/config", { "asr.languages": ["es"] });
+      try {
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await until(
+          async () =>
+            ((await page.textContent(row)) ?? "").includes("Nemotron English does not hear es."),
+          5000,
+          "the reason",
+        );
+        expect(await page.getAttribute(row, "data-state")).toBe("blocked");
+        expect(await page.isDisabled(`${row} input.pg-radio`)).toBe(true);
+      } finally {
+        await rig.api("PATCH", "/config", { "asr.languages": ["en"] });
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${LIVE} [data-setup]`);
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "the narrowest window (480 px, the shell's minimum): nothing scrolls sideways",
     async () => {
       await page.setViewportSize({ width: 480, height: 800 });

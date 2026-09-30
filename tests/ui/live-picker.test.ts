@@ -362,6 +362,8 @@ describe("W3.19: the live panel in the Record row", () => {
             await page.textContent(`#live-menu [data-review="${RECOGNIZER}"] .live-line`),
           ).toBe("Parakeet already writes the live lines.");
           expect(await extra(page)).toBe("");
+          // Qwen stays saved but cannot run: Off is what the next call runs, so Off is checked.
+          expect((await radios(page, "review"))[0]).toEqual(["none", "Off", "true", "ready"]);
           // An interval saved elsewhere shows as itself, checked.
           await rig.api("PATCH", "/config", {
             "asr.live": STREAM,

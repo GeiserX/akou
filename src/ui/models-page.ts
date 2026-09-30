@@ -522,15 +522,18 @@ export class ModelsPage {
           name: "models-live",
           value: e.id,
           label: own.name ?? e.id,
-          help: side.help ?? (!owner && own.state !== "ready" ? needsText([own]) : help),
+          help:
+            side.help ?? (!owner && own.state !== "ready" ? needsText([own]) : (e.blocked ?? help)),
           checked,
           isDefault: DEFAULTS["asr.live"] === e.id,
+          // A model that does not hear the call's languages says why, as the second pass does.
+          disabled: e.blocked !== null && !checked,
         },
         ...mark(e.id, e.id),
         ...side.controls,
       );
       r.dataset.setup = e.id;
-      r.dataset.state = side.state;
+      r.dataset.state = e.blocked ? "blocked" : side.state;
       rows.push(r);
     }
     const vox = v.setups.find((x) => x.id === "voxtral");

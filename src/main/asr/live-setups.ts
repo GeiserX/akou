@@ -32,6 +32,7 @@ import {
   engineForLanguages,
   isLiveEngine,
   LIVE_ENGINE_IDS,
+  LIVE_ENGINES,
   type LiveChoice,
 } from "./live-engines.ts";
 import { QWEN_ASR } from "./llama-catalog.ts";
@@ -351,7 +352,8 @@ export function qwenRoom(c: LiveSetupContext): string | null {
  * reviews Nemotron's lines, so the live model must be Nemotron; and Parakeet hears 25 European
  * languages, so every one of the call's languages must be among them. An empty `asr.languages`
  * (any language) blocks Parakeet too: the streaming Nemotron gives no language per utterance, so
- * nothing tells which utterances Parakeet could hear.
+ * nothing tells which utterances Parakeet could hear. A live model that hears one language only
+ * (Nemotron English) answers that: every utterance is in its language.
  */
 export function reviewCannot(
   id: Reviewer,
@@ -363,12 +365,33 @@ export function reviewCannot(
       ? "Parakeet already writes the live lines."
       : "It reviews Nemotron's lines; the live model is Parakeet.";
   if (id === "parakeet") {
-    if (c.languages.length === 0)
+    // A Nemotron named by its id in `asr.live` wins over `asr.live.engine`, as in `chooseLiveSetup`.
+    const engine = isLiveEngine(c.setting) ? c.setting : c.engine;
+    const only = isLiveEngine(engine) ? LIVE_ENGINES[engine] : null;
+    const languages =
+      c.languages.length === 0 && only && !only.multilingual ? only.languages : c.languages;
+    if (languages.length === 0)
       return "Parakeet hears 25 European languages; name this call's languages in Settings to use it.";
-    const out = c.languages.filter((l) => !PARAKEET_LANGUAGES.includes(l));
+    const out = languages.filter((l) => !PARAKEET_LANGUAGES.includes(l));
     if (out.length > 0) return `Parakeet does not hear ${out.join(", ")}.`;
   }
   return null;
+}
+
+/**
+ * Why the live panel does not offer a live model for these call languages, or null: it must hear
+ * every one of them, the rule `reviewCannot` applies to Parakeet's pass. Any language (none named):
+ * null. Advice, not a block: a model chosen anyway runs.
+ */
+export function liveCannot(id: string, languages: readonly string[]): string | null {
+  const hears = isLiveEngine(id)
+    ? LIVE_ENGINES[id].languages
+    : id === RECOGNIZER
+      ? PARAKEET_LANGUAGES
+      : null;
+  if (!hears) return null;
+  const out = languages.filter((l) => !hears.includes(l));
+  return out.length > 0 ? `${liveModelName(id)} does not hear ${out.join(", ")}.` : null;
 }
 
 /**
@@ -564,7 +587,7 @@ export function liveView(
         id,
         models: [id],
         checked: id === nextId,
-        blocked: null,
+        blocked: liveCannot(id, c.languages),
       })),
       review: REVIEW_SLOT.filter(inCatalog).map((id) => {
         const kind = reviewerOf(id) as Reviewer;
