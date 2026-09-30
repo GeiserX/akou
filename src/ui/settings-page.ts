@@ -19,6 +19,7 @@
  * The search finds a setting by its words across the page and its Advanced pages, and goes to it.
  */
 
+import { everyText, liveModelName } from "../main/asr/live-names.ts";
 import { hotkeyFor } from "../main/window/hotkey.ts";
 import { LanguageList, languageName } from "./dictation-languages.ts";
 import { type CaptureInput, readMics } from "./dictation-mic.ts";
@@ -250,6 +251,8 @@ const BY_HAND: Readonly<Record<string, readonly string[]>> = {
 
 /** What the Models page calls its settings, for the search here. */
 const MODELS_WORDS: Readonly<Record<string, string>> = {
+  "asr.review.model": "Second pass during a call",
+  "asr.review.everySeconds": "How often the second pass reviews",
   "asr.diarizer": "Speakers: who spoke when",
   "asr.accelerator": "Use the graphics chip",
   "server.models_unused_days": "Delete models unused for",
@@ -290,7 +293,12 @@ type Status = Partial<Pick<AppStatus, "provider" | "asr">> & {
 };
 
 type LiveReply = {
-  live?: { setting?: string; next?: string; setups?: { id: string; title: string }[] };
+  live?: {
+    setting?: string;
+    next?: string;
+    setups?: { id: string; title: string }[];
+    review?: { next?: { model: string; everySeconds: number } | null };
+  };
 };
 
 interface SearchItem {
@@ -1299,7 +1307,11 @@ export class SettingsPage {
     const l = this.live;
     const next = l?.setups?.find((s) => s.id === l.next)?.title ?? l?.next ?? "";
     const setting = String(this.settings["asr.live"] ?? l?.setting ?? "auto");
-    const value = setting === "auto" ? `Automatic${next ? `, ${next}` : ""}` : next || setting;
+    const review = l?.review?.next;
+    const second = review
+      ? `, ${liveModelName(review.model)} ${everyText(review.everySeconds)}`
+      : "";
+    const value = `${setting === "auto" ? `Automatic${next ? `, ${next}` : ""}` : next || setting}${second}`;
     return linkRow({ label: "Live transcript", value, id: "settings-live" }, () =>
       this.hooks.openModels?.("asr.live"),
     );

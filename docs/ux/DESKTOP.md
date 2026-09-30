@@ -312,8 +312,10 @@ Their exact names can still move with the engine design. What this section fixes
 
 | Key | Type | Values come from | Takes effect |
 |---|---|---|---|
-| `asr.live` | `auto`, `parakeet`, `nemotron` or `upgrade` (`voxtral` listed as unavailable) | fixed; the Models page's Live section shows each with its bars | next call |
-| `asr.live.engine` | one engine id, used when `asr.live` resolves to `nemotron` or `upgrade` | registry entries with role `live` | next call |
+| `asr.live` | `auto`, `parakeet` or `nemotron` (`voxtral` listed as unavailable; the old `upgrade` is read as `nemotron` with `asr.review.model` `qwen`) | fixed; the Record row's Live menu and the Models page's Live section show each by name | next call |
+| `asr.review.model` | `none` or `qwen` | fixed; the Live menu's Second pass group and the Models page's Second pass section | next call |
+| `asr.review.everySeconds` | whole seconds, 30 to 600 (the menus offer 1, 2 and 5 minutes) | fixed | next call |
+| `asr.live.engine` | one engine id, used when `asr.live` resolves to `nemotron` | registry entries with role `live` | next call |
 | `asr.final.engines` | ordered list of engine ids; the first is the primary | registry entries with role `final` | next final pass |
 | `asr.final.fusion` | one method, shown only when two or more final engines are chosen | the engine design's list, for example `off`, a per-word vote among the engines, or per word by the provider | next final pass |
 | `asr.language` | `auto` or a language code | the union of the chosen engines' languages | next call |

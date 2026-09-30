@@ -246,8 +246,9 @@ function pullPlan(
 }
 
 /**
- * The live setups (`asr.live`) as this machine would run them: each one's bars, the models it
- * needs and their state, and the one the next call runs. No app is asked, so no call is running.
+ * The live models (`asr.live`) and the second pass (`asr.review.*`) as this machine would run
+ * them: each model's bars, the models it needs and their state, and what the next call runs. No
+ * app is asked, so no call is running.
  */
 function liveRows(ctx: Ctx, dir: string) {
   const settings = loadConfig(ctx.io.env).settings;
@@ -264,6 +265,8 @@ function liveRows(ctx: Ctx, dir: string) {
     setting: settings["asr.live"],
     engine: settings["asr.live.engine"],
     languages: settings["asr.languages"],
+    review: settings["asr.review.model"],
+    everySeconds: settings["asr.review.everySeconds"],
     present: (id) => state(id) === "ready",
     runtime: llamaRuntime(settings, hostPlatform(), all as readonly CatalogEntry[], {
       image: ctx.io.env.AKOU_LLAMA_SERVER,
@@ -317,8 +320,10 @@ const models: Command = {
             `${r.id}  ${r.state}  ${(r.bytes / 1e6).toFixed(0)} MB  accuracy ${shown(r.accuracy)}  speed ${shown(r.speed)}  ${r.licence}  (${r.job})`,
           );
         }
+        const next = live.setups.find((l) => l.id === live.next);
+        const review = live.review.next;
         ctx.io.out(
-          `# live setups (asr.live ${live.setting}; the next call runs ${live.next}${live.note ? `: ${live.note}` : ""})`,
+          `# live models (asr.live ${live.setting}; the next call runs ${next?.title ?? live.next}${review ? `, with ${live.review.choices.find((r) => r.id === review.model)?.title ?? review.model}'s second pass every ${review.everySeconds} s` : ""}${live.note ? `: ${live.note}` : ""})`,
         );
         for (const l of live.setups) {
           const bars = (["accuracy", "latency", "cores", "memory"] as const)
@@ -330,7 +335,22 @@ const models: Command = {
             : missing.length > 0
               ? `needs ${missing.join(", ")}`
               : "ready";
-          ctx.io.out(`${l.id}${l.selected ? " *" : ""}  ${bars}  ${where}`);
+          ctx.io.out(`${l.id}${l.selected ? " *" : ""}  ${l.title}  ${bars}  ${where}`);
+        }
+        ctx.io.out(
+          `# second pass (asr.review.model ${live.review.setting}, every ${live.review.everySeconds} s)`,
+        );
+        for (const r of live.review.choices) {
+          const missing = r.models.filter((m) => m.state !== "ready").map((m) => m.id);
+          const where =
+            missing.length > 0
+              ? `needs ${missing.join(", ")}`
+              : r.blocked
+                ? `off: ${r.blocked}`
+                : "ready";
+          ctx.io.out(
+            `${r.id}${live.review.next?.model === r.id ? " *" : ""}  ${r.title}  ${where}`,
+          );
         }
       }
       return EXIT.ok;

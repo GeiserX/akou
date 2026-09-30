@@ -1,8 +1,10 @@
 /**
- * The in-call upgrade (docs/research/asr-architecture.md section 3.2, ASR-7): on the `upgrade`
- * setup each streaming line is rewritten once during the call, by Qwen, as a new revision of the
- * same `seg`, in a review once a minute of the utterances closed since the last one. The streaming engine, the recognizer and Qwen are fakes (tests/fixtures/asr-fake.ts
- * and a scripted `LineUpgrader`); nothing here loads a model or starts a server.
+ * The second pass (docs/research/asr-architecture.md section 3.2, ASR-7, `asr.review.*`): with a
+ * second pass on, each streaming line is rewritten once during the call, by Qwen, as a
+ * new revision of the same `seg`, in a review every `asr.review.everySeconds` of the utterances
+ * closed since the last one. The streaming engine, the recognizer and Qwen are fakes
+ * (tests/fixtures/asr-fake.ts and a scripted `LineUpgrader`); nothing here loads a model or starts
+ * a server.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -20,10 +22,12 @@ import {
 } from "../src/main/asr/live-worker.ts";
 import {
   joinUtterances,
+  REVIEW_CAP_MAX_SECONDS,
   REVIEW_CAP_SECONDS,
   REVIEW_EVERY_SECONDS,
   REVIEW_GAP_SECONDS,
   reviewBatches,
+  reviewCap,
   splitToLines,
   UTTERANCE_MAX_SECONDS,
 } from "../src/main/asr/upgrade.ts";
@@ -266,7 +270,8 @@ function qwenSays(text: string): Hypothesis {
   };
 }
 
-async function rig(qwen: LineUpgrader | null) {
+async function rig(qwen: LineUpgrader | null, o: { everySeconds?: number; name?: string } = {}) {
+  const every = o.everySeconds ?? REVIEW_EVERY_SECONDS;
   const t = tempDir();
   cleanups.push(t.cleanup);
   const clock = new ManualClock();
@@ -295,7 +300,7 @@ async function rig(qwen: LineUpgrader | null) {
       inThread: true,
       clock,
       liveEngine: () => LIVE,
-      upgrade: () => qwen,
+      review: () => (qwen ? { name: o.name ?? "Qwen", reviewer: qwen, everySeconds: every } : null),
       onLog: (_level, msg) => logs.push(msg),
     },
     (id) => mgr.controller(id) as CallAccess | undefined,
@@ -321,8 +326,8 @@ async function rig(qwen: LineUpgrader | null) {
     const audio = concat(...parts);
     engine.last.play(audio, silence(audio.length / RATE));
   };
-  /** Moves the clock a minute (or `ms`) on, for the next review. */
-  const minute = (ms = REVIEW_EVERY_SECONDS * 1000) => clock.advance(ms);
+  /** Moves the clock one interval (or `ms`) on, for the next review. */
+  const minute = (ms = every * 1000) => clock.advance(ms);
   return { mgr, id, events, segs, logs, play, minute, clock, view: () => mgr.controller(id)?.view };
 }
 
@@ -549,6 +554,40 @@ describe("[ASR-7] a line reads as its highest revision", () => {
       by: "user",
     });
     expect(view.resolve("l000001")?.edited).toBe(true);
+    await r.mgr.stop();
+  });
+});
+
+describe("[ASR-7] the interval the second pass reviews at (asr.review.everySeconds)", () => {
+  test("a request's audio cap follows the interval: an interval and a half, at most the ceiling", () => {
+    expect(reviewCap(REVIEW_EVERY_SECONDS)).toBe(REVIEW_CAP_SECONDS);
+    expect(reviewCap(30)).toBe(45);
+    expect(reviewCap(120)).toBe(180);
+    expect(reviewCap(300)).toBe(REVIEW_CAP_MAX_SECONDS);
+    expect(reviewCap(600)).toBe(REVIEW_CAP_MAX_SECONDS);
+  });
+
+  test("every 2 minutes: nothing at the first minute, one review at the second, whole utterances up to its cap", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen, { everySeconds: 120 });
+    // About 110 s with no stop: more than the default minute's 90 s cap, under 2 minutes' 180 s.
+    const said: string[][] = [];
+    for (let i = 0; i < 75; i++) said.push(["hello", "world"]);
+    r.play(said, 0.8);
+    await until(() => r.segs().length === 75, 20_000, "every stream line");
+    await Bun.sleep(50);
+    await r.clock.advance(60_000);
+    await Bun.sleep(20);
+    expect(qwen.asked.length).toBe(0);
+    await r.clock.advance(60_000);
+    await until(() => qwen.asked.length === 1, 5000, "the review at 2 minutes");
+    await Bun.sleep(20);
+    // One request, longer than a minute's cap allows: the interval's own cap applies.
+    expect(qwen.asked.length).toBe(1);
+    const seconds = (qwen.asked[0]?.samples.length as number) / RATE;
+    expect(seconds).toBeGreaterThan(REVIEW_CAP_SECONDS);
+    expect(seconds).toBeLessThanOrEqual(reviewCap(120) + 1);
+    qwen.asked[0]?.answer(qwenSays(""));
     await r.mgr.stop();
   });
 });

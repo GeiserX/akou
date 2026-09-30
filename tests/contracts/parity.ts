@@ -365,17 +365,21 @@ export const PARITY: readonly Row[] = [
     ],
   },
   {
-    action: "Choose the live transcript's setup (asr.live), and see the one a call runs",
+    action:
+      "Choose the live transcript's model (asr.live) and its second pass (asr.review.*), and see what a call runs",
     cli: ["config", "start", "models", "status"],
     api: ["PATCH /config", "POST /calls", "GET /models", "GET /status"],
     mcp: ["akou_status"],
     window: [
       ui("models-page.ts", 'this.patch("asr.live"'),
-      ui("live-picker.ts", '"PATCH", "/config", { "asr.live": id }'),
-      app("...(live ? { live } : {})"),
-      app("`Live: #{liveTitle(setup)}`"),
+      ui("models-page.ts", 'this.patch("asr.review.model"'),
+      ui("live-picker.ts", 'this.save("asr.live", id'),
+      ui("live-picker.ts", 'this.save("asr.review.model", o.id)'),
+      ui("live-picker.ts", 'this.save("asr.review.everySeconds", s)'),
+      app("...(live ?? {})"),
+      app("liveChip(running)"),
     ],
-    note: "MCP only reads it (akou_status names the live call's setup): the choice is the user's, from the window, `akou config set asr.live`, `akou start --live`, `PATCH /config` or `POST /calls {live}`",
+    note: "MCP only reads it (akou_status names the live call's model and second pass): the choice is the user's, from the window, `akou config set asr.live` or `asr.review.model`, `akou start --live --review --review-every`, `PATCH /config` or `POST /calls {live, review, reviewEvery}`",
   },
   {
     action: "Open the window",

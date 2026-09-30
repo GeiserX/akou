@@ -465,7 +465,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_status",
     {
       description:
-        "Whether a call is recording, its health, recognizer lag and live setup (`live.setup`: parakeet, nemotron or upgrade, and `live.engine`), the models and provider in use, and sharing. Read models and provider from here, never from memory. Not needed before akou_start.",
+        "Whether a call is recording, its health, recognizer lag and live model (`live.setup`: parakeet or nemotron, `live.engine`, and `live.review`: the second pass's model and interval, or null), the models and provider in use, and sharing. Read models and provider from here, never from memory. Not needed before akou_start.",
       inputSchema: z.object({}),
       outputSchema: OUT.body,
     },

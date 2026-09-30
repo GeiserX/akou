@@ -144,9 +144,11 @@ export interface AppStatus {
     state: string;
     muted: boolean;
     lag: number;
-    /** The live setup the call runs (`asr.live`); null before its audio reaches the recognizer, absent from an older app. */
+    /** The live model the call runs (`asr.live`); null before its audio reaches the recognizer, absent from an older app. */
     setup?: string | null;
     engine?: string | null;
+    /** The call's second pass (`asr.review.*`), or null for none; absent from an older app. */
+    review?: { model: string; everySeconds: number } | null;
   } | null;
   last: { call: string; title: string; state: string; endedAt: number | null } | null;
   asr: { state: string; reason?: string; model?: string };

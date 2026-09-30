@@ -83,6 +83,8 @@ export interface RigOptions {
   metalHolder?: AppOptions["metalHolder"];
   /** How often the in-call upgrade reviews a call's closed utterances, ms; a minute by default. */
   liveReviewEveryMs?: number;
+  /** The machine's memory in GB, which the second pass's Qwen is offered by; the test machine's by default. */
+  memoryGb?: number;
 }
 
 /** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
@@ -148,6 +150,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     accelerator: o.accelerator ?? NO_GPU,
     ...(o.metalHolder ? { metalHolder: o.metalHolder } : {}),
     ...(o.liveReviewEveryMs ? { liveReviewEveryMs: o.liveReviewEveryMs } : {}),
+    ...(o.memoryGb ? { memoryGb: o.memoryGb } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;

@@ -20,6 +20,7 @@ import type { LogEvent } from "../../core/log/events.ts";
 import type { CallView } from "../../core/log/fold.ts";
 import { readLog } from "../../core/log/reader.ts";
 import { EVENTS_FILE, type WriterOptions } from "../../core/log/writer.ts";
+import { legacyLive } from "../asr/live-setups.ts";
 import { type CaptureEngine, type Clock, realClock } from "../capture/engine.ts";
 import type { IngestOptions, PartIngest } from "../capture/ingest.ts";
 import type { Packet } from "../capture/protocol.ts";
@@ -79,11 +80,14 @@ export interface StartRequest {
    */
   withoutModels?: boolean;
   /**
-   * This call's live setup (`asr.live`'s values), instead of the setting. Kept on the call's
-   * controller (`liveAsked`) before the helper spawns; the app reads it there when the call's audio
-   * first reaches the recognizer.
+   * This call's live model (`asr.live`'s values, or `upgrade`, the old spelling of `nemotron` with
+   * Qwen's second pass), instead of the setting. Kept on the call's controller (`liveAsked`) before
+   * the helper spawns; the app reads it there when the call's audio first reaches the recognizer.
    */
   live?: string;
+  /** This call's second pass (`asr.review.model`'s values) and its interval, instead of the settings. */
+  review?: string;
+  reviewEvery?: number;
   /**
    * An agent's start: when a call is already starting, recording or paused, start nothing and
    * answer with that call (`attached`) instead of `409 already_recording`. A call still starting
@@ -370,7 +374,15 @@ export class CallManager {
         },
       );
     }
-    c.liveAsked = req.live;
+    const asked = legacyLive(req.live, req.review);
+    c.liveAsked = asked.live;
+    c.reviewAsked =
+      asked.review === undefined && req.reviewEvery === undefined
+        ? undefined
+        : {
+            ...(asked.review === undefined ? {} : { model: asked.review }),
+            ...(req.reviewEvery === undefined ? {} : { everySeconds: req.reviewEvery }),
+          };
     this.controllers.set(id, c);
     this.o.onOpen?.(c);
     this.onEvent(id, workspace, c.view.call as LogEvent);

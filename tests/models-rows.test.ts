@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { LIVE_SETUPS, type LiveView } from "../src/main/asr/live-setups.ts";
+import { LIVE_SETUPS, type LiveView, REVIEWS } from "../src/main/asr/live-setups.ts";
 import { LLAMA_CATALOG, QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { type Measure, type NotMeasured, SCORES } from "../src/main/asr/model-scores.ts";
 import { modelsFor, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
@@ -74,6 +74,7 @@ function setup(id: keyof typeof LIVE_SETUPS) {
     title: s.title,
     what: s.what,
     plain: s.plain,
+    line: s.line,
     unavailable: s.unavailable ?? null,
     selected: false,
     running: false,
@@ -91,7 +92,8 @@ function view(o: Partial<LiveView>): LiveView {
     next: "nemotron",
     note: null,
     running: null,
-    setups: (["parakeet", "nemotron", "upgrade", "voxtral"] as const).map(setup),
+    setups: (["nemotron", "parakeet", "voxtral"] as const).map(setup),
+    review: { setting: "none", everySeconds: 60, next: null, running: null, choices: [] },
     ...o,
   };
 }
@@ -130,8 +132,6 @@ describe("[SV-U6] facts as plain sentences, each accuracy figure naming its test
     expect(liveHelp(setup("parakeet"))).toBe(
       "About 1 word in 3 wrong on meetings. Words can change as you watch.",
     );
-    // No figure on meetings: the sentence says so, and what is known instead.
-    expect(liveHelp(setup("upgrade"))).toContain("Not measured on meetings yet");
     expect(liveHelp(setup("voxtral"))).toMatch(/^Not available yet/);
   });
 
@@ -159,7 +159,7 @@ describe("[SV-U6] facts as plain sentences, each accuracy figure naming its test
 
   test("no sentence quotes a setting's key or a value in code quotes", () => {
     const keys = Object.keys(SETTINGS);
-    for (const s of Object.values(LIVE_SETUPS)) {
+    for (const s of [...Object.values(LIVE_SETUPS), ...Object.values(REVIEWS)]) {
       expect(s.plain.includes("`")).toBe(false);
       expect(keys.filter((k) => s.plain.includes(k))).toEqual([]);
     }
@@ -185,9 +185,9 @@ describe("[SV-U6] the live transcript's marks", () => {
     ]);
   });
 
-  test("a setup chosen by name whose models are missing: the next call's fallback is marked", () => {
-    expect([...liveTags(view({ setting: "upgrade", next: "nemotron" }))]).toEqual([
-      ["nemotron", ["next call"]],
+  test("a model chosen by name whose files are missing: the next call's fallback is marked", () => {
+    expect([...liveTags(view({ setting: "nemotron", next: "parakeet" }))]).toEqual([
+      ["parakeet", ["next call"]],
     ]);
   });
 });
