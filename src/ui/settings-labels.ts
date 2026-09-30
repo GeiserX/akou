@@ -47,7 +47,7 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "app.hotkey": { label: "Record shortcut" },
   "provider.kind": {
-    label: "Answers",
+    label: "Assistant",
     choices: [
       ["harness", "Claude Code or Codex"],
       ["anthropic", "Anthropic API"],
@@ -81,11 +81,11 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
     help: "Set in the config file.",
     empty: "Found on its own",
   },
-  "provider.apiKey": { label: "API key", empty: "Not set" },
+  "provider.apiKey": { label: "API key", empty: "Paste your key" },
   "provider.model": { label: "Model", empty: "The default model" },
   "provider.baseUrl": {
     label: "Server address",
-    help: "Set in the config file, since your key and transcripts go there.",
+    help: "Your key and transcripts go there.",
     empty: "The Anthropic API",
   },
   "provider.timeoutSeconds": {

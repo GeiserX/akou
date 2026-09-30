@@ -33,6 +33,7 @@ import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
 import { checkDictationHotkey, checkExtraHotkey } from "../window/hotkey.ts";
+import { KEY_TEXT } from "./secrets.ts";
 
 export type SettingType =
   | "integer"
@@ -502,8 +503,11 @@ export const SETTINGS = {
   "provider.baseUrl": {
     type: "string",
     default: "",
+    // Where your key and transcripts go: set on the Settings page in the desktop window or in the
+    // file, never by an HTTP client, so the API token cannot send your calls to a chosen host.
     apiWritable: false,
-    doc: "Server address for `openai-compatible` (Ollama: `http://127.0.0.1:11434/v1`), or another Anthropic API address. File only: it decides where your key and transcripts are sent.",
+    windowWritable: true,
+    doc: "Server address for `openai-compatible` (Ollama: `http://127.0.0.1:11434/v1`), or another Anthropic API address. Set it in the akou window or the config file, never over the API: it decides where your key and transcripts are sent.",
   },
   "provider.model": {
     type: "string",
@@ -516,7 +520,12 @@ export const SETTINGS = {
     max: 400,
     default: "",
     secret: true,
-    doc: "API key for `openai-compatible` (optional) or `anthropic` (required). Never shown back or logged.",
+    // Never the value in the error: it is the key.
+    check: (v) =>
+      KEY_TEXT.test(v as string)
+        ? null
+        : "must be letters, digits and symbols only, with no spaces",
+    doc: "API key for `openai-compatible` (optional) or `anthropic` (required). On macOS it is saved in the Keychain, never in the config file; elsewhere in the config file. Never shown back or logged.",
   },
   "provider.timeoutSeconds": {
     type: "integer",

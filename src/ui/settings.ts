@@ -17,6 +17,10 @@ export interface SchemaEntry {
   secret?: boolean;
   /** False: the file only (DESIGN 8.2, 6.3); `PATCH /config` refuses it. */
   apiWritable: boolean;
+  /** With `apiWritable` false: the desktop window may still set it. */
+  windowWritable?: boolean;
+  /** A secret saved in the macOS Keychain, never in the config file. */
+  keychain?: boolean;
   doc: string;
 }
 

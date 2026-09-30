@@ -67,6 +67,8 @@ export interface RigOptions {
   finalAudio?: (call: { id: string; dir: string; parts: number[] }) => FinalAudioSpec | null;
   home?: string;
   provider?: Provider;
+  /** Where the API key is saved instead of the config file; tests pass a fake Keychain. */
+  secrets?: AppOptions["secrets"];
   discover?: (env: Record<string, string | undefined>) => Promise<Discovery>;
   openExternal?: (url: string) => Promise<boolean>;
   /** The app's clock; tests that need minutes to pass move a real clock forward. */
@@ -137,6 +139,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     finalAudio: o.finalAudio,
     guard: o.guard,
     provider: o.provider,
+    secrets: o.secrets,
     discover: o.discover,
     openExternal: o.openExternal,
     clock: o.clock,

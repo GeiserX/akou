@@ -17,6 +17,7 @@ import {
   type SettingKey,
   type SettingSpec,
 } from "../../config/schema.ts";
+import { STORED_SECRETS } from "../../config/secrets.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { resolveRef } from "./common.ts";
@@ -40,13 +41,14 @@ export function settingsRoutes(r: Router<ApiApp>): void {
     "/config",
     {
       id: "config.get",
-      doc: "Every setting: its value, the values set in the config file, problems found in the file, and the schema of each key. Secrets are redacted.",
+      doc: "Every setting: its value, the values set in the config file, problems found in the file, and the schema of each key. Secrets are redacted; one saved in the macOS Keychain says `keychain: true`.",
       access: "admin",
       modes: ["app", "server"],
       ok: 200,
     },
     (c) => {
       const cfg = c.app.config();
+      const keychain = c.app.secretStore?.() === "keychain";
       return json(200, {
         file: cfg.paths.configFile,
         settings: redactSettings(cfg.settings),
@@ -68,6 +70,10 @@ export function settingsRoutes(r: Router<ApiApp>): void {
                 apiWritable: s.apiWritable !== false,
                 // With apiWritable false: the desktop window may still set it.
                 ...(s.windowWritable ? { windowWritable: true } : {}),
+                // Saved in the macOS Keychain, never in the file.
+                ...(keychain && (STORED_SECRETS as readonly string[]).includes(k)
+                  ? { keychain: true }
+                  : {}),
                 doc: s.doc,
               },
             ];
@@ -93,15 +99,18 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       const cfg = c.app.config();
       // The window's bridge runs in process with no identity; every HTTP request has one.
       const inProcess = c.identity === undefined;
-      const res = patchConfig(cfg.file, body, cfg.paths, { inProcess });
-      if (!res.ok) {
-        throw new HttpError(400, "bad_setting", res.errors.join("; "), { errors: res.errors });
-      }
       const keep = Object.keys(body).filter(
         (k): k is SettingKey =>
           isSettingKey(k) && (SETTINGS[k] as SettingSpec).apiWritable === false,
       );
-      const next = await c.app.saveConfig(res.file, { keep: inProcess ? keep : [] });
+      // Made from the file as the save before it left it: saves run one at a time.
+      const change = (current: typeof cfg.file) => {
+        const res = patchConfig(current, body, cfg.paths, { inProcess });
+        if (!res.ok)
+          throw new HttpError(400, "bad_setting", res.errors.join("; "), { errors: res.errors });
+        return res.file;
+      };
+      const next = await c.app.saveConfig(change, { keep: inProcess ? keep : [] });
       return json(200, {
         ok: true,
         settings: redactSettings(next.settings),
