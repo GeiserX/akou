@@ -614,6 +614,12 @@ describe("H-11: the island holds the whole dictation", () => {
           e.scrollTop = 0;
           e.dispatchEvent(new Event("scroll"));
         });
+        // Chromium fires a scroll when the box empties, which pins again by itself; a WebView that
+        // does not would leave it unpinned. The page's own handler is kept from those events here,
+        // so only the new session's reset can pin.
+        await p.$eval("#preview", (e) => {
+          e.addEventListener("scroll", (ev) => ev.stopImmediatePropagation(), { capture: true });
+        });
         await v.send("state", { state: "transcribing", since: 2 });
         await v.send("state", { ...listening, since: 3 });
         await v.send("preview", { text: words(400, 1000) });

@@ -17,7 +17,8 @@
  * Qwen reviews once a minute, not per utterance: the utterances closed in the last minute go in
  * one request, whole, at most `REVIEW_CAP_SECONDS` of audio each (`reviewBatches`). On FLEURS
  * clips joined into 27 and 34 minute calls that read 10.19 and 4.19 % WER against 11.36 and 4.32
- * per utterance, with 0.9 requests a minute instead of 4.7 to 6.2, and the reviewed text about 45 s
+ * per utterance (10.37 and 4.19 with the call's last minute left to the final pass, as the app
+ * does), with 0.9 requests a minute instead of 4.7 to 6.2, and the reviewed text about 45 s
  * after the words instead of 6 to 9 s (docs/research/asr-architecture.md section 3.2). Its words are cut back into all of the request's lines as above.
  */
 

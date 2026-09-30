@@ -54,9 +54,12 @@ The workflow checks the tag equals every version string, builds and checks every
    - The main window has no grey title bar: the traffic lights sit over the sidebar, dragging the empty strip above the rows moves the window, a double-click on it zooms and a second one restores, and dragging on the title field, Template or Record does not move it (DK-M7).
    - On a Mac with no `akou` on PATH, akou menu > Install Command-Line Tool… installs it (a password is asked only if `/usr/local/bin` needs one); in a new terminal `akou --version` prints this release's version; a second run says it is already installed (DK-M6).
    - During a recording, switch to another app: the floating indicator shows the time and both levels, stays above the other app, and never takes its focus; drag it, stop the call, start another: it comes back where it was dragged. With the akou window in front it is hidden (DK-F1).
+   - With the meeting app in front and the akou window behind it, speak and play call audio: both of the indicator's bars move with the sound, several times a second, as the window's Mic and Call meters do (DK-F1, W3.18). They move in steps of a quarter second, one per level the capture sends; they must never stand still or jump only once a second.
+   - In a dark and a light appearance, look at the indicator while recording, muted (Unmute), paused, and past 10:00: the window ends at the pill's rounded edge, with no darker rectangle or edge to its right or around its corners, Stop is never cut off, and Stop stays where it is when Mute becomes Unmute (DK-F1).
    - With the window closed, `akou start -t "Check title"` shows one "Recording started" notification, "Started from the command line", and the title appears nowhere in it (DK-N1, DK-N4).
 3. `akou-cli-<version>-darwin-arm64`: `akou --version`, `akou doctor`, `akou start` against the installed app.
 4. On Ubuntu 24.04 with the GNOME AppIndicator extension, once a Linux app build exists: the tray icon shows (DK-T1).
+5. Once Windows and Linux app builds exist, at 150 % display scaling (Windows 11; GNOME on Wayland, and X11 with scaling): during a recording the floating indicator ends at the pill's rounded edge, Stop is not cut off, and no dark rectangle shows around it (DK-F1). The window library sizes Windows windows in DIPs, which match the page's CSS pixels; on Linux the GTK path sizes in logical pixels, and whether WebKitGTK's CSS pixels match them under fractional scaling is not settled.
 
 ## Signing, when the Developer ID exists
 

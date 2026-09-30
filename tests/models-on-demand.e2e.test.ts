@@ -467,6 +467,10 @@ describe("[SV-M6] one model at a time: list, pull and delete", () => {
       id: B,
       kind: "speech",
       job: "test",
+      // A model with no name: not one a person picks for a call.
+      name: null,
+      short: null,
+      lines: {},
       languages: null,
       streaming: false,
       after_call: true,

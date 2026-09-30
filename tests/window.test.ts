@@ -69,9 +69,16 @@ function rulesUsing(css: string, name: string): string[] {
 }
 
 describe("one accent per screen (the design's rules)", () => {
-  test("theme.css reads --accent only in the welcome's primary action (Download, or the setup's Continue) and the focus ring", () => {
+  test("theme.css reads --accent only in the welcome's primary action (Download, or the setup's Continue), the focus ring, and the live panel's chosen radio and Add a model", () => {
     const css = readFileSync(join(UI_DIR, "theme.css"), "utf8");
-    expect(rulesUsing(css, "--accent").sort()).toEqual(["#welcome button.go", ":focus-visible"]);
+    // The live panel as drawn (design-explorations/lm-live-menu-slots.html): the chosen model's
+    // radio and "+ Add a model" are the panel's one accent.
+    expect(rulesUsing(css, "--accent").sort()).toEqual([
+      "#live-menu .live-add",
+      '#live-menu .live-item[aria-checked="true"] .live-dot',
+      "#welcome button.go",
+      ":focus-visible",
+    ]);
     // Positive control: one more rule painting with the accent is caught.
     const more = `${css}\n.row.playing .body { background: var(--accent); }`;
     expect(rulesUsing(more, "--accent")).toContain(".row.playing .body");

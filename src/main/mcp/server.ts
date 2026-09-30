@@ -494,7 +494,7 @@ export function createMcpServer(o: McpOptions): McpServer {
         body: { question: a.question, budget: a.budget },
       });
       return asResult(r, (b) => ({
-        text: `${b.pack}\n---\ncall: ${b.call} · state: ${b.state} · cursor: ${b.cursor} · memoStale: ${b.memoStale}`,
+        text: `${b.pack}\n---\ncall: ${b.call} · state: ${b.state} · cursor: ${b.cursor} · memoStale: ${b.memoStale}${unreviewedNote(b.unreviewed)}`,
         data: {
           call: b.call ?? null,
           state: b.state,
@@ -551,6 +551,7 @@ export function createMcpServer(o: McpOptions): McpServer {
             ...(more > 0
               ? [`${more} more new lines: call akou_read again with since: ${b.cursor}.`]
               : []),
+            ...(unreviewedNote(b.unreviewed) ? [unreviewedNote(b.unreviewed).trim()] : []),
           ].join("\n"),
           data: {
             call: b.call ?? a.call,
@@ -1286,4 +1287,15 @@ export async function runMcpStdio(o: McpOptions): Promise<void> {
   });
   await server.connect(new StdioServerTransport());
   await closed;
+}
+
+/**
+ * The second pass's lag, as a read says it: the closed lines it had not reviewed when the read
+ * answered (their streaming text is what came back). Empty with none, or with no second pass.
+ */
+function unreviewedNote(n: unknown): string {
+  const k = typeof n === "number" ? n : 0;
+  return k > 0
+    ? `\n${k} closed line${k === 1 ? " was" : "s were"} not through the second pass yet: they read as streamed, and a later read brings the corrected text.`
+    : "";
 }

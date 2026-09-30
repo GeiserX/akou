@@ -192,7 +192,9 @@ export const watch: Command = {
     /** Speaker id to name, from the committed lines: the in-progress line shows the same names. */
     const names = new Map<string, string>();
 
-    const t = await api(ctx, "GET", `/calls/${id}/transcript`, { query: { format: "json" } });
+    const t = await api(ctx, "GET", `/calls/${id}/transcript`, {
+      query: { format: "json", review: "skip" },
+    });
     if (t.status !== 200) return finish(ctx, t, () => "");
     let lineCursor = t.body.cursor as number;
 
@@ -246,7 +248,7 @@ export const watch: Command = {
       pulling = pulling.then(async () => {
         if (done) return;
         const r = await api(ctx, "GET", `/calls/${id}/transcript`, {
-          query: { format: "json", since: lineCursor },
+          query: { format: "json", since: lineCursor, review: "skip" },
         }).catch(() => null);
         if (r?.status !== 200) return;
         lineCursor = r.body.cursor;

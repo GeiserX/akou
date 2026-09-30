@@ -20,6 +20,7 @@
  * Qwen3-ASR's audio encoder (llama.cpp docs/backend/OPENVINO.md, 2026-09).
  */
 
+import { MODEL_TEXT } from "./model-text.ts";
 import type { Accelerator, CatalogEntry, Platform } from "./models.ts";
 
 /** The llama.cpp release every build comes from, published 2026-09-26. */
@@ -240,6 +241,7 @@ export function llamaBuildId(platform: string, accelerator: string): string {
 export const LLAMA_CATALOG: readonly CatalogEntry[] = [
   {
     id: QWEN_ASR,
+    ...MODEL_TEXT[QWEN_ASR],
     job: "the best preset's recognizer: 30 languages, run by llama-server on Metal, Vulkan, CUDA, SYCL, ROCm or the CPU",
     licence: "Apache-2.0",
     source: "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",

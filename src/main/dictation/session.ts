@@ -71,8 +71,9 @@
  * audio since the last settled word is decoded again every `PREVIEW_EVERY_SECONDS` on the preview
  * engine, one decode at a time, and each answer goes out as a partial (`onPartial`) while the same
  * session still listens. A partial is the whole dictation so far (H-11): once the audio decoded
- * again passes `PREVIEW_TAIL_SECONDS`, the words that end `PREVIEW_SETTLE_SECONDS` before its end
- * are settled and never decoded again, so a decode stays short however long the dictation. A
+ * again passes `PREVIEW_TAIL_SECONDS`, the words that end `PREVIEW_SETTLE_SECONDS` before its end,
+ * up to a pause of `PREVIEW_CUT_GAP_SECONDS`, are settled and never decoded again, so a decode
+ * stays short however long the dictation. A
  * partial is only ever shown: the inserted text is the decode of the whole buffer at the release. A
  * password field's session has no partials (DC-N8).
  *
@@ -394,6 +395,12 @@ export const PREVIEW_EVERY_SECONDS = 0.5;
 export const PREVIEW_TAIL_SECONDS = 8;
 /** A word settles once this much audio follows it: enough right context not to change again. */
 export const PREVIEW_SETTLE_SECONDS = 3;
+/**
+ * The shortest gap the preview cuts in after a settled word. Parakeet's word ends come from token
+ * durations and are off by tens of ms, so a cut between words said closer than this can land in
+ * the settled word's tail, and the next decode would start on a fragment of it.
+ */
+export const PREVIEW_CUT_GAP_SECONDS = 0.15;
 /**
  * The most audio one preview decode takes: with no word times to settle by, the start of a long
  * dictation beyond it drops out of the preview, never out of the inserted text.
@@ -1457,8 +1464,8 @@ export function languageForced(
 /**
  * The whole preview after a decode of the audio from `from` (`n` samples): the settled words, then
  * the decoded ones. Past `PREVIEW_TAIL_SECONDS`, the words that end `PREVIEW_SETTLE_SECONDS` before
- * the decode's end join the settled ones, and the next decode starts between the last of them and
- * the word after it.
+ * the decode's end join the settled ones, up to the last of them followed by a gap of at least
+ * `PREVIEW_CUT_GAP_SECONDS`, and the next decode starts in that gap.
  */
 function settlePreview(
   c: Listening,
@@ -1475,6 +1482,12 @@ function settlePreview(
     let k = 0;
     while (k < words.length && (words[k] as { e: number }).e <= seconds - PREVIEW_SETTLE_SECONDS)
       k++;
+    // Back to a word followed by a real pause; with none, nothing settles this time.
+    while (k > 0 && k < words.length) {
+      const gap = (words[k] as { s: number }).s - (words[k - 1] as { e: number }).e;
+      if (gap >= PREVIEW_CUT_GAP_SECONDS) break;
+      k--;
+    }
     if (k > 0) {
       const last = words[k - 1] as { e: number };
       const next = words[k] as { s: number } | undefined;

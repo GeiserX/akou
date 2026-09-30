@@ -36,8 +36,8 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { totalmem } from "node:os";
-import { join } from "node:path";
+import { homedir, totalmem } from "node:os";
+import { join, resolve } from "node:path";
 import type { Activation } from "../core/dictation/activation.ts";
 import type { EventDraft, LogEvent } from "../core/log/events.ts";
 import { type CallView, type FileVocabEntry, fold } from "../core/log/fold.ts";
@@ -86,14 +86,17 @@ import {
   type LiveView,
   liveModelName,
   liveView,
+  reviewerId,
   reviewModels,
   setupModels,
+  shortModelName,
 } from "./asr/live-setups.ts";
 import {
   type CallAccess,
   type LineUpgrader,
   LiveAsr,
   type LiveReview,
+  recognizerReviewer,
   type VocabSource,
 } from "./asr/live-worker.ts";
 import { QWEN_ASR, QWEN_MMPROJ_FILE, QWEN_MODEL_FILE } from "./asr/llama-catalog.ts";
@@ -108,6 +111,7 @@ import {
   DownloadRefused,
   downloadModels,
   hostPlatform,
+  importModels,
   MODELS,
   type ModelSpecEntry,
   type ModelsStatus,
@@ -833,6 +837,7 @@ export class AkouApp implements ApiApp {
         return m !== undefined && modelsPresent(s["asr.modelsDir"], [m]);
       },
       runtime: plan.build?.id ?? null,
+      catalog: catalog.map((m) => m.id),
     };
   }
 
@@ -851,15 +856,46 @@ export class AkouApp implements ApiApp {
     );
   }
 
-  /** A call's second pass: Qwen, every interval. */
+  /** A call's second pass: Qwen, or Parakeet on the live Worker's own recognizer. */
   private liveReview(callId: string): LiveReview | null {
     const r = this.liveRan.get(callId)?.review;
     if (!r) return null;
+    const asr = this.asr;
+    const reviewer: LineUpgrader =
+      r.model === "qwen"
+        ? this.liveUpgrader()
+        : recognizerReviewer((parts, signal) =>
+            asr ? asr.review(parts, signal) : Promise.reject(new Error("the recognizer is closed")),
+          );
     return {
-      name: liveModelName(QWEN_ASR),
-      reviewer: this.liveUpgrader(),
+      name: liveModelName(r.model === "qwen" ? QWEN_ASR : RECOGNIZER),
+      reviewer,
       everySeconds: r.everySeconds,
+      // A read does not wait on Qwen while a final pass holds its GPU.
+      ...(r.model === "qwen" ? { busy: () => this.finalHoldsGpu() } : {}),
     };
+  }
+
+  /**
+   * A final pass's Metal llama-server holds the GPU: one that is neither dictation's warm Qwen nor
+   * the second pass's own.
+   */
+  private finalHoldsGpu(): boolean {
+    if (this.llamaPlan().accelerator !== "metal") return false;
+    const holder = (this.o.metalHolder ?? metalHolder)(
+      this.llamaSpec(QWEN_ASR).build?.dir,
+      this.bestDictation?.pid() ?? null,
+    );
+    return holder !== null && holder !== (this.liveQwen?.server.pid() ?? null);
+  }
+
+  /**
+   * Review before a read (`GET /calls/{id}/transcript`, `POST /calls/{id}/context`): with a second
+   * pass on for this live call, its closed lines are reviewed first, waiting at most
+   * `REVIEW_READ_WAIT_MS`. Null with no second pass, or once the call has ended.
+   */
+  async settleReview(callId: string): Promise<{ unreviewed: number } | null> {
+    return (await this.asr?.reviewForRead(callId)) ?? null;
   }
 
   /**
@@ -929,7 +965,9 @@ export class AkouApp implements ApiApp {
     if (this.runMode === "server") return null;
     const live = this.manager.live();
     const ran = live ? this.liveRan.get(live.id) : undefined;
-    const running = ran ? { setup: ran.setup, review: ran.review } : null;
+    const running = ran
+      ? { setup: ran.setup, review: ran.review, engine: ran.choice?.engine ?? null }
+      : null;
     const shelf = this.shelf;
     const ctx = this.liveContext();
     return liveView(ctx, running, (id) =>
@@ -1799,7 +1837,10 @@ export class AkouApp implements ApiApp {
     const beam = this.runningDecoding() === "beam";
     if (this.manager.live()?.id !== id) return beam;
     const ran = this.liveRan.get(id);
-    return ran?.review?.model === "qwen" || (beam && ran?.setup === "parakeet");
+    return (
+      ran?.review?.model === "qwen" ||
+      (beam && (ran?.setup === "parakeet" || ran?.review?.model === "parakeet"))
+    );
   }
 
   /** What the API key is saved in: the Keychain, or null for the config file. */
@@ -2130,6 +2171,8 @@ export class AkouApp implements ApiApp {
             setup: this.liveRan.get(live.id)?.setup ?? null,
             engine: this.liveRan.get(live.id)?.choice?.engine ?? null,
             review: this.liveRan.get(live.id)?.review ?? null,
+            // Their names, as the Record row's button and the call header say them.
+            ...liveNames(this.liveRan.get(live.id)),
             levels: this.levels(live.id),
           }
         : null,
@@ -3083,6 +3126,21 @@ export class AkouApp implements ApiApp {
     return this.shelf?.cancel(id, by) ?? false;
   }
 
+  /** Copies the catalog's model files from a folder on this machine (`POST /models/import`). */
+  async importModels(dir: string): Promise<{ copied: string[]; missing: string[] }> {
+    const from = resolve(dir.startsWith("~/") ? join(homedir(), dir.slice(2)) : dir);
+    if (!existsSync(from) || !statSync(from).isDirectory()) {
+      throw new HttpError(404, "not_found", `no folder ${dir}`, { dir });
+    }
+    const got = await importModels(
+      from,
+      this.cfg.settings["asr.modelsDir"],
+      this.o.modelRegistry ?? MODELS,
+    );
+    for (const fn of this.statusWatchers) fn();
+    return got;
+  }
+
   /**
    * Deletes the models unused for `server.models_unused_days` (0: never), in both modes: never
    * the default's set, one in use, or one downloading. Server mode sweeps through its job service,
@@ -3397,4 +3455,13 @@ if (import.meta.main) {
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void app.quit());
   await app.closed;
   process.exit(0);
+}
+
+/** The live call's model and second pass by name, for the window: `Nemotron 3.5`, `Qwen`. */
+function liveNames(ran: LiveSetupChoice | undefined): { name?: string; reviewName?: string } {
+  if (!ran) return {};
+  return {
+    name: liveModelName(ran.choice?.engine ?? RECOGNIZER),
+    ...(ran.review ? { reviewName: shortModelName(reviewerId(ran.review.model)) } : {}),
+  };
 }

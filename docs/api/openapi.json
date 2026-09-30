@@ -548,6 +548,54 @@
         "x-akou-access": "admin"
       }
     },
+    "/v1/models/import": {
+      "post": {
+        "operationId": "models.import",
+        "tags": [
+          "models"
+        ],
+        "description": "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing. 404 when the folder does not exist.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "dir": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "dir"
+                ],
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app",
+          "server"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
     "/v1/models/{id}": {
       "delete": {
         "operationId": "models.delete",
@@ -594,7 +642,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, `qwen`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+        "description": "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, a model id, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, a model id, `qwen`, `parakeet`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
         "requestBody": {
           "required": false,
           "content": {
@@ -1331,7 +1379,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 20 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
         "parameters": [
           {
             "name": "id",
@@ -1442,6 +1490,20 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "review",
+            "in": "query",
+            "required": false,
+            "description": "With a second pass on and `format` json: `wait` reviews the live call's closed lines first (at most 20 s); `skip` answers at once, for a follower that reads on every event.",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "wait",
+                "skip"
+              ],
+              "default": "wait"
+            }
           }
         ],
         "responses": {
@@ -1471,7 +1533,7 @@
         "tags": [
           "calls"
         ],
-        "description": "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. Changes nothing.",
+        "description": "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. With a second pass on, the live call's closed lines are reviewed first, waiting at most 20 s; `unreviewed` counts those it had not reviewed yet, and a line whose review failed keeps the streaming text and is not counted. Changes nothing else.",
         "parameters": [
           {
             "name": "id",

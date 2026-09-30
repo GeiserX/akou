@@ -20,7 +20,7 @@ The questions people ask first. Each answer points at the page with the detail.
 
 ??? question "Does it record Zoom, Meet or Teams?"
 
-    It records whatever your Mac plays, so any meeting app works: the call audio is the whole computer or one app you pick, and your microphone is kept on a separate channel. Nothing joins the meeting as a bot, and akou never talks to a meeting service. Tell the others you are recording; the window reminds you.
+    It records whatever your Mac plays, so any meeting app works: the call audio is the whole computer or one app you pick, and your microphone is kept on a separate channel. Nothing joins the meeting as a bot, and akou never talks to a meeting service. Tell the others you are recording.
 
 ??? question "Can it search across my calls?"
 

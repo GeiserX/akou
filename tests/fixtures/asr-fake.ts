@@ -13,7 +13,7 @@
  *   stream's hotwords.
  */
 
-import { existsSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, writeFileSync } from "node:fs";
 import type { Channel } from "../../src/core/log/events.ts";
 import type {
   DiarizedSpan,
@@ -192,6 +192,8 @@ export interface FakeOptions {
    * Real Worker only: in-thread it would kill the test runner.
    */
   crashOnceFile?: string;
+  /** Each recognizer decode appends its sample count as a line here, for a test that counts them. */
+  decodesFile?: string;
   /** `nemotron`: live labels from `FakeStreamDiarizer`. Default: embedding clusters. */
   diarizer?: "nemotron" | "embeddings";
   /** The fake stream diarizer's step and look-ahead, seconds (Nemotron live: 1.68 and 0.32). */
@@ -248,6 +250,7 @@ export class FakeRecognizer implements Recognizer {
       hotwords,
       args: hotwords === undefined ? 0 : 1,
     });
+    if (this.o.decodesFile) appendFileSync(this.o.decodesFile, `${samples.length}\n`);
     if (hotwords !== undefined && this.kind !== "transducer") {
       // What sherpa-onnx does: log and exit the process. The test sees a throw instead.
       throw new Error("Only transducer models support contextual biasing.");

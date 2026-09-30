@@ -2,7 +2,7 @@
  * The second pass through the whole app (ASR-7, akou-chp.23, `asr.review.*`): a call with Qwen's
  * review writes each streaming line, then Qwen's one rewrite of it at the next review (every second
  * here, every `asr.review.everySeconds` in the app), and the Qwen server it started stops when the
- * call ends. A call's own `review` and `reviewEvery` (`POST /calls`, `akou start --review
+ * call ends; with Parakeet's, the live Worker's own recognizer rewrites it. A call's own `review` and `reviewEvery` (`POST /calls`, `akou start --review
  * --review-every`) reach it. The config file starts with the old `asr.live` `upgrade`, read as
  * Nemotron with Qwen's review. Qwen is the fake
  * llama-server (`asr.llamaServer`), the recognizer and the streaming engine the fakes of
@@ -31,6 +31,8 @@ import { tempDir } from "./helpers.ts";
 setDefaultTimeout(60_000);
 
 const STREAM = "nemotron-en-560";
+/** The fake recognizer's name: what the live Worker's recognizer writes. */
+const RECOGNIZER_MODEL = "fake-parakeet";
 const FAKE_LLAMA = join(import.meta.dir, "fixtures", "fake-llama-server.ts");
 
 let reg: ModelRegistry;
@@ -196,6 +198,69 @@ describe("[ASR-7] a call's own second pass", () => {
     expect((await cli(["status"])).out).toContain(
       `live model nemotron (${STREAM}), second pass qwen every 300 s`,
     );
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
+  });
+});
+
+describe("[ASR-7] a call with Parakeet's second pass", () => {
+  test("each line is written by the stream, then rewritten once by the recognizer the live Worker holds; no Qwen starts", async () => {
+    const r = await rig.api("PATCH", "/config", {
+      "asr.review.model": "parakeet",
+      "dictation.enabled": false,
+    });
+    expect(r.status).toBe(200);
+    const started = () => llama().filter((x) => x.argv !== undefined).length;
+    const before = started();
+    const id = await rig.startCall({});
+    const status = async () => (await rig.api("GET", "/status")).body.live;
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    expect((await status()).review).toEqual({ model: "parakeet", everySeconds: 60 });
+    const segs = async () =>
+      (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
+    await until(
+      async () => (await segs()).filter((s) => s.model === RECOGNIZER_MODEL).length >= 2,
+      30_000,
+      "both lines rewritten",
+    );
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
+    const byLine = new Map<string, string[]>();
+    for (const s of await segs())
+      byLine.set(s.id, [...(byLine.get(s.id) ?? []), `${s.rev} ${s.model}`]);
+    const allowed = [[`1 ${STREAM}`], [`1 ${STREAM}`, `2 ${RECOGNIZER_MODEL}`]];
+    for (const l of byLine.values()) expect(allowed).toContainEqual(l);
+    expect(started()).toBe(before);
+  });
+});
+
+describe("[ASR-7] review before a read, through the app", () => {
+  test("GET transcript and POST context say how many lines are unreviewed with a pass on; review=skip and Off say nothing", async () => {
+    await rig.api("PATCH", "/config", { "asr.review.model": "qwen", "dictation.enabled": false });
+    const id = await rig.startCall({});
+    const status = async () => (await rig.api("GET", "/status")).body.live;
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    const segs = async () =>
+      (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
+    await until(async () => (await segs()).length >= 2, 15_000, "the lines");
+    const read = await rig.api("GET", `/calls/${id}/transcript?format=json`);
+    expect(read.status).toBe(200);
+    expect(typeof read.body.unreviewed).toBe("number");
+    const ctx = await rig.api("POST", `/calls/${id}/context`, { question: "what was said?" });
+    expect(typeof ctx.body.unreviewed).toBe("number");
+    const skip = await rig.api("GET", `/calls/${id}/transcript?format=json&review=skip`);
+    expect("unreviewed" in skip.body).toBe(false);
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
+    // Ended: the final pass owns it, and a read says nothing of a second pass.
+    const after = await rig.api("GET", `/calls/${id}/transcript?format=json`);
+    expect("unreviewed" in after.body).toBe(false);
+    // Off: nothing either.
+    await rig.api("PATCH", "/config", { "asr.review.model": "none" });
+    const off = await rig.startCall({});
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    const r = await rig.api("GET", `/calls/${off}/transcript?format=json`);
+    expect("unreviewed" in r.body).toBe(false);
     expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
     await until(async () => (await status()) === null, 10_000, "the call's end");
   });

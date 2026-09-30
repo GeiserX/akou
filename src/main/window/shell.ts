@@ -105,6 +105,8 @@ export interface NativeWindow {
 
 /** The floating indicator's window: always on top, never takes the focus when shown. */
 export interface IndicatorWindow {
+  /** Moves and sizes it: to the width of its pill, which changes with what the pill shows. */
+  setFrame(frame: Rect): void;
   /** Shows it without taking the focus from the app in front (the meeting). */
   showInactive(): void;
   hide(): void;
@@ -357,8 +359,14 @@ export const QUIT_QUESTION: Omit<QuitQuestion, "id"> = {
 export const DEFAULT_WINDOW = { width: 1280, height: 820 } as const;
 /** No window is restored smaller than this. */
 const MIN_WINDOW = { width: 480, height: 360 } as const;
-/** The floating indicator's size: one row, never resized. */
+/**
+ * The floating indicator's size before its page has measured its pill: one row. The window is then
+ * made as wide as the pill (`fitIndicator`), never narrower than `INDICATOR_MIN_WIDTH` nor wider
+ * than `INDICATOR_MAX_WIDTH`, and it is transparent, so nothing past the pill's rounded edge shows.
+ */
 export const INDICATOR_SIZE = { width: 480, height: 40 } as const;
+export const INDICATOR_MIN_WIDTH = 160;
+export const INDICATOR_MAX_WIDTH = 800;
 /** Its distance from the work area's edge the first time it shows. */
 const INDICATOR_MARGIN = 16;
 /**
@@ -402,21 +410,35 @@ export function placeFrame(saved: Rect | undefined, areas: readonly Rect[]): Rec
   return fitInto(want, areas, MIN_WINDOW);
 }
 
+/** A width the indicator's window may take. */
+const indicatorWidth = (w: number) =>
+  Math.min(INDICATOR_MAX_WIDTH, Math.max(INDICATOR_MIN_WIDTH, Math.ceil(w)));
+
 /**
- * Where the floating indicator shows (DK-F1): where it was dragged last, pulled onto a display the
- * same way as the window; the first time, the top right of the primary work area.
+ * Where the floating indicator shows (DK-F1): where it was dragged last, as wide as it was, pulled
+ * onto a display the same way as the window; the first time, the top right of the primary work
+ * area.
  */
 export function placeIndicator(saved: Rect | undefined, areas: readonly Rect[]): Rect {
   const primary = areas.find((a) => a.width > 0 && a.height > 0);
+  const width = saved ? indicatorWidth(saved.width) : INDICATOR_SIZE.width;
   const at = saved ?? {
-    x:
-      (primary ? primary.x + primary.width : INDICATOR_SIZE.width) -
-      INDICATOR_SIZE.width -
-      INDICATOR_MARGIN,
+    x: (primary ? primary.x + primary.width : width) - width - INDICATOR_MARGIN,
     y: (primary?.y ?? 0) + INDICATOR_MARGIN,
   };
-  const want = { x: at.x, y: at.y, ...INDICATOR_SIZE };
-  return primary ? fitInto(want, areas, INDICATOR_SIZE) : want;
+  const want = { x: at.x, y: at.y, width, height: INDICATOR_SIZE.height };
+  return primary ? fitInto(want, areas, { width, height: INDICATOR_SIZE.height }) : want;
+}
+
+/**
+ * The indicator's frame once its pill is `width` wide: its right edge stays where it is, so from
+ * the top right corner it keeps its margin, and Stop does not move under the pointer when the time
+ * grows or Mute becomes Unmute. Pulled back onto its display if that pushed it off.
+ */
+export function fitIndicator(frame: Rect, width: number, areas: readonly Rect[]): Rect {
+  const w = indicatorWidth(width);
+  const want = { x: frame.x + frame.width - w, y: frame.y, width: w, height: frame.height };
+  return areas.some(hasArea) ? fitInto(want, areas, { width: w, height: frame.height }) : want;
 }
 
 /** The same rectangle. */
@@ -490,18 +512,14 @@ export function placePill(
 
 /**
  * The pill's window at `height` for `base`, a place at `PILL_SIZE` (H-11): it grows away from the
- * edge `dictation.pill` names. At the top its top stays, at the bottom its bottom, and at the left
- * or right its middle; the width never changes. Pulled whole into `area` when given, and never
+ * edge `dictation.pill` names. At the bottom its bottom stays; anywhere else, the left and right
+ * edges included, its top stays, since the page lays its row at the top and the words below it,
+ * so the row with Stop and Cancel never moves as it grows. The width never changes. Pulled whole into `area` when given, and never
  * taller than it.
  */
 export function sizePill(base: Rect, edge: string, height: number, area?: Rect): Rect {
   const h = Math.max(1, Math.round(height));
-  const y =
-    edge === "bottom"
-      ? base.y + base.height - h
-      : edge === "left" || edge === "right"
-        ? base.y + Math.round((base.height - h) / 2)
-        : base.y;
+  const y = edge === "bottom" ? base.y + base.height - h : base.y;
   const want = { x: base.x, y, width: base.width, height: h };
   if (!area || !hasArea(area)) return want;
   return fitInto(want, [area], { width: base.width, height: Math.min(h, area.height) });
@@ -510,12 +528,7 @@ export function sizePill(base: Rect, edge: string, height: number, area?: Rect):
 /** The place at `PILL_SIZE` of a pill window at any height: `sizePill` the other way round. */
 export function pillBase(frame: Rect, edge: string): Rect {
   const h = PILL_SIZE.height;
-  const y =
-    edge === "bottom"
-      ? frame.y + frame.height - h
-      : edge === "left" || edge === "right"
-        ? frame.y - Math.round((h - frame.height) / 2)
-        : frame.y;
+  const y = edge === "bottom" ? frame.y + frame.height - h : frame.y;
   return { x: frame.x, y, width: frame.width, height: h };
 }
 
@@ -1136,6 +1149,15 @@ export class Shell implements WindowShell {
     const rpc = indicatorRpc(this.bridge, () => send ?? { followed: () => {}, status: () => {} }, {
       openMain: async () => {
         await this.app.openWindow(await liveCall());
+      },
+      fit: (width) => {
+        // This window's pill, while it is the one open.
+        const ind = this.indicator;
+        if (ind?.rpc !== rpc) return;
+        const f = fitIndicator(ind.frame, width, this.ui.workAreas());
+        if (sameRect(f, ind.frame)) return;
+        ind.frame = f;
+        ind.window.setFrame(f);
       },
     });
     const w = this.ui.openIndicator({ url: INDICATOR_URL, rpc, frame });

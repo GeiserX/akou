@@ -13,8 +13,8 @@
  * The second pass (`asr.review.model`, live-setups.ts, ASR-7) rewrites each streaming line once
  * during the call, as a new revision of the same `seg` (upgrade.ts): once the speaker stops, the
  * Worker hands the utterance's audio to the host, and every `asr.review.everySeconds` the host
- * sends the utterances closed since then to the reviewer (Qwen) in one request and cuts its words
- * back into their lines. A word
+ * sends the utterances closed since then to the reviewer (Qwen in one request; Parakeet, back on
+ * this Worker's recognizer, each utterance alone) and cuts its words back into their lines. A word
  * shown is never taken back while its line is open; the review replaces whole closed lines. A
  * review still waiting when the next one is due is skipped, and a reviewer that falls behind two
  * reviews in a row is off for the rest of the call. A line a person
@@ -182,6 +182,8 @@ export interface Decoded {
   ms: number;
   /** How many spans of at most `DICTATION_SPAN_SECONDS` the buffer was cut into. */
   spans: number;
+  /** A review's slowest single decode, milliseconds: how long it held the live lines at once. */
+  slowest?: number;
 }
 
 /**
@@ -525,6 +527,20 @@ export class LivePipeline {
       c: round3(x.conf ?? 0),
     }));
     return { text: r.text.trim(), lang: r.lang, words, model: rec.model, ms };
+  }
+
+  /**
+   * One utterance of the second pass, whole, on the loaded recognizer, with the call's decode list
+   * as its hotwords where the decoding takes them (`streamHotwords`: beam, not the default greedy).
+   * The utterance comes already gained and padded (`upgradeUtterance`), so it is decoded as it is:
+   * a second `prepareSpan` would gain a quiet one twice. Only its text: the words go back into lines
+   * by text.
+   */
+  decodeUtterance(samples: Float32Array): { text: string; model: string; ms: number } {
+    const h = this.hot();
+    const t = performance.now();
+    const r = h.recognizer.decode(samples, streamHotwords(h));
+    return { text: r.text.trim(), model: h.recognizer.model, ms: performance.now() - t };
   }
 
   private hot(): PreparedHotwords {
@@ -1160,6 +1176,13 @@ export type ToWorker =
   /** Whether the dictation VAD hears any speech in a buffer (DC-E6), before any engine decodes it. */
   | { type: "speech"; token: number; samples: Float32Array }
   /**
+   * The second pass's Parakeet review: each utterance decoded alone on the loaded recognizer with
+   * the call's decode list, answered as one `decoded`.
+   */
+  | { type: "review"; token: number; parts: Float32Array[] }
+  /** A review whose call has ended: the utterances not decoded yet are not decoded. */
+  | { type: "review.cancel"; token: number }
+  /**
    * A dictation's words as it records (DC-E5 live words): a stream opened on `choice`, or on the
    * engine a call runs when it hears `languages`; its audio; its end, flushed for its last words.
    */
@@ -1199,6 +1222,8 @@ export class WorkerSide {
   private pipeline: LivePipeline | null = null;
   private models: ModelSet | null = null;
   private queue: Promise<void> = Promise.resolve();
+  /** Reviews given up (`review.cancel`): their next utterance is not decoded. */
+  private readonly cancelled = new Set<number>();
   private callId = "";
 
   constructor(private readonly reply: (m: FromWorker) => void) {}
@@ -1230,6 +1255,12 @@ export class WorkerSide {
       switch (m.type) {
         case "decode":
           this.decode(p, m);
+          break;
+        case "review":
+          this.review(p, m);
+          break;
+        case "review.cancel":
+          this.cancelled.add(m.token);
           break;
         case "speech":
           this.reply({
@@ -1296,13 +1327,58 @@ export class WorkerSide {
       this.out({ type: "log", level: "error", msg: `live ASR: ${(err as Error).message}` });
       if (m.type === "init") this.reply({ type: "failed", error: (err as Error).message });
       if (m.type === "flush") this.reply({ type: "flushed", token: m.token });
-      if (m.type === "decode" || m.type === "speech")
+      if (m.type === "decode" || m.type === "speech" || m.type === "review")
         this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
       if (m.type === "dstream-open" || m.type === "dstream-close")
         this.reply({ type: "dstream.failed", token: m.token, error: (err as Error).message });
       if (m.type === "dwarm")
         this.reply({ type: "dwarmed", token: m.token, error: (err as Error).message });
     }
+  }
+
+  /**
+   * A Parakeet review: one utterance per turn of the event loop, like a dictation's spans, so the
+   * call's audio is transcribed between two of them.
+   */
+  private review(p: LivePipeline, m: Extract<ToWorker, { type: "review" }>): void {
+    const texts: string[] = [];
+    let ms = 0;
+    let slowest = 0;
+    let model = p.recognizerModel;
+    const step = (i: number) => (): void => {
+      try {
+        if (this.cancelled.delete(m.token)) {
+          this.reply({ type: "decode.failed", token: m.token, error: "the review was given up" });
+          return;
+        }
+        const part = m.parts[i];
+        if (part) {
+          const r = p.decodeUtterance(part);
+          ms += r.ms;
+          slowest = Math.max(slowest, r.ms);
+          model = r.model;
+          if (r.text !== "") texts.push(r.text);
+          setTimeout(() => {
+            this.queue = this.queue.then(step(i + 1));
+          }, 0);
+          return;
+        }
+        this.reply({
+          type: "decoded",
+          token: m.token,
+          text: texts.join(" "),
+          words: [],
+          language: null,
+          model,
+          ms: Math.round(ms),
+          spans: m.parts.length,
+          slowest: Math.round(slowest),
+        });
+      } catch (err) {
+        this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
+      }
+    };
+    step(0)();
   }
 
   /**
@@ -1452,14 +1528,49 @@ interface HostDictationStream {
 }
 
 /**
- * The model of a second pass: a review's closed utterances, each gained and padded and joined by
- * `joinUtterances`, to its hypothesis.
+ * The model of a second pass: a review's closed utterances, each gained and padded, to its
+ * hypothesis. `samples` is them joined by `joinUtterances` (what Qwen decodes), `parts` each one
+ * alone (what Parakeet decodes).
  */
 export interface LineUpgrader {
   decode(
     samples: Float32Array,
-    o: { glossary: readonly string[]; signal: AbortSignal },
+    o: { glossary: readonly string[]; signal: AbortSignal; parts: readonly Float32Array[] },
   ): Promise<Hypothesis>;
+}
+
+/**
+ * One utterance of Parakeet's pass that took longer than this, milliseconds, held the call's live
+ * lines that long (the Worker decodes it between two chunks of the call's audio): the pass goes
+ * off for the rest of the call. Measured on the reference Mac mini at `asr.threads` 2, while other
+ * builds loaded it: a 30 s utterance, the longest there is, took 1.8 to 2.1 s greedy and 2.1 to
+ * 2.5 s under beam (docs/research/asr-architecture.md section 3.2). Twice that is a machine too
+ * slow to review with Parakeet during a call.
+ */
+export const REVIEW_STALL_MAX_MS = 4000;
+
+/** A second pass that must not go on for this call; the message says why, for the log. */
+export class ReviewOff extends Error {}
+
+/**
+ * Parakeet's pass, on the recognizer the live Worker holds: each utterance alone (`parts`), never
+ * the joined audio, which read worse than the stream alone. Only its text: the words go back into
+ * the lines by text. A decode that held the live lines past `REVIEW_STALL_MAX_MS` turns it off.
+ */
+export function recognizerReviewer(
+  review: (parts: readonly Float32Array[], signal: AbortSignal) => Promise<Decoded>,
+): LineUpgrader {
+  return {
+    decode: async (_joined, o) => {
+      const d = await review(o.parts, o.signal);
+      if ((d.slowest ?? 0) > REVIEW_STALL_MAX_MS) {
+        throw new ReviewOff(
+          `one sentence took ${((d.slowest ?? 0) / 1000).toFixed(1)} s, holding the live lines`,
+        );
+      }
+      return { engine: d.model, text: d.text, words: [], ms: d.ms };
+    },
+  };
 }
 
 /** A call's second pass: its model, its name for the log, and how often it reviews. */
@@ -1467,7 +1578,15 @@ export interface LiveReview {
   name: string;
   reviewer: LineUpgrader;
   everySeconds: number;
+  /** The reviewer cannot take a request now (a final pass holds Qwen's GPU); absent: never. */
+  busy?: () => boolean;
 }
+
+/**
+ * How long a read of the call's lines waits for the second pass to review what has closed, ms:
+ * past it the read answers with what is reviewed so far and says how many lines are still not.
+ */
+export const REVIEW_READ_WAIT_MS = 20_000;
 
 /**
  * Reviews in a row that had not finished when the next one was due, after which the second pass
@@ -1506,6 +1625,8 @@ interface HostUpgrade {
   timer: unknown;
   /** Reviews in a row that had not finished when the next one was due. */
   behind: number;
+  /** The first request the last timer queued: still waiting at the next one, it is behind. */
+  lastQueued: UpgradeJob[] | null;
   /** The reviewer did not keep up: nothing more of this call is reviewed. */
   off: boolean;
   /** Aborted at `call.ended`: the request in flight is given up. */
@@ -1514,6 +1635,14 @@ interface HostUpgrade {
   glossary: string[];
   /** The last failure logged, so a failing reviewer is logged once, not per line. */
   failed: string;
+  /** Lines of the request the reviewer has now. */
+  inFlight: number;
+  /** Settles when the review loop running now stops; null while none runs. */
+  drained: Promise<void> | null;
+  /** A reader's pass in progress, which a second reader shares; null while none runs. */
+  readPass: Promise<void> | null;
+  /** The reviewer cannot take a request now (Qwen's GPU is a final pass's): a read does not wait. */
+  busyElsewhere?: () => boolean;
 }
 
 interface HostCall {
@@ -1802,6 +1931,36 @@ export class LiveAsr {
   }
 
   /**
+   * The second pass's Parakeet review of a call's utterances, on the Worker's already loaded
+   * recognizer with the call's decode list: never a second copy of the model. The Worker takes the
+   * call's audio between two utterances.
+   */
+  review(parts: readonly Float32Array[], signal?: AbortSignal): Promise<Decoded> {
+    if (this.failed) return Promise.reject(new Error(`the recognizer failed: ${this.failed}`));
+    if (this.closed) return Promise.reject(new Error("the recognizer is closed"));
+    if (signal?.aborted) return Promise.reject(new Error("the review was given up"));
+    const token = ++this.decodeToken;
+    const copies = parts.map((p) => p.slice());
+    return new Promise<Decoded>((resolve, reject) => {
+      this.decodes.set(token, { resolve, reject });
+      // The call ended: the Worker decodes no more of it, and the answer is not waited for.
+      signal?.addEventListener(
+        "abort",
+        () => {
+          if (!this.decodes.delete(token)) return;
+          this.transport.post({ type: "review.cancel", token });
+          reject(new Error("the review was given up"));
+        },
+        { once: true },
+      );
+      this.transport.post(
+        { type: "review", token, parts: copies },
+        copies.map((c) => c.buffer),
+      );
+    });
+  }
+
+  /**
    * Whether the dictation VAD hears speech anywhere in a buffer (DC-E6): a buffer with none is
    * never handed to an engine, whichever it is, so none can invent a sentence from room noise.
    */
@@ -1949,10 +2108,15 @@ export class LiveAsr {
             busy: false,
             timer: null,
             behind: 0,
+            lastQueued: null,
             off: false,
             ended: new AbortController(),
             glossary: [],
             failed: "",
+            inFlight: 0,
+            drained: null,
+            readPass: null,
+            ...(review.busy ? { busyElsewhere: review.busy } : {}),
           }
         : null;
     }
@@ -2214,16 +2378,27 @@ export class LiveAsr {
   private reviewDue(c: HostCall, u: HostUpgrade): void {
     u.timer = null;
     if (u.off) return;
+    // A reader's pass is running: its request is ahead of the timer, not behind the call, so
+    // nothing waiting is dropped. The reviewer is behind only when the last timer's request has
+    // not even started, as reads one after another would otherwise keep it on however slow it is.
+    if (u.readPass) {
+      if (u.lastQueued && u.waiting.includes(u.lastQueued)) {
+        u.behind++;
+        if (u.behind >= REVIEW_BEHIND_MAX) {
+          this.reviewOff(u);
+          return;
+        }
+      } else {
+        u.behind = 0;
+      }
+      this.queueReview(c, u);
+      return;
+    }
     if (u.busy || u.waiting.length > 0) {
       u.behind++;
       const late = u.waiting.splice(0).flatMap((r) => r.flatMap((j) => j.lines.map((l) => l.id)));
       if (u.behind >= REVIEW_BEHIND_MAX) {
-        u.off = true;
-        u.closed.length = 0;
-        this.log(
-          "warn",
-          `second pass: ${u.name} did not keep up with the call (${u.behind} reviews in a row behind); the rest of the call keeps the streaming text`,
-        );
+        this.reviewOff(u);
         return;
       }
       if (late.length > 0) {
@@ -2235,30 +2410,62 @@ export class LiveAsr {
     } else {
       u.behind = 0;
     }
-    u.waiting.push(...reviewBatches(u.closed.splice(0), u.capSeconds));
+    this.queueReview(c, u);
+  }
+
+  /** The timer's review: the utterances closed since the last one, queued for the reviewer. */
+  private queueReview(c: HostCall, u: HostUpgrade): void {
+    const batches = reviewBatches(u.closed.splice(0), u.capSeconds);
+    u.lastQueued = batches[0] ?? null;
+    u.waiting.push(...batches);
     void this.runQwen(c, u);
+  }
+
+  /** The reviewer did not keep up: nothing more of this call is reviewed. */
+  private reviewOff(u: HostUpgrade): void {
+    u.off = true;
+    u.closed.length = 0;
+    u.waiting.length = 0;
+    this.log(
+      "warn",
+      `second pass: ${u.name} did not keep up with the call (${u.behind} reviews in a row behind); the rest of the call keeps the streaming text`,
+    );
   }
 
   /** Decodes the waiting reviews, one at a time, and writes each one's words. */
   private async runQwen(c: HostCall, u: HostUpgrade): Promise<void> {
     if (u.busy) return;
     u.busy = true;
+    let done = () => {};
+    u.drained = new Promise<void>((resolve) => {
+      done = resolve;
+    });
     try {
       for (;;) {
         const review = u.waiting.shift();
         if (!review || u.ended.signal.aborted || u.off) break;
-        const job = {
-          lines: review.flatMap((j) => j.lines),
-          samples: joinUtterances(review.map((j) => j.samples)),
-        };
+        const parts = review.map((j) => j.samples);
+        const job = { lines: review.flatMap((j) => j.lines), samples: joinUtterances(parts) };
+        u.inFlight = job.lines.length;
         let qwen: Hypothesis;
         try {
           qwen = await u.qwen.decode(job.samples, {
             glossary: u.glossary,
             signal: u.ended.signal,
+            parts,
           });
         } catch (err) {
           const why = (err as Error).message;
+          if (err instanceof ReviewOff) {
+            u.off = true;
+            u.waiting.length = 0;
+            u.closed.length = 0;
+            this.log(
+              "warn",
+              `second pass: ${u.name} is off for the rest of the call: ${why}; the lines keep the streaming text`,
+            );
+            break;
+          }
           if (!u.ended.signal.aborted && why !== u.failed) {
             u.failed = why;
             this.log(
@@ -2272,14 +2479,90 @@ export class LiveAsr {
         this.revise(c, job.lines, qwen);
       }
     } finally {
+      u.inFlight = 0;
       u.busy = false;
+      u.drained = null;
+      done();
+    }
+  }
+
+  /**
+   * Review before a read (review-on-read): when a reader asks for the call's lines, the second pass
+   * first reviews the utterances closed and not reviewed yet, so an agent that follows the call
+   * reads corrected lines. The newest cap's worth goes first; older ones stay for the timer. Waits
+   * at most `waitMs`, then answers how many closed lines are still not reviewed. Concurrent reads
+   * share one pass, and a read right after the timer's pass finds nothing to do. Null when the call
+   * has no second pass running: Off, gone off, or ended (the final pass owns the rest), including
+   * when that happens during the wait, which then ends at once: no later read would review them.
+   */
+  async reviewForRead(
+    callId: string,
+    waitMs = REVIEW_READ_WAIT_MS,
+  ): Promise<{ unreviewed: number } | null> {
+    const c = this.calls.get(callId);
+    const u = c?.upgrade;
+    if (!c || !u || u.off || u.ended.signal.aborted) return null;
+    if (!u.readPass && !u.busyElsewhere?.()) {
+      const pass = this.readPass(c, u);
+      u.readPass = pass;
+      void pass.finally(() => {
+        if (u.readPass === pass) u.readPass = null;
+      });
+    }
+    const pass = u.readPass;
+    if (pass) {
+      let timer: unknown = null;
+      let onEnd = () => {};
+      await Promise.race([
+        pass,
+        new Promise<void>((resolve) => {
+          timer = this.clock.setTimeout(resolve, waitMs);
+        }),
+        new Promise<void>((resolve) => {
+          onEnd = resolve;
+          u.ended.signal.addEventListener("abort", onEnd, { once: true });
+        }),
+      ]);
+      if (timer !== null) this.clock.clearTimeout(timer);
+      u.ended.signal.removeEventListener("abort", onEnd);
+    }
+    if (u.off || u.ended.signal.aborted) return null;
+    return { unreviewed: unreviewedLines(u) };
+  }
+
+  private async readPass(c: HostCall, u: HostUpgrade): Promise<void> {
+    if (u.closed.length > 0) {
+      // The newest cap's worth, whole utterances; older ones are left to the timer.
+      const cap = u.capSeconds * ASR_RATE;
+      let from = u.closed.length;
+      let n = 0;
+      while (from > 0) {
+        const len = (u.closed[from - 1] as UpgradeJob).samples.length;
+        if (from < u.closed.length && n + len > cap) break;
+        n += len;
+        from--;
+      }
+      const newest = u.closed.splice(from);
+      if (u.closed.length === 0 && u.timer !== null) {
+        this.clock.clearTimeout(u.timer);
+        u.timer = null;
+      }
+      u.waiting.push(...reviewBatches(newest, u.capSeconds));
+    }
+    for (;;) {
+      if (u.off || u.ended.signal.aborted) return;
+      if (!u.busy) {
+        if (u.waiting.length === 0) return;
+        void this.runQwen(c, u);
+      }
+      await u.drained;
     }
   }
 
   /**
    * Writes the reviewer's hypothesis of an utterance as the next revision of each of its lines, its
-   * words cut back into them. Nothing is written once the call has ended. A line a person edited or
-   * retracted, or one that gets no words, is left as it is.
+   * words cut back into them. Nothing is written once the call has ended. A line a person edited,
+   * retracted or fixed a word on, or one that gets no words, is left as it is.
    */
   private revise(c: HostCall, lines: readonly UpgradeLine[], h: Hypothesis): void {
     if (this.calls.get(c.id) !== c) {
@@ -2294,9 +2577,12 @@ export class LiveAsr {
       lines.map((l) => l.text),
       words.filter((w) => w !== ""),
     );
+    // A line a person fixed a word on (a line-scoped pair of the call, #186's fix) keeps its words:
+    // the fix is a pair, not a revision, so `by` alone does not show it.
+    const fixed = new Set(c.access.view.callVocabulary().flatMap((v) => v.segs ?? []));
     lines.forEach((l, i) => {
       const seg = c.access.view.segment(l.id);
-      if (!seg || seg.text === null || seg.by !== undefined) return;
+      if (!seg || seg.text === null || seg.by !== undefined || fixed.has(l.id)) return;
       const text = (parts[i] as string).trim();
       if (text === "") return;
       c.access.record({
@@ -2362,4 +2648,13 @@ export function modelNameFor(spec: ModelSpec): string {
 export async function whenReady(asr: LiveAsr, clock: Clock, ms: number): Promise<boolean> {
   const r = await withDeadline(clock, asr.ready, ms);
   return r.ok;
+}
+
+/** The closed lines of a reviewed call the second pass has not written yet. */
+function unreviewedLines(u: HostUpgrade): number {
+  return (
+    u.closed.reduce((n, j) => n + j.lines.length, 0) +
+    u.waiting.reduce((n, r) => n + r.reduce((m, j) => m + j.lines.length, 0), 0) +
+    u.inFlight
+  );
 }
