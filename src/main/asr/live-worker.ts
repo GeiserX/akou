@@ -11,10 +11,12 @@
  * Speakers (step 5) are the same on both.
  *
  * The `upgrade` setup (live-setups.ts, ASR-7) rewrites each streaming line once during the call,
- * as a new revision of the same `seg`, one utterance at a time (upgrade.ts): once the speaker
- * stops, the Worker hands the utterance's audio to the host, which sends it to Qwen and cuts
- * Qwen's words back into the utterance's lines (about 1 to 2.5 s later). A word shown is never
- * taken back while its line is open; the upgrade replaces whole closed lines. A line a person
+ * as a new revision of the same `seg` (upgrade.ts): once the speaker stops, the Worker hands the
+ * utterance's audio to the host, and once a minute the host sends the utterances closed since
+ * then to Qwen in one request and cuts Qwen's words back into their lines. A word shown is never
+ * taken back while its line is open; the upgrade replaces whole closed lines. A review still
+ * waiting when the next minute's is due is skipped, and a Qwen that falls behind two minutes in a
+ * row is off for the rest of the call. A line a person
  * edited or retracted keeps their text, a line that gets no words keeps its own, and nothing is
  * written after the call's `call.ended`: an answer that comes later is dropped, and the final pass
  * covers it.
@@ -87,7 +89,13 @@ import {
   type SpeakerEvent,
   StreamSpeakers,
 } from "./speakers.ts";
-import { splitToLines, UTTERANCE_MAX_SECONDS } from "./upgrade.ts";
+import {
+  joinUtterances,
+  REVIEW_EVERY_SECONDS,
+  reviewBatches,
+  splitToLines,
+  UTTERANCE_MAX_SECONDS,
+} from "./upgrade.ts";
 
 /** A stream diarizer that dies is started again at most this many times per call. */
 export const STREAM_RESTART_LIMIT = 3;
@@ -1266,6 +1274,8 @@ export interface LiveAsrOptions {
    * `liveEngine`; null or absent for any other setup.
    */
   upgrade?(callId: string): LineUpgrader | null;
+  /** How often Qwen reviews a call's closed utterances, ms (`REVIEW_EVERY_SECONDS`). Tests only. */
+  reviewEveryMs?: number;
   /** Backlog levels that write `asr.lag`, seconds. */
   lagLevels?: readonly number[];
   /** Audio in flight to the Worker per channel, seconds; the rest waits in the ingest queue. */
@@ -1281,7 +1291,10 @@ interface Transport {
   close(): void;
 }
 
-/** Qwen for the in-call upgrade: one utterance's audio, gained and padded, to its hypothesis. */
+/**
+ * Qwen for the in-call upgrade: a minute's closed utterances, each gained and padded and joined
+ * by `joinUtterances`, to its hypothesis.
+ */
 export interface LineUpgrader {
   decode(
     samples: Float32Array,
@@ -1290,10 +1303,10 @@ export interface LineUpgrader {
 }
 
 /**
- * Utterances waiting for Qwen per call. Past this the oldest waiting one keeps the streaming text,
- * so a slow Qwen upgrades the newest lines instead of falling further behind.
+ * Minutes in a row whose review had not finished when the next one was due, after which Qwen is off
+ * for the rest of the call: it is not keeping up with the call.
  */
-export const UPGRADE_QUEUE_MAX = 6;
+export const REVIEW_BEHIND_MAX = 2;
 
 /** A written line of an utterance: its id and its streaming text. */
 interface UpgradeLine {
@@ -1301,14 +1314,28 @@ interface UpgradeLine {
   text: string;
 }
 
+/** A closed utterance on the host: its written lines and its audio. */
+interface UpgradeJob {
+  lines: UpgradeLine[];
+  samples: Float32Array;
+}
+
 /** An upgrading call's state on the host. */
 interface HostUpgrade {
   qwen: LineUpgrader;
   /** Its written lines by the key the Worker gave them, until their utterance closes. */
   keys: Map<number, string>;
-  /** Utterances waiting for Qwen, oldest first, each with its lines and audio. */
-  waiting: { lines: UpgradeLine[]; samples: Float32Array }[];
+  /** Utterances closed since the last review, oldest first. */
+  closed: UpgradeJob[];
+  /** Reviews waiting for Qwen, oldest first: each one request of whole utterances. */
+  waiting: UpgradeJob[][];
   busy: boolean;
+  /** The next review, armed when an utterance closes and none is armed. */
+  timer: unknown;
+  /** Minutes in a row whose review had not finished when the next one was due. */
+  behind: number;
+  /** Qwen did not keep up: nothing more of this call is reviewed. */
+  off: boolean;
   /** Aborted at `call.ended`: the request in flight is given up. */
   ended: AbortController;
   /** The call's decode list as Qwen's glossary. */
@@ -1648,8 +1675,12 @@ export class LiveAsr {
         ? {
             qwen,
             keys: new Map(),
+            closed: [],
             waiting: [],
             busy: false,
+            timer: null,
+            behind: 0,
+            off: false,
             ended: new AbortController(),
             glossary: [],
             failed: "",
@@ -1861,7 +1892,7 @@ export class LiveAsr {
 
   // --- the in-call upgrade ------------------------------------------------------------------
 
-  /** A closed utterance: it waits for Qwen, whose words become its lines' next revisions. */
+  /** A closed utterance: it waits for the next minute's review, whose words become its lines' next revisions. */
   private upgradeLine(c: HostCall, m: UpgradeOut): void {
     const u = c.upgrade;
     if (!u) return;
@@ -1871,26 +1902,60 @@ export class LiveAsr {
       u.keys.delete(key);
       if (id) lines.push({ id, text: m.lines[i] as string });
     });
-    if (lines.length === 0) return;
-    u.waiting.push({ lines, samples: m.samples });
-    if (u.waiting.length > UPGRADE_QUEUE_MAX) {
-      const late = u.waiting.shift();
-      this.log(
-        "warn",
-        `live upgrade: Qwen is behind; ${late?.lines.map((l) => l.id).join(", ")} keep the streaming text`,
-      );
+    if (lines.length === 0 || u.off || u.ended.signal.aborted) return;
+    u.closed.push({ lines, samples: m.samples });
+    u.timer ??= this.clock.setTimeout(
+      () => this.review(c, u),
+      this.o.reviewEveryMs ?? REVIEW_EVERY_SECONDS * 1000,
+    );
+  }
+
+  /**
+   * A minute is up: the utterances closed since the last review go to Qwen, whole, in requests of
+   * at most `REVIEW_CAP_SECONDS`. A review still waiting from the minute before is skipped (its
+   * lines keep the streaming text), and after `REVIEW_BEHIND_MAX` minutes in a row behind, Qwen is
+   * off for the rest of the call.
+   */
+  private review(c: HostCall, u: HostUpgrade): void {
+    u.timer = null;
+    if (u.off) return;
+    if (u.busy || u.waiting.length > 0) {
+      u.behind++;
+      const late = u.waiting.splice(0).flatMap((r) => r.flatMap((j) => j.lines.map((l) => l.id)));
+      if (u.behind >= REVIEW_BEHIND_MAX) {
+        u.off = true;
+        u.closed.length = 0;
+        this.log(
+          "warn",
+          `live upgrade: Qwen did not keep up with the call (${u.behind} minutes in a row behind); the rest of the call keeps the streaming text`,
+        );
+        return;
+      }
+      if (late.length > 0) {
+        this.log(
+          "warn",
+          `live upgrade: Qwen is behind; ${late.join(", ")} keep the streaming text`,
+        );
+      }
+    } else {
+      u.behind = 0;
     }
+    u.waiting.push(...reviewBatches(u.closed.splice(0)));
     void this.runQwen(c, u);
   }
 
-  /** Decodes the waiting utterances with Qwen, one at a time, and writes each one's words. */
+  /** Decodes the waiting reviews with Qwen, one at a time, and writes each one's words. */
   private async runQwen(c: HostCall, u: HostUpgrade): Promise<void> {
     if (u.busy) return;
     u.busy = true;
     try {
       for (;;) {
-        const job = u.waiting.shift();
-        if (!job || u.ended.signal.aborted) break;
+        const review = u.waiting.shift();
+        if (!review || u.ended.signal.aborted || u.off) break;
+        const job = {
+          lines: review.flatMap((j) => j.lines),
+          samples: joinUtterances(review.map((j) => j.samples)),
+        };
         let qwen: Hypothesis;
         try {
           qwen = await u.qwen.decode(job.samples, {
@@ -1949,9 +2014,12 @@ export class LiveAsr {
 
   /** The call ended: the Qwen request in flight is given up and nothing waiting is decoded. */
   private endUpgrade(c: HostCall): void {
-    if (!c.upgrade) return;
-    c.upgrade.ended.abort();
-    c.upgrade.waiting.length = 0;
+    const u = c.upgrade;
+    if (!u) return;
+    u.ended.abort();
+    if (u.timer !== null) this.clock.clearTimeout(u.timer);
+    u.timer = null;
+    u.waiting.length = 0;
   }
 }
 
