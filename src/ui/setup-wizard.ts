@@ -706,8 +706,7 @@ export class SetupWizard {
   }
 
   private async pullBest(): Promise<void> {
-    // Only the models step's own row: the welcome's download is the speech set's alone.
-    if (!this.running || this.step !== "models" || this.best?.state !== "missing") return;
+    if (this.best?.state !== "missing") return;
     try {
       const r = await this.d.t.request("POST", "/models/pull", { model: this.best.id });
       if (r.status >= 400)
