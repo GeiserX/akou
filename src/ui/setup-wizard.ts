@@ -144,7 +144,10 @@ export class SetupWizard {
   private busy = false;
   private recorder: KeyRecorder | null = null;
   private assistant: SettingsPage | null = null;
+  /** The permissions step's read of the grants, once a second. */
   private timer: ReturnType<typeof setInterval> | null = null;
+  /** The models step's read of Qwen's download, once a second while it runs. */
+  private bestTimer: ReturnType<typeof setInterval> | null = null;
   /** The step's controls that Continue reads. */
   private read: () => Record<string, unknown> = () => ({});
   private workspaceField: HTMLInputElement | null = null;
@@ -481,12 +484,15 @@ export class SetupWizard {
     }
     const asr = this.setting("asr.languages");
     const own = this.setting("dictation.languages");
+    // With none saved, the chips start from the calls' languages; only a change is saved, so an
+    // untouched list keeps following them.
+    const first = firstLanguages(
+      Array.isArray(own) ? (own as string[]) : [],
+      Array.isArray(asr) ? (asr as string[]) : [],
+      navigator.language,
+    );
     const list = new LanguageList(
-      firstLanguages(
-        Array.isArray(own) ? (own as string[]) : [],
-        Array.isArray(asr) ? (asr as string[]) : [],
-        navigator.language,
-      ),
+      first,
       () => {},
       "setup-languages",
       wordsFor("dictation.languages").empty,
@@ -505,7 +511,7 @@ export class SetupWizard {
       if (input.value !== saved) out["dictation.hotkey"] = input.value;
       if (seg && seg.input.value !== engine) out["dictation.engine"] = seg.input.value;
       const langs = list.value();
-      if (JSON.stringify(langs) !== JSON.stringify(own ?? [])) out["dictation.languages"] = langs;
+      if (JSON.stringify(langs) !== JSON.stringify(first)) out["dictation.languages"] = langs;
       return out;
     };
     return section("", ...rows);
@@ -639,13 +645,13 @@ export class SetupWizard {
       ),
     );
     list.hidden = false;
-    if (best.state === "downloading" && !this.timer) {
-      this.timer = setInterval(() => {
+    if (best.state === "downloading" && !this.bestTimer) {
+      this.bestTimer = setInterval(() => {
         if (this.step === "models" && this.running) void this.bestRow();
       }, 1000);
-    } else if (best.state !== "downloading" && this.timer) {
-      clearInterval(this.timer);
-      this.timer = null;
+    } else if (best.state !== "downloading" && this.bestTimer) {
+      clearInterval(this.bestTimer);
+      this.bestTimer = null;
     }
   }
 
@@ -670,6 +676,8 @@ export class SetupWizard {
     this.recorder = null;
     if (this.timer) clearInterval(this.timer);
     this.timer = null;
+    if (this.bestTimer) clearInterval(this.bestTimer);
+    this.bestTimer = null;
     if (this.step === "assistant") this.assistant?.leave();
   }
 

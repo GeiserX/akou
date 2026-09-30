@@ -260,6 +260,15 @@ describe("the first-run setup (WINDOW section 10)", () => {
         await page.click("#setup-next");
         await onStep(page, "Dictation");
         expect(await count(page)).toBe("Step 2 of 5");
+        // Continue with nothing changed saves nothing: the languages drawn from the calls' are
+        // not written as the user's own.
+        await page.click("#setup-next");
+        await onStep(page, "Speech models");
+        expect(f.patches).toEqual([]);
+        // A change left with Skip is not saved either.
+        await page.click("#setup-back");
+        await onStep(page, "Dictation");
+        await page.selectOption("#setup-languages-add", "es");
         await page.click("#setup-skip");
         // The models are there: their rows, and no download.
         await onStep(page, "Speech models");
