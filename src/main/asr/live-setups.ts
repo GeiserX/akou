@@ -212,11 +212,11 @@ export const REVIEWS: Readonly<Record<Reviewer, ReviewInfo>> = {
   },
   parakeet: {
     what: "Parakeet decodes each sentence Nemotron finished since its last review again, alone, and its words replace theirs, once",
-    // The same calls, a review a minute: 14.39 to 12.35 % (14 % fewer) and 8.00 to 4.29 % (46 %
-    // fewer), on the recognizer the live Worker already holds (docs/research/asr-architecture.md
-    // section 3.2).
+    // The same calls, a review a minute, at 2 threads: 14.39 to 12.05 % (16 % fewer) and 8.00 to
+    // 4.29 % (46 % fewer), on the recognizer the live Worker already holds
+    // (docs/research/asr-architecture.md section 3.2).
     plain:
-      "Rewrites the finished sentences with Parakeet, on the processor, with no extra memory. On read speech it cuts Nemotron's mistakes by a seventh in English and by almost half in Spanish.",
+      "Rewrites the finished sentences with Parakeet, on the processor, with no extra memory. On read speech it cuts Nemotron's mistakes by a sixth in English and by almost half in Spanish.",
     line: "Fewer mistakes, on the processor, with no extra memory.",
   },
 };
