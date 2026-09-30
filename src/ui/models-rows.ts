@@ -5,12 +5,13 @@
  * Pure, so the tests read it without a browser.
  */
 
-import type { LiveSetupView, LiveView } from "../main/asr/live-setups.ts";
+import { everyText } from "../main/asr/live-names.ts";
+import type { LiveSetupView, LiveView, ReviewChoiceView } from "../main/asr/live-setups.ts";
 import type { ModelView, ScoreView } from "../main/server/model-store.ts";
 import { when } from "./server-text.ts";
 
 export type ModelRow = ModelView;
-export type { LiveSetupView, LiveView };
+export type { LiveSetupView, LiveView, ReviewChoiceView };
 
 /** Catalog ids the page places by hand (`tests/models-rows.test.ts` checks them against the catalog). */
 export const RECOGNIZER_ID = "parakeet-tdt-0.6b-v3-fp32";
@@ -34,6 +35,8 @@ export const PRESET_ENGINES: Readonly<Record<string, string>> = {
 /** The settings whose home is the Models page; the Settings page leaves them out and links here. */
 export const MODELS_KEYS = [
   "asr.live",
+  "asr.review.model",
+  "asr.review.everySeconds",
   "asr.diarizer",
   "asr.accelerator",
   "server.models_unused_days",
@@ -43,6 +46,7 @@ export const MODELS_KEYS = [
 /** The defaults the page marks "(default)"; `tests/models-rows.test.ts` checks them against the registry. */
 export const DEFAULTS: Readonly<Record<string, string>> = {
   "asr.live": "auto",
+  "asr.review.model": "none",
   "asr.diarizer": "nemotron",
   "server.default_model": "auto",
 };
@@ -79,18 +83,26 @@ export function modelName(r: Pick<ModelRow, "id" | "job">): string {
   return r.id;
 }
 
-/** The live setups' names on the page, in its order: Automatic first, Voxtral last. */
-export const LIVE_ORDER = ["auto", "nemotron", "parakeet", "upgrade", "voxtral"] as const;
-const LIVE_NAMES: Readonly<Record<string, string>> = {
-  auto: "Automatic",
-  nemotron: "Nemotron, streaming",
-  parakeet: "Parakeet, between pauses",
-  upgrade: "Nemotron, each line rewritten by Qwen",
-  voxtral: "Voxtral Realtime",
-};
+/** The live models on the page, in its order: Automatic first, Voxtral last. */
+export const LIVE_ORDER = ["auto", "nemotron", "parakeet", "voxtral"] as const;
 
-export function liveName(id: string, fallback = id): string {
-  return LIVE_NAMES[id] ?? fallback;
+/** A live model's name on the page: Automatic, or the model's own name (`Nemotron 3.5`). */
+export function liveName(id: string, title = id): string {
+  return id === "auto" ? "Automatic" : title;
+}
+
+/** How often the second pass may review, as the page offers it, seconds. */
+export const REVIEW_EVERY = [60, 120, 300] as const;
+
+/** An interval's words in the page's list: `Every 2 min`. */
+export function everyLabel(seconds: number): string {
+  const t = everyText(seconds);
+  return t.charAt(0).toUpperCase() + t.slice(1);
+}
+
+/** A second pass's facts on the page: what stops it here, or what it does. */
+export function reviewHelp(c: ReviewChoiceView): string {
+  return c.blocked ?? c.plain;
 }
 
 /** `2.55 GB`, `40 MB`, `644 KB`, in powers of ten as the settings count them. */
@@ -162,14 +174,15 @@ export function liveHelp(s: LiveSetupView): string {
 
 /** What Automatic runs: Nemotron once a streaming model is here, else Parakeet. */
 export function autoHelp(v: LiveView, here: string): string {
+  const nemotron = v.setups.find((s) => s.id === "nemotron");
+  const name = nemotron?.title ?? "Nemotron";
   const streams =
     v.setting === "auto"
       ? v.next === "nemotron"
-      : (v.setups.find((s) => s.id === "nemotron")?.models.every((m) => m.state === "ready") ??
-        false);
+      : (nemotron?.models.every((m) => m.state === "ready") ?? false);
   return streams
-    ? `Uses Nemotron, since it is on ${here}.`
-    : `Uses Parakeet until Nemotron is on ${here}.`;
+    ? `Uses ${name}, since it is on ${here}.`
+    : `Uses Parakeet until ${name} is on ${here}.`;
 }
 
 /**

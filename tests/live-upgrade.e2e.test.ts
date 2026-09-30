@@ -1,9 +1,13 @@
 /**
- * The `upgrade` live setup through the whole app (ASR-7, akou-chp.23): a call started with it
- * writes each streaming line, then Qwen's one rewrite of it at the next review (every second here,
- * every minute in the app), and the Qwen server it started stops when the call ends. Qwen is the fake llama-server
- * (`asr.llamaServer`), the recognizer and the streaming engine the fakes of asr-fake.ts, and the
- * catalog a loopback registry of tiny files: nothing is downloaded and no model loads.
+ * The second pass through the whole app (ASR-7, akou-chp.23, `asr.review.*`): a call with Qwen's
+ * review writes each streaming line, then Qwen's one rewrite of it at the next review (every second
+ * here, every `asr.review.everySeconds` in the app), and the Qwen server it started stops when the
+ * call ends. A call's own `review` and `reviewEvery` (`POST /calls`, `akou start --review
+ * --review-every`) reach it. The config file starts with the old `asr.live` `upgrade`, read as
+ * Nemotron with Qwen's review. Qwen is the fake
+ * llama-server (`asr.llamaServer`), the recognizer and the streaming engine the fakes of
+ * asr-fake.ts, and the catalog a loopback registry of tiny files: nothing is downloaded and no
+ * model loads.
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
@@ -20,6 +24,7 @@ import {
 } from "../src/main/asr/models.ts";
 import { type AppRig, appRig, FAKE_MODELS, speechWav } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
+import { rigCli } from "./cli-helpers.ts";
 import { type ModelRegistry, modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -60,6 +65,7 @@ beforeAll(async () => {
     settings: {
       "asr.modelsDir": models,
       "asr.languages": ["en"],
+      // The old value: Nemotron with Qwen's review.
       "asr.live": "upgrade",
       // An own llama-server needs no downloaded build.
       "asr.llamaServer": [process.execPath, FAKE_LLAMA, "--fake-log", llamaLog],
@@ -94,12 +100,16 @@ const alive = (pid: number) => {
   }
 };
 
-describe("[ASR-7] a call on the upgrade setup", () => {
+describe("[ASR-7] a call with Qwen's second pass", () => {
   test("each line is written by the stream, then rewritten once by Qwen; Qwen stops with the call", async () => {
     const id = await rig.startCall({});
     const status = async () => (await rig.api("GET", "/status")).body.live;
     await until(async () => (await status())?.setup != null, 10_000, "the live setup");
-    expect((await status()).setup).toBe("upgrade");
+    expect(await status()).toMatchObject({
+      setup: "nemotron",
+      engine: STREAM,
+      review: { model: "qwen", everySeconds: 60 },
+    });
     const segs = async () =>
       (await rig.app.events(id, 0)).filter((e: LogEvent): e is Seg => e.type === "seg");
     await until(
@@ -161,5 +171,32 @@ describe("[ASR-7] one Qwen for the upgrade and dictation", () => {
     expect(alive(pid)).toBe(true);
     await rig.api("PATCH", "/config", { "dictation.enabled": false });
     await until(() => !alive(pid), 10_000, "dictation's Qwen to stop");
+  });
+});
+
+describe("[ASR-7] a call's own second pass", () => {
+  test("POST /calls review and reviewEvery, and akou start --review --review-every, reach the call and its status", async () => {
+    const status = async () => (await rig.api("GET", "/status")).body.live;
+    await rig.api("PATCH", "/config", { "asr.review.model": "none" });
+    await rig.startCall({ review: "qwen", reviewEvery: 120 });
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    expect((await status()).review).toEqual({ model: "qwen", everySeconds: 120 });
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
+    // The setting says none: a call that names nothing runs none.
+    await rig.startCall({});
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    expect((await status()).review).toBeNull();
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
+    const cli = rigCli(rig);
+    const started = await cli(["start", "--review", "qwen", "--review-every", "300", "--json"]);
+    expect(started.code).toBe(0);
+    await until(async () => (await status())?.setup != null, 10_000, "the live setup");
+    expect((await cli(["status"])).out).toContain(
+      `live model nemotron (${STREAM}), second pass qwen every 300 s`,
+    );
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await status()) === null, 10_000, "the call's end");
   });
 });

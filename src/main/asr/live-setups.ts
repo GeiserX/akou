@@ -1,25 +1,27 @@
 /**
- * The live setups a user chooses between (`asr.live`, akou-chp.23): what writes the live transcript
- * of a call, with the numbers measured for each (docs/research/asr-architecture.md sections 3.1
- * and 3.2), and the rule `auto` follows.
+ * The live models a user chooses between (`asr.live`, akou-chp.23), with the numbers measured for
+ * each (docs/research/asr-architecture.md sections 3.1 and 3.2) and the rule `auto` follows, and
+ * the second pass that may review their lines during the call (`asr.review.model`,
+ * `asr.review.everySeconds`).
  *
- * | Setup      | What writes the live lines                                   | AMI WER |
+ * | Model      | What writes the live lines                                   | AMI WER |
  * |------------|--------------------------------------------------------------|---------|
  * | `parakeet` | Parakeet re-decoding each pause-cut window (words move back)  | 36.17   |
  * | `nemotron` | streaming Nemotron (a word shown is never taken back)         | 18.80   |
- * | `upgrade`  | streaming Nemotron, the lines of the last minute's closed     | not run |
- * |            | utterances rewritten once by Qwen, once a minute              |         |
  * | `voxtral`  | listed only: unavailable, with its reason                    |         |
  *
- * `auto` picks `upgrade` when the Mac allows it (`upgradeRoom`): Qwen and its llama-server on disk,
- * a GPU to run Qwen on, `UPGRADE_MIN_MEMORY_GB` of memory or more, and no final pass holding the
- * GPU. Reviewing once a minute, Qwen was busy for 7.9 to 9.9 % of a call on the reference Mac mini. Otherwise
- * `auto` picks `nemotron` when a streaming model is on disk, else `parakeet`. A Qwen that does not
- * keep up during the call turns the review off for that call and says so (live-worker.ts). A setup
- * whose models are missing is never run: a named one that cannot run falls back the same way and
- * says why. The choice is made
- * when a call takes the recognizer, so a change applies from the next call and a running call keeps
- * its setup. The in-call upgrade itself (ASR-7) is in live-worker.ts.
+ * `auto` picks `nemotron` when a streaming model is on disk, else `parakeet`. A model whose files
+ * are missing is never run: a named one that cannot run falls back the same way and says why.
+ *
+ * The second pass is the user's choice only, never `auto`'s: every `asr.review.everySeconds`, the
+ * utterances Nemotron closed since the last review are decoded again, whole, and their words
+ * replace the lines' (upgrade.ts, live-worker.ts). `qwen` runs Qwen on llama-server when its
+ * models are here; the menus offer it when the Mac has a GPU for it and `QWEN_MIN_MEMORY_GB` of
+ * memory. It reviews Nemotron's lines, so it never runs on a call whose live model is Parakeet. A
+ * review that cannot run is off for the call, with a note saying why.
+ *
+ * The choice is made when a call takes the recognizer, so a change applies from the next call and
+ * a running call keeps its setup.
  */
 
 import { type ScoreView, scoreView } from "../server/model-store.ts";
@@ -29,21 +31,60 @@ import {
   isLiveEngine,
   type LiveChoice,
 } from "./live-engines.ts";
+import { liveModelName } from "./live-names.ts";
 import { QWEN_ASR } from "./llama-catalog.ts";
 import type { Measure, NotMeasured } from "./model-scores.ts";
 import { REFERENCE_MACHINE } from "./model-scores.ts";
 import { RECOGNIZER } from "./models.ts";
 
-export const LIVE_SETUP_IDS = ["parakeet", "nemotron", "upgrade", "voxtral"] as const;
+export { liveModelName };
+
+import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS } from "./upgrade.ts";
+
+export const LIVE_SETUP_IDS = ["nemotron", "parakeet", "voxtral"] as const;
 export type LiveSetupId = (typeof LIVE_SETUP_IDS)[number];
-/** The setups a call can run. */
+/** The live models a call can run. */
 export type RunnableSetup = Exclude<LiveSetupId, "voxtral">;
-/** The values of `asr.live`, and of a call's `live` at its start. */
-export const LIVE_SETTINGS = ["auto", "parakeet", "nemotron", "upgrade"] as const;
+/** The values of `asr.live`. */
+export const LIVE_SETTINGS = ["auto", "parakeet", "nemotron"] as const;
 export type LiveSetting = (typeof LIVE_SETTINGS)[number];
+/**
+ * What a call's own `live` may say (`POST /calls`, `akou start --live`): the values of `asr.live`,
+ * and `upgrade`, the old spelling of Nemotron with Qwen's second pass (`legacyLive`).
+ */
+export const LIVE_CALL_SETTINGS = [...LIVE_SETTINGS, "upgrade"] as const;
 
 export function isLiveSetting(v: string): v is LiveSetting {
   return (LIVE_SETTINGS as readonly string[]).includes(v);
+}
+
+export function isLiveCallSetting(v: string): boolean {
+  return (LIVE_CALL_SETTINGS as readonly string[]).includes(v);
+}
+
+/** The values of `asr.review.model`: no second pass, or the model that reviews. */
+export const REVIEW_MODELS = ["none", "qwen"] as const;
+export type ReviewModel = (typeof REVIEW_MODELS)[number];
+/** A second pass that runs. */
+export type Reviewer = Exclude<ReviewModel, "none">;
+export const REVIEWERS: readonly Reviewer[] = ["qwen"];
+
+export function isReviewModel(v: string): v is ReviewModel {
+  return (REVIEW_MODELS as readonly string[]).includes(v);
+}
+
+export { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS };
+
+/**
+ * A call's `live` in today's terms: `upgrade`, the old spelling, is Nemotron with Qwen's second
+ * pass, unless the call names its own review.
+ */
+export function legacyLive(
+  live: string | undefined,
+  review: string | undefined,
+): { live: string | undefined; review: string | undefined } {
+  if (live !== "upgrade") return { live, review };
+  return { live: "nemotron", review: review ?? "qwen" };
 }
 
 export interface LiveSetupInfo {
@@ -55,6 +96,8 @@ export interface LiveSetupInfo {
    * and for a setup with no figure on meetings, what is known instead.
    */
   plain: string;
+  /** What the live menu says under the model's name, in one plain line. */
+  line: string;
   /** Why no call can run it in this version; absent when it can. */
   unavailable?: string;
   accuracy: Measure | NotMeasured;
@@ -65,47 +108,17 @@ export interface LiveSetupInfo {
 
 const ARCH = "docs/research/asr-architecture.md";
 const LIVE = `${ARCH}#31-what-replaces-the-12-s-windows`;
-const UPGRADE = `${ARCH}#32-upgrading-live-text-during-the-call`;
-/** Memory `auto` needs before it runs Qwen during a call: the upgrade takes 10 to 13 GB. */
-export const UPGRADE_MIN_MEMORY_GB = 16;
+/** Memory a Mac needs before Qwen reviews during a call: the call then takes 10 to 13 GB. */
+export const QWEN_MIN_MEMORY_GB = 16;
 
 const E22 = `the first 600 s of an Earnings-22 call, one channel, on the ${REFERENCE_MACHINE}`;
 
 export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
-  parakeet: {
-    title: "Parakeet",
-    what: "Parakeet decodes each stretch of speech between pauses and re-decodes the open one every second, so words on screen can change",
-    plain: "Words can change as you watch.",
-    accuracy: {
-      metric: "call-wer",
-      value: 36.17,
-      set: "meetings",
-      what: "AMI meetings through the live path: 36.17 % WER, and 20.8 words taken back per 100",
-      source: LIVE,
-    },
-    latency: {
-      metric: "seconds",
-      value: 0.78,
-      what: `a word shows 0.78 s (p50) after it is said, 3.20 s (p95), over ${E22}`,
-      source: LIVE,
-    },
-    cores: {
-      metric: "cores",
-      value: 0.95,
-      what: `0.95 CPU cores per channel over ${E22}`,
-      source: LIVE,
-    },
-    memory: {
-      metric: "gb",
-      value: 3.6,
-      what: "3.6 GB resident on AMI",
-      source: LIVE,
-    },
-  },
   nemotron: {
     title: "Nemotron",
     what: "Streaming Nemotron writes each word once as it is heard and never takes one back",
     plain: "Words appear as they are said and never change.",
+    line: "Words appear as they are said.",
     accuracy: {
       metric: "call-wer",
       value: 18.8,
@@ -132,44 +145,68 @@ export const LIVE_SETUPS: Readonly<Record<LiveSetupId, LiveSetupInfo>> = {
       source: LIVE,
     },
   },
-  upgrade: {
-    title: "Nemotron, reviewed by Qwen each minute",
-    what: "Streaming Nemotron writes the words; once a minute, Qwen rewrites the lines of the sentences finished since, once",
-    // FLEURS joined into 27 and 34 minute calls: 14.39 to 10.19 % (29 % fewer) and 8.00 to 4.19 %
-    // (48 % fewer).
-    plain:
-      "Cleaner lines about a minute after they are said. Not measured on meetings yet; on read speech it cuts Nemotron's mistakes by a quarter or more. Uses 10 to 13 GB of memory during a call.",
+  parakeet: {
+    title: "Parakeet",
+    what: "Parakeet decodes each stretch of speech between pauses and re-decodes the open one every second, so words on screen can change",
+    plain: "Words can change as you watch.",
+    line: "Writes each stretch between pauses; words can change for a moment.",
     accuracy: {
-      notMeasured:
-        "not run on AMI meetings; on FLEURS clips joined into one call per language (27 and 34 min), Qwen's review each minute takes the stream from 14.39 to 10.19 % WER in English and from 8.00 to 4.19 in Spanish",
+      metric: "call-wer",
+      value: 36.17,
+      set: "meetings",
+      what: "AMI meetings through the live path: 36.17 % WER, and 20.8 words taken back per 100",
+      source: LIVE,
     },
     latency: {
       metric: "seconds",
-      value: 0.46,
-      what: "the words show as Nemotron's (0.46 s p50); Qwen's review lands 43 to 48 s (p50) after a word is said, 73 to 79 s (p95), on FLEURS clips joined into one call per language",
-      source: UPGRADE,
+      value: 0.78,
+      what: `a word shows 0.78 s (p50) after it is said, 3.20 s (p95), over ${E22}`,
+      source: LIVE,
     },
     cores: {
-      notMeasured:
-        "Nemotron's 0.39 cores per channel, and Qwen on the GPU for 7.9 to 9.9 % of the call; the two together were not timed",
+      metric: "cores",
+      value: 0.95,
+      what: `0.95 CPU cores per channel over ${E22}`,
+      source: LIVE,
     },
     memory: {
       metric: "gb",
-      value: 13,
-      what: "live Nemotron 2.25 GB, Parakeet 2.7 GB (loaded on every setup) and Qwen 4.9 to 7.8 GB: about 10 to 13 GB during a call (the bar takes 13)",
-      source: UPGRADE,
+      value: 3.6,
+      what: "3.6 GB resident on AMI",
+      source: LIVE,
     },
   },
   voxtral: {
     title: "Voxtral Realtime",
     what: "Voxtral Mini 4B Realtime, the most accurate streaming model measured (7.19 % English and 3.60 % Spanish WER on FLEURS)",
     plain: "Not available yet: on a Mac's graphics chip it only just keeps up with speech.",
+    line: "Not available yet.",
     unavailable:
       "it runs only at real time on an Apple M4 (real-time factor 1.0), so it needs a faster GPU and one channel, and it gives no word times and takes no vocabulary",
     accuracy: { notMeasured: "not run on AMI meetings; 7.19 % and 3.60 % WER on FLEURS" },
     latency: { notMeasured: "not measured in akou's live path" },
     cores: { notMeasured: "runs on the GPU; not measured in akou's live path" },
     memory: { notMeasured: "not measured in akou's live path" },
+  },
+};
+
+export interface ReviewInfo {
+  /** What the second pass does, in one sentence. */
+  what: string;
+  /** What the Models page says of it, in plain words. */
+  plain: string;
+  /** What the live menu says under its name, in one plain line. */
+  line: string;
+}
+
+export const REVIEWS: Readonly<Record<Reviewer, ReviewInfo>> = {
+  qwen: {
+    what: "Qwen decodes the sentences Nemotron finished since its last review, whole, and its words replace theirs, once",
+    // FLEURS joined into 27 and 34 minute calls, a review a minute: 14.39 to 10.19 % (29 % fewer)
+    // and 8.00 to 4.19 % (48 % fewer).
+    plain:
+      "Rewrites the finished sentences with the most accurate model. On read speech it cuts Nemotron's mistakes by a quarter or more. Uses 10 to 13 GB of memory during a call.",
+    line: "The most accurate. Uses 10 to 13 GB of memory during a call.",
   },
 };
 
@@ -181,103 +218,129 @@ export interface LiveSetupContext {
   engine: string;
   /** `asr.languages`. */
   languages: readonly string[];
+  /** `asr.review.model`, or a call's own; absent: none. */
+  review?: string;
+  /** `asr.review.everySeconds`, or a call's own; absent: `REVIEW_EVERY_SECONDS`. */
+  everySeconds?: number;
   /** Whether a catalog model's files are on disk. */
   present: (id: string) => boolean;
   /** The llama-server build Qwen runs on here, or null for an own llama-server. */
   runtime: string | null;
-  /** What `auto` needs to know before it runs Qwen during a call; absent: `auto` never does. */
+  /** What Qwen needs of the machine; absent: not known, and not checked. */
   machine?: {
     /** Qwen's llama-server runs on a GPU here (not `cpu`). */
     gpu: boolean;
     /** The machine's memory, GB. */
     memoryGb: number;
-    /** A final pass's llama-server holds the GPU now. */
-    gpuBusy: boolean;
   };
 }
 
+/** A second pass a call runs: its model, and how often it reviews. */
+export interface ReviewRun {
+  model: Reviewer;
+  everySeconds: number;
+}
+
 export interface LiveSetupChoice {
-  /** The setup the call runs. */
+  /** The live model the call runs. */
   setup: RunnableSetup;
   /** Its streaming engine, or null for Parakeet's windows. */
   choice: LiveChoice | null;
+  /** The second pass the call runs, or null for none. */
+  review: ReviewRun | null;
   /** Why the setup differs from the one asked for, or why a streaming model is not used. */
   note?: string;
 }
 
 /**
- * The model ids a setup loads here, for the Models page's Download and the sweep: the Nemotron
- * the setting and languages name (or the one `auto` falls back to on disk).
+ * The model ids a live model loads here, for the Models page's Download and the sweep: the
+ * Nemotron the setting and languages name (or the one `auto` falls back to on disk).
  */
 export function setupModels(id: LiveSetupId, c: LiveSetupContext): string[] {
-  const nemotron = (): string => {
-    if (isLiveEngine(c.engine)) return c.engine;
-    return (
-      chooseLiveEngine(c.engine, c.languages, c.present).choice?.engine ??
-      engineForLanguages(c.languages)
-    );
-  };
   switch (id) {
     case "parakeet":
       return [RECOGNIZER];
-    case "nemotron":
-      return [nemotron()];
-    case "upgrade":
-      return [nemotron(), QWEN_ASR, ...(c.runtime ? [c.runtime] : [])];
+    case "nemotron": {
+      if (isLiveEngine(c.engine)) return [c.engine];
+      return [
+        chooseLiveEngine(c.engine, c.languages, c.present).choice?.engine ??
+          engineForLanguages(c.languages),
+      ];
+    }
     case "voxtral":
       return [];
   }
 }
 
+/** The model ids a second pass loads here beyond the live model's. */
+export function reviewModels(_id: Reviewer, c: LiveSetupContext): string[] {
+  return [QWEN_ASR, ...(c.runtime ? [c.runtime] : [])];
+}
+
 /**
- * Why `auto` does not run the upgrade on this machine now, or null when the Mac allows it: every
- * model of the upgrade on disk, Qwen on a GPU, `UPGRADE_MIN_MEMORY_GB` or more, and no final pass
- * holding the GPU.
+ * Why the menu and the Models page do not offer Qwen's review on this machine, in plain words, or
+ * null when they do: Qwen on a GPU and `QWEN_MIN_MEMORY_GB` or more. Not known (no `machine`):
+ * null. It is advice, not a block: a review chosen anyway (in `config.json`, the CLI or the API)
+ * runs, and turns itself off for a call it cannot keep up with.
  */
-export function upgradeRoom(c: LiveSetupContext): string | null {
-  const missing = setupModels("upgrade", c).filter((id) => !c.present(id));
-  if (missing.length > 0) return `needs ${missing.join(", ")}`;
+export function qwenRoom(c: LiveSetupContext): string | null {
   const m = c.machine;
-  if (!m) return "not known whether this machine can run Qwen";
-  if (!m.gpu) return "Qwen would run on the CPU here";
-  if (m.memoryGb < UPGRADE_MIN_MEMORY_GB)
-    return `${Math.round(m.memoryGb)} GB of memory, under ${UPGRADE_MIN_MEMORY_GB}`;
-  if (m.gpuBusy) return "a final pass holds the GPU";
+  if (!m) return null;
+  if (!m.gpu) return "Qwen would run on the processor here, too slow to keep up with a call.";
+  if (m.memoryGb < QWEN_MIN_MEMORY_GB)
+    return `Needs ${QWEN_MIN_MEMORY_GB} GB of memory; this computer has ${Math.round(m.memoryGb)} GB.`;
   return null;
 }
 
-/** The setup the next call runs, never one whose models are missing. */
+/**
+ * Why a second pass cannot run on the next call, or null when it can: it reviews Nemotron's lines,
+ * so the live model must be Nemotron, and its models must be here.
+ */
+export function reviewBlock(id: Reviewer, c: LiveSetupContext, live: RunnableSetup): string | null {
+  if (live !== "nemotron") return "It reviews Nemotron's lines; the live model is Parakeet.";
+  const missing = reviewModels(id, c).filter((m) => !c.present(m));
+  if (missing.length > 0) return `Needs ${missing.join(", ")} (\`akou models pull <id>\`).`;
+  return null;
+}
+
+/** `asr.review.everySeconds` kept inside its bounds. */
+function every(c: LiveSetupContext): number {
+  const n = c.everySeconds ?? REVIEW_EVERY_SECONDS;
+  return Math.min(REVIEW_EVERY_MAX, Math.max(REVIEW_EVERY_MIN, Math.round(n)));
+}
+
+/** The live model and second pass the next call runs, never one whose models are missing. */
 export function chooseLiveSetup(c: LiveSetupContext): LiveSetupChoice {
   const setting = isLiveSetting(c.setting) ? c.setting : "auto";
   const stream = chooseLiveEngine(c.engine, c.languages, c.present);
-  const fallback = (why?: string): LiveSetupChoice => {
-    if (stream.choice)
-      return { setup: "nemotron", choice: stream.choice, ...(why ? { note: why } : {}) };
-    const note = [why, stream.note].filter((x) => x).join("; ");
-    return { setup: "parakeet", choice: null, ...(note ? { note } : {}) };
-  };
-  if (setting === "parakeet") return { setup: "parakeet", choice: null };
-  if (setting === "auto" && stream.choice && upgradeRoom(c) === null)
-    return { setup: "upgrade", choice: stream.choice };
-  if (setting === "nemotron" || setting === "auto") return fallback();
-  const missing = setupModels("upgrade", c).filter((id) => !c.present(id));
-  const upgradeWhy =
-    missing.length > 0
-      ? `the upgrade setup needs ${missing.join(", ")} (\`akou models pull <id>\` or the Models page)`
-      : null;
-  if (upgradeWhy === null && stream.choice) return { setup: "upgrade", choice: stream.choice };
-  return fallback(upgradeWhy ?? undefined);
+  const live: Omit<LiveSetupChoice, "review"> =
+    setting === "parakeet"
+      ? { setup: "parakeet", choice: null }
+      : stream.choice
+        ? { setup: "nemotron", choice: stream.choice }
+        : { setup: "parakeet", choice: null, ...(stream.note ? { note: stream.note } : {}) };
+  const asked = c.review && isReviewModel(c.review) ? c.review : "none";
+  if (asked === "none") return { ...live, review: null };
+  const block = reviewBlock(asked, c, live.setup);
+  if (block === null) return { ...live, review: { model: asked, everySeconds: every(c) } };
+  const note = [live.note, `no ${liveModelName(QWEN_ASR)} second pass: ${block}`]
+    .filter((x) => x)
+    .join("; ");
+  return { ...live, review: null, note };
 }
 
 // ---------------------------------------------------------------------------
-// What the Models page and `GET /models` show
+// What the Models page, the live menu and `GET /models` show
 
 export interface LiveSetupView {
   id: LiveSetupId;
+  /** Its name here: the Nemotron that would run, by its model. */
   title: string;
   what: string;
   /** The Models page's words after the accuracy figure (`LiveSetupInfo.plain`). */
   plain: string;
+  /** The live menu's line under the name (`LiveSetupInfo.line`). */
+  line: string;
   /** Why no call can run it in this version, or null. */
   unavailable: string | null;
   /** The next call runs it: the setting as it resolves on this machine now. */
@@ -292,6 +355,34 @@ export interface LiveSetupView {
   memory: ScoreView;
 }
 
+export interface ReviewChoiceView {
+  id: Reviewer;
+  title: string;
+  what: string;
+  plain: string;
+  line: string;
+  /** The models it loads beyond the live model's, each with its state on disk. */
+  models: { id: string; state: "ready" | "downloading" | "missing" }[];
+  /**
+   * Why it is not offered with the next call's live model on this machine, in plain words, or
+   * null: it cannot run (the live model is Parakeet), or `qwenRoom`. Missing models are in
+   * `models`, not here.
+   */
+  blocked: string | null;
+}
+
+export interface ReviewView {
+  /** `asr.review.model`. */
+  setting: ReviewModel;
+  /** `asr.review.everySeconds`. */
+  everySeconds: number;
+  /** The second pass the next call runs, or null. */
+  next: ReviewRun | null;
+  /** The live call's second pass, or null. */
+  running: ReviewRun | null;
+  choices: ReviewChoiceView[];
+}
+
 export interface LiveView {
   /** `asr.live`. */
   setting: LiveSetting;
@@ -303,36 +394,61 @@ export interface LiveView {
   /** What the live call runs, or null with no call or no live transcript. */
   running: RunnableSetup | null;
   setups: LiveSetupView[];
+  review: ReviewView;
 }
 
 export function liveView(
   c: LiveSetupContext,
-  running: RunnableSetup | null,
+  running: { setup: RunnableSetup; review: ReviewRun | null } | null,
   state: (id: string) => "ready" | "downloading" | "missing",
 ): LiveView {
   const next = chooseLiveSetup(c);
+  const models = (ids: readonly string[]) => ids.map((m) => ({ id: m, state: state(m) }));
+  const review = c.review && isReviewModel(c.review) ? c.review : "none";
   return {
     setting: isLiveSetting(c.setting) ? c.setting : "auto",
     next: next.setup,
     auto: chooseLiveSetup({ ...c, setting: "auto" }).setup,
     note: next.note ?? null,
-    running,
+    running: running?.setup ?? null,
     setups: LIVE_SETUP_IDS.map((id) => {
       const s = LIVE_SETUPS[id];
+      const ids = setupModels(id, c);
       return {
         id,
-        title: s.title,
+        title: id === "nemotron" ? liveModelName(ids[0] as string) : s.title,
         what: s.what,
         plain: s.plain,
+        line: s.line,
         unavailable: s.unavailable ?? null,
         selected: next.setup === id,
-        running: running === id,
-        models: setupModels(id, c).map((m) => ({ id: m, state: state(m) })),
+        running: running?.setup === id,
+        models: models(ids),
         accuracy: scoreView(s.accuracy),
         latency: scoreView(s.latency),
         cores: scoreView(s.cores),
         memory: scoreView(s.memory),
       };
     }),
+    review: {
+      setting: review,
+      everySeconds: every(c),
+      next: next.review,
+      running: running?.review ?? null,
+      choices: REVIEWERS.map((id) => {
+        const ids = reviewModels(id, c);
+        const block = reviewBlock(id, c, next.setup) ?? qwenRoom(c);
+        return {
+          id,
+          title: liveModelName(QWEN_ASR),
+          what: REVIEWS[id].what,
+          plain: REVIEWS[id].plain,
+          line: REVIEWS[id].line,
+          models: models(ids),
+          // Missing models show as models, with Get; any other reason is said in words.
+          blocked: block !== null && ids.every((m) => c.present(m)) ? block : null,
+        };
+      }),
+    },
   };
 }

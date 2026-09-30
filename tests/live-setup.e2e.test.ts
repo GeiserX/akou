@@ -1,8 +1,9 @@
 /**
  * The live setup through the whole app (akou-chp.23): `asr.live` set over `PATCH /config` starts
- * the next call on that setup, a call's own `live` (`POST /calls`, `akou start --live`) overrides
- * it for that call only, a running call keeps its setup, and `GET /status`, `akou status` and
- * `GET /models` name it. Every setup runs on the fake recognizer and the fake streaming engine
+ * the next call on that model, a call's own `live` (`POST /calls`, `akou start --live`) overrides
+ * it for that call only, and so do its own `review` and `reviewEvery` (`--review`,
+ * `--review-every`) for the second pass; a running call keeps its setup, the old `upgrade` is read
+ * as Nemotron with Qwen's review, and `GET /status`, `akou status` and `GET /models` name it. Every setup runs on the fake recognizer and the fake streaming engine
  * (tests/fixtures/asr-fake.ts), so each line's `model` says which path wrote it; the catalog is a
  * loopback registry of tiny files named after the real models, and nothing is downloaded.
  */
@@ -36,7 +37,7 @@ beforeAll(async () => {
     reg.entry("silero-vad", ["vad.onnx"]),
     reg.entry(NEMOTRON, ["diar.onnx"]),
     { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true } as ModelSpecEntry,
-    // Qwen is fetched on demand only and is not here: the upgrade setup cannot run.
+    // Qwen is fetched on demand only and is not here: its second pass cannot run.
     { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true } as ModelSpecEntry,
   ];
   const models = join(home.dir, "models");
@@ -188,16 +189,51 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
     });
   });
 
-  test("upgrade, not runnable here, starts the call on nemotron and says why in the log", async () => {
+  test("the old upgrade is saved as nemotron with Qwen's review; Qwen is not here, so the call runs nemotron alone and says why", async () => {
     await setLive("upgrade");
+    const cfg = (await rig.api("GET", "/config")).body.settings;
+    expect([cfg["asr.live"], cfg["asr.review.model"]]).toEqual(["nemotron", "qwen"]);
     expect(await oneCall()).toEqual({
       setup: "nemotron",
       engine: STREAM,
       models: [STREAM],
     });
-    expect(rig.logs.some((l) => /runs the nemotron live setup .*upgrade setup/.test(l.msg))).toBe(
-      true,
-    );
+    expect(
+      rig.logs.some((l) =>
+        /runs the nemotron live model .*no Qwen second pass: Needs qwen3-asr-1.7b/.test(l.msg),
+      ),
+    ).toBe(true);
+    // A call's own `live: "upgrade"` is the same pair.
+    const before = rig.logs.length;
+    await rig.api("PATCH", "/config", { "asr.live": "parakeet", "asr.review.model": "none" });
+    expect((await oneCall({ live: "upgrade" })).setup).toBe("nemotron");
+    expect(
+      rig.logs
+        .slice(before)
+        .some((l) => /runs the nemotron live model .*no Qwen second pass/.test(l.msg)),
+    ).toBe(true);
+  });
+
+  test("a call's own review that cannot run here is off for that call, and says why; a bad one is refused", async () => {
+    await rig.api("PATCH", "/config", { "asr.live": "nemotron", "asr.review.model": "none" });
+    const before = rig.logs.length;
+    expect((await oneCall({ review: "qwen", reviewEvery: 120 })).setup).toBe("nemotron");
+    expect(
+      rig.logs
+        .slice(before)
+        .some((l) =>
+          /runs the nemotron live model .*no Qwen second pass: Needs qwen3-asr-1.7b/.test(l.msg),
+        ),
+    ).toBe(true);
+    for (const [body, field] of [
+      [{ review: "whisper" }, "review"],
+      [{ reviewEvery: 10 }, "reviewEvery"],
+      [{ reviewEvery: 90.5 }, "reviewEvery"],
+    ] as const) {
+      const r = await rig.api("POST", "/calls", { workspace: "work", ...body });
+      expect([r.status, r.body.error, r.body.field]).toEqual([422, "bad_field", field]);
+    }
+    expect(await liveStatus()).toBeNull();
   });
 
   test("a call's own live overrides the setting for that call only, and keeps its setup when the setting changes", async () => {
@@ -224,14 +260,17 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
     const cli = rigCli(rig);
     const bad = await cli(["start", "--live", "voxtral"]);
     expect(bad.code).not.toBe(0);
-    expect(bad.err).toContain("live is one of auto, parakeet, nemotron, upgrade");
+    expect(bad.err).toContain("live is one of auto, parakeet, nemotron");
     const started = await cli(["start", "--live", "nemotron", "--json"]);
     expect(started.code).toBe(0);
     await until(async () => (await liveStatus())?.setup != null, 10_000, "the live setup");
     const st = await cli(["status"]);
-    expect(st.out).toContain(`live setup nemotron (${STREAM})`);
+    expect(st.out).toContain(`live model nemotron (${STREAM})`);
     expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
     await until(async () => (await liveStatus()) === null, 10_000, "the call's end");
+    const outOfRange = await cli(["start", "--review-every", "5"]);
+    expect(outOfRange.code).not.toBe(0);
+    expect(outOfRange.err).toContain("--review-every must be a whole number from 30 to 600");
   });
 
   test("a start refused while another call starts never changes that call's setup", async () => {
@@ -267,20 +306,22 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
   });
 });
 
-describe("[akou-chp.23] GET /models lists the live setups", () => {
-  test("the four setups, the next call's marked, the missing model named", async () => {
+describe("[akou-chp.23] GET /models lists the live models and the second pass", () => {
+  test("the three models, the next call's marked, the second pass with the missing model named", async () => {
     await setLive("auto");
     const r = await rig.api("GET", "/models");
     const live = r.body.live;
     expect([live.setting, live.next, live.running]).toEqual(["auto", "nemotron", null]);
     const by = Object.fromEntries(live.setups.map((s: Body) => [s.id, s]));
-    expect(Object.keys(by)).toEqual(["parakeet", "nemotron", "upgrade", "voxtral"]);
+    expect(Object.keys(by)).toEqual(["nemotron", "parakeet", "voxtral"]);
+    expect(by.nemotron.title).toBe("Nemotron English");
     expect(by.nemotron).toMatchObject({
       selected: true,
       models: [{ id: STREAM, state: "ready" }],
       accuracy: { score: 62, metric: "call-wer" },
     });
-    expect(by.upgrade.models).toContainEqual({ id: QWEN_ASR, state: "missing" });
+    const qwen = live.review.choices.find((c: Body) => c.id === "qwen");
+    expect(qwen.models).toContainEqual({ id: QWEN_ASR, state: "missing" });
     expect(by.voxtral.unavailable).toBeTruthy();
     // The streaming model the next call runs is the app's: never swept, never deleted.
     const row = r.body.models.find((m: Body) => m.id === STREAM);

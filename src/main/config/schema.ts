@@ -27,8 +27,9 @@ import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
 import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
-import { LIVE_SETTINGS } from "../asr/live-setups.ts";
+import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
+import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN, REVIEW_EVERY_SECONDS } from "../asr/upgrade.ts";
 import { checkRemotes } from "../server/remotes.ts";
 import { DICTIONARY_LANGUAGES } from "../vocab/dictionary.ts";
 import { defaultConfigDir } from "../vocab/files.ts";
@@ -460,13 +461,26 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_SETTINGS,
     default: "auto",
-    doc: "What writes the live transcript of a call. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `upgrade`: Nemotron, then, once a minute, the lines of the sentences finished since rewritten once by Qwen; about 10 to 13 GB while a call runs, and Qwen goes off for the rest of a call it cannot keep up with. `auto` picks `upgrade` when the Mac allows it (Qwen and its llama-server downloaded, a GPU to run Qwen, 16 GB of memory or more, and no final pass holding the GPU when the call starts), else `nemotron` when its model is downloaded, else `parakeet`. A setup whose models are missing never runs. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its setup.",
+    doc: "The model that writes the live transcript of a call. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `auto` picks `nemotron` when its model is downloaded, else `parakeet`. A model that is not downloaded never runs. `upgrade`, the old value, is read as `nemotron` with `asr.review.model` `qwen`, and saved that way. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its model.",
+  },
+  "asr.review.model": {
+    type: "string",
+    values: REVIEW_MODELS,
+    default: "none",
+    doc: "A second pass during a call: every `asr.review.everySeconds`, the sentences Nemotron finished since the last review are decoded again, whole, and the new words replace the live lines once. `qwen`: Qwen3-ASR, the most accurate, about 10 to 13 GB of memory during a call; it needs its llama-server, a GPU and 16 GB of memory, and it goes off for the rest of a call it cannot keep up with. `none`: the live lines stay as Nemotron wrote them. It reviews Nemotron's lines only, so a call whose live model is Parakeet runs none. A line someone edited keeps their text. `akou start --review` sets it for one call. A change applies from the next call.",
+  },
+  "asr.review.everySeconds": {
+    type: "integer",
+    min: REVIEW_EVERY_MIN,
+    max: REVIEW_EVERY_MAX,
+    default: REVIEW_EVERY_SECONDS,
+    doc: "How often the second pass (`asr.review.model`) reviews, seconds: the reviewed text lands about this long after the words. `akou start --review-every` sets it for one call.",
   },
   "asr.live.engine": {
     type: "string",
     values: LIVE_ENGINE_SETTINGS,
     default: "auto",
-    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron` or `upgrade`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
+    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
   },
   "asr.segmentPause": {
     type: "number",
@@ -1175,6 +1189,20 @@ function crossCheck(s: Settings): { key: SettingKey; message: string }[] {
   return out;
 }
 
+/**
+ * Old values rewritten in today's keys, so a file or a `PATCH /config` that carries one keeps
+ * working and the next save writes the new form: `asr.live` `upgrade` is `nemotron` with
+ * `asr.review.model` `qwen` (unless it names its own).
+ */
+export function legacyValues(values: Record<string, unknown>): Record<string, unknown> {
+  if (values["asr.live"] !== "upgrade") return values;
+  return {
+    ...values,
+    "asr.live": "nemotron",
+    ...("asr.review.model" in values ? {} : { "asr.review.model": "qwen" }),
+  };
+}
+
 /** Applies file values over defaults, then the environment, validating each. */
 export function buildSettings(
   paths: Paths,
@@ -1186,7 +1214,7 @@ export function buildSettings(
   const settings = { ...defaults } as Record<string, SettingValue>;
   const file: Partial<Record<SettingKey, SettingValue>> = {};
   const issues: SettingIssue[] = [];
-  for (const [key, value] of Object.entries(fileValues)) {
+  for (const [key, value] of Object.entries(legacyValues(fileValues))) {
     const v = validateSetting(key, value);
     if (!v.ok) {
       issues.push({ key, source, message: `${v.error}; using the default` });
@@ -1267,7 +1295,7 @@ export function patchConfig(
 ): { ok: true; file: Partial<Record<SettingKey, SettingValue>> } | { ok: false; errors: string[] } {
   const next = { ...current };
   const errors: string[] = [];
-  for (const [key, value] of Object.entries(patch)) {
+  for (const [key, value] of Object.entries(legacyValues(patch))) {
     const spec = isSettingKey(key) ? (SETTINGS[key] as SettingSpec) : null;
     if (spec?.apiWritable === false && !(o.inProcess && spec.windowWritable)) {
       if (spec.windowWritable) {

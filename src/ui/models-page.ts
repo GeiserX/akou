@@ -3,8 +3,10 @@
  * SV-U6, DESKTOP.md DK-E2): a page of the main window beside the sidebar, and the same page on
  * server mode's web page. One column of grouped rows:
  *
- * - **Live transcript** (the app only): the live setups as a radio list (`asr.live`), Automatic
+ * - **Live transcript** (the app only): the live models as a radio list (`asr.live`), Automatic
  *   first, Voxtral listed and unavailable; "next call" and "this call" mark what runs.
+ * - **Second pass** (the app only): Off, Qwen or Parakeet reviewing the finished sentences during
+ *   the call (`asr.review.model`), and how often (`asr.review.everySeconds`).
  * - **After the call** (the app) or **Jobs** (server mode): the recognizer that writes the
  *   accurate transcript; in server mode a radio list of the recognizers a job may run by default.
  * - **Dictation** (the app): Fast and Best, the engines dictation decodes with.
@@ -33,6 +35,7 @@ import {
   bestHelp,
   DEFAULTS,
   DIARIZERS,
+  everyLabel,
   gbText,
   helperHelp,
   hourText,
@@ -50,8 +53,10 @@ import {
   percent,
   QWEN_ID,
   RECOGNIZER_ID,
+  REVIEW_EVERY,
   reasonText,
   removeRefusal,
+  reviewHelp,
   speakersHelp,
   totalText,
 } from "./models-rows.ts";
@@ -284,9 +289,11 @@ export class ModelsPage {
     if (el.id) return [`#${CSS.escape(el.id)}`];
     if (el instanceof HTMLInputElement && el.type === "radio" && el.name)
       return [`input[name="${CSS.escape(el.name)}"][value="${CSS.escape(el.value)}"]`];
-    const r = el.closest<HTMLElement>("[data-setup], [data-diarizer], [data-model]");
+    const r = el.closest<HTMLElement>("[data-setup], [data-review], [data-diarizer], [data-model]");
     if (!r) return null;
-    const attr = ["data-setup", "data-diarizer", "data-model"].find((a) => r.hasAttribute(a));
+    const attr = ["data-setup", "data-review", "data-diarizer", "data-model"].find((a) =>
+      r.hasAttribute(a),
+    );
     const at = `[${attr}="${CSS.escape(r.getAttribute(attr as string) ?? "")}"]`;
     const action = el.dataset.action;
     return [
@@ -316,6 +323,7 @@ export class ModelsPage {
       ? [this.jobsSection(), this.speakersSection()]
       : [
           this.liveSection(),
+          this.reviewSection(),
           this.afterCallSection(),
           this.dictationSection(),
           this.speakersSection(),
@@ -500,7 +508,7 @@ export class ModelsPage {
       const s = v.setups.find((x) => x.id === id);
       if (!s) return null;
       const models = this.rowsOf(s.models.map((m) => m.id));
-      // The streaming Nemotron is this row's own; the others are shown where they belong.
+      // The streaming Nemotron is this row's own; Parakeet is shown where it belongs.
       const owner = id === "nemotron";
       const side = s.unavailable ? null : this.modelSide(models, owner);
       const missing = models.filter((r) => r.state === "missing");
@@ -537,6 +545,89 @@ export class ModelsPage {
       ...radios,
     );
     s.id = "models-live";
+    return s;
+  }
+
+  /** The second pass: Off, Qwen or Parakeet, each with what stops it here, and how often. */
+  private reviewSection(): HTMLElement | null {
+    const v = this.live;
+    if (!v) return null;
+    const r = v.review;
+    const setting = String(this.settings["asr.review.model"] ?? r.setting);
+    const running = r.running;
+    const mark = (id: string) =>
+      running && running.model === id
+        ? [tag("this call", "running")]
+        : !running && r.next?.model === id
+          ? [tag("next call", "next")]
+          : [];
+    const off = choiceRow({
+      name: "models-review",
+      value: "none",
+      label: "Off",
+      help: "The live lines stay as they were written.",
+      checked: setting === "none",
+      isDefault: DEFAULTS["asr.review.model"] === "none",
+    });
+    off.dataset.review = "none";
+    const rows: HTMLElement[] = [off];
+    for (const c of r.choices) {
+      const models = this.rowsOf(c.models.map((m) => m.id));
+      const side = this.modelSide(models, false);
+      const missing = models.filter((m) => m.state === "missing");
+      const help = missing.length > 0 ? needsText(missing) : reviewHelp(c);
+      const row = choiceRow(
+        {
+          name: "models-review",
+          value: c.id,
+          label: c.title,
+          help: side.help ?? help,
+          checked: setting === c.id,
+          isDefault: DEFAULTS["asr.review.model"] === c.id,
+          disabled: c.blocked !== null && setting !== c.id,
+        },
+        ...mark(c.id),
+        ...side.controls,
+      );
+      row.dataset.review = c.id;
+      row.dataset.state = c.blocked ? "blocked" : side.state;
+      rows.push(row);
+    }
+    for (const x of rows) {
+      const input = x.querySelector<HTMLInputElement>("input.pg-radio");
+      input?.addEventListener("change", () => {
+        if (input.checked) void this.patch("asr.review.model", input.value);
+      });
+    }
+    const every = Number(this.settings["asr.review.everySeconds"] ?? r.everySeconds);
+    const pick = selectBox({
+      id: "models-review-every",
+      label: "How often",
+      options: REVIEW_EVERY.map((n) => [String(n), everyLabel(n)] as const),
+      value: String(every),
+    });
+    pick.dataset.key = "asr.review.everySeconds";
+    pick.dataset.number = "true";
+    rows.push(
+      this.withIssue(
+        row(
+          {
+            label: "How often",
+            help: "The reviewed text lands about this long after the words.",
+            key: "asr.review.everySeconds",
+            for: pick.id,
+          },
+          pick,
+        ),
+        "asr.review.everySeconds",
+      ),
+    );
+    const s = sectionWith(
+      "Second pass",
+      "Rewrites the finished sentences once during the call, for cleaner lines a little later.",
+      ...rows,
+    );
+    s.id = "models-review";
     return s;
   }
 
@@ -813,9 +904,11 @@ export class ModelsPage {
       r ??
       (key === "asr.live"
         ? this.col.querySelector<HTMLElement>("#models-live")
-        : key === "asr.diarizer"
-          ? this.col.querySelector<HTMLElement>("#models-speakers")
-          : null);
+        : key === "asr.review.model"
+          ? this.col.querySelector<HTMLElement>("#models-review")
+          : key === "asr.diarizer"
+            ? this.col.querySelector<HTMLElement>("#models-speakers")
+            : null);
     if (!target) return;
     target.scrollIntoView({ block: "center" });
     const input = target.querySelector<HTMLElement>("input:checked, input, select, button");
@@ -843,7 +936,9 @@ export class ModelsPage {
     const value =
       el instanceof HTMLInputElement && el.type === "checkbox"
         ? el.checked
-        : (el as HTMLInputElement | HTMLSelectElement).value;
+        : el.dataset.number
+          ? Number((el as HTMLSelectElement).value)
+          : (el as HTMLInputElement | HTMLSelectElement).value;
     await this.patch(key, value);
   }
 
@@ -862,13 +957,23 @@ export class ModelsPage {
       at?.classList.add("refused");
       at?.querySelector(".pg-lbl")?.append(h("small", { class: "issue" }, why));
       toast(`Not saved: ${why}`);
-      if (key === "asr.live" || key === "asr.diarizer" || key === "server.default_model")
+      if (
+        key === "asr.live" ||
+        key === "asr.review.model" ||
+        key === "asr.diarizer" ||
+        key === "server.default_model"
+      )
         this.drawModels();
       return false;
     }
     this.settings[key] = value;
     this.issues.delete(key);
-    toast(key === "asr.live" ? "The next call uses this." : "Saved.", "info");
+    toast(
+      key.startsWith("asr.live") || key.startsWith("asr.review")
+        ? "The next call uses this."
+        : "Saved.",
+      "info",
+    );
     if (!key.startsWith("server.models_")) await this.read();
     return true;
   }

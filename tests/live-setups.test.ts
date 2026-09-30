@@ -1,28 +1,35 @@
 /**
- * The live setups a user chooses between (`asr.live`, akou-chp.23, live-setups.ts): which one the
- * next call runs for each value, `auto` by the models on disk and the upgrade only when the Mac
- * allows it, never a setup whose models are missing, and what the Models page and `GET /models` show of each. The models on
- * disk are injected; nothing here loads a model.
+ * The live models a user chooses between (`asr.live`, akou-chp.23, live-setups.ts) and the second
+ * pass (`asr.review.*`): which model the next call runs for each value, `auto` by the models on
+ * disk, never one whose models are missing; the second pass only when the user chose it, only on
+ * Nemotron's lines, only with its models here and, for Qwen, a Mac that allows it; the old
+ * `upgrade` value read as that pair; and what the Models page and `GET /models` show. The models
+ * on disk are injected; nothing here loads a model.
  */
 
 import { describe, expect, test } from "bun:test";
 import {
   chooseLiveSetup,
+  isLiveCallSetting,
   isLiveSetting,
   LIVE_SETTINGS,
   LIVE_SETUPS,
   type LiveSetupContext,
+  legacyLive,
   liveView,
+  QWEN_MIN_MEMORY_GB,
+  qwenRoom,
+  reviewModels,
   setupModels,
-  UPGRADE_MIN_MEMORY_GB,
-  upgradeRoom,
 } from "../src/main/asr/live-setups.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { RECOGNIZER } from "../src/main/asr/models.ts";
-import { validateSetting } from "../src/main/config/schema.ts";
+import { legacyValues, validateSetting } from "../src/main/config/schema.ts";
 
 const RUNTIME = "llama-server-test-build";
 const EVERYTHING = new Set(["nemotron-en-560", RECOGNIZER, QWEN_ASR, RUNTIME]);
+const ROOMY = { gpu: true, memoryGb: QWEN_MIN_MEMORY_GB };
+const NEMOTRON = { engine: "nemotron-en-560", lang: "en" };
 
 function ctx(o: Partial<LiveSetupContext> & { on?: ReadonlySet<string> } = {}): LiveSetupContext {
   const on = o.on ?? EVERYTHING;
@@ -36,133 +43,183 @@ function ctx(o: Partial<LiveSetupContext> & { on?: ReadonlySet<string> } = {}): 
   };
 }
 
-describe("[akou-chp.23] the live setup the next call runs", () => {
-  test("each value runs its own setup when its models are here", () => {
+describe("[akou-chp.23] the live model the next call runs", () => {
+  test("each value runs its own model when its files are here", () => {
     expect(chooseLiveSetup(ctx({ setting: "parakeet" }))).toEqual({
       setup: "parakeet",
       choice: null,
+      review: null,
     });
     expect(chooseLiveSetup(ctx({ setting: "nemotron" }))).toEqual({
       setup: "nemotron",
-      choice: { engine: "nemotron-en-560", lang: "en" },
-    });
-    expect(chooseLiveSetup(ctx({ setting: "upgrade" }))).toEqual({
-      setup: "upgrade",
-      choice: { engine: "nemotron-en-560", lang: "en" },
+      choice: NEMOTRON,
+      review: null,
     });
   });
 
-  test("auto picks streaming Nemotron, not the upgrade, when nothing says the machine can run Qwen", () => {
-    expect(chooseLiveSetup(ctx())).toEqual({
-      setup: "nemotron",
-      choice: { engine: "nemotron-en-560", lang: "en" },
-    });
-    // Positive control: the same machine with the upgrade named runs it.
-    expect(chooseLiveSetup(ctx({ setting: "upgrade" })).setup).toBe("upgrade");
-  });
-
-  const ROOMY = { gpu: true, memoryGb: UPGRADE_MIN_MEMORY_GB, gpuBusy: false };
-
-  test(`[ASR-7] auto runs the upgrade when the Mac allows it: its models here, Qwen on a GPU, ${UPGRADE_MIN_MEMORY_GB} GB or more, no final pass on the GPU`, () => {
-    expect(upgradeRoom(ctx({ machine: ROOMY }))).toBeNull();
+  test("auto picks streaming Nemotron when it is here, else Parakeet, and never a second pass by itself", () => {
     expect(chooseLiveSetup(ctx({ machine: ROOMY }))).toEqual({
-      setup: "upgrade",
-      choice: { engine: "nemotron-en-560", lang: "en" },
+      setup: "nemotron",
+      choice: NEMOTRON,
+      review: null,
     });
-    // An own llama-server needs no downloaded build.
-    const own = new Set([...EVERYTHING].filter((id) => id !== RUNTIME));
-    expect(chooseLiveSetup(ctx({ machine: ROOMY, on: own, runtime: null })).setup).toBe("upgrade");
+    const none = new Set([RECOGNIZER, QWEN_ASR, RUNTIME]);
+    expect(chooseLiveSetup(ctx({ on: none })).setup).toBe("parakeet");
+    // Positive control: the same roomy Mac with Qwen's review chosen runs it.
+    expect(chooseLiveSetup(ctx({ machine: ROOMY, review: "qwen" })).review).toEqual({
+      model: "qwen",
+      everySeconds: 60,
+    });
   });
 
-  test("[ASR-7] auto keeps to Nemotron when any part of the rule fails, and says which", () => {
+  test("a named Nemotron that is not here falls back to Parakeet, and says why", () => {
+    const nem = chooseLiveSetup(ctx({ setting: "nemotron", on: new Set([RECOGNIZER]) }));
+    expect(nem.setup).toBe("parakeet");
+    expect(nem.note).toContain("nemotron-en-560");
+  });
+
+  test("voxtral is listed, never a value; upgrade is a call's old spelling, never a setting", () => {
+    expect(LIVE_SETTINGS).toEqual(["auto", "parakeet", "nemotron"]);
+    expect(isLiveSetting("voxtral")).toBe(false);
+    expect(validateSetting("asr.live", "voxtral").ok).toBe(false);
+    for (const v of LIVE_SETTINGS) expect(validateSetting("asr.live", v).ok).toBe(true);
+    expect(isLiveSetting("upgrade")).toBe(false);
+    expect(isLiveCallSetting("upgrade")).toBe(true);
+    expect(isLiveCallSetting("voxtral")).toBe(false);
+    expect(LIVE_SETUPS.voxtral.unavailable).toContain("real-time factor 1.0");
+  });
+
+  test("the models each live model and second pass loads here", () => {
+    expect(setupModels("parakeet", ctx())).toEqual([RECOGNIZER]);
+    expect(setupModels("nemotron", ctx({ languages: ["es"] }))).toEqual(["nemotron-3.5-1120"]);
+    expect(setupModels("voxtral", ctx())).toEqual([]);
+    expect(reviewModels("qwen", ctx())).toEqual([QWEN_ASR, RUNTIME]);
+    // An own llama-server needs no downloaded build.
+    expect(reviewModels("qwen", ctx({ runtime: null }))).toEqual([QWEN_ASR]);
+  });
+});
+
+describe("[ASR-7] the second pass the next call runs", () => {
+  test("the chosen model and interval, on Nemotron's lines", () => {
+    expect(chooseLiveSetup(ctx({ review: "qwen", everySeconds: 120 }))).toEqual({
+      setup: "nemotron",
+      choice: NEMOTRON,
+      review: { model: "qwen", everySeconds: 120 },
+    });
+    expect(
+      chooseLiveSetup(ctx({ review: "qwen", everySeconds: 300, machine: ROOMY })).review,
+    ).toEqual({ model: "qwen", everySeconds: 300 });
+    // `none` and no choice at all: no second pass.
+    expect(chooseLiveSetup(ctx({ review: "none", machine: ROOMY })).review).toBeNull();
+  });
+
+  test("an interval out of bounds is kept inside them", () => {
+    expect(chooseLiveSetup(ctx({ review: "qwen", everySeconds: 5 })).review?.everySeconds).toBe(30);
+    expect(chooseLiveSetup(ctx({ review: "qwen", everySeconds: 9999 })).review?.everySeconds).toBe(
+      600,
+    );
+  });
+
+  test("it never reviews a call whose live model is Parakeet, and the note says so in plain words", () => {
+    const c = chooseLiveSetup(ctx({ setting: "parakeet", review: "qwen", machine: ROOMY }));
+    expect([c.setup, c.review]).toEqual(["parakeet", null]);
+    expect(c.note).toContain("the live model is Parakeet");
+    // Nemotron not downloaded: the call falls back to Parakeet, and so has no second pass.
+    const fell = chooseLiveSetup(
+      ctx({ review: "qwen", on: new Set([RECOGNIZER, QWEN_ASR, RUNTIME]) }),
+    );
+    expect([fell.setup, fell.review]).toEqual(["parakeet", null]);
+  });
+
+  test("Qwen's review needs its models and runtime: a missing one says which, and the call runs none", () => {
     const cases: [string, LiveSetupContext, string][] = [
-      ["cpu", ctx({ machine: { ...ROOMY, gpu: false } }), "CPU"],
-      ["memory", ctx({ machine: { ...ROOMY, memoryGb: UPGRADE_MIN_MEMORY_GB - 0.1 } }), "GB"],
-      ["final pass", ctx({ machine: { ...ROOMY, gpuBusy: true } }), "final pass"],
       [
         "no Qwen",
-        ctx({ machine: ROOMY, on: new Set([...EVERYTHING].filter((id) => id !== QWEN_ASR)) }),
+        ctx({
+          review: "qwen",
+          machine: ROOMY,
+          on: new Set([...EVERYTHING].filter((id) => id !== QWEN_ASR)),
+        }),
         QWEN_ASR,
       ],
       [
         "no runtime",
-        ctx({ machine: ROOMY, on: new Set([...EVERYTHING].filter((id) => id !== RUNTIME)) }),
+        ctx({
+          review: "qwen",
+          machine: ROOMY,
+          on: new Set([...EVERYTHING].filter((id) => id !== RUNTIME)),
+        }),
         RUNTIME,
       ],
     ];
     for (const [name, c, why] of cases) {
-      expect([name, chooseLiveSetup(c).setup]).toEqual([name, "nemotron"]);
-      expect([name, upgradeRoom(c)]).toEqual([name, expect.stringContaining(why)]);
+      const got = chooseLiveSetup(c);
+      expect([name, got.setup, got.review]).toEqual([name, "nemotron", null]);
+      expect([name, got.note]).toEqual([name, expect.stringContaining(why)]);
     }
-    // No streaming model: Parakeet, even on a machine with room for Qwen.
-    const noStream = new Set([RECOGNIZER, QWEN_ASR, RUNTIME]);
-    expect(chooseLiveSetup(ctx({ machine: ROOMY, on: noStream })).setup).toBe("parakeet");
-    // The rule is auto's: a named Nemotron stays Nemotron on a roomy Mac.
-    expect(chooseLiveSetup(ctx({ machine: ROOMY, setting: "nemotron" })).setup).toBe("nemotron");
   });
 
-  test("auto never picks a setup with a missing model", () => {
-    for (const gone of [QWEN_ASR, RECOGNIZER, RUNTIME]) {
-      const on = new Set([...EVERYTHING].filter((id) => id !== gone));
-      expect([gone, chooseLiveSetup(ctx({ on })).setup]).toEqual([gone, "nemotron"]);
+  test("a Mac with no GPU for Qwen or too little memory is told why the menus do not offer it, and a Qwen chosen anyway runs", () => {
+    const cases: [string, LiveSetupContext, string][] = [
+      ["cpu", ctx({ review: "qwen", machine: { ...ROOMY, gpu: false } }), "processor"],
+      [
+        "memory",
+        ctx({ review: "qwen", machine: { ...ROOMY, memoryGb: QWEN_MIN_MEMORY_GB - 0.1 } }),
+        "GB of memory",
+      ],
+    ];
+    for (const [name, c, why] of cases) {
+      expect([name, qwenRoom(c)]).toEqual([name, expect.stringContaining(why)]);
+      expect([name, chooseLiveSetup(c).review?.model]).toEqual([name, "qwen"]);
+      const view = liveView(c, null, () => "ready");
+      expect([name, view.review.choices.find((x) => x.id === "qwen")?.blocked]).toEqual([
+        name,
+        expect.stringContaining(why),
+      ]);
     }
-    // No streaming model at all: Parakeet, whatever else is here.
-    const none = new Set([RECOGNIZER, QWEN_ASR, RUNTIME]);
-    expect(chooseLiveSetup(ctx({ on: none })).setup).toBe("parakeet");
+    expect(qwenRoom(ctx({ machine: ROOMY }))).toBeNull();
+    // Nothing known of the machine (the CLI's view): not held against it.
+    expect(qwenRoom(ctx())).toBeNull();
   });
 
-  test("a named setup that cannot run falls back, and says why", () => {
-    const noQwen = new Set([...EVERYTHING].filter((id) => id !== QWEN_ASR));
-    const up = chooseLiveSetup(ctx({ setting: "upgrade", on: noQwen }));
-    expect(up.setup).toBe("nemotron");
-    expect(up.note).toContain(QWEN_ASR);
-    const nem = chooseLiveSetup(ctx({ setting: "nemotron", on: new Set([RECOGNIZER]) }));
-    expect(nem.setup).toBe("parakeet");
-    expect(nem.note).toContain("nemotron-en-560");
-    // An own llama-server needs no downloaded build.
-    const own = new Set([...EVERYTHING].filter((id) => id !== RUNTIME));
-    expect(chooseLiveSetup(ctx({ setting: "upgrade", on: own, runtime: null })).setup).toBe(
-      "upgrade",
-    );
-  });
-
-  test("[ASR-7] the upgrade is built: it is listed as available, and runs when named with its models here", () => {
-    expect(LIVE_SETUPS.upgrade.unavailable).toBeUndefined();
-    expect(chooseLiveSetup(ctx({ setting: "upgrade" }))).toEqual({
-      setup: "upgrade",
-      choice: { engine: "nemotron-en-560", lang: "en" },
+  test("the old `upgrade` is Nemotron with Qwen's second pass, for a call and in a file or a PATCH", () => {
+    expect(legacyLive("upgrade", undefined)).toEqual({ live: "nemotron", review: "qwen" });
+    // A call that names its own review keeps it.
+    expect(legacyLive("upgrade", "none")).toEqual({ live: "nemotron", review: "none" });
+    expect(legacyLive("parakeet", undefined)).toEqual({ live: "parakeet", review: undefined });
+    expect(legacyValues({ "asr.live": "upgrade", "asr.languages": ["en"] })).toEqual({
+      "asr.live": "nemotron",
+      "asr.review.model": "qwen",
+      "asr.languages": ["en"],
     });
-  });
-
-  test("voxtral is listed, never a value: the setting and a call's start refuse it", () => {
-    expect(LIVE_SETTINGS).toEqual(["auto", "parakeet", "nemotron", "upgrade"]);
-    expect(isLiveSetting("voxtral")).toBe(false);
-    expect(validateSetting("asr.live", "voxtral").ok).toBe(false);
-    for (const v of LIVE_SETTINGS) expect(validateSetting("asr.live", v).ok).toBe(true);
-    expect(LIVE_SETUPS.voxtral.unavailable).toContain("real-time factor 1.0");
-  });
-
-  test("the models each setup loads here", () => {
-    expect(setupModels("parakeet", ctx())).toEqual([RECOGNIZER]);
-    expect(setupModels("nemotron", ctx({ languages: ["es"] }))).toEqual(["nemotron-3.5-1120"]);
-    expect(setupModels("upgrade", ctx())).toEqual(["nemotron-en-560", QWEN_ASR, RUNTIME]);
-    expect(setupModels("voxtral", ctx())).toEqual([]);
+    expect(legacyValues({ "asr.live": "upgrade", "asr.review.model": "none" })).toEqual({
+      "asr.live": "nemotron",
+      "asr.review.model": "none",
+    });
+    // Control: anything else goes through untouched.
+    const same = { "asr.live": "auto" };
+    expect(legacyValues(same)).toBe(same);
   });
 });
 
-describe("[akou-chp.23] what GET /models and the Models page show of each setup", () => {
-  test("four rows with the measured bars, the next call's marked, missing models listed", () => {
+describe("[akou-chp.23] what GET /models and the Models page show", () => {
+  test("three models with the measured bars and their names, the next call's marked, missing models listed", () => {
     const on = new Set(["nemotron-en-560", RECOGNIZER]);
-    const v = liveView(ctx({ on }), "parakeet", (id) => (on.has(id) ? "ready" : "missing"));
+    const v = liveView(ctx({ on }), { setup: "parakeet", review: null }, (id) =>
+      on.has(id) ? "ready" : "missing",
+    );
     expect(v.setting).toBe("auto");
     expect(v.next).toBe("nemotron");
     expect(v.auto).toBe("nemotron");
-    // With the upgrade asked for, the view still says what auto would run here.
-    const roomy = { gpu: true, memoryGb: 32, gpuBusy: false };
-    const named = liveView(ctx({ setting: "nemotron", machine: roomy }), null, () => "ready");
-    expect([named.next, named.auto]).toEqual(["nemotron", "upgrade"]);
     expect(v.running).toBe("parakeet");
-    expect(v.setups.map((s) => s.id)).toEqual(["parakeet", "nemotron", "upgrade", "voxtral"]);
+    expect(v.setups.map((s) => [s.id, s.title])).toEqual([
+      ["nemotron", "Nemotron English"],
+      ["parakeet", "Parakeet"],
+      ["voxtral", "Voxtral Realtime"],
+    ]);
+    // The name follows the Nemotron the languages pick.
+    const es = liveView(ctx({ languages: ["es"] }), null, () => "ready");
+    expect(es.setups[0]?.title).toBe("Nemotron 3.5");
     const by = Object.fromEntries(v.setups.map((s) => [s.id, s]));
     expect(v.setups.filter((s) => s.selected).map((s) => s.id)).toEqual(["nemotron"]);
     expect(v.setups.filter((s) => s.running).map((s) => s.id)).toEqual(["parakeet"]);
@@ -171,14 +228,38 @@ describe("[akou-chp.23] what GET /models and the Models page show of each setup"
       (["accuracy", "latency", "cores", "memory"] as const).map((k) => by[id]?.[k].score);
     expect(bars("parakeet")).toEqual([28, 61, 53, 78]);
     expect(bars("nemotron")).toEqual([62, 77, 81, 86]);
-    // The upgrade's Qwen review was measured on FLEURS, not on AMI meetings: no accuracy bar.
-    expect(bars("upgrade")).toEqual([null, 77, null, 19]);
     expect(bars("voxtral")).toEqual([null, null, null, null]);
-    expect(by.upgrade?.models.filter((m) => m.state === "missing").map((m) => m.id)).toEqual([
-      QWEN_ASR,
-      RUNTIME,
-    ]);
     expect(by.voxtral?.unavailable).toBeTruthy();
     expect(by.nemotron?.unavailable).toBeNull();
+  });
+
+  test("the second pass: its setting, the one the next call runs, and each choice with what stops it", () => {
+    const on = new Set(["nemotron-en-560", RECOGNIZER]);
+    const v = liveView(
+      ctx({ on, review: "qwen", everySeconds: 120, machine: ROOMY }),
+      { setup: "nemotron", review: { model: "qwen", everySeconds: 60 } },
+      (id) => (on.has(id) ? "ready" : "missing"),
+    );
+    expect(v.review.setting).toBe("qwen");
+    expect(v.review.everySeconds).toBe(120);
+    // Qwen is not downloaded: the next call runs none, and says why.
+    expect(v.review.next).toBeNull();
+    expect(v.note).toContain(QWEN_ASR);
+    expect(v.review.running).toEqual({ model: "qwen", everySeconds: 60 });
+    const by = Object.fromEntries(v.review.choices.map((c) => [c.id, c]));
+    expect(v.review.choices.map((c) => [c.id, c.title])).toEqual([["qwen", "Qwen"]]);
+    // Missing models are listed as models, not as a reason.
+    expect(by.qwen?.models.map((m) => m.state)).toEqual(["missing", "missing"]);
+    expect(by.qwen?.blocked).toBeNull();
+    // A Mac with too little memory: Qwen's reason in words.
+    const small = liveView(ctx({ machine: { gpu: true, memoryGb: 8 } }), null, () => "ready");
+    expect(small.review.choices.find((c) => c.id === "qwen")?.blocked).toBe(
+      "Needs 16 GB of memory; this computer has 8 GB.",
+    );
+    // With Parakeet live, the pass says why it is not offered.
+    const pk = liveView(ctx({ setting: "parakeet" }), null, () => "ready");
+    expect(pk.review.choices.find((c) => c.id === "qwen")?.blocked).toBe(
+      "It reviews Nemotron's lines; the live model is Parakeet.",
+    );
   });
 });
