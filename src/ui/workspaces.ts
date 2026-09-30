@@ -129,6 +129,15 @@ export class WorkspacePicker {
     this.remember(name);
   }
 
+  /**
+   * The first-run setup's workspace: made if it is new (`POST /workspaces` answers an existing one
+   * as it is), then chosen. Returns why the name was refused, or null.
+   */
+  async choose(name: string): Promise<string | null> {
+    const bad = workspaceNameProblem(name, []);
+    return bad ?? this.create(name.trim());
+  }
+
   async load(): Promise<void> {
     const r = await this.d.t.request<{ workspaces?: { name: string }[] }>("GET", "/workspaces");
     if (r.status >= 400) return;

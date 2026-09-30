@@ -1,11 +1,11 @@
 /**
  * The welcome (docs/ux/WINDOW.md section 10, docs/ux/design-explorations/README.md): while the
  * speech models are missing, downloading or failed, it replaces the transcript, the side pane and
- * the player, and the sidebar with the calls stays. Three steps: the speech models with the one
- * download (`POST /models/pull`), the permissions macOS asks for at the first recording, and the
- * optional agent. Recording is refused until the models are there (`503 models_missing`), so Record
- * waits with its reason and this is the first thing a new user acts on. Once they are there the
- * welcome goes by itself.
+ * the player, and the sidebar with the calls stays. This card is its speech models step, in the
+ * first-run setup (`setup-wizard.ts`) and alone once the setup is done: the rows, the one download
+ * (`POST /models/pull`) and its progress. Recording is refused until the models are there
+ * (`503 models_missing`), so Record waits with its reason. Once they are there the card says so,
+ * and the welcome goes by itself unless the setup is still on screen.
  *
  * Progress arrives on the status push (DESKTOP.md DK-E2). A one-second `GET /models` poll is only
  * the fallback, for a download whose push has gone quiet: an older app that sends no progress, or a
@@ -50,6 +50,10 @@ export class ModelsCard {
   /** When the status push last carried the models. */
   private pushedAt = 0;
   private rows: "none" | "reading" | "read" = "none";
+  /** The last models drawn, to draw again when `add` changes the total. */
+  private last: ModelsInfo | undefined;
+  /** Bytes the setup adds to the one download before it starts (Qwen3-ASR for Best dictation). */
+  private extra = 0;
   private readonly changed: () => void;
   /** The models are not there yet: the window shows the welcome unless a call is recording. */
   missing = false;
@@ -59,28 +63,25 @@ export class ModelsCard {
     o: {
       /** The models changed state: the window redraws what the welcome replaces. */
       changed: () => void;
-      openAgentSettings: () => void;
-      mac: boolean;
     },
   ) {
     this.changed = o.changed;
     byId("models-pull").addEventListener("click", () => void this.pull());
-    byId("welcome-agent").addEventListener("click", o.openAgentSettings);
-    if (!o.mac) {
-      byId("welcome-perm-text").textContent =
-        "Your system may ask for the microphone the first time you press Record.";
-    }
   }
 
   /** The models from the status push (`pushed`), a pull's reply or a poll. */
   update(m: ModelsInfo | undefined, pushed = false): void {
     if (pushed && m) this.pushedAt = Date.now();
-    const view = modelsCardText(m);
+    this.last = m;
+    const view = modelsCardText(
+      m?.state === "missing" && this.extra > 0 ? { ...m, total: m.total + this.extra } : m,
+    );
     const was = this.missing;
     this.missing = view !== null;
     if (was !== this.missing) this.changed();
     if (!view) {
       this.stopPolling();
+      if (m?.state === "ready") this.ready(m);
       return;
     }
     if (this.rows === "none") void this.readRows();
@@ -98,6 +99,34 @@ export class ModelsCard {
     bar.value = view.progress ?? 0;
     if (m?.state === "downloading") this.startPolling();
     else this.stopPolling();
+  }
+
+  /**
+   * The models are there: the rows stay, with no button or bar, as the setup shows them when it is
+   * run again. The size and where they live read as they did before the download.
+   */
+  private ready(m: ModelsInfo): void {
+    const view = modelsCardText({ ...m, state: "missing" });
+    byId("models-size").textContent = view?.size ?? "";
+    byId("models-where-text").textContent = view?.where ?? "";
+    byId("models-where").title = m.dir;
+    const text = byId("models-text");
+    text.textContent = "Downloaded, ready to use.";
+    text.classList.remove("failed");
+    byId("models-pull").hidden = true;
+    byId("models-progress").hidden = true;
+  }
+
+  /** The setup's one download fetches `bytes` more than the speech set: its total says so. */
+  add(bytes: number): void {
+    if (bytes === this.extra) return;
+    this.extra = bytes;
+    if (this.last) this.update(this.last);
+  }
+
+  /** The step is on screen: its rows are read, if no update read them yet. */
+  shown(): void {
+    if (this.rows === "none") void this.readRows();
   }
 
   /** The rows of the models the download fetches; asked again on the next update if it failed. */

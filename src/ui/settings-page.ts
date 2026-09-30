@@ -61,6 +61,8 @@ const AFTER_CALL = "#after-call";
 const YOUR_WORDS = "#your-words";
 /** The rows the chosen assistant needs, under the Assistant row: its service, address, model, key. */
 const ASSISTANT_USE = "#assistant-use";
+/** "Run the setup again": the first-run setup, with what is set now (`setup-wizard.ts`). */
+const SETUP = "#setup";
 
 /** Ollama's OpenAI-compatible address on this computer: what "Local model (Ollama)" sets. */
 export const OLLAMA_URL = "http://127.0.0.1:11434/v1";
@@ -93,7 +95,7 @@ export const WEBHOOKS = "#webhooks";
 export type Layout = readonly { title: string; items: readonly string[] }[];
 
 const MAIN: Layout = [
-  { title: "General", items: ["user.name", "app.openAtLogin"] },
+  { title: "General", items: ["user.name", "app.openAtLogin", SETUP] },
   { title: "Workspaces and recordings", items: ["recordings.root", WORKSPACES, "export.dir"] },
   {
     title: "Calls",
@@ -311,6 +313,13 @@ export interface SettingsPageHooks {
    * pages, nothing of the recorder, and no config file to open, since it is on the server.
    */
   server?: Layout;
+  /** Reopens the first-run setup; absent, the page has no "Run the setup again". */
+  runSetup?: () => void;
+  /**
+   * Drawn inside another view (the first-run setup's assistant step): these rows alone, with no
+   * title, search, Advanced pages or foot, and the page's root under this id.
+   */
+  only?: { id: string; layout: Layout };
 }
 
 export class SettingsPage {
@@ -353,6 +362,10 @@ export class SettingsPage {
     private readonly t: Transport,
     private readonly hooks: SettingsPageHooks = {},
   ) {
+    if (hooks.only) {
+      this.root.id = hooks.only.id;
+      this.root.classList.remove("pg");
+    }
     this.root.append(this.col);
     this.root.addEventListener("change", (e) => {
       const el = e.target as HTMLElement;
@@ -445,7 +458,7 @@ export class SettingsPage {
   }
 
   private get main(): Layout {
-    return this.hooks.server ?? MAIN;
+    return this.hooks.only?.layout ?? this.hooks.server ?? MAIN;
   }
 
   private get platform(): string {
@@ -467,7 +480,7 @@ export class SettingsPage {
 
   /** The Advanced pages with what each holds; `other` only when a key has no place. */
   private subs(): Record<string, SubPage> {
-    if (this.hooks.server) return {};
+    if (this.hooks.server || this.hooks.only) return {};
     const placed = placedKeys();
     const rest = settingsKeys(this.schema).filter((k) => !placed.has(k));
     return rest.length === 0
@@ -507,6 +520,7 @@ export class SettingsPage {
         return rows.length > 0 ? section(s.title, ...rows) : null;
       })
       .filter((x): x is HTMLElement => x !== null);
+    if (this.hooks.only) return sections;
     return [
       pageHead("Settings", { right: [find] }),
       ...sections,
@@ -556,6 +570,19 @@ export class SettingsPage {
   private item(item: string, subs: Record<string, SubPage>): HTMLElement | HTMLElement[] | null {
     if (item === WORKSPACES) return this.workspacesRow();
     if (item === ASSISTANT_USE) return this.useRows();
+    if (item === SETUP) {
+      const run = this.hooks.runSetup;
+      return run
+        ? linkRow(
+            {
+              label: "Run the setup again",
+              help: "What you use akou for, the speech models, dictation, permissions and the assistant.",
+              id: "settings-setup-open",
+            },
+            run,
+          )
+        : null;
+    }
     if (item === LIVE) return this.liveRow();
     if (item === AFTER_CALL) return this.afterCallRow();
     if (item === WEBHOOKS)
@@ -1000,6 +1027,9 @@ export class SettingsPage {
         ? `Uses ${name} on ${this.here}.`
         : `Uses ${name}.`;
     const why = p.reason ?? p.detail;
+    // Where akou looked and how to pin a path are for the command line (`akou status`).
+    if (p.id === "harness" && why?.startsWith("no harness found"))
+      return `${capital(name)} was not found on ${this.here}. Install one, or choose another assistant.`;
     return `${capital(name)} is not available${why ? `: ${this.inWords(why)}.` : "."}`.replace(
       /\.\.$/,
       ".",
