@@ -133,7 +133,12 @@ export interface ApiApp {
    * `keep`: window-only keys the desktop window set in this request.
    */
   saveConfig(
-    file: Partial<Record<SettingKey, SettingValue>>,
+    /** The file to write, or a change made from the file as the previous save left it. */
+    file:
+      | Partial<Record<SettingKey, SettingValue>>
+      | ((
+          current: Partial<Record<SettingKey, SettingValue>>,
+        ) => Partial<Record<SettingKey, SettingValue>>),
     o?: { keep?: readonly SettingKey[] },
   ): Promise<LoadedConfig>;
   /** Vocabulary files changed on disk: forget what was read. */

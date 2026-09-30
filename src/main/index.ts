@@ -279,6 +279,9 @@ export type Announcement =
   | { what: "start"; by: string; ok: false; code: string }
   | { what: "share"; by: string; call: string };
 
+/** The settings as `config.json` holds them. */
+type ConfigFile = Partial<Record<SettingKey, SettingValue>>;
+
 export interface AppOptions {
   env?: Record<string, string | undefined>;
   platform?: string;
@@ -1680,10 +1683,28 @@ export class AkouApp implements ApiApp {
     return this.cfg;
   }
 
+  /** The save running now: the next one starts after it, so none writes a copy made before it. */
+  private saving: Promise<unknown> = Promise.resolve();
+
   async saveConfig(
-    file: Partial<Record<SettingKey, SettingValue>>,
+    file: ConfigFile | ((current: ConfigFile) => ConfigFile),
     o: { keep?: readonly SettingKey[] } = {},
   ): Promise<LoadedConfig> {
+    // A save may wait on the Keychain. The next one starts after it and, given as a change,
+    // is made from the file as that save left it, so neither writes over the other.
+    const run = this.saving.then(
+      () => this.saveConfigNow(file, o),
+      () => this.saveConfigNow(file, o),
+    );
+    this.saving = run.catch(() => {});
+    return run;
+  }
+
+  private async saveConfigNow(
+    change: ConfigFile | ((current: ConfigFile) => ConfigFile),
+    o: { keep?: readonly SettingKey[] },
+  ): Promise<LoadedConfig> {
+    const file = typeof change === "function" ? change(this.cfg.file) : change;
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     const env = this.o.env ?? process.env;
     // The keys the API cannot write are the file's: what is on disk now wins over this process's
@@ -1812,12 +1833,16 @@ export class AkouApp implements ApiApp {
     if (moved.length === 0) return;
     // The file as it is on disk, keys the registry refused included: only the moved keys go.
     const file = this.cfg.paths.configFile;
-    const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
-    for (const k of moved) {
-      delete raw[k];
-      this.secretsInFile.delete(k);
+    try {
+      const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      for (const k of moved) delete raw[k];
+      writePrivate(file, `${JSON.stringify(raw, null, 2)}\n`);
+    } catch (err) {
+      // The key is in both places and still works; the next save of it tries again.
+      this.log("warn", `${moved.join(", ")} stays in the config file: ${(err as Error).message}`);
+      return;
     }
-    writePrivate(file, `${JSON.stringify(raw, null, 2)}\n`);
+    for (const k of moved) this.secretsInFile.delete(k);
     this.log("info", `moved ${moved.join(", ")} from the config file into the Keychain`);
   }
 

@@ -99,15 +99,18 @@ export function settingsRoutes(r: Router<ApiApp>): void {
       const cfg = c.app.config();
       // The window's bridge runs in process with no identity; every HTTP request has one.
       const inProcess = c.identity === undefined;
-      const res = patchConfig(cfg.file, body, cfg.paths, { inProcess });
-      if (!res.ok) {
-        throw new HttpError(400, "bad_setting", res.errors.join("; "), { errors: res.errors });
-      }
       const keep = Object.keys(body).filter(
         (k): k is SettingKey =>
           isSettingKey(k) && (SETTINGS[k] as SettingSpec).apiWritable === false,
       );
-      const next = await c.app.saveConfig(res.file, { keep: inProcess ? keep : [] });
+      // Made from the file as the save before it left it: saves run one at a time.
+      const change = (current: typeof cfg.file) => {
+        const res = patchConfig(current, body, cfg.paths, { inProcess });
+        if (!res.ok)
+          throw new HttpError(400, "bad_setting", res.errors.join("; "), { errors: res.errors });
+        return res.file;
+      };
+      const next = await c.app.saveConfig(change, { keep: inProcess ? keep : [] });
       return json(200, {
         ok: true,
         settings: redactSettings(next.settings),

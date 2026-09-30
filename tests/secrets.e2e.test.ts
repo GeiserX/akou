@@ -223,6 +223,24 @@ describe("the app keeps the API key in the Keychain", () => {
   });
 });
 
+test("a save that lands while another waits on the Keychain loses neither", async () => {
+  await withRig({ settings: { "provider.kind": "anthropic" } }, async (rig, kc) => {
+    kc.refuse("slow-add");
+    const key = rig.api("PATCH", "/config", { "provider.apiKey": KEY });
+    await Bun.sleep(150);
+    const model = rig.api("PATCH", "/config", { "provider.model": "claude-y" });
+    expect((await key).status).toBe(200);
+    expect((await model).status).toBe(200);
+    expect(JSON.parse(configText(rig))["provider.model"]).toBe("claude-y");
+    expect(kc.items()["akou/provider.apiKey"]).toBe(KEY);
+    expect(configText(rig)).not.toContain(KEY);
+    // A refused change in the queue is still refused, and the next one still runs.
+    const bad = await rig.api("PATCH", "/config", { "provider.timeoutSeconds": -1 });
+    expect(bad.status).toBe(400);
+    expect((await rig.api("PATCH", "/config", { "provider.model": "claude-z" })).status).toBe(200);
+  });
+});
+
 describe("server mode", () => {
   test("keeps the key in the config file, since a server has no login Keychain", async () => {
     await withRig(

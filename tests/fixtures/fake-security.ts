@@ -11,7 +11,7 @@
  * `FAKE_SECURITY_REFUSE=add` makes an add fail (exit 1); `=drop` makes it exit 0 and keep nothing,
  * a Keychain that says yes and holds something else; `=all` makes every command exit 51, as a
  * locked or missing Keychain does; `=hang` never answers, as a Keychain waiting on a prompt nobody
- * sees; `=hang-add` hangs only the save. The file `<store>.refuse` says the same and wins.
+ * sees; `=hang-add` hangs only the save; `=slow-add` takes 0.7 s to save. The file `<store>.refuse` says the same and wins.
  */
 
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from "node:fs";
@@ -32,6 +32,7 @@ const id = (a: string[]) => `${flag(a, "-s")}/${flag(a, "-a")}`;
 
 if (refuse === "all") process.exit(51);
 if (refuse === "hang" || (refuse === "hang-add" && args[0] === "-i")) await Bun.sleep(60_000);
+if (refuse === "slow-add" && args[0] === "-i") await Bun.sleep(700);
 
 function run(a: string[]): number {
   const items = read();
