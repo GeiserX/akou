@@ -1419,7 +1419,15 @@ export interface LiveReview {
   name: string;
   reviewer: LineUpgrader;
   everySeconds: number;
+  /** The reviewer cannot take a request now (a final pass holds Qwen's GPU); absent: never. */
+  busy?: () => boolean;
 }
+
+/**
+ * How long a read of the call's lines waits for the second pass to review what has closed, ms:
+ * past it the read answers with what is reviewed so far and says how many lines are still not.
+ */
+export const REVIEW_READ_WAIT_MS = 20_000;
 
 /**
  * Reviews in a row that had not finished when the next one was due, after which the second pass
@@ -1466,6 +1474,14 @@ interface HostUpgrade {
   glossary: string[];
   /** The last failure logged, so a failing reviewer is logged once, not per line. */
   failed: string;
+  /** Lines of the request the reviewer has now. */
+  inFlight: number;
+  /** Settles when the review loop running now stops; null while none runs. */
+  drained: Promise<void> | null;
+  /** A reader's pass in progress, which a second reader shares; null while none runs. */
+  readPass: Promise<void> | null;
+  /** The reviewer cannot take a request now (Qwen's GPU is a final pass's): a read does not wait. */
+  busyElsewhere?: () => boolean;
 }
 
 interface HostCall {
@@ -1841,6 +1857,10 @@ export class LiveAsr {
             ended: new AbortController(),
             glossary: [],
             failed: "",
+            inFlight: 0,
+            drained: null,
+            readPass: null,
+            ...(review.busy ? { busyElsewhere: review.busy } : {}),
           }
         : null;
     }
@@ -2073,6 +2093,12 @@ export class LiveAsr {
   private reviewDue(c: HostCall, u: HostUpgrade): void {
     u.timer = null;
     if (u.off) return;
+    // A reader's pass is running: the reviewer is not behind the call, it is ahead of the timer.
+    if (u.readPass) {
+      u.waiting.push(...reviewBatches(u.closed.splice(0), u.capSeconds));
+      void this.runQwen(c, u);
+      return;
+    }
     if (u.busy || u.waiting.length > 0) {
       u.behind++;
       const late = u.waiting.splice(0).flatMap((r) => r.flatMap((j) => j.lines.map((l) => l.id)));
@@ -2102,12 +2128,17 @@ export class LiveAsr {
   private async runQwen(c: HostCall, u: HostUpgrade): Promise<void> {
     if (u.busy) return;
     u.busy = true;
+    let done = () => {};
+    u.drained = new Promise<void>((resolve) => {
+      done = resolve;
+    });
     try {
       for (;;) {
         const review = u.waiting.shift();
         if (!review || u.ended.signal.aborted || u.off) break;
         const parts = review.map((j) => j.samples);
         const job = { lines: review.flatMap((j) => j.lines), samples: joinUtterances(parts) };
+        u.inFlight = job.lines.length;
         let qwen: Hypothesis;
         try {
           qwen = await u.qwen.decode(job.samples, {
@@ -2140,7 +2171,75 @@ export class LiveAsr {
         this.revise(c, job.lines, qwen);
       }
     } finally {
+      u.inFlight = 0;
       u.busy = false;
+      u.drained = null;
+      done();
+    }
+  }
+
+  /**
+   * Review before a read (review-on-read): when a reader asks for the call's lines, the second pass
+   * first reviews the utterances closed and not reviewed yet, so an agent that follows the call
+   * reads corrected lines. The newest cap's worth goes first; older ones stay for the timer. Waits
+   * at most `waitMs`, then answers how many closed lines are still not reviewed. Concurrent reads
+   * share one pass, and a read right after the timer's pass finds nothing to do. Null when the call
+   * has no second pass running: Off, gone off, or ended (the final pass owns the rest).
+   */
+  async reviewForRead(
+    callId: string,
+    waitMs = REVIEW_READ_WAIT_MS,
+  ): Promise<{ unreviewed: number } | null> {
+    const c = this.calls.get(callId);
+    const u = c?.upgrade;
+    if (!c || !u || u.off || u.ended.signal.aborted) return null;
+    if (!u.readPass && !u.busyElsewhere?.()) {
+      const pass = this.readPass(c, u);
+      u.readPass = pass;
+      void pass.finally(() => {
+        if (u.readPass === pass) u.readPass = null;
+      });
+    }
+    const pass = u.readPass;
+    if (pass) {
+      let timer: unknown = null;
+      await Promise.race([
+        pass,
+        new Promise<void>((resolve) => {
+          timer = this.clock.setTimeout(resolve, waitMs);
+        }),
+      ]);
+      if (timer !== null) this.clock.clearTimeout(timer);
+    }
+    return { unreviewed: unreviewedLines(u) };
+  }
+
+  private async readPass(c: HostCall, u: HostUpgrade): Promise<void> {
+    if (u.closed.length > 0) {
+      // The newest cap's worth, whole utterances; older ones are left to the timer.
+      const cap = u.capSeconds * ASR_RATE;
+      let from = u.closed.length;
+      let n = 0;
+      while (from > 0) {
+        const len = (u.closed[from - 1] as UpgradeJob).samples.length;
+        if (from < u.closed.length && n + len > cap) break;
+        n += len;
+        from--;
+      }
+      const newest = u.closed.splice(from);
+      if (u.closed.length === 0 && u.timer !== null) {
+        this.clock.clearTimeout(u.timer);
+        u.timer = null;
+      }
+      u.waiting.push(...reviewBatches(newest, u.capSeconds));
+    }
+    for (;;) {
+      if (u.off || u.ended.signal.aborted) return;
+      if (!u.busy) {
+        if (u.waiting.length === 0) return;
+        void this.runQwen(c, u);
+      }
+      await u.drained;
     }
   }
 
@@ -2233,4 +2332,13 @@ export function modelNameFor(spec: ModelSpec): string {
 export async function whenReady(asr: LiveAsr, clock: Clock, ms: number): Promise<boolean> {
   const r = await withDeadline(clock, asr.ready, ms);
   return r.ok;
+}
+
+/** The closed lines of a reviewed call the second pass has not written yet. */
+function unreviewedLines(u: HostUpgrade): number {
+  return (
+    u.closed.reduce((n, j) => n + j.lines.length, 0) +
+    u.waiting.reduce((n, r) => n + r.reduce((m, j) => m + j.lines.length, 0), 0) +
+    u.inFlight
+  );
 }

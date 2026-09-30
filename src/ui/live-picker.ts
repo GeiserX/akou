@@ -304,6 +304,9 @@ export class LivePicker {
         h("span", { class: "live-head-name" }, SLOT_TITLE[slot]),
         slot === "review" ? this.everySwitch(v) : null,
       ),
+      ...(slot === "review"
+        ? [h("p", { class: "live-before" }, "Also runs before an agent reads the call.")]
+        : []),
       ...(note ? [h("p", { class: "live-note" }, note)] : []),
       h(
         "div",

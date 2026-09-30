@@ -20,6 +20,7 @@ import {
   type LiveOut,
   LivePipeline,
   REVIEW_BEHIND_MAX,
+  REVIEW_READ_WAIT_MS,
   REVIEW_STALL_MAX_MS,
   recognizerReviewer,
 } from "../src/main/asr/live-worker.ts";
@@ -367,6 +368,7 @@ async function rig(
     minute,
     clock,
     decodes,
+    asr: a,
     view: () => mgr.controller(id)?.view,
   };
 }
@@ -839,5 +841,129 @@ describe("[ASR-7] Parakeet as the second pass", () => {
     const n = existsSync(file) ? readFileSync(file, "utf8").trim().split("\n").length : 0;
     // The first utterance may already be decoding; none after it is.
     expect(n).toBeLessThanOrEqual(1);
+  });
+});
+
+describe("[ASR-7] review before a read: an agent reads lines the second pass has corrected", () => {
+  /** Two utterances closed, and no review due yet. */
+  const two = async (qwen: LineUpgrader | null) => {
+    const r = await rig(qwen);
+    r.play([
+      ["we", "should", "move", "the", "build"],
+      ["to", "the", "new", "box"],
+    ]);
+    await until(() => r.segs().length === 2, 5000, "both stream lines");
+    await Bun.sleep(50);
+    return r;
+  };
+
+  test("a read runs the pass over what has closed, before the timer, and answers once the lines are corrected", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    const read = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    qwen.asked[0]?.answer(qwenSays("we should move the built to the news box"));
+    expect(await read).toEqual({ unreviewed: 0 });
+    expect(r.view()?.segment("l000001")?.text).toBe("we should move the built");
+    // The timer finds nothing left: a read right after costs nothing either.
+    await r.minute();
+    expect(await r.asr.reviewForRead(r.id)).toEqual({ unreviewed: 0 });
+    expect(qwen.asked.length).toBe(1);
+    await r.mgr.stop();
+  });
+
+  test(`the wait is bounded: past ${REVIEW_READ_WAIT_MS / 1000} s the read answers with how many lines are still unreviewed`, async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    let answered = null as { unreviewed: number } | null;
+    const read = r.asr.reviewForRead(r.id).then((x) => {
+      answered = x;
+    });
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    await r.clock.advance(REVIEW_READ_WAIT_MS - 1000);
+    await Bun.sleep(20);
+    expect(answered).toBeNull();
+    await r.clock.advance(1000);
+    await read;
+    expect(answered).toEqual({ unreviewed: 2 });
+    qwen.asked[0]?.answer(qwenSays(""));
+    await r.mgr.stop();
+  });
+
+  test("two reads at once share one pass", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    const a = r.asr.reviewForRead(r.id);
+    const b = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the review");
+    await Bun.sleep(50);
+    expect(qwen.asked.length).toBe(1);
+    qwen.asked[0]?.answer(qwenSays("we should move the built to the news box"));
+    expect(await Promise.all([a, b])).toEqual([{ unreviewed: 0 }, { unreviewed: 0 }]);
+    await r.mgr.stop();
+  });
+
+  test("with the second pass Off, a read reviews nothing and says nothing", async () => {
+    const r = await two(null);
+    expect(await r.asr.reviewForRead(r.id)).toBeNull();
+    expect(r.segs().every((x) => x.rev === 1)).toBe(true);
+    await r.mgr.stop();
+  });
+
+  test("after call.ended a read reviews nothing: the final pass owns the call", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    await r.mgr.stop();
+    expect(await r.asr.reviewForRead(r.id)).toBeNull();
+    expect(qwen.asked.length).toBe(0);
+  });
+
+  test("a read with more than the cap pending reviews the newest cap's worth, and leaves the rest to the timer", async () => {
+    const qwen = new SlowQwen();
+    const r = await rig(qwen);
+    // About 110 s of speech closed and no review yet: more than a minute's 90 s cap.
+    const said: string[][] = [];
+    for (let i = 0; i < 75; i++) said.push(["hello", "world"]);
+    r.play(said, 0.8);
+    await until(() => r.segs().length === 75, 20_000, "every stream line");
+    await Bun.sleep(50);
+    const read = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    await Bun.sleep(50);
+    // One request, the newest ones, within the cap; nothing else asked yet.
+    expect(qwen.asked.length).toBe(1);
+    expect((qwen.asked[0]?.samples.length as number) / RATE).toBeLessThanOrEqual(
+      REVIEW_CAP_SECONDS + 1,
+    );
+    qwen.asked[0]?.answer(qwenSays(""));
+    const got = await read;
+    expect(got?.unreviewed).toBeGreaterThan(0);
+    // The timer takes the older ones.
+    await r.minute();
+    await until(() => qwen.asked.length === 2, 5000, "the timer's review");
+    qwen.asked[1]?.answer(qwenSays(""));
+    await r.mgr.stop();
+  });
+
+  test("a line a person fixed a word on keeps the fix through a read's pass", async () => {
+    const qwen = new SlowQwen();
+    const r = await two(qwen);
+    r.mgr.controller(r.id)?.record({
+      type: "vocab.add",
+      id: "v0001",
+      rev: 1,
+      term: "could",
+      heard: ["should"],
+      segs: ["l000001"],
+      nth: 0,
+      decode: false,
+      by: "user",
+    });
+    const read = r.asr.reviewForRead(r.id);
+    await until(() => qwen.asked.length === 1, 5000, "the read's review");
+    qwen.asked[0]?.answer(qwenSays("we shall move the built to the news box"));
+    await read;
+    expect(r.view()?.resolve("l000001")?.text).toBe("we could move the build");
+    await r.mgr.stop();
   });
 });

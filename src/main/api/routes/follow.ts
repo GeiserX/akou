@@ -385,7 +385,7 @@ export function followRoutes(r: Router<ApiApp>): void {
     "/calls/:id/transcript",
     {
       id: "calls.transcript",
-      doc: "The call's transcript, every line with its local wall-clock time and speaker. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 20 s, and `unreviewed` counts those it had not reviewed yet. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -428,14 +428,27 @@ export function followRoutes(r: Router<ApiApp>): void {
         from: { type: "string", doc: "Lines ending at or after this time: epoch ms or ISO 8601." },
         to: { type: "string", doc: "Lines starting at or before this time: epoch ms or ISO 8601." },
         speaker: { type: "string", doc: "Only this speaker, by id (`c2`) or by name." },
+        review: {
+          type: "string",
+          values: ["wait", "skip"],
+          default: "wait",
+          doc: "With a second pass on and `format` json: `wait` reviews the live call's closed lines first (at most 20 s); `skip` answers at once, for a follower that reads on every event.",
+        },
       },
       ok: 200,
     },
     async (c) => {
       const call = await callOf(c);
+      const layer = c.query.oneOf<View>("layer");
+      // Review before a read: with a second pass on, the call's closed lines are reviewed first
+      // (at most `REVIEW_READ_WAIT_MS`), so a follower reads corrected lines.
+      const settle =
+        layer !== "final" &&
+        c.query.oneOf<"json" | "md" | "txt" | "export">("format") === "json" &&
+        c.query.oneOf<"wait" | "skip">("review") === "wait";
+      const review = settle ? ((await c.app.settleReview?.(call.id)) ?? null) : null;
       const v = call.view;
       const tz = v.call?.tz ?? "UTC";
-      const layer = c.query.oneOf<View>("layer");
       const format = c.query.oneOf<"json" | "md" | "txt" | "export">("format");
       const since = c.query.int("since") as number;
       const limitTokens = c.query.int("limitTokens");
@@ -576,6 +589,8 @@ export function followRoutes(r: Router<ApiApp>): void {
         more,
         offset: offset ?? 0,
         nextOffset,
+        // With a second pass on: the closed lines it had not reviewed when this answer was made.
+        ...(review ? { unreviewed: review.unreviewed } : {}),
         lines: lines.map((l) => ({
           id: l.id,
           seq: l.seq,

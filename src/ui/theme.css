@@ -650,6 +650,11 @@ body.welcoming #composer #controls {
   line-height: 1.4;
   white-space: normal;
 }
+#live-menu .live-before {
+  margin: 0 8px 4px;
+  color: var(--faint);
+  font-size: 11px;
+}
 #live-menu .live-note,
 #live-menu .live-none {
   margin: 4px 8px 6px 30px;
