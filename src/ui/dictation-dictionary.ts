@@ -307,7 +307,8 @@ export class DictationDictionary {
   private where(e: DictionaryEntry): string {
     return [
       e.heard.length > 0 && !isReplacement(e) ? `also heard as ${quote(e.heard)}` : "",
-      e.entryScope !== "dictation" ? "Calls too" : "",
+      // Another list's section says where its words apply, so its rows need not.
+      e.scope === "global" && e.entryScope !== "dictation" ? "Calls too" : "",
       e.confirmed ? "" : "Not confirmed yet",
     ]
       .filter((x) => x !== "")

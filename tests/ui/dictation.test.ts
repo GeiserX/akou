@@ -1666,7 +1666,7 @@ describe("DC-U5: the dictionary and replacements", () => {
         "also heard as “cooper netties”",
       );
       // Another list's word: read only, under its own heading, and no file path anywhere.
-      expect(await text(page, `${row("Acme")} .where`)).toBe("Calls too · Not confirmed yet");
+      expect(await text(page, `${row("Acme")} .where`)).toBe("Not confirmed yet");
       expect(
         await page
           .locator("section[data-section='From your other word lists'] li[data-term='Acme']")
@@ -3069,6 +3069,8 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
       // No file path on the page.
       expect(await text(page, "#page-dictation")).not.toContain("work.yaml");
       expect(await page.locator(`${term("Hetzner")} button`).count()).toBe(0);
+      // Its section says where it applies; the row says only how else it is heard.
+      expect(await text(page, `${term("Hetzner")} .where`)).toBe("also heard as “hetzna”");
       // The global file's words open to their switch and Remove (positive control).
       await page.click(`${term("Vercel")} .pg-link`);
       expect(await page.isVisible(`${term("Vercel")} button.remove`)).toBe(true);
