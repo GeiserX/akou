@@ -26,6 +26,8 @@ import type { Grant } from "../main/dictation/protocol.ts";
 import { dictationHotkeyDefault, fixLastDefault, hotkeyFor } from "../main/window/hotkey.ts";
 import { appsEditor, nextDictatedApp } from "./dictation-apps.ts";
 import { cueStyle } from "./dictation-cues.ts";
+import type { DictationDictionary } from "./dictation-dictionary.ts";
+import type { DictationHistory } from "./dictation-history.ts";
 import { LanguageList, languageName } from "./dictation-languages.ts";
 import { MIC_KEY, type MicList, micMeter, micNote, micPicker, readMics } from "./dictation-mic.ts";
 import { KEY_SETTINGS, KeyRecorder } from "./dictation-recorder.ts";
@@ -105,11 +107,11 @@ const MIC_GRANT = "#mic-grant";
 const A11Y_GRANT = "#accessibility-grant";
 const SETUP = "#setup";
 const WHILE = "#while-listening";
-const WORDS = "#words";
-const HISTORY = "#history";
+/** The rows, and `show`'s names, of the Words and History pages under this one. */
+export const WORDS = "#words";
+export const HISTORY = "#history";
 const REMOTE = "#remote";
 const REVIEW = "#review";
-const DELETE_ALL = "#delete-all";
 const ADVANCED = "#advanced";
 
 /** The sections of the app-mode page, in the mockup's order. */
@@ -167,7 +169,7 @@ export const DICTATION_GROUPS: readonly DictationGroup[] = [
 /** The Advanced page: what it holds, as its row says it, and its sections. */
 export const ADVANCED_PAGE = {
   title: "Advanced",
-  help: "Silence and length, the mic, one fixed language, context words, time limits, history and its audio, Delete all.",
+  help: "Silence and length, the mic, one fixed language, context words, time limits.",
   groups: [
     {
       title: "Listening",
@@ -185,9 +187,11 @@ export const ADVANCED_PAGE = {
         "asr.qwenIdleMinutes",
       ],
     },
-    { title: "History", keys: ["dictation.retainDays", "dictation.keepAudio", DELETE_ALL] },
   ] as readonly DictationGroup[],
 };
+
+/** The History page's settings, above the dictations (sd-a-history). */
+export const HISTORY_KEYS: readonly string[] = ["dictation.retainDays", "dictation.keepAudio"];
 
 /** Server mode: what the server does for dictating clients. */
 export const SERVER_GROUPS: readonly DictationGroup[] = [
@@ -198,6 +202,7 @@ export const SERVER_GROUPS: readonly DictationGroup[] = [
 export function dictationKeys(): string[] {
   return [...DICTATION_GROUPS, ...ADVANCED_PAGE.groups]
     .flatMap((g) => g.keys)
+    .concat(HISTORY_KEYS)
     .filter((k) => !k.startsWith("#"));
 }
 
@@ -211,13 +216,21 @@ export const NO_MIC_NOTICE =
   "This page is served over plain http from another computer, so the browser gives it no microphone. Dictate from the akou app, with this server as the other computer it uses.";
 
 export interface DictationHooks {
-  /** Opens the words to review, whose Dictation heading lists them (DC-L5). */
-  openReview?: () => Promise<void>;
-  /** Opens the words and replacements (DC-U5). */
-  openWords?: () => void;
-  /** Opens the history (DC-H1). */
-  openHistory?: () => void;
+  /** The Words page's list: words, replacements and the words to review (DC-U5, DC-L5). */
+  words?: DictationDictionary;
+  /** The History page's list (DC-H1). */
+  history?: DictationHistory;
 }
+
+/** A page under the Dictation page, reached from its row and left by its back link. */
+type Sub = "advanced" | "words" | "history";
+
+/** The rows that lead to each page under this one, for the focus on the way back. */
+const SUB_ROWS: Record<Sub, string> = {
+  advanced: "dictation-advanced",
+  words: "dictation-dictionary-open",
+  history: "dictation-history-open",
+};
 
 type Status = {
   app?: { platform?: string };
@@ -288,8 +301,8 @@ export class DictationPage {
   private review: DictationReview | null = null;
   /** Dictations served in the last hour, in server mode. */
   private served: number | undefined;
-  /** The Advanced page is on screen instead of the page itself. */
-  private sub = false;
+  /** The page under this one on screen instead of the page itself, if any. */
+  private sub: Sub | null = null;
   /** "Use another computer" was turned on before an address was saved: the address turns it on. */
   private remotePending = false;
   /** Why `GET /config` failed, said where the settings would be; null once it answers. */
@@ -312,11 +325,44 @@ export class DictationPage {
     await this.saveTyped();
     if (shown !== this.shows) return;
     replace(this.col, h("p", { class: "pg-reading" }, "Reading the dictation settings…"));
-    await this.load();
+    const sub = subFor(key, this.hooks);
+    await Promise.all([this.load(), this.loadSub(sub)]);
     if (shown !== this.shows) return;
-    this.sub = key ? ADVANCED_PAGE.groups.some((g) => g.keys.includes(key)) : false;
+    this.sub = sub;
     this.draw();
-    if (key) this.focusRow(key);
+    if (key && !key.startsWith("#")) this.focusRow(key);
+  }
+
+  /** Reads what a page under this one lists: the words, or the dictations. */
+  private async loadSub(sub: Sub | null): Promise<void> {
+    if (sub === "words") await this.hooks.words?.load();
+    if (sub === "history") await this.hooks.history?.load();
+  }
+
+  /** Goes to a page under this one; what is typed is saved and a key recording stops first. */
+  private async openSub(sub: Sub): Promise<void> {
+    // A live recorder would take every key typed into the page's fields.
+    this.stopRecording();
+    const shown = ++this.shows;
+    await Promise.all([this.saveTyped(), this.loadSub(sub)]);
+    if (shown !== this.shows) return;
+    this.sub = sub;
+    this.draw();
+    this.col.querySelector<HTMLElement>(".pg-back")?.focus();
+  }
+
+  /** "‹ Dictation": back to this page, with the keyboard on the row it came through. */
+  private back(): HTMLButtonElement {
+    return backLink("Dictation", () => {
+      const from = this.sub;
+      void this.saveTyped();
+      this.shows++;
+      this.sub = null;
+      this.draw();
+      if (from) this.col.querySelector<HTMLElement>(`#${SUB_ROWS[from]}`)?.focus();
+      // The words to review may have been answered there.
+      if (from === "words") void this.refreshReview();
+    });
   }
 
   /** Reads everything again and draws the page, saving nothing first. */
@@ -357,7 +403,7 @@ export class DictationPage {
       app ? this.t.request<Status>("GET", "/status") : null,
       app ? this.readDictation() : null,
       app ? readMics(this.t) : null,
-      app && this.hooks.openReview ? readDictationReview(this.t) : null,
+      app && this.hooks.words ? readDictationReview(this.t) : null,
     ]);
     if (read !== this.reads) return;
     // "Use another computer" turned on with no address saved is forgotten with the page.
@@ -425,8 +471,17 @@ export class DictationPage {
       );
       return;
     }
+    if (this.sub === "words" || this.sub === "history") {
+      replace(this.col, ...(this.sub === "words" ? this.wordsPage() : this.historyPage()));
+      this.root.parentElement?.scrollTo?.({ top: 0 });
+      return;
+    }
     const groups =
-      this.mode === "server" ? SERVER_GROUPS : this.sub ? ADVANCED_PAGE.groups : DICTATION_GROUPS;
+      this.mode === "server"
+        ? SERVER_GROUPS
+        : this.sub === "advanced"
+          ? ADVANCED_PAGE.groups
+          : DICTATION_GROUPS;
     // An akou whose registry has none of the page's keys has no dictation to set.
     const any = groups.some((g) => g.keys.some((k) => k in this.schema));
     const sections = (any ? groups : [])
@@ -435,16 +490,10 @@ export class DictationPage {
         return rows.length > 0 ? section(g.title, ...rows) : null;
       })
       .filter((x): x is HTMLElement => x !== null);
-    const head = this.sub
-      ? pageHead(ADVANCED_PAGE.title, {
-          back: backLink("Dictation", () => {
-            void this.saveTyped();
-            this.sub = false;
-            this.draw();
-            this.col.querySelector<HTMLElement>("#dictation-advanced")?.focus();
-          }),
-        })
-      : pageHead("Dictation");
+    const head =
+      this.sub === "advanced"
+        ? pageHead(ADVANCED_PAGE.title, { back: this.back() })
+        : pageHead("Dictation");
     replace(
       this.col,
       head,
@@ -478,28 +527,22 @@ export class DictationPage {
       case WHILE:
         return this.whileListening();
       case WORDS:
-        return this.hooks.openWords
+        return this.hooks.words
           ? linkRow(
               {
                 label: "Words and replacements",
                 help: "Names and terms spelled your way.",
                 id: "dictation-dictionary-open",
               },
-              () => {
-                // A live recorder would take every key typed into the words' fields.
-                this.stopRecording();
-                this.hooks.openWords?.();
-              },
+              () => void this.openSub("words"),
             )
           : null;
       case HISTORY:
-        return this.hooks.openHistory ? this.historyRow() : null;
+        return this.hooks.history ? this.historyRow() : null;
       case REMOTE:
         return this.remoteRow();
       case REVIEW:
         return this.reviewRow();
-      case DELETE_ALL:
-        return this.mode === "app" ? this.deleteAll() : null;
       case ADVANCED:
         return this.advancedRow();
       default:
@@ -1164,12 +1207,45 @@ export class DictationPage {
         value,
         id: "dictation-history-open",
       },
-      () => {
-        // A live recorder would take every key typed into the history's search.
-        this.stopRecording();
-        this.hooks.openHistory?.();
-      },
+      () => void this.openSub("history"),
     );
+  }
+
+  /** The Words page (sd-a-words): its title and line, then the words' own list and forms. */
+  private wordsPage(): HTMLElement[] {
+    const words = this.hooks.words;
+    return [
+      pageHead("Words and replacements", {
+        back: this.back(),
+        sub: h(
+          "div",
+          { class: "pg-help" },
+          "Spelled your way in every dictation. Words marked Calls too also fix your call transcripts.",
+        ),
+      }),
+      ...(words ? [words.root] : []),
+    ];
+  }
+
+  /**
+   * The History page (sd-a-history): its search on the title's right, how long dictations and
+   * their audio are kept, the dictations by day, and Delete all.
+   */
+  private historyPage(): HTMLElement[] {
+    const history = this.hooks.history;
+    const rows = HISTORY_KEYS.map((k) => this.keyRow(k)).filter(
+      (x): x is HTMLElement => x !== null,
+    );
+    return [
+      pageHead("History", {
+        back: this.back(),
+        sub: h("div", { class: "pg-help" }, `Your dictations stay on ${this.here}.`),
+        right: history ? [history.find] : [],
+      }),
+      rows.length > 0 ? section("", ...rows) : null,
+      history?.root ?? null,
+      this.deleteAll(),
+    ].filter((x): x is HTMLElement => x !== null);
   }
 
   /**
@@ -1178,8 +1254,7 @@ export class DictationPage {
    */
   private reviewRow(): HTMLElement | null {
     const r = this.review;
-    const open = this.hooks.openReview;
-    if (!r || !open || ("pairs" in r && r.pairs === null)) return null;
+    if (!r || !this.hooks.words || ("pairs" in r && r.pairs === null)) return null;
     if ("error" in r)
       return row({ label: "Words to review", help: r.error, id: "dictation-review-row" });
     const n = waitingTerms(r.pairs ?? []);
@@ -1194,21 +1269,13 @@ export class DictationPage {
         { class: "pg-value", id: "dictation-review-count" },
         n === 0 ? "None waiting" : `${n} waiting`,
       ),
-      button(
-        "Open",
-        () => {
-          // A live recorder would take every key pressed over the list.
-          this.stopRecording();
-          void open();
-        },
-        "dictation-review-open",
-      ),
+      button("Open", () => void this.openSub("words"), "dictation-review-open"),
     );
   }
 
   /** Reads the count again, after the words to review answered some, and redraws its row alone. */
   async refreshReview(): Promise<void> {
-    if (this.mode !== "app" || !this.hooks.openReview) return;
+    if (this.mode !== "app" || !this.hooks.words) return;
     const reads = this.reads;
     const review = await readDictationReview(this.t);
     // A load since then has read its own.
@@ -1231,33 +1298,32 @@ export class DictationPage {
         value: `${n} setting${n === 1 ? "" : "s"}`,
         id: "dictation-advanced",
       },
-      () => {
-        void this.saveTyped();
-        this.sub = true;
-        this.draw();
-        this.col.querySelector<HTMLElement>(".pg-back")?.focus();
-      },
+      () => void this.openSub("advanced"),
     );
   }
 
+  /** "Delete all dictations…", which asks once more, under the History page's list. */
   private deleteAll(): HTMLElement {
     const b = twoStep(
       {
-        class: "pg-btn",
-        label: "Delete all",
+        class: "pg-textlink",
+        label: "Delete all dictations…",
         confirm: "Delete every dictation and its audio?",
         id: "dictations-delete",
         armed: this.armed,
       },
       () =>
         void this.t.request("DELETE", "/dictations").then((r) => {
-          if (r.status >= 400)
+          if (r.status >= 400) {
             toast(message(r.body, `the dictations were not deleted (HTTP ${r.status})`));
-          else toast("Every dictation is deleted.", "info");
+            return;
+          }
+          toast("Every dictation is deleted.", "info");
+          if (this.sub === "history") void this.hooks.history?.load();
         }),
     );
     b.id = "dictations-delete";
-    return row({ label: "Delete all dictations", help: "Their text and their audio, now." }, b);
+    return h("p", { class: "pg-under" }, b);
   }
 
   // -------------------------------------------------------------------------
@@ -1504,6 +1570,17 @@ function grantState(g: Grant): HTMLElement {
           ? "Not asked yet"
           : "Not allowed",
   );
+}
+
+/**
+ * The page under this one that `arg` goes to: `#words`, `#history`, or the page holding the
+ * setting `arg` names; null for the page itself. A page the window has no list for is none.
+ */
+function subFor(arg: string | undefined, hooks: DictationHooks): Sub | null {
+  if (!arg) return null;
+  if (arg === WORDS) return hooks.words ? "words" : null;
+  if (arg === HISTORY || HISTORY_KEYS.includes(arg)) return hooks.history ? "history" : null;
+  return ADVANCED_PAGE.groups.some((g) => g.keys.includes(arg)) ? "advanced" : null;
 }
 
 function lostOf(d: DictationReply | null): string[] {

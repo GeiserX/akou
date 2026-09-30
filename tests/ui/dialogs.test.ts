@@ -1,8 +1,10 @@
 /**
  * Every dialog of the window closes the way a window does (WINDOW W15.8): its × in the top corner,
  * always on screen, Escape, and a click on the backdrop; each gives the focus back to the control
- * that opened it. Settings is a page of the window, not a dialog: its tests are in
- * `settings-page.test.ts`, including an edit left typed when the page is left.
+ * that opened it. Settings, Dictation, Models, Words and History are pages of the window, not
+ * dialogs: a page under another is left by its back link, with the focus on the row that led to
+ * it. Settings' tests are in `settings-page.test.ts`, including an edit left typed when the page
+ * is left.
  */
 
 import { describe, expect, test } from "bun:test";
@@ -83,12 +85,27 @@ describe("W15.8: every dialog closes like a window", () => {
         // Dictation is a page of the window now, not a dialog.
         expect(await page.$("dialog#dictation")).toBeNull();
 
-        // Over the Dictation page, History and Dictionary close on their own, back to their row.
+        // History and Words are pages under Dictation, not dialogs: the back link leads to the
+        // Dictation page, with the focus on the row that opened them.
         await page.click("#dictation-open");
         await page.waitForSelector("#page-dictation:not([hidden]) #dictation-history-open");
-        await closesThreeWays(page, "dictation-history", "#dictation-history-open");
-        await closesThreeWays(page, "dictation-dictionary", "#dictation-dictionary-open");
-        expect(await page.isVisible("#page-dictation")).toBe(true);
+        for (const [opener, title] of [
+          ["#dictation-history-open", "History"],
+          ["#dictation-dictionary-open", "Words and replacements"],
+        ] as const) {
+          await page.click(opener);
+          await page.waitForFunction(
+            (x) => document.querySelector("#page-dictation h1")?.textContent === x,
+            title,
+          );
+          expect(await page.$$("dialog#dictation-history, dialog#dictation-dictionary")).toEqual(
+            [],
+          );
+          expect(await page.getAttribute("#dictation-open", "aria-current")).toBe("page");
+          await page.click("#page-dictation .pg-back");
+          await page.waitForSelector("#page-dictation section[data-section='Keys']");
+          expect(`${title}: ${await focused(page)}`).toBe(`${title}: ${opener.slice(1)}`);
+        }
         // While a key is being recorded, Escape stops the recording and leaves the page on screen.
         const recorder = "#page-dictation button.record-key[data-for='dictation.hotkey']";
         await page.click(recorder);

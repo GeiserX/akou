@@ -151,8 +151,7 @@ button.pill {
   background: transparent;
   cursor: pointer;
 }
-#review-list,
-.review-dictation ul {
+#review-list {
   list-style: none;
   padding: 0;
 }
@@ -2190,19 +2189,6 @@ dialog {
   font-size: 18px;
   font-weight: 400;
 }
-.dictation-dictionary .issue {
-  color: var(--rec);
-}
-.dictation-dictionary ul {
-  list-style: none;
-  padding: 0;
-}
-.dictation-dictionary li {
-  display: flex;
-  gap: 6px;
-  align-items: baseline;
-  flex-wrap: wrap;
-}
 /* The user's languages (akou-5v8): one chip each, then the list that adds another. */
 .dictation-setup .dictation-languages {
   margin: 4px 0 10px;
@@ -2226,11 +2212,6 @@ dialog {
 }
 .language-chip .remove {
   padding: 0 6px;
-}
-/* The refusal sits under the form as a line of its own, not wrapped beside the Add button. */
-#dictionary-issue {
-  display: block;
-  margin-top: 6px;
 }
 #share-notes {
   border-left: 1px solid var(--line);
@@ -2394,7 +2375,7 @@ dialog {
   width: 36em;
 }
 
-/* Dictation: the key recorder's keycaps and the history list (DC-U3, DC-H1). */
+/* Dictation: the key recorder's keycaps (DC-U3). */
 .keycaps kbd {
   font: inherit;
   padding: 0 0.35em;
@@ -2403,24 +2384,6 @@ dialog {
   border-bottom-width: 2px;
   border-radius: 4px;
   background: var(--panel);
-}
-#dictation-history-list {
-  list-style: none;
-  padding: 0;
-}
-#dictation-history-list > li + li {
-  border-top: 1px solid var(--line);
-}
-.dictation-history .results {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-}
-.dictation-history .result {
-  flex: 1 1 14em;
-}
-.dictation-history .issue {
-  color: var(--rec);
 }
 
 /* Pages of grouped rows (docs/ux/design-explorations/sd-a-settings.html): Settings in the window
@@ -3008,7 +2971,6 @@ input.pg-radio:focus-visible {
 .pg-row .pg-remove:focus-visible {
   position: static;
   opacity: 1;
-  pointer-events: auto;
 }
 .pg-row:hover .pg-remove:disabled {
   opacity: 0.5;
@@ -3233,4 +3195,159 @@ meter.pg-lvl::-webkit-meter-even-less-good-value {
 }
 .dictation-server {
   margin: -8px 0 12px;
+}
+
+/* The Words and History pages under Dictation (sd-a-words.html, sd-a-history.html): a line of
+   quiet links under a panel, lists of entries whose rows open, and the history's rows, whose
+   actions show under the pointer or the keyboard, with a menu for Retry and Delete. */
+.pg-under {
+  margin: 8px 4px 0;
+}
+.pg-textlink {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--dim);
+  font-size: 12px;
+  font-weight: 400;
+  cursor: pointer;
+}
+.pg-textlink:hover {
+  color: var(--fg);
+}
+.pg-textlink .ico {
+  width: 12px;
+  height: 12px;
+}
+.pg-count {
+  font-weight: 500;
+}
+ul.pg-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.pg-list > li + li,
+.pg-list > li > .pg-row + .pg-row {
+  border-top: 1px solid var(--line);
+}
+.pg-list > li:first-child > .pg-row:first-child {
+  border-radius: 10px 10px 0 0;
+}
+.pg-list > li:last-child > .pg-row:last-child {
+  border-radius: 0 0 10px 10px;
+}
+.pg-list > li:only-child > .pg-row:only-child {
+  border-radius: 10px;
+}
+.pg-add .pg-input {
+  flex: 1;
+  width: auto;
+}
+.pg-add .pg-unit {
+  flex: none;
+}
+#dictionary-issue {
+  display: block;
+  margin: 6px 4px 0;
+  color: var(--rec);
+  font-size: 12px;
+}
+.pg-ro .pg-name,
+.pg-rest .pg-name,
+.pg-arrow {
+  color: var(--dim);
+}
+.pg-rest .pg-name {
+  font-weight: 400;
+}
+.pg-link.open .pg-more .ico {
+  transform: rotate(90deg);
+}
+.pg-empty {
+  margin: 18px 4px 0;
+}
+.hist-row .text {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+.hist-row .results {
+  display: grid;
+  gap: 6px;
+}
+.hist-row .result.retry {
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  padding-left: 10px;
+  border-left: 2px solid var(--line2);
+}
+.hist-row .pg-help.meta {
+  max-width: none;
+}
+.hist-row .pg-help .issue {
+  display: inline;
+  margin: 0;
+}
+.hist-row:hover,
+.hist-row.menu-open {
+  background: rgba(242, 243, 245, 0.03);
+}
+/* Out of the row's way until it is under the pointer or the keyboard, so the text runs the
+   row's width. */
+.hist-actions {
+  position: absolute;
+  right: 14px;
+  opacity: 0;
+}
+.hist-row:hover .hist-actions,
+.hist-row:focus-within .hist-actions,
+.hist-row.menu-open .hist-actions {
+  position: static;
+  opacity: 1;
+}
+.hist-more {
+  display: flex;
+  padding: 4px;
+  border: 0;
+  background: none;
+  color: var(--faint);
+}
+.hist-more:hover {
+  color: var(--fg);
+}
+.hist-more .ico {
+  stroke-width: 2.2;
+}
+.pg-menu.hist-menu {
+  top: 44px;
+  right: 10px;
+  width: auto;
+  min-width: 188px;
+}
+.hist-menu > button {
+  display: flex;
+  align-items: center;
+  width: 100%;
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 5px;
+  background: none;
+  color: var(--fg);
+  font-size: 12.5px;
+  font-weight: 400;
+  text-align: left;
+}
+.hist-menu > button:hover,
+.hist-menu > button:focus-visible {
+  background: var(--line2);
+}
+.hist-menu hr {
+  border: 0;
+  border-top: 1px solid #33373e;
+  margin: 4px 2px;
 }

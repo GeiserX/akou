@@ -1,8 +1,7 @@
 /**
- * The words fixed while dictating in the words to review (docs/ux/DICTATION.md DC-L5, the page
- * side): the Dictation heading, Accept and Reject answering as the chip does, Forget taking a
- * learned word back out, the count on the Dictation page, and an akou without the list showing
- * nothing. The routes are answered from the vocabulary fixture (`rig.ts`) with the shapes of
+ * The words fixed while dictating (docs/ux/DICTATION.md DC-L5, the page side): the Words page's
+ * To review section, Learn it and Ignore answering as the chip does, Forget taking a learned word
+ * back out, the count on the Dictation page, and an akou without the list showing nothing. The routes are answered from the vocabulary fixture (`rig.ts`) with the shapes of
  * `GET /vocab?dictation=true` and `POST /vocab/approve|reject {dictation: true}`. Nothing records,
  * types, pastes, prompts or plays.
  */
@@ -121,7 +120,7 @@ describe("DC-L5: reading the list", () => {
   });
 });
 
-describe("DC-L5: the Dictation heading in the words to review", () => {
+describe("DC-L5: To review on the Words page", () => {
   let rig: UiRig;
   let t: ReturnType<typeof tempDir>;
   let call = "";
@@ -135,7 +134,9 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
     t?.cleanup();
   });
 
-  const row = (term: string) => `#review-list .review-dictation li[data-term='${term}']`;
+  const row = (term: string) => `#dictionary-list .review-dictation [data-term='${term}']`;
+  const toast = (page: Page, said: string) =>
+    page.waitForFunction((x) => document.getElementById("toast")?.textContent === x, said);
 
   async function openPage(dictation?: DictationPair[]): Promise<{ page: Page; v: VocabFixture }> {
     let v: VocabFixture | null = null;
@@ -150,7 +151,7 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
   }
 
   test(
-    "the Dictation page counts the waiting terms; Open lists every pair; Accept, Reject and Forget answer as the chip does",
+    "the Dictation page counts the waiting terms; Open lists them on the Words page; Learn it, Ignore and Forget answer as the chip does",
     async () => {
       const { page, v } = await openPage(pairs());
       await page.click("#dictation-open");
@@ -164,45 +165,40 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       ).toBe(1);
 
       await page.click("#dictation-review-open");
-      await page.waitForSelector("#review[open] .review-dictation h3");
-      expect(await text(page, "#review-list .review-dictation h3")).toBe("Dictation");
-      const states = await page.$$eval("#review-list .review-dictation li[data-term]", (els) =>
+      await page.waitForSelector("#page-dictation .review-dictation .pg-row");
+      expect(await text(page, "#page-dictation h1")).toBe("Words and replacements");
+      expect(await text(page, "#dictionary-list .review-dictation .pg-sec")).toBe("To review");
+      const states = await page.$$eval("#dictionary-list .review-dictation [data-term]", (els) =>
         els.map((e) => `${e.getAttribute("data-term")}:${e.getAttribute("data-state")}`),
       );
-      expect(states).toEqual([
-        "Kubernetes:waiting",
-        "Vercel:waiting",
-        "Postgres:accepted",
-        "Kafka:rejected",
-      ]);
-      expect(await text(page, `${row("Kubernetes")} strong`)).toBe("Kubernetes");
-      expect(await text(page, row("Kubernetes"))).toContain("(heard: kubernetis, cooper netties)");
-      expect(await text(page, row("Vercel"))).toContain("the chip closed unanswered");
-      expect(await text(page, row("Kubernetes"))).toContain("waiting for your answer");
-      // The rows sit flush under the heading, as the call's rows do: no bullets, no indent.
+      // Waiting first, then learned; a term answered Not a word has nothing left to do.
+      expect(states).toEqual(["Kubernetes:waiting", "Vercel:waiting", "Postgres:accepted"]);
+      expect(await text(page, `${row("Kubernetes")} .pg-name`)).toBe("Kubernetes");
+      expect(await text(page, `${row("Kubernetes")} .pg-help`)).toBe(
+        "You changed “kubernetis” and “cooper netties” to this.",
+      );
+      expect(await text(page, `${row("Vercel")} .pg-help`)).toBe(
+        "You changed “versal” to this and left it unanswered.",
+      );
+      // Rows of one panel, as every page draws them.
       expect(
-        await page.$eval("#review-list .review-dictation ul", (e) => {
-          const c = getComputedStyle(e);
-          return [c.listStyleType, c.paddingLeft];
-        }),
-      ).toEqual(["none", "0px"]);
+        await page.locator("#dictionary-list .review-dictation .pg-grp > .pg-row").count(),
+      ).toBe(3);
       const buttons = (term: string) =>
         page.$$eval(`${row(term)} button`, (els) => els.map((e) => e.textContent));
-      expect(await buttons("Kubernetes")).toEqual(["Accept", "Reject"]);
+      expect(await buttons("Kubernetes")).toEqual(["Learn it", "Ignore"]);
       expect(await buttons("Postgres")).toEqual(["Forget"]);
-      expect(await buttons("Kafka")).toEqual([]);
+      expect(await page.locator(row("Kafka")).count()).toBe(0);
 
-      // Accept writes the term's scope: dictation entry, for every waiting heard form of it.
+      // Learn it writes the term's scope: dictation entry, for every waiting heard form of it.
       await page.click(`${row("Kubernetes")} button[data-action='approve']`);
-      await page.waitForSelector(`#review-list li[data-term='Kubernetes'][data-state='accepted']`);
+      await page.waitForSelector(`${row("Kubernetes")}[data-state='accepted']`);
       expect(v.calls.at(-1)).toEqual({
         method: "POST",
         path: "/vocab/approve",
         body: { terms: ["Kubernetes"], dictation: true },
       });
-      expect(await text(page, "#review-status")).toBe(
-        "Kubernetes is learned: dictation writes it for what you said.",
-      );
+      await toast(page, "Kubernetes is learned: dictation writes it for what you said.");
       expect(v.entries.filter((e) => e.term === "Kubernetes")).toEqual([
         expect.objectContaining({
           heard: ["kubernetis", "cooper netties"],
@@ -210,11 +206,14 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
         }),
       ]);
 
-      // Reject keeps it from being proposed again.
+      // The learned word is among your words now, too.
+      await page.waitForSelector("section[data-section='Words'] li[data-term='Kubernetes']");
+
+      // Ignore keeps it from being proposed again, and it leaves the list.
       await page.click(`${row("Vercel")} button[data-action='reject']`);
-      await page.waitForSelector(`#review-list li[data-term='Vercel'][data-state='rejected']`);
+      await page.waitForSelector(row("Vercel"), { state: "detached" });
       expect(v.calls.at(-1)?.body).toEqual({ terms: ["Vercel"], dictation: true });
-      expect(await text(page, "#review-status")).toBe("Vercel will not be proposed again.");
+      await toast(page, "Vercel will not be proposed again.");
 
       // Forget takes a learned word back out of the vocabulary.
       v.entries.push({
@@ -226,14 +225,12 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
         entryScope: "dictation",
       });
       await page.click(`${row("Postgres")} button[data-action='reject']`);
-      await page.waitForSelector(`#review-list li[data-term='Postgres'][data-state='rejected']`);
+      await page.waitForSelector(row("Postgres"), { state: "detached" });
       expect(v.entries.some((e) => e.term === "Postgres")).toBe(false);
-      expect(await text(page, "#review-status")).toBe(
-        "Postgres is out of the vocabulary and will not be proposed again.",
-      );
+      await toast(page, "Postgres is out of your words and will not be proposed again.");
 
       // Back on the Dictation page, the count follows the answers.
-      await page.click("#review-close");
+      await page.click("#page-dictation .pg-back");
       await page.waitForFunction(
         () => document.querySelector("#dictation-review-count")?.textContent === "None waiting",
       );
@@ -251,7 +248,7 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       v.refuse = '"Kubernetes" is a call word in the vocabulary file; edit it there';
       await page.click(`${row("Kubernetes")} button[data-action='approve']`);
       await until(
-        async () => (await text(page, "#review-status")).includes("call word"),
+        async () => (await text(page, "#toast")).includes("call word"),
         5000,
         "the refusal said",
       );
@@ -287,14 +284,14 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       );
       expect(await page.isEnabled(`${row("Kubernetes")} button[data-action='reject']`)).toBe(false);
       release();
-      await page.waitForSelector(`#review-list li[data-term='Kubernetes'][data-state='accepted']`);
+      await page.waitForSelector(`${row("Kubernetes")}[data-state='accepted']`);
       expect(v.calls.filter((c) => c.path === "/vocab/approve")).toHaveLength(1);
     },
     UI_TIMEOUT,
   );
 
   test(
-    "a learned term waiting again says Reject forgets it too, and Accept keeps the entry",
+    "a learned term waiting again says Ignore forgets it too, and Learn it keeps the entry",
     async () => {
       const learned = (): DictationPair[] => [
         { term: "Kubernetes", heard: "cooper netties", status: "proposed", id: "d2", at: T + 2 },
@@ -317,30 +314,26 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       expect(await page.locator(row("Kubernetes")).count()).toBe(1);
       expect(
         await page.$$eval(`${row("Kubernetes")} button`, (els) => els.map((e) => e.textContent)),
-      ).toEqual(["Accept", "Reject and forget"]);
-      expect(await text(page, row("Kubernetes"))).toContain(
-        "learned for kubernetis: Reject forgets that too",
+      ).toEqual(["Learn it", "Ignore and forget"]);
+      expect(await text(page, `${row("Kubernetes")} .pg-help`)).toBe(
+        "You changed “cooper netties” to this. Ignore also forgets “kubernetis”, learned before.",
       );
       await page.click(`${row("Kubernetes")} button[data-action='approve']`);
-      await page.waitForSelector(`#review-list li[data-term='Kubernetes'][data-state='accepted']`);
+      await page.waitForSelector(`${row("Kubernetes")}[data-state='accepted']`);
       expect(v.entries.filter((e) => e.term === "Kubernetes")).toEqual([
         expect.objectContaining({ heard: ["kubernetis", "cooper netties"] }),
       ]);
 
-      // Reject and forget says the entry left the vocabulary, as it did.
+      // Ignore and forget says the entry left your words, as it did.
       const again = await openPage(learned());
       again.v.entries.push({ ...entry });
       await again.page.click("#dictation-open");
       await again.page.click("#dictation-review-open");
       await again.page.waitForSelector(row("Kubernetes"));
       await again.page.click(`${row("Kubernetes")} button[data-action='reject']`);
-      await again.page.waitForSelector(
-        `#review-list li[data-term='Kubernetes'][data-state='rejected']`,
-      );
+      await again.page.waitForSelector(row("Kubernetes"), { state: "detached" });
       expect(again.v.entries).toEqual([]);
-      expect(await text(again.page, "#review-status")).toBe(
-        "Kubernetes is out of the vocabulary and will not be proposed again.",
-      );
+      await toast(again.page, "Kubernetes is out of your words and will not be proposed again.");
     },
     UI_TIMEOUT,
   );
@@ -353,6 +346,11 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       await page.waitForSelector("#page-dictation section[data-section='Learning']");
       // A count, not `page.$(...)` with toBeNull: that passed here with the row on the page.
       expect(await page.locator("#dictation-review-row").count()).toBe(0);
+      // Nor a To review section on the Words page.
+      await page.click("#dictation-dictionary-open");
+      await page.waitForSelector("#page-dictation #dictionary-form");
+      await page.waitForSelector("#dictionary-list > *");
+      expect(await page.locator("#dictionary-list .review-dictation").count()).toBe(0);
       // Positive control: the same page with the list shows the row.
       const withList = await openPage([]);
       await withList.page.click("#dictation-open");
@@ -363,7 +361,7 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
   );
 
   test(
-    "on a call, the call's words come first and the Dictation heading follows them",
+    "on a call, the call's words to review hold the call's words only: the dictation words are on the Words page",
     async () => {
       let v: VocabFixture | null = null;
       const page = await rig.open(call, {
@@ -391,17 +389,18 @@ describe("DC-L5: the Dictation heading in the words to review", () => {
       await page.waitForSelector("#lines .row");
       // The pill shows once the call's log proposes; the pane is what is under test here.
       await page.evaluate(() => (document.getElementById("pill-review") as HTMLElement).click());
-      await page.waitForSelector("#review[open] .review-dictation");
+      await page.waitForSelector("#review[open] #review-list li[data-term]");
       const order = await page.$$eval("#review-list > li", (els) =>
-        els.map((e) => e.getAttribute("data-term") ?? e.querySelector("h3")?.textContent),
+        els.map((e) => e.getAttribute("data-term") ?? e.textContent),
       );
-      expect(order).toEqual(["Hetzner", "Dictation"]);
+      expect(order).toEqual(["Hetzner"]);
+      expect(await page.locator("#review .review-dictation").count()).toBe(0);
     },
     UI_TIMEOUT,
   );
 });
 
-describe("DC-L5: the words to review open without a call", () => {
+describe("DC-L5: the words fixed while dictating open without a call", () => {
   let rig: UiRig;
   let t: ReturnType<typeof tempDir>;
   beforeAll(async () => {
@@ -415,7 +414,7 @@ describe("DC-L5: the words to review open without a call", () => {
   });
 
   test(
-    "Open on the Dictation page lists the dictation words and asks for no call's words",
+    "Open on the Dictation page lists them on the Words page and asks for no call's words",
     async () => {
       const asked: string[] = [];
       const page = await rig.open(undefined, {
@@ -428,12 +427,12 @@ describe("DC-L5: the words to review open without a call", () => {
       });
       await page.click("#dictation-open");
       await page.click("#dictation-review-open");
-      await page.waitForSelector("#review[open] .review-dictation h3");
+      await page.waitForSelector("#page-dictation .review-dictation .pg-row");
       expect(
-        await page.$$eval("#review-list .review-dictation li[data-term]", (els) =>
+        await page.$$eval("#dictionary-list .review-dictation [data-term]", (els) =>
           els.map((e) => e.getAttribute("data-term")),
         ),
-      ).toEqual(["Kubernetes", "Vercel", "Postgres", "Kafka"]);
+      ).toEqual(["Kubernetes", "Vercel", "Postgres"]);
       expect(asked.filter((p) => /\/calls\/[^/]+\/vocab$/.test(p))).toEqual([]);
       // Positive control: the list itself was read.
       expect(asked.some((p) => p.endsWith("/vocab"))).toBe(true);
