@@ -360,7 +360,7 @@ export const DICTATION_SCHEMA: Schema = {
   "dictation.preferBuiltInOverBluetooth": bool("The built-in mic over a Bluetooth headset."),
   "dictation.warmMic": pick(["off", "auto", "always"], "Keeps the mic open between dictations."),
   "dictation.engine": pick(["auto", "fast", "best", "remote"], "The engine."),
-  "dictation.final": pick(["parakeet", "live", "qwen"], "The text a dictation inserts."),
+  "dictation.final": pick(["live", "parakeet", "qwen"], "The text a dictation inserts."),
   "dictation.localTimeoutSeconds": int(2, 120, "How long a local best may take."),
   "dictation.remote.url": str("The remote akou.", { apiWritable: false }),
   "dictation.remote.key": str("The remote's jobs key.", { secret: true }),
