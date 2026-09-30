@@ -1,4 +1,4 @@
-# Handing calls to your own knowledge system
+# Hand-off to your knowledge system
 
 akou records, transcribes and answers questions about a call. It does not keep a library of your calls, search across them, or build a picture of your people and topics. That belongs in the system you already use: an Obsidian or Logseq vault, a Git repository of notes, a wiki, a search index. akou's job is to hand each finished call over quickly, in open formats, and to keep the copy current when you fix it.
 

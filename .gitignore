@@ -16,3 +16,6 @@ artifacts/
 *.db
 .beads-credential-key
 .beads/proxieddb/
+
+# mkdocs build output
+/site/

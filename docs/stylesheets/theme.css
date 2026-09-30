@@ -1,18 +1,18 @@
-/* docs/stylesheets/theme.css: the site takes its two colours from the banner.
+/* Match the docs to the banner and the app icon.
  *
- * mkdocs.yml sets `primary: custom` and `accent: custom`, which means Material
- * paints nothing until these variables exist. Replace the two hex values with
- * the banner's background and accent, then check the light-scheme link colour
- * against white: anything under 4.5:1 contrast is too faint for body links.
+ * banner.svg draws the akou wordmark in #f2f3f5 on #101216, with the tagline in
+ * #b8bdc6 and a #ff453a dot inside the "a". The app icon is the same mark on a
+ * #212327 to #0e1014 plate. These values keep the header, the logo and the
+ * page in one palette.
  */
 :root {
   --md-primary-fg-color: #101216; /* banner background */
-  --md-primary-fg-color--light: #212327;
+  --md-primary-fg-color--light: #212327; /* icon plate, top */
   --md-primary-fg-color--dark: #0a0b0e;
-  --md-primary-bg-color: #f2f3f5; /* text on the header */
-  --md-primary-bg-color--light: #b8bdc6;
+  --md-primary-bg-color: #f2f3f5; /* wordmark */
+  --md-primary-bg-color--light: #b8bdc6; /* tagline */
 
-  --md-accent-fg-color: #ff453a; /* banner accent */
+  --md-accent-fg-color: #ff453a; /* the dot */
   --md-accent-fg-color--transparent: #ff453a1a;
 }
 
@@ -24,15 +24,163 @@
   --md-typeset-a-color: #ff453a;
 }
 
-/* Light scheme: the accent on white is usually too faint for body links. Use
-   the same hue, darkened until it passes 4.5:1. */
+/* Light scheme: #ff453a on white is 3.1:1, too faint for body links.
+   #d70015 is the same hue at 5.4:1. */
 [data-md-color-scheme="default"] {
   --md-typeset-a-color: #d70015;
 }
 
-/* Fixed logo size so it does not crowd the site name. */
+/* Give the header logo a fixed size so it does not crowd the site name. */
 .md-header__button.md-logo img,
 .md-header__button.md-logo svg {
   height: 1.6rem;
   width: 1.6rem;
+}
+
+/* The site name, set the way the banner sets the wordmark: bold, lowercase,
+   a little tracking, the wordmark colour.
+ *
+ * Only the first topic is styled. Material puts the site name in one
+ * .md-header__topic and the page title in a second one, and swaps them on
+ * scroll. Styling both would change every page title too.
+ */
+.md-header__topic:first-child .md-ellipsis {
+  color: #f2f3f5;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: lowercase;
+}
+
+/* Keep the mark and the name close, so they read as one unit. */
+.md-header__button.md-logo {
+  padding-right: 0.2rem;
+}
+
+.md-header__title {
+  margin-left: 0.2rem;
+}
+
+/* Buttons.
+ *
+ * Material paints .md-button in --md-primary-fg-color, the header colour. On
+ * the dark page that is also the page background, so a button would show as
+ * plain text. Outline buttons take the link colour instead. */
+.md-typeset .md-button {
+  color: var(--md-typeset-a-color);
+  border-color: var(--md-typeset-a-color);
+  border-radius: 0.5rem;
+}
+
+.md-typeset .md-button:focus,
+.md-typeset .md-button:hover {
+  background-color: var(--md-typeset-a-color);
+  border-color: var(--md-typeset-a-color);
+  color: #ffffff;
+}
+
+.md-typeset .md-button--primary,
+.md-typeset .md-button--primary:focus,
+.md-typeset .md-button--primary:hover {
+  /* White on #ff453a is 3.1:1. #d70015 -> #b80012 keeps every point above 4.5:1. */
+  background: linear-gradient(90deg, #d70015 0%, #b80012 100%);
+  border-color: transparent;
+  color: #ffffff;
+}
+
+.md-typeset .md-button--primary:focus,
+.md-typeset .md-button--primary:hover {
+  box-shadow: 0 0.2rem 0.8rem #ff453a59;
+}
+
+/* Grid cards: the border picks up the accent on hover, so the cards match
+   the buttons and links. */
+.md-typeset .grid.cards > ul > li,
+.md-typeset .grid > .card {
+  border-radius: 0.5rem;
+}
+
+.md-typeset .grid.cards > ul > li:focus-within,
+.md-typeset .grid.cards > ul > li:hover,
+.md-typeset .grid > .card:focus-within,
+.md-typeset .grid > .card:hover {
+  border-color: #ff453a;
+}
+
+/* FAQ entries (??? question). Material draws them lime green, a colour that
+   appears nowhere else here; use the accent instead. */
+.md-typeset .admonition.question,
+.md-typeset details.question {
+  border-color: #ff453a;
+}
+
+.md-typeset .admonition.question:focus-within,
+.md-typeset details.question:focus-within {
+  box-shadow: 0 0 0 0.2rem #ff453a1a;
+}
+
+.md-typeset .question > .admonition-title::after,
+.md-typeset .question > summary::after {
+  color: #ff453a;
+}
+
+.md-typeset .question > .admonition-title,
+.md-typeset .question > summary {
+  background-color: #ff453a1a;
+}
+
+.md-typeset .question > .admonition-title::before,
+.md-typeset .question > summary::before {
+  background-color: #ff453a;
+}
+
+/* The home page keeps an H1 for search, screen readers and the browser tab.
+   The banner under it already shows the name, so the H1 is hidden visually.
+   Use it as: # akou { .ak-visually-hidden } */
+.md-typeset h1.ak-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Setting keys in tables, such as provider.harnessPath, must not wrap
+   mid-word. Material sets word-break: break-word on code; normal keeps a
+   name whole but still lets a long log line wrap at its spaces. */
+.md-typeset table:not([class]) code {
+  word-break: normal;
+}
+
+/* Screenshots of the window on the home page: two in a row on a wide
+   screen, one on a narrow one, each with a short caption. Every image is
+   the window at 1440x900, so the row lines up. */
+.md-typeset .ak-gallery {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.8rem;
+  margin: 1em 0;
+}
+
+.md-typeset .ak-gallery figure {
+  margin: 0;
+}
+
+.md-typeset .ak-gallery img {
+  border-radius: 0.4rem;
+  border: 1px solid #3a3f49;
+}
+
+.md-typeset .ak-gallery figcaption {
+  margin-top: 0.3rem;
+  font-size: 0.7rem;
+}
+
+@media screen and (max-width: 44.9375em) {
+  .md-typeset .ak-gallery {
+    grid-template-columns: 1fr;
+  }
 }
