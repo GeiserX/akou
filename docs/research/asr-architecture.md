@@ -247,6 +247,8 @@ Qwen's words reversed before they are cut back, the failing control, read 90.10 
 
 The per-minute cadence passes the rule on every row: its WER is equal or better (−0.64, 0.00, −1.17, −0.13), and it sends 80 to 85 % fewer requests. Its busy share is only 1 to 16 % lower, since Qwen's time follows the audio it hears, not the number of requests. What it costs is the wait: the reviewed text lands about 45 s after the words (p50) instead of 6 to 9 s, and utterances still waiting for their minute when the call ends are never reviewed live. So it is what the `upgrade` setup does now, and `auto` runs it when the Mac allows.
 
+The measured per-minute cadence also reviews the utterances left at the end of the audio, which the app does not do (they go to the final pass). That is 1 of the 4 requests on the 20-clip rows and at most 60 s of audio on the long ones. Scored at the stream's WER instead, that tail moves English 150 clips from 10.19 to about 10.35, still under per-utterance's 11.36; the rule holds on every row either way.
+
 Qwen hears a minute of speech at once, with more context than one utterance, which is the likely reason it is no worse: the per-line cut read 16.63 because a line's audio cuts words at both ends, and a minute of whole utterances cuts nothing.
 
 The stream reads worse on joined clips than on single clips (English 11.45 on 20 joined clips and 14.39 on 150, against 7.34 on the same 20 one at a time). We have not explained it; both cadences review the same stream.
