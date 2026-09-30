@@ -559,7 +559,7 @@ The agent never reads call folders from disk. There is no per-part transcript fi
 
 | Command | Does |
 |---|---|
-| `akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab TERM,…] [--live SETUP] [--without-models] [--json]` | Starts a call. Prints `{call, folder, url}` once audio is being written. `--vocab` writes call-scoped `vocab.add` events right after `call.created` (attendees, title terms). `--live` sets this call's live setup (`auto`, `parakeet`, `nemotron`, `upgrade`) instead of `asr.live` (section 3.1). Exit 75 if a call is already recording. Exit 69 (`models_missing`) until the speech models are downloaded; `--without-models` records audio only |
+| `akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system\|app:ID\|none] [--mic ID\|none] [--vocab TERM,…] [--live SETUP] [--without-models] [--attach] [--json]` | Starts a call. Prints `{call, folder, url}` once audio is being written. `--vocab` writes call-scoped `vocab.add` events right after `call.created` (attendees, title terms). `--live` sets this call's live setup (`auto`, `parakeet`, `nemotron`, `upgrade`) instead of `asr.live` (section 3.1). Exit 75 if a call is already recording; its `--json` names that call under `already_recording` (`id`, `title`, `workspace`, `startedAt`, `state`). `--attach` answers with that call instead, exit 0 and `attached: true`, and starts one only when none records. Exit 69 (`models_missing`) until the speech models are downloaded; `--without-models` records audio only |
 | `akou stop` · `pause` · `resume` · `mute` · `unmute` | Controls the live call. Exit 3 if nothing is live |
 | `akou restart [--force] [--call ID]` | New part in the same call, make before break |
 | `akou status [--json]` | App, live call, health, recognizer lag, models in use, provider state, share state |
@@ -596,7 +596,7 @@ Exit codes: 0 ok, 3 nothing live, 64 usage, 65 a vocabulary term fails validatio
 | Method and path | Purpose |
 |---|---|
 | `GET /status` | As `akou status`. Always 200 |
-| `POST /calls` `{workspace, title, template, call, mic, withoutModels}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call}` · `403 permission` · `503 capture_failed {stage, error}` · `503 models_missing` until the speech models are there, unless `withoutModels` |
+| `POST /calls` `{workspace, title, template, call, mic, withoutModels, attach}` | `201 {call, folder, firstAudioMs}` · `409 already_recording {call, already_recording}` · with `attach`, `200 {call, attached: true, title, workspace, startedAt, state, part, folder}` for the call already recording · `403 permission` · `503 capture_failed {stage, error}` · `503 models_missing` until the speech models are there, unless `withoutModels` |
 | `GET /models` · `POST /models/pull` | The speech models on disk (`missing`, `downloading` with bytes, `ready`, `failed`); the first-run download, answered at once (`202`) and followed with `GET /models` |
 | `GET /calls?workspace&limit&failed` | Metadata list |
 | `GET /calls/{id\|live\|last}` | Header, parts, roster, health, final state. `live` gives 404 `no_live_call {last}` when nothing is recording |
@@ -647,7 +647,7 @@ The CI security job starts the app headless with a fake helper, loads a page on 
 
 | Tool | Purpose |
 |---|---|
-| `akou_start {workspace?, title?, template?, call?, vocab?}` | Start; returns `{call, url}` once audio is being written. `vocab` is a list of call-scoped words (attendees, title terms) |
+| `akou_start {workspace?, title?, template?, call?, vocab?}` | Start; returns `{call, url}` once audio is being written. `vocab` is a list of call-scoped words (attendees, title terms). A call already recording is returned instead, with `attached: true`: the agent follows it, never a dead end |
 | `akou_stop`, `akou_pause`, `akou_resume`, `akou_mute`, `akou_unmute`, `akou_restart {force?}` | Controls |
 | `akou_status` | Live or not, health, lag, models, provider, share |
 | `akou_context {question, call = "live", budget = 6000}` | The pack. The main tool for answering |
@@ -668,7 +668,7 @@ Tool descriptions carry the rules: cite wall time, never quote a draft line as f
 
 `skills/akou/SKILL.md` triggers on "record this call/meeting", starting a call, or questions about what is being said. Its rules, in order:
 
-1. **Start first.** The first tool call is `akou start -w <workspace> -t "<title>"` (or `akou_start`). No status probe, no planning turn. Exit 75 means a call is already recording. Tell the user they can also press the hotkey or type `! akou start`.
+1. **Start first.** The first tool call is `akou start --attach -w <workspace> -t "<title>"` (or `akou_start`). No status probe, no planning turn. A call already recording comes back with `attached: true`, and the agent follows it (answers, reads, notes) as if it had started it. Tell the user they can also press the hotkey or type `! akou start`.
 2. Remind the user once about consent when outside people are on the call.
 3. **To answer**, call `akou_context` with the user's question verbatim. Never read files under the recordings root. Answer from the pack, cite `[15:41 Ben]`, never present an offset as a time of day, never quote a `DRAFT` line as fact. If the pack says `ENDED`, say the call ended and when.
 4. When the user names someone, call `akou_name_speaker` at once. When the user states how a word is spelled ("it's Vercel, not versal"), call `akou_vocab_add` with `scope: call` at once; if the user wants it kept, add it to the workspace. When you learn something you will need later, call `akou_remember`.

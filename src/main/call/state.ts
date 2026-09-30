@@ -87,6 +87,19 @@ export const DEFAULT_BUDGETS: CallBudgets = {
   flushMs: 5_000,
 };
 
+/**
+ * The call that is recording, as a refused start names it: enough for an agent to follow it
+ * (`akou start --attach`, `akou_start`) without a second request.
+ */
+export interface LiveBrief {
+  id: string;
+  title: string;
+  workspace: string;
+  /** Epoch ms of its first audio, or of its creation while it is still starting. */
+  startedAt: number;
+  state: string;
+}
+
 /** An answer the API layer maps one to one onto HTTP (DESIGN 6.2). */
 export type Outcome<T extends object = object> =
   | ({ ok: true } & T)
@@ -98,13 +111,14 @@ export type Outcome<T extends object = object> =
       stage?: string;
       call?: string;
       last?: { id: string; title: string; endedAt: number | null } | null;
+      already_recording?: LiveBrief;
     };
 
 export function fail(
   status: number,
   code: string,
   error: string,
-  extra: { stage?: string; call?: string } = {},
+  extra: { stage?: string; call?: string; already_recording?: LiveBrief } = {},
 ): Extract<Outcome, { ok: false }> {
   return { ok: false, status, code, error, ...extra };
 }

@@ -176,10 +176,12 @@ function operation(method: string, path: string, d: RouteDoc): OpenApiOperation 
     ...(parameters.length > 0 ? { parameters } : {}),
     ...(d.body && method !== "GET" ? { requestBody: requestBody(d.body) } : {}),
     responses: {
-      [String(d.ok)]: {
-        description: STATUS_TEXT[d.ok] ?? "Success",
-        content: { [media]: { schema } },
-      },
+      ...Object.fromEntries(
+        [d.ok, ...(d.alsoOk ?? [])].map((status) => [
+          String(status),
+          { description: STATUS_TEXT[status] ?? "Success", content: { [media]: { schema } } },
+        ]),
+      ),
       default: { $ref: "#/components/responses/Error" },
     },
     // An anonymous route overrides the file's one security requirement with none.

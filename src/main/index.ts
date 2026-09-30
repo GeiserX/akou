@@ -115,9 +115,9 @@ import {
 } from "./asr/models.ts";
 import { DIARIZE_HELPER_NAME } from "./asr/nemotron.ts";
 import { QwenEngine } from "./asr/qwen.ts";
-import type { CallController, StartOk } from "./call/call.ts";
+import type { CallController } from "./call/call.ts";
 import { partFile } from "./call/folder.ts";
-import { CallManager, type StartRequest } from "./call/manager.ts";
+import { CallManager, type StartAnswer, type StartRequest } from "./call/manager.ts";
 import { fail, type Outcome } from "./call/state.ts";
 import { type CaptureEngine, type Clock, realClock, withDeadline } from "./capture/engine.ts";
 import { AkouCaptureEngine, findHelper, locateHelper } from "./capture/helper.ts";
@@ -1808,8 +1808,10 @@ export class AkouApp implements ApiApp {
     }
   }
 
-  async start(req: StartRequest): Promise<Outcome<StartOk>> {
+  async start(req: StartRequest): Promise<Outcome<StartAnswer>> {
     const r = await this.startCall(req);
+    // An attach started nothing: no "started" and no "refused" banner for it.
+    if (r.ok && r.attached) return r;
     const by = req.by ?? "user";
     this.announce(
       r.ok
@@ -1819,8 +1821,13 @@ export class AkouApp implements ApiApp {
     return r;
   }
 
-  private async startCall(req: StartRequest): Promise<Outcome<StartOk>> {
+  private async startCall(req: StartRequest): Promise<Outcome<StartAnswer>> {
     if (this.quitting) return fail(503, "quitting", "akou is quitting");
+    // An attach to the live call starts nothing, so the start checks below do not apply to it.
+    if (req.attach) {
+      const attached = await this.manager.attachLive();
+      if (attached) return attached;
+    }
     this.recognizerOnNewModels();
     // Without the speech models a call records audio that nothing transcribes: only when asked.
     const ready =

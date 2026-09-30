@@ -148,7 +148,7 @@ One meaning per code, the same in every command. The codes are sysexits, which h
 | 65 | A vocabulary term fails validation | `akou vocab add` with a term that fails the checks |
 | 69 | Something needed is unavailable | The app cannot be reached or launched; speech models missing; no provider answered (`ask` still prints the excerpts); a command not built yet; `akou wait --for final.done` on a call whose final pass cannot run |
 | 70 | akou failed | A bug; a stage that failed, reported by `akou wait` |
-| 75 | Already recording | `akou start` while a call is live |
+| 75 | Already recording | `akou start` while a call is live, unless `--attach`, which answers with that call and exits 0 |
 | 77 | Permission | The token is refused; an OS grant is missing; `akou serve` in server mode with a data or models folder it cannot write |
 | 78 | The settings refuse it | `akou serve` with `api.bind` not loopback and `server.behind_proxy` false (sysexits `EX_CONFIG`) |
 | 124 | Timed out | `akou wait --timeout` ran out (the GNU `timeout` convention, PG-S5) |
@@ -178,7 +178,7 @@ A few of the texts, as they should read:
 |---|---|---|
 | App not running (`status`) | `akou is not running` | `akou open` (starts the app and shows the window; never `akou start`) |
 | Speech models missing (`start`) | `the speech models are not downloaded yet (2.6 GB)` | `akou models pull`, or `akou start --without-models` to record audio now and transcribe later |
-| Already recording | `already recording "Weekly sync" since 14:31` | `akou stop`, or `akou restart` for a new part |
+| Already recording | `a call is already recording: "Weekly sync" in work since 14:31 (ID)` | `akou start --attach` to follow it, `akou stop`, or `akou restart` for a new part |
 | No provider answered (`ask`) | `no model answered (usage limit reached); the excerpts above are what matched` | `akou context "Q"` prints what an agent answers from |
 | Unknown setting | `unknown setting "asr.segmentPuase"` | `akou config set asr.segmentPause …` (CLI-09) |
 | Token refused | `the API refused the token` | `akou token rotate` |

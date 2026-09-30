@@ -244,9 +244,21 @@ A note's marker (`- `, `[] `, `? `, `# `) is drawn as a glyph before the text, a
 
 The column shows one question and its answer: the last one asked here, or, until one is, the call's last answered question from the log, marked with who asked it when an agent did. The answer card is in the agent's colour; its citations are chips that scroll to the line and play it. Enter asks; the presets are a menu on the input (arrow keys move, Escape closes), never a row of buttons.
 
+With no assistant set up, the same box is a search of the call. It reads "Search this call" behind a plain magnifier, with no presets, and what comes back is only the lines that contain the words, under the muted label "Excerpts from the call", with each excerpt's time and speaker as a chip, or "No line has these words." when none does. There is no answer card and no reason: nothing failed. A search writes nothing to the call, so it never shows up as a question in the context an agent reads later. "Speaker 2 is Ben" still names the speaker. "Copy context for my agent" stays under the excerpts. Until akou says whether an assistant is set up, the box shows neither Ask's words nor Search's. As soon as an assistant is set up, the box is Ask again. What shipped: [the search box](design-explorations/built/ow-2-search-dark.png), [its excerpts](design-explorations/built/ow-2-search-excerpts-dark.png), [a search that matches nothing](design-explorations/built/ow-2-search-miss-dark.png) and [Ask with an assistant](design-explorations/built/ow-2-ask-dark.png).
+
+```
+ [ ⌕ Search this call                              ↵ ]
+ ─────────────────────────────────────────────────────
+ the build
+ Excerpts from the call
+   [15:41 Ben]  15:41:07 Ben: we should move the build to the new box
+ [ Copy context for my agent ]
+```
+
 | ID | Feature | P | From | Accept | Today |
 |---|---|---|---|---|---|
 | W6.6 | Ask box, presets, evidence within 300 ms, streamed answer, clickable citations, "Copy context for my agent" when no provider | done | DESIGN 5.3, 7 | Existing tests | has |
+| W6.25 | With no assistant, the ask box is "Search this call": no presets, only the lines that match under one muted label ("No line has these words." for none), no answer card and no reason naming a setting, and nothing written to the call; with one, it is Ask | done | Owner: each question runs on the configured provider, and none means excerpts | `tests/ui/window.test.ts` "the ask box with no assistant": the words, the magnifier, no presets, the label, no answer card, no line ids, and a citation that leads to its line; a miss shows no lines and the call's log gains no `ask`; it fails when the box ignores the provider or searches through Ask. The ask box test checks the Ask words with a provider | has |
 | W6.7 | Stop a running answer | P1 | Audit | Stop aborts the provider process; the log has the partial `answer` marked stopped; the box is ready for the next question | missing |
 | W6.8 | Past questions and answers of the call are drawn from the log on open and on call switch | P1 | Audit: they vanish on switch; intent: the log is the truth | Ask, switch calls, switch back: the Q&A is there; answers an agent asked through MCP are listed too, marked by client | partial: the last answered one shows, marked by client |
 | W6.9 | Copy an answer (with citations as `[15:41 Ben]`) | P1 | Granola, audit | Copy puts the answer text on the clipboard with wall-time citations | missing |
@@ -473,7 +485,7 @@ The interface language is a setting (`app.language`: system, en, es). Transcript
 | Recording, disk | n/a | n/a | amber banner at the low-disk threshold: "Disk almost full: about N minutes left", then the stop reason `low-disk` in the call header if it runs out |
 | Calls list | the default workspace with "No calls yet"; a search that matches nothing says so | skeleton rows | "Could not read the recordings folder: reason" with Open Settings |
 | Notes | the input's placeholder, "Type a note, Enter to add it", with the markers as hints under it | n/a | save failed: the line stays in the input with "Not saved. Retry" |
-| Ask | the input with its presets menu, and the call's last answered question if it has one | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has) |
+| Ask | the input with its presets menu, and the call's last answered question if it has one; with no assistant, "Search this call" with no presets | evidence cards within 300 ms, then the stream | the reason stated, excerpts kept, "Copy context for my agent" (has); with no assistant the excerpts are the reply, labelled, with no reason |
 | Final pass | n/a | progress bar (has) | "Improving the transcript failed: reason" with Retry |
 | Models | the welcome with each model, its size and the one Download (has) | bar, bytes of the total, percentage, file (has); speed and time left | the reason with Try again (has) |
 | Settings | n/a | n/a | the registry's refusal per key (has) |

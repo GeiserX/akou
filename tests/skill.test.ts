@@ -94,6 +94,9 @@ describe("the skill text", () => {
       "ENDED",
       "Never read files under the recordings folder",
       "akou_status",
+      // A call already recording is followed, never a dead end (OW-2).
+      "--attach",
+      "attached: true",
     ]) {
       expect(SKILL).toContain(must);
     }

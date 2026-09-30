@@ -129,11 +129,53 @@ describe("starting a call", () => {
     const id = await live();
     const r = await rig.api("POST", "/calls", { title: "Other" });
     expect(r.status).toBe(409);
+    const detail = (await rig.api("GET", `/calls/${id}`)).body;
     expect(r.body).toEqual({
       error: "already_recording",
       message: "a call is already recording",
       call: id,
+      already_recording: {
+        id,
+        title: detail.title,
+        workspace: detail.workspace,
+        startedAt: detail.startedAt,
+        state: "recording",
+      },
     });
+  });
+
+  test("with attach, a start answers 200 with the live call and starts nothing (OW-2)", async () => {
+    const id = await live();
+    const before = (await rig.api("GET", "/calls")).body.calls.length;
+    const r = await rig.api("POST", "/calls", { title: "Other", attach: true });
+    expect(r.status).toBe(200);
+    const detail = (await rig.api("GET", `/calls/${id}`)).body;
+    expect(r.body).toEqual({
+      call: id,
+      attached: true,
+      title: detail.title,
+      workspace: detail.workspace,
+      startedAt: detail.startedAt,
+      state: "recording",
+      part: 1,
+      folder: detail.folder,
+      url: `akou://call/${id}`,
+    });
+    expect((await rig.api("GET", "/calls")).body.calls.length).toBe(before);
+    // An attach started nothing and refused nothing: no "started" or "refused" banner for it.
+    const told: unknown[] = [];
+    const off = rig.app.onAnnounce((a) => told.push(a));
+    try {
+      expect((await rig.api("POST", "/calls", { attach: true })).status).toBe(200);
+      expect(told).toEqual([]);
+      expect((await rig.api("POST", "/calls", {})).status).toBe(409);
+      expect(told).toMatchObject([{ what: "start", ok: false, code: "already_recording" }]);
+    } finally {
+      off();
+    }
+    // attach is a boolean like every other flag.
+    const bad = await rig.api("POST", "/calls", { attach: "yes" });
+    expect(bad.status).toBe(400);
   });
 
   test("bad bodies: an unknown field, a bad workspace, a bad vocabulary word", async () => {

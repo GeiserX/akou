@@ -890,6 +890,15 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
           provider.answer = () => `Ben said to move the build [${minute} Ben].`;
           // Ask is always on screen, above Notes: no tab to open first.
           expect(await page.locator("#ask-input").isVisible()).toBe(true);
+          // With an assistant the box asks (OW-2): its words say so.
+          await until(
+            async () =>
+              (await page.getAttribute("#ask-input", "placeholder")) === "Ask about this call",
+            5000,
+            "the ask box's words",
+          );
+          expect(await page.getAttribute("#ask-form", "aria-label")).toBe("Ask about this call");
+          expect(await page.getAttribute("#ask-form", "class")).not.toContain("unset");
           expect(await page.locator("#ask-presets").isVisible()).toBe(false);
           // The presets are a menu on the input.
           await page.click("#ask-presets-open");
@@ -1008,6 +1017,92 @@ describe("the ask box (DESIGN 5.3, 5.4)", () => {
     },
     UI_TIMEOUT,
   );
+});
+
+describe("the ask box with no assistant (OW-2)", () => {
+  test(
+    "it reads Search this call, has no suggested questions, and shows the excerpts under one label, never an answer card",
+    async () => {
+      let id = "";
+      // No provider passed: the rig's config says `provider.kind` none.
+      await withRig(
+        {
+          seed: (home) => {
+            id = seedCall(home, standardCall).id;
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(id);
+          await page.waitForSelector("#lines .row >> nth=3");
+          await until(
+            async () =>
+              (await page.getAttribute("#ask-input", "placeholder")) === "Search this call",
+            5000,
+            "the search box",
+          );
+          expect(await page.getAttribute("#ask-form", "aria-label")).toBe("Search this call");
+          expect(await page.getAttribute("#ask-go", "title")).toBe("Search (Enter)");
+          expect(await page.locator("#ask-presets-open").isVisible()).toBe(false);
+          expect(await page.locator("#ask-form .ico.find").isVisible()).toBe(true);
+          expect(await page.locator("#ask-form .ico.agent").isVisible()).toBe(false);
+          await page.fill("#ask-input", "the build");
+          await page.keyboard.press("Enter");
+          await page.waitForSelector("#ask-out .card");
+          await until(
+            async () => (await text(page, "#ask-out .found")) === "Excerpts from the call",
+            5000,
+            "the label",
+          );
+          await page.waitForSelector("#ask-out .copy-context");
+          expect(await page.locator("#ask-out .a-card").count()).toBe(0);
+          expect(await text(page, "#ask-out .question")).toBe("the build");
+          const out = await text(page, "#ask-out");
+          expect(out).toContain("we should move the build to the new box");
+          // No reason naming a setting, no "No answer", no line ids.
+          for (const bad of ["provider", "No answer", "No model", "#l0"]) {
+            expect(out).not.toContain(bad);
+          }
+          // The excerpt's citation still leads to its line.
+          await page.click("#ask-out .card-cite button.cite >> nth=0");
+          await page.waitForSelector("#lines .row.flash");
+          // Only lines that contain the words: a miss shows none, never the call's last lines.
+          await page.fill("#ask-input", "banana kubernetes");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await text(page, "#ask-out .found")) === "No line has these words.",
+            5000,
+            "the miss",
+          );
+          expect(await page.locator("#ask-out .card").count()).toBe(0);
+          expect(await text(page, "#ask-out")).not.toContain("thanks");
+          // A search writes nothing to the call: no question an agent would read later.
+          expect((await events(rig, id)).filter((e) => e.type === "ask")).toEqual([]);
+          // "Speaker 2 is Ben" still names the speaker from the search box.
+          await page.fill("#ask-input", "c2 is Ben");
+          await page.keyboard.press("Enter");
+          await until(
+            async () => (await text(page, "#ask-out .found")) === "c2 is now named Ben.",
+            5000,
+            "the naming",
+          );
+          expect((await events(rig, id)).filter((e) => e.type === "speaker.name")).toMatchObject([
+            { spk: "c2", name: "Ben" },
+          ]);
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test("until the first status says which, the box shows neither Ask's words nor Search's", () => {
+    const html = readFileSync(join(import.meta.dir, "../../src/ui/index.html"), "utf8");
+    expect(html).toContain('<form id="ask-form" class="unset"');
+    expect(html).toMatch(/<input id="ask-input" placeholder=""/);
+    const css = readFileSync(join(import.meta.dir, "../../src/ui/theme.css"), "utf8");
+    expect(css).toMatch(
+      /#ask-form\.unset > \.ico,\s*#ask-form\.unset > #ask-presets-open \{\s*visibility: hidden;/,
+    );
+  });
 });
 
 describe("the side column (WINDOW section 6)", () => {

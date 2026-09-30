@@ -12,10 +12,17 @@
  * Presets, in a small menu on the input: "Catch me up", "Was my name mentioned?", "Decisions so
  * far", "Action items", and "What did <speaker> say?" for each named speaker. Everything shown is
  * text, never markup.
+ *
+ * With no assistant (`provider.kind` none) the box is a search of the call: it reads "Search this
+ * call", has no suggested questions, and shows only the lines that match, labelled as excerpts,
+ * with no answer card and no reason naming a setting. A search writes nothing to the call. Until
+ * the first status says which, the box shows neither Ask's words nor Search's. With an assistant
+ * it is Ask again.
  */
 
 import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
+import { parseNaming } from "../main/query/classify.ts";
 import { byId, h, replace, toast } from "./dom.ts";
 import { presets, resolveTimeCitation, splitCitations } from "./model.ts";
 import type { AskAnswer, Transport } from "./protocol.ts";
@@ -69,9 +76,23 @@ export function citedText(
   return out;
 }
 
+/** The box's words when an assistant answers, and when it only searches the call. */
+const WORDS = {
+  ask: { box: "Ask about this call", field: "Question", go: "Ask" },
+  search: { box: "Search this call", field: "Words to find", go: "Search" },
+} as const;
+
+/** An excerpt line as the pack renders it, `#l000031 15:41:07 Ben: text`, without the line id. */
+export function excerptLine(line: string): string {
+  return line.replace(/^#[lf]\d{6,} /, "");
+}
+
 export class AskPane {
   private readonly form = byId<HTMLFormElement>("ask-form");
   private readonly input = byId<HTMLInputElement>("ask-input");
+  private readonly go = byId<HTMLButtonElement>("ask-go");
+  /** No assistant: the box searches the call instead of asking it. Null until the first status. */
+  private searching: boolean | null = null;
   private readonly menuButton = byId<HTMLButtonElement>("ask-presets-open");
   private readonly presetsBox = byId("ask-presets");
   private readonly out = byId("ask-out");
@@ -116,6 +137,22 @@ export class AskPane {
     this.form.addEventListener("focusout", (e) => {
       if (e.relatedTarget && !this.form.contains(e.relatedTarget as Node)) this.menu(false);
     });
+  }
+
+  /** Search when no assistant is set up, Ask when one is (the status's `provider.id`). */
+  setSearch(on: boolean): void {
+    if (on === this.searching) return;
+    this.searching = on;
+    const w = on ? WORDS.search : WORDS.ask;
+    this.form.classList.remove("unset");
+    this.form.classList.toggle("search", on);
+    this.form.setAttribute("aria-label", w.box);
+    this.input.placeholder = w.box;
+    this.input.setAttribute("aria-label", w.field);
+    this.go.title = `${w.go} (Enter)`;
+    const label = this.go.querySelector(".vh");
+    if (label) label.textContent = w.go;
+    if (on) this.menu(false);
   }
 
   private menu(open: boolean): void {
@@ -209,6 +246,37 @@ export class AskPane {
     return { root, cards, status, answer };
   }
 
+  /** The excerpts as cards: each with its citation chip, then its lines. */
+  private cards(excerpts: readonly { citation: string; lines: string[] }[]): HTMLElement[] {
+    return excerpts.map((x) =>
+      h(
+        "article",
+        { class: "card" },
+        h("div", { class: "card-cite" }, ...citedText(x.citation, this.d.view(), [], this.d.cite)),
+        ...x.lines.map((l) => h("p", {}, excerptLine(l))),
+      ),
+    );
+  }
+
+  /** "Copy context for my agent": the pack, for the user's own agent when akou has none. */
+  private copyContext(ctx: string): HTMLElement {
+    return h(
+      "button",
+      {
+        class: "copy-context",
+        type: "button",
+        on: {
+          click: () =>
+            void navigator.clipboard.writeText(ctx).then(
+              () => toast("The context is on the clipboard: paste it to your agent.", "info"),
+              () => toast("The clipboard is not available here."),
+            ),
+        },
+      },
+      "Copy context for my agent",
+    );
+  }
+
   ask(question: string): void {
     const q = question.trim();
     const call = this.d.call();
@@ -216,6 +284,10 @@ export class AskPane {
     this.running?.cancel();
     this.input.value = "";
     this.shown = null;
+    if (this.searching) {
+      this.search(call, q);
+      return;
+    }
     const { root, cards, status, answer } = this.block(q);
     answer.classList.add("streaming");
     status.textContent = "Looking in the call…";
@@ -224,21 +296,7 @@ export class AskPane {
     let streamed = "";
     this.running = this.d.t.ask(call, q, {
       excerpts: (data) => {
-        replace(
-          cards,
-          ...data.excerpts.map((x) =>
-            h(
-              "article",
-              { class: "card" },
-              h(
-                "div",
-                { class: "card-cite" },
-                ...citedText(x.citation, this.d.view(), [], this.d.cite),
-              ),
-              ...x.lines.map((l) => h("p", {}, l)),
-            ),
-          ),
-        );
+        replace(cards, ...this.cards(data.excerpts));
         status.textContent = "Asking…";
       },
       token: (t) => {
@@ -268,27 +326,7 @@ export class AskPane {
               : "The excerpts below are what matched.",
           ),
         );
-        if (a.context) {
-          const ctx = a.context;
-          answer.append(
-            h(
-              "button",
-              {
-                class: "copy-context",
-                type: "button",
-                on: {
-                  click: () =>
-                    void navigator.clipboard.writeText(ctx).then(
-                      () =>
-                        toast("The context is on the clipboard: paste it to your agent.", "info"),
-                      () => toast("The clipboard is not available here."),
-                    ),
-                },
-              },
-              "Copy context for my agent",
-            ),
-          );
-        }
+        if (a.context) answer.append(this.copyContext(a.context));
       },
       error: (e) => {
         this.running = null;
@@ -296,5 +334,83 @@ export class AskPane {
         status.textContent = `The question failed: ${e.message}`;
       },
     });
+  }
+
+  /**
+   * No assistant: the words are a search of the call (`GET /calls/{id}/search`), which writes
+   * nothing to the call and shows only lines that match, under one muted label, never an answer
+   * card. "Speaker 2 is Ben" still names the speaker. "Copy context for my agent" copies the pack
+   * of `POST /calls/{id}/context`, which changes nothing either.
+   */
+  private search(call: string, q: string): void {
+    const found = h(
+      "p",
+      { class: "found", attrs: { "aria-live": "polite" } },
+      "Looking in the call…",
+    );
+    const cards = h("div", { class: "evidence" });
+    const root = h(
+      "section",
+      { class: "qa search" },
+      h("p", { class: "question" }, q),
+      found,
+      cards,
+    );
+    replace(this.out, root);
+    const failed = (message: string) => {
+      found.textContent = `The search failed: ${message}`;
+      found.classList.add("failed");
+    };
+    if (parseNaming(q)) {
+      this.running = this.d.t.ask(call, q, {
+        excerpts: () => {},
+        token: () => {},
+        answer: (a: AskAnswer) => {
+          this.running = null;
+          found.textContent = a.text;
+        },
+        error: (e) => {
+          this.running = null;
+          failed(e.message);
+        },
+      });
+      return;
+    }
+    let cancelled = false;
+    const run = { cancel: () => (cancelled = true) };
+    this.running = run;
+    const path = `/calls/${encodeURIComponent(call)}`;
+    void this.d.t
+      .request<{ hits?: { citation: string; lines: string[] }[]; message?: string }>(
+        "GET",
+        `${path}/search?q=${encodeURIComponent(q)}`,
+      )
+      .then(
+        (r) => {
+          if (cancelled) return;
+          if (this.running === run) this.running = null;
+          if (r.status !== 200 || !r.body?.hits) {
+            failed(r.body?.message ?? `HTTP ${r.status}`);
+            return;
+          }
+          const hits = r.body.hits;
+          replace(cards, ...this.cards(hits));
+          found.textContent =
+            hits.length > 0 ? "Excerpts from the call" : "No line has these words.";
+          // The pack is fetched now, not on the click: WebKit copies only inside the click itself.
+          void this.d.t.request<{ pack?: string }>("POST", `${path}/context`, { question: q }).then(
+            (c) => {
+              if (!cancelled && c.status === 200 && typeof c.body?.pack === "string")
+                root.append(this.copyContext(c.body.pack));
+            },
+            () => {},
+          );
+        },
+        (err: Error) => {
+          if (cancelled) return;
+          if (this.running === run) this.running = null;
+          failed(err.message);
+        },
+      );
   }
 }

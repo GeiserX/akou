@@ -339,6 +339,8 @@ class App {
     this.status = s;
     titleBar(this.t.kind === "window" && s.app.platform === "darwin");
     this.modelsCard.update(s.models, true);
+    // With no assistant the ask box searches the call instead (OW-2).
+    this.askPane.setSearch(s.provider?.id === "none");
     this.livePicker.follow(s.live);
     // The live menu reads its models again when the speech models or the live call change.
     const liveKey = JSON.stringify([s.models?.state, s.live?.call, s.live?.setup]);

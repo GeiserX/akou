@@ -10,8 +10,8 @@
 import type { EventDraft, LogEvent } from "../../core/log/events.ts";
 import type { AcceleratorState } from "../asr/accelerator.ts";
 import type { ModelsStatus } from "../asr/models.ts";
-import type { CallController, StartOk } from "../call/call.ts";
-import type { CallManager, StartRequest } from "../call/manager.ts";
+import type { CallController } from "../call/call.ts";
+import type { CallManager, StartAnswer, StartRequest } from "../call/manager.ts";
 import type { Outcome } from "../call/state.ts";
 import type { HookStage, LoadedConfig, SettingKey, SettingValue } from "../config/schema.ts";
 import type { ExportResult } from "../handoff/export.ts";
@@ -108,7 +108,7 @@ export interface ApiApp {
   /** Stops one model's download; false when it is not downloading. */
   cancelModel?(id: string, by: string): boolean;
   /** `POST /calls`: reads the workspace's vocabulary, then starts the call. */
-  start(req: StartRequest): Promise<Outcome<StartOk>>;
+  start(req: StartRequest): Promise<Outcome<StartAnswer>>;
   /** The controller of a known call id (loaded from disk if needed). Throws 404 otherwise. */
   call(id: string): Promise<CallController>;
   /** The query engine over a call's view, kept per call so its index updates incrementally. */
