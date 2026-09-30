@@ -19,7 +19,11 @@ import { parseVocab } from "../../src/main/vocab/files.ts";
 import { DRAFT_SIZE, PILL_SIZE } from "../../src/main/window/shell.ts";
 import { APP_RULE_GLOBAL, NEXT_APP_LABEL, NEXT_APP_WAITING } from "../../src/ui/dictation-apps.ts";
 import { CHIP_ASK_MS, CHIP_UNDO_MS } from "../../src/ui/dictation-chip.ts";
-import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
+import {
+  type DictionaryEntry,
+  isReplacement,
+  WORDS_SHOWN,
+} from "../../src/ui/dictation-dictionary.ts";
 import { type DictationRow, HISTORY_PAGE } from "../../src/ui/dictation-history.ts";
 import { type CaptureInput, readMics } from "../../src/ui/dictation-mic.ts";
 import {
@@ -28,11 +32,13 @@ import {
   type DictationGrants,
   dictationKeys,
   ENABLE_KEY,
+  HISTORY_KEYS,
   onDictationPage,
 } from "../../src/ui/dictation-page.ts";
 import type { DraftOpen } from "../../src/ui/dictation-protocol.ts";
 import { HOLD_ALONE_MS } from "../../src/ui/dictation-recorder.ts";
 import { lowMarks, shiftMarks } from "../../src/ui/draft.ts";
+import { dayLabel, localZone } from "../../src/ui/model.ts";
 import { PREVIEW_CHARS, previewParts } from "../../src/ui/pill.ts";
 import { type PillState, pillPreview } from "../../src/ui/pill-protocol.ts";
 import type { Transport } from "../../src/ui/protocol.ts";
@@ -1143,6 +1149,8 @@ describe("DC-U1: the Dictation page in the window", () => {
   const advancedKeys = ADVANCED_PAGE.groups
     .flatMap((g) => g.keys)
     .filter((k) => !k.startsWith("#"));
+  /** The keys drawn on a page under this one: Advanced, and History's two. */
+  const elsewhere = [...advancedKeys, ...HISTORY_KEYS];
 
   test(
     "akou-5v8: the languages are chips with a list to add one, and each change saves the whole list",
@@ -1206,7 +1214,7 @@ describe("DC-U1: the Dictation page in the window", () => {
       const main = await keys();
       expect(main.sort()).toEqual(
         Object.keys(DICTATION_SCHEMA)
-          .filter((k) => !advancedKeys.includes(k))
+          .filter((k) => !elsewhere.includes(k))
           .sort(),
       );
       const words = (await page.textContent("#page-dictation")) ?? "";
@@ -1264,16 +1272,35 @@ describe("DC-U1: the Dictation page in the window", () => {
       await until(() => f.patches.length === before + 1, 5000, "the switch saved");
       expect(f.patches.at(-1)).toEqual({ "dictation.glossary": "on" });
 
-      // Delete all asks once more before it acts.
-      await page.click("#dictations-delete");
-      expect(f.deletes).toBe(0);
-      await page.click("#dictations-delete");
-      await until(() => f.deletes === 1, 5000, "the delete");
-
       // The back link leads to the page, with the keyboard on the row it came through.
       await page.click("#page-dictation .pg-back");
       await page.waitForSelector("#page-dictation section[data-section='Keys']");
       expect(await page.evaluate(() => document.activeElement?.id)).toBe("dictation-advanced");
+
+      // History holds how long dictations and their audio are kept, and Delete all.
+      await page.click("#dictation-history-open");
+      await page.waitForSelector("#page-dictation #dictation-history-q");
+      expect(await text(page, "#page-dictation h1")).toBe("History");
+      expect((await keys()).sort()).toEqual([...HISTORY_KEYS].sort());
+      expect(await page.getAttribute("#set-dictation-keepAudio", "role")).toBe("switch");
+      // Delete all asks once more before it acts.
+      expect(await text(page, "#dictations-delete")).toBe("Delete all dictations…");
+      await page.click("#dictations-delete");
+      expect(f.deletes).toBe(0);
+      // The first press arms it, and it looks like the press that deletes.
+      expect(await page.getAttribute("#dictations-delete", "class")).toContain("armed");
+      await page.click("#dictations-delete");
+      await until(() => f.deletes === 1, 5000, "the delete");
+      expect(await page.getAttribute("#dictations-delete", "class")).not.toContain("armed");
+      // A value typed and left by the back link is saved once, and the row that led here says it.
+      const kept = f.patches.length;
+      await page.fill(on("dictation.retainDays"), "7");
+      await page.click("#page-dictation .pg-back");
+      await page.waitForSelector("#page-dictation section[data-section='Keys']");
+      expect(await page.evaluate(() => document.activeElement?.id)).toBe("dictation-history-open");
+      expect(await text(page, "#dictation-history-open .pg-value")).toBe("Kept 7 days");
+      await new Promise((r) => setTimeout(r, 300));
+      expect(f.patches.slice(kept)).toEqual([{ "dictation.retainDays": 7 }]);
     },
     UI_TIMEOUT,
   );
@@ -1302,7 +1329,11 @@ describe("DC-U1: the Dictation page in the window", () => {
       expect(await text(page, `${on("dictation.formatTimeoutSeconds")} option:checked`)).toBe(
         "Automatic",
       );
-      const all = [...main, ...(await keys())];
+      const advanced = await keys();
+      await page.click("#page-dictation .pg-back");
+      await page.click("#dictation-history-open");
+      await page.waitForSelector("#page-dictation #dictation-history-q");
+      const all = [...main, ...advanced, ...(await keys())];
       // Settings hides every dictation key, so each must be here, and the page names none the
       // registry lacks.
       const registry = Object.keys(SETTINGS).filter((k) => k.startsWith("dictation."));
@@ -1518,6 +1549,21 @@ describe("DC-U1: the Dictation page in the window", () => {
   );
 });
 
+describe("DC-U5: words and replacements, as the page lists them", () => {
+  test("a replacement writes more than letters for a way of saying it; anything else is a word", () => {
+    const listed = (term: string, heard: string[] = []) =>
+      isReplacement({ term, heard }) ? "replacement" : "word";
+    expect(listed(".com", ["dot com"])).toBe("replacement");
+    expect(listed("@", ["at sign"])).toBe("replacement");
+    expect(listed("jordan@example.com", ["my email"])).toBe("replacement");
+    expect(listed("Kubernetes", ["cooper netties"])).toBe("word");
+    expect(listed("Wi-Fi", ["why fi"])).toBe("word");
+    expect(listed("O’Brien", ["o brian"])).toBe("word");
+    // Nothing to say it as: a word, whatever it holds.
+    expect(listed("C++")).toBe("word");
+  });
+});
+
 describe("DC-U5: the dictionary and replacements", () => {
   let rig: UiRig;
   let t: ReturnType<typeof tempDir>;
@@ -1530,7 +1576,7 @@ describe("DC-U5: the dictionary and replacements", () => {
     t?.cleanup();
   });
 
-  /** Opens the Dictionary from the Dictation page; with `entries`, over the vocabulary fixture. */
+  /** Opens the Words page from the Dictation page; with `entries`, over the vocabulary fixture. */
   const openDictionary = async (entries?: DictionaryEntry[]) => {
     let fx: VocabFixture | null = null;
     const page = await rig.open(undefined, {
@@ -1540,10 +1586,19 @@ describe("DC-U5: the dictionary and replacements", () => {
     });
     await page.click("#dictation-open");
     await page.click("#dictation-dictionary-open");
-    await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li");
+    await page.waitForSelector("#page-dictation #dictionary-list :is(li[data-term], [data-empty])");
     return { page, fx: fx as unknown as VocabFixture };
   };
   const row = (term: string) => `#dictionary-list li[data-term='${term}']`;
+  /** Opens a row to its switch and Remove. */
+  const openRow = async (page: Page, term: string) => {
+    await page.click(`${row(term)} .pg-link`);
+    await page.waitForSelector(`${row(term)} .calls-too`);
+  };
+  /** "Replace something I say": the form takes what you say too. */
+  const replacing = async (page: Page) => {
+    if (await page.isHidden("#dictionary-heard")) await page.click("#dictionary-replace");
+  };
   const global = (e: Partial<DictionaryEntry> & { term: string }): DictionaryEntry => ({
     heard: [],
     confirmed: true,
@@ -1556,9 +1611,17 @@ describe("DC-U5: the dictionary and replacements", () => {
     "a replacement is written for dictation only, shown as what you say to what akou writes, and removed in one click",
     async () => {
       const { page, fx } = await openDictionary([]);
-      expect(await text(page, "#dictionary-list li")).toBe(
+      expect(await text(page, "#dictionary-list [data-empty]")).toBe(
         "No words yet. Add one above, or import a list.",
       );
+      // The form adds a word; "Replace something I say" shows what you say beside it.
+      expect(await page.isHidden("#dictionary-heard")).toBe(true);
+      expect(await page.getAttribute("#dictionary-term", "placeholder")).toBe("Add a word");
+      await page.click("#dictionary-replace");
+      expect(await page.getAttribute("#dictionary-heard", "placeholder")).toBe(
+        "You say (commas for several)",
+      );
+      expect(await page.getAttribute("#dictionary-term", "placeholder")).toBe("akou writes");
       await page.fill("#dictionary-heard", "dot com");
       await page.fill("#dictionary-term", ".com");
       await page.press("#dictionary-term", "Enter");
@@ -1572,17 +1635,27 @@ describe("DC-U5: the dictionary and replacements", () => {
       ]);
       expect(await text(page, `${row(".com")} .heard`)).toBe("dot com");
       expect(await text(page, `${row(".com")} .term`)).toBe(".com");
-      expect(await text(page, `${row(".com")} .where`)).toBe("dictation only");
+      // Dictation only: nothing on its right says Calls too, and it is listed as a replacement.
+      expect(await page.$(`${row(".com")} .where`)).toBeNull();
+      expect(
+        await page.locator("section[data-section='Replacements'] li[data-term='.com']").count(),
+      ).toBe(1);
       expect(await page.inputValue("#dictionary-term")).toBe("");
 
       // A word alone, with no way of saying it.
+      await page.click("#dictionary-replace");
+      expect(await page.isHidden("#dictionary-heard")).toBe(true);
       await page.fill("#dictionary-term", "Kubernetes");
       await page.click("#dictionary-add");
       await page.waitForSelector(row("Kubernetes"));
       expect(fx.calls.at(-1)?.body).toEqual({ term: "Kubernetes", heard: [], scope: "dictation" });
       expect(await page.$(`${row("Kubernetes")} .heard`)).toBeNull();
+      expect(
+        await page.locator("section[data-section='Words'] li[data-term='Kubernetes']").count(),
+      ).toBe(1);
 
       fx.calls.length = 0;
+      await openRow(page, ".com");
       await page.click(`${row(".com")} button.remove`);
       await page.waitForSelector(row(".com"), { state: "detached" });
       expect(fx.calls).toEqual([{ method: "DELETE", path: "/vocab/.com" }]);
@@ -1591,22 +1664,34 @@ describe("DC-U5: the dictionary and replacements", () => {
   );
 
   test(
-    "more forms keep a term's spelling, forms and scope; Use in calls too drops the scope; another file's word is read only; a refusal shows",
+    "more forms keep a term's spelling, forms and scope; Use in calls too switches the scope both ways; another file's word is read only; a refusal shows",
     async () => {
       const { page, fx } = await openDictionary([
         global({ term: "Vercel", heard: ["versal"] }),
         global({ term: "Kubernetes", heard: ["cooper netties"], entryScope: "dictation" }),
         { term: "Acme", heard: [], confirmed: false, scope: "extra", file: "/team/words.yaml" },
       ]);
-      expect(await text(page, `${row("Vercel")} .where`)).toBe("calls and dictation");
-      expect(await text(page, `${row("Kubernetes")} .where`)).toBe("dictation only");
-      expect(await text(page, `${row("Acme")} .where`)).toBe(
-        "calls and dictation, waiting for your yes, from /team/words.yaml",
+      expect(await text(page, `${row("Vercel")} .where`)).toBe(
+        "also heard as “versal” · Calls too",
       );
+      expect(await text(page, `${row("Kubernetes")} .where`)).toBe(
+        "also heard as “cooper netties”",
+      );
+      // Another list's word: read only, under its own heading, and no file path anywhere.
+      expect(await text(page, `${row("Acme")} .where`)).toBe("Not confirmed yet");
+      expect(
+        await page
+          .locator("section[data-section='From your other word lists'] li[data-term='Acme']")
+          .count(),
+      ).toBe(1);
       expect(await page.$$(`${row("Acme")} button`)).toHaveLength(0);
-      expect(await page.$(`${row("Vercel")} button.calls-too`)).toBeNull();
+      expect(await text(page, "#page-dictation")).not.toContain("/team/words.yaml");
+      await openRow(page, "Vercel");
+      expect(await page.isChecked(`${row("Vercel")} .calls-too`)).toBe(true);
+      expect(await text(page, `${row("Vercel")} .pg-help`)).toBe("Also heard as “versal”.");
 
       // A calls entry stays one: no scope is added to it, and its first form is kept.
+      await replacing(page);
       await page.fill("#dictionary-heard", "for sell, Versal");
       await page.fill("#dictionary-term", "vercel");
       await page.click("#dictionary-add");
@@ -1617,7 +1702,9 @@ describe("DC-U5: the dictionary and replacements", () => {
         confirmed: true,
       });
 
-      await page.click(`${row("Kubernetes")} button.calls-too`);
+      await openRow(page, "Kubernetes");
+      expect(await page.isChecked(`${row("Kubernetes")} .calls-too`)).toBe(false);
+      await page.click(`${row("Kubernetes")} .calls-too`);
       await until(() => fx.calls.length === 2, 5000, "calls too");
       expect(fx.calls[1]?.body).toEqual({
         term: "Kubernetes",
@@ -1625,8 +1712,21 @@ describe("DC-U5: the dictionary and replacements", () => {
         confirmed: true,
       });
       await page.waitForFunction(
-        (sel) => document.querySelector(sel)?.textContent === "calls and dictation",
-        `${row("Kubernetes")} .where`,
+        (sel) => (document.querySelector(sel) as HTMLInputElement | null)?.checked === true,
+        `${row("Kubernetes")} .calls-too`,
+      );
+      // And back: off, dictation alone reads it again.
+      await page.click(`${row("Kubernetes")} .calls-too`);
+      await until(() => fx.calls.length === 3, 5000, "dictation only again");
+      expect(fx.calls[2]?.body).toEqual({
+        term: "Kubernetes",
+        heard: ["cooper netties"],
+        confirmed: true,
+        scope: "dictation",
+      });
+      await page.waitForFunction(
+        (sel) => (document.querySelector(sel) as HTMLInputElement | null)?.checked === false,
+        `${row("Kubernetes")} .calls-too`,
       );
 
       fx.refuse = "a term needs at least one letter or digit";
@@ -1647,6 +1747,82 @@ describe("DC-U5: the dictionary and replacements", () => {
   );
 
   test(
+    "a word heard many ways stays inside its panel; a refused switch says why and shows the file; the keyboard keeps its place",
+    async () => {
+      const forms = [
+        "cooper netties",
+        "kube er netes",
+        "kubernetees",
+        "coober netties",
+        "cube our nettles",
+      ];
+      const { page, fx } = await openDictionary([
+        global({ term: "Kubernetes", heard: forms, entryScope: "dictation" }),
+        global({ term: "Vercel", heard: ["versal"] }),
+        global({ term: "Postgres" }),
+        global({
+          term: "Grafana",
+          heard: [
+            "graph on a dashboard for the whole platform team",
+            "graffiti on the wall of the old office building",
+          ],
+        }),
+      ]);
+      await page.setViewportSize({ width: 1024, height: 700 });
+      // Two forms and how many more; the open row lists them all.
+      expect(await text(page, `${row("Kubernetes")} .where`)).toBe(
+        "also heard as “cooper netties”, “kube er netes” and 3 more",
+      );
+      // The forms beside a word end inside its row, with the chevron on screen, however long.
+      const fits = (term: string) =>
+        page.$eval(row(term), (li) => {
+          const r = li.getBoundingClientRect();
+          const v = li.querySelector(".where")?.getBoundingClientRect();
+          const c = li.querySelector(".pg-more")?.getBoundingClientRect();
+          return !!v && !!c && v.right <= r.right && c.right <= r.right && v.left >= r.left;
+        });
+      expect(await fits("Kubernetes")).toBe(true);
+      expect(await fits("Grafana")).toBe(true);
+      await openRow(page, "Kubernetes");
+      expect(await text(page, `${row("Kubernetes")} .pg-help`)).toBe(
+        `Also heard as ${forms.map((f) => `“${f}”`).join(", ")}.`,
+      );
+
+      // A refused switch: said at once, and the switch shows what the file still holds.
+      fx.refuse = "the vocabulary file could not be written";
+      await page.click(`${row("Kubernetes")} .calls-too`);
+      await page.waitForFunction(
+        () =>
+          document.getElementById("toast")?.textContent ===
+          "the vocabulary file could not be written",
+      );
+      expect(await page.getAttribute("#toast", "class")).toBe("error");
+      expect(await page.isChecked(`${row("Kubernetes")} .calls-too`)).toBe(false);
+      expect(await page.isHidden("#dictionary-issue")).toBe(true);
+
+      // The keyboard on Remove: the entry goes, and the keyboard is on the row now in its place.
+      await page.focus(`${row("Kubernetes")} .remove`);
+      await page.keyboard.press("Enter");
+      await page.waitForSelector(row("Kubernetes"), { state: "detached" });
+      await page.waitForFunction(
+        () => document.activeElement?.closest("li")?.getAttribute("data-term") === "Vercel",
+      );
+      // The switch of a row kept is focused again after its save.
+      await openRow(page, "Vercel");
+      await page.focus(`${row("Vercel")} .calls-too`);
+      await page.keyboard.press("Space");
+      await until(() => fx.calls.length === 3, 5000, "calls too off");
+      await page.waitForFunction(
+        (sel) =>
+          (document.querySelector(sel) as HTMLInputElement | null)?.checked === false &&
+          document.activeElement === document.querySelector(sel),
+        `${row("Vercel")} .calls-too`,
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "more forms and Use in calls too keep the entry's note, decode: false and unconfirmed state",
     async () => {
       const { page, fx } = await openDictionary([
@@ -1659,6 +1835,7 @@ describe("DC-U5: the dictionary and replacements", () => {
           entryScope: "dictation",
         }),
       ]);
+      await replacing(page);
       await page.fill("#dictionary-heard", "for sell");
       await page.fill("#dictionary-term", "vercel");
       await page.click("#dictionary-add");
@@ -1671,12 +1848,19 @@ describe("DC-U5: the dictionary and replacements", () => {
         decode: false,
         scope: "dictation",
       });
-      await page.waitForSelector(`${row("Vercel")} button.calls-too`);
-      await page.click(`${row("Vercel")} button.calls-too`);
+      await openRow(page, "Vercel");
+      await page.click(`${row("Vercel")} .calls-too`);
       await until(() => fx.calls.length === 2, 5000, "calls too");
+      // The row opened stays open over the list read again, with the switch on.
+      await page.waitForFunction(
+        (sel) => (document.querySelector(sel) as HTMLInputElement | null)?.checked === true,
+        `${row("Vercel")} .calls-too`,
+      );
+      await page.click(`${row("Vercel")} .pg-link`);
       await page.waitForFunction(
         (sel) =>
-          document.querySelector(sel)?.textContent === "calls and dictation, waiting for your yes",
+          document.querySelector(sel)?.textContent ===
+          "also heard as “versal”, “for sell” · Calls too · Not confirmed yet",
         `${row("Vercel")} .where`,
       );
       const kept: DictionaryEntry = {
@@ -1712,6 +1896,7 @@ describe("DC-U5: the dictionary and replacements", () => {
         global({ term: "Wi-Fi", heard: ["why fi"], entryScope: "dictation" }),
         global({ term: "café", entryScope: "dictation" }),
       ]);
+      await replacing(page);
       await page.fill("#dictionary-heard", "Why-Fi, wee fee");
       await page.fill("#dictionary-term", "Wi Fi");
       await page.click("#dictionary-add");
@@ -1741,18 +1926,34 @@ describe("DC-U5: the dictionary and replacements", () => {
   );
 
   test(
-    "Settings opens the same dictionary rather than a second list of words",
+    "Settings opens the same Words page rather than a second list of words, and #dictation-dictionary does too",
     async () => {
       const page = await rig.open();
       await page.click("#settings-open");
       await page.waitForSelector("#page-settings .pg-row[data-key]");
-      // Your words are under Word lists, one row that opens the dictionary.
+      // Your words are under Word lists, one row that opens the Words page under Dictation.
       await page.click("#settings-go-words");
       await page.waitForSelector("#settings-dictionary");
       expect(await page.$$("#page-settings li, #page-settings table")).toHaveLength(0);
       await page.click("#settings-dictionary");
-      await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li");
+      await page.waitForSelector("#page-dictation:not([hidden]) #dictionary-form");
       expect(await page.$$("#dictionary-form")).toHaveLength(1);
+      expect(await page.$$("dialog#dictation-dictionary")).toHaveLength(0);
+      expect(await text(page, "#page-dictation h1")).toBe("Words and replacements");
+      // The sidebar marks Dictation, the page it is under.
+      expect(await page.getAttribute("#dictation-open", "aria-current")).toBe("page");
+      // The old links to the dialogs open the pages.
+      await page.click("#calls-open");
+      await page.evaluate(() => {
+        location.hash = "#dictation-dictionary";
+      });
+      await page.waitForSelector("#page-dictation:not([hidden]) #dictionary-form");
+      await page.click("#calls-open");
+      await page.evaluate(() => {
+        location.hash = "#dictation-history";
+      });
+      await page.waitForSelector("#page-dictation:not([hidden]) #dictation-history-q");
+      expect(await text(page, "#page-dictation h1")).toBe("History");
     },
     UI_TIMEOUT,
   );
@@ -1772,6 +1973,16 @@ describe("DC-U5: the dictionary and replacements", () => {
       await page.waitForFunction(
         () => document.getElementById("toast")?.textContent === "Imported 200 words.",
       );
+      // The first few words, then one row that shows the rest.
+      await page.waitForFunction(
+        (n) => document.querySelectorAll("#dictionary-list li[data-term]").length === n,
+        WORDS_SHOWN,
+      );
+      expect(await text(page, "section[data-section='Words'] .pg-count")).toBe("200");
+      expect(await text(page, "section[data-section='Words'] .pg-rest")).toBe(
+        `${200 - WORDS_SHOWN} more`,
+      );
+      await page.click("section[data-section='Words'] .pg-rest button");
       await page.waitForFunction(
         () => document.querySelectorAll("#dictionary-list li[data-term]").length === 200,
       );
@@ -1781,8 +1992,8 @@ describe("DC-U5: the dictionary and replacements", () => {
       expect(got.filter((e) => e.entryScope !== "dictation").map((e) => e.term)).toEqual([
         "Term000",
       ]);
-      expect(await text(page, `${row("Term001")} .where`)).toBe("dictation only");
-      expect(await text(page, `${row("Term000")} .where`)).toBe("calls and dictation");
+      expect(await page.$(`${row("Term001")} .where`)).toBeNull();
+      expect(await text(page, `${row("Term000")} .where`)).toBe("Calls too");
     },
     UI_TIMEOUT,
   );
@@ -2509,6 +2720,19 @@ describe("DC-U2 on the real app: a microphone never asked for starts the helper"
   );
 });
 
+describe("DC-H1: the History page's days", () => {
+  test("Today, Yesterday, the weekday, then the date, as the sidebar lists calls; another year says its year", () => {
+    const tz = localZone();
+    const now = new Date(2026, 8, 30, 9, 0).getTime();
+    expect(dayLabel(new Date(2026, 8, 30, 0, 5).getTime(), now, tz)).toBe("Today");
+    expect(dayLabel(new Date(2026, 8, 29, 23, 59).getTime(), now, tz)).toBe("Yesterday");
+    expect(dayLabel(new Date(2026, 8, 29, 0, 0).getTime(), now, tz)).toBe("Yesterday");
+    expect(dayLabel(new Date(2026, 8, 28, 12, 0).getTime(), now, tz)).toBe("Mon");
+    expect(dayLabel(new Date(2026, 7, 21, 12, 0).getTime(), now, tz)).toBe("21 Aug");
+    expect(dayLabel(new Date(2025, 8, 28, 12, 0).getTime(), now, tz)).toBe("28 Sep 2025");
+  });
+});
+
 describe("DC-H1: the History page", () => {
   let rig: UiRig;
   let t: ReturnType<typeof tempDir>;
@@ -2521,20 +2745,28 @@ describe("DC-H1: the History page", () => {
     t?.cleanup();
   });
 
-  const openHistory = async (history: DictationRow[]) => {
+  const openHistory = async (history: DictationRow[], settings: Record<string, unknown> = {}) => {
     let fx: DictationFixture | null = null;
     const page = await rig.open(undefined, {
       before: async (p) => {
         await p.context().grantPermissions([...CLIPBOARD_PERMISSIONS]);
         fx = await dictationFixture(p, { history });
+        Object.assign(fx.settings, settings);
       },
     });
     await page.click("#dictation-open");
     await page.click("#dictation-history-open");
-    await page.waitForSelector("#dictation-history[open] #dictation-history-list li");
+    await page.waitForSelector(
+      "#page-dictation #dictation-history-list :is(li[data-id], [data-empty])",
+    );
     return { page, fx: fx as unknown as DictationFixture };
   };
   const row = (id: string) => `#dictation-history-list li[data-id='${id}']`;
+  /** Picks an item of a row's menu, opening it first. */
+  const fromMenu = async (page: Page, id: string, item: string) => {
+    if (await page.isHidden(`${row(id)} .hist-menu`)) await page.click(`${row(id)} .hist-more`);
+    await page.click(`${row(id)} .hist-menu ${item}`);
+  };
 
   test(
     "lists every dictation with its app, engine, time and state; each action calls its route",
@@ -2549,22 +2781,44 @@ describe("DC-H1: the History page", () => {
           language: "es",
         }),
         dictationRow(3, { state: "failed", text: null, error: "remote akou not reachable" }),
+        dictationRow(4, { state: "drafted", engine: "fast", fallback_from: "best" }),
       ]);
       expect(
         await page.$$eval("#dictation-history-list li", (l) => l.map((x) => x.dataset.id)),
-      ).toEqual(["d001", "d002", "d003"]);
+      ).toEqual(["d001", "d002", "d003", "d004"]);
+      // The time is the sidebar's 24-hour clock, whatever the machine's locale.
+      expect(await text(page, `${row("d001")} time`)).toMatch(/^\d{2}:\d{2}$/);
+      // A dictation the engine chosen could not hear says which one did, and one left in the
+      // draft box says so.
+      expect(await text(page, `${row("d004")} .meta`)).toMatch(
+        /^[^·]+ · [^·]+ · Fast instead of Best · Left in the draft box$/,
+      );
       expect(await text(page, `${row("d001")} .text`)).toBe("dictation number 1");
       const meta = await text(page, `${row("d002")} .meta`);
-      expect(meta).toContain("no app · best 0.6 s · ES · cancelled");
-      // A dictation with no language named says none (positive control).
-      expect(await text(page, `${row("d001")} .meta`)).not.toContain(" · EN");
+      expect(meta).toMatch(/^[^·]+ · No app · Spanish · Cancelled$/);
+      // A plain insert says nothing of its state, and a dictation with no language names none
+      // (positive control).
+      expect(await text(page, `${row("d001")} .meta`)).toMatch(/^[^·]+ · [^·]+$/);
       expect(await page.$(`${row("d001")} .language`)).toBeNull();
-      expect(await text(page, `${row("d002")} .state`)).toBe("cancelled");
+      expect(await page.$(`${row("d001")} .state`)).toBeNull();
+      expect(await text(page, `${row("d002")} .state`)).toBe("Cancelled");
       expect(await text(page, `${row("d003")} .issue`)).toBe("remote akou not reachable");
+      // The rows are under the day they were made, in words.
+      expect(
+        await page.$$eval("#dictation-history-list section", (l) =>
+          l.map((x) => x.getAttribute("data-section")),
+        ),
+      ).toHaveLength(1);
       // Nothing to insert, copy or fix in a dictation with no text; Retry still decodes its audio.
       expect(await page.isDisabled(`${row("d003")} button.insert`)).toBe(true);
       expect(await page.isDisabled(`${row("d003")} button.fix`)).toBe(true);
-      expect(await page.isDisabled(`${row("d003")} button.retry`)).toBe(false);
+      expect(await page.isDisabled(`${row("d003")} button.copy`)).toBe(true);
+      await page.click(`${row("d003")} .hist-more`);
+      expect(await page.isEnabled(`${row("d003")} .hist-menu button.retry`)).toBe(true);
+      await page.keyboard.press("Escape");
+      await page.waitForSelector(`${row("d003")} .hist-menu`, { state: "hidden" });
+      // Escape closed the menu, not the page.
+      expect(await page.isVisible("#page-dictation")).toBe(true);
 
       fx.calls.length = 0;
       await page.click(`${row("d001")} button.insert`);
@@ -2585,24 +2839,30 @@ describe("DC-H1: the History page", () => {
 
       // Delete asks once more, then removes the dictation from the page and the store.
       fx.calls.length = 0;
-      await page.click(`${row("d002")} button.delete`);
+      await fromMenu(page, "d002", "button.delete");
       expect(fx.calls).toEqual([]);
-      await page.click(`${row("d002")} button.delete`);
+      expect(await text(page, `${row("d002")} button.delete`)).toBe("Delete it and its audio?");
+      await fromMenu(page, "d002", "button.delete");
       await page.waitForSelector(row("d002"), { state: "detached" });
       expect(fx.calls).toEqual([{ method: "DELETE", path: "/dictations/d002" }]);
-      expect(fx.history.map((d) => d.id)).toEqual(["d001", "d003"]);
+      expect(fx.history.map((d) => d.id)).toEqual(["d001", "d003", "d004"]);
     },
     UI_TIMEOUT,
   );
 
   test(
-    "Retry with best shows the second result beside the first, and either can be inserted",
+    "Retry with Best shows the second result under the first, and either can be inserted",
     async () => {
-      const { page, fx } = await openHistory([dictationRow(1)]);
-      // The picker starts on another engine than the one that ran.
-      expect(await page.inputValue(`${row("d001")} select.retry-engine`)).toBe("best");
+      const { page, fx } = await openHistory([dictationRow(1)], {
+        "dictation.remote.url": "https://studio.example",
+      });
+      // The menu offers every engine but the one that ran.
+      await page.click(`${row("d001")} .hist-more`);
+      expect(
+        await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
+      ).toEqual(["Retry with Best", "Retry on the other computer", "Delete"]);
       fx.calls.length = 0;
-      await page.click(`${row("d001")} button.retry`);
+      await fromMenu(page, "d001", "button.retry[data-engine='best']");
       await page.waitForSelector(`${row("d001")} .result.retry`);
       expect(fx.calls).toEqual([
         { method: "POST", path: "/dictations/d001/retry", body: { engine: "best" } },
@@ -2614,11 +2874,11 @@ describe("DC-H1: the History page", () => {
         ["fast", "dictation number 1"],
         ["best", "dictation number 1 (best)"],
       ]);
-      expect(await text(page, `${row("d001")} .result.retry small`)).toBe("best 0.6 s");
+      expect(await text(page, `${row("d001")} .result.retry small`)).toBe("Best · 0.6 s");
 
       fx.calls.length = 0;
       await page.click(`${row("d001")} .result.retry button.insert`);
-      await page.click(`${row("d001")} .result.first button.insert`);
+      await page.click(`${row("d001")} .hist-actions button.insert`);
       await until(() => fx.calls.length === 2, 5000, "both inserts");
       expect(fx.calls.map((c) => c.body)).toEqual([
         { text: "dictation number 1 (best)" },
@@ -2627,19 +2887,97 @@ describe("DC-H1: the History page", () => {
 
       // A refused retry says why and leaves the readings as they were.
       fx.refuse.set("retry:remote", "no remote akou is set");
-      await page.selectOption(`${row("d001")} select.retry-engine`, "remote");
-      await page.click(`${row("d001")} button.retry`);
+      await fromMenu(page, "d001", "button.retry[data-engine='remote']");
       await page.waitForFunction(() => document.getElementById("toast")?.textContent !== "");
       expect(await text(page, "#toast")).toBe("no remote akou is set");
       expect(await page.$$(`${row("d001")} .result`)).toHaveLength(2);
 
       // A best that could not run is decoded by fast, and the reading says so.
       fx.retry = (d, engine) => ({ ...d, engine: "fast", fallback_from: engine, ms: 120 });
-      await page.selectOption(`${row("d001")} select.retry-engine`, "best");
-      await page.click(`${row("d001")} button.retry`);
+      await fromMenu(page, "d001", "button.retry[data-engine='best']");
       await page.waitForFunction(
-        (sel) => document.querySelector(sel)?.textContent === "fast 0.1 s (instead of best)",
+        (sel) => document.querySelector(sel)?.textContent === "Fast · 0.1 s, instead of Best",
         `${row("d001")} .result.retry small`,
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a request that fails outright still opens History and Words, and says why in the list",
+    async () => {
+      const page = await rig.open(undefined, {
+        before: async (p) => {
+          await dictationFixture(p);
+          await vocabFixture(p);
+          // Registered after the fixtures, so these run first: the app is gone.
+          await p.route(
+            (u) => u.pathname.startsWith("/api/v1/dictations") || u.pathname === "/api/v1/vocab",
+            (route) => route.abort(),
+          );
+        },
+      });
+      await page.click("#dictation-open");
+      await page.click("#dictation-history-open");
+      await page.waitForSelector("#page-dictation #dictation-history-list .pg-sechelp");
+      expect(await text(page, "#page-dictation h1")).toBe("History");
+      expect(await text(page, "#dictation-history-list .pg-sechelp")).not.toBe("");
+      await page.click("#page-dictation .pg-back");
+      await page.click("#dictation-dictionary-open");
+      await page.waitForSelector("#page-dictation #dictionary-list .pg-sechelp");
+      expect(await text(page, "#page-dictation h1")).toBe("Words and replacements");
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "with no other computer set up, the menu offers no retry on one",
+    async () => {
+      const { page } = await openHistory([dictationRow(1)]);
+      await page.click(`${row("d001")} .hist-more`);
+      expect(
+        await page.$$eval(`${row("d001")} .hist-menu button`, (l) => l.map((x) => x.textContent)),
+      ).toEqual(["Retry with Best", "Delete"]);
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a row under the pointer keeps its height, and a menu at the window's bottom opens upwards",
+    async () => {
+      const long =
+        "Can we move the review to Thursday? The numbers are not ready and the deck needs another pass.";
+      const { page } = await openHistory(
+        Array.from({ length: 12 }, (_, i) => dictationRow(i + 1, i === 0 ? { text: long } : {})),
+      );
+      await page.setViewportSize({ width: 1024, height: 600 });
+      await page.mouse.move(0, 0);
+      const heights = () =>
+        page.$$eval("#dictation-history-list li", (l) =>
+          l.map((x) => Math.round(x.getBoundingClientRect().height)),
+        );
+      const still = await heights();
+      await page.hover(row("d001"), { position: { x: 30, y: 12 } });
+      await page.waitForFunction(
+        (sel) => getComputedStyle(document.querySelector(sel) as Element).opacity === "1",
+        `${row("d001")} .hist-actions`,
+      );
+      expect(await heights()).toEqual(still);
+
+      // The last row at the bottom of the window: Delete stays on screen.
+      await page.$eval(row("d012"), (el) => el.scrollIntoView({ block: "end" }));
+      await page.click(`${row("d012")} .hist-more`);
+      const box = await page.$eval(`${row("d012")} .hist-menu`, (m) => {
+        const r = m.getBoundingClientRect();
+        return { bottom: r.bottom, view: window.innerHeight, up: m.classList.contains("up") };
+      });
+      expect(box.up).toBe(true);
+      expect(box.bottom).toBeLessThanOrEqual(box.view);
+      // A row near the top still opens its menu below the button.
+      await page.$eval(row("d001"), (el) => el.scrollIntoView({ block: "start" }));
+      await page.click(`${row("d001")} .hist-more`);
+      expect(await page.$eval(`${row("d001")} .hist-menu`, (m) => m.classList.contains("up"))).toBe(
+        false,
       );
     },
     UI_TIMEOUT,
@@ -2649,10 +2987,10 @@ describe("DC-H1: the History page", () => {
     "deleting the last dictation shown says there are none",
     async () => {
       const { page } = await openHistory([dictationRow(1)]);
-      await page.click(`${row("d001")} button.delete`);
-      await page.click(`${row("d001")} button.delete`);
-      await page.waitForSelector("#dictation-history-list li[data-empty]");
-      expect(await text(page, "#dictation-history-list li")).toBe("No dictations yet.");
+      await fromMenu(page, "d001", "button.delete");
+      await fromMenu(page, "d001", "button.delete");
+      await page.waitForSelector("#dictation-history-list [data-empty]");
+      expect(await text(page, "#dictation-history-list [data-empty]")).toBe("No dictations yet.");
     },
     UI_TIMEOUT,
   );
@@ -2679,8 +3017,10 @@ describe("DC-H1: the History page", () => {
       expect(fx.calls.map((c) => c.path)).toEqual(["/dictations?limit=50&q=kubernetes"]);
       expect(await text(page, "#dictation-history-list li .text")).toBe("ping the Kubernetes team");
       await page.fill("#dictation-history-q", "nothing like this");
-      await page.waitForSelector("#dictation-history-list li[data-empty]");
-      expect(await text(page, "#dictation-history-list li")).toBe("No dictation holds that.");
+      await page.waitForSelector("#dictation-history-list [data-empty]");
+      expect(await text(page, "#dictation-history-list [data-empty]")).toBe(
+        "No dictation holds that.",
+      );
     },
     UI_TIMEOUT,
   );
@@ -2796,7 +3136,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
     if (call) await page.waitForFunction(() => document.getElementById("title")?.textContent);
     await page.click("#dictation-open");
     await page.click("#dictation-dictionary-open");
-    await page.waitForSelector("#dictation-dictionary[open] #dictionary-list li[data-term]");
+    await page.waitForSelector("#page-dictation #dictionary-list li[data-term]");
     return page;
   };
   const term = (x: string) => `#dictionary-list li[data-term='${x}']`;
@@ -2805,11 +3145,13 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
     "dot com to .com is written for dictation only, and the next dictation of example dot com inserts example.com",
     async () => {
       const page = await openDictionary();
+      await page.click("#dictionary-replace");
       await page.fill("#dictionary-heard", "dot com");
       await page.fill("#dictionary-term", ".com");
       await page.click("#dictionary-add");
       await page.waitForSelector(term(".com"));
-      expect(await text(page, `${term(".com")} .where`)).toBe("dictation only");
+      // Dictation only: its row does not say Calls too.
+      expect(await page.$(`${term(".com")} .where`)).toBeNull();
       expect(vocabFile().find((e) => e.term === ".com")).toMatchObject({
         heard: ["dot com"],
         source: "user",
@@ -2822,8 +3164,8 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
       await page.fill("#dictionary-term", "Vercel");
       await page.click("#dictionary-add");
       await page.waitForFunction(
-        (sel) => document.querySelector(sel)?.textContent === "versal, ver sell",
-        `${term("Vercel")} .heard`,
+        (sel) => document.querySelector(sel)?.textContent === "also heard as “versal”, “ver sell”",
+        `${term("Vercel")} .where`,
       );
       expect(vocabFile().find((e) => e.term === "Vercel")).toMatchObject({
         heard: ["versal", "ver sell"],
@@ -2864,10 +3206,12 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
       const row = `#dictation-history-list li[data-id='${id}']`;
       await page.waitForSelector(row);
       expect(await text(page, `${row} .result.first .text`)).toBe("example.com");
-      expect(await text(page, `${row} .state`)).toBe("inserted");
-      expect(await page.inputValue(`${row} select.retry-engine`)).toBe("best");
+      // Inserted is the usual end: its row names no state.
+      expect(await page.$(`${row} .state`)).toBeNull();
+      expect(await page.getAttribute(row, "data-state")).toBe("inserted");
 
-      await page.click(`${row} button.retry`);
+      await page.click(`${row} .hist-more`);
+      await page.click(`${row} .hist-menu button.retry[data-engine='best']`);
       await page.waitForSelector(`${row} .result.retry`);
       const readings = await page.$$eval(`${row} .result`, (r) =>
         r.map((x) => [x.getAttribute("data-engine"), x.querySelector(".text")?.textContent]),
@@ -2878,7 +3222,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
       ]);
 
       await page.click(`${row} .result.retry button.insert`);
-      await page.click(`${row} .result.first button.insert`);
+      await page.click(`${row} .hist-actions button.insert`);
       await until(() => draftOpens.length === 2, 5000, "both inserts open the draft box");
       expect(draftOpens.map((o) => [o.id, o.text, o.focus])).toEqual([
         [id, "example.com", true],
@@ -2887,6 +3231,7 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
 
       const audio = d.audio.path(id);
       expect(existsSync(audio)).toBe(true);
+      await page.click(`${row} .hist-more`);
       await page.click(`${row} button.delete`);
       await page.click(`${row} button.delete`);
       await page.waitForSelector(row, { state: "detached" });
@@ -2897,15 +3242,22 @@ describe("DC-U5, DC-H1 on the real app: the dictionary and the history over akou
   );
 
   test(
-    "on a call, the Dictionary lists that workspace's words read only, with their file, as words for its calls",
+    "on a call, the Words page lists that workspace's words read only, under its name, as words for its calls",
     async () => {
       const page = await openDictionary("01J8Z6Q4M2VX0K7B3D4E5F6G7H");
       await page.waitForSelector(term("Hetzner"));
-      expect(await text(page, `${term("Hetzner")} .where`)).toBe(
-        `calls in work only, from ${join(rig.app.configDir, "vocabulary", "work.yaml")}`,
+      const ws = "section[data-section='From the work workspace']";
+      expect(await page.locator(`${ws} li[data-term='Hetzner']`).count()).toBe(1);
+      expect(await text(page, `${ws} .pg-sechelp`)).toBe(
+        "Used on work's calls only, not in dictation. Change them from that workspace.",
       );
-      expect(await page.isVisible(`${term("Hetzner")} button.remove`)).toBe(false);
-      // The global file's words keep their buttons (positive control).
+      // No file path on the page.
+      expect(await text(page, "#page-dictation")).not.toContain("work.yaml");
+      expect(await page.locator(`${term("Hetzner")} button`).count()).toBe(0);
+      // Its section says where it applies; the row says only how else it is heard.
+      expect(await text(page, `${term("Hetzner")} .where`)).toBe("also heard as “hetzna”");
+      // The global file's words open to their switch and Remove (positive control).
+      await page.click(`${term("Vercel")} .pg-link`);
       expect(await page.isVisible(`${term("Vercel")} button.remove`)).toBe(true);
     },
     UI_TIMEOUT,
@@ -3068,9 +3420,10 @@ describe("DC-U3: the dictation key recorder", () => {
     async () => {
       const { page, fx } = await openPage();
       await page.click(record("dictation.hotkey"));
+      expect(await page.getAttribute(record("dictation.hotkey"), "aria-pressed")).toBe("true");
       await page.click("#dictation-history-open");
-      await page.waitForSelector("#dictation-history[open]");
-      expect(await page.getAttribute(record("dictation.hotkey"), "aria-pressed")).toBe("false");
+      await page.waitForSelector("#page-dictation #dictation-history-q");
+      expect(await page.locator(record("dictation.hotkey")).count()).toBe(0);
       await page.click("#dictation-history-q");
       await page.keyboard.type("ab");
       expect(await page.inputValue("#dictation-history-q")).toBe("ab");

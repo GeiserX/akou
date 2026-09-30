@@ -219,7 +219,10 @@ export const PARITY: readonly Row[] = [
     cli: ["vocab"],
     api: ["GET /vocab", "POST /vocab/approve", "POST /vocab/reject"],
     mcp: ["akou_vocab_list"],
-    window: { none: "the Dictation heading of Words to review is not built yet (DC-L5)" },
+    window: [
+      ui("dictation-review.ts", '"GET", "/vocab?dictation=true"'),
+      ui("dictation-review.ts", '"POST", `/vocab/#{action}`'),
+    ],
     note: "`dictation` on each: the list's second source is the dictation log. MCP lists them and answers none, since it reads dictation history only (DICTATION.md DC-G5).",
   },
   {

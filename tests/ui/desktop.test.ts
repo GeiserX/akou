@@ -355,6 +355,7 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
         const onMac: number[] = [];
         const modelsOnMac: number[] = [];
         const dictationOnMac: number[] = [];
+        const subOnMac: number[] = [];
         for (const platform of ["darwin", "win32", "linux"]) {
           const w = await windowPage(rig, { platform });
           const { page } = w;
@@ -486,6 +487,32 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
               expect([dictation.title, advanced.title]).toEqual(
                 dictationOnMac.map((top) => top - 28),
               );
+            }
+            // Words and History, under Dictation, too; History's search is a control in the header.
+            await page.click("#page-dictation .pg-back");
+            await page.click("#dictation-dictionary-open");
+            await page.waitForSelector("#page-dictation .pg-back");
+            await page.waitForFunction(() => document.getElementById("pages")?.scrollTop === 0);
+            const words = await pageTitleBar(page, "#page-dictation");
+            await page.click("#page-dictation .pg-back");
+            await page.click("#dictation-history-open");
+            await page.waitForSelector("#page-dictation #dictation-history-q");
+            await page.waitForFunction(() => document.getElementById("pages")?.scrollTop === 0);
+            const history = await pageTitleBar(page, "#page-dictation");
+            if (platform === "darwin") {
+              for (const p of [words, history]) {
+                expect(p.bar).toBe(28);
+                expect(p.title).toBeGreaterThanOrEqual(28 + 28);
+                expect(p.drag).toEqual(["pg-bar", "pg-top"]);
+                expect(p.loose).toEqual([]);
+              }
+              // The back link, and History's search beside its title.
+              expect(history.controls).toBeGreaterThan(words.controls);
+              subOnMac.push(words.title, history.title);
+            } else {
+              for (const p of [words, history])
+                expect(`${platform}: ${p.bar} ${p.drag}`).toBe(`${platform}: 0 `);
+              expect([words.title, history.title]).toEqual(subOnMac.map((top) => top - 28));
             }
           } finally {
             await w.close();

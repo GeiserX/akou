@@ -1,31 +1,41 @@
 /**
- * The dictionary and replacements editor (docs/ux/DICTATION.md DC-U5), opened from the Dictation
- * page. It edits the user's vocabulary file, the one calls read too (WINDOW W9.2), through the API,
- * so a script can do what the page does.
+ * The Words page (docs/ux/design-explorations/sd-a-words.html, docs/ux/DICTATION.md DC-U5), under
+ * the Dictation page with a back link. It edits the user's vocabulary file, the one calls read too
+ * (WINDOW W9.2), through the API, so a script can do what the page does.
  *
  * An entry is a term and the forms it is heard as. A replacement is the same entry read the other
  * way: its heard form is what you say (`dot com`) and its term what akou writes (`.com`), replaced
- * whole word, in any case, longest first (DC-L6).
+ * whole word, in any case, longest first (DC-L6). The page lists an entry as a replacement when
+ * what akou writes holds more than letters (`isReplacement`), and as a word otherwise.
  *
- * - Add: `POST /vocab {term, heard, scope: "dictation"}`. Dictation always applies such an entry
- *   and calls never read it, since a heard form such as "versal" would otherwise rewrite call
- *   transcripts. Adding forms to a term the file has keeps its forms, its scope, its note, its
- *   `decode: false` and whether it is confirmed: the route replaces the whole entry, so the page
- *   sends them back (the route keeps its `source` and `added_at`).
- * - Use in calls too: the same route without `scope`, which makes it an ordinary entry.
- * - Remove: `DELETE /vocab/{term}`, one click.
+ * - Add a word, or Replace something I say: `POST /vocab {term, heard, scope: "dictation"}`.
+ *   Dictation always applies such an entry and calls never read it, since a heard form such as
+ *   "versal" would otherwise rewrite call transcripts. Adding forms to a term the file has keeps
+ *   its forms, its scope, its note, its `decode: false` and whether it is confirmed: the route
+ *   replaces the whole entry, so the page sends them back (the route keeps `source` and
+ *   `added_at`).
+ * - A row opens to Use in calls too, a switch: on is the same route without `scope`, an ordinary
+ *   entry; off puts `scope: "dictation"` back. Remove is `DELETE /vocab/{term}`, one click.
  * - Import: a text file, one term per line, through `POST /vocab/import {scope: "dictation"}`, into
  *   the same file; a word the file already holds for calls stays one.
+ * - To review: the words fixed while dictating (DC-L5, `dictation-review.ts`).
  *
  * Dictation belongs to no workspace, so the page changes only the global file. It reads
  * `GET /vocab` for the workspace of the call the window shows, if any, so that workspace's words
- * are listed too, read only, with their file's path, as are those of `vocab.extraFiles`.
+ * are listed too, read only, as are those of the other word lists (`vocab.extraFiles`).
  */
 
 import { tokenize } from "../core/vocab/correct.ts";
-import { closable, h, openModal, replace, toast } from "./dom.ts";
+import {
+  type DictationReview,
+  dictationReviewError,
+  dictationReviewSection,
+  readDictationReview,
+} from "./dictation-review.ts";
+import { h, replace, toast } from "./dom.ts";
 import { message } from "./notepad.ts";
 import type { Transport } from "./protocol.ts";
+import { ICONS, icon, linkRow, row, toggle } from "./rows.ts";
 
 /** An entry as `GET /vocab` lists it. */
 export interface DictionaryEntry {
@@ -81,27 +91,86 @@ const key = (s: string) =>
     .join(" ");
 const same = (a: string, b: string) => key(a) === key(b);
 
+/** A section shows this many entries, then a row that shows the rest. */
+export const WORDS_SHOWN = 8;
+
+/**
+ * An entry read as a replacement, "dot com → .com": it has a way of saying it and what akou writes
+ * holds more than letters, digits, spaces, hyphens and apostrophes. Any other entry is a word,
+ * with the forms it is also heard as. Both are the same entry in the file; this is only how the
+ * page lists it.
+ */
+export function isReplacement(e: Pick<DictionaryEntry, "term" | "heard">): boolean {
+  return e.heard.length > 0 && /[^\p{L}\p{N}\s'’-]/u.test(e.term);
+}
+
+const quote = (forms: readonly string[]) => forms.map((f) => `“${f}”`).join(", ");
+
+/** The forms a closed row names: two, then how many more, since the open row lists them all. */
+export function fewForms(forms: readonly string[]): string {
+  return forms.length <= 2
+    ? quote(forms)
+    : `${quote(forms.slice(0, 2))} and ${forms.length - 2} more`;
+}
+
+/** Where the keyboard was in the list: the entry, the control, and the row's place. */
+interface Spot {
+  term: string | undefined;
+  section: string | undefined;
+  control: string;
+  index: number;
+}
+
+/** The controls of a row, as a selector that finds the same one after a redraw. */
+const CONTROLS = [
+  ".pg-link",
+  ".calls-too",
+  ".remove",
+  "button[data-action='approve']",
+  "button[data-action='reject']",
+  ".pg-rest button",
+];
+
 export class DictationDictionary {
   readonly root = h("div", { class: "dictation-dictionary" });
   private readonly heard = h("input", {
     id: "dictionary-heard",
-    placeholder: "dot com",
-    attrs: { "aria-label": "What you say" },
+    class: "pg-input",
+    placeholder: "You say (commas for several)",
+    hidden: true,
+    attrs: { "aria-label": "What you say", autocomplete: "off", spellcheck: "false" },
   });
+  private readonly arrow = h("span", { class: "pg-unit", hidden: true }, "→");
   private readonly term = h("input", {
     id: "dictionary-term",
-    placeholder: ".com",
-    attrs: { "aria-label": "What akou writes" },
+    class: "pg-input",
+    placeholder: "Add a word",
+    attrs: { "aria-label": "A word", autocomplete: "off", spellcheck: "false" },
   });
   private readonly issue = h("small", { id: "dictionary-issue", class: "issue", hidden: true });
+  private readonly mode = h("button", {
+    id: "dictionary-replace",
+    type: "button",
+    class: "pg-textlink",
+  });
   private readonly file = h("input", {
     id: "dictionary-import",
     type: "file",
+    hidden: true,
     attrs: { accept: ".txt,text/plain", "aria-label": "Import a word list" },
   });
-  private readonly list = h("ul", { id: "dictionary-list" });
+  private readonly list = h("div", { id: "dictionary-list" });
   private entries: DictionaryEntry[] = [];
+  private review: DictationReview | null = null;
   private reads = 0;
+  /** The typing form is "Replace something I say", not "Add a word". */
+  private replacing = false;
+  /** The entry opened to change, by the server's key of its term. */
+  private opened: string | null = null;
+  /** The sections showing every entry, not only the first few. */
+  private readonly all = new Set<string>();
+  /** Where the keyboard was in the list, until it leaves it. */
+  private spot: Spot | null = null;
 
   constructor(
     private readonly t: Transport,
@@ -112,6 +181,7 @@ export class DictationDictionary {
       "form",
       {
         id: "dictionary-form",
+        class: "pg-grp",
         on: {
           submit: (e) => {
             e.preventDefault();
@@ -119,110 +189,315 @@ export class DictationDictionary {
           },
         },
       },
-      h("label", {}, "You say ", this.heard),
-      h("label", {}, " akou writes ", this.term),
-      h("button", { id: "dictionary-add", type: "submit" }, "Add"),
-      this.issue,
+      h(
+        "div",
+        { class: "pg-row pg-add" },
+        this.heard,
+        this.arrow,
+        this.term,
+        h("button", { id: "dictionary-add", type: "submit", class: "pg-btn" }, "Add"),
+      ),
     );
+    this.mode.addEventListener("click", () => this.switchMode(!this.replacing));
+    // An answer redraws the list, which takes the focused control with it: the keyboard is put
+    // back where it was, or on the row that took the place of the one gone.
+    this.list.addEventListener("focusin", (e) => {
+      this.spot = spotOf(e.target as HTMLElement);
+    });
+    this.list.addEventListener("focusout", (e) => {
+      const to = e.relatedTarget as Node | null;
+      if (to && !this.list.contains(to)) this.spot = null;
+    });
     this.file.addEventListener("change", () => void this.importFile());
+    this.switchMode(false);
     this.root.append(
-      h(
-        "p",
-        { class: "hint" },
-        "A word akou should spell your way, or a phrase it should turn into other text. Leave 'You say' empty to teach a word alone; separate several ways of saying it with commas. What you add or import here applies to dictation only.",
-      ),
       form,
+      this.issue,
+      h("p", { class: "pg-under" }, this.mode),
+      this.list,
       h(
         "p",
-        { class: "hint" },
-        h("label", {}, "Import a text file, one word per line: ", this.file),
+        { class: "pg-under" },
+        h(
+          "button",
+          {
+            id: "dictionary-import-open",
+            type: "button",
+            class: "pg-textlink",
+            on: { click: () => this.file.click() },
+          },
+          icon("M8 3v10M3 8h10"),
+          "Import a list, one word per line",
+        ),
+        this.file,
       ),
-      this.list,
     );
+  }
+
+  /** "Add a word", or "You say → akou writes" for a replacement; what is typed stays. */
+  private switchMode(replacing: boolean): void {
+    this.replacing = replacing;
+    this.heard.hidden = !replacing;
+    this.arrow.hidden = !replacing;
+    this.term.placeholder = replacing ? "akou writes" : "Add a word";
+    this.term.setAttribute("aria-label", replacing ? "What akou writes" : "A word");
+    this.mode.textContent = replacing ? "Add a word instead" : "Replace something I say";
   }
 
   async load(): Promise<void> {
     const read = ++this.reads;
     const ws = this.workspace();
-    const r = await this.t.request<{ entries?: DictionaryEntry[] }>(
-      "GET",
-      ws ? `/vocab?workspace=${encodeURIComponent(ws)}` : "/vocab",
-    );
+    // A request that throws (the app gone) is said in the list, so the page still opens.
+    const [r, review] = await Promise.all([
+      this.t
+        .request<{ entries?: DictionaryEntry[] }>(
+          "GET",
+          ws ? `/vocab?workspace=${encodeURIComponent(ws)}` : "/vocab",
+        )
+        .catch((err: Error) => ({
+          status: 599,
+          body: { message: err.message } as { entries?: DictionaryEntry[] },
+        })),
+      readDictationReview(this.t),
+    ]);
     if (read !== this.reads) return;
+    this.review = review;
     if (r.status >= 400) {
       replace(
         this.list,
-        h("li", { class: "hint" }, message(r.body, "the vocabulary could not be read")),
+        h("p", { class: "pg-sechelp" }, message(r.body, "the vocabulary could not be read")),
       );
       return;
     }
     this.entries = Array.isArray(r.body?.entries) ? r.body.entries : [];
-    const rows = this.entries.map((e) => this.row(e));
-    if (rows.length > 0) replace(this.list, ...rows);
-    else
-      replace(
-        this.list,
-        h(
-          "li",
-          { class: "hint", attrs: { "data-empty": "" } },
-          "No words yet. Add one above, or import a list.",
-        ),
-      );
+    this.draw();
   }
 
-  private row(e: DictionaryEntry): HTMLElement {
-    const mine = e.scope === "global";
-    const where = [
-      // Dictation reads no workspace file: those words are for that workspace's calls.
-      e.scope === "workspace"
-        ? `calls in ${this.workspace() ?? "this workspace"} only`
-        : e.entryScope === "dictation"
-          ? "dictation only"
-          : "calls and dictation",
-      e.confirmed ? "" : "waiting for your yes",
-      mine ? "" : `from ${e.file}`,
-    ].filter((x) => x !== "");
-    return h(
-      "li",
-      { attrs: { "data-term": e.term } },
-      e.heard.length > 0 ? h("span", { class: "heard" }, e.heard.join(", ")) : null,
-      e.heard.length > 0 ? " → " : null,
-      h("span", { class: "term" }, e.term),
-      " ",
-      h("small", { class: "where hint" }, where.join(", ")),
-      mine
+  private draw(): void {
+    const mine = this.entries.filter((e) => e.scope === "global");
+    const ws = this.workspace();
+    const review =
+      this.review && "error" in this.review
+        ? dictationReviewError(this.review.error)
+        : this.review?.pairs
+          ? dictationReviewSection(this.t, this.review.pairs, async (said, ok) => {
+              toast(said, ok ? "info" : "error");
+              if (ok) await this.load();
+            })
+          : null;
+    replace(
+      this.list,
+      review,
+      mine.length === 0
         ? h(
-            "span",
-            { class: "bar" },
-            e.entryScope === "dictation"
-              ? h(
-                  "button",
-                  {
-                    class: "calls-too",
-                    type: "button",
-                    title: "Calls read it too, under their own rules",
-                    on: { click: () => void this.write(kept(e)) },
-                  },
-                  "Use in calls too",
-                )
-              : null,
-            h(
-              "button",
-              { class: "remove", type: "button", on: { click: () => void this.remove(e.term) } },
-              "Remove",
-            ),
+            "p",
+            { class: "pg-sechelp pg-empty", attrs: { "data-empty": "" } },
+            "No words yet. Add one above, or import a list.",
           )
         : null,
+      this.part(
+        "Words",
+        mine.filter((e) => !isReplacement(e)),
+      ),
+      this.part("Replacements", mine.filter(isReplacement)),
+      this.part(
+        ws ? `From the ${ws} workspace` : "From this workspace",
+        this.entries.filter((e) => e.scope === "workspace"),
+        `Used on ${ws ? `${ws}'s` : "this workspace's"} calls only, not in dictation. Change them from that workspace.`,
+      ),
+      this.part(
+        "From your other word lists",
+        this.entries.filter((e) => e.scope === "extra"),
+        "Used in calls and dictation. Change them in their own file.",
+      ),
     );
+    this.refocus();
+  }
+
+  /** Puts the keyboard back after a redraw took the control it was on. */
+  private refocus(): void {
+    const spot = this.spot;
+    const now = document.activeElement;
+    if (!spot || (now && now !== document.body && now.isConnected)) return;
+    const section = spot.section
+      ? this.list.querySelector(`[data-section="${CSS.escape(spot.section)}"]`)
+      : null;
+    const rows = [...(section?.querySelectorAll<HTMLElement>("[data-term], .pg-rest") ?? [])];
+    const same = spot.term
+      ? rows.find((r) => r.dataset.term === spot.term)
+      : rows.find((r) => r.classList.contains("pg-rest"));
+    // The entry is gone (learned, removed): the row now in its place, or the last one left.
+    const at = same ?? rows[Math.min(spot.index, rows.length - 1)];
+    const target =
+      (same ? at?.querySelector<HTMLElement>(spot.control) : null) ??
+      at?.querySelector<HTMLElement>("button:not(:disabled), input:not(:disabled)") ??
+      this.term;
+    target.focus();
+  }
+
+  /** One section of entries with its count; the first few, then a row that shows the rest. */
+  private part(title: string, entries: DictionaryEntry[], help?: string): HTMLElement | null {
+    if (entries.length === 0) return null;
+    const shown = this.all.has(title) ? entries : entries.slice(0, WORDS_SHOWN);
+    const rest = entries.length - shown.length;
+    const items = shown.map((e) => this.item(e));
+    if (rest > 0)
+      items.push(
+        h(
+          "li",
+          { class: "pg-rest" },
+          linkRow({ label: `${rest} more` }, () => {
+            this.all.add(title);
+            this.draw();
+          }),
+        ),
+      );
+    return h(
+      "section",
+      { class: "pg-section", attrs: { "data-section": title } },
+      h(
+        "h2",
+        { class: "pg-sec" },
+        title,
+        " ",
+        h("span", { class: "pg-count" }, String(entries.length)),
+      ),
+      help ? h("p", { class: "pg-sechelp" }, help) : null,
+      h("ul", { class: "pg-grp pg-list" }, ...items),
+    );
+  }
+
+  /** What the row says on its right: how else it is heard, and where it applies. */
+  private where(e: DictionaryEntry): string {
+    return [
+      e.heard.length > 0 && !isReplacement(e) ? `also heard as ${fewForms(e.heard)}` : "",
+      // Another list's section says where its words apply, so its rows need not.
+      e.scope === "global" && e.entryScope !== "dictation" ? "Calls too" : "",
+      e.confirmed ? "" : "Not confirmed yet",
+    ]
+      .filter((x) => x !== "")
+      .join(" · ");
+  }
+
+  private item(e: DictionaryEntry): HTMLElement {
+    const name = isReplacement(e)
+      ? h(
+          "b",
+          { class: "pg-name" },
+          h("span", { class: "heard" }, e.heard.join(", ")),
+          h("span", { class: "pg-arrow" }, " → "),
+          h("span", { class: "term" }, e.term),
+        )
+      : h("b", { class: "pg-name" }, h("span", { class: "term" }, e.term));
+    const li = h("li", { attrs: { "data-term": e.term } });
+    // Another file's words are read only: changed from where they live.
+    if (e.scope !== "global") {
+      const where = this.where(e);
+      li.append(
+        h(
+          "div",
+          { class: "pg-row pg-ro" },
+          h("span", { class: "pg-lbl" }, name),
+          where
+            ? h(
+                "span",
+                { class: "pg-ctl" },
+                h("span", { class: "pg-value where", title: where }, where),
+              )
+            : null,
+        ),
+      );
+      return li;
+    }
+    const open = this.opened === key(e.term);
+    const where = this.where(e);
+    const head = h(
+      "button",
+      {
+        type: "button",
+        class: `pg-row pg-link${open ? " open" : ""}`,
+        attrs: { "aria-expanded": String(open) },
+        on: {
+          click: () => {
+            this.opened = open ? null : key(e.term);
+            this.draw();
+            this.list
+              .querySelector<HTMLElement>(`li[data-term="${CSS.escape(e.term)}"] .pg-link`)
+              ?.focus();
+          },
+        },
+      },
+      h(
+        "span",
+        { class: "pg-lbl" },
+        name,
+        open && e.heard.length > 0
+          ? h(
+              "span",
+              { class: "pg-help" },
+              isReplacement(e)
+                ? `Written for ${quote(e.heard)}.`
+                : `Also heard as ${quote(e.heard)}.`,
+            )
+          : null,
+      ),
+      h(
+        "span",
+        { class: "pg-ctl" },
+        !open && where ? h("span", { class: "pg-value where", title: where }, where) : null,
+        h("span", { class: "pg-more" }, icon(...ICONS.chevron)),
+      ),
+    );
+    li.append(head);
+    if (!open) return li;
+    const calls = toggle({
+      id: `dictionary-calls-${this.entries.indexOf(e)}`,
+      checked: e.entryScope !== "dictation",
+      label: "Use in calls too",
+    });
+    calls.classList.add("calls-too");
+    calls.addEventListener("change", () => {
+      // Calls read it too, under their own rules; off, dictation alone reads it again. A refusal
+      // is said at once, and the switch shows what the file still holds.
+      void this.write(calls.checked ? kept(e) : { ...kept(e), scope: "dictation" }, false).then(
+        (ok) => {
+          if (!ok) calls.checked = e.entryScope !== "dictation";
+        },
+      );
+    });
+    li.append(
+      row(
+        {
+          label: "Use in calls too",
+          help: "Fixes it in every call transcript as well.",
+          for: calls.id,
+        },
+        calls,
+      ),
+      h(
+        "div",
+        { class: "pg-row" },
+        h(
+          "button",
+          {
+            class: "remove pg-textlink",
+            type: "button",
+            on: { click: () => void this.remove(e.term) },
+          },
+          isReplacement(e) ? "Remove this replacement" : "Remove this word",
+        ),
+      ),
+    );
+    return li;
   }
 
   private async add(): Promise<void> {
     const term = this.term.value.trim();
     if (term === "") {
-      this.refused("Type what akou writes.");
+      this.refused(this.replacing ? "Type what akou writes." : "Type a word.");
       return;
     }
-    const heard = heardForms(this.heard.value);
+    const heard = this.replacing ? heardForms(this.heard.value) : [];
     const had = this.entries.find((e) => e.scope === "global" && same(e.term, term));
     // Adding forms to a term the file has keeps its spelling, its forms, its scope and the rest of
     // the entry: the route replaces the whole entry.
@@ -236,11 +511,13 @@ export class DictationDictionary {
     }
   }
 
-  /** Writes one entry; the refusal, if any, is shown beside the form. */
-  private async write(body: WriteBody): Promise<boolean> {
+  /** Writes one entry; the refusal, if any, is shown under the form, or said by a row's change. */
+  private async write(body: WriteBody, fromForm = true): Promise<boolean> {
     const r = await this.t.request("POST", "/vocab", body);
     if (r.status >= 400) {
-      this.refused(message(r.body, `the word was not saved (HTTP ${r.status})`));
+      const why = message(r.body, `the word was not saved (HTTP ${r.status})`);
+      if (fromForm) this.refused(why);
+      else toast(why);
       return false;
     }
     this.issue.hidden = true;
@@ -260,7 +537,8 @@ export class DictationDictionary {
       toast(message(r.body, `the word was not removed (HTTP ${r.status})`));
       return;
     }
-    toast(`Removed "${term}".`, "info");
+    this.opened = null;
+    toast(`Removed ${term}.`, "info");
     await this.load();
   }
 
@@ -289,28 +567,17 @@ export class DictationDictionary {
   }
 }
 
-/** The window's Dictionary dialog, opened from the Dictation page or by `#dictation-dictionary`. */
-export function mountDictionaryDialog(
-  t: Transport,
-  workspace?: () => string | undefined,
-): { open(): Promise<void> } {
-  const dialog = document.getElementById("dictation-dictionary") as HTMLDialogElement;
-  const body = document.getElementById("dictation-dictionary-body") as HTMLElement;
-  const dictionary = new DictationDictionary(t, workspace);
-  body.append(dictionary.root);
-  const open = async () => {
-    await dictionary.load();
-    openModal(dialog);
+/** The spot of a focused control in the list, or null when it is none of a row's. */
+function spotOf(el: HTMLElement): Spot | null {
+  const control = CONTROLS.find((c) => el.matches(c));
+  const item = el.closest<HTMLElement>("[data-term], .pg-rest");
+  const section = el.closest<HTMLElement>("[data-section]");
+  if (!control || !item || !section) return null;
+  const rows = [...section.querySelectorAll<HTMLElement>("[data-term], .pg-rest")];
+  return {
+    term: item.dataset.term,
+    section: section.dataset.section,
+    control,
+    index: rows.indexOf(item),
   };
-  // What is typed into the fields stays there when the dialog closes, so nothing is lost.
-  closable(dialog);
-  document
-    .getElementById("dictation-dictionary-close")
-    ?.addEventListener("click", () => dialog.close());
-  const fromHash = () => {
-    if (location.hash === "#dictation-dictionary") void open();
-  };
-  window.addEventListener("hashchange", fromHash);
-  fromHash();
-  return { open };
 }
