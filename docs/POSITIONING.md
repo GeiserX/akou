@@ -59,4 +59,4 @@ The table reflects public information as of September 2026 and may be out of dat
 
 ## Consent
 
-Recording a call needs the other side's agreement in many places. akou reminds you once per call, gives you a notice you can paste, and explains the duties in its privacy document. Following the law where you are is up to you.
+Recording a call needs the other side's agreement in many places. akou explains the duties in its privacy document, and the akou skill reminds you once when an agent starts the call. Telling the others, and following the law where you are, is up to you.

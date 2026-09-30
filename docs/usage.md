@@ -28,7 +28,7 @@ The Record row at the top holds everything a new call needs:
 
 ![A call being recorded: the elapsed time, the microphone and call meters, Stop, the live transcript, a note already added and a second one being typed](images/screenshots/recording.png)
 
-While a call records, the row shows **REC**, the elapsed time, **Stop**, and buttons to mute your microphone and to pause. A bar under it reminds you to tell the others you are recording, with **Copy a notice** to paste into the meeting chat, and **Dismiss**. While the meeting app is in front, a small floating bar shows the time, the levels, Mute, Ask and Stop. It carries no transcript text, so it can stay up during a screen share; Settings turns it off (**Floating bar while recording**).
+While a call records, the row shows **REC**, the elapsed time, **Stop**, and buttons to mute your microphone and to pause. While the meeting app is in front, a small floating bar shows the time, the levels, Mute, Ask and Stop. It carries no transcript text, so it can stay up during a screen share; Settings turns it off (**Floating bar while recording**).
 
 The first Record asks macOS for the microphone and for the system audio of the call. See [Permissions](getting-started.md#permissions).
 

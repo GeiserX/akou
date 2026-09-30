@@ -1075,7 +1075,6 @@ class App {
       byId<HTMLInputElement>("newtitle").value = "";
       this.workspace.used(workspace);
       this.openCall(call, false);
-      this.consent();
       return;
     }
     toast(message(r.body, `the call did not start (${r.status})`));
@@ -1133,22 +1132,9 @@ class App {
     }
   }
 
-  /** The consent reminder, once per call started here, with notice text to copy. */
-  private consent(): void {
-    const notice = "Heads up: I'm recording this call on my own computer to take notes.";
-    this.confirm(
-      "Remember to tell the others you are recording.",
-      "Copy a notice",
-      () =>
-        void navigator.clipboard
-          .writeText(notice)
-          .catch(() => toast("The clipboard is not available here.")),
-    );
-  }
-
   /**
    * A row under the header with one action and a dismiss button. Each message gets its own row, so
-   * a second one (the share link) never hides the first (the consent reminder).
+   * a second one never hides the first (the share link, a stale restart).
    */
   private confirm(text: string, action: string, run: () => void): void {
     const bar = byId("confirm");
