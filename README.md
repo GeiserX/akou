@@ -2,45 +2,62 @@
   <img src="docs/images/banner.svg" alt="akou" width="100%">
 </p>
 
-# akou
+<h1 align="center">akou</h1>
 
-<p>
-  <a href="https://github.com/GeiserX/akou/releases"><img src="https://img.shields.io/github/v/release/GeiserX/akou?include_prereleases" alt="Release"></a>
-  <a href="https://github.com/GeiserX/akou/actions/workflows/ci.yml"><img src="https://github.com/GeiserX/akou/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/GeiserX/akou" alt="License"></a>
+<p align="center">
+  <a href="https://github.com/GeiserX/akou/releases"><img src="https://img.shields.io/github/v/release/GeiserX/akou?include_prereleases&style=flat-square" alt="Release"></a>
+  <a href="https://github.com/GeiserX/akou/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/GeiserX/akou/ci.yml?style=flat-square&label=CI" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/GeiserX/akou?style=flat-square" alt="License"></a>
+  <a href="https://hub.docker.com/r/drumsergio/akou"><img src="https://img.shields.io/docker/pulls/drumsergio/akou?style=flat-square&logo=docker" alt="Docker pulls"></a>
+  <a href="https://github.com/GeiserX/akou/stargazers"><img src="https://img.shields.io/github/stars/GeiserX/akou?style=flat-square&logo=github" alt="Stars"></a>
 </p>
 
-akou is an open-source alternative to [Granola](https://www.granola.ai): a desktop app that records your calls on your own computer, transcribes them on the machine, and answers questions about a call while it is still running. Your own terminal agent (Claude Code, Codex or anything that [speaks MCP or can run the `akou` command](docs/ux/PROGRAMMABILITY.md)) can follow and question the call, and the notes land in the tools you already use. It runs on macOS, Windows and Linux, and as a [transcription server](docs/ux/SERVER.md) you host yourself.
+akou is a desktop app for macOS that records your calls on your own computer, transcribes them on the machine, and answers questions about a call while it is still running. There is no bot in the meeting, no account and no cloud: your own terminal agent (Claude Code, Codex or anything that speaks MCP) can follow and question the call, and the notes land in files you own. The same core runs as a [self-hosted transcription server](https://geiserx.github.io/akou/server/) in Docker.
 
-## Status
-
-Early. The 0.x releases are prereleases for macOS on Apple silicon: the app is not signed by Apple yet, so the first open needs one extra step. The documents in this repository cover the architecture, the requirements, the known traps and the roadmap.
+<img src="docs/images/screenshots/calls.png" alt="A saved call in akou: calls by workspace on the left, three speakers with their talk time, a transcript with a time and a name on every line, and the notes taken during the call on the right" width="100%">
 
 ## Features
 
-- Captures the microphone and the call audio on separate channels, with no bot in the meeting.
-- Shows a live transcript and keeps a timestamped notepad while the call runs.
-- The recording never leaves your machine, and the app has no cloud.
-- Your agent can start a call, follow it, name a speaker and ask about it from the terminal, over a local API or MCP.
-- The ask box answers with the Claude Code or Codex subscription you already pay for, or with [any OpenAI-compatible or Anthropic endpoint](docs/providers.md).
-- Answers come from a small context built locally, with no model call and no re-reading of the call, so a late question in a three-hour call costs about the same as one in a ten-minute call.
-- One word list you own fixes rare names and product terms; your agent adds new words to it with your approval.
-- A finished call becomes Markdown, an event log and the audio, and lands in your own files: no built-in knowledge base.
+- Records the microphone and the call audio on separate channels, with no bot in the meeting and no virtual audio driver.
+- Shows a live transcript as people speak, and runs an accurate pass with speaker labels on your Mac after the call.
+- Keeps a timestamped notepad while the call runs; every note carries the time it was written.
+- Answers a question about the call while it runs, with the Claude Code or Codex you already pay for, a local model, or your own API key. With none, Ask becomes a search of the call.
+- Lets your agent start, follow, question and annotate a call from the terminal, over a local API or MCP.
+- Types what you dictate into any app when you hold a key, and learns a word you fix only if you say yes.
+- Fixes names and product terms across calls from one word list you own.
+- Hands a finished call to your own vault or repository as Markdown, an event log and the audio, through an export folder, hooks, a signed webhook or the API.
+- Runs as a transcription server in Docker with OpenAI-compatible, Wyoming and Bazarr endpoints.
 
 ## Quick start
 
-Download `akou-<version>-macos-arm64.dmg` from the [latest release](https://github.com/GeiserX/akou/releases), drag akou into Applications and open it once. The build is not signed by Apple yet: on macOS 14, Control-click akou and choose Open; on macOS 15 and later, go to System Settings > Privacy & Security after the refusal and click Open Anyway. Needs a Mac with Apple silicon and macOS 14.4 or later.
+```sh
+# Download akou-0.5.2-macos-arm64.dmg from the latest release and drag akou into Applications.
+# The build is not signed by Apple yet: clear the download mark once, or use Open Anyway in Privacy & Security.
+xattr -dr com.apple.quarantine /Applications/akou.app
+open -a akou
+```
 
-The first window downloads the speech models (about 3.0 GB, each file checked against a pinned SHA-256). [Getting started](docs/getting-started.md) covers checksums, permissions, the command line and uninstalling.
+The first window asks what you will use akou for and downloads the speech models (about 3.0 GB). At your first Record, macOS asks for the microphone and system audio; the call then shows up in the sidebar with a live transcript. Needs a Mac with Apple silicon and macOS 14.4 or later. To let Claude Code or Codex follow your calls, install the command line from the akou menu and run `akou skill install`; see [Getting started](https://geiserx.github.io/akou/getting-started/) and [Agents and the command line](https://geiserx.github.io/akou/agents/).
+
+## Status
+
+The 0.x releases are prereleases: macOS on Apple silicon only, unsigned, and an update may ask for the microphone and system audio grants again. The Windows and Linux archives are the `akou` command line alone: they manage models and settings and drive a remote akou, but cannot record. Each release's [changelog entry](CHANGELOG.md) lists its known limitations.
 
 ## Documentation
 
-The documentation is published as a site at [geiserx.github.io/akou](https://geiserx.github.io/akou/). The same pages on GitHub:
+Docs: https://geiserx.github.io/akou/
 
-- [Getting started](docs/getting-started.md): installing the app and the command line, the first open, models, permissions, uninstalling
-- [Providers](docs/providers.md): what answers questions and writes notes
-- [Handing calls to your own knowledge system](docs/knowledge-handoff.md)
-- Design record: [index](docs/index.md), [design](docs/DESIGN.md), [requirements](docs/REQUIREMENTS.md), [traps](docs/TRAPS.md), [roadmap](docs/ROADMAP.md), [positioning](docs/POSITIONING.md)
+- [Getting started](https://geiserx.github.io/akou/getting-started/): install, the first open, the models, permissions, your first call
+- [Configuration](https://geiserx.github.io/akou/configuration/): every setting and its default
+- [Usage](https://geiserx.github.io/akou/usage/): the window, notes, Ask, speakers, workspaces
+- [Dictation](https://geiserx.github.io/akou/dictation/): hold a key, speak, and the words land where the cursor is
+- [Agents and the command line](https://geiserx.github.io/akou/agents/): the skill, the plugin, the CLI, the API and MCP
+- [Providers](https://geiserx.github.io/akou/providers/): what answers questions, and what it sees
+- [Hand-off to your knowledge system](https://geiserx.github.io/akou/knowledge-handoff/): export folder, hooks, webhook, pull
+- [Server mode](https://geiserx.github.io/akou/server/): the Docker image, keys, GPUs and presets
+- [How it works](https://geiserx.github.io/akou/how-it-works/)
+- [Troubleshooting](https://geiserx.github.io/akou/troubleshooting/)
+- [Development](https://geiserx.github.io/akou/development/): build, test, release
 
 ## License
 
