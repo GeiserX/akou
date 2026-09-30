@@ -2072,6 +2072,11 @@ button.cite:hover {
   border-radius: 999px;
   padding: 0 6px;
 }
+/* A line akou wrote from a fix is the user's, not an agent's: its tag is neutral. */
+.note.fix .author {
+  border-color: var(--line2);
+  color: var(--dim);
+}
 /* The marker's glyph: a dot for a bullet, a box for an action, a ? for an open question. */
 .note .mark {
   flex: none;
@@ -2266,6 +2271,11 @@ button.cite:hover {
   background: var(--raised);
   border: 1px solid var(--line2);
   color: var(--fg);
+}
+#toast .toast-action {
+  margin-left: 8px;
+  padding: 2px 10px;
+  font-size: 12px;
 }
 #jump {
   position: fixed;

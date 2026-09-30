@@ -223,6 +223,10 @@ const OUT = {
     scope: z.enum(["call", "workspace", "global"]),
     id: z.string().optional(),
     path: z.string().optional(),
+    /** Scope call: learned into the call's and the workspace's vocabulary. */
+    learned: z.boolean().optional(),
+    /** Scope call: written into the call's Notes as `Fixed: heard -> term`. */
+    noted: z.boolean().optional(),
   }),
   proposed: z.object({ proposed: z.array(z.string()) }),
   /** With a call, the call's words and proposals as call text; without, the vocabulary files. */
@@ -778,7 +782,7 @@ export function createMcpServer(o: McpOptions): McpServer {
     "akou_vocab_add",
     {
       description:
-        'Add a word the user stated ("it\'s Vercel, not versal"): with scope "call" it applies to the live call at once, forward to recognition and backward to every earlier line; "workspace" or "global" keeps it in the vocabulary file. Never add a word you inferred; propose it with akou_vocab_propose.',
+        'Pass on a word the user stated ("it\'s Vercel, not versal"), with how it was heard. Scope "call" (the default) works like the user fixing a line: every line of the live call with that heard form reads corrected at once. A name, product or jargon word is also learned into the call\'s and the workspace\'s vocabulary with no review; a rewording of common words stays in this call only and goes into the call\'s Notes as "Fixed: heard -> term" (so does any word while the live engine takes no word list). `decode: false` only corrects the reading of this call. "workspace" or "global" only writes the vocabulary file. Never add a word you inferred; propose it with akou_vocab_propose.',
       inputSchema: z.object({
         term: z.string().min(1),
         heard: z.array(z.string()).optional(),
@@ -790,7 +794,7 @@ export function createMcpServer(o: McpOptions): McpServer {
       outputSchema: OUT.vocabAdd,
     },
     async (a) => {
-      if (a.scope === "call") {
+      if (a.scope === "call" && a.decode === false) {
         const r = await req("POST", "/calls/live/vocab", {
           body: { term: a.term, heard: a.heard, decode: a.decode },
         });
@@ -798,6 +802,23 @@ export function createMcpServer(o: McpOptions): McpServer {
           text: `Added ${a.term} to call ${b.call} (${b.vocab.id})`,
           data: { term: a.term, scope: a.scope, id: b.vocab.id },
         }));
+      }
+      if (a.scope === "call") {
+        const r = await req("POST", "/calls/live/fix", { body: { term: a.term, heard: a.heard } });
+        return asResult(r, (b) => {
+          const pairs: { heard: string; term: string; learned: boolean; noted: boolean }[] =
+            b.pairs ?? [];
+          const learned = pairs.some((p) => p.learned);
+          const noted = pairs.some((p) => p.noted);
+          const what = pairs.map((p) => (p.heard ? `${p.heard} -> ${p.term}` : p.term)).join(", ");
+          const text = learned
+            ? `Fixed ${what} in call ${b.call}: learned into the call's and the workspace's vocabulary${noted ? ", and added to the call's Notes" : ""}`
+            : `Fixed ${what} in call ${b.call} and added it to the call's Notes: a rewording of common words is not learned for later calls`;
+          return {
+            text,
+            data: { term: a.term, scope: a.scope, id: b.undo?.vocab?.[0], learned, noted },
+          };
+        });
       }
       if (a.scope === "workspace" && !a.workspace) {
         return errorText('bad_field: scope "workspace" needs `workspace`');

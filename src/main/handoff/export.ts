@@ -300,7 +300,12 @@ export function renderNotes(view: CallView, tz: string): string {
   return view
     .notes()
     .map((n) => {
-      const who = n.author === "agent" ? ` _(agent: ${n.client ?? n.by.slice(6)})_` : "";
+      const who =
+        n.from === "fix"
+          ? " _(from a fix)_"
+          : n.author === "agent"
+            ? ` _(agent: ${n.client ?? n.by.slice(6)})_`
+            : "";
       return `- ${formatWall(n.w, tz)} ${n.text}${who}`;
     })
     .join("\n");

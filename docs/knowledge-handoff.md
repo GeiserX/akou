@@ -67,9 +67,9 @@ Set `webhook.url` and `webhook.secret` in `config.json`. akou `POST`s the same J
 
 ## The vocabulary is the one thing that carries over
 
-Names and product terms are what every recognizer gets wrong, so akou keeps one list you own: plain YAML files (`vocabulary.yaml` for everything, `vocabulary/<workspace>.yaml` per workspace), each term with the ways it was misheard. It is a setting, not a knowledge base. It grows only by what you add and by proposals you approve:
+Names and product terms are what every recognizer gets wrong, so akou keeps one list you own: plain YAML files (`vocabulary.yaml` for everything, `vocabulary/<workspace>.yaml` per workspace), each term with the ways it was misheard. It is a setting, not a knowledge base. It grows only by what you fix and by proposals you approve:
 
-- **During a call**, "Fix this word" corrects a word in that call at once, and can add it to the workspace vocabulary when you say so.
+- **During or after a call**, Fix on a line: you write the line as it was said, and every other line of the call with the same mishearing reads right at once. A name, product or jargon word goes into the workspace vocabulary with no review step, since you wrote it yourself; a rewording of common words stays on its line and goes into the call's notes as `Fixed: versal -> Vercel`, so the final transcript can take it into account. A toast says what was learned, with Undo.
 - **After a call**, `akou vocab pass` asks your [provider](providers.md) to fix known terms and propose new ones. Every correction must point at words that are really in that line, or it is dropped.
 - **From your own sources**, the `akou-vocab` skill runs in your Claude Code or Codex. Given an invite, it proposes the attendees' names and the title's product names; given documents, repositories or your exported calls, it ranks names by how often and how unusual they are, confirms each spelling on the web, and turns words you corrected into heard forms. `akou skill install` installs it next to the `akou` skill.
 

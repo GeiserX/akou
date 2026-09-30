@@ -201,6 +201,8 @@ export interface NoteView {
   author: "human" | "agent";
   /** For agent notes, the client after `agent:`. */
   client?: string;
+  /** `fix` when akou wrote the line from a fix of a transcript line. */
+  from?: "fix";
   seq: number;
 }
 
@@ -219,6 +221,8 @@ export interface CallVocabEntry {
   heard: string[];
   by: string;
   segs?: string[];
+  /** With `segs`: the occurrence of the heard form on the first segment, for a one-word fix. */
+  nth?: number;
   decode: boolean;
   seq: number;
 }
@@ -546,6 +550,7 @@ export class CallView {
           by: e.by,
           author: isAgentAuthor(e.by) ? "agent" : "human",
           client: isAgentAuthor(e.by) ? e.by.slice("agent:".length) : undefined,
+          ...(e.from ? { from: e.from } : {}),
           seq: cur?.seq ?? e.seq,
         });
         break;
@@ -690,6 +695,7 @@ export class CallView {
         revisions: [e],
       };
       this.segs.set(e.id, s);
+      if (s.layer === "final") this.coverChanged();
       if (e.lang) this.langs.add(e.lang);
       this.changeLog.push(s.id);
       this.indexTokens(s.id, s.text);
@@ -715,6 +721,9 @@ export class CallView {
     if (e.model !== undefined) cur.model = e.model;
     if (e.echo !== undefined) cur.echo = e.echo;
     if (e.by !== undefined) cur.by = e.by;
+    if (cur.layer === "final" && (e.a0 !== undefined || e.a1 !== undefined || e.text === null)) {
+      this.coverChanged();
+    }
     this.changeLog.push(cur.id);
     this.indexTokens(cur.id, cur.text);
   }
@@ -730,6 +739,7 @@ export class CallView {
       heard: [...heard],
       by: e.by,
       segs: e.segs ?? (e.term === null ? cur?.segs : undefined),
+      nth: e.nth ?? (e.term === null ? cur?.nth : undefined),
       decode: e.decode ?? (e.term === null ? (cur?.decode ?? true) : true),
       seq: cur?.seq ?? e.seq,
       retracted: e.term === null,
@@ -742,6 +752,16 @@ export class CallView {
       this.invalidateAll();
     } else {
       this.invalidateRuleForms([...(before?.heard ?? []), ...entry.heard]);
+    }
+  }
+
+  /** Final lines came or moved: the lines a line-scoped pair covers are worked out again. */
+  private coverChanged(): void {
+    for (const v of this.callVocab.values()) {
+      if (v.segs && !v.retracted) {
+        this.rulesCache = null;
+        return;
+      }
     }
   }
 
@@ -962,7 +982,15 @@ export class CallView {
     const rules: VocabRule[] = [];
     for (const v of this.callVocab.values()) {
       if (v.retracted || v.term === "") continue;
-      rules.push({ term: v.term, heard: v.heard, scope: "call", segs: v.segs });
+      rules.push({
+        term: v.term,
+        heard: v.heard,
+        scope: "call",
+        segs: v.segs ? this.withCover(v.segs) : undefined,
+        ...(v.segs?.[0] !== undefined && v.nth !== undefined
+          ? { at: { seg: v.segs[0], nth: v.nth } }
+          : {}),
+      });
     }
     for (const f of this.options.vocabFiles ?? []) {
       if (f.confirmed === false) continue;
@@ -978,6 +1006,24 @@ export class CallView {
     for (const name of names) rules.push({ term: name, heard: [], scope: "name" });
     this.rulesCache = rules;
     return rules;
+  }
+
+  /**
+   * A pair kept to some lines (a fix of one line) also reads on the final lines that cover the
+   * same audio, so the fix outlives the final pass: a live line's, and a retracted final line's
+   * when the final pass runs again and writes new ones.
+   */
+  private withCover(ids: readonly string[]): string[] {
+    const out = new Set(ids);
+    for (const id of ids) {
+      const s = this.segs.get(id);
+      if (!s || (s.layer !== "live" && s.text !== null)) continue;
+      for (const f of this.segs.values()) {
+        if (f.layer !== "final" || f.text === null || f.part !== s.part || f.ch !== s.ch) continue;
+        if (f.a0 < s.a1 && f.a1 > s.a0) out.add(f.id);
+      }
+    }
+    return [...out];
   }
 
   private corrected(s: SegState): CorrectResult {

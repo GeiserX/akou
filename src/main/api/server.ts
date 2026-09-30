@@ -39,6 +39,7 @@ import type { KeyStore } from "./keys.ts";
 import { type Cidr, isLoopback, sourceAddress } from "./net.ts";
 import { callRoutes } from "./routes/calls.ts";
 import { dictationRoutes } from "./routes/dictation.ts";
+import { fixRoutes } from "./routes/fix.ts";
 import { followRoutes } from "./routes/follow.ts";
 import { handoffRoutes } from "./routes/handoff.ts";
 import { jobRoutes } from "./routes/jobs.ts";
@@ -135,6 +136,12 @@ export interface ApiApp {
   ): Promise<LoadedConfig>;
   /** Vocabulary files changed on disk: forget what was read. */
   vocabChanged(): void;
+  /**
+   * Whether the engine transcribing this call now can be given a word list: a live call's setup
+   * (Qwen's in-call rewrite, or Parakeet decoding with beam search), or for an ended call the final
+   * pass's recognizer (Parakeet with beam search). Absent: it cannot.
+   */
+  takesWords?(id: string): boolean;
   /** Runs the final pass for an ended call. */
   finalize(
     id: string,
@@ -233,6 +240,7 @@ export function buildRouter(mode?: Mode): Router<ApiApp> {
   queryRoutes(r);
   notesRoutes(r);
   vocabRoutes(r);
+  fixRoutes(r);
   dictationRoutes(r);
   postCallRoutes(r);
   handoffRoutes(r);
