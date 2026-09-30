@@ -1466,6 +1466,8 @@ interface HostUpgrade {
   timer: unknown;
   /** Reviews in a row that had not finished when the next one was due. */
   behind: number;
+  /** The first request the last timer queued: still waiting at the next one, it is behind. */
+  lastQueued: UpgradeJob[] | null;
   /** The reviewer did not keep up: nothing more of this call is reviewed. */
   off: boolean;
   /** Aborted at `call.ended`: the request in flight is given up. */
@@ -1853,6 +1855,7 @@ export class LiveAsr {
             busy: false,
             timer: null,
             behind: 0,
+            lastQueued: null,
             off: false,
             ended: new AbortController(),
             glossary: [],
@@ -2093,22 +2096,27 @@ export class LiveAsr {
   private reviewDue(c: HostCall, u: HostUpgrade): void {
     u.timer = null;
     if (u.off) return;
-    // A reader's pass is running: the reviewer is not behind the call, it is ahead of the timer.
+    // A reader's pass is running: its request is ahead of the timer, not behind the call, so
+    // nothing waiting is dropped. The reviewer is behind only when the last timer's request has
+    // not even started, as reads one after another would otherwise keep it on however slow it is.
     if (u.readPass) {
-      u.waiting.push(...reviewBatches(u.closed.splice(0), u.capSeconds));
-      void this.runQwen(c, u);
+      if (u.lastQueued && u.waiting.includes(u.lastQueued)) {
+        u.behind++;
+        if (u.behind >= REVIEW_BEHIND_MAX) {
+          this.reviewOff(u);
+          return;
+        }
+      } else {
+        u.behind = 0;
+      }
+      this.queueReview(c, u);
       return;
     }
     if (u.busy || u.waiting.length > 0) {
       u.behind++;
       const late = u.waiting.splice(0).flatMap((r) => r.flatMap((j) => j.lines.map((l) => l.id)));
       if (u.behind >= REVIEW_BEHIND_MAX) {
-        u.off = true;
-        u.closed.length = 0;
-        this.log(
-          "warn",
-          `second pass: ${u.name} did not keep up with the call (${u.behind} reviews in a row behind); the rest of the call keeps the streaming text`,
-        );
+        this.reviewOff(u);
         return;
       }
       if (late.length > 0) {
@@ -2120,8 +2128,26 @@ export class LiveAsr {
     } else {
       u.behind = 0;
     }
-    u.waiting.push(...reviewBatches(u.closed.splice(0), u.capSeconds));
+    this.queueReview(c, u);
+  }
+
+  /** The timer's review: the utterances closed since the last one, queued for the reviewer. */
+  private queueReview(c: HostCall, u: HostUpgrade): void {
+    const batches = reviewBatches(u.closed.splice(0), u.capSeconds);
+    u.lastQueued = batches[0] ?? null;
+    u.waiting.push(...batches);
     void this.runQwen(c, u);
+  }
+
+  /** The reviewer did not keep up: nothing more of this call is reviewed. */
+  private reviewOff(u: HostUpgrade): void {
+    u.off = true;
+    u.closed.length = 0;
+    u.waiting.length = 0;
+    this.log(
+      "warn",
+      `second pass: ${u.name} did not keep up with the call (${u.behind} reviews in a row behind); the rest of the call keeps the streaming text`,
+    );
   }
 
   /** Decodes the waiting reviews, one at a time, and writes each one's words. */
@@ -2184,7 +2210,8 @@ export class LiveAsr {
    * reads corrected lines. The newest cap's worth goes first; older ones stay for the timer. Waits
    * at most `waitMs`, then answers how many closed lines are still not reviewed. Concurrent reads
    * share one pass, and a read right after the timer's pass finds nothing to do. Null when the call
-   * has no second pass running: Off, gone off, or ended (the final pass owns the rest).
+   * has no second pass running: Off, gone off, or ended (the final pass owns the rest), including
+   * when that happens during the wait, which then ends at once: no later read would review them.
    */
   async reviewForRead(
     callId: string,
@@ -2203,14 +2230,21 @@ export class LiveAsr {
     const pass = u.readPass;
     if (pass) {
       let timer: unknown = null;
+      let onEnd = () => {};
       await Promise.race([
         pass,
         new Promise<void>((resolve) => {
           timer = this.clock.setTimeout(resolve, waitMs);
         }),
+        new Promise<void>((resolve) => {
+          onEnd = resolve;
+          u.ended.signal.addEventListener("abort", onEnd, { once: true });
+        }),
       ]);
       if (timer !== null) this.clock.clearTimeout(timer);
+      u.ended.signal.removeEventListener("abort", onEnd);
     }
+    if (u.off || u.ended.signal.aborted) return null;
     return { unreviewed: unreviewedLines(u) };
   }
 
