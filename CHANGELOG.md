@@ -2,6 +2,39 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.5.3 — pick the live model and a second pass by name, and dictate with no wait
+
+On 0.5.2 the live menu named setups instead of models, and dictation could wait about 10 s for Qwen to load. In 0.5.3 one panel picks the live model by name and, as a separate choice, a second pass that goes back over the lines. The second pass also runs before an agent reads the call, so the agent reads corrected lines. Dictation types with the live model by default, shows everything you say, and its key works as soon as Accessibility is granted.
+
+### The window
+- **One panel picks the live model and the second pass.** It lists the downloaded models by name, one plain line each, with no Automatic row. The second pass is Off by default, or Qwen or Parakeet every 1, 2 or 5 minutes (#199, #203).
+- **Add a model from the panel.** Each slot ends in Add a model, which downloads a model that fits the slot right there, with progress and Cancel. "From a folder…" copies a model you already have (#203).
+- **The 1120 ms Nemotron is named "Nemotron 3.5, 1 s"**, after its wait. Nothing measured backed calling it steadier (#209).
+- **The recording popup's level bars move**, and the extra space past Stop is gone (#202).
+- **No consent reminder row when a call starts.** Telling the others you are recording stays your job (#204).
+
+### Transcription
+- **Parakeet can be the second pass.** On FLEURS it has 16% fewer errors than the live stream alone in English and 46% fewer in Spanish, and it adds no memory, because the live Worker already has Parakeet loaded. A line someone edited or fixed a word on keeps their text, and that now holds for Qwen's pass too (#200).
+- **The second pass runs before an agent reads the call.** With a second pass on, a read of a live call first reviews the lines closed since the last review. A read waits at most 20 s, and its answer counts the lines it did not reach as `unreviewed`. `akou tail -f` and `akou watch` read with `review=skip` and never wait (#206).
+
+### Dictation
+- **Dictation types with the live model by default**, with no wait for a model to load. `dictation.final` picks the text that goes in: `live`, the default and the fastest, `parakeet` or `qwen`, as [docs/configuration.md](docs/configuration.md) lists. `live` gives up 3.0 points of word error rate in English and 0.6 in Spanish against Parakeet. akou loads dictation's models first when the app starts. It keeps a press made while they load, and the pill says "loading model" (#207).
+- **The pill shows everything you say.** It grows up to eight lines, then scrolls, pinned to the newest words (#205).
+- **The dictation key works once Accessibility is granted**, with no restart of akou (#208).
+
+### Docs
+- **The docs are a site** at [geiserx.github.io/akou](https://geiserx.github.io/akou/) (#190), and the site and README show the real app (#201).
+- The live panel's [design drawings](docs/ux/design-explorations/lm-live-menu-slots.html) are in the repo (#198), and the [compose example](examples/compose/telegram-archive/.env.example) pins the published 0.5.2 images (#197).
+
+The HTTP API only adds fields. `POST /calls` takes `review` and `reviewEvery`, `GET /status` has `live.review`, a live call's transcript read has `unreviewed`, and `GET /v1/dictation` has `final` and `live`. With the second pass Off, the default, no read waits.
+
+### Known limitations
+- **After installing a new build, macOS asks for Accessibility again**, because the app is ad-hoc signed. Allow akou again in System Settings, then Privacy & Security, then Accessibility ([docs/troubleshooting.md](docs/troubleshooting.md#the-dictation-key-does-nothing)).
+- **The late Accessibility grant has not been checked on a real Mac yet.** The tests cover the helper and the app, but not a real grant and key tap.
+- **With Qwen as the second pass and 5 minutes of lines pending, a read reaches its 20 s cap about half the time.** It then answers with the rest counted as `unreviewed`.
+- **Parakeet in dictation can drop sentence ends on quiet speech**, because the pause finder hears the raw signal. That hits `dictation.final` `parakeet` and the fallback when no streaming model is downloaded.
+- Every item under 0.5.2's Known limitations still applies.
+
 ## 0.5.2 — every setting is a page of plain words, and first run asks only what you need
 
 On 0.5.1, Settings, Models and Dictation were dialogs full of config keys that did not close like a normal window. In 0.5.2 each one is a page of the main window with plain rows, and you leave it from the sidebar. A first run now asks what you will use akou for and sets up only that. Your API key moves into the macOS Keychain.
