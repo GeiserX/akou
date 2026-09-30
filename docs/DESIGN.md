@@ -673,14 +673,13 @@ Tool descriptions carry the rules: cite wall time, never quote a draft line as f
 `skills/akou/SKILL.md` triggers on "record this call/meeting", starting a call, or questions about what is being said. Its rules, in order:
 
 1. **Start first.** The first tool call is `akou start --attach -w <workspace> -t "<title>"` (or `akou_start`). No status probe, no planning turn. A call already recording comes back with `attached: true`, and the agent follows it (answers, reads, notes) as if it had started it. Tell the user they can also press the hotkey or type `! akou start`.
-2. Remind the user once about consent when outside people are on the call.
-3. **To answer**, call `akou_context` with the user's question verbatim. Never read files under the recordings root. Answer from the pack, cite `[15:41 Ben]`, never present an offset as a time of day, never quote a `DRAFT` line as fact. If the pack says `ENDED`, say the call ended and when.
-4. When the user names someone, call `akou_name_speaker` at once. When the user states how a word is spelled ("it's Vercel, not versal"), call `akou_vocab_add` with `scope: call` at once; if the user wants it kept, add it to the workspace. When you learn something you will need later, call `akou_remember`.
-4a. Before a call, if the user shares the invite, pass attendee names and title terms as `vocab` to `akou_start`. Never add an inferred word as confirmed; use `akou_vocab_propose`. The `akou-vocab` skill does the wider learning from documents, exports and the web, always ending in a proposal the user approves.
-5. If `memoStale` is set and no provider is configured, write the memo with `akou_memo_put`.
-6. On `health: dead`, tell the user at once; akou is already rebuilding and restarts automatically after 60 s. On `asr.lag` over 30 s, hold heavy work in this session until the call ends.
-7. History beyond this call lives in the user's own knowledge system. Do not ask akou about other calls unless the user names one.
-8. Read the models and provider in use from `akou status`, never from this text.
+2. **To answer**, call `akou_context` with the user's question verbatim. Never read files under the recordings root. Answer from the pack, cite `[15:41 Ben]`, never present an offset as a time of day, never quote a `DRAFT` line as fact. If the pack says `ENDED`, say the call ended and when.
+3. When the user names someone, call `akou_name_speaker` at once. When the user states how a word is spelled ("it's Vercel, not versal"), call `akou_vocab_add` with `scope: call` at once; if the user wants it kept, add it to the workspace. When you learn something you will need later, call `akou_remember`.
+3a. Before a call, if the user shares the invite, pass attendee names and title terms as `vocab` to `akou_start`. Never add an inferred word as confirmed; use `akou_vocab_propose`. The `akou-vocab` skill does the wider learning from documents, exports and the web, always ending in a proposal the user approves.
+4. If `memoStale` is set and no provider is configured, write the memo with `akou_memo_put`.
+5. On `health: dead`, tell the user at once; akou is already rebuilding and restarts automatically after 60 s. On `asr.lag` over 30 s, hold heavy work in this session until the call ends.
+6. History beyond this call lives in the user's own knowledge system. Do not ask akou about other calls unless the user names one.
+7. Read the models and provider in use from `akou status`, never from this text.
 
 ## 7. The window
 
@@ -882,7 +881,7 @@ Full exit criteria are in [ROADMAP.md](ROADMAP.md).
 | F12 | The audible click from the probe tap in Bluetooth headphones is real (human listening test in the M1 hardware release checklist) | Probe only on non-Bluetooth routes; otherwise rely on the "no lines for 90 s" amber banner |
 | F13 | With `asr.parakeet.decoding` `beam`, decode biasing at the constant boost of 1.5 with a list under the cap inserts listed words into more than 1 in 15 negative clips of real calls in the nightly evaluation (at boost 3 the measured figure was 2 of 30; boost 1.5 on an earnings-call set gave 0 false insertions) | Greedy, the default, sends no list; for beam, lower the boost further or drop the cap; layer 2 and layer 3 carry the rest |
 
-Risks without a clean falsifier: ElectroBun is young (v2 stable since 2026-08-22, about 120 open issues, including a webview that freezes after sleep on macOS until relaunch; the recording is unaffected because capture is in the helper and the window can be closed and reopened). Windows signing cost. Consent law; the reminder ships in M1 and `docs/privacy-and-consent.md` explains the duties. Parakeet covers European languages only and does not report which one it heard; Whisper is selectable and does report it.
+Risks without a clean falsifier: ElectroBun is young (v2 stable since 2026-08-22, about 120 open issues, including a webview that freezes after sleep on macOS until relaunch; the recording is unaffected because capture is in the helper and the window can be closed and reopened). Windows signing cost. Consent law; akou shows no reminder, and telling the others stays the user's job. Parakeet covers European languages only and does not report which one it heard; Whisper is selectable and does report it.
 
 ## Summary
 
