@@ -280,7 +280,8 @@ export class LivePicker {
     const missing = all.filter((r) => r.state !== "ready");
     const note = slot === "live" ? liveNote(v, this.rows) : reviewNote(v, this.rows);
     const open = this.adding[slot] ?? here.length === 0;
-    const offChecked = slot === "review" && !v.review.next && v.review.setting === "none";
+    // Off is on whenever the next call runs no second pass, a saved one that cannot run included.
+    const offChecked = slot === "review" && !v.review.next;
     const radios: HTMLElement[] = [
       ...(slot === "review"
         ? [

@@ -407,6 +407,20 @@ describe("[W3.19] the live panel's slots take any model that fills them, by id",
     const small = liveView(ctx({ catalog: [RECOGNIZER, "nemotron-en-560"] }), null, () => "ready");
     expect(small.slots.live.map((e) => e.id)).toEqual(["nemotron-en-560", RECOGNIZER]);
     expect(small.slots.review.map((e) => e.id)).toEqual([RECOGNIZER]);
+    // A live model that does not hear one of the call's languages says so, like the second pass.
+    expect(v.slots.live.map((e) => e.blocked)).toEqual([
+      null,
+      null,
+      "Nemotron English does not hear es.",
+      null,
+    ]);
+    const ja = liveView(ctx({ languages: ["en", "ja"] }), null, () => "ready");
+    expect(ja.slots.live.find((e) => e.id === RECOGNIZER)?.blocked).toBe(
+      "Parakeet does not hear ja.",
+    );
+    // Any language: nothing to miss.
+    const any = liveView(ctx({ languages: [] }), null, () => "ready");
+    expect(any.slots.live.every((e) => e.blocked === null)).toBe(true);
     // Parakeet live: the second pass models say why they are not offered.
     const pk = liveView(ctx({ setting: RECOGNIZER }), null, () => "ready");
     expect(pk.slots.review.map((e) => e.blocked)).toEqual([

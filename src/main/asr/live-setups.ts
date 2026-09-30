@@ -379,6 +379,22 @@ export function reviewCannot(
 }
 
 /**
+ * Why the live panel does not offer a live model for these call languages, or null: it must hear
+ * every one of them, the rule `reviewCannot` applies to Parakeet's pass. Any language (none named):
+ * null. Advice, not a block: a model chosen anyway runs.
+ */
+export function liveCannot(id: string, languages: readonly string[]): string | null {
+  const hears = isLiveEngine(id)
+    ? LIVE_ENGINES[id].languages
+    : id === RECOGNIZER
+      ? PARAKEET_LANGUAGES
+      : null;
+  if (!hears) return null;
+  const out = languages.filter((l) => !hears.includes(l));
+  return out.length > 0 ? `${liveModelName(id)} does not hear ${out.join(", ")}.` : null;
+}
+
+/**
  * Why a second pass cannot run on the next call, or null when it can: `reviewCannot`, then its
  * models must be here.
  */
@@ -571,7 +587,7 @@ export function liveView(
         id,
         models: [id],
         checked: id === nextId,
-        blocked: null,
+        blocked: liveCannot(id, c.languages),
       })),
       review: REVIEW_SLOT.filter(inCatalog).map((id) => {
         const kind = reviewerOf(id) as Reviewer;
