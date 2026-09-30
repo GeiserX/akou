@@ -234,7 +234,9 @@ export const PARITY: readonly Row[] = [
     cli: ["vocab"],
     api: ["POST /calls/:id/vocab/pass"],
     mcp: { none: "no tool yet, and no design item names one" },
-    window: [ui("review.ts", "`/calls/#{call}/vocab/pass`")],
+    window: {
+      none: "the window fixes a word on its line; the pass is left to the CLI and scripts",
+    },
   },
   {
     action: "Import a vocabulary file",
@@ -248,14 +250,18 @@ export const PARITY: readonly Row[] = [
     cli: ["enhance"],
     api: ["POST /calls/:id/enhance", "GET /calls/:id/enhanced"],
     mcp: ["akou_enhance"],
-    window: [ui("enhanced.ts", "`/calls/#{call}/enhance`")],
+    window: {
+      none: "hidden from the window on purpose; notes already written stay in the export and GET /calls/:id/enhanced",
+    },
   },
   {
     action: "Agent-written notes",
     cli: { none: "CLI-28 designs it" },
     api: ["GET /calls/:id/enhance/context", "PUT /calls/:id/enhanced"],
     mcp: ["akou_enhance_context", "akou_enhanced_put"],
-    window: { none: "an agent writes them; the window shows them in the Enhanced tab" },
+    window: {
+      none: "an agent writes them; the export carries them, the window does not show them",
+    },
   },
   {
     action: "Final pass",
@@ -317,7 +323,7 @@ export const PARITY: readonly Row[] = [
     api: ["GET /templates"],
     mcp: { none: "missing: PG-F3" },
     window: {
-      none: "the window always uses the automatic choice; scripts pick one through the API or --template",
+      none: "the window always uses the automatic choice and has no Enhanced tab; scripts pick one through the API or --template",
     },
   },
   {

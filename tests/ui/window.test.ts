@@ -2,7 +2,7 @@
  * The window's new parts and its traps (docs/DESIGN.md sections 5.1 to 5.3, 7 and 8.3; TRAPS
  * "Page refetched the whole transcript every second", "Wake from sleep"), on the real page in a
  * headless browser: reconnecting without duplicates or gaps, XSS, request counting, the dead-call
- * banner from the fake helper, keyboard access, the notepad, the ask box, enhanced notes,
+ * banner from the fake helper, keyboard access, the notepad, the ask box,
  * settings, playback, "Fix this word", the meters, the share viewer and the page's own guard.
  */
 
@@ -389,7 +389,7 @@ describe("XSS: every text from a transcript, a note, a name or an answer renders
 
 describe("keyboard access", () => {
   test(
-    "Record and Stop are reachable with Tab and work with Enter; the tabs move with the arrow keys",
+    "Record and Stop are reachable with Tab and work with Enter, with a visible focus ring",
     async () => {
       await withRig({}, async (rig) => {
         const page = await rig.open();
@@ -408,84 +408,51 @@ describe("keyboard access", () => {
         await page.keyboard.press("Enter");
         await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
         // A visible focus ring on the focused control.
-        await focusOn("tab-notes");
+        await focusOn("copy-transcript");
         const outline = await page.evaluate(
           () => getComputedStyle(document.activeElement as Element).outlineStyle,
         );
         expect(outline).not.toBe("none");
-        await page.keyboard.press("ArrowRight");
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-enhanced");
-        expect(await page.locator("#pane-enhanced").isVisible()).toBe(true);
-        // Two tabs: the arrow wraps back to Notes.
-        await page.keyboard.press("ArrowRight");
-        expect(await page.evaluate(() => document.activeElement?.id)).toBe("tab-notes");
-        expect(await page.locator("#pane-notes").isVisible()).toBe(true);
       });
     },
     UI_TIMEOUT,
   );
 });
 
-describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
+describe("the notes pane is just Notes (W1.1, TS-15)", () => {
   test(
-    "[W1.1] for each tab, the other pane has computed display none and is skipped by Tab",
+    "[W1.1] no tabs, no Enhanced pane, no Enhance and no Find misheard words: a word is fixed on its line",
     async () => {
       let id = "";
       await withRig(
-        {
-          seed: (home) =>
-            (id = seedCall(home, (b) => {
-              standardCall(b);
-              // A note, so the Notes pane has its own controls to reach with Tab.
-              b.add({
-                type: "note",
-                id: "n0001",
-                rev: 1,
-                text: "budget review",
-                w: T0 + 2000,
-                afterSeq: 3,
-                by: "user",
-              });
-            }).id),
-        },
+        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
         async (rig) => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
-          await page.waitForSelector("#notes li.note");
-          const panes = ["notes", "enhanced"];
-          for (const tab of panes) {
-            await page.click(`#tab-${tab}`);
-            const display = await page.evaluate(
-              (ids) =>
-                Object.fromEntries(
-                  ids.map((p) => [
-                    p,
-                    getComputedStyle(document.getElementById(`pane-${p}`) as Element).display,
-                  ]),
-                ),
-              panes,
-            );
-            for (const p of panes) {
-              if (p === tab) expect(display[p]).not.toBe("none");
-              else expect(display[p]).toBe("none");
-            }
-            // Tab from the selected tab walks into its own pane and on, never into the others.
-            await page.focus(`#tab-${tab}`);
-            const reached: string[] = [];
-            for (let i = 0; i < 12; i++) {
-              await page.keyboard.press("Tab");
-              reached.push(
-                await page.evaluate(
-                  () => document.activeElement?.closest("[role=tabpanel]")?.id ?? "",
-                ),
-              );
-            }
-            expect(reached).toContain(`pane-${tab}`);
-            for (const p of panes.filter((x) => x !== tab)) {
-              expect(reached).not.toContain(`pane-${p}`);
-            }
-            expect(await hiddenOffenders(page)).toEqual([]);
+          for (const gone of [
+            "[role=tab]",
+            "[role=tabpanel]",
+            "#pane-enhanced",
+            "#enhance",
+            "#enhance-template",
+            "#vocab-pass",
+          ]) {
+            expect([gone, await page.locator(gone).count()]).toEqual([gone, 0]);
           }
+          const side = (await text(page, "#side")) ?? "";
+          for (const word of ["Enhance", "misheard"]) expect(side).not.toContain(word);
+          expect(await page.locator("#pane-notes").isVisible()).toBe(true);
+          expect(await hiddenOffenders(page)).toEqual([]);
+          // Positive control: the check sees a button with those words when one is there.
+          await page.evaluate(() => {
+            const b = document.createElement("button");
+            b.id = "vocab-pass";
+            b.textContent = "Find misheard words";
+            document.getElementById("pane-notes")?.append(b);
+          });
+          expect(await page.locator("#vocab-pass").count()).toBe(1);
+          expect(await text(page, "#side")).toContain("misheard");
+          await page.evaluate(() => document.getElementById("vocab-pass")?.remove());
         },
       );
     },
@@ -502,20 +469,18 @@ describe("the side pane shows one tab at a time (W1.1, TS-15)", () => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
           expect(await hiddenOffenders(page)).toEqual([]);
-          // The rule broken on purpose: every tab panel forced to show (through the CSSOM, which
-          // the page's Content-Security-Policy allows where a style tag is refused).
+          // The rule broken on purpose: the hidden popover forced to show (through the CSSOM,
+          // which the page's Content-Security-Policy allows where a style tag is refused).
           const force = (on: boolean) =>
             page.evaluate((show) => {
-              for (const p of document.querySelectorAll<HTMLElement>('[role="tabpanel"]')) {
-                if (show) p.style.setProperty("display", "flex", "important");
-                else p.style.removeProperty("display");
-              }
+              const p = document.getElementById("popover") as HTMLElement;
+              if (show) p.style.setProperty("display", "flex", "important");
+              else p.style.removeProperty("display");
             }, on);
           await force(true);
-          expect(await hiddenOffenders(page)).toEqual(["#pane-enhanced shows"]);
-          await page.click("#tab-enhanced");
+          expect(await hiddenOffenders(page)).toEqual(["#popover shows"]);
           expect(await watchedOffenders(page, { clear: true })).toEqual(
-            expect.arrayContaining(["#pane-notes shows", "#pane-enhanced shows"]),
+            expect.arrayContaining(["#popover shows"]),
           );
           // Put right, so this test's own close has nothing to report.
           await force(false);
@@ -1057,7 +1022,7 @@ describe("the side column (WINDOW section 6)", () => {
         await page.setViewportSize({ width: 1440, height: 900 });
         await rig.write(id, seg("l000001", "we should move the build", { spk: "c1" }));
         await until(async () => (await rowIds(page)).length === 1, 5000, "the row");
-        // Top to bottom: the ask row, the Notes header with its toggle, the note input.
+        // Top to bottom: the ask row, the Notes header, the note input.
         const tops = await page.evaluate(() =>
           ["ask-row", "notes-head", "compose"].map(
             (x) => (document.getElementById(x) as HTMLElement).getBoundingClientRect().top,
@@ -1072,15 +1037,10 @@ describe("the side column (WINDOW section 6)", () => {
         const field = await page.locator("#note-input").boundingBox();
         const hints = await page.locator("#note-hints").boundingBox();
         expect(hints && field && hints.y >= field.y + field.height).toBe(true);
-        expect(await page.locator("[role=tab]").count()).toBe(2);
-        // Whichever pane is selected, Ask and the note input stay on screen.
-        for (const tab of ["tab-enhanced", "tab-notes"]) {
-          await page.click(`#${tab}`);
-          expect(await page.locator("#ask-input").isVisible()).toBe(true);
-          expect(await page.locator("#note-input").isVisible()).toBe(true);
-        }
-        // A note from the foot, while the Enhanced pane is open, lands in the Notes count.
-        await page.click("#tab-enhanced");
+        expect(await page.locator("[role=tab]").count()).toBe(0);
+        expect(await page.locator("#ask-input").isVisible()).toBe(true);
+        expect(await page.locator("#note-input").isVisible()).toBe(true);
+        // A note from the foot lands in the Notes count.
         await page.click("#note-input");
         await page.keyboard.type("- budget first");
         await page.keyboard.press("Enter");
@@ -1459,78 +1419,9 @@ describe("renaming a call from its title (WINDOW 3.1)", () => {
   );
 });
 
-describe("enhanced notes and templates (DESIGN 5.2)", () => {
-  test(
-    "Enhance writes the notes; the user's lines are marked as theirs, the AI's cite lines",
-    async () => {
-      let id = "";
-      const provider = new FakeProvider();
-      provider.answer = () => "## Decisions\n- Move the build to the new box [#l000002]\n- {n0001}";
-      await withRig(
-        {
-          provider,
-          seed: (home) => {
-            id = seedCall(home, (b) => {
-              standardCall(b);
-              b.add({
-                type: "note",
-                id: "n0001",
-                rev: 1,
-                text: "new box?",
-                w: T0 + 4000,
-                afterSeq: 4,
-                by: "user",
-              });
-            }).id;
-          },
-        },
-        async (rig) => {
-          const page = await rig.open(id);
-          await page.waitForSelector("#lines .row >> nth=3");
-          await page.click("#tab-enhanced");
-          expect(await text(page, "#enhance")).toBe("Enhance");
-          // No template picker: the notes use the automatic choice.
-          expect(await page.locator("#enhance-template").count()).toBe(0);
-          await page.click("#enhance");
-          await page.waitForSelector("#enhanced-body li.ai");
-          expect(await text(page, "#enhanced-body h3")).toBe("Decisions");
-          expect(
-            await page.locator("#enhanced-body li.ai button.cite").getAttribute("data-line"),
-          ).toBe("l000002");
-          expect(await text(page, "#enhanced-body li.mine")).toContain("new box?");
-          const e = (await events(rig, id)).find((x) => x.type === "enhanced") as LogEvent & {
-            template: string;
-          };
-          expect(e.template).toBe("general");
-        },
-      );
-    },
-    UI_TIMEOUT,
-  );
-
-  test(
-    "during the call the button says Enhance so far",
-    async () => {
-      const t = tempDir("akou-wav-");
-      await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
-        const id = await rig.startCall();
-        const page = await rig.open(id);
-        await page.click("#tab-enhanced");
-        await until(
-          async () => (await text(page, "#enhance")) === "Enhance so far",
-          5000,
-          "so far",
-        );
-      });
-      t.cleanup();
-    },
-    UI_TIMEOUT,
-  );
-});
-
 describe("the words to review (DESIGN 5.4, 7)", () => {
   test(
-    "Find misheard words runs the pass; the review screen shows each proposal with its line; Approve writes the workspace file",
+    "a pass run from the API: the review screen shows each proposal with its line; Approve writes the workspace file",
     async () => {
       let id = "";
       let home = "";
@@ -1553,17 +1444,20 @@ describe("the words to review (DESIGN 5.4, 7)", () => {
         async (rig) => {
           const page = await rig.open(id);
           await page.waitForSelector("#lines .row >> nth=3");
-          await page.click("#tab-enhanced");
-          await page.click("#vocab-pass");
+          // The window has no button for the pass (a word is fixed on its line); the CLI and the
+          // API still run it, and its proposals land in the review screen.
+          const pass = await rig.api("POST", `/calls/${id}/vocab/pass`);
+          expect(pass.status).toBe(200);
+          // The bad span (hetzner is not in l000001) was dropped.
+          expect(pass.body.corrections).toEqual([]);
+          // The pill follows the log, which reaches the page on its own stream.
+          await page.waitForSelector("#pill-review:not([hidden])");
+          expect(await text(page, "#pill-review")).toBe("1 word to review");
+          await page.click("#pill-review");
           await page.waitForSelector("#review[open] .review-item[data-term=Hetzner]");
-          // The bad span (hetzner is not in l000001) was dropped; the proposal carries its line.
-          expect(await text(page, "#review-status")).toContain("corrected 0 words and proposed 1");
           expect(await text(page, ".review-item[data-term=Hetzner] .review-lines li")).toContain(
             "deploy to hetzner today",
           );
-          // The pill follows the log, which reaches the page on its own stream after the reply.
-          await page.waitForSelector("#pill-review:not([hidden])");
-          expect(await text(page, "#pill-review")).toBe("1 word to review");
           await page.click(".review-item[data-term=Hetzner] button.go");
           await until(
             async () =>
@@ -1578,132 +1472,6 @@ describe("the words to review (DESIGN 5.4, 7)", () => {
           expect(file).toContain(`source: "call:${id}"`);
           await page.click("#review-close");
           await until(async () => !(await page.isVisible("#pill-review")), 5000, "pill hidden");
-        },
-      );
-    },
-    UI_TIMEOUT,
-  );
-
-  test(
-    "a pass whose request fails is a toast, and Find misheard words works again",
-    async () => {
-      let id = "";
-      const provider = new FakeProvider();
-      provider.answer = () => JSON.stringify({ corrections: [], proposals: [] });
-      await withRig(
-        { provider, seed: (h) => (id = seedCall(h, (b) => standardCall(b)).id) },
-        async (rig) => {
-          const page = await rig.open(id);
-          await page.waitForSelector("#lines .row >> nth=3");
-          await page.click("#tab-enhanced");
-          // The request itself fails (the app quit, the connection dropped mid-pass).
-          await page.route("**/api/v1/calls/*/vocab/pass", (r) => r.abort());
-          await page.click("#vocab-pass");
-          await until(
-            async () => (await text(page, "#toast"))?.includes("could not be checked") ?? false,
-            5000,
-            "error toast",
-          );
-          expect(await page.isEnabled("#vocab-pass")).toBe(true);
-          await page.unroute("**/api/v1/calls/*/vocab/pass");
-          await page.click("#vocab-pass");
-          await page.waitForSelector("#review[open]");
-          expect(await text(page, "#review-status")).toContain("corrected 0 words and proposed 0");
-        },
-      );
-    },
-    UI_TIMEOUT,
-  );
-});
-
-describe("re-enhance after the final layer (DESIGN 5.2)", () => {
-  test(
-    "notes written by hand before the final layer get a Re-enhance button, and it writes them from the final transcript",
-    async () => {
-      let id = "";
-      const provider = new FakeProvider();
-      provider.answer = () => "## Decisions\n- Move the build to the new box [#l000002]";
-      await withRig(
-        {
-          provider,
-          seed: (home) => {
-            const seeded = seedCall(home, (b) => {
-              standardCall(b);
-              b.add({
-                type: "enhanced",
-                rev: 1,
-                template: "general",
-                file: "enhanced/001-general.md",
-                coversSeq: 6,
-                by: "agent:claude-code",
-                model: "agent:claude-code",
-                cites: ["l000002"],
-              });
-              b.add({ type: "final.started", pid: 1 });
-              b.add({ type: "final.done", parts: [1], skipped: [] });
-            });
-            id = seeded.id;
-            mkdirSync(join(seeded.dir, "enhanced"), { recursive: true });
-            writeFileSync(
-              join(seeded.dir, "enhanced", "001-general.md"),
-              "## Decisions\n- the build moves [#l000002]\n",
-            );
-          },
-        },
-        async (rig) => {
-          const page = await rig.open(id);
-          await page.waitForSelector("#lines .row >> nth=3");
-          await page.click("#tab-enhanced");
-          await page.waitForSelector("#reenhance");
-          expect(await text(page, "#enhance-status")).toContain("written by hand");
-          await page.click("#reenhance");
-          await until(
-            async () => (await events(rig, id)).some((e) => e.type === "enhanced" && e.rev === 2),
-            10_000,
-            "rev 2",
-          );
-          const e = (await events(rig, id)).find(
-            (x) => x.type === "enhanced" && x.rev === 2,
-          ) as LogEvent & { template: string };
-          expect(e.template).toBe("general");
-          await until(async () => !(await page.isVisible("#reenhance")), 5000, "button gone");
-        },
-      );
-    },
-    UI_TIMEOUT,
-  );
-});
-
-describe("enhanced notes with no provider", () => {
-  test(
-    "one plain sentence under the button, no toast, and a button to the provider setting",
-    async () => {
-      let id = "";
-      await withRig(
-        { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
-        async (rig) => {
-          const page = await rig.open(id);
-          await page.waitForSelector("#lines .row >> nth=3");
-          await page.click("#tab-enhanced");
-          await page.click("#enhance");
-          await until(
-            async () => ((await text(page, "#enhance-status")) ?? "").startsWith("No provider"),
-            5000,
-            "the status line",
-          );
-          const status = (await text(page, "#enhance-status")) ?? "";
-          expect(status).not.toContain("enhance/context");
-          expect(await page.locator("#toast").isVisible()).toBe(false);
-          await page.locator("#enhance-status button").click();
-          await page.waitForSelector("#page-settings:not([hidden])");
-          await until(
-            async () =>
-              (await page.evaluate(
-                () => (document.activeElement as HTMLElement | null)?.dataset.key,
-              )) === "provider.kind",
-            5000,
-            "the provider setting focused",
-          );
         },
       );
     },
@@ -1801,9 +1569,9 @@ describe("playback and Fix this word", () => {
           expect(await page.inputValue("#note-input")).toBe("a b");
           expect((await player()).paused).toBe(false);
           // On any other button, Space presses that button and leaves the audio alone.
-          await page.focus("#tab-enhanced");
+          await page.focus("#copy-transcript");
           await page.keyboard.press("Space");
-          expect(await page.getAttribute("#tab-enhanced", "aria-selected")).toBe("true");
+          await page.waitForSelector("#toast:not([hidden])");
           expect((await player()).paused).toBe(false);
         },
       );
@@ -2256,13 +2024,13 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
           async (rig) => {
             const page = await rig.open();
             await page.waitForSelector("#welcome:not([hidden]) #models-pull:not([hidden])");
-            // No transcript, tabs or player: they carry hidden, and the watch checks that hidden
+            // No transcript, notes or player: they carry hidden, and the watch checks that hidden
             // means hidden. The sidebar stays, with its empty workspace, and its readiness row
             // says what is missing; the Models row carries the amber dot.
             for (const sel of ["#scroller", "#side"]) {
               expect(await page.getAttribute(sel, "hidden")).toBe("");
             }
-            expect(await page.isVisible("#tab-notes")).toBe(false);
+            expect(await page.isVisible("#notes-title")).toBe(false);
             expect(await page.isVisible("#player-bar")).toBe(false);
             expect(await page.isVisible("#sidebar")).toBe(true);
             expect(await text(page, "#calls .none")).toBe("No calls yet");
@@ -2355,7 +2123,7 @@ describe("the welcome: readiness drives the shell (WINDOW section 10)", () => {
             for (const sel of ["#scroller", "#side"]) {
               expect(await page.getAttribute(sel, "hidden")).toBeNull();
             }
-            expect(await page.isVisible("#tab-notes")).toBe(true);
+            expect(await page.isVisible("#notes-title")).toBe(true);
             expect(await text(page, "#readiness-text")).toBe("Ready");
             expect(await page.getAttribute("#readiness", "data-state")).toBe("ready");
             expect(await text(page, "#state")).toBe("ready");
