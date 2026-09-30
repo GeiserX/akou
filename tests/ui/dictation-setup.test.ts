@@ -16,10 +16,10 @@ import { monoWav } from "../fixtures/audio.ts";
 import { tempDir } from "../helpers.ts";
 import { UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
 
-const TOGGLE = "#dictation .dictation-enable input[data-key='dictation.enabled']";
+const TOGGLE = "#page-dictation input[data-key='dictation.enabled']";
 const text = (page: Page, sel: string) => page.textContent(sel).then((t) => t?.trim() ?? "");
 const step = (page: Page, s: string) =>
-  page.waitForSelector(`#dictation .dictation-setup[data-step='${s}']`, { timeout: 10_000 });
+  page.waitForSelector(`#page-dictation .dictation-setup[data-step='${s}']`, { timeout: 10_000 });
 const lines = (file: string): Record<string, unknown>[] =>
   existsSync(file)
     ? readFileSync(file, "utf8")
@@ -97,7 +97,7 @@ describe("DC-N3 on the real app: the setup follows the grants the helper reports
       await page.click("#dictation-setup-next");
       await step(page, "key");
       expect(
-        await page.$$eval("#dictation .dictation-setup .keycaps kbd", (k) =>
+        await page.$$eval("#page-dictation .dictation-setup .keycaps kbd", (k) =>
           k.map((x) => x.textContent),
         ),
       ).toEqual(["Right ⌘"]);
@@ -110,11 +110,10 @@ describe("DC-N3 on the real app: the setup follows the grants the helper reports
       });
 
       await page.click("#dictation-setup-done");
-      await page.waitForSelector("#dictation fieldset[data-group='Keys']");
+      await page.waitForSelector("#page-dictation section[data-section='Keys']");
       expect(await page.isChecked(TOGGLE)).toBe(true);
-      expect(await text(page, "#dictation-permissions")).toBe(
-        "Permissions: Microphone ok, Accessibility ok. Run the setup again",
-      );
+      expect(await text(page, "#dictation-grant-mic .pg-state")).toBe("Allowed");
+      expect(await text(page, "#dictation-grant-accessibility .pg-state")).toBe("Allowed");
       // The helper ran and was bound, and was never asked to prompt (it would have exited 70).
       const sent = lines(commands);
       expect(sent.some((c) => c.type === "rebind")).toBe(true);
@@ -174,8 +173,9 @@ describe("DC-N3 on the real app: Accessibility refused, the dictation lands on t
     "clipboard only: the key becomes a chord, and a dictation is copied with no paste and no send",
     async () => {
       const page = await macPage(rig);
-      expect(await text(page, "#dictation-permissions")).toBe(
-        "Permissions: Microphone ok, Accessibility not granted (clipboard only). Run the setup again",
+      expect(await text(page, "#dictation-grant-mic .pg-state")).toBe("Allowed");
+      expect(await text(page, "#dictation-grant-accessibility .pg-help")).toBe(
+        "Not allowed, so dictations are copied and you paste them.",
       );
       await page.click(TOGGLE);
       await step(page, "mic");
@@ -185,7 +185,7 @@ describe("DC-N3 on the real app: Accessibility refused, the dictation lands on t
       await step(page, "languages");
       await page.click("#dictation-setup-next");
       await step(page, "key");
-      const key = "#dictation .dictation-setup input[data-key='dictation.hotkey']";
+      const key = "#page-dictation .dictation-setup input[data-key='dictation.hotkey']";
       expect(await page.inputValue(key)).toBe("Control+Shift+Space");
       await page.click("#dictation-setup-next");
       await step(page, "try");

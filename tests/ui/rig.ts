@@ -380,7 +380,7 @@ export const DICTATION_SCHEMA: Schema = {
   "dictation.spokenSend": bool("A spoken send."),
   "dictation.format": pick(["off", "provider"], "Cleans up with your provider."),
   "dictation.formatPrompt": str("The formatting prompt."),
-  "dictation.formatTimeoutSeconds": int(1, 60, "How long formatting may take."),
+  "dictation.formatTimeoutSeconds": int(0, 60, "How long formatting may take; 0 is automatic."),
   "dictation.muteMedia": bool("Pauses other media while listening."),
   "dictation.learn": pick(["off", "ask", "auto"], "Suggests words to learn."),
   "dictation.readField": bool("Reads the field you dictated into."),
@@ -812,7 +812,12 @@ const VIEW_FILES: Record<"pill" | "draft" | "main", { html: string; css: string;
  */
 export async function viewPage(
   view: "pill" | "draft" | "main",
-  o: { clock?: Date; answer?: (name: string, params: unknown) => unknown } = {},
+  o: {
+    clock?: Date;
+    answer?: (name: string, params: unknown) => unknown;
+    /** The window's size and pixel ratio, for a screenshot as the app draws it. */
+    screen?: { width: number; height: number; scale: number };
+  } = {},
 ): Promise<ViewPage> {
   const f = VIEW_FILES[view];
   const ui = join(import.meta.dir, "..", "..", "src", "ui");
@@ -822,7 +827,14 @@ export async function viewPage(
     "index.js": { body: await buildEntry(f.entry), type: "text/javascript" },
   };
   const b = await launch();
-  const context = await b.newContext();
+  const context = await b.newContext(
+    o.screen
+      ? {
+          viewport: { width: o.screen.width, height: o.screen.height },
+          deviceScaleFactor: o.screen.scale,
+        }
+      : {},
+  );
   const page = await context.newPage();
   page.on("pageerror", (err) => {
     pageErrors.push(err.message);
@@ -875,6 +887,7 @@ export async function windowPage(
     /** Saved values over the section 6 defaults. */
     settings?: Record<string, unknown>;
     devices?: DevicesFixture;
+    screen?: { width: number; height: number; scale: number };
   } = {},
 ): Promise<ViewPage & { patches: Record<string, unknown>[] }> {
   const settings = { ...defaults(DICTATION_SCHEMA), ...o.settings };
@@ -922,6 +935,7 @@ export async function windowPage(
     return { status: r.status, body: r.body };
   };
   const v = await viewPage("main", {
+    ...(o.screen ? { screen: o.screen } : {}),
     answer: (name, params) =>
       name === "api"
         ? api(params as Parameters<typeof api>[0])
