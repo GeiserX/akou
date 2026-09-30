@@ -91,7 +91,6 @@ export function liveName(id: string, title = id): string {
   return id === "auto" ? "Automatic" : title;
 }
 
-
 /** An interval's words in the page's list: `Every 2 min`. */
 export function everyLabel(seconds: number): string {
   const t = everyText(seconds);
