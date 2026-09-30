@@ -222,7 +222,9 @@ describe("[akou-chp.23] asr.live starts the next call on that setup", () => {
       rig.logs
         .slice(before)
         .some((l) =>
-          /runs the nemotron live model .*no Qwen3-ASR second pass: Needs qwen3-asr-1.7b/.test(l.msg),
+          /runs the nemotron live model .*no Qwen3-ASR second pass: Needs qwen3-asr-1.7b/.test(
+            l.msg,
+          ),
         ),
     ).toBe(true);
     for (const [body, field] of [

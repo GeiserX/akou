@@ -380,7 +380,7 @@ export const PARITY: readonly Row[] = [
     window: [
       ui("models-page.ts", 'this.patch("asr.live"'),
       ui("models-page.ts", 'this.patch("asr.review.model"'),
-      ui("live-picker.ts", 'await this.save(KEY[slot], id)'),
+      ui("live-picker.ts", "await this.save(KEY[slot], id)"),
       ui("live-picker.ts", 'this.save("asr.review.everySeconds", s)'),
       app("...(live ?? {})"),
       app("liveChip(running)"),
