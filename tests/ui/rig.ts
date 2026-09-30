@@ -25,6 +25,7 @@ import {
 import type { EventDraft, LogEvent } from "../../src/core/log/events.ts";
 import { tokenize } from "../../src/core/vocab/correct.ts";
 import type { CompleteRequest, CompleteResult, Provider } from "../../src/main/llm/provider.ts";
+import { Bridge } from "../../src/main/window/bridge.ts";
 import type { DictionaryEntry } from "../../src/ui/dictation-dictionary.ts";
 import type { DictationRow } from "../../src/ui/dictation-history.ts";
 import type { CaptureInput } from "../../src/ui/dictation-mic.ts";
@@ -889,9 +890,14 @@ export async function windowPage(
     devices?: DevicesFixture;
     screen?: { width: number; height: number; scale: number };
   } = {},
-): Promise<ViewPage & { patches: Record<string, unknown>[] }> {
+): Promise<
+  ViewPage & { patches: Record<string, unknown>[]; configPatches: Record<string, unknown>[] }
+> {
   const settings = { ...defaults(DICTATION_SCHEMA), ...o.settings };
   const patches: Record<string, unknown>[] = [];
+  /** Every other `PATCH /config`, run in process as the window's bridge runs it. */
+  const configPatches: Record<string, unknown>[] = [];
+  const bridge = new Bridge(rig.app);
   const status = async () => {
     const r = await rig.api("GET", "/status");
     return o.platform ? { ...r.body, app: { ...r.body.app, platform: o.platform } } : r.body;
@@ -919,6 +925,8 @@ export async function windowPage(
         Object.assign(settings, body);
         return { status: 200, body: { ok: true } };
       }
+      configPatches.push(body);
+      return bridge.json("PATCH", "/config", body);
     }
     const r = await rig.api(p.method, p.path, p.body);
     if (p.path === "/config" && p.method === "GET" && r.status === 200) {
@@ -948,5 +956,5 @@ export async function windowPage(
               : undefined,
   });
   await v.page.waitForFunction(() => document.body.dataset.transport === "window");
-  return { ...v, patches };
+  return { ...v, patches, configPatches };
 }

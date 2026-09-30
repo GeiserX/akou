@@ -59,6 +59,33 @@ const WORKSPACES = "#workspaces";
 const LIVE = "#live";
 const AFTER_CALL = "#after-call";
 const YOUR_WORDS = "#your-words";
+/** The rows the chosen assistant needs, under the Assistant row: its service, address, model, key. */
+const ASSISTANT_USE = "#assistant-use";
+
+/** Ollama's OpenAI-compatible address on this computer: what "Local model (Ollama)" sets. */
+export const OLLAMA_URL = "http://127.0.0.1:11434/v1";
+/** OpenAI's own address: what the OpenAI-compatible service starts from in the window. */
+export const OPENAI_URL = "https://api.openai.com/v1";
+
+/** Whether an address is Ollama's on this computer. */
+export function isOllama(url: string): boolean {
+  return /^https?:\/\/(127\.0\.0\.1|localhost|\[::1\]):11434(\/|$)/.test(url.trim());
+}
+
+/**
+ * What the assistant is, as the Settings page offers it: the Claude Code or Codex found here, an
+ * API key (Anthropic, or an OpenAI-compatible server), a local model through Ollama, or none. Each
+ * is one or two settings: `provider.kind`, and `provider.baseUrl` for Ollama.
+ */
+export type AssistantUse = "harness" | "key" | "ollama" | "none";
+
+export function assistantUse(settings: Record<string, unknown>): AssistantUse {
+  const kind = String(settings["provider.kind"] ?? "harness");
+  if (kind === "harness" || kind === "none") return kind;
+  if (kind === "openai-compatible" && isOllama(String(settings["provider.baseUrl"] ?? "")))
+    return "ollama";
+  return "key";
+}
 /** Server mode: where a job's result may be sent is each key's, on the Keys page. */
 export const WEBHOOKS = "#webhooks";
 
@@ -79,7 +106,10 @@ const MAIN: Layout = [
       "app.hotkey",
     ],
   },
-  { title: "Notes and AI", items: ["provider.kind", "memo.provider", ">assistant"] },
+  {
+    title: "Notes and AI",
+    items: ["provider.kind", ASSISTANT_USE, "memo.provider", ">assistant"],
+  },
   { title: "Privacy and sharing", items: ["share.bind", AFTER_CALL] },
   { title: "Advanced", items: [">speech", ">capture", ">words", ">export", ">server", ">other"] },
 ];
@@ -251,7 +281,11 @@ function callAudio(v: string): { mode: string; apps: string } {
   return { mode: "system", apps: "" };
 }
 
-type Status = Partial<Pick<AppStatus, "provider" | "asr">> & { app?: Partial<AppStatus["app"]> };
+type Status = Partial<Pick<AppStatus, "provider" | "asr">> & {
+  app?: Partial<AppStatus["app"]>;
+  /** Claude Code and Codex as the app found them; null while it has not looked. */
+  harnesses?: { claude: unknown; codex: unknown } | null;
+};
 
 type LiveReply = {
   live?: { setting?: string; next?: string; setups?: { id: string; title: string }[] };
@@ -469,9 +503,7 @@ export class SettingsPage {
     );
     const sections = this.main
       .map((s) => {
-        const rows = s.items
-          .map((item) => this.item(item, subs))
-          .filter((x): x is HTMLElement => x !== null);
+        const rows = s.items.flatMap((item) => this.item(item, subs) ?? []);
         return rows.length > 0 ? section(s.title, ...rows) : null;
       })
       .filter((x): x is HTMLElement => x !== null);
@@ -521,8 +553,9 @@ export class SettingsPage {
     ];
   }
 
-  private item(item: string, subs: Record<string, SubPage>): HTMLElement | null {
+  private item(item: string, subs: Record<string, SubPage>): HTMLElement | HTMLElement[] | null {
     if (item === WORKSPACES) return this.workspacesRow();
+    if (item === ASSISTANT_USE) return this.useRows();
     if (item === LIVE) return this.liveRow();
     if (item === AFTER_CALL) return this.afterCallRow();
     if (item === WEBHOOKS)
@@ -564,16 +597,23 @@ export class SettingsPage {
     const w = wordsFor(key);
     const value = this.settings[key];
     const id = `set-${key.replace(/[^a-z0-9]/gi, "-")}`;
-    const fileOnly = spec.apiWritable === false;
+    // The desktop window may set a key only it can, as the address the assistant is reached at.
+    const fileOnly =
+      spec.apiWritable === false && !(spec.windowWritable && this.t.kind === "window");
     this.shown[key] = spec.secret ? "" : shownValue(spec, value);
     let help: string | undefined = w.help;
     if (key === "app.openAtLogin" && this.platform && this.platform !== "darwin")
       help = help?.replace("the menu bar", "the tray");
+    if (key === "provider.baseUrl" && fileOnly)
+      help = "Set in the akou window, since your key and transcripts go there.";
     let controls: (Node | null)[];
     if (key === "provider.kind") {
-      controls = [this.kindControl(id, String(value ?? ""))];
+      controls = [this.kindControl(id)];
+      // The select holds a use, not a kind: it is saved by `chooseUse`, never as the key.
+      this.shown[key] = assistantUse(this.settings);
       help = this.agentState();
-    } else if (key === "capture.call") controls = this.callAudioControls(id, String(value ?? ""));
+    } else if (key === "provider.apiKey") controls = this.apiKeyControls(id);
+    else if (key === "capture.call") controls = this.callAudioControls(id, String(value ?? ""));
     else if (key === "capture.mic") controls = [this.micControl(id, String(value ?? ""))];
     else if (key === "asr.languages") controls = [this.languagesControl(id, value)];
     else if (key === "app.hotkey") controls = this.hotkeyControls(id, String(value ?? ""));
@@ -748,15 +788,194 @@ export class SettingsPage {
     return root;
   }
 
-  /** The assistant, named for what it is on this machine. */
-  private kindControl(id: string, value: string): HTMLSelectElement {
-    const harness = String(this.settings["provider.harness"] ?? "auto");
-    const who =
-      harness === "claude" ? "Claude Code" : harness === "codex" ? "Codex" : "Claude Code or Codex";
-    const choices = (wordsFor("provider.kind").choices ?? []).map(([v, l]) =>
-      v === "harness" ? ([v, `${who} on ${this.here}`] as const) : ([v, l] as const),
+  /** The assistant, the Claude Code or Codex named for what was found on this machine. */
+  private kindControl(id: string): HTMLSelectElement {
+    const now = assistantUse(this.settings);
+    const base = String(this.settings["provider.baseUrl"] ?? "");
+    const select = selectBox({
+      id,
+      label: "Assistant",
+      options: [
+        ["harness", this.harnessName()],
+        ["key", "Use an API key"],
+        ["ollama", "Local model (Ollama)"],
+        ["none", "None"],
+      ],
+      value: now,
+    });
+    // The address is the window's to change (an HTTP client may not): in a browser, a use that
+    // changes it is offered and cannot be picked, rather than refused after the pick.
+    if (this.t.kind !== "window")
+      for (const opt of select.options) {
+        const changes =
+          opt.value !== now && (opt.value === "ollama" || (opt.value === "key" && base !== ""));
+        if (changes) {
+          opt.disabled = true;
+          opt.textContent = `${opt.textContent}, in the akou window`;
+        }
+      }
+    select.addEventListener("change", (e) => {
+      e.stopPropagation();
+      const r = select.closest<HTMLElement>(".pg-row");
+      if (r) void this.chooseUse(r, select.value as AssistantUse);
+    });
+    return select;
+  }
+
+  /** "Claude Code on this Mac": the one found, or both names while none is known. */
+  private harnessName(): string {
+    const pick = String(this.settings["provider.harness"] ?? "auto");
+    const found = this.status.harnesses;
+    const has = (k: "claude" | "codex") => Boolean(found?.[k]);
+    const name =
+      pick === "claude"
+        ? "Claude Code"
+        : pick === "codex"
+          ? "Codex"
+          : has("claude")
+            ? "Claude Code"
+            : has("codex")
+              ? "Codex"
+              : "Claude Code or Codex";
+    const none =
+      found != null && (pick === "auto" ? !has("claude") && !has("codex") : !has(pick as "claude"));
+    return none ? `${name} (not found)` : `${name} on ${this.here}`;
+  }
+
+  /** The settings a use is, saved together, then the page drawn again for its rows. */
+  private async chooseUse(r: HTMLElement, use: AssistantUse): Promise<void> {
+    const base = String(this.settings["provider.baseUrl"] ?? "");
+    const patch: Record<string, unknown> = {};
+    // A model is the previous service's name for one (Ollama's `llama3.2`), not this one's.
+    if (this.settings["provider.model"]) patch["provider.model"] = null;
+    if (use === "harness" || use === "none") patch["provider.kind"] = use;
+    else if (use === "ollama") {
+      patch["provider.kind"] = "openai-compatible";
+      patch["provider.baseUrl"] = OLLAMA_URL;
+    } else {
+      patch["provider.kind"] = "anthropic";
+      // Ollama's address is not the Anthropic API's.
+      if (base) patch["provider.baseUrl"] = null;
+    }
+    await this.saveMany(r, patch);
+  }
+
+  /** The rows the chosen assistant needs: which service, its address and model, and the key. */
+  private useRows(): HTMLElement[] {
+    const use = assistantUse(this.settings);
+    const rows: (HTMLElement | null)[] = [];
+    if (use === "key") {
+      const kind = String(this.settings["provider.kind"] ?? "anthropic");
+      const seg = segmented({
+        id: "set-provider-service",
+        label: "Service",
+        options: [
+          ["anthropic", "Anthropic"],
+          ["openai-compatible", "OpenAI-compatible"],
+        ],
+        value: kind,
+      });
+      const service = row(
+        {
+          label: "Service",
+          help:
+            kind === "anthropic"
+              ? "Claude, with your Anthropic key."
+              : "OpenAI, or any server that speaks its API.",
+        },
+        seg.root,
+      );
+      service.id = "settings-provider-service";
+      // Back to Anthropic clears an address, which only the window may do.
+      if (this.t.kind !== "window" && kind !== "anthropic" && this.settings["provider.baseUrl"])
+        for (const radio of seg.root.querySelectorAll<HTMLInputElement>("input[value='anthropic']"))
+          radio.disabled = true;
+      seg.input.addEventListener("change", (e) => {
+        e.stopPropagation();
+        const base = String(this.settings["provider.baseUrl"] ?? "");
+        const to = seg.input.value;
+        const patch: Record<string, unknown> = { "provider.kind": to };
+        // The other service's model name means nothing to this one.
+        if (this.settings["provider.model"]) patch["provider.model"] = null;
+        // An address left from another choice would send the key there.
+        if (base && (to === "anthropic" || isOllama(base))) patch["provider.baseUrl"] = null;
+        // OpenAI's own address, shown as the value, where the window may set it.
+        if (to === "openai-compatible" && !base && this.t.kind === "window")
+          patch["provider.baseUrl"] = OPENAI_URL;
+        void this.saveMany(service, patch);
+      });
+      rows.push(service);
+      if (kind === "openai-compatible") {
+        rows.push(this.useField("provider.baseUrl", "The server's address"));
+        rows.push(this.useField("provider.model", "The model's name"));
+      }
+      rows.push(this.keyRow("provider.apiKey"));
+    } else if (use === "ollama") {
+      rows.push(this.useField("provider.model", "The model's name, as Ollama lists it"));
+    }
+    return rows.filter((x): x is HTMLElement => x !== null);
+  }
+
+  /** A key's row with what its empty field asks for here. */
+  private useField(key: string, placeholder: string): HTMLElement | null {
+    const r = this.keyRow(key);
+    const input = r?.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(key)}"]`);
+    if (!input) return r;
+    input.placeholder = placeholder;
+    // One this page cannot change reads as a value, not as a field that takes no clicks.
+    if (input.disabled)
+      input.replaceWith(h("span", { id: input.id, class: "pg-value" }, input.value || "Not set"));
+    return r;
+  }
+
+  /**
+   * The API key, never shown: "Saved in Keychain" and Replace when there is one, a field to paste
+   * it into when there is none. Escape puts back what was there; Enter or leaving the field saves.
+   */
+  private apiKeyControls(id: string): (Node | null)[] {
+    const input = field({
+      id,
+      label: "API key",
+      value: "",
+      type: "password",
+      placeholder: wordsFor("provider.apiKey").empty ?? "",
+    });
+    input.dataset.key = "provider.apiKey";
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        input.blur();
+      }
+    });
+    if (!this.settings["provider.apiKey"]) return [input];
+    const saved = h(
+      "span",
+      { id: "settings-key-saved", class: "pg-value" },
+      this.schema["provider.apiKey"]?.keychain ? "Saved in Keychain" : "Saved",
     );
-    return selectBox({ id, label: "Answers", options: choices, value });
+    input.hidden = true;
+    const show = (typing: boolean) => {
+      input.hidden = !typing;
+      saved.hidden = typing;
+      swap.hidden = typing;
+    };
+    const swap = button(
+      "Replace",
+      () => {
+        show(true);
+        input.focus();
+      },
+      "settings-key-replace",
+    );
+    input.addEventListener("keydown", (e) => {
+      if (e.key !== "Escape") return;
+      e.preventDefault();
+      e.stopPropagation();
+      input.value = "";
+      show(false);
+      swap.focus();
+    });
+    return [saved, swap, input];
   }
 
   /** What answers now, as a sentence: the agent's state, read only. */
@@ -764,23 +983,33 @@ export class SettingsPage {
     const p = this.status.provider;
     if (!p) return "";
     const names: Record<string, string> = {
-      claude: "Claude Code",
+      "claude-code": "Claude Code",
       codex: "Codex",
       harness: "Claude Code or Codex",
-      anthropic: "The Anthropic API",
-      "openai-compatible": "The OpenAI-compatible server",
+      anthropic: "the Anthropic API",
+      "openai-compatible": "the OpenAI-compatible server",
     };
-    const name = names[p.harness ?? ""] ?? names[p.id] ?? p.id;
+    const name =
+      assistantUse(this.settings) === "ollama"
+        ? "Ollama"
+        : // The harness comes as its id and version: "claude-code/2.1.0".
+          (names[p.harness?.replace(/\/.*$/, "") ?? ""] ?? names[p.id] ?? p.id);
     if (p.id === "none") return "Ask shows the matching parts of the call instead.";
     if (p.state === "available")
-      return p.id === "harness" ? `Uses ${name} on ${this.here}.` : `Uses ${name}.`;
+      return p.id === "harness" || name === "Ollama"
+        ? `Uses ${name} on ${this.here}.`
+        : `Uses ${name}.`;
     const why = p.reason ?? p.detail;
-    return `${name} is not available${why ? `: ${this.inWords(why)}.` : "."}`.replace(/\.\.$/, ".");
+    return `${capital(name)} is not available${why ? `: ${this.inWords(why)}.` : "."}`.replace(
+      /\.\.$/,
+      ".",
+    );
   }
 
   /** Text from akou that may name a setting by its key: each key becomes the setting's label. */
   private inWords(text: string): string {
-    return inWords(text, Object.keys(this.schema));
+    // A hint that names an address, as "(for Ollama: http://…)", is for the command line.
+    return inWords(text.replace(/\s*\([^()]*:\/\/[^()]*\)/g, ""), Object.keys(this.schema));
   }
 
   private callAudioControls(id: string, value: string): (Node | null)[] {
@@ -1132,9 +1361,10 @@ export class SettingsPage {
       return;
     }
     for (const [k, v] of Object.entries(patch)) {
-      this.settings[k] = v;
-      this.issues.delete(k);
       const spec = this.schema[k];
+      // A secret is never kept on the page, only whether there is one.
+      this.settings[k] = spec?.secret ? (v ? "(set)" : "") : v;
+      this.issues.delete(k);
       this.shown[k] = spec?.secret ? "" : shownValue(spec, v);
       if (spec?.secret) {
         const input = r.querySelector<HTMLInputElement>(`input[data-key="${CSS.escape(k)}"]`);
@@ -1146,13 +1376,31 @@ export class SettingsPage {
     }
     r.classList.remove("refused");
     r.querySelector(".issue")?.remove();
-    toast(res.body?.note ?? "Saved.", "info");
+    toast(this.savedNote(keys, res.body?.note), "info");
     // What the agent is, and which details apply, follow the kind and the harness.
     if (keys.some((k) => k.startsWith("provider.")) && this.root.isConnected) {
       const st = await this.t.request<Status>("GET", "/status");
       if (st.status < 400) this.status = st.body ?? {};
-      if (keys.includes("provider.kind") || keys.includes("provider.harness")) this.redraw();
+      if (["provider.kind", "provider.harness", "provider.apiKey"].some((k) => keys.includes(k)))
+        this.redraw();
     }
+  }
+
+  /** What a save says: the assistant's settings apply at once, so no note about a restart. */
+  private savedNote(keys: string[], note: string | undefined): string {
+    return keys.every((k) => k.startsWith("provider.")) ? "Saved." : (note ?? "Saved.");
+  }
+
+  /** Saves several keys at once (the assistant's use), then reads and draws the page again. */
+  private async saveMany(r: HTMLElement, patch: Record<string, unknown>): Promise<void> {
+    const res = await this.t.request<{ note?: string }>("PATCH", "/config", patch);
+    if (res.status >= 400) {
+      this.refused(r, Object.keys(patch), res.body);
+      return;
+    }
+    toast(this.savedNote(Object.keys(patch), res.body?.note), "info");
+    await this.load();
+    if (this.root.isConnected) this.redraw();
   }
 
   /**

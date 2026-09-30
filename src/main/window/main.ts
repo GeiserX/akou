@@ -14,6 +14,7 @@ import { join } from "node:path";
 import { TOKEN_FILE } from "../api/guard.ts";
 import { BUNDLE_ID } from "../app-info.ts";
 import { loadConfig } from "../config/schema.ts";
+import { systemSecrets } from "../config/secrets.ts";
 import { type AkouApp, AlreadyRunningError, startApp } from "../index.ts";
 import { Bridge } from "./bridge.ts";
 import { BUNDLED_CLI, installCli, nodeOps } from "./install-cli.ts";
@@ -46,6 +47,8 @@ async function ensureShell(app: AkouApp): Promise<Shell> {
 
 try {
   const app = await startApp({
+    // The API key lives in the Keychain on macOS, never in the config file.
+    secrets: systemSecrets(),
     excludeResponsible:
       process.platform === "darwin"
         ? BUNDLE_ID

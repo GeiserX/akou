@@ -131,7 +131,7 @@
         "tags": [
           "config"
         ],
-        "description": "Every setting: its value, the values set in the config file, problems found in the file, and the schema of each key. Secrets are redacted.",
+        "description": "Every setting: its value, the values set in the config file, problems found in the file, and the schema of each key. Secrets are redacted; one saved in the macOS Keychain says `keychain: true`.",
         "responses": {
           "200": {
             "description": "OK",

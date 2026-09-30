@@ -125,13 +125,20 @@ export interface ApiApp {
   subscribe(id: string, fn: (e: LogEvent) => void): () => void;
   levels(id: string): Levels | null;
   config(): LoadedConfig;
+  /** What the API key is saved in instead of the config file: the Keychain, or null for the file. */
+  secretStore?(): "keychain" | null;
   /** Writes `config.json` and applies it; the running parts pick up what they can. */
   /**
    * Writes the config file. A key the API cannot write keeps its value on disk, except those in
    * `keep`: window-only keys the desktop window set in this request.
    */
   saveConfig(
-    file: Partial<Record<SettingKey, SettingValue>>,
+    /** The file to write, or a change made from the file as the previous save left it. */
+    file:
+      | Partial<Record<SettingKey, SettingValue>>
+      | ((
+          current: Partial<Record<SettingKey, SettingValue>>,
+        ) => Partial<Record<SettingKey, SettingValue>>),
     o?: { keep?: readonly SettingKey[] },
   ): Promise<LoadedConfig>;
   /** Vocabulary files changed on disk: forget what was read. */

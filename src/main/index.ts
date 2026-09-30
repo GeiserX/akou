@@ -134,6 +134,12 @@ import {
   type Settings,
   type SettingValue,
 } from "./config/schema.ts";
+import {
+  type SecretStore,
+  STORED_SECRETS,
+  type StoredSecret,
+  systemSecrets,
+} from "./config/secrets.ts";
 import { BestEngine } from "./dictation/best.ts";
 import { SystemCuePlayer } from "./dictation/cues.ts";
 import {
@@ -273,6 +279,9 @@ export type Announcement =
   | { what: "start"; by: string; ok: false; code: string }
   | { what: "share"; by: string; call: string };
 
+/** The settings as `config.json` holds them. */
+type ConfigFile = Partial<Record<SettingKey, SettingValue>>;
+
 export interface AppOptions {
   env?: Record<string, string | undefined>;
   platform?: string;
@@ -301,6 +310,12 @@ export interface AppOptions {
   window?: WindowFactory;
   /** The provider, replacing the one the settings name. Tests pass a fake. */
   provider?: Provider;
+  /**
+   * Where the provider's API key is kept instead of `config.json`: the entry points pass
+   * `systemSecrets()`, the Keychain on macOS. None keeps it in the file, as on Windows and Linux,
+   * and as every test does that passes no fake store.
+   */
+  secrets?: SecretStore | null;
   /** The webhook's HTTP client and backoff. Tests pass a local one; nothing else does. */
   webhook?: { fetch?: typeof fetch; backoffMs?: readonly number[] };
   /** Looks for Claude Code and Codex. Tests pass a fake; nothing else does. */
@@ -540,6 +555,12 @@ export class AkouApp implements ApiApp {
   private quitting: Promise<void> | null = null;
   /** Claude Code and Codex as found at start; null while still looking. */
   discovery: Discovery | null = null;
+  /** The store the API key lives in instead of `config.json`, or null for the file. */
+  private readonly secrets: SecretStore | null;
+  /** The stored keys as read at start and written since: the settings carry them from here. */
+  private readonly secretValues = new Map<StoredSecret, string>();
+  /** Keys the store refused at start, so they stay in the file until a save moves them. */
+  private readonly secretsInFile = new Set<StoredSecret>();
   private discovering = false;
   private resolveClosed!: () => void;
   private lockPath: string;
@@ -583,7 +604,10 @@ export class AkouApp implements ApiApp {
     token: { token: string; path: string },
     lockPath: string,
   ) {
-    this.cfg = cfg;
+    // Server mode keeps the key in the file on every system, and never writes it to a Keychain.
+    const server = cfg.settings["server.enabled"];
+    this.secrets = server ? null : (o.secrets ?? null);
+    this.cfg = this.readSecrets(cfg, server ? (o.secrets ?? null) : this.secrets);
     this.version = o.version ?? APP_VERSION;
     this.clock = o.clock ?? realClock;
     this.configDir = cfg.paths.configDir;
@@ -1659,10 +1683,28 @@ export class AkouApp implements ApiApp {
     return this.cfg;
   }
 
+  /** The save running now: the next one starts after it, so none writes a copy made before it. */
+  private saving: Promise<unknown> = Promise.resolve();
+
   async saveConfig(
-    file: Partial<Record<SettingKey, SettingValue>>,
+    file: ConfigFile | ((current: ConfigFile) => ConfigFile),
     o: { keep?: readonly SettingKey[] } = {},
   ): Promise<LoadedConfig> {
+    // A save may wait on the Keychain. The next one starts after it and, given as a change,
+    // is made from the file as that save left it, so neither writes over the other.
+    const run = this.saving.then(
+      () => this.saveConfigNow(file, o),
+      () => this.saveConfigNow(file, o),
+    );
+    this.saving = run.catch(() => {});
+    return run;
+  }
+
+  private async saveConfigNow(
+    change: ConfigFile | ((current: ConfigFile) => ConfigFile),
+    o: { keep?: readonly SettingKey[] },
+  ): Promise<LoadedConfig> {
+    const file = typeof change === "function" ? change(this.cfg.file) : change;
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     const env = this.o.env ?? process.env;
     // The keys the API cannot write are the file's: what is on disk now wins over this process's
@@ -1697,8 +1739,9 @@ export class AkouApp implements ApiApp {
         throw new HttpError(400, "bad_setting", error, { errors: [error] });
       }
     }
+    await this.storeSecrets(next);
     writePrivate(this.cfg.paths.configFile, `${JSON.stringify(next, null, 2)}\n`);
-    this.cfg = loadConfig(env, this.o.platform);
+    this.cfg = this.withSecrets(loadConfig(env, this.o.platform));
     const after = this.cfg.settings;
     const same = (k: "vocab.extraFiles" | "vocab.languages") =>
       before[k].join("\n") === after[k].join("\n");
@@ -1729,6 +1772,130 @@ export class AkouApp implements ApiApp {
     if (this.manager.live()?.id !== id) return beam;
     const setup = this.liveRan.get(id)?.setup;
     return setup === "upgrade" || (setup === "parakeet" && beam);
+  }
+
+  /** What the API key is saved in: the Keychain, or null for the config file. */
+  secretStore(): "keychain" | null {
+    // A key the store refused at start is still in the file, and the page must not say otherwise.
+    if (this.secretsInFile.size > 0) return null;
+    return this.secrets?.where ?? null;
+  }
+
+  /**
+   * At start: the store's keys are read. A key still in `config.json` stays in use from there
+   * until `moveSecrets` has it in the store. In server mode, which keeps keys in the file, a key
+   * the app moved into the Keychain before is still read from there while the file has none, so
+   * turning server mode on does not lose it. A store that cannot be read leaves no key.
+   */
+  private readSecrets(cfg: LoadedConfig, store: SecretStore | null): LoadedConfig {
+    if (!store) return cfg;
+    for (const k of STORED_SECRETS) {
+      const inFile = cfg.file[k];
+      if (typeof inFile === "string" && inFile !== "") {
+        if (this.secrets) {
+          this.secretValues.set(k, inFile);
+          this.secretsInFile.add(k);
+        }
+        continue;
+      }
+      try {
+        const v = store.get(k);
+        if (!v) continue;
+        this.secretValues.set(k, v);
+        if (!this.secrets)
+          this.log(
+            "warn",
+            `${k} is read from the Keychain; server mode keeps it in the config file, so set it there`,
+          );
+      } catch (err) {
+        this.log("warn", `${k}: ${(err as Error).message}; the assistant has no key for now`);
+      }
+    }
+    return this.withSecrets(cfg);
+  }
+
+  /**
+   * At start, after `readSecrets`: a key still in `config.json` moves into the store and leaves
+   * the file. A store that refuses leaves it in the file, where it still works, and says so.
+   */
+  async moveSecrets(): Promise<void> {
+    const store = this.secrets;
+    if (!store) return;
+    const moved: StoredSecret[] = [];
+    for (const k of this.secretsInFile) {
+      try {
+        await store.set(k, this.secretValues.get(k) ?? "");
+        moved.push(k);
+      } catch (err) {
+        this.log("warn", `${k} stays in the config file: ${(err as Error).message}`);
+      }
+    }
+    if (moved.length === 0) return;
+    // The file as it is on disk, keys the registry refused included: only the moved keys go.
+    const file = this.cfg.paths.configFile;
+    try {
+      const raw = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
+      for (const k of moved) delete raw[k];
+      writePrivate(file, `${JSON.stringify(raw, null, 2)}\n`);
+    } catch (err) {
+      // The key is in both places and still works; the next save of it tries again.
+      this.log("warn", `${moved.join(", ")} stays in the config file: ${(err as Error).message}`);
+      return;
+    }
+    for (const k of moved) this.secretsInFile.delete(k);
+    this.log("info", `moved ${moved.join(", ")} from the config file into the Keychain`);
+  }
+
+  /** The settings with the stored keys in them, as if the file held them. */
+  private withSecrets(cfg: LoadedConfig): LoadedConfig {
+    if (!this.secrets) {
+      // Server mode: a key read from the Keychain answers only while the file has none.
+      if (this.secretValues.size === 0) return cfg;
+      const settings = { ...cfg.settings } as Record<string, SettingValue>;
+      for (const [k, v] of this.secretValues) if (!cfg.file[k]) settings[k] = v;
+      return { ...cfg, settings: settings as Settings };
+    }
+    const settings = { ...cfg.settings } as Record<string, SettingValue>;
+    const file = { ...cfg.file };
+    for (const k of STORED_SECRETS) {
+      const v = this.secretValues.get(k) ?? "";
+      settings[k] = v;
+      if (v) file[k] = v;
+      else delete file[k];
+    }
+    return { ...cfg, settings: settings as Settings, file };
+  }
+
+  /**
+   * A save: each stored key leaves what goes to `config.json`, and a changed one is written to the
+   * store (or removed from it) first. A store that refuses refuses the whole save, so the file
+   * never takes the key instead. A key the store refused at start stays in the file until then.
+   */
+  private async storeSecrets(next: Partial<Record<SettingKey, SettingValue>>): Promise<void> {
+    const store = this.secrets;
+    if (!store) {
+      // Server mode: a save that changes the key in the file ends the one read from the Keychain.
+      for (const k of STORED_SECRETS) if (next[k] !== this.cfg.file[k]) this.secretValues.delete(k);
+      return;
+    }
+    for (const k of STORED_SECRETS) {
+      const v = typeof next[k] === "string" ? (next[k] as string) : "";
+      if (v === (this.secretValues.get(k) ?? "")) {
+        if (!this.secretsInFile.has(k)) delete next[k];
+        continue;
+      }
+      try {
+        if (v) await store.set(k, v);
+        else await store.remove(k);
+      } catch (err) {
+        const error = `${k}: ${(err as Error).message}`;
+        throw new HttpError(500, "keychain", error, { errors: [error] });
+      }
+      delete next[k];
+      this.secretsInFile.delete(k);
+      if (v) this.secretValues.set(k, v);
+      else this.secretValues.delete(k);
+    }
   }
 
   vocabChanged(): void {
@@ -3050,6 +3217,7 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
   try {
     const token = ensureToken(cfg.paths.configDir);
     app = new AkouApp(o, cfg, token, lockPath);
+    await app.moveSecrets();
     await app.listen();
     return app;
   } catch (err) {
@@ -3066,7 +3234,7 @@ export async function startApp(o: AppOptions = {}): Promise<AkouApp> {
 if (import.meta.main) {
   let app: AkouApp;
   try {
-    app = await startApp();
+    app = await startApp({ secrets: systemSecrets() });
   } catch (err) {
     if (err instanceof AlreadyRunningError) {
       console.error(err.message);
