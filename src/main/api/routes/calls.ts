@@ -10,7 +10,14 @@
  */
 
 import { formatWall } from "../../../core/log/clock.ts";
-import { isLiveSetting, LIVE_SETTINGS } from "../../asr/live-setups.ts";
+import {
+  isLiveCallSetting,
+  isReviewModel,
+  LIVE_SETTINGS,
+  REVIEW_EVERY_MAX,
+  REVIEW_EVERY_MIN,
+  REVIEW_MODELS,
+} from "../../asr/live-setups.ts";
 import type { CallController } from "../../call/call.ts";
 import { LIVE_CONTROLS } from "../../call/manager.ts";
 import { validateTerm } from "../../vocab/files.ts";
@@ -105,7 +112,7 @@ export function callRoutes(r: Router<ApiApp>): void {
     "/calls",
     {
       id: "calls.start",
-      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live setup (`auto`, `parakeet`, `nemotron`, `upgrade`) instead of `asr.live`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
+      doc: "Start recording a call. `workspace` and `title` name it; `template` picks the notes template; `call` and `mic` pick the sources; `vocab` adds words for this call; `withoutModels` records before the speech models are downloaded; `live` sets this call's live model (`auto`, `parakeet`, `nemotron`) instead of `asr.live`; `review` its second pass (`none`, `qwen`) instead of `asr.review.model`, and `reviewEvery` how often it reviews, in seconds, instead of `asr.review.everySeconds`. `live` `upgrade`, the old spelling, is `nemotron` with `review` `qwen`. One call at a time: a second start answers 409 with the live call under `already_recording` (id, title, workspace, startedAt, state). With `attach`, it answers 200 with that call and `attached: true` instead, and starts a call only when none records.",
       access: "admin",
       modes: ["app"],
       body: {
@@ -117,6 +124,8 @@ export function callRoutes(r: Router<ApiApp>): void {
         "vocab?": "string[]",
         "withoutModels?": "boolean",
         "live?": "string",
+        "review?": "string",
+        "reviewEvery?": "number",
         "attach?": "boolean",
       },
       ok: 201,
@@ -132,12 +141,34 @@ export function callRoutes(r: Router<ApiApp>): void {
         vocab?: string[];
         withoutModels?: boolean;
         live?: unknown;
+        review?: unknown;
+        reviewEvery?: unknown;
         attach?: boolean;
       }>();
-      if (b.live !== undefined && (typeof b.live !== "string" || !isLiveSetting(b.live))) {
+      if (b.live !== undefined && (typeof b.live !== "string" || !isLiveCallSetting(b.live))) {
         throw new HttpError(422, "bad_field", `live is one of ${LIVE_SETTINGS.join(", ")}`, {
           field: "live",
         });
+      }
+      if (b.review !== undefined && (typeof b.review !== "string" || !isReviewModel(b.review))) {
+        throw new HttpError(422, "bad_field", `review is one of ${REVIEW_MODELS.join(", ")}`, {
+          field: "review",
+        });
+      }
+      const every = b.reviewEvery;
+      if (
+        every !== undefined &&
+        (typeof every !== "number" ||
+          !Number.isInteger(every) ||
+          every < REVIEW_EVERY_MIN ||
+          every > REVIEW_EVERY_MAX)
+      ) {
+        throw new HttpError(
+          422,
+          "bad_field",
+          `reviewEvery is a whole number of seconds from ${REVIEW_EVERY_MIN} to ${REVIEW_EVERY_MAX}`,
+          { field: "reviewEvery" },
+        );
       }
       const vocab = [];
       for (const term of b.vocab ?? []) {
@@ -155,6 +186,8 @@ export function callRoutes(r: Router<ApiApp>): void {
         by: c.by,
         withoutModels: b.withoutModels,
         live: b.live as string | undefined,
+        review: b.review as string | undefined,
+        reviewEvery: every as number | undefined,
         attach: b.attach === true,
       });
       if (!res.ok) return outcome(res);

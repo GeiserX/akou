@@ -19,7 +19,7 @@ import { DictationPage, HISTORY, WORDS } from "./dictation-page.ts";
 import { byId, closable, closeX, h, openModal, replace, toast } from "./dom.ts";
 import { Follower } from "./follow.ts";
 import { type LineAction, LineMenu } from "./line-menu.ts";
-import { liveTitle } from "./live-options.ts";
+import { liveChip } from "./live-options.ts";
 import { LivePicker } from "./live-picker.ts";
 import { SmoothMeters } from "./meter.ts";
 import {
@@ -696,13 +696,13 @@ class App {
     const lang = byId("pill-lang");
     lang.hidden = langs.length === 0;
     lang.textContent = `languages: ${langs.join(", ")}`;
-    // The live setup this call runs (asr.live), while it records.
+    // The live model and second pass this call runs (asr.live, asr.review.*), while it records.
     const running = this.status?.live;
-    const setup = running && running.call === this.callId ? running.setup : null;
+    const chip = running && running.call === this.callId ? liveChip(running) : null;
     const livePill = byId("pill-live");
-    livePill.hidden = !setup;
-    livePill.textContent = setup ? `Live: ${liveTitle(setup)}` : "";
-    livePill.title = setup && running?.engine ? running.engine : "";
+    livePill.hidden = !chip;
+    livePill.textContent = chip ?? "";
+    livePill.title = chip && running?.engine ? running.engine : "";
     const share = this.status?.share.shares?.find((x) => x.call === this.callId);
     const pill = byId("pill-share");
     pill.hidden = !share;
@@ -1064,7 +1064,7 @@ class App {
       r = await this.t.request("POST", "/calls", {
         workspace,
         title: byId<HTMLInputElement>("newtitle").value.trim() || undefined,
-        ...(live ? { live } : {}),
+        ...(live ?? {}),
       });
     } finally {
       this.starting = false;

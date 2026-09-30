@@ -243,3 +243,60 @@ test("the reference table is generated from the registry and lists every key", (
   const table = settingsReference();
   for (const k of SETTING_KEYS) expect(table).toContain(`\`${k}\``);
 });
+
+describe("[ASR-7] the old asr.live upgrade", () => {
+  test("a file that says upgrade reads as nemotron with Qwen's second pass, and the next save writes that", () => {
+    const h = home({ "asr.live": "upgrade", "asr.languages": ["en"] });
+    try {
+      const c = loadConfig(h.env);
+      expect(c.issues).toEqual([]);
+      expect([c.settings["asr.live"], c.settings["asr.review.model"]]).toEqual([
+        "nemotron",
+        "qwen",
+      ]);
+      expect(c.settings["asr.review.everySeconds"]).toBe(60);
+      // The next save, of any key, writes the file from `file`: the new form, never upgrade.
+      const p = patchConfig(c.file, { "asr.review.everySeconds": 120 }, c.paths);
+      expect(p).toEqual({
+        ok: true,
+        file: {
+          "asr.live": "nemotron",
+          "asr.review.model": "qwen",
+          "asr.languages": ["en"],
+          "asr.review.everySeconds": 120,
+        },
+      });
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("a PATCH that says upgrade is saved as the pair; a file that names its own review keeps it", () => {
+    const h = home({ "asr.live": "upgrade", "asr.review.model": "none" });
+    try {
+      const c = loadConfig(h.env);
+      expect([c.settings["asr.live"], c.settings["asr.review.model"]]).toEqual([
+        "nemotron",
+        "none",
+      ]);
+      expect(patchConfig({}, { "asr.live": "upgrade" }, c.paths)).toEqual({
+        ok: true,
+        file: { "asr.live": "nemotron", "asr.review.model": "qwen" },
+      });
+      // Control: any other unknown value is still refused.
+      const bad = patchConfig({}, { "asr.live": "voxtral" }, c.paths);
+      expect(bad.ok).toBe(false);
+    } finally {
+      h.cleanup();
+    }
+  });
+
+  test("the interval's bounds: 30 to 600 whole seconds", () => {
+    expect(validateSetting("asr.review.everySeconds", 30).ok).toBe(true);
+    expect(validateSetting("asr.review.everySeconds", 600).ok).toBe(true);
+    expect(validateSetting("asr.review.everySeconds", 29).ok).toBe(false);
+    expect(validateSetting("asr.review.everySeconds", 601).ok).toBe(false);
+    expect(validateSetting("asr.review.everySeconds", 90.5).ok).toBe(false);
+    expect(validateSetting("asr.review.model", "whisper").ok).toBe(false);
+  });
+});

@@ -4,6 +4,7 @@
  * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
+import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN } from "../../asr/upgrade.ts";
 import { bool, int, list, str } from "../args.ts";
 import { EXIT, Unreachable } from "../client.ts";
 import { healthWord } from "../color.ts";
@@ -24,7 +25,7 @@ const start: Command = {
   name: "start",
   summary: "Start a call; answers once audio is being written",
   usage:
-    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live SETUP] [--without-models] [--attach] [--json]",
+    "akou start [-w WORKSPACE] [-t TITLE…] [--template T] [--call system|app:ID|none] [--mic ID|none] [--vocab TERM,…] [--live MODEL] [--review MODEL] [--review-every S] [--without-models] [--attach] [--json]",
   flags: {
     workspace: { type: "string", short: "w", value: "WS", desc: "the workspace the call goes in" },
     title: { type: "string", short: "t", value: "TITLE", desc: "the call's title" },
@@ -39,8 +40,18 @@ const start: Command = {
     vocab: { type: "string", value: "A,B", desc: "words for this call only, comma-separated" },
     live: {
       type: "string",
-      value: "SETUP",
-      desc: "the live transcript for this call only: auto, parakeet, nemotron or upgrade (default: asr.live)",
+      value: "MODEL",
+      desc: "the live model for this call only: auto, parakeet or nemotron (default: asr.live); upgrade, the old spelling, is nemotron with --review qwen",
+    },
+    review: {
+      type: "string",
+      value: "MODEL",
+      desc: "the second pass for this call only: none or qwen (default: asr.review.model)",
+    },
+    "review-every": {
+      type: "string",
+      value: "S",
+      desc: "how often the second pass reviews, seconds, 30 to 600 (default: asr.review.everySeconds)",
     },
     // Audio only, before `akou models pull` has run: nothing is transcribed live.
     "without-models": {
@@ -56,6 +67,7 @@ const start: Command = {
   examples: [
     'akou start -w work -t "Weekly sync" --vocab Kubernetes,Terraform',
     "akou start --live nemotron",
+    "akou start --live nemotron --review qwen --review-every 120",
     "akou start --attach --json",
   ],
   run: async (ctx, p) => {
@@ -71,6 +83,8 @@ const start: Command = {
         vocab: list(p, "vocab"),
         withoutModels: bool(p, "without-models") || undefined,
         live: str(p, "live"),
+        review: str(p, "review"),
+        reviewEvery: int(p, "review-every", REVIEW_EVERY_MIN, REVIEW_EVERY_MAX),
         attach: bool(p, "attach") || undefined,
       },
     });
@@ -121,7 +135,7 @@ function statusText(s: Body, color = false): string {
   const live = s.live;
   if (live) {
     out.push(
-      `Live: "${live.title}" in ${live.workspace}, ${live.state}${live.muted ? ", muted" : ""}, ${live.parts} part${live.parts === 1 ? "" : "s"}, recognizer lag ${live.lag} s${live.setup ? `, live setup ${live.setup}${live.engine ? ` (${live.engine})` : ""}` : ""} (${live.call})`,
+      `Live: "${live.title}" in ${live.workspace}, ${live.state}${live.muted ? ", muted" : ""}, ${live.parts} part${live.parts === 1 ? "" : "s"}, recognizer lag ${live.lag} s${live.setup ? `, live model ${live.setup}${live.engine ? ` (${live.engine})` : ""}${live.review ? `, second pass ${live.review.model} every ${live.review.everySeconds} s` : ""}` : ""} (${live.call})`,
     );
     for (const h of live.health ?? []) {
       out.push(`  ${h.ch}: ${healthWord(color, h.state)}${h.detail ? ` (${h.detail})` : ""}`);

@@ -626,6 +626,102 @@ body.welcoming #composer #controls {
   align-self: flex-start;
   margin: 0 8px 6px;
 }
+/* A model that is not downloaded, or cannot run here: dim, its reason in its line, Get beside it. */
+#live-menu .live-dim {
+  display: flex;
+  flex: 1;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  opacity: 0.55;
+}
+#live-menu .live-dim[aria-checked="false"] .check {
+  visibility: hidden;
+}
+#live-menu .live-item.dim:hover {
+  background: transparent;
+}
+#live-menu .live-get-one {
+  flex: none;
+  align-self: center;
+  height: 24px;
+  padding: 0 10px;
+  font-size: 11.5px;
+}
+#live-menu .live-sep {
+  height: 1px;
+  margin: 4px 6px;
+  background: var(--line2);
+}
+/* "Second pass: Off", opening its group inline below it. */
+#live-menu .live-review {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 12.5px;
+  text-align: left;
+}
+#live-menu .live-review:hover,
+#live-menu .live-review:focus-visible,
+#live-menu .live-every-one:hover:not(:disabled),
+#live-menu .live-every-one:focus-visible {
+  background: var(--line2);
+  outline: none;
+}
+#live-menu .live-review-key {
+  color: var(--dim);
+}
+#live-review-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+#live-menu .live-review .chev {
+  transition: transform 0.12s;
+}
+#live-menu .live-review[aria-expanded="true"] .chev {
+  transform: rotate(90deg);
+}
+#live-review-group {
+  display: flex;
+  flex-direction: column;
+  padding-left: 12px;
+}
+#live-menu .live-every {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 8px 4px 30px;
+  font-size: 12px;
+}
+#live-menu .live-every-key {
+  margin-right: 4px;
+  color: var(--dim);
+}
+#live-menu .live-every-one {
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--line2);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg);
+  font-size: 11.5px;
+}
+#live-menu .live-every-one[aria-checked="true"] {
+  border-color: var(--faint);
+  background: var(--line2);
+}
+#live-menu .live-every-one:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
 #composer #meters {
   flex: none;
   flex-direction: column;
