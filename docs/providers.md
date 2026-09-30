@@ -72,7 +72,15 @@ It ships off, and stays off unless a follow-up question costs at least 40 % fewe
 
 ## Keys
 
-`provider.apiKey` is for `anthropic` and `openai-compatible`. Until akou stores it in the system keychain, it lives in `config.json`, which only your user can read. It is never shown back over the API or in Settings, and never written to a log. `provider.baseUrl` and `provider.harnessPath` can only be set in the file, because they decide where your transcripts go and what program akou runs.
+`provider.apiKey` is for `anthropic` and `openai-compatible`. It is never shown back over the API or in Settings, and never written to a log. Where it is kept depends on the system:
+
+- **macOS**: in your login Keychain, as a generic password with service `akou` and account `provider.apiKey`, never in `config.json`. Saving the key (Settings, `PATCH /config`, or `printf '%s' "$KEY" | akou config set provider.apiKey -`) writes it there, and the assistant reads it from there. akou talks to the Keychain through Apple's `security` command and passes the key on its standard input, never on a command line where `ps` would show it. A key already in `config.json` from an older akou moves into the Keychain the next time akou starts and is removed from the file. If the Keychain refuses (a locked Keychain, for example), the key stays in the file, still works, and akou logs that it did. You can see or delete the item in Keychain Access under "akou".
+- **Windows and Linux**: in `config.json`, which only your user can read. Credential Manager and the Secret Service (libsecret) come later.
+- **Server mode** (`akou serve`): in `config.json` on every system, since a server has no login Keychain.
+
+`provider.harnessPath` can only be set in the file, because it names a program akou runs. `provider.baseUrl` can be set in the file or on the Settings page of the akou window, never over the API, because it decides where your key and transcripts go.
+
+In Settings, the assistant is one of four choices: the Claude Code or Codex akou found on this computer, "Use an API key" (Anthropic, or an OpenAI-compatible server with its address and model), "Local model (Ollama)", which sets `provider.kind` to `openai-compatible` and `provider.baseUrl` to `http://127.0.0.1:11434/v1` and asks for the model's name, or "None".
 
 ## Terms of service: an open risk
 

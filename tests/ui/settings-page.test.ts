@@ -8,11 +8,14 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import type { Page } from "playwright-core";
+import { keychainStore } from "../../src/main/config/secrets.ts";
 import { onDictationPage } from "../../src/ui/dictation-page.ts";
 import { MODELS_KEYS } from "../../src/ui/models-rows.ts";
 import { tempDir } from "../helpers.ts";
-import { seedCall, standardCall, UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
+import { seedCall, standardCall, UI_TIMEOUT, type UiRig, uiRig, until, windowPage } from "./rig.ts";
 
 async function withRig<T>(
   o: Parameters<typeof uiRig>[0] & { seed?: (home: string) => void },
@@ -390,6 +393,189 @@ describe("the Settings page", () => {
         const file = (await rig.api("GET", "/config")).body.file as string;
         expect(rig.opened[0]).toBe(file);
       });
+    },
+    UI_TIMEOUT,
+  );
+});
+
+const KEY = "sk-ant-ui-7d31b0";
+
+describe("the assistant on the Settings page", () => {
+  test(
+    "four uses, each saving what it is; the key shows Saved in Keychain and Replace, never the key",
+    async () => {
+      const t = tempDir("akou-kc-");
+      const store = join(t.dir, "keychain.json");
+      const secrets = keychainStore({
+        command: [process.execPath, join(import.meta.dir, "..", "fixtures", "fake-security.ts")],
+        env: { ...process.env, FAKE_SECURITY_STORE: store },
+      });
+      try {
+        await withRig({ secrets }, async (rig) => {
+          // The desktop window, whose saves run in process: the address is its to change.
+          const w = await windowPage(rig, { platform: "darwin" });
+          const page = w.page;
+          const sent = w.configPatches;
+          await openSettings(page);
+          const use = "#set-provider-kind";
+          const options = await page.$$eval(`${use} option`, (o) => o.map((x) => x.textContent));
+          expect(options.slice(1)).toEqual(["Use an API key", "Local model (Ollama)", "None"]);
+          expect(options[0]).toBe("Claude Code or Codex on this Mac");
+          expect(await page.inputValue(use)).toBe("none");
+          expect(await page.$("#settings-provider-service")).toBeNull();
+
+          // An API key: Anthropic first, and a field to paste the key into.
+          await page.selectOption(use, "key");
+          await until(() => sent.length === 1, 5000, "the use saved");
+          expect(sent[0]).toEqual({ "provider.kind": "anthropic" });
+          await page.waitForSelector("#settings-provider-service input[value='anthropic']:checked");
+          expect(await page.$(".pg-row[data-key='provider.baseUrl']")).toBeNull();
+          const field = "#set-provider-apiKey";
+          expect(await page.getAttribute(field, "type")).toBe("password");
+          expect(await page.getAttribute(field, "placeholder")).toBe("Paste your key");
+          await page.fill(field, KEY);
+          await page.press(field, "Enter");
+          await until(() => sent.length === 2, 5000, "the key saved");
+          expect(sent[1]).toEqual({ "provider.apiKey": KEY });
+          await page.waitForSelector("#settings-key-saved");
+          expect(await page.textContent("#settings-key-saved")).toBe("Saved in Keychain");
+          expect(await page.isVisible("#settings-key-replace")).toBe(true);
+          expect(await page.isVisible(field)).toBe(false);
+          expect(await page.inputValue(field)).toBe("");
+          expect(await page.innerText("#page-settings")).not.toContain(KEY);
+          expect(JSON.parse(readFileSync(store, "utf8"))["akou/provider.apiKey"]).toBe(KEY);
+          expect(readFileSync(rig.app.config().paths.configFile, "utf8")).not.toContain(KEY);
+          expect(await page.textContent("#settings-provider-state")).toBe(
+            "Uses the Anthropic API.",
+          );
+
+          // Replace opens the field; Escape puts Saved back and sends nothing.
+          await page.click("#settings-key-replace");
+          expect(await page.evaluate(() => document.activeElement?.id)).toBe("set-provider-apiKey");
+          expect(await page.isVisible("#settings-key-saved")).toBe(false);
+          await page.keyboard.type("sk-typo");
+          await page.keyboard.press("Escape");
+          expect(await page.isVisible("#settings-key-saved")).toBe(true);
+          expect(await page.isVisible(field)).toBe(false);
+          // What was typed went with the Escape: showing the page again, which saves what is still
+          // typed, sends nothing.
+          await openSettings(page);
+          await page.waitForSelector("#settings-key-saved");
+          expect(sent.length).toBe(2);
+
+          // An OpenAI-compatible server: its address and model too.
+          await page.click("#settings-provider-service label:has-text('OpenAI-compatible')");
+          await until(() => sent.length === 3, 5000, "the service saved");
+          expect(sent[2]).toEqual({ "provider.kind": "openai-compatible" });
+          await page.waitForSelector(".pg-row[data-key='provider.baseUrl']");
+          const address = "#set-provider-baseUrl";
+          expect(await page.isDisabled(address)).toBe(false);
+          await page.fill(address, "https://llm.example/v1");
+          await page.press(address, "Tab");
+          await until(() => sent.length === 4, 5000, "the address saved");
+          expect(sent[3]).toEqual({ "provider.baseUrl": "https://llm.example/v1" });
+          expect(await page.isVisible(".pg-row[data-key='provider.model']")).toBe(true);
+          expect(await page.inputValue(use)).toBe("key");
+
+          // A local model: Ollama's address, and its model.
+          await page.selectOption(use, "ollama");
+          await until(() => sent.length === 5, 5000, "Ollama saved");
+          expect(sent[4]).toEqual({
+            "provider.kind": "openai-compatible",
+            "provider.baseUrl": "http://127.0.0.1:11434/v1",
+          });
+          await page.waitForSelector("#page-settings:not(:has(#settings-provider-service))");
+          expect(await page.getAttribute("#set-provider-model", "placeholder")).toBe(
+            "The model's name, as Ollama lists it",
+          );
+          expect(await page.$("#set-provider-apiKey")).toBeNull();
+          expect(await page.inputValue(use)).toBe("ollama");
+
+          // Back to a key: Ollama's address is not the Anthropic API's.
+          await page.selectOption(use, "key");
+          await until(() => sent.length === 6, 5000, "the key use saved");
+          expect(sent[5]).toEqual({ "provider.kind": "anthropic", "provider.baseUrl": null });
+
+          // None: no rows under it.
+          await page.selectOption(use, "none");
+          await until(() => sent.length === 7, 5000, "none saved");
+          expect(sent[6]).toEqual({ "provider.kind": "none" });
+          await page.waitForSelector("#page-settings:not(:has(#settings-provider-service))");
+          expect(await page.$("#set-provider-apiKey")).toBeNull();
+          expect(await page.textContent("#settings-provider-state")).toBe(
+            "Ask shows the matching parts of the call instead.",
+          );
+          await w.close();
+        });
+      } finally {
+        t.cleanup();
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Claude Code or Codex is named for what was found; a browser cannot change the address",
+    async () => {
+      const found = {
+        claude: { kind: "claude" as const, path: "/opt/claude", version: "2.1.0" },
+        codex: null,
+      };
+      await withRig(
+        { settings: { "provider.kind": "harness" }, discover: async () => found },
+        async (rig) => {
+          const page = await rig.open();
+          await openSettings(page);
+          await until(
+            async () =>
+              /^Claude Code on this (Mac|computer)$/.test(
+                (await page.textContent("#set-provider-kind option[value='harness']")) ?? "",
+              ) ||
+              (await page
+                .reload()
+                .then(() => openSettings(page))
+                .then(() => false)),
+            10_000,
+            "Claude Code named",
+          );
+          // And the line under it says the same one, not both names.
+          await until(
+            async () =>
+              /^Uses Claude Code on this (Mac|computer)\.$/.test(
+                (await page.textContent("#settings-provider-state")) ?? "",
+              ),
+            5000,
+            "the state names Claude Code",
+          );
+          // The address decides where the key and the transcripts go: a browser cannot set it.
+          await page.selectOption("#set-provider-kind", "key");
+          await page.waitForSelector("#settings-provider-service");
+          await page.click("#settings-provider-service label:has-text('OpenAI-compatible')");
+          await page.waitForSelector("#set-provider-baseUrl");
+          expect(await page.isDisabled("#set-provider-baseUrl")).toBe(true);
+        },
+      );
+      await withRig(
+        {
+          settings: { "provider.kind": "harness" },
+          discover: async () => ({ claude: null, codex: null }),
+        },
+        async (rig) => {
+          const page = await rig.open();
+          await openSettings(page);
+          await until(
+            async () =>
+              (await page.textContent("#set-provider-kind option[value='harness']")) ===
+                "Claude Code or Codex (not found)" ||
+              (await page
+                .reload()
+                .then(() => openSettings(page))
+                .then(() => false)),
+            10_000,
+            "none found",
+          );
+        },
+      );
     },
     UI_TIMEOUT,
   );

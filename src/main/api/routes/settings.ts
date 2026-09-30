@@ -17,6 +17,7 @@ import {
   type SettingKey,
   type SettingSpec,
 } from "../../config/schema.ts";
+import { STORED_SECRETS } from "../../config/secrets.ts";
 import { HttpError, json, OPEN_BODY, type Router } from "../http.ts";
 import type { ApiApp } from "../server.ts";
 import { resolveRef } from "./common.ts";
@@ -40,13 +41,14 @@ export function settingsRoutes(r: Router<ApiApp>): void {
     "/config",
     {
       id: "config.get",
-      doc: "Every setting: its value, the values set in the config file, problems found in the file, and the schema of each key. Secrets are redacted.",
+      doc: "Every setting: its value, the values set in the config file, problems found in the file, and the schema of each key. Secrets are redacted; one saved in the macOS Keychain says `keychain: true`.",
       access: "admin",
       modes: ["app", "server"],
       ok: 200,
     },
     (c) => {
       const cfg = c.app.config();
+      const keychain = c.app.secretStore?.() === "keychain";
       return json(200, {
         file: cfg.paths.configFile,
         settings: redactSettings(cfg.settings),
@@ -68,6 +70,10 @@ export function settingsRoutes(r: Router<ApiApp>): void {
                 apiWritable: s.apiWritable !== false,
                 // With apiWritable false: the desktop window may still set it.
                 ...(s.windowWritable ? { windowWritable: true } : {}),
+                // Saved in the macOS Keychain, never in the file.
+                ...(keychain && (STORED_SECRETS as readonly string[]).includes(k)
+                  ? { keychain: true }
+                  : {}),
                 doc: s.doc,
               },
             ];
