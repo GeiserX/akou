@@ -950,7 +950,7 @@ describe("DC-O1: the pill's window", () => {
     expect(draft.x + draft.width / 2).toBe(pill.x + pill.width / 2);
   });
 
-  test("[H-11] the window grows away from its edge: down at the top, up at the bottom, both ways at a side", () => {
+  test("[H-11] the window grows away from its edge: up at the bottom, down anywhere else, so its row never moves", () => {
     const base = placePill([], "top", AREAS);
     expect(sizePill(base, "top", 320)).toEqual({ ...base, height: 320 });
     const bottom = placePill([], "bottom", AREAS);
@@ -958,10 +958,14 @@ describe("DC-O1: the pill's window", () => {
     expect(tall.y + tall.height).toBe(bottom.y + bottom.height);
     const short = sizePill(bottom, "bottom", 90);
     expect(short.y + short.height).toBe(bottom.y + bottom.height);
-    const left = placePill([], "left", AREAS);
-    const grown = sizePill(left, "left", 300);
-    expect(grown.y + grown.height / 2).toBe(left.y + left.height / 2);
-    expect(grown.x).toBe(left.x);
+    // At a side the page still lays its row at the top: the top stays, so Stop and Cancel do not
+    // move as lines are added.
+    for (const edge of ["left", "right"]) {
+      const side = placePill([], edge, AREAS);
+      const grown = sizePill(side, edge, 300);
+      expect(grown.y).toBe(side.y);
+      expect(grown.x).toBe(side.x);
+    }
     // Never past its display, and never taller than it.
     const primary = AREAS[0] as Rect;
     expect(sizePill(bottom, "bottom", 5000, primary)).toMatchObject({

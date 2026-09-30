@@ -195,6 +195,38 @@ describe("DC-E5: partials while listening, the whole decode inserted", () => {
     expect(Math.max(...at)).toBeLessThanOrEqual((PREVIEW_TAIL_SECONDS + 1) * CAPTURE_RATE);
   });
 
+  test("[H-11] the settle cut lands only in a pause, never between words said close together", async () => {
+    // Five words of 0.45 s 0.05 s apart, then a 0.55 s pause, every 3 s. Word times are off by
+    // tens of ms in a real decode, so a cut in a 0.05 s gap can land in a word's tail.
+    const said: { w: string; s: number; e: number }[] = [];
+    for (let b = 0; b < 30; b += 3)
+      for (let k = 0; k < 5; k++)
+        said.push({ w: `w${said.length}`, s: b + k * 0.5, e: b + k * 0.5 + 0.45 });
+    /** Whether time `t` falls in a gap of at least 0.15 s between two words said. */
+    const pause = (t: number) =>
+      said.some((w, i) => {
+        const next = said[i + 1];
+        return next !== undefined && t > w.e && t < next.s && next.s - w.e >= 0.15;
+      });
+    const starts: number[] = [];
+    const r = rig({
+      preview: async (samples, from) => {
+        const t0 = from / CAPTURE_RATE;
+        const t1 = t0 + samples.length / CAPTURE_RATE;
+        starts.push(t0);
+        const words = said
+          .filter((w) => w.s >= t0 && w.e <= t1)
+          .map((w) => ({ w: w.w, s: w.s - t0, e: w.e - t0, c: 1 }));
+        return { text: words.map((w) => w.w).join(" "), language: null, words };
+      },
+    });
+    await r.feed(30);
+    const cuts = [...new Set(starts)].filter((t) => t > 0);
+    expect(cuts.length).toBeGreaterThan(0);
+    for (const t of cuts) expect({ t, pause: pause(t) }).toEqual({ t, pause: true });
+    expect(r.partials.at(-1)?.text).toBe(said.map((w) => w.w).join(" "));
+  });
+
   test("[H-11] with no word times nothing settles, and a decode takes at most PREVIEW_MAX_SECONDS", async () => {
     const r = rig();
     await r.feed(PREVIEW_MAX_SECONDS + 2);

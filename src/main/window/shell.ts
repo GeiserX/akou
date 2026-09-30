@@ -490,18 +490,14 @@ export function placePill(
 
 /**
  * The pill's window at `height` for `base`, a place at `PILL_SIZE` (H-11): it grows away from the
- * edge `dictation.pill` names. At the top its top stays, at the bottom its bottom, and at the left
- * or right its middle; the width never changes. Pulled whole into `area` when given, and never
+ * edge `dictation.pill` names. At the bottom its bottom stays; anywhere else, the left and right
+ * edges included, its top stays, since the page lays its row at the top and the words below it,
+ * so the row with Stop and Cancel never moves as it grows. The width never changes. Pulled whole into `area` when given, and never
  * taller than it.
  */
 export function sizePill(base: Rect, edge: string, height: number, area?: Rect): Rect {
   const h = Math.max(1, Math.round(height));
-  const y =
-    edge === "bottom"
-      ? base.y + base.height - h
-      : edge === "left" || edge === "right"
-        ? base.y + Math.round((base.height - h) / 2)
-        : base.y;
+  const y = edge === "bottom" ? base.y + base.height - h : base.y;
   const want = { x: base.x, y, width: base.width, height: h };
   if (!area || !hasArea(area)) return want;
   return fitInto(want, [area], { width: base.width, height: Math.min(h, area.height) });
@@ -510,12 +506,7 @@ export function sizePill(base: Rect, edge: string, height: number, area?: Rect):
 /** The place at `PILL_SIZE` of a pill window at any height: `sizePill` the other way round. */
 export function pillBase(frame: Rect, edge: string): Rect {
   const h = PILL_SIZE.height;
-  const y =
-    edge === "bottom"
-      ? frame.y + frame.height - h
-      : edge === "left" || edge === "right"
-        ? frame.y - Math.round((h - frame.height) / 2)
-        : frame.y;
+  const y = edge === "bottom" ? frame.y + frame.height - h : frame.y;
   return { x: frame.x, y, width: frame.width, height: h };
 }
 
