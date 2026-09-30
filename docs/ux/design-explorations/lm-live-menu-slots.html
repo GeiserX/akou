@@ -1,0 +1,108 @@
+<!doctype html><meta charset="utf-8">
+<style>
+:root{--bg:#0d0e10;--panel:#15171a;--fg:#f2f3f5;--dim:#8b9099;--faint:#565b64;--line:#1f2226;--rec:#ff453a;--accent:#6aa8ff;--info:#5ad1c8;--raised:#1b1e22;--line2:#2a2e34}
+*{box-sizing:border-box}
+body{margin:0;background:#000;font:13px -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif;color:var(--fg);-webkit-font-smoothing:antialiased}
+.shot{width:760px;background:var(--bg);margin:0 0 40px;position:relative;overflow:hidden}
+.cap{padding:14px 18px 0;color:var(--dim);font-size:12px}
+.cap b{color:var(--fg);font-weight:600;font-size:13px;display:block;margin-bottom:2px}
+.row{display:flex;align-items:center;gap:10px;padding:14px 18px;border-bottom:1px solid var(--line)}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint)}
+.state{color:var(--dim);font-size:12px;width:44px}
+.title{flex:1;display:flex;align-items:center;height:32px;border:1px solid var(--line);border-radius:8px;background:var(--panel);padding:0 10px;gap:8px;color:var(--faint);font-size:12px;min-width:0}
+.ws{color:var(--fg);font-weight:500;padding-right:8px;border-right:1px solid var(--line);display:flex;gap:4px;align-items:center}
+.live{display:flex;align-items:center;gap:4px;height:32px;padding:0 6px 0 10px;border-radius:8px;background:var(--panel);border:1px solid var(--faint);font-size:12px;font-weight:500;white-space:nowrap}
+.live .k{color:var(--dim)} .live .x{color:var(--dim);font-weight:400}
+svg.i{width:12px;height:12px;stroke:var(--dim);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+.meters{width:84px;font-size:10px;color:var(--dim);display:flex;flex-direction:column;gap:6px}
+.meters span{display:flex;align-items:center;gap:6px}.meters i{flex:1;height:3px;border-radius:2px;background:var(--line2)}
+.rec{height:32px;padding:0 14px 0 10px;border-radius:16px;border:1px solid var(--line2);background:var(--raised);display:flex;align-items:center;gap:8px;font-size:12px;font-weight:600}
+.rec u{width:12px;height:12px;border-radius:50%;background:var(--rec);display:block}
+.body{height:var(--h,330px);position:relative}
+.menu{position:absolute;top:6px;right:212px;width:300px;padding:4px;border:1px solid var(--line2);border-radius:8px;background:var(--raised);box-shadow:0 8px 24px rgb(0 0 0/.45);display:flex;flex-direction:column}
+.it{display:flex;align-items:flex-start;gap:8px;padding:7px 8px;border-radius:6px}
+.it.h{background:var(--line2)}
+.ck{width:14px;height:14px;margin-top:1px;flex:none;stroke:var(--dim);fill:none;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+.ck.off{visibility:hidden}
+.tx{display:flex;flex-direction:column;gap:2px;min-width:0;flex:1}
+.t{font-size:12.5px;font-weight:500}.l{color:var(--dim);font-size:11.5px;line-height:1.4}
+.it.dim .t{color:var(--dim)} 
+.get{align-self:center;font-size:11.5px;font-weight:500;color:var(--fg);border:1px solid var(--line2);border-radius:6px;padding:3px 9px;background:var(--panel)}
+.sep{height:1px;background:var(--line2);margin:4px 8px}
+.hd{padding:6px 8px 2px;color:var(--faint);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.chev{align-self:center;color:var(--dim);font-size:11.5px;display:flex;gap:4px;align-items:center;white-space:nowrap}
+.seg{display:flex;gap:0;margin:2px 8px 8px 30px;border:1px solid var(--line2);border-radius:7px;overflow:hidden;width:max-content;background:var(--panel)}
+.seg span{padding:4px 11px;font-size:11.5px;color:var(--dim);border-right:1px solid var(--line2)}
+.seg span:last-child{border:0}.seg span.on{background:var(--line2);color:var(--fg);font-weight:500}
+.sub{position:absolute;top:150px;right:6px;width:232px;padding:4px;border:1px solid var(--line2);border-radius:8px;background:var(--raised);box-shadow:0 8px 24px rgb(0 0 0/.45);display:flex;flex-direction:column}
+/* settings */
+.pg{padding:22px 28px 26px}.pg h1{font-size:17px;margin:0 0 4px;font-weight:600}.pg .subh{color:var(--faint);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin:18px 0 8px}
+.pn{border:1px solid var(--line);border-radius:10px;background:var(--panel)}
+.r{display:flex;align-items:center;gap:12px;padding:11px 14px;border-bottom:1px solid var(--line)}.r:last-child{border:0}
+.r .tx .t{font-size:13px}.sel{border:1px solid var(--line2);border-radius:7px;padding:5px 9px;font-size:12px;background:var(--raised);display:flex;gap:6px;align-items:center;white-space:nowrap}
+.back{color:var(--dim);font-size:12px;margin-bottom:10px}
+</style>
+<svg width="0" height="0" style="position:absolute"><defs>
+<symbol id="c" viewBox="0 0 16 16"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></symbol>
+<symbol id="k" viewBox="0 0 16 16"><path d="m3.5 8.5 3 3 6-7"/></symbol>
+<symbol id="r" viewBox="0 0 16 16"><path d="m6.5 4.5 3.5 3.5-3.5 3.5"/></symbol></defs></svg>
+
+<style>
+.panel{position:absolute;top:6px;right:212px;width:340px;padding:6px;border:1px solid var(--line2);border-radius:10px;background:var(--raised);box-shadow:0 8px 24px rgb(0 0 0/.45);display:flex;flex-direction:column}
+.ph{display:flex;align-items:center;justify-content:space-between;padding:8px 8px 4px;color:var(--faint);font-size:10.5px;font-weight:600;letter-spacing:.04em;text-transform:uppercase}
+.ph .seg{margin:0;text-transform:none;letter-spacing:0;font-weight:400}
+.ph .seg span{padding:2px 8px;font-size:11px}
+.add{display:flex;align-items:center;gap:8px;padding:7px 8px;border-radius:6px;color:var(--accent);font-size:12.5px;font-weight:500}
+.add .pl{width:14px;text-align:center;font-size:14px;line-height:14px}
+.cat{margin:2px 4px 6px 30px;border:1px solid var(--line2);border-radius:8px;background:var(--panel)}
+.cat .c{display:flex;align-items:center;gap:10px;padding:8px 10px;border-bottom:1px solid var(--line2)}.cat .c:last-child{border:0}
+.bar{height:3px;border-radius:2px;background:var(--line2);margin-top:5px;overflow:hidden}.bar i{display:block;height:100%;width:42%;background:var(--accent)}
+.lnk{color:var(--dim);font-size:11.5px}
+.rd{width:14px;height:14px;margin-top:1px;flex:none;border-radius:50%;border:1.5px solid var(--faint)}
+.rd.on{border-color:var(--accent);background:radial-gradient(var(--accent) 38%,transparent 44%)}
+</style><!-- helper row -->
+<template id="rowT"><div class="row"><span class="dot"></span><span class="state">Ready</span>
+<div class="title"><span class="ws">disney <svg class="i"><use href="#c"/></svg></span>Call title (optional)</div>
+<div class="live"><span class="k">Live:</span> <span class="n"></span><svg class="i"><use href="#c"/></svg></div>
+<div class="meters"><span>Mic<i></i></span><span>Call<i></i></span></div>
+<div class="rec"><u></u>Record</div></div></template>
+
+<div class="shot" id="d1" data-n="Nemotron 3.5" data-x="+ Qwen 2 min" style="--h:500px"><div class="cap"><b>Two slots, each takes a model</b>One panel. Live is the model that writes the words; Second pass is the model that re-reads them. Each slot ends in "Add a model".</div>
+<div class="body"><div class="panel">
+<div class="ph">Live</div>
+<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Nemotron 3.5</span><span class="l">Words appear as they are said. 35 languages, mixed in one call.</span></div></div>
+<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Writes each sentence when the speaker pauses. 25 European languages.</span></div></div>
+<div class="add"><span class="pl">+</span>Add a model</div>
+<div class="sep"></div>
+<div class="ph">Second pass<div class="seg"><span>1 min</span><span class="on">2 min</span><span>5 min</span></div></div>
+<div class="it"><span class="rd"></span><div class="tx"><span class="t">Off</span></div></div>
+<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Qwen3-ASR</span><span class="l">Hears the last minutes again and rewrites the lines. 30 languages.</span></div></div>
+<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Hears the last minutes again, whole sentences at a time. 25 European languages.</span></div></div>
+<div class="add"><span class="pl">+</span>Add a model</div>
+</div></div></div><div class="shot" id="d2" data-n="Parakeet" style="--h:600px"><div class="cap"><b>Adding a model</b>"Add a model" opens in place: the models that fit this slot, downloaded right here, and a folder of your own.</div>
+<div class="body"><div class="panel">
+<div class="ph">Live</div>
+<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Writes each sentence when the speaker pauses. 25 European languages.</span></div></div>
+<div class="add" style="color:var(--fg)"><span class="pl">−</span>Add a model</div>
+<div class="cat">
+<div class="c"><div class="tx"><span class="t">Nemotron 3.5</span><span class="l">Words appear as they are said. 35 languages, mixed in one call. 0.7 GB.</span><div class="bar"><i></i></div></div><span class="get">Cancel</span></div>
+<div class="c"><div class="tx"><span class="t">Nemotron 3.5, steadier</span><span class="l">Waits about a second before writing, for fewer wrong words. Best for Spanish. 0.7 GB.</span></div><span class="get">Download</span></div>
+<div class="c"><div class="tx"><span class="t">Nemotron English</span><span class="l">Words appear as they are said. English only. 0.7 GB.</span></div><span class="get">Download</span></div>
+<div class="c"><div class="tx"><span class="t lnk">From a folder…</span></div></div>
+</div>
+<div class="sep"></div>
+<div class="ph">Second pass<div class="seg"><span>1 min</span><span class="on">2 min</span><span>5 min</span></div></div>
+<div class="it"><span class="rd on"></span><div class="tx"><span class="t">Off</span></div></div>
+<div class="it"><span class="rd"></span><div class="tx"><span class="t">Parakeet</span><span class="l">Hears the last minutes again, whole sentences at a time. 25 European languages.</span></div></div>
+<div class="add"><span class="pl">+</span>Add a model</div>
+</div></div></div><div class="shot" id="s6" style="--h:0px"><div class="cap"><b>While a call records</b>The button names what is running and is locked until the call ends.</div>
+<div class="row" style="border:0"><span class="dot" style="background:var(--rec)"></span><span class="state" style="color:var(--rec);font-weight:600">REC</span>
+<div class="title" style="color:var(--fg)">PDE daily scrum</div>
+<div class="live" style="opacity:.7;border-color:var(--line)"><span class="k">Live:</span> Nemotron 3.5 <span class="x">+ Qwen 2 min</span></div>
+<div class="meters"><span>Mic<i style="background:linear-gradient(90deg,#32d74b 55%,var(--line2) 55%)"></i></span><span>Call<i style="background:linear-gradient(90deg,#32d74b 35%,var(--line2) 35%)"></i></span></div>
+<div class="rec"><u style="border-radius:2px"></u>Stop</div></div></div>
+<script>
+for(const s of document.querySelectorAll('.shot[data-n]')){const r=document.getElementById('rowT').content.cloneNode(true);
+r.querySelector('.n').innerHTML=s.dataset.n+(s.dataset.x?' <span class="x">'+s.dataset.x+'</span>':'');
+s.insertBefore(r,s.querySelector('.body')||s.querySelector('.pg'));}
+</script>
