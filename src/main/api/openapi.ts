@@ -217,7 +217,7 @@ export function buildOpenApi(
       version: o.version,
       description:
         "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
-      license: { name: "GPL-3.0-only", identifier: "GPL-3.0-only" },
+      license: { name: "GPL-3.0-or-later", identifier: "GPL-3.0-or-later" },
     },
     servers: [{ url: o.serverUrl ?? LOCAL_SERVER }],
     security: [{ [SECURITY_SCHEME]: [] }],

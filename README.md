@@ -4,42 +4,42 @@
 
 # akou
 
-An open-source alternative to [Granola](https://www.granola.ai). akou transcribes your calls on your own machine and works with your own AI agent in the terminal: Claude Code, Codex or any other agent that [speaks MCP or can run the `akou` command](docs/ux/PROGRAMMABILITY.md). Its own ask box answers with the Claude Code or Codex subscription you already pay for, or with [any OpenAI-compatible or Anthropic endpoint](docs/providers.md). The notes go into the tools you use today. It runs on macOS, Windows and Linux, and as a [transcription server](docs/ux/SERVER.md) you host yourself.
+<p>
+  <a href="https://github.com/GeiserX/akou/releases"><img src="https://img.shields.io/github/v/release/GeiserX/akou?include_prereleases" alt="Release"></a>
+  <a href="https://github.com/GeiserX/akou/actions/workflows/ci.yml"><img src="https://github.com/GeiserX/akou/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/GeiserX/akou" alt="License"></a>
+</p>
 
-akou (Greek: "listen!") is a desktop app that records your calls on your own computer. It shows a live transcript, keeps a timestamped notepad while the call runs, and answers questions about the call while it is still going. It captures the microphone and the call audio on separate channels, with no bot in the meeting, and transcribes on the machine. Its default brain is the coding-agent subscription you already have, Claude Code or Codex, run locally. A finished call becomes Markdown, an event log and the audio, and lands in whatever system you already keep your notes in. It runs on macOS, Windows and Linux.
+akou is an open-source alternative to [Granola](https://www.granola.ai): a desktop app that records your calls on your own computer, transcribes them on the machine, and answers questions about a call while it is still running. Your own terminal agent (Claude Code, Codex or anything that [speaks MCP or can run the `akou` command](docs/ux/PROGRAMMABILITY.md)) can follow and question the call, and the notes land in the tools you already use. It runs on macOS, Windows and Linux, and as a [transcription server](docs/ux/SERVER.md) you host yourself.
 
 ## Status
 
 Early. The 0.x releases are prereleases for macOS on Apple silicon: the app is not signed by Apple yet, so the first open needs one extra step. The documents in this repository cover the architecture, the requirements, the known traps and the roadmap.
 
-## Install
+## Features
 
-Download the DMG from the [releases page](https://github.com/GeiserX/akou/releases), drag akou into Applications, and open it once:
-
-- On macOS 14, Control-click akou in Applications, choose Open, then Open again.
-- On macOS 15 and later, let macOS refuse it once, then go to System Settings, then Privacy & Security, and click Open Anyway.
-
-On first run the window offers the one download of the speech models (about 3.0 GB, each file checked against a pinned SHA-256). Recording starts once they are there. The `akou` command line is a separate download. [docs/install.md](docs/install.md) covers checksums, the models, the microphone and system-audio permissions (which macOS may ask for again after an update while builds are unsigned), the command line and uninstalling.
-
-## Why it is different
-
+- Captures the microphone and the call audio on separate channels, with no bot in the meeting.
+- Shows a live transcript and keeps a timestamped notepad while the call runs.
 - The recording never leaves your machine, and the app has no cloud.
-- Your agent can start a call, follow it, name a speaker and answer a question about it from the terminal, over a local API or MCP.
-- akou answers every question from a small context it builds locally in under 50 ms, so a question late in a three-hour call costs about the same as one in a ten-minute call.
-- One word list you own fixes rare names and product terms. akou biases the recognizer toward it, every view corrects with it, and your agent adds new words to it with your approval.
-- No built-in knowledge base. The call lands in your own files, and that is the point.
+- Your agent can start a call, follow it, name a speaker and ask about it from the terminal, over a local API or MCP.
+- The ask box answers with the Claude Code or Codex subscription you already pay for, or with [any OpenAI-compatible or Anthropic endpoint](docs/providers.md).
+- Answers come from a small context built locally, with no model call and no re-reading of the call, so a late question in a three-hour call costs about the same as one in a ten-minute call.
+- One word list you own fixes rare names and product terms; your agent adds new words to it with your approval.
+- A finished call becomes Markdown, an event log and the audio, and lands in your own files: no built-in knowledge base.
 
-## Documents
+## Quick start
 
-Start with [INDEX.md](docs/INDEX.md). The main ones:
+Download `akou-<version>-macos-arm64.dmg` from the [latest release](https://github.com/GeiserX/akou/releases), drag akou into Applications and open it once. The build is not signed by Apple yet: on macOS 14, Control-click akou and choose Open; on macOS 15 and later, go to System Settings > Privacy & Security after the refusal and click Open Anyway. Needs a Mac with Apple silicon and macOS 14.4 or later.
 
-- [install.md](docs/install.md): installing the app and the command line, the first open, models, permissions, uninstalling.
-- [DESIGN.md](docs/DESIGN.md): the architecture, starting simple and then covering every part in depth.
-- [REQUIREMENTS.md](docs/REQUIREMENTS.md): what the predecessors did and what akou does with each feature.
-- [TRAPS.md](docs/TRAPS.md): failures that already bit once, written as tests.
-- [ROADMAP.md](docs/ROADMAP.md): milestones with exit criteria.
-- [POSITIONING.md](docs/POSITIONING.md): who it is for and how it compares.
+The first window downloads the speech models (about 3.0 GB, each file checked against a pinned SHA-256). [Getting started](docs/getting-started.md) covers checksums, permissions, the command line and uninstalling.
 
-## Licence and credit
+## Documentation
 
-GPL-3.0. akou is written from scratch and replaces [hark](https://github.com/PhantomYdn/hark), the macOS command-line recorder. akou carries over hark's capture design in full. hark's code is the reference, not a dependency.
+- [Getting started](docs/getting-started.md): installing the app and the command line, the first open, models, permissions, uninstalling
+- [Providers](docs/providers.md): what answers questions and writes notes
+- [Handing calls to your own knowledge system](docs/knowledge-handoff.md)
+- Design record: [index](docs/index.md), [design](docs/DESIGN.md), [requirements](docs/REQUIREMENTS.md), [traps](docs/TRAPS.md), [roadmap](docs/ROADMAP.md), [positioning](docs/POSITIONING.md)
+
+## License
+
+[GPL-3.0-or-later](LICENSE). akou is written from scratch and replaces [hark](https://github.com/PhantomYdn/hark), whose capture design it carries over in full.

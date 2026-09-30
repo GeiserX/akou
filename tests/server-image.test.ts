@@ -185,7 +185,7 @@ describe("[SV-T1] the server job in ci.yml", () => {
       "docker build",
       "models pull fast",
       // The container binds 0.0.0.0, which SV-P5 refuses without the operator's word that a proxy
-      // is in front; install.md publishes the port on loopback and says so in the environment
+      // is in front; getting-started.md publishes the port on loopback and says so in the environment
       // (SV-P11), and the job also watches the image refuse without it and a folder it cannot write.
       "-e AKOU_BEHIND_PROXY=true",
       "exited 78",

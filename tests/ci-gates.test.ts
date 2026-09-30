@@ -292,7 +292,7 @@ describe("[CI-2] one workflow, one required check", () => {
       "native/akou-capture/README.md",
       "scripts/.beads/x.ts",
     ])
-      expect({ code, needsCode: needsCode(re, ["docs/INDEX.md", code]) }).toEqual({
+      expect({ code, needsCode: needsCode(re, ["docs/index.md", code]) }).toEqual({
         code,
         needsCode: true,
       });
