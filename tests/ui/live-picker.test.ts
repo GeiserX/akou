@@ -343,6 +343,20 @@ describe("W3.19: the live model picker in the Record row", () => {
             5000,
             "Off saved",
           );
+          // An interval saved elsewhere shows as itself, checked.
+          await rig.api("PATCH", "/config", {
+            "asr.live": "nemotron",
+            "asr.review.model": "qwen",
+            "asr.review.everySeconds": 90,
+          });
+          await page.keyboard.press("Escape");
+          await page.keyboard.press("Escape");
+          await page.click("#live");
+          await until(async () => (await reviewName(page)) === "Qwen, every 90 s", 5000, "90 s");
+          await page.click("#live-review");
+          await page.waitForSelector('[data-every="90"]');
+          expect(await page.getAttribute('[data-every="90"]', "aria-checked")).toBe("true");
+          expect(await page.textContent('[data-every="90"]')).toBe("90 s");
         },
         undefined,
         true,

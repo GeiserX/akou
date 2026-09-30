@@ -14,6 +14,7 @@ import type {
   ReviewRun,
 } from "../src/main/asr/live-setups.ts";
 import {
+  everyChoices,
   liveChecked,
   liveChip,
   liveNote,
@@ -222,5 +223,19 @@ describe("W3.19: the second pass in the menu", () => {
     ).toBe("Live: Nemotron English, Qwen every 2 min");
     expect(liveChip({ setup: "parakeet", engine: null })).toBe("Live: Parakeet");
     expect(liveChip({ setup: null })).toBeNull();
+  });
+
+  test("an interval saved elsewhere (90 s, 10 min) shows as itself beside the three offered", () => {
+    expect(everyChoices(120)).toEqual([60, 120, 300]);
+    expect(everyChoices(90)).toEqual([60, 90, 120, 300]);
+    expect(everyChoices(600)).toEqual([60, 120, 300, 600]);
+  });
+
+  test("a missing Qwen that could not run with the live model says why, and offers no Get", () => {
+    const why = "It reviews Nemotron's lines; the live model is Parakeet.";
+    const v = view("parakeet", "parakeet", both, {
+      choices: [choice("qwen", ["missing", "missing"], why)],
+    });
+    expect(reviewOptions(v)[1]).toMatchObject({ id: "qwen", state: "blocked", line: why });
   });
 });

@@ -263,6 +263,15 @@ describe("[akou-chp.23] what GET /models and the Models page show", () => {
     expect(small.review.choices.find((c) => c.id === "qwen")?.blocked).toBe(
       "Needs 16 GB of memory; this computer has 8 GB.",
     );
+    // With Parakeet live and Qwen not downloaded, the reason still shows: no download would help.
+    const pkMissing = liveView(
+      ctx({ setting: "parakeet", on: new Set([RECOGNIZER]) }),
+      null,
+      (id) => (id === RECOGNIZER ? "ready" : "missing"),
+    );
+    expect(pkMissing.review.choices[0]?.blocked).toBe(
+      "It reviews Nemotron's lines; the live model is Parakeet.",
+    );
     // With Parakeet live, Parakeet's pass says why it is not offered.
     const pk = liveView(ctx({ setting: "parakeet" }), null, () => "ready");
     expect(pk.review.choices.find((c) => c.id === "parakeet")?.blocked).toBe(
