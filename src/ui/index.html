@@ -17,6 +17,7 @@
   <div class="calls-sub">
     <label class="search"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg><input id="calls-search" type="search" placeholder="Search calls" aria-label="Search calls by title or workspace" autocomplete="off" spellcheck="false"></label>
     <section id="calls" aria-labelledby="calls-title"></section>
+    <button id="workspace-new" class="side-new" type="button"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M3.5 8h9"/></svg><span class="grow">New workspace</span></button>
   </div>
   <button class="navrow" id="dictation-open" type="button" data-page="dictation" title="Type what you say into any app"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.8" width="4" height="8" rx="2"/><path d="M3.5 8a4.5 4.5 0 0 0 9 0M8 12.5v1.7"/></svg><span class="grow">Dictation</span></button>
   <button class="navrow" id="models-open" type="button" data-page="models" title="Speech and speaker models: download, remove, choose"><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 1.8 13.5 5v6L8 14.2 2.5 11V5z"/><path d="M2.5 5 8 8.2 13.5 5M8 8.2v6"/></svg><span class="grow">Models</span><i class="pip" id="models-pip" title="Speech models missing" hidden></i></button>
@@ -34,8 +35,10 @@
   <span id="state" role="status" aria-live="polite">…</span>
   <div id="controls" role="toolbar" aria-label="Recording controls">
     <div class="idle field title-field">
-      <input id="workspace" list="workspaces" placeholder="workspace" aria-label="Workspace" maxlength="60" autocomplete="off">
-      <datalist id="workspaces"></datalist>
+      <div class="ws-pick">
+        <button id="workspace" type="button" aria-haspopup="menu" aria-expanded="false" aria-controls="workspace-menu"><span class="vh">Workspace: </span><span id="workspace-name">default</span><svg class="ico" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg></button>
+        <div id="workspace-menu" role="menu" aria-label="Workspaces" hidden></div>
+      </div>
       <input id="newtitle" placeholder="Call title (optional)" aria-label="Call title" maxlength="80" autocomplete="off">
     </div>
     <div id="live-pick" hidden>

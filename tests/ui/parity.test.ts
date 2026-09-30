@@ -66,9 +66,9 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           expect(await page.locator("#dot").count()).toBe(1);
           expect(await text(page, "#state")).toBe("saved");
           // The composer row: the workspace chip inside the title field, the live model, the Mic
-          // and Call meters with their health dots, and Record, all on screen at once. The
-          // template is no longer picked here: the live model menu took its place.
-          expect(await page.locator("#template").count()).toBe(0);
+          // and Call meters with their health dots, and Record, all on screen at once. No template
+          // picker here or on the Enhanced tab: notes pick their template automatically.
+          expect(await page.locator("#template, #enhance-template").count()).toBe(0);
           for (const c of [
             "#composer .title-field #workspace",
             "#composer .title-field #newtitle",
@@ -116,10 +116,10 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           ).toBe(0);
           expect(await page.locator("#composer .pill, #composer #title").count()).toBe(0);
           // The call header over the transcript: the title, then day and start, length,
-          // workspace and what the state adds; the speakers with their talk time.
+          // workspace, template and what the state adds; the speakers with their talk time.
           expect(await text(page, "#call-head #title")).toBe("Weekly sync");
           expect(await text(page, "#call-head #meta")).toMatch(
-            /^[^·]+, 15:36 · 12 s · work · 4 lines$/,
+            /^[^·]+, 15:36 · 12 s · work · Template: standup · 4 lines$/,
           );
           expect(await page.locator("#meta").getAttribute("title")).toContain("Times are local");
           expect(await page.locator("#people li").count()).toBe(3);
@@ -329,11 +329,14 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
-    "Workspace picker and title field; a call started here takes the automatic template",
+    "Workspace menu and title field; the template is the automatic choice, and a script's shows in the header",
     async () => {
       await withRig({}, async (rig) => {
+        await rig.api("POST", "/workspaces", { name: "acme" });
         const page = await rig.open();
-        await page.fill("#workspace", "acme");
+        await page.waitForFunction(() => document.getElementById("state")?.textContent !== "…");
+        await page.click("#workspace");
+        await page.click('#workspace-menu [data-ws="acme"]');
         await page.fill("#newtitle", "Kickoff");
         await page.click("#record");
         await until(async () => (await text(page, "#state")) === "rec", 8000, "recording");
@@ -352,6 +355,15 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         expect(await text(page, "#meta")).toContain(" · acme");
         expect(await text(page, "#meta")).not.toContain("Template");
         await page.click("#stop");
+        await until(async () => (await text(page, "#state")) === "saved", 8000, "stopped");
+        // A template a script names still reaches the call, and its header says so.
+        const scripted = await rig.startCall({ workspace: "acme", template: "standup" });
+        await until(
+          async () => ((await text(page, "#meta")) ?? "").includes("Template: standup"),
+          8000,
+          "scripted",
+        );
+        await rig.api("POST", `/calls/${scripted}/stop`);
       });
     },
     UI_TIMEOUT,

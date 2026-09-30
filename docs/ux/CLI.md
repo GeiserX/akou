@@ -74,7 +74,7 @@ The tree stays flat: one verb per action, with subcommands only where a noun has
 | During the call | `name SPK NAME` · `name --merge A B` · `name --unmerge SPK` · `note "TEXT"` · `note --edit ID "TEXT"` · `note --del ID` · `remember "TEXT"` · `remember --del ID` · `mark [LABEL]` **new** (CLI-34) | has, except `mark` |
 | Vocabulary | `vocab list\|add\|fix\|remove\|approve\|reject\|suggest\|check\|import\|pass` | has |
 | After the call | `enhance [--template T]` · `finalize [CALL] [--force] [--engine E]` · `export [CALL] [--to DIR]` · `hooks run CALL [--stage S]` · `hooks test` **new** (PG-H2) · `show CALL [--layer best\|live\|final] [--format md\|json\|txt]` | has, except `--engine` (TRN-16) and `hooks test` |
-| Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename CALL TITLE…` · `calls move\|delete\|restore CALL …` **new** (CLI-26) · `import hark-viewer DIR… [-w WS]` | has, except `move`, `delete` and `restore` |
+| Calls | `calls [-w WS] [--limit N] [--failed]` · `calls rename CALL TITLE…` · `calls move\|delete\|restore CALL …` **new** (CLI-26) · `workspaces` · `workspace add NAME` · `import hark-viewer DIR… [-w WS]` | has, except `move`, `delete` and `restore` |
 | Share | `share on\|off\|status [-c CALL] [--bind tailnet\|lan\|IP] [--notes] [--expires 3h]` | has |
 | Setup | `config show\|get\|set\|unset\|path` · `models list\|pull [PRESET\|MODEL]\|delete MODEL\|import\|select` (`pull` and `import` need no running app, SV-P3; `delete` asks the running akou, which refuses the default model and one in use) · `devices` · `apps` · `templates list\|show` **new** (PG-F3) · `token path\|rotate` · `doctor [--grant] [--capture-test]` · `demo [--clean]` **new** (SET-10) · `completion SHELL` **new** (CLI-08) | partial: `devices` and `apps` exit 69 "not built"; no `get`, `path`, `models select` (SET-06), `doctor --capture-test` (DK-O1), `templates`, `demo`, `completion` |
 | Dictation | `dictate FILE [--engine E] [--language L]` **new** (DICTATION.md DC-G3: a clip through the dictation path) · `dictate start\|stop\|toggle\|cancel` · `dictations list\|show\|retry\|delete` **new** (DC-G3) | has every command in this row ([dictate.ts](../../src/main/cli/commands/dictate.ts)) |
@@ -404,10 +404,11 @@ Every action has the same name and the same effect through every door (PRINCIPLE
 | Export, hooks | `export`, `hooks run` | `POST …/export`, `…/hooks` | `akou_export` | hand-off status | none for the CLI |
 | List calls | `calls` | `GET /calls` | `akou_list_calls` | sidebar | none |
 | Rename a call | `calls rename` | `PATCH /calls/{id}` | `akou_rename_call` | the title in the call header | none |
+| List and add workspaces | `workspaces`, `workspace add` | `GET /workspaces`, `POST /workspaces` | none | the workspace menu in the Record row, New workspace in the sidebar | MCP: `akou_start` names the workspace and makes its folder |
 | Move, delete, restore a call | `calls move…` | PG-A4 | PG-M4 | WINDOW.md | all missing (CLI-26) |
 | Edit a line | `edit` | PG-A5 | none yet | inline edit | all missing (CLI-29) |
 | Share | `share` | `/share` | none | share pill | MCP (PG-M4) |
-| Templates | `templates` | `GET /templates` | none | template picker | CLI and MCP (PG-F3) |
+| Templates | `templates` | `GET /templates` | none | none: the window always uses the automatic choice | CLI and MCP (PG-F3); the window on purpose |
 | Settings | `config` | `/config` | `akou_config_get`, read-only; writes are left out on purpose, so an agent never changes `provider.kind` or `share.bind` on its own (PG-M4 exclusion list) | Settings | MCP read (PG-M4) |
 | Devices, apps | `devices`, `apps` | route to add (CLI-07) | none | device pickers | CLI and route missing (CLI-07) |
 | Import | `import hark-viewer` | `POST /import/hark-viewer` | none, by design | none | none |
