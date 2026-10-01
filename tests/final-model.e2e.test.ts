@@ -53,14 +53,14 @@ beforeAll(async () => {
     settings: {
       "asr.modelsDir": models,
       "asr.languages": ["en"],
-      // Slow to answer its health check, so the pass is seen running.
+      // Slow to answer its health check (4 s), so the pass is seen starting and running.
       "asr.llamaServer": [
         process.execPath,
         FAKE_LLAMA,
         "--fake-log",
         llamaLog,
         "--fake-loading-ms",
-        "1500",
+        "4000",
       ],
     },
   });
@@ -113,7 +113,13 @@ describe("the final pass's model", () => {
     const run = await cli(["finalize", "last", "--force", "--model", "qwen"]);
     expect(run.code).toBe(0);
     expect(run.out).toContain(`Final pass started for ${id} on Qwen`);
-    // Running: `GET /status` has how far it is and on which model, and so does the call.
+    // Running: `GET /status` has how far it is and on which model, and so does the call. The
+    // fake llama-server answers its health check after 4 s, so the pass sits on "starting".
+    await until(
+      async () => (await rig.api("GET", "/status")).body.finals?.[0]?.step === "starting",
+      15_000,
+      "the pass to start Qwen",
+    );
     const st = await rig.api("GET", "/status");
     expect(st.body.finals).toEqual([
       {
@@ -121,7 +127,6 @@ describe("the final pass's model", () => {
         done_s: expect.any(Number),
         total_s: expect.any(Number),
         model: QWEN_ASR,
-        // llama-server answers its health check after 1.5 s: the pass is still starting it.
         step: "starting",
         waiting: null,
       },
@@ -227,7 +232,7 @@ describe("the final pass's model", () => {
     const a = await rig.api("POST", `/calls/${first}/finalize`, { force: true, model: "qwen" });
     const b = await rig.api("POST", `/calls/${second}/finalize`, { force: true, model: "qwen" });
     expect([a.status, b.status]).toEqual([202, 202]);
-    // The fake llama-server takes 1.5 s to answer its health check, so the first is still on it.
+    // The fake llama-server takes 4 s to answer its health check, so the first is still on it.
     const st = (await rig.api("GET", "/status")).body;
     const waiting = st.finals.find((f: { call: string }) => f.call === second);
     expect(waiting).toMatchObject({ waiting: first, model: QWEN_ASR });
