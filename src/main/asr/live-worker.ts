@@ -1333,8 +1333,17 @@ export class WorkerSide {
       if (m.type === "flush") this.reply({ type: "flushed", token: m.token });
       if (m.type === "decode" || m.type === "speech" || m.type === "review")
         this.reply({ type: "decode.failed", token: m.token, error: (err as Error).message });
-      if (m.type === "dstream-open" || m.type === "dstream-close")
+      if (m.type === "dstream-open" || m.type === "dstream-close" || m.type === "dstream-audio") {
+        // A stream whose audio failed is dropped here too, and the host stops waiting on it.
+        if (m.type === "dstream-audio") {
+          try {
+            this.pipeline?.closeDictation(m.token, false);
+          } catch {
+            // Already broken: the reply below is what the host needs.
+          }
+        }
         this.reply({ type: "dstream.failed", token: m.token, error: (err as Error).message });
+      }
       if (m.type === "dwarm")
         this.reply({ type: "dwarmed", token: m.token, error: (err as Error).message });
     }

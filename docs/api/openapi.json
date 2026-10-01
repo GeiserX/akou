@@ -506,7 +506,7 @@
         "tags": [
           "models"
         ],
-        "description": "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. 404 when the model is not downloading.",
+        "description": "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. It also stops the model's copy by models.import, which then lists its files as missing. 404 when the model is not downloading.",
         "requestBody": {
           "required": true,
           "content": {
@@ -554,7 +554,7 @@
         "tags": [
           "models"
         ],
-        "description": "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing. 404 when the folder does not exist.",
+        "description": "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing once the copy ends; while it runs, models.get shows the model being copied as `downloading` with its bytes so far, and models.cancel stops it. 404 when the folder does not exist.",
         "requestBody": {
           "required": true,
           "content": {
@@ -1379,7 +1379,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor, newest last (`vocab.learned`), left out when there are none: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor and up to the answer's `cursor`, newest last (`vocab.learned`), left out when there are none, and on the first page only when paging with `offset` or `afterLine`: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
         "parameters": [
           {
             "name": "id",

@@ -296,7 +296,7 @@ export interface VocabLearned extends Envelope {
   term: string | null;
   heard?: string[];
   by: Author;
-  /** Lines of the call that read the term when it was written. */
+  /** Lines of the call this fix changed to read the term. */
   lines?: number;
   kept?: LearnedKept;
   /** The call's `vocab.add` ids it came with. */

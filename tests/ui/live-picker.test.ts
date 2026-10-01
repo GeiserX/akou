@@ -255,7 +255,7 @@ describe("W3.19: the live panel in the Record row", () => {
   );
 
   test(
-    "with no live model the button reads Live: no model, and the Live slot says so with its Add a model list open",
+    "with no live model the button reads Live: no model, and the Live slot says so with its Add a model list open, again after the panel closes",
     async () => {
       let id = "";
       await withModels(
@@ -279,6 +279,18 @@ describe("W3.19: the live panel in the Record row", () => {
             RECOGNIZER,
           ]);
           expect(await page.$("#live-get")).toBeNull();
+          // Closed by hand, the box stays closed only until the panel closes: opened again, a
+          // slot with no model shows its box open again.
+          await page.click('#live-menu [data-add="live"]');
+          expect(await page.getAttribute('#live-menu [data-add="live"]', "aria-expanded")).toBe(
+            "false",
+          );
+          await page.keyboard.press("Escape");
+          await until(async () => await page.isHidden("#live-menu"), 3000, "closed");
+          await openPanel(page);
+          expect(await page.getAttribute('#live-menu [data-add="live"]', "aria-expanded")).toBe(
+            "true",
+          );
         },
         { seed: (home) => (id = seedCall(home, (b) => standardCall(b)).id) },
       );

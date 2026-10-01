@@ -28,6 +28,7 @@ function seed(home: string): void {
   line("l000003", 5, "their plan works");
   line("l000004", 6, "ask mark about it");
   line("l000005", 8, "then mark said yes");
+  line("l000006", 9, "we moved to vercell");
   b.partEnded(1, "stop", 10);
   b.add({ type: "call.ended", reason: "stop" });
   const dir = join(home, "Recordings", "akou", "work", "2026-09-23_153612_f6g7h");
@@ -114,6 +115,20 @@ describe("the vocab.learned event", () => {
       await fixLine(rig, "l000003", "there plan works");
       await fixLine(rig, "l000002", "Vercel is down again");
       expect(await learnedEvents(rig)).toHaveLength(1);
+    },
+    LONG,
+  );
+
+  test(
+    "`lines` counts the lines this fix changed, not lines that read the term before it",
+    async () => {
+      const rig = await rigWith();
+      // A word the workspace file already knows: one line reads Vercel before any fix.
+      await rig.api("POST", "/vocab", { term: "Vercel", heard: ["vercell"], workspace: "work" });
+      expect((await texts(rig)).l000006).toBe("we moved to Vercel");
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const [k] = await learnedEvents(rig);
+      expect(k).toMatchObject({ term: "Vercel", lines: 2 });
     },
     LONG,
   );
@@ -431,6 +446,48 @@ describe("`learned` on a read from a cursor", () => {
       const next = await read(page.body.cursor);
       expect(next.body.lines.map((l: { id: string }) => l.id)).toEqual(["l000011"]);
       expect(next.body.learned).toEqual([expect.objectContaining({ term: "Vercel" })]);
+    },
+    LONG,
+  );
+});
+
+describe("`learned` with offset paging", () => {
+  test(
+    "comes on the first page only, since every page shares one cursor",
+    async () => {
+      const rig = await rigWith();
+      const before = await cursor(rig);
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      // Lines changed after the cursor, so there is more than one page.
+      for (const [id, w] of [
+        ["l000010", 6],
+        ["l000011", 7],
+      ] as const) {
+        await rig.app.write(CALL, {
+          type: "seg",
+          id,
+          rev: 1,
+          layer: "live",
+          part: 1,
+          ch: "call",
+          spk: "c1",
+          a0: w,
+          a1: w + 1,
+          w0: T0 + w * 1000,
+          w1: T0 + w * 1000 + 900,
+          text: `a line after the fix ${id}`,
+          model: "fake",
+        } as EventDraft);
+      }
+      const page = (offset: number) =>
+        rig.api(
+          "GET",
+          `/calls/${CALL}/transcript?since=${before}&offset=${offset}&limitTokens=1&review=skip`,
+        );
+      const first = await page(0);
+      expect(first.body.nextOffset).toBe(1);
+      expect(first.body.learned).toEqual([expect.objectContaining({ term: "Vercel" })]);
+      expect("learned" in (await page(1)).body).toBe(false);
     },
     LONG,
   );

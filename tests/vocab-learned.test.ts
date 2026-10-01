@@ -20,7 +20,7 @@ describe("learnedNote", () => {
         kept: "workspace",
       }),
     ).toBe(
-      'The user taught akou "Vercel" (heard "versal") at 15:41:07: 4 lines now read Vercel, lines you read before included. Spell it that way.',
+      'The user taught akou "Vercel" (heard "versal") at 15:41:07: 4 lines now read Vercel, including any you read before. Spell it that way.',
     );
   });
 
@@ -40,7 +40,7 @@ describe("learnedNote", () => {
         lines: 2,
       }),
     ).toBe(
-      'The user renamed "Vercel" to "Vercel.com" (heard "versal") at 15:44:00: 2 lines now read Vercel.com, lines you read before included. Spell it that way.',
+      'The user renamed "Vercel" to "Vercel.com" (heard "versal") at 15:44:00: 2 lines now read Vercel.com, including any you read before. Spell it that way.',
     );
     expect(
       learnedNote({ term: null, was: "Hetzner", heard: ["hetzna"], by: "user", time: "15:43:10" }),

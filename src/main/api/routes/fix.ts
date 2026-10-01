@@ -286,6 +286,16 @@ function checkPart(v: unknown, what: string): string {
   return v.trim();
 }
 
+/** Ids of the lines of the call that read this term now, whichever vocabulary corrects them. */
+function linesReading(view: CallView, term: string): Set<string> {
+  return new Set(
+    view
+      .lines("best")
+      .filter((l) => l.corrections.some((c) => c.term === term))
+      .map((l) => l.id),
+  );
+}
+
 /** Lines of the call whose rendering now carries this pair's correction. */
 function linesCorrected(view: CallView, p: { heard: string; term: string }): number {
   const key = termKey(p.heard);
@@ -411,6 +421,13 @@ export function fixRoutes(r: Router<ApiApp>): void {
         undo.vocab.push(vid);
         return vid;
       };
+      // The lines that read each term before this fix, so a notice counts only the lines it changed.
+      const readBefore = new Map<string, Set<string>>();
+      for (const p of pairs) {
+        for (const t of [p.term, p.added ?? ""]) {
+          if (t && !readBefore.has(t)) readBefore.set(t, linesReading(view, t));
+        }
+      }
       for (const p of pairs) {
         const kind = pairKind(p, isDict);
         const target = fixed ? renameTarget(view, fixed, p) : null;
@@ -568,7 +585,8 @@ export function fixRoutes(r: Router<ApiApp>): void {
         }
       }
       for (const k of byTerm.values()) {
-        const lines = linesCorrected(after, { heard: "", term: k.term });
+        const before = readBefore.get(k.term) ?? new Set<string>();
+        const lines = [...linesReading(after, k.term)].filter((x) => !before.has(x)).length;
         const e = await c.app.write(id, (cc) => {
           const prev = k.prev ? cc.view.learnedTerms().find((x) => x.id === k.prev) : undefined;
           return {

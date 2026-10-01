@@ -961,8 +961,17 @@ export async function finalizeCall(
   };
   try {
     if (o.waitFor) {
-      const aborted = new Promise<void>((r) => o.signal?.addEventListener("abort", () => r()));
-      await Promise.race([o.waitFor.catch(() => {}), aborted]);
+      // The signal lives as long as the app: every listener added here is removed again.
+      let onWaitAbort = () => {};
+      const aborted = new Promise<void>((r) => {
+        onWaitAbort = () => r();
+        o.signal?.addEventListener("abort", onWaitAbort, { once: true });
+      });
+      try {
+        await Promise.race([o.waitFor.catch(() => {}), aborted]);
+      } finally {
+        o.signal?.removeEventListener("abort", onWaitAbort);
+      }
     }
     if (o.signal?.aborted) return quit;
     o.onStarted?.();
@@ -985,9 +994,11 @@ export async function finalizeCall(
       let w: Worker | null = null;
       /** llama-server processes the Worker runs: a terminated Worker cannot stop them. */
       const kids = new Set<number>();
+      const onAbort = () => finish(quit);
       const finish = (r: Out) => {
         if (settled) return;
         settled = true;
+        o.signal?.removeEventListener("abort", onAbort);
         clock.clearTimeout(timer);
         w?.terminate();
         for (const pid of kids) {
@@ -1009,7 +1020,7 @@ export async function finalizeCall(
         budget,
       );
       // Quitting: the Worker and its llama-server go now, and the log keeps `final.started`.
-      o.signal?.addEventListener("abort", () => finish(quit), { once: true });
+      o.signal?.addEventListener("abort", onAbort, { once: true });
       if (o.signal?.aborted) return finish(quit);
       // Nothing the pass sends after its end (a timeout) reaches the log.
       const onReply = (r: FromFinal) => {

@@ -1858,10 +1858,24 @@ main {
   scroll-behavior: smooth;
   padding: 20px 24px 40vh;
 }
+/* The transcript sits at the bottom of its area (WINDOW W4.1): the newest line, or the grey one
+   still being spoken, ends at the bottom edge and older lines go up; with a few lines the empty
+   space is above them. In a column, the top margin of the first content takes the free space and
+   is 0 once the lines overflow, so the oldest stay reachable by scrolling. */
+#scroller {
+  display: flex;
+  flex-direction: column;
+  padding-bottom: 20px;
+}
 #lines,
 #partial {
+  width: 100%;
   max-width: 46em;
   margin: 0 auto;
+}
+#lines:not(:empty),
+#lines:empty + #partial {
+  margin-top: auto;
 }
 .row {
   display: grid;

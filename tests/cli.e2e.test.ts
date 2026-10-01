@@ -623,6 +623,20 @@ describe("doctor and models", () => {
     for (const x of [empty, src, t]) x.cleanup();
   });
 
+  test("models import says how far each file's copy is on stderr, and --json says nothing until done", async () => {
+    const t = tempDir();
+    const models = join(t.dir, "models");
+    const env = { ...process.env, AKOU_HOME: t.dir, AKOU_MODELS_DIR: models };
+    const src = tempDir();
+    writeFileSync(join(src.dir, "tiny.bin"), tiny);
+    const quiet = await cli(env, ["models", "import", src.dir, "--json"], { models: [tinyModel] });
+    expect(quiet.err).toBe("");
+    const imp = await cli(env, ["models", "import", src.dir], { models: [tinyModel] });
+    expect(imp.code).toBe(0);
+    expect(imp.err).toContain("Copying tiny/tiny.bin: 100%");
+    for (const x of [src, t]) x.cleanup();
+  });
+
   test("models import keeps the retired int8 folder when a current file has the right size but the wrong SHA-256", async () => {
     const t = tempDir();
     const models = join(t.dir, "models");
