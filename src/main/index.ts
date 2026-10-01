@@ -2235,6 +2235,10 @@ export class AkouApp implements ApiApp {
     if (c.live || c.status === "stopping") {
       return fail(409, "not_ended", "the call is still recording", { call: id });
     }
+    // A pass whose end is in the log is only settling (its Worker and llama-server stopping):
+    // waited for, so `akou wait --for final.done` then `akou finalize --force` is never refused.
+    const settling = this.finals.get(id);
+    if (settling && c.view.final.state !== "running") await settling;
     if (this.finals.has(id))
       return fail(409, "final_running", "the final pass is running", { call: id });
     if (finalCurrent(c.view) && !opts.force) {
