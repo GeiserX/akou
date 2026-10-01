@@ -141,6 +141,23 @@ export const SCORES: Readonly<Record<string, ModelScores>> = {
         "the benchmark timed the 560 ms tier only; the 1120 ms tier decodes the same model in larger chunks",
     },
   },
+  ...Object.fromEntries(
+    ["nemotron-en-80", "nemotron-en-160", "nemotron-en-1120"]
+      .concat(["nemotron-3.5-80", "nemotron-3.5-160", "nemotron-3.5-320"])
+      .map((id): [string, ModelScores] => [
+        id,
+        {
+          accuracy: {
+            notMeasured:
+              "not run on akou's benchmark yet; the benchmark measured the 560 ms tiers (and 1120 ms for Nemotron 3.5) only",
+          },
+          speed: {
+            notMeasured:
+              "not timed in akou yet; the benchmark timed the 560 ms tier only, and a shorter chunk runs the encoder more often",
+          },
+        },
+      ]),
+  ),
   "nemotron-3-diarization": {
     accuracy: {
       metric: "der",

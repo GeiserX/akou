@@ -3308,6 +3308,10 @@ input.pg-radio:focus-visible {
 .pg-choice.dis .pg-name {
   opacity: 0.55;
 }
+/* Why a model does not suit this machine or the call's languages: its own line under the facts. */
+.pg-why {
+  display: block;
+}
 .pg-default {
   color: var(--dim);
   font-size: 12px;

@@ -48,9 +48,9 @@ beforeAll(async () => {
     reg.entry(NEMOTRON, ["diar.onnx"]),
     reg.entry(PYANNOTE, ["seg.onnx"]),
     reg.entry(TITANET, ["t.onnx"]),
-    // Qwen fetched on demand only: missing here.
-    { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true } as ModelSpecEntry,
-    { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true } as ModelSpecEntry,
+    // Qwen fetched on demand only: missing here. Each says what it serves, as the catalog does.
+    { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true, serves: ["final"] } as ModelSpecEntry,
+    { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true, serves: ["live"] } as ModelSpecEntry,
   ];
   mkdirSync(models, { recursive: true });
   for (const m of catalog.slice(0, 5)) reg.install(models, m);
@@ -191,6 +191,71 @@ describe("the Models page", () => {
         await page.click("#calls-open");
         await page.click("#models-open");
         await page.waitForSelector(`${row}[data-state="missing"]`);
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "All models: every model in four groups, the ones here first, each missing one with its size and a full-strength Download, and why one does not suit the call under its name",
+    async () => {
+      await rig.api("PATCH", "/config", { "asr.languages": ["en", "es"] });
+      const ALL = "#page-models";
+      try {
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector("#models-go-all");
+        expect(await page.textContent("#models-go-all")).toMatch(
+          /5 on this (Mac|computer), 2 more to download\./,
+        );
+        await page.click("#models-go-all");
+        await page.waitForSelector(`${ALL} section[data-role]`);
+        const groups = await page.$$eval(`${ALL} section[data-role]`, (els) =>
+          els.map((e) => ({
+            role: (e as HTMLElement).dataset.role,
+            ids: [...e.querySelectorAll<HTMLElement>("[data-model]")].map((r) => r.dataset.model),
+          })),
+        );
+        expect(groups).toEqual([
+          { role: "live", ids: [STREAM] },
+          { role: "final", ids: [RECOGNIZER, QWEN_ASR] },
+          { role: "speakers", ids: [NEMOTRON, PYANNOTE, TITANET] },
+          { role: "helpers", ids: ["silero-vad"] },
+        ]);
+        // Every missing model has its size and a Download; nothing on disk offers one.
+        const rows = await page.$$eval(`${ALL} [data-model]`, (els) =>
+          els.map((e) => ({
+            id: (e as HTMLElement).dataset.model,
+            state: (e as HTMLElement).dataset.state,
+            get: e.querySelector('[data-action="download"]') !== null,
+            size: e.querySelector(".pg-value")?.textContent ?? "",
+          })),
+        );
+        for (const r of rows) {
+          expect(`${r.id}: ${r.get}`).toBe(`${r.id}: ${r.state === "missing"}`);
+          expect(r.size).toMatch(/\d (KB|MB|GB)$/);
+        }
+        expect(rows.filter((r) => r.state === "missing").map((r) => r.id)).toEqual([
+          STREAM,
+          QWEN_ASR,
+        ]);
+        // The English-only model says why it does not suit English and Spanish, and keeps its
+        // Download at full strength.
+        const stream = `${ALL} [data-model="${STREAM}"]`;
+        expect(await page.textContent(`${stream} .pg-why`)).toBe(
+          "Nemotron English does not hear es.",
+        );
+        expect(await page.isEnabled(`${stream} [data-action="download"]`)).toBe(true);
+        const words = await page.innerText(ALL);
+        for (const bad of [RECOGNIZER, QWEN_ASR, STREAM, "asr.", "server."])
+          expect(`${bad}: ${words.includes(bad)}`).toBe(`${bad}: false`);
+        await page.click(`${ALL} .pg-back`);
+        await page.waitForSelector(`${LIVE} [data-setup]`);
+      } finally {
+        await rig.api("PATCH", "/config", { "asr.languages": ["en"] });
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${LIVE} [data-setup="${STREAM}"][data-state="missing"]`);
       }
     },
     UI_TIMEOUT,
@@ -433,18 +498,19 @@ describe("the Models page", () => {
   );
 
   test(
-    "the helpers are one row away, with a way back",
+    "All models is one row away, with a way back",
     async () => {
-      await page.click("#models-go-helpers");
+      await page.click("#models-go-all");
       await page.waitForSelector("#page-models .pg-back");
       const text = await page.innerText("#page-models");
       expect(text).toContain("Voice detection");
-      // TitaNet is here, not under a speaker choice.
+      // TitaNet is listed too, though no speaker choice is its own.
       expect(text).toContain("Speaker voices");
+      expect(text).toContain("Qwen3-ASR 1.7B");
       await page.click("#page-models .pg-back");
       await page.waitForSelector(`${LIVE} [data-setup]`);
       expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.id)).toBe(
-        "models-go-helpers",
+        "models-go-all",
       );
     },
     UI_TIMEOUT,

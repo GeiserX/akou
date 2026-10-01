@@ -462,7 +462,7 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_SETTINGS,
     default: "auto",
-    doc: "The model that writes the live transcript of a call: `auto`, or a model's id (`nemotron-3.5-560`, `nemotron-3.5-1120`, `nemotron-en-560`, `parakeet-tdt-0.6b-v3-fp32`), as the Record row's Live panel saves it. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `auto` picks `nemotron` when its model is downloaded, else `parakeet`. A model that is not downloaded never runs. `upgrade`, the old value, is read as `nemotron` with `asr.review.model` `qwen`, and saved that way. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its model.",
+    doc: "The model that writes the live transcript of a call: `auto`, or a model's id (`nemotron-3.5-560`, `nemotron-3.5-1120`, `nemotron-en-560`, `parakeet-tdt-0.6b-v3-fp32`, or another chunk size of a streaming Nemotron: `nemotron-en-80`, `nemotron-en-160`, `nemotron-en-1120`, `nemotron-3.5-80`, `nemotron-3.5-160`, `nemotron-3.5-320`), as the Record row's Live panel saves it. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `auto` picks `nemotron` when its model is downloaded, else `parakeet`. A model that is not downloaded never runs. `upgrade`, the old value, is read as `nemotron` with `asr.review.model` `qwen`, and saved that way. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its model.",
   },
   "asr.review.model": {
     type: "string",
@@ -481,7 +481,7 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_ENGINE_SETTINGS,
     default: "auto",
-    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
+    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. The other chunk sizes (`nemotron-en-80`, `nemotron-en-160`, `nemotron-en-1120`, `nemotron-3.5-80`, `nemotron-3.5-160`, `nemotron-3.5-320`) run only when named: a shorter chunk writes a word sooner, and `auto` never picks one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
   },
   "asr.segmentPause": {
     type: "number",
