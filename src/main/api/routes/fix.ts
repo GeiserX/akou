@@ -116,11 +116,11 @@ function keptIn(workspace: string | undefined): LearnedKept {
 async function retractLearned(
   c: { app: ApiApp; by: string },
   id: string,
-  match: (x: LearnedTerm) => boolean,
+  match: (x: LearnedTerm, view: CallView) => boolean,
 ): Promise<boolean> {
   const e = await c.app
     .write(id, (cc) => {
-      const l = cc.view.learnedTerms().find(match);
+      const l = cc.view.learnedTerms().find((x) => match(x, cc.view));
       if (!l) throw new HttpError(404, "not_found", "no learned term");
       return { type: "vocab.learned", id: l.id, rev: l.rev + 1, term: null, by: c.by };
     })
@@ -172,11 +172,14 @@ async function takeBack(
     });
   if (!call) return false;
   const vid = (call as EventDraft & { id: string }).id;
+  // The learned term is taken back only once none of its call entries reads it any more: an entry
+  // that keeps other heard forms, or another entry the same fix wrote, still spells it that way.
   await retractLearned(
     c,
     id,
-    (l) =>
-      l.vocab.includes(vid) && (l.heard.length === 0 || l.heard.some((h) => termKey(h) === form)),
+    (l, view) =>
+      l.vocab.includes(vid) &&
+      !view.callVocabulary().some((v) => l.vocab.includes(v.id) && v.term === l.term),
   );
   const out = await editFile(targetPath(c.app, workspace), (file) => {
     const had = file.entries.find(
@@ -403,7 +406,17 @@ export function fixRoutes(r: Router<ApiApp>): void {
         undo.notes.push((e as EventDraft & { id: string }).id);
       }
       let after = (await callOf(c)).view;
+      // One notice per term: a stated word with several heard forms is one term taught.
+      const byTerm = new Map<string, (typeof learned)[number]>();
       for (const k of learned) {
+        const had = byTerm.get(k.term);
+        if (!had) byTerm.set(k.term, { ...k, heard: [...k.heard], vocab: [...k.vocab] });
+        else {
+          for (const h of k.heard) if (!had.heard.includes(h)) had.heard.push(h);
+          had.vocab.push(...k.vocab);
+        }
+      }
+      for (const k of byTerm.values()) {
         const lines = linesCorrected(after, { heard: "", term: k.term });
         const e = await c.app.write(id, (cc) => ({
           type: "vocab.learned",
@@ -418,7 +431,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
         }));
         undo.learned.push((e as EventDraft & { id: string }).id);
       }
-      if (learned.length > 0) after = (await callOf(c)).view;
+      if (byTerm.size > 0) after = (await callOf(c)).view;
       return json(200, {
         ok: true,
         call: id,
