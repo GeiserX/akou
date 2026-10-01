@@ -1379,7 +1379,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor, newest last (`vocab.learned`), left out when there are none: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
         "parameters": [
           {
             "name": "id",
@@ -3085,7 +3085,7 @@
         "tags": [
           "callVocab"
         ],
-        "description": "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, and the words it put into a vocabulary file taken out again. The log keeps every event.",
+        "description": "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, the words it put into a vocabulary file taken out again, and the terms it learned taken back (a `vocab.learned` revision with `term: null`). The log keeps every event.",
         "parameters": [
           {
             "name": "id",
@@ -3116,7 +3116,13 @@
                       "type": "string"
                     }
                   },
-                  "words": {}
+                  "words": {},
+                  "learned": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
                 },
                 "additionalProperties": false
               }

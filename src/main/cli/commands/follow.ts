@@ -3,6 +3,7 @@
  * `ask`, `search`. Every time printed is local wall-clock time from the API, never an offset.
  */
 
+import { type LearnedItem, learnedNote } from "../../../core/vocab/learned.ts";
 import { readSse } from "../../llm/provider.ts";
 import { bool, duration, int, str } from "../args.ts";
 import { EXIT } from "../client.ts";
@@ -19,6 +20,12 @@ export function lineText(l: Body, format: Format, colors?: SpeakerColors): strin
   if (format === "md") return `**${l.time} ${l.speaker}:** ${text}`;
   const who = colors ? colors.name(l.spk ?? l.speaker, l.speaker) : l.speaker;
   return `${l.time} ${who}: ${text}`;
+}
+
+/** What fixes taught akou since the cursor: a sentence each, or `{"learned": …}` rows in json. */
+function learnedText(b: Body, format: Format): string[] {
+  const items = (b.learned as LearnedItem[] | undefined) ?? [];
+  return items.map((x) => (format === "json" ? JSON.stringify({ learned: x }) : learnedNote(x)));
 }
 
 /** Waits for the next events after `cursor` (the API long-polls up to 25 s). */
@@ -67,6 +74,7 @@ const tail: Command = {
     if (first.status !== 200) return finish(ctx, first, () => "");
     const id = first.body.call as string;
     for (const l of first.body.lines) ctx.io.out(lineText(l, format, colors));
+    for (const x of learnedText(first.body, format)) ctx.io.out(x);
     if (!follow) {
       const n = Number(first.body.unreviewed ?? 0);
       if (n > 0 && format !== "json")
@@ -93,6 +101,7 @@ const tail: Command = {
       });
       if (r.status !== 200) return finish(ctx, r, () => "");
       for (const l of r.body.lines) ctx.io.out(lineText(l, format, colors));
+      for (const x of learnedText(r.body, format)) ctx.io.out(x);
       lineCursor = r.body.cursor;
       eventCursor = ev.cursor;
       const ended = (ev.events as Body[]).some(

@@ -170,7 +170,7 @@ describe("a fix of one line", () => {
       expect((await rig.api("GET", `/calls/${CALL}/notes`)).body.notes).toHaveLength(1);
       const u = await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
       expect(u.status).toBe(200);
-      expect(u.body.undone).toEqual({ vocab: 1, notes: 1, words: 1 });
+      expect(u.body.undone).toEqual({ vocab: 1, notes: 1, words: 1, learned: 1 });
       const t = await texts(rig);
       expect(t.l000001).toBe("deploy to versal today");
       expect(t.l000002).toBe("versal is down again");

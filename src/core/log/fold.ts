@@ -39,6 +39,7 @@ import {
   type HookDone,
   isAgentAuthor,
   type Layer,
+  type LearnedKept,
   type LogEvent,
   type Memo,
   type PartEndReason,
@@ -227,6 +228,40 @@ export interface CallVocabEntry {
   seq: number;
 }
 
+/** A term a fix learned, as it stands now (`vocab.learned`, retracted ones left out). */
+export interface LearnedTerm {
+  id: string;
+  rev: number;
+  term: string;
+  heard: string[];
+  by: string;
+  lines?: number;
+  kept?: LearnedKept;
+  /** The call's `vocab.add` ids it came with. */
+  vocab: string[];
+  /** Its first revision, and the latest one with its time (epoch ms). */
+  seq: number;
+  lastSeq: number;
+  t: number;
+}
+
+/**
+ * One revision of a learned term, as a follower reads it: learned, renamed (`was` set) or taken
+ * back (`term` null, `was` the term it had). In log order.
+ */
+export interface LearnedChange {
+  id: string;
+  rev: number;
+  seq: number;
+  t: number;
+  term: string | null;
+  was?: string;
+  heard: string[];
+  by: string;
+  lines?: number;
+  kept?: LearnedKept;
+}
+
 export interface ProposalView {
   id: string;
   rev: number;
@@ -361,6 +396,8 @@ export class CallView {
 
   private readonly callVocab = new Map<string, CallVocabEntry & { retracted: boolean }>();
   private readonly _proposals = new Map<string, ProposalView>();
+  private readonly _learned = new Map<string, LearnedTerm & { retracted: boolean }>();
+  private readonly _learnedLog: LearnedChange[] = [];
   private _vocabUsed: VocabUsed | null = null;
 
   private readonly _health = new Map<string, Health>();
@@ -597,6 +634,41 @@ export class CallView {
       case "vocab.add":
         this.applyVocabAdd(e);
         break;
+      case "vocab.learned": {
+        // Says what a fix did; the `vocab.add` it came with is what changes the rendering.
+        const cur = this._learned.get(e.id);
+        if (cur && cur.rev >= e.rev) break;
+        const heard = [...(e.heard ?? cur?.heard ?? [])];
+        const term = e.term ?? cur?.term ?? "";
+        this._learned.set(e.id, {
+          id: e.id,
+          rev: e.rev,
+          term,
+          heard,
+          by: e.by,
+          ...(e.lines !== undefined ? { lines: e.lines } : {}),
+          ...((e.kept ?? cur?.kept) ? { kept: e.kept ?? cur?.kept } : {}),
+          vocab: [...(e.vocab ?? cur?.vocab ?? [])],
+          seq: cur?.seq ?? e.seq,
+          lastSeq: e.seq,
+          t: e.t,
+          retracted: e.term === null,
+        });
+        const was = e.term === null ? cur?.term : e.was;
+        this._learnedLog.push({
+          id: e.id,
+          rev: e.rev,
+          seq: e.seq,
+          t: e.t,
+          term: e.term,
+          ...(was ? { was } : {}),
+          heard,
+          by: e.by,
+          ...(e.term !== null && e.lines !== undefined ? { lines: e.lines } : {}),
+          ...(e.term !== null && e.kept ? { kept: e.kept } : {}),
+        });
+        break;
+      }
       case "vocab.propose": {
         const cur = this._proposals.get(e.id);
         if (cur && cur.rev >= e.rev) break;
@@ -1166,6 +1238,19 @@ export class CallView {
       .filter((v) => !v.retracted)
       .map(({ retracted: _r, ...v }) => v)
       .sort((a, b) => a.seq - b.seq);
+  }
+
+  /** Terms learned from fixes and still in force, oldest change first. */
+  learnedTerms(): LearnedTerm[] {
+    return [...this._learned.values()]
+      .filter((x) => !x.retracted)
+      .map(({ retracted: _r, ...x }) => x)
+      .sort((a, b) => a.lastSeq - b.lastSeq);
+  }
+
+  /** Every learned, renamed or taken-back term, in log order; `after` and `upTo` bound `seq`. */
+  learnedChanges(after = 0, upTo = Number.POSITIVE_INFINITY): LearnedChange[] {
+    return this._learnedLog.filter((x) => x.seq > after && x.seq <= upTo);
   }
 
   proposals(status?: ProposalStatus): ProposalView[] {

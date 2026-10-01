@@ -24,6 +24,7 @@
 import { formatWall, formatZone } from "../../../core/log/clock.ts";
 import type { LogEvent } from "../../../core/log/events.ts";
 import type { Line, View } from "../../../core/log/fold.ts";
+import { learnedItem } from "../../../core/vocab/learned.ts";
 import { renderTranscriptSection } from "../../handoff/export.ts";
 import { estimateTokens, renderLine } from "../../query/render.ts";
 import { HttpError, json, type Query, type Router } from "../http.ts";
@@ -385,7 +386,7 @@ export function followRoutes(r: Router<ApiApp>): void {
     "/calls/:id/transcript",
     {
       id: "calls.transcript",
-      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor, newest last (`vocab.learned`), left out when there are none: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -571,6 +572,8 @@ export function followRoutes(r: Router<ApiApp>): void {
             };
           })
         : [];
+      const learned =
+        since > 0 ? v.learnedChanges(since, cursor).map((x) => learnedItem(x, tz)) : [];
       return json(200, {
         call: call.id,
         state: v.state,
@@ -591,6 +594,8 @@ export function followRoutes(r: Router<ApiApp>): void {
         nextOffset,
         // With a second pass on: the closed lines it had not reviewed when this answer was made.
         ...(review ? { unreviewed: review.unreviewed } : {}),
+        // With a cursor: what fixes taught akou since, which can change lines read before it.
+        ...(learned.length > 0 ? { learned } : {}),
         lines: lines.map((l) => ({
           id: l.id,
           seq: l.seq,

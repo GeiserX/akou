@@ -281,6 +281,30 @@ export interface VocabAdd extends Envelope {
   decode?: boolean;
 }
 
+/** Where a term learned from a fix is used from now on: a vocabulary file, or this call only. */
+export type LearnedKept = "workspace" | "global" | "call";
+
+/**
+ * A term a fix learned, for the agents following the call (docs/DESIGN.md section 5.4). Written once
+ * per term; a revision with `term: null` takes it back (Undo, Forget, the heard word written back),
+ * and one with a new `term` and `was` renames it.
+ */
+export interface VocabLearned extends Envelope {
+  type: "vocab.learned";
+  id: string;
+  rev: number;
+  term: string | null;
+  heard?: string[];
+  by: Author;
+  /** Lines of the call that read the term when it was written. */
+  lines?: number;
+  kept?: LearnedKept;
+  /** The call's `vocab.add` ids it came with. */
+  vocab?: string[];
+  /** On a rename: the term it had before. */
+  was?: string;
+}
+
 export type ProposalStatus = "proposed" | "accepted" | "rejected";
 
 export interface VocabPropose extends Envelope {
@@ -401,6 +425,7 @@ export type LogEvent =
   | Enhanced
   | VocabUsed
   | VocabAdd
+  | VocabLearned
   | VocabPropose
   | Health
   | AsrLag
@@ -581,6 +606,17 @@ const SPECS: { [T in EventType]: Spec } = {
     nth: opt("int"),
     decode: opt("boolean"),
   },
+  "vocab.learned": {
+    id: req("string"),
+    rev: req("int"),
+    term: req("string|null"),
+    heard: opt("string[]"),
+    by: req("author"),
+    lines: opt("int"),
+    kept: opt(["workspace", "global", "call"]),
+    vocab: opt("string[]"),
+    was: opt("string"),
+  },
   "vocab.propose": {
     id: req("string"),
     rev: req("int"),
@@ -727,8 +763,15 @@ function validateBody(o: Record<string, unknown>, type: EventType): string | nul
     if (o.term.trim() === "") return "vocab.add: term must not be empty";
     if (o.heard === undefined) return 'vocab.add: missing field "heard"';
   }
+  if (type === "vocab.learned" && typeof o.term === "string" && o.term.trim() === "") {
+    return "vocab.learned: term must not be empty";
+  }
   if (
-    (type === "note" || type === "remember" || type === "vocab.add" || type === "call.renamed") &&
+    (type === "note" ||
+      type === "remember" ||
+      type === "vocab.add" ||
+      type === "vocab.learned" ||
+      type === "call.renamed") &&
     (o.rev as number) < 1
   ) {
     return `${type}: rev must be >= 1`;
