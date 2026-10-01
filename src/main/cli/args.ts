@@ -5,7 +5,7 @@
  *   akou start -w work -t "Weekly sync" --vocab Ben,Hetzner --json
  *
  * Flags take their value as the next word or after `=` (`--budget=4000`). `--` ends the flags.
- * `--json` and `--help` are accepted by every command.
+ * `--json`, `--help` and `--restart` are accepted by every command.
  */
 
 export type FlagType = "string" | "boolean";
@@ -47,6 +47,10 @@ export class SecretFlagError extends UsageError {
 export const COMMON: FlagSpecs = {
   json: { type: "boolean", desc: "print the answer as JSON, errors included" },
   help: { type: "boolean", short: "h", desc: "show this help" },
+  restart: {
+    type: "boolean",
+    desc: "if akou takes the connection and never answers, restart it first, even for a command that only reads",
+  },
 };
 
 /**

@@ -25,6 +25,20 @@ import { processAlive } from "../../core/log/writer.ts";
 import { TOKEN_FILE } from "../api/guard.ts";
 import { RUNTIME_FILE } from "../app-info.ts";
 import { resolvePaths } from "../config/schema.ts";
+import {
+  ANSWER_MS,
+  descendants,
+  HANGS_DIR,
+  HEAL_BUDGET_MS,
+  launcherOf,
+  probe,
+  processTable,
+  type Recording,
+  recordingBelow,
+  sampleHung,
+  seconds,
+  stopAll,
+} from "./heal.ts";
 
 /** Exit codes (DESIGN 6.1). */
 export const EXIT = {
@@ -80,6 +94,19 @@ export interface ApiResponse {
 export class Unreachable extends Error {
   override name = "Unreachable";
 }
+
+/** The app takes the connection and never answers, and was not restarted (DK-M8). */
+export class Hung extends Unreachable {
+  override name = "Hung";
+}
+
+/** A hung app was stopped for a request that never launches one (`akou quit`, DK-M8). */
+export class StoppedHung extends Hung {
+  override name = "StoppedHung";
+}
+
+/** A probe answered this recently: the next request goes straight out. */
+const FRESH_MS = 5000;
 
 /** The remote target is set up wrong: an `AKOU_URL` that is not a URL (64), a key file (77). */
 export class TargetError extends Error {
@@ -159,6 +186,12 @@ export interface ClientOptions {
    */
   launch?: readonly string[] | null;
   launchBudgetMs?: number;
+  /** Restart a hung app even for a request that only reads (`--restart`, DK-M8). */
+  restart?: boolean;
+  /** One line for the user, on stderr: what the client did on its own (a restart). */
+  note?: (line: string) => void;
+  /** How long the app has to answer before it counts as hung (tests shorten it). */
+  answerMs?: number;
 }
 
 export interface RequestOptions {
@@ -218,6 +251,8 @@ export class ApiClient {
   private readonly launchCmd: readonly string[] | null;
   private readonly budget: number;
   private launching: Promise<Runtime> | null = null;
+  /** When the app last answered a probe (`performance.now()`), so a burst of requests probes once. */
+  private answeredAt = Number.NEGATIVE_INFINITY;
 
   constructor(readonly o: ClientOptions) {
     this.configDir = resolvePaths(o.env).configDir;
@@ -314,6 +349,7 @@ export class ApiClient {
     const allowLaunch = o.launch ?? true;
     let rt = this.runtime();
     if (rt) {
+      rt = await this.answering(rt, method, allowLaunch);
       try {
         return await this.send(rt, method, path, o);
       } catch (err) {
@@ -337,6 +373,7 @@ export class ApiClient {
     }
     let rt = this.runtime();
     if (rt) {
+      rt = await this.answering(rt, method, o.launch ?? true);
       try {
         return await this.fetchRaw(rt, method, path, o);
       } catch (err) {
@@ -398,14 +435,14 @@ export class ApiClient {
    * Starts the app headless, detached, with its output in `app.log`, and waits for its API. Two
    * clients launching at once are fine: the second app finds the first one's lock and exits.
    */
-  launch(): Promise<Runtime> {
-    this.launching ??= this.doLaunch().finally(() => {
+  launch(waitMs: number = this.budget): Promise<Runtime> {
+    this.launching ??= this.doLaunch(waitMs).finally(() => {
       this.launching = null;
     });
     return this.launching;
   }
 
-  private async doLaunch(): Promise<Runtime> {
+  private async doLaunch(waitMs: number): Promise<Runtime> {
     const cmd = this.launchCmd;
     if (!cmd || cmd.length === 0) throw new Unreachable("akou is not running");
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
@@ -421,15 +458,75 @@ export class ApiClient {
     } finally {
       closeSync(log);
     }
-    const deadline = performance.now() + this.budget;
+    const deadline = performance.now() + waitMs;
     while (performance.now() < deadline) {
       const rt = await this.running();
       if (rt) return rt;
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Unreachable(
-      `akou did not answer within ${this.budget / 1000} s of launching; see ${join(this.configDir, "app.log")}`,
+      `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; see ${join(this.configDir, "app.log")}`,
     );
+  }
+
+  /**
+   * DK-M8: the app answers `/healthz` within `answerMs`, or it is hung. A hung app is restarted
+   * for a request that changes something (or with `--restart`) when no recording is in progress,
+   * and the request goes to the new one; otherwise `Hung` says why nothing was done. A request that
+   * never launches the app (`akou quit`) gets `StoppedHung` once the app is stopped, unless
+   * `--restart` asked for a new one. A refused connection is left to the caller, which launches
+   * the app.
+   */
+  private async answering(rt: Runtime, method: string, launch: boolean): Promise<Runtime> {
+    if (performance.now() - this.answeredAt < FRESH_MS) return rt;
+    const t0 = performance.now();
+    const answerMs = this.o.answerMs ?? ANSWER_MS;
+    const p = await probe(rt.port, answerMs);
+    if (p === "answers") this.answeredAt = performance.now();
+    if (p !== "silent") return rt;
+    const s = Math.round(answerMs / 100) / 10;
+    const changes = method !== "GET" && method !== "HEAD";
+    if (process.platform === "win32") {
+      throw new Hung(
+        `akou is not answering: it took the connection and sent nothing back for ${s} s (pid ${rt.pid}); end it in Task Manager and run the command again`,
+      );
+    }
+    if (!changes && this.o.restart !== true) {
+      throw new Hung(
+        `akou is not answering: it took the connection and sent nothing back for ${s} s (pid ${rt.pid}); nothing was restarted, as this command only reads: run it again with --restart to restart akou`,
+      );
+    }
+    const rows = await processTable();
+    const rec = await recordingBelow(rows, rt.pid);
+    if (rec) throw new Hung(recordingMessage(rt.pid, rec));
+    await sampleHung(rt.pid, join(this.configDir, HANGS_DIR));
+    // A slow app, not a hung one: it answers now, so nothing is stopped.
+    if ((await probe(rt.port, 1000)) === "answers") {
+      this.answeredAt = performance.now();
+      return rt;
+    }
+    const launcher = launcherOf(rows, rt.pid);
+    const pids = [...(launcher ? [launcher] : []), rt.pid, ...descendants(rows, rt.pid)];
+    const left = await stopAll(pids);
+    if (left.length > 0) {
+      throw new Hung(
+        `akou is not answering and could not be stopped (pid ${left.join(", ")} is still there); stop it with kill -KILL ${left.join(" ")} and run the command again`,
+      );
+    }
+    if (!launch && this.o.restart !== true) {
+      throw new StoppedHung(`akou was not answering; stopped it (${seconds(t0)} s)`);
+    }
+    if (!this.launchCmd) {
+      throw new Hung(
+        "akou was not answering, so it was stopped; this command line cannot start it again: open the akou app and run the command again",
+      );
+    }
+    const next = await this.launch(
+      Math.max(this.budget, HEAL_BUDGET_MS - (performance.now() - t0)),
+    );
+    this.answeredAt = performance.now();
+    this.o.note?.(`akou was not answering; restarted it (${seconds(t0)} s)`);
+    return next;
   }
 
   tokenPath(): string {
@@ -439,6 +536,17 @@ export class ApiClient {
   hasToken(): boolean {
     return existsSync(this.tokenPath());
   }
+}
+
+/** What the CLI says when the app is hung and a call is recording: nothing is stopped. */
+export function recordingMessage(appPid: number, rec: Recording): string {
+  const audio =
+    rec.growing === true
+      ? "is still writing the audio"
+      : rec.growing === false
+        ? "is alive, though its audio file did not grow in the last second"
+        : "is alive";
+  return `akou is not answering while a call is recording (pid ${appPid}); the capture helper (pid ${rec.pid}) ${audio}, so nothing was restarted. To restart akou by hand, which ends this recording and keeps the audio so far: kill -KILL ${appPid}, then run the command again`;
 }
 
 /**

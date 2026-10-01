@@ -96,6 +96,8 @@ export interface CliOptions {
   /** The launch command for a cold app (tests pin it); null never launches. */
   launch?: readonly string[] | null;
   launchBudgetMs?: number;
+  /** How long the app has to answer before it counts as hung (DK-M8); tests shorten it. */
+  answerMs?: number;
   models?: readonly ModelSpecEntry[];
   skillSource?: string;
   self?: readonly string[];
@@ -155,6 +157,9 @@ export async function runCli(argv: readonly string[], io: Io, o: CliOptions = {}
       client: "cli",
       launch: o.launch,
       launchBudgetMs: o.launchBudgetMs,
+      restart: parsed.flags.restart === true,
+      note: (line) => io.err(`akou: ${line}`),
+      answerMs: o.answerMs,
     }),
     models: o.models,
     skillSource: o.skillSource,

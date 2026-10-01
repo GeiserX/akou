@@ -8,7 +8,7 @@ import { finalText } from "../../asr/final-text.ts";
 import { shortModelName } from "../../asr/model-text.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN } from "../../asr/upgrade.ts";
 import { bool, int, list, str } from "../args.ts";
-import { EXIT, Unreachable } from "../client.ts";
+import { EXIT, Hung, StoppedHung, Unreachable } from "../client.ts";
 import { healthWord } from "../color.ts";
 import {
   api,
@@ -196,7 +196,8 @@ const status: Command = {
       // A probe never launches the app.
       r = await api(ctx, "GET", "/status", { launch: false });
     } catch (err) {
-      if (!(err instanceof Unreachable)) throw err;
+      // A hung app is not "not running": the CLI's own message says what it found (DK-M8).
+      if (!(err instanceof Unreachable) || err instanceof Hung) throw err;
       if (ctx.json) ctx.io.out(JSON.stringify({ running: false }));
       else ctx.io.err("akou is not running (`akou open` starts it and shows the window)");
       return EXIT.unavailable;
@@ -416,7 +417,14 @@ const quit: Command = {
     try {
       r = await api(ctx, "POST", "/quit", { launch: false });
     } catch (err) {
-      if (!(err instanceof Unreachable)) throw err;
+      if (err instanceof StoppedHung) {
+        // The hung app is gone: that is what quit asked for (DK-M8).
+        ctx.io.err(`akou: ${err.message}`);
+        if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, running: false }));
+        else ctx.io.out("akou has quit");
+        return EXIT.ok;
+      }
+      if (!(err instanceof Unreachable) || err instanceof Hung) throw err;
       if (ctx.json) ctx.io.out(JSON.stringify({ ok: true, running: false }));
       else ctx.io.out("akou is not running");
       return EXIT.ok;

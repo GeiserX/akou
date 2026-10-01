@@ -69,6 +69,16 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **Fix.** Use named volumes, or `chown 1000:1000` the host folders and mount them read-write.
 
+## akou does not answer
+
+**What you see.** A command waits a few seconds, then prints `akou was not answering; restarted it (12 s)` and goes on. Or it stops with `akou is not answering`, and exit code 69.
+
+**Why.** Some of akou's work waits on the window's toolkit, and when the toolkit stops responding akou waits with it. It still takes connections on its port but answers none, and a plain `kill` or `pkill` does not end it. The recording itself is not affected: the capture helper writes the audio to its file on its own.
+
+**What akou does.** Before its first request every command gives the app 3 s to answer. When it does not, a command that changes something, such as `akou start`, stops akou and starts it again, then runs, all within about 15 s. A command that only reads, such as `akou status`, says akou is not answering and stops nothing; add `--restart` to restart it from there. If a call is recording, nothing is stopped, and the message says so.
+
+**Fix by hand.** When a call is recording and you want akou back before it ends, the message names akou's process: `kill -KILL` that number, then run the command again. The recording so far stays on disk and akou closes it at its next start. On macOS each restart leaves a few seconds of `sample` of the stuck process in `~/.config/akou/hangs/`; attach the newest one when you report the bug.
+
 ## Reporting a bug
 
 Open an issue on the [issues page](https://github.com/GeiserX/akou/issues) with:

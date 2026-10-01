@@ -18,7 +18,7 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { bool, duration, int, str } from "../args.ts";
-import { EXIT, Unreachable } from "../client.ts";
+import { EXIT, Hung, Unreachable } from "../client.ts";
 import { api, type Body, type Command, type Ctx, finish, wall } from "../context.ts";
 import { usage } from "./calls.ts";
 
@@ -47,7 +47,7 @@ async function session(ctx: Ctx, word: string, language: string | undefined): Pr
     }
     return finish(ctx, r, (b: Body) => `dictation ${b.state}`);
   } catch (err) {
-    if (!(err instanceof Unreachable)) throw err;
+    if (!(err instanceof Unreachable) || err instanceof Hung) throw err;
     const message = "akou is not running (`akou open` starts it)";
     if (ctx.json) ctx.io.out(JSON.stringify({ error: "not_running", message }));
     else ctx.io.err(`akou: ${message}`);
