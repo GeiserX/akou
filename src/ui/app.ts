@@ -1520,7 +1520,7 @@ class App {
     if (button.disabled) return;
     button.disabled = true;
     void this.t
-      .request("POST", `/calls/${call}/fix/forget`, { learned: l.id })
+      .request<{ warnings?: string[] }>("POST", `/calls/${call}/fix/forget`, { learned: l.id })
       .then((r) => {
         if (r.status >= 400) {
           button.disabled = false;
@@ -1528,6 +1528,14 @@ class App {
           return;
         }
         this.closePopover();
+        // The call forgot it, but a vocabulary file that could not be changed still holds it.
+        if ((r.body?.warnings ?? []).length > 0) {
+          toast(
+            `Forgot ${l.term} in this call. The vocabulary file could not be changed, so later calls still know it.`,
+            "error",
+          );
+          return;
+        }
         toast(`Forgot ${l.term}. Its lines read as heard again.`, "info");
       })
       .catch((err: Error) => {

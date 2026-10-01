@@ -8,6 +8,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
+import { writeFileSync } from "node:fs";
 import type { Page } from "playwright-core";
 import { tempDir } from "../helpers.ts";
 import { seedCall, seg, silentWav, T0, UI_TIMEOUT, type UiRig, uiRig, until } from "./rig.ts";
@@ -311,6 +312,38 @@ describe("a word a fix learned", () => {
         await doubleClick(page, "l000002", "versal");
         await page.waitForSelector("#popover:not([hidden])");
         expect(await page.locator("#popover .fix-learned").count()).toBe(0);
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "Forget says so when the vocabulary file could not be changed",
+    async () => {
+      let id = "";
+      await withRig({ seed: (home) => (id = seedCall(home, saved).id) }, async (rig) => {
+        const page = await rig.open(id);
+        await page.waitForSelector(row("l000003"));
+        await learnVercel(page);
+        // The workspace's file no longer parses: the call can forget, the file cannot.
+        const files = (await rig.api("GET", "/vocab?workspace=work")).body.files as {
+          scope: string;
+          path: string;
+        }[];
+        writeFileSync(
+          files.find((f) => f.scope === "workspace")?.path as string,
+          "entries:\n  - term: [unclosed\n",
+        );
+        await page.evaluate(() => {
+          (document.getElementById("toast") as HTMLElement).hidden = true;
+        });
+        await doubleClick(page, "l000002", "Vercel");
+        await page.waitForSelector("#popover .fix-learned");
+        await page.click("#popover .fix-learned button");
+        await page.waitForSelector("#toast.error:not([hidden])");
+        expect(await page.locator("#toast").textContent()).toBe(
+          "Forgot Vercel in this call. The vocabulary file could not be changed, so later calls still know it.",
+        );
       });
     },
     UI_TIMEOUT,
