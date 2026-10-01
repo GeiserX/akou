@@ -160,6 +160,43 @@ describe("the Models page", () => {
   );
 
   test(
+    "a model that does not fit the call's languages keeps its size and a full-strength Download, and says why under its name",
+    async () => {
+      await rig.api("PATCH", "/config", { "asr.languages": ["en", "es"] });
+      const row = `${LIVE} [data-setup="${STREAM}"]`;
+      /** How visible an element is on screen: its opacity times every ancestor's. */
+      const seen = (sel: string) =>
+        page.$eval(sel, (el) => {
+          let o = 1;
+          for (let e: Element | null = el; e; e = e.parentElement)
+            o *= Number(getComputedStyle(e).opacity);
+          return o;
+        });
+      try {
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${row}[data-state="blocked"]`);
+        expect(await page.textContent(`${row} .pg-help`)).toBe(
+          "Nemotron English does not hear es.",
+        );
+        expect(await page.textContent(`${row} .pg-value`)).toMatch(/^\d+ (KB|MB)$|GB$/);
+        const get = `${row} [data-action="download"]`;
+        expect(await page.isEnabled(get)).toBe(true);
+        // The radio and the name fade to say "not for this call"; the Download does not.
+        expect(await seen(`${row} .pg-name`)).toBeLessThan(1);
+        expect(await seen(get)).toBe(1);
+        expect(await seen(`${row} .pg-help`)).toBe(1);
+      } finally {
+        await rig.api("PATCH", "/config", { "asr.languages": ["en"] });
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${row}[data-state="missing"]`);
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "a refused download says why in plain words, with the model's name and no id",
     async () => {
       const cap = await setting("server.models_max_gb");
