@@ -1183,6 +1183,8 @@ export class AkouApp implements ApiApp {
 
   private onEvent(id: string, e: LogEvent): void {
     this.asr?.onEvent(id, e);
+    // A pass that has ended has no figure any more, before anyone reads the status for its end.
+    if (e.type === "final.done" || e.type === "final.failed") this.finalRuns.delete(id);
     // A language the recognizer just detected may bring its word list.
     if (e.type === "seg" && e.lang) {
       const c = this.manager.controller(id);
@@ -2259,7 +2261,7 @@ export class AkouApp implements ApiApp {
         this.finalSeen.set(id, { size, final: f });
       }
     }
-    const run = this.finalProgress(id);
+    const run = f.state === "running" ? this.finalProgress(id) : null;
     const end = f.state === "done" ? f.done : f.state === "failed" ? f.failed : undefined;
     return {
       state: f.state,
