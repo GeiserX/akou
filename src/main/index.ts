@@ -96,6 +96,7 @@ import {
   type LineUpgrader,
   LiveAsr,
   type LiveReview,
+  modelNameFor,
   recognizerReviewer,
   type VocabSource,
 } from "./asr/live-worker.ts";
@@ -236,6 +237,8 @@ export const APP_LOCK = "akou.lock";
 export const QUIT_FINAL_GRACE_MS = 5_000;
 /** How long a settings change waits for the dictation helper to take or refuse new keys. */
 const REBIND_ANSWER_MS = 3_000;
+/** A running final pass pushes the status to the window at most this often, so its note moves. */
+export const FINAL_PUSH_MS = 2_000;
 /** How often dictation looks whether a final pass still holds the GPU `best` gave way to (DC-E2). */
 export const BEST_REWARM_MS = 5_000;
 /**
@@ -559,6 +562,15 @@ export class AkouApp implements ApiApp {
   /** The word lists that tell a real word from a mishearing (DESIGN 5.4), read on first use. */
   private readonly dictionaries: Dictionaries;
   private readonly finals = new Map<string, Promise<unknown>>();
+  /**
+   * How far each running final pass is, and its recognizer: seconds of the call covered and the
+   * call's length (0 until the pass has read it). In memory only; `GET /status` and
+   * `GET /calls/{id}` read it, and the window gets it with the status.
+   */
+  private readonly finalRuns = new Map<
+    string,
+    { model: string; done_s: number; total_s: number; pushedAt: number }
+  >();
   /** Per call, the hand-off work in order: one export or hook round at a time. */
   private readonly handoffs = new Map<string, Promise<unknown>>();
   private readonly reexports = new Map<string, ReturnType<typeof setTimeout>>();
@@ -1171,6 +1183,8 @@ export class AkouApp implements ApiApp {
 
   private onEvent(id: string, e: LogEvent): void {
     this.asr?.onEvent(id, e);
+    // A pass that has ended has no figure any more, before anyone reads the status for its end.
+    if (e.type === "final.done" || e.type === "final.failed") this.finalRuns.delete(id);
     // A language the recognizer just detected may bring its word list.
     if (e.type === "seg" && e.lang) {
       const c = this.manager.controller(id);
@@ -2177,8 +2191,16 @@ export class AkouApp implements ApiApp {
           }
         : null,
       last: last
-        ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
+        ? {
+            call: last.id,
+            title: last.title,
+            state: last.state,
+            endedAt: last.endedAt,
+            final: await this.finalStatus(last.id),
+          }
         : null,
+      // Every final pass running now, the last call's or an older one's, with how far it is.
+      finals: [...this.finalRuns.keys()].map((call) => ({ call, ...this.finalProgress(call) })),
       asr: {
         ...this.asrState,
         loads: this.asr?.loads ?? {},
@@ -2218,6 +2240,48 @@ export class AkouApp implements ApiApp {
     const r = this.runFinal(id, true);
     if (r) return fail(501, "final_unavailable", r.why, { call: id });
     return { ok: true, call: id, started: true };
+  }
+
+  /**
+   * A call's final pass for `GET /status`: its state, recognizer, how far it is while it runs,
+   * and when it ended. From the open call's view, else from its log, read again only when the log
+   * grew.
+   */
+  private async finalStatus(id: string): Promise<FinalStatus | null> {
+    let f = this.manager.controller(id)?.view.final;
+    if (!f) {
+      const dir = this.manager.summary(id)?.dir;
+      if (!dir) return null;
+      const file = join(dir, EVENTS_FILE);
+      const size = existsSync(file) ? statSync(file).size : 0;
+      const cached = this.finalSeen.get(id);
+      if (cached?.size === size) f = cached.final;
+      else {
+        f = fold((await readLog(file)).events).final;
+        this.finalSeen.set(id, { size, final: f });
+      }
+    }
+    const run = f.state === "running" ? this.finalProgress(id) : null;
+    const end = f.state === "done" ? f.done : f.state === "failed" ? f.failed : undefined;
+    return {
+      state: f.state,
+      model: run?.model ?? f.model ?? null,
+      done_s: run?.done_s ?? null,
+      total_s: run?.total_s ?? null,
+      endedAt: end?.t ?? null,
+      skipped: f.state === "done" ? (f.done?.skipped.length ?? 0) : 0,
+      warning: f.state === "done" ? (f.done?.warning ?? null) : null,
+      error: f.state === "failed" ? (f.failed?.error ?? null) : null,
+    };
+  }
+
+  /** The final state of calls not open, by the size of the log it was read from. */
+  private readonly finalSeen = new Map<string, { size: number; final: CallView["final"] }>();
+
+  /** How far a running final pass is, or null when none runs for the call. */
+  finalProgress(id: string): { done_s: number; total_s: number; model: string } | null {
+    const r = this.finalRuns.get(id);
+    return r ? { done_s: round1(r.done_s), total_s: round1(r.total_s), model: r.model } : null;
   }
 
   /**
@@ -2278,7 +2342,9 @@ export class AkouApp implements ApiApp {
       };
     const models = this.finalModels();
     if (!models) return { why: "the speech models are not downloaded", unavailable: true };
+    const model = modelNameFor(models);
     const ws = c.view.call?.workspace ?? "";
+    this.finalRuns.set(id, { model, done_s: 0, total_s: 0, pushedAt: 0 });
     const p = finalizeCall(c, {
       models,
       audio,
@@ -2286,15 +2352,36 @@ export class AkouApp implements ApiApp {
       inThread: this.o.asrInThread,
       clock: this.clock,
       onLog: (level, msg) => this.log(level, `final ${id}: ${msg}`),
+      onProgress: (done_s, total_s) => this.finalMoved(id, done_s, total_s),
     })
       .then((r) => {
         if (!r.ok) this.log("warn", `final pass of ${id} failed: ${r.error}`);
         else this.ranModels(r.audio_s ?? 0, r.decode_s ?? 0);
       })
       .catch((err) => this.log("error", `final pass of ${id}: ${(err as Error).message}`))
-      .finally(() => this.finals.delete(id));
+      .finally(() => {
+        this.finals.delete(id);
+        this.finalRuns.delete(id);
+        for (const fn of this.statusWatchers) fn();
+      });
     this.finals.set(id, p);
+    for (const fn of this.statusWatchers) fn();
     return null;
+  }
+
+  /**
+   * A running pass moved: kept for `GET /status`, and the status pushed to the window at most
+   * every `FINAL_PUSH_MS`, so its note moves without a log event per piece.
+   */
+  private finalMoved(id: string, done_s: number, total_s: number): void {
+    const r = this.finalRuns.get(id);
+    if (!r) return;
+    r.done_s = done_s;
+    r.total_s = total_s;
+    const now = this.clock.now();
+    if (now - r.pushedAt < FINAL_PUSH_MS) return;
+    r.pushedAt = now;
+    for (const fn of this.statusWatchers) fn();
   }
 
   /**
@@ -3455,6 +3542,26 @@ if (import.meta.main) {
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void app.quit());
   await app.closed;
   process.exit(0);
+}
+
+/** A call's final pass as `GET /status` reports it (`last.final`). */
+export interface FinalStatus {
+  state: "none" | "running" | "done" | "failed";
+  /** The recognizer's id, or null when the log does not name one (an older pass). */
+  model: string | null;
+  /** Seconds of the call the running pass has covered, over both channels; null when not running here. */
+  done_s: number | null;
+  /** The call's length in seconds, once the running pass has read it (0 before). */
+  total_s: number | null;
+  /** `t` of `final.done` or `final.failed`. */
+  endedAt: number | null;
+  skipped: number;
+  warning: string | null;
+  error: string | null;
+}
+
+function round1(x: number): number {
+  return Math.round(x * 10) / 10;
 }
 
 /** The live call's model and second pass by name, for the window: `Nemotron 3.5`, `Qwen`. */

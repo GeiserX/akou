@@ -20,6 +20,7 @@
  * 4. Every span is gained and padded by `prepareSpan` (the one rule) and decoded with the call's
  *    decode list as it stands when the pass starts, recorded as `vocab.used`. A span the engine
  *    refuses is halved down to 20 s, and only the smallest failing piece is skipped and listed.
+ *    How far the pass is goes to the host as it decodes, never to the log.
  * 5. **Output:** `seg` events with `layer: final` (a re-run first retracts the previous final
  *    lines), a `final.part.done` per part as its lines are written, `speaker.map` or
  *    `speaker.suggest` per final cluster (names carry over from the live layer), then one
@@ -111,11 +112,18 @@ export interface FinalInput {
   pid?: number;
   /** The host already wrote `final.started` (finalizeCall), so the pass does not write it again. */
   announced?: boolean;
+  /**
+   * How far the pass is: seconds of the call covered and the call's length. Both channels count,
+   * each by the audio it decodes, so it moves about evenly; nothing is written to the log for it.
+   */
+  progress?(done_s: number, total_s: number): void;
   options?: Partial<FinalOptions>;
 }
 
 export interface FinalResult {
   ok: boolean;
+  /** The recognizer the pass decoded with. */
+  model?: string;
   parts: number[];
   skipped: SkippedSpan[];
   warning?: string;
@@ -477,8 +485,11 @@ export async function runFinalPass(
     .map((p) => p.part)
     .filter((p) => audio.length(p) > 0);
   const skipped: SkippedSpan[] = [];
+  // The recognizer's name is known before it loads; the lines take the loaded one's own.
+  let modelId = models.recognizerModel;
   let step = "energy";
-  if (!input.announced) emit({ type: "final.started", pid: input.pid ?? process.pid });
+  if (!input.announced)
+    emit({ type: "final.started", pid: input.pid ?? process.pid, model: modelId });
   try {
     // 1. Energy, before any model loads.
     const energy = new Map<string, boolean>();
@@ -501,12 +512,26 @@ export async function runFinalPass(
     if (!any) {
       for (const d of layer) emit(d);
       for (const p of parts) emit({ type: "final.part.done", part: p });
-      emit({ type: "final.done", parts, skipped: [] });
-      return { ok: true, parts, skipped };
+      emit({ type: "final.done", parts, skipped: [], model: modelId });
+      return { ok: true, parts, skipped, model: modelId };
     }
+
+    // Progress: the call's length, and the audio of every channel with sound as the work.
+    const callSeconds = parts.reduce((n, p) => n + audio.length(p), 0) / ASR_RATE;
+    let work = 0;
+    for (const p of parts)
+      for (const ch of CHANNELS) if (energy.get(`${p}:${ch}`)) work += audio.length(p);
+    let worked = 0;
+    const progress = (inChannel: number) =>
+      input.progress?.(
+        work > 0 ? Math.min(callSeconds, (callSeconds * (worked + inChannel)) / work) : 0,
+        callSeconds,
+      );
+    progress(0);
 
     step = "models";
     const hw = models.prepare(input.decode);
+    modelId = hw.recognizer.model;
     emit({
       type: "vocab.used",
       entries: hw.entries,
@@ -579,6 +604,7 @@ export async function runFinalPass(
           const r = decodeHalving(samples, piece.from, piece.to, hw, o, (from, to, error) =>
             skipped.push({ part: p, ch, a0: from / ASR_RATE, a1: to / ASR_RATE, error }),
           );
+          progress(piece.to);
           if (r.lang) languages.add(r.lang);
           if (r.text === "") continue;
           if (ch === "call") callText = true;
@@ -600,10 +626,12 @@ export async function runFinalPass(
             w0,
             w1,
             text: r.text,
-            model: hw.recognizer.model,
+            model: modelId,
             ...(r.lang ? { lang: r.lang } : {}),
           });
         }
+        worked += samples.length;
+        progress(0);
       }
       lines.sort((a, b) => (a.w0 as number) - (b.w0 as number) || (a.ch === "mic" ? -1 : 1));
       for (const l of lines) {
@@ -640,13 +668,22 @@ export async function runFinalPass(
       skipped,
       ...(languages.size > 0 ? { languages: [...languages].sort() } : {}),
       ...(warning ? { warning } : {}),
+      model: modelId,
     });
     const audio_s = parts.reduce((n, p) => n + audio.length(p), 0) / ASR_RATE;
-    return { ok: true, parts, skipped, audio_s, decode_s, ...(warning ? { warning } : {}) };
+    return {
+      ok: true,
+      model: modelId,
+      parts,
+      skipped,
+      audio_s,
+      decode_s,
+      ...(warning ? { warning } : {}),
+    };
   } catch (err) {
     const error = (err as Error).message;
     emit({ type: "final.failed", step, error });
-    return { ok: false, parts, skipped, error };
+    return { ok: false, model: modelId, parts, skipped, error };
   }
 }
 
@@ -726,13 +763,25 @@ type ToFinal = {
 type FromFinal =
   | { type: "event"; draft: EventDraft }
   | { type: "log"; level: "info" | "warn" | "error"; msg: string }
+  | { type: "progress"; done_s: number; total_s: number }
   | { type: "done"; result: FinalResult; loads: Record<string, number> };
+
+/** The Worker sends its progress at most this often, ms; the last value always goes. */
+const PROGRESS_EVERY_MS = 1000;
 
 async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<void> {
   let result: FinalResult;
   let loads: Record<string, number> = {};
   const emit = (draft: EventDraft) => reply({ type: "event", draft });
+  const log = (level: "info" | "warn" | "error", msg: string) => reply({ type: "log", level, msg });
   let models: ModelSet | undefined;
+  let sent = Number.NEGATIVE_INFINITY;
+  const progress = (done_s: number, total_s: number) => {
+    const now = performance.now();
+    if (now - sent < PROGRESS_EVERY_MS && done_s < total_s) return;
+    sent = now;
+    reply({ type: "progress", done_s, total_s });
+  };
   try {
     models = await loadModelSet(m.models);
     const audio = await openFinalAudio(m.audio);
@@ -744,11 +793,12 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
           decode: m.decode,
           files: m.files,
           announced: true,
+          progress,
           options: m.options,
         },
         models,
         emit,
-        (level, msg) => reply({ type: "log", level, msg }),
+        log,
       );
     } finally {
       audio.close?.();
@@ -793,6 +843,8 @@ export interface FinalizeOptions {
   vocab?: VocabSource;
   options?: Partial<FinalOptions>;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
+  /** How far the pass is (`FinalInput.progress`), at most once a second. */
+  onProgress?(done_s: number, total_s: number): void;
   /** Runs the pass on this thread. Tests only. */
   inThread?: boolean;
   /** The pass's deadline; defaults to `finalBudgetMs` of the call. */
@@ -825,9 +877,10 @@ export async function finalizeCall(
   o: FinalizeOptions,
 ): Promise<FinalResult & { loads: Record<string, number> }> {
   const release = call.holdWriter();
+  const model = modelNameFor(o.models);
   // Written before the first await, so the pass is in the log by the time the caller answers: a
   // `finalize --force` followed by `akou wait` never takes the earlier final.done for this one.
-  call.record({ type: "final.started", pid: process.pid });
+  call.record({ type: "final.started", pid: process.pid, model });
   try {
     const { events } = await readLog(join(call.dir, EVENTS_FILE));
     const view = fold(events);
@@ -836,7 +889,7 @@ export async function finalizeCall(
       events,
       audio: o.audio,
       models: o.models,
-      decode: callDecodeList(view, modelNameFor(o.models), o.vocab),
+      decode: callDecodeList(view, model, o.vocab),
       files: [...(o.vocab?.files ?? [])],
       options: o.options,
     };
@@ -867,6 +920,7 @@ export async function finalizeCall(
         if (settled) return;
         if (r.type === "event") call.record(r.draft);
         else if (r.type === "log") o.onLog?.(r.level, r.msg);
+        else if (r.type === "progress") o.onProgress?.(r.done_s, r.total_s);
         else finish({ ...r.result, loads: r.loads });
       };
       if (o.inThread) {
