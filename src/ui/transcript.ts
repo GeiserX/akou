@@ -108,6 +108,8 @@ export function fillRow(
  */
 export class ScrollPin {
   pinned = true;
+  /** The area's content and visible heights the last time the view was at the bottom. */
+  private seen = { content: 0, visible: 0 };
 
   constructor(
     private readonly scroller: HTMLElement,
@@ -115,21 +117,47 @@ export class ScrollPin {
   ) {
     scroller.addEventListener("scroll", () => {
       const s = this.scroller;
+      // The area or its lines changed size since the view was last at the bottom, and this scroll
+      // event (often follow()'s own, dispatched a frame late) reads the layout's distance, not the
+      // reader's: a pinned view goes back down instead of letting go.
+      if (
+        this.pinned &&
+        (s.scrollHeight !== this.seen.content || s.clientHeight !== this.seen.visible)
+      ) {
+        this.follow();
+        return;
+      }
       this.pinned = s.scrollHeight - s.scrollTop - s.clientHeight < SCROLL_PIN_PX;
+      if (this.pinned) this.remember();
       document.body.classList.toggle("scrolled", !this.pinned);
     });
     jump.addEventListener("click", () => this.backToLive());
+    // The area gets shorter (the player bar, the final note, a smaller window) or its lines taller
+    // (+ and -) with no new content and no scroll: a pinned view goes back to the bottom.
+    const resized = new ResizeObserver(() => this.follow());
+    resized.observe(scroller);
+    for (const c of scroller.children) resized.observe(c);
   }
 
-  /** After new content: stays at the bottom only while pinned. */
+  /**
+   * After new content: stays at the bottom only while pinned. At once, not smoothly: a smooth
+   * scroll's first steps read as a reader scrolling up and unpin the view before it lands.
+   */
   follow(): void {
-    if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
+    if (!this.pinned) return;
+    this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: "instant" });
+    this.remember();
   }
 
+  /** At once too, for the same reason as follow(): lines may be arriving while it scrolls. */
   backToLive(): void {
     this.pinned = true;
-    this.scroller.scrollTop = this.scroller.scrollHeight;
+    this.follow();
     document.body.classList.remove("scrolled");
+  }
+
+  private remember(): void {
+    this.seen = { content: this.scroller.scrollHeight, visible: this.scroller.clientHeight };
   }
 
   /** The page moved the reader on purpose (a citation): stop following. */

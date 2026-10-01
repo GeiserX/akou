@@ -506,7 +506,7 @@
         "tags": [
           "models"
         ],
-        "description": "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. 404 when the model is not downloading.",
+        "description": "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. It also stops the model's copy by models.import, which then lists its files as missing. 404 when the model is not downloading.",
         "requestBody": {
           "required": true,
           "content": {
@@ -554,7 +554,7 @@
         "tags": [
           "models"
         ],
-        "description": "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing. 404 when the folder does not exist.",
+        "description": "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing once the copy ends; while it runs, models.get shows the model being copied as `downloading` with its bytes so far, and models.cancel stops it. 404 when the folder does not exist.",
         "requestBody": {
           "required": true,
           "content": {
