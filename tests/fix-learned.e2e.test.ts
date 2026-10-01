@@ -165,6 +165,28 @@ describe("the vocab.learned event", () => {
   );
 
   test(
+    "writing back one of several heard forms keeps the term: the call still reads it",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", `/calls/${CALL}/fix`, { term: "Vercel", heard: ["versal", "vercell"] });
+      const r = await fixLine(rig, "l000002", "versal is down again");
+      expect(r.body.reverted).toEqual([{ heard: "versal", term: "Vercel" }]);
+      // One term taught, with both heard forms.
+      const [k, ...more] = await learnedEvents(rig);
+      expect(more.filter((x) => x.rev === 1)).toEqual([]);
+      expect(k).toMatchObject({ rev: 1, term: "Vercel", heard: ["versal", "vercell"] });
+      // The call still reads `vercell` as Vercel, so nothing is taken back.
+      const call = (await rig.api("GET", `/calls/${CALL}/vocab`)).body.callVocab as {
+        term: string;
+        heard: string[];
+      }[];
+      expect(call).toEqual([expect.objectContaining({ term: "Vercel", heard: ["vercell"] })]);
+      expect((await learnedEvents(rig)).map((x) => x.term)).toEqual(["Vercel"]);
+    },
+    LONG,
+  );
+
+  test(
     "an agent's own correction is told apart from the user's by `by`",
     async () => {
       const rig = await rigWith();
