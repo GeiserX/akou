@@ -1,9 +1,10 @@
 /**
- * Telling the agent what a fix taught akou, over the API (docs/DESIGN.md section 5.4,
- * docs/ux/design-explorations/fix-a-word-on-the-line.md): a headless app on a seeded, ended call. A
- * fix that learns a term writes one `vocab.learned` event; Undo and the heard word written back take
- * it back; a read from a cursor carries `learned` only when a fix changed something after it; a
- * context pack lists the five newest. No test runs a real model.
+ * Telling the agent what a fix taught akou, and renaming or forgetting a learned term, over the API
+ * (docs/DESIGN.md section 5.4, docs/ux/design-explorations/fix-a-word-on-the-line.md): a headless app
+ * on a seeded, ended call. A fix that learns a term writes one `vocab.learned` event; Undo, Forget and
+ * the heard word written back take it back; a new spelling over a learned word renames it instead of
+ * adding a second term; a read from a cursor carries `learned` only when a fix changed something
+ * after it; a context pack lists the five newest. No test runs a real model.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -118,7 +119,7 @@ describe("the vocab.learned event", () => {
   );
 
   test(
-    "the same word fixed on one more line is told once",
+    "the same word fixed on one more line is told once, and Forget takes both lines back",
     async () => {
       const rig = await rigWith();
       // `mark` is a common word: each fix stays on its line, the term itself is learned once.
@@ -127,6 +128,9 @@ describe("the vocab.learned event", () => {
       expect((await texts(rig)).l000005).toBe("then Marc said yes");
       const ks = await learnedEvents(rig);
       expect(ks.map((k) => [k.term, k.heard])).toEqual([["Marc", ["mark"]]]);
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: ks[0]?.id });
+      const t = await texts(rig);
+      expect([t.l000004, t.l000005]).toEqual(["ask mark about it", "then mark said yes"]);
     },
     LONG,
   );
@@ -171,6 +175,99 @@ describe("the vocab.learned event", () => {
         { "x-akou-client": "claude" },
       );
       expect((await learnedEvents(rig))[0]).toMatchObject({ term: "Vercel", by: "agent:claude" });
+    },
+    LONG,
+  );
+});
+
+describe("renaming a learned term", () => {
+  test(
+    "a new spelling over a learned word renames it in the call and the file, with no second term",
+    async () => {
+      const rig = await rigWith();
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const r = await fixLine(rig, "l000001", "deploy to Vercel.com today");
+      expect(r.status).toBe(200);
+      expect(r.body.pairs).toEqual([
+        expect.objectContaining({ heard: "versal", term: "Vercel.com", renamed: "Vercel" }),
+      ]);
+      expect((await texts(rig)).l000002).toBe("Vercel.com is down again");
+      // The call holds one entry for the heard form, renamed: a revision, not a second add.
+      const call = (await rig.api("GET", `/calls/${CALL}/vocab`)).body.callVocab as {
+        term: string;
+        heard: string[];
+      }[];
+      expect(call.filter((v) => v.heard.includes("versal")).map((v) => v.term)).toEqual([
+        "Vercel.com",
+      ]);
+      // The file's entry takes the new term and keeps its heard forms.
+      const file = await words(rig);
+      expect(file.map((e) => e.term)).not.toContain("Vercel");
+      expect(file).toContainEqual(
+        expect.objectContaining({ term: "Vercel.com", heard: ["versal"] }),
+      );
+      const ks = await learnedEvents(rig);
+      expect(ks.map((k) => [k.rev, k.term, k.was])).toEqual([
+        [1, "Vercel", undefined],
+        [2, "Vercel.com", "Vercel"],
+      ]);
+      expect(new Set(ks.map((k) => k.id)).size).toBe(1);
+      // Undo names it back everywhere.
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect((await texts(rig)).l000002).toBe("Vercel is down again");
+      expect((await words(rig)).map((e) => e.term)).toContain("Vercel");
+      expect((await words(rig)).map((e) => e.term)).not.toContain("Vercel.com");
+      expect((await learnedEvents(rig)).at(-1)).toMatchObject({
+        rev: 3,
+        term: "Vercel",
+        was: "Vercel.com",
+      });
+    },
+    LONG,
+  );
+});
+
+describe("forgetting a learned term", () => {
+  test(
+    "Forget takes it out of the call and out of the file, at any time after the fix",
+    async () => {
+      const rig = await rigWith();
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      await fixLine(rig, "l000003", "there plan works");
+      const [k] = await learnedEvents(rig);
+      const f = await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id });
+      expect(f.status).toBe(200);
+      expect(f.body.forgotten).toEqual({ term: "Vercel", vocab: 1, file: true });
+      const t = await texts(rig);
+      expect(t.l000001).toBe("deploy to versal today");
+      expect(t.l000002).toBe("versal is down again");
+      // A rewording is no vocabulary and stays.
+      expect(t.l000003).toBe("there plan works");
+      expect((await words(rig)).map((e) => e.term)).not.toContain("Vercel");
+      expect((await learnedEvents(rig)).map((x) => [x.rev, x.term])).toEqual([
+        [1, "Vercel"],
+        [2, null],
+      ]);
+      // Gone: a second Forget finds nothing.
+      expect((await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id })).status).toBe(
+        404,
+      );
+      expect((await rig.api("POST", `/calls/${CALL}/fix/forget`, {})).status).toBe(400);
+    },
+    LONG,
+  );
+
+  test(
+    "an entry the user wrote before keeps itself and loses only the heard form the fix added",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", "/vocab", { term: "Vercel", heard: ["vercell"], workspace: "work" });
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const [k] = await learnedEvents(rig);
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id });
+      expect(await words(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: ["vercell"] }),
+      );
     },
     LONG,
   );

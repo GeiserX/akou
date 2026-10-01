@@ -11,7 +11,8 @@
  */
 
 import { formatZone } from "../core/log/clock.ts";
-import type { CallView } from "../core/log/fold.ts";
+import type { CallView, LearnedTerm } from "../core/log/fold.ts";
+import { tokenize } from "../core/vocab/correct.ts";
 import { AskPane } from "./ask.ts";
 import { DictationDictionary } from "./dictation-dictionary.ts";
 import { DictationHistory } from "./dictation-history.ts";
@@ -59,12 +60,21 @@ interface FixAnswer {
     term: string;
     learned: boolean;
     learnedTerm?: string;
+    /** A rename: the term it had before. */
+    renamed?: string;
     noted: boolean;
     lines: number;
   }[];
   /** Corrections the person wrote back as heard, now off the call. */
   reverted?: { heard: string; term: string }[];
   undo?: unknown;
+}
+
+/** The one line above a learned word's fix: `Vercel, heard "versal", learned from a fix`. */
+export function learnedLine(l: Pick<LearnedTerm, "term" | "heard" | "by">): string {
+  const heard = l.heard.length > 0 ? `, heard ${l.heard.map((h) => `"${h}"`).join(", ")}` : "";
+  const from = l.by.startsWith("agent:") ? "taught by an agent" : "learned from a fix";
+  return `${l.term}${heard}, ${from}`;
 }
 
 /** A level above this means someone on the call side is audible. */
@@ -232,7 +242,7 @@ class App {
       hue: (spk) => this.hues.hue(spk),
       play: (id) => void this.play(id),
       speakerMenu: (spk, anchor) => this.speakerMenu(spk, anchor),
-      fixWord: (id, anchor, sel) => this.fixWord(id, anchor, sel),
+      fixWord: (id, anchor, sel, near) => this.fixWord(id, anchor, sel, near),
     });
     new LineMenu(byId("lines"), byId("scroller"), () => this.lineActions());
     this.player = new Player({
@@ -1275,12 +1285,18 @@ class App {
 
   private popoverFrom: HTMLElement | null = null;
 
-  private openPopover(anchor: HTMLElement, label: string, ...children: HTMLElement[]): void {
+  /** `anchor` takes the focus back on close; the popover opens under `at`, or under the anchor. */
+  private openPopover(
+    anchor: HTMLElement | { el: HTMLElement; at: DOMRect },
+    label: string,
+    ...children: HTMLElement[]
+  ): void {
     const pop = byId("popover");
     replace(pop, h("h3", {}, label), ...children);
     pop.setAttribute("aria-label", label);
     pop.hidden = false;
-    const r = anchor.getBoundingClientRect();
+    const r = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : anchor.at;
+    if (!(anchor instanceof HTMLElement)) anchor = anchor.el;
     pop.style.left = `${Math.max(8, Math.min(innerWidth - 340, r.left))}px`;
     pop.style.top = `${Math.min(innerHeight - 40, r.bottom + 6)}px`;
     this.popoverFrom = anchor;
@@ -1380,7 +1396,12 @@ class App {
    * each to the whole call (`POST /calls/{id}/fix`). A quiet toast says what it learned or noted,
    * with Undo.
    */
-  private fixWord(lineId: string, anchor: HTMLElement, selected: string): void {
+  private fixWord(
+    lineId: string,
+    anchor: HTMLElement,
+    selected: string,
+    near?: { at: number; rect: DOMRect },
+  ): void {
     const call = this.callId;
     let shown = this.transcript.shown(lineId)?.text;
     // The revision shown: a line rewritten meanwhile (the in-call upgrade) is read again first.
@@ -1439,9 +1460,71 @@ class App {
       field,
       h("button", { type: "submit", class: "go" }, "Fix"),
     );
-    this.openPopover(anchor, "Fix this line", note, form);
-    const at = selected ? shown.indexOf(selected) : -1;
+    // A word that reads corrected by a term a fix learned: say so, and offer to forget it.
+    const learned = selected ? this.learnedFor(selected, shown) : undefined;
+    const known = learned
+      ? [
+          h(
+            "div",
+            { class: "pop-row fix-learned" },
+            h("span", {}, learnedLine(learned)),
+            h(
+              "button",
+              {
+                type: "button",
+                class: "forget",
+                attrs: { "aria-label": `Forget ${learned.term}` },
+                on: { click: () => this.forget(call, learned) },
+              },
+              "Forget",
+            ),
+          ),
+        ]
+      : [];
+    this.openPopover(
+      near ? { el: anchor, at: near.rect } : anchor,
+      "Fix this line",
+      note,
+      ...known,
+      form,
+    );
+    const at =
+      near && shown.slice(near.at, near.at + selected.length) === selected
+        ? near.at
+        : selected
+          ? shown.indexOf(selected)
+          : -1;
+    // The field takes the keys, even with Forget above it.
+    field.focus();
     if (at >= 0) field.setSelectionRange(at, at + selected.length);
+  }
+
+  /** The term a fix learned that this word of the line belongs to, if any. */
+  private learnedFor(word: string, line: string): LearnedTerm | undefined {
+    const folded = tokenize(word).map((t) => t.folded);
+    if (folded.length === 0) return undefined;
+    const inLine = new Set(tokenize(line).map((t) => t.folded));
+    return this.view()
+      ?.learnedTerms()
+      .findLast((l) => {
+        const words = tokenize(l.term).map((t) => t.folded);
+        return folded.every((w) => words.includes(w)) && words.every((w) => inLine.has(w));
+      });
+  }
+
+  /** Forget a learned term: out of the call and out of the file it went into. */
+  private forget(call: string, l: LearnedTerm): void {
+    void this.t
+      .request("POST", `/calls/${call}/fix/forget`, { learned: l.id })
+      .then((r) => {
+        if (r.status >= 400) {
+          toast(message(r.body, `${l.term} could not be forgotten`), "error");
+          return;
+        }
+        this.closePopover();
+        toast(`Forgot ${l.term}. Its lines read as heard again.`, "info");
+      })
+      .catch((err: Error) => toast(err.message, "error"));
   }
 
   /** What a fix did, in one quiet line, with Undo. */
@@ -1463,8 +1546,14 @@ class App {
       );
       return;
     }
-    const learned = pairs.filter((p) => p.learned);
+    const renamed = pairs.filter((p) => p.renamed);
+    const learned = pairs.filter((p) => p.learned && !p.renamed);
     const reworded = pairs.filter((p) => !p.learned);
+    for (const p of renamed) {
+      said.push(
+        `Renamed ${p.renamed} to ${p.term}: ${p.lines} ${p.lines === 1 ? "line" : "lines"}`,
+      );
+    }
     if (learned.length > 0) {
       const lines = learned.reduce((n, p) => n + p.lines, 0);
       said.push(

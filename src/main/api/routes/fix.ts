@@ -22,16 +22,20 @@
  * - `POST /calls/{id}/fix {term, heard}`: the same for a correction stated with no line, as an
  *   agent passes on "it's Vercel, not versal": the person said it, so it applies to the whole call
  *   even for common words. A rewording is not learned into the workspace, and is noted.
- * - `POST /calls/{id}/fix/undo {vocab, notes, words, learned}`: takes a fix back, given the `undo`
- *   of its answer: the call's entries are retracted, the note deleted, and the word (or only the heard
- *   form the fix added) leaves the vocabulary file again. The log keeps every event.
+ * - `POST /calls/{id}/fix/undo {vocab, notes, words, learned, renames}`: takes a fix back, given the
+ *   `undo` of its answer: the call's entries are retracted, the note deleted, the word (or only the
+ *   heard form the fix added) leaves the vocabulary file again, and a rename goes back. The log keeps
+ *   every event.
+ * - `POST /calls/{id}/fix/forget {learned}`: takes a term a fix learned out of the call and out of the
+ *   file it was learned into, at any time after the fix.
  *
- * Every term a fix learns or takes back writes a `vocab.learned` revision, so an agent following the
- * call is told (`learned` on read answers).
+ * Every term a fix learns, renames or takes back writes a `vocab.learned` revision, so an agent
+ * following the call is told (`learned` on read answers). A new spelling typed over a word that a
+ * correction of the call gives renames that term instead of adding a second one.
  */
 
 import type { EventDraft, LearnedKept, VocabAdd } from "../../../core/log/events.ts";
-import type { CallView, LearnedTerm } from "../../../core/log/fold.ts";
+import type { CallView, LearnedTerm, Line } from "../../../core/log/fold.ts";
 import { type Correction, occurrences, tokenize } from "../../../core/vocab/correct.ts";
 import {
   type FixPair,
@@ -70,6 +74,8 @@ export interface FixedPair {
   learned: boolean;
   /** The word learned, when it is not `term`: the added word of `on` to `on Vercel`. */
   learnedTerm?: string;
+  /** A rename of a term the call already corrected this word to: the term it had. */
+  renamed?: string;
   /** Written into the call's Notes. */
   noted: boolean;
   /** Lines of the call that read corrected by it now. */
@@ -86,12 +92,26 @@ export interface FixedWord {
   created: boolean;
 }
 
+/** A term a fix renamed, so Undo can name it back. */
+export interface FixRename {
+  /** The call's entry that was renamed. */
+  vocab: string;
+  /** The `vocab.learned` id that says so. */
+  learned: string;
+  from: string;
+  to: string;
+  workspace?: string;
+  /** The vocabulary file's entry was renamed too. */
+  file: boolean;
+}
+
 export interface FixUndo {
   vocab: string[];
   notes: string[];
   words: FixedWord[];
   /** `vocab.learned` ids the fix wrote; Undo takes them back. */
   learned: string[];
+  renames: FixRename[];
 }
 
 function today(now: number): string {
@@ -129,6 +149,78 @@ async function retractLearned(
       throw err;
     });
   return e !== null;
+}
+
+/**
+ * Renames a term in a vocabulary file, keeping its heard forms. An entry already holding the new
+ * term takes the old one's heard forms. Answers whether the file changed.
+ */
+async function renameInFile(
+  app: ApiApp,
+  workspace: string | undefined,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  const out = await editFile(targetPath(app, workspace), (file) => {
+    const had = file.entries.find((e) => termKey(e.term) === termKey(from));
+    if (!had || had.term === to) return null;
+    const into = file.entries.find((e) => e !== had && termKey(e.term) === termKey(to));
+    if (into) {
+      const heard = [...into.heard];
+      for (const h of had.heard) {
+        if (heard.length < MAX_HEARD && !heard.some((x) => termKey(x) === termKey(h)))
+          heard.push(h);
+      }
+      return { file: upsertEntry(removeEntry(file, had.term), { ...into, heard }), result: true };
+    }
+    return {
+      file: { ...file, entries: file.entries.map((e) => (e === had ? { ...had, term: to } : e)) },
+      result: true,
+    };
+  });
+  return out === true;
+}
+
+/** Takes a learned term out of the file it went into: the entry a fix wrote, or the forms it added. */
+async function forgetInFile(
+  app: ApiApp,
+  workspace: string | undefined,
+  l: Pick<LearnedTerm, "term" | "heard">,
+): Promise<boolean> {
+  const out = await editFile(targetPath(app, workspace), (file) => {
+    const had = file.entries.find((e) => termKey(e.term) === termKey(l.term));
+    if (!had) return null;
+    if (had.source === "correction") return { file: removeEntry(file, had.term), result: true };
+    const heard = had.heard.filter((h) => !l.heard.some((x) => termKey(x) === termKey(h)));
+    if (heard.length === had.heard.length) return null;
+    return { file: upsertEntry(file, { ...had, heard }), result: true };
+  });
+  return out === true;
+}
+
+/**
+ * The correction of the call a new spelling was typed over, when there is one: the word as it read
+ * came from a call entry, and the pair's words are that word. Typing another spelling renames it.
+ */
+function renameTarget(view: CallView, l: Line & { raw: string }, p: FixPair) {
+  if (p.op !== "replace" || !p.heard) return null;
+  const toks = tokenize(l.raw);
+  const first = toks[p.from];
+  const last = toks[p.from + tokenize(p.heard).length - 1];
+  if (!first || !last) return null;
+  const x = l.corrections.find(
+    (x) =>
+      x.scope === "call" &&
+      x.kind === "heard" &&
+      x.term !== p.term &&
+      x.start >= first.start &&
+      x.end <= last.end,
+  );
+  if (!x) return null;
+  const cur = view
+    .callVocabulary()
+    .find((v) => v.term === x.term && v.heard.some((h) => termKey(h) === termKey(x.heard)));
+  return cur ? { from: x.term, vocab: cur.id } : null;
 }
 
 /**
@@ -237,8 +329,9 @@ export function fixRoutes(r: Router<ApiApp>): void {
       const isDict = view.options.isDictionaryWord;
       let pairs: FixPair[];
       let line: { id: string; w: number; raw: string } | null = null;
+      let fixed: (Line & { raw: string }) | null = null;
       const reverted: { heard: string; term: string }[] = [];
-      const undo: FixUndo = { vocab: [], notes: [], words: [], learned: [] };
+      const undo: FixUndo = { vocab: [], notes: [], words: [], learned: [], renames: [] };
       let filesChanged = false;
       if (b.line !== undefined) {
         if (typeof b.text !== "string" || b.text.trim() === "") {
@@ -258,6 +351,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
           });
         }
         line = { id: l.id, w: l.w0, raw: l.raw };
+        fixed = l as Line & { raw: string };
         // Aligned with the raw text, so every pair matches what the recognizer wrote; a word the
         // vocabulary already corrects on this line, left as it reads, is no new pair.
         pairs = fixPairs(l.raw, text).filter(
@@ -303,6 +397,10 @@ export function fixRoutes(r: Router<ApiApp>): void {
         heard: string[];
         vocab: string[];
         kept: LearnedKept;
+        was?: string;
+        /** A rename of a term learned before: its id. */
+        prev?: string;
+        rename?: FixRename;
       }[] = [];
       const add = async (draft: Pick<VocabAdd, "term" | "heard" | "segs" | "nth" | "decode">) => {
         const e = await c.app.write(id, (cc) => ({
@@ -318,6 +416,65 @@ export function fixRoutes(r: Router<ApiApp>): void {
       };
       for (const p of pairs) {
         const kind = pairKind(p, isDict);
+        const target = fixed ? renameTarget(view, fixed, p) : null;
+        if (target) {
+          // A new spelling over a word the call already corrects: that term is renamed, in the
+          // call and in the file it was learned into, instead of a second term being added.
+          await c.app.write(id, (cc) => {
+            const cur = cc.view.callVocabulary().find((v) => v.id === target.vocab);
+            if (!cur)
+              throw new HttpError(409, "line_changed", "the word changed while it was fixed");
+            return {
+              type: "vocab.add",
+              id: cur.id,
+              rev: cur.rev + 1,
+              term: p.term,
+              heard: cur.heard,
+              by: c.by,
+              ...(cur.segs ? { segs: cur.segs } : {}),
+              ...(cur.nth !== undefined ? { nth: cur.nth } : {}),
+              decode: cur.decode,
+            };
+          });
+          const prev = view.learnedTerms().find((x) => x.vocab.includes(target.vocab));
+          const kept = prev?.kept ?? "call";
+          let file = false;
+          if (kept !== "call") {
+            try {
+              file = await renameInFile(c.app, workspace, target.from, p.term);
+              if (file) filesChanged = true;
+            } catch (err) {
+              warnings.push(`${p.term} was not renamed in the file: ${(err as Error).message}`);
+            }
+          }
+          const rename: FixRename = {
+            vocab: target.vocab,
+            learned: prev?.id ?? "",
+            from: target.from,
+            to: p.term,
+            ...(workspace ? { workspace } : {}),
+            file,
+          };
+          undo.renames.push(rename);
+          learned.push({
+            term: p.term,
+            heard: prev?.heard ?? [p.heard],
+            vocab: prev?.vocab ?? [target.vocab],
+            kept,
+            was: target.from,
+            ...(prev ? { prev: prev.id } : {}),
+            rename,
+          });
+          done.push({
+            heard: p.heard,
+            term: p.term,
+            kind,
+            learned: true,
+            renamed: target.from,
+            noted: !takesWords,
+          });
+          continue;
+        }
         const heard = p.heard && termKey(p.heard) !== "" ? [p.heard] : [];
         // A stated pair is the person's own word for the whole call; a line's pair spreads to the
         // other lines only when it is a term whose heard form is no common word.
@@ -405,18 +562,24 @@ export function fixRoutes(r: Router<ApiApp>): void {
       let after = (await callOf(c)).view;
       for (const k of learned) {
         const lines = linesCorrected(after, { heard: "", term: k.term });
-        const e = await c.app.write(id, (cc) => ({
-          type: "vocab.learned",
-          id: nextItemId("k", cc.view.lastSeq),
-          rev: 1,
-          term: k.term,
-          heard: k.heard,
-          by: c.by,
-          lines,
-          kept: k.kept,
-          vocab: k.vocab,
-        }));
-        undo.learned.push((e as EventDraft & { id: string }).id);
+        const e = await c.app.write(id, (cc) => {
+          const prev = k.prev ? cc.view.learnedTerms().find((x) => x.id === k.prev) : undefined;
+          return {
+            type: "vocab.learned",
+            id: prev?.id ?? nextItemId("k", cc.view.lastSeq),
+            rev: (prev?.rev ?? 0) + 1,
+            term: k.term,
+            heard: k.heard,
+            by: c.by,
+            lines,
+            kept: k.kept,
+            vocab: k.vocab,
+            ...(k.was ? { was: k.was } : {}),
+          };
+        });
+        const lid = (e as EventDraft & { id: string }).id;
+        if (k.rename) k.rename.learned = lid;
+        else undo.learned.push(lid);
       }
       if (learned.length > 0) after = (await callOf(c)).view;
       return json(200, {
@@ -437,12 +600,13 @@ export function fixRoutes(r: Router<ApiApp>): void {
     "/calls/:id/fix/undo",
     doc({
       id: "callVocab.fixUndo",
-      doc: "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, the words it put into a vocabulary file taken out again, and the terms it learned taken back (a `vocab.learned` revision with `term: null`). The log keeps every event.",
+      doc: "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, the words it put into a vocabulary file taken out again, the terms it learned taken back (a `vocab.learned` revision with `term: null`), and a term it renamed named back. The log keeps every event.",
       body: {
         "vocab?": "string[]",
         "notes?": "string[]",
         "words?": "any",
         "learned?": "string[]",
+        "renames?": "any",
       },
       ok: 200,
     }),
@@ -453,6 +617,60 @@ export function fixRoutes(r: Router<ApiApp>): void {
       let notes = 0;
       let words = 0;
       let learned = 0;
+      for (const r of b.renames ?? []) {
+        if (
+          typeof r?.vocab !== "string" ||
+          typeof r.from !== "string" ||
+          typeof r.to !== "string"
+        ) {
+          continue;
+        }
+        const e = await c.app
+          .write(id, (cc) => {
+            const cur = cc.view.callVocabulary().find((x) => x.id === r.vocab && x.term === r.to);
+            if (!cur) throw new HttpError(404, "not_found", r.vocab);
+            return {
+              type: "vocab.add",
+              id: cur.id,
+              rev: cur.rev + 1,
+              term: r.from,
+              heard: cur.heard,
+              by: c.by,
+              ...(cur.segs ? { segs: cur.segs } : {}),
+              ...(cur.nth !== undefined ? { nth: cur.nth } : {}),
+              decode: cur.decode,
+            };
+          })
+          .catch((err) => {
+            if (err instanceof HttpError && err.status === 404) return null;
+            throw err;
+          });
+        if (!e) continue;
+        vocab++;
+        const ws =
+          typeof r.workspace === "string" && validWorkspace(r.workspace) ? r.workspace : undefined;
+        if (r.file && (await renameInFile(c.app, ws, r.to, r.from))) words++;
+        await c.app
+          .write(id, (cc) => {
+            const l = cc.view.learnedTerms().find((x) => x.id === r.learned && x.term === r.to);
+            if (!l) throw new HttpError(404, "not_found", String(r.learned));
+            return {
+              type: "vocab.learned",
+              id: l.id,
+              rev: l.rev + 1,
+              term: r.from,
+              was: r.to,
+              heard: l.heard,
+              by: c.by,
+              ...(l.kept ? { kept: l.kept } : {}),
+              vocab: l.vocab,
+            };
+          })
+          .then(() => learned++)
+          .catch((err) => {
+            if (!(err instanceof HttpError && err.status === 404)) throw err;
+          });
+      }
       for (const vid of b.vocab ?? []) {
         if (typeof vid !== "string") continue;
         const e = await c.app
@@ -512,6 +730,56 @@ export function fixRoutes(r: Router<ApiApp>): void {
       }
       if (words > 0) c.app.vocabChanged();
       return json(200, { ok: true, call: id, undone: { vocab, notes, words, learned } });
+    },
+  );
+
+  r.add(
+    "POST",
+    "/calls/:id/fix/forget",
+    doc({
+      id: "callVocab.forget",
+      doc: "Forget a term a fix learned, at any time after the fix: `learned` is its `vocab.learned` id. The call's entries it came with are retracted, so its lines read as heard again, and it leaves the vocabulary file it was learned into (the whole entry when a fix wrote it, else only the heard forms the fix added). A `vocab.learned` revision with `term: null` tells the agents following the call.",
+      body: { learned: "string" },
+      ok: 200,
+    }),
+    async (c) => {
+      const b = await c.body<{ learned?: unknown }>();
+      if (typeof b.learned !== "string") {
+        throw new HttpError(400, "bad_field", "learned must be a vocab.learned id");
+      }
+      const id = callId(c);
+      const view = (await callOf(c)).view;
+      const l = view.learnedTerms().find((x) => x.id === b.learned);
+      if (!l) throw new HttpError(404, "not_found", `no learned term ${b.learned}`);
+      let vocab = 0;
+      // The entries it came with, and the same term fixed on more lines since.
+      const ids = new Set([
+        ...l.vocab,
+        ...view
+          .callVocabulary()
+          .filter((v) => v.term === l.term)
+          .map((v) => v.id),
+      ]);
+      for (const vid of ids) {
+        const e = await c.app
+          .write(id, (cc) => {
+            const cur = cc.view.callVocabulary().find((x) => x.id === vid);
+            if (!cur) throw new HttpError(404, "not_found", vid);
+            return { type: "vocab.add", id: cur.id, rev: cur.rev + 1, term: null, by: c.by };
+          })
+          .catch((err) => {
+            if (err instanceof HttpError && err.status === 404) return null;
+            throw err;
+          });
+        if (e) vocab++;
+      }
+      let file = false;
+      if (l.kept && l.kept !== "call") {
+        file = await forgetInFile(c.app, l.kept === "workspace" ? workspaceOf(view) : undefined, l);
+        if (file) c.app.vocabChanged();
+      }
+      await retractLearned(c, id, (x) => x.id === l.id);
+      return json(200, { ok: true, call: id, forgotten: { term: l.term, vocab, file } });
     },
   );
 }
