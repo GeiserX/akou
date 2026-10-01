@@ -19,6 +19,8 @@
  *   need) and the ones downloading. Each deletion is one `model.evicted` log line.
  * - **One model at a time** (SV-M6, SV-U6): `list` (state, last use, deletion date, the scores of
  *   `asr/model-scores.ts`, this machine's measured speed from `speed.json`), `pull` and `delete`.
+ * - **Imports** (`POST /models/import`): a model being copied from a folder reads as downloading,
+ *   with its bytes so far, the sweep leaves it, and Cancel stops its copy.
  *
  * This file is server code on purpose: `asr/models.ts` stays the catalog and the downloader.
  */
@@ -40,6 +42,7 @@ import {
   type CatalogEntry,
   DownloadRefused,
   downloadModels,
+  importModels,
   type ModelSpecEntry,
   modelFile,
   NEMOTRON,
@@ -457,6 +460,13 @@ export interface ModelView {
   set_default: { key: string; value: string } | null;
 }
 
+/** A model being copied from a folder (`POST /models/import`). */
+interface Copy {
+  /** Bytes so far per file name. */
+  bytes: Map<string, number>;
+  abort: AbortController;
+}
+
 /** The models the sweep and a delete must not touch: the default's set and what is in use. */
 export interface Held {
   defaults: ReadonlySet<string>;
@@ -466,6 +476,7 @@ export interface Held {
 export class ModelStore {
   private readonly now: () => number;
   private readonly downloads = new Map<string, Download>();
+  private readonly copies = new Map<string, Copy>();
   private readonly watchers = new Set<(e: DownloadEnd) => void>();
   private closed = false;
 
@@ -518,7 +529,7 @@ export class ModelStore {
     let n = 0;
     for (const f of m.files) {
       if (existsSync(modelFile(dir, m.id, f.name))) continue;
-      n += f.size - (d?.bytes.get(f.name) ?? 0);
+      n += f.size - (d?.bytes.get(f.name) ?? this.copies.get(m.id)?.bytes.get(f.name) ?? 0);
     }
     return n;
   }
@@ -649,6 +660,12 @@ export class ModelStore {
    * download gives up. False when the model is not downloading.
    */
   cancel(id: string, by: string): boolean {
+    const c = this.copies.get(id);
+    if (c) {
+      c.abort.abort();
+      this.o.log("info", `model.import ${id} cancelled key ${by}`);
+      return true;
+    }
     const d = this.downloads.get(id);
     if (!d) return false;
     d.abort.abort();
@@ -720,7 +737,7 @@ export class ModelStore {
     if (days > 0) {
       for (const id of onDisk) {
         const last = l[id] as number;
-        if (now - last < days * DAY_MS || protect.has(id) || this.downloads.has(id)) continue;
+        if (now - last < days * DAY_MS || protect.has(id) || this.busy(id)) continue;
         const path = join(dir, id);
         const bytes = bytesUnder(path);
         try {
@@ -748,7 +765,46 @@ export class ModelStore {
   /** Whether a catalog model is on disk, downloading, or missing. */
   state(id: string): "ready" | "downloading" | "missing" {
     if (this.missing([id]).length === 0) return "ready";
-    return this.downloads.has(id) ? "downloading" : "missing";
+    return this.busy(id) ? "downloading" : "missing";
+  }
+
+  /** Downloading, or being copied from a folder. */
+  private busy(id: string): boolean {
+    return this.downloads.has(id) || this.copies.has(id);
+  }
+
+  /**
+   * Copies the files of `catalog` from a folder on this machine (`POST /models/import`), one model
+   * at a time: while a model is copied it reads as downloading with its bytes so far, as a
+   * download does, and `cancel` stops its copy, which leaves its files missing.
+   */
+  async import(
+    from: string,
+    catalog: readonly ModelSpecEntry[] = this.o.catalog(),
+  ): Promise<{ copied: string[]; missing: string[] }> {
+    const dir = this.o.dir();
+    const copied: string[] = [];
+    const missing: string[] = [];
+    for (const m of catalog) {
+      const c: Copy = { bytes: new Map(), abort: new AbortController() };
+      this.copies.set(m.id, c);
+      try {
+        const r = await importModels(from, dir, [m], {
+          onProgress: (p) => c.bytes.set(p.name, p.bytes),
+          signal: c.abort.signal,
+        });
+        copied.push(...r.copied);
+        missing.push(...r.missing);
+      } catch (err) {
+        if (!c.abort.signal.aborted) throw err;
+        for (const f of m.files) {
+          if (!existsSync(modelFile(dir, m.id, f.name))) missing.push(`${m.id}/${f.name}`);
+        }
+      } finally {
+        this.copies.delete(m.id);
+      }
+    }
+    return { copied, missing };
   }
 
   /** Bytes of the model on disk or fetched so far, and the catalog's total. */

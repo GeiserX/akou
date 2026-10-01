@@ -8,7 +8,9 @@
  * utterance closes with no review armed, the utterances closed by then, whole, in requests of at
  * most `reviewCap(every)` seconds of audio (`reviewBatches`, joined by `joinUtterances`), each
  * request's words cut back into its lines by `splitToLines`. Utterances whose review would come
- * after the call's audio has ended are never reviewed, as in the app: the final pass covers them.
+ * after the call's audio has ended are never reviewed, as in the app: a request whose tick is past
+ * the end is never sent, and one whose decode ends past it is given up, as the app's review is
+ * when the call ends. The final pass covers them.
  *
  * - **Parakeet** decodes a request on the live pipeline's own recognizer two ways: each utterance
  *   alone (`decodeUtterance`, what the app does), and, for comparison, the joined request cut at
@@ -21,15 +23,18 @@
  * reversed-words control that must be worse than the stream), the delay from a word spoken to its
  * reviewed text (p50, p95), the reviewer's busy share (decode time over the call's length), for
  * Parakeet the CPU cores it used on average, and the memory it added: for Qwen llama-server's peak
- * physical footprint, for Parakeet the growth of this process's resident memory over the pass.
+ * physical footprint, for Parakeet the peak of this process's resident memory during the pass over
+ * what it held before. Parakeet's decodes hold this thread, so that peak is sampled by `ps` from a
+ * child process: a timer here would never run during one.
  *
  *   AKOU_LIVE_MODELS=<models> AKOU_FLEURS=<data> AKOU_LIVE_CLIPS=150 AKOU_REVIEW_EVERY=60,120 \
  *     bun test tests/live-second-pass.test.ts
  */
 
 import { describe, expect, test } from "bun:test";
-import { spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { FLEURS, readWav } from "../scripts/eval/nightly.ts";
 import { percentile, wer } from "../scripts/eval/score.ts";
@@ -151,6 +156,36 @@ function footprint(pid: number): number {
   return Number(m[1]) * k;
 }
 
+/**
+ * This process's peak resident memory while `run` runs, in bytes, sampled every 200 ms by `ps` in
+ * a child process. A synchronous decode holds this thread, so no timer here samples during it.
+ */
+async function peakRss<T>(run: () => Promise<T>): Promise<{ out: T; peak: number }> {
+  const file = join(tmpdir(), `akou-rss-${process.pid}-${Date.now()}`);
+  const child = spawn(
+    "sh",
+    ["-c", `while :; do ps -o rss= -p ${process.pid}; sleep 0.2; done > '${file}'`],
+    { stdio: "ignore" },
+  );
+  let out: T;
+  try {
+    out = await run();
+  } finally {
+    const gone = new Promise((r) => child.once("exit", r));
+    child.kill();
+    await gone;
+  }
+  try {
+    const kb = readFileSync(file, "utf8")
+      .split("\n")
+      .map((l) => Number(l.trim()))
+      .filter((n) => Number.isFinite(n) && n > 0);
+    return { out, peak: Math.max(process.memoryUsage().rss, ...kb.map((k) => k * 1024)) };
+  } finally {
+    rmSync(file, { force: true });
+  }
+}
+
 interface Line {
   a0: number;
   a1: number;
@@ -181,6 +216,7 @@ async function review(
   segs: ReadonlyMap<number, Line>,
   ref: string,
   seconds: number,
+  end: number,
   lang: "en" | "es",
   decode: Decoder,
 ): Promise<Omit<Result, "memMb">> {
@@ -189,8 +225,11 @@ async function review(
   const decodeS: number[] = [];
   let cpu = 0;
   let waited = 0;
+  let reviewedUtts = 0;
   let now = 0;
   for (const job of reqs) {
+    // The call has ended: the app sends no more reviews.
+    if (now > end) break;
     if (now > job.ready) waited++;
     now = Math.max(now, job.ready);
     const t = performance.now();
@@ -204,6 +243,9 @@ async function review(
     const d = (performance.now() - t) / 1000;
     decodeS.push(d);
     now += d;
+    // Its answer would land after the call ended: the app gives that review up.
+    if (now > end) break;
+    reviewedUtts += job.utts.length;
     const keys = job.utts.flatMap((x) => x.u.keys);
     const texts = job.utts.flatMap((x) => x.u.lines);
     const apply = (k: "reviewed" | "control", ws: string[]) => {
@@ -231,7 +273,7 @@ async function review(
     control: wer([{ ref, hyp: text("control") }]),
     delays,
     requests: decodeS.length,
-    reviewedUtts: reqs.reduce((a, r) => a + r.utts.length, 0),
+    reviewedUtts,
     busy: busy / seconds,
     cores: cpu / seconds,
     waited,
@@ -322,13 +364,10 @@ if (!READY) {
               const reqs = ticks(utts, every, end);
               for (const [name, decode] of parakeets) {
                 const rss0 = process.memoryUsage().rss;
-                let rss = rss0;
-                const sample = setInterval(() => {
-                  rss = Math.max(rss, process.memoryUsage().rss);
-                }, 200);
-                const pk = await review(reqs, segs, ref, seconds, lang, decode);
-                clearInterval(sample);
-                const pr: Result = { ...pk, memMb: (rss - rss0) / 1024 ** 2 };
+                const { out: pk, peak } = await peakRss(() =>
+                  review(reqs, segs, ref, seconds, end, lang, decode),
+                );
+                const pr: Result = { ...pk, memMb: Math.max(0, peak - rss0) / 1024 ** 2 };
                 results.push(pr);
                 rows.push(`  ${row(`${name} every ${every} s (cap ${reviewCap(every)} s)`, pr)}`);
               }
@@ -352,7 +391,7 @@ if (!READY) {
               if (pid) peak = Math.max(peak, footprint(pid));
             }, 500);
             try {
-              const q = await review(reqs, segs, ref, seconds, lang, async (parts) => {
+              const q = await review(reqs, segs, ref, seconds, end, lang, async (parts) => {
                 const h = await qwen.decode({ samples: joinUtterances(parts), lang, glossary: [] });
                 return h.words.length > 0 ? h.words.map((w) => w.w) : words(h.text);
               });

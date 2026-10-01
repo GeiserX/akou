@@ -30,7 +30,7 @@ import {
 import { DictationLog } from "../src/main/dictation/store.ts";
 import { FAKE_MODELS } from "./api-helpers.ts";
 import { until } from "./capture-helpers.ts";
-import { FakeModels, speak } from "./fixtures/asr-fake.ts";
+import { created, FakeModels, speak } from "./fixtures/asr-fake.ts";
 import { tempDir } from "./helpers.ts";
 
 const cleanups: (() => void | Promise<void>)[] = [];
@@ -405,6 +405,36 @@ describe("DC-E7: the live Worker shares its streaming model", () => {
     expect(words).toEqual(["hello", "world"]);
     // Finished, it is gone: a second finish is refused.
     await expect(s.finish()).rejects.toThrow();
+  });
+
+  test("through the host: a stream whose audio fails is lost, says why, and takes no more audio", async () => {
+    const asr = new LiveAsr(
+      {
+        models: {
+          kind: "module",
+          path: FAKE_MODELS,
+          model: "fake-parakeet",
+          options: { livePushFails: true },
+        },
+        inThread: true,
+      },
+      () => undefined,
+    );
+    cleanups.push(() => asr.close());
+    await asr.ready;
+    const s = asr.openDictation({ engine: "nemotron-en-560", lang: "en" }, ["en"], () => {});
+    await s.opened;
+    s.push(speak(["hello"]));
+    // Without the Worker's reply the host keeps the stream, and `lost` never settles.
+    const lost = await Promise.race([s.lost, Bun.sleep(2000).then(() => null)]);
+    expect(lost?.message).toMatch(/decode failed/);
+    // Gone on both sides: a finish is refused rather than waiting on a stream nobody serves, and
+    // the Worker closed its stream.
+    await expect(s.finish()).rejects.toThrow(/not open/);
+    const engine = (created.at(-1) as FakeModels).liveEngines.find(
+      (e) => e.id === "nemotron-en-560",
+    );
+    expect(engine?.streams.map((x) => x.closed)).toEqual([true]);
   });
 
   test("through the host: a stream open when the recognizer goes away is lost, and says why", async () => {
