@@ -4,10 +4,11 @@
  * child that stands in for a helper, prints `ready`, then does what the arguments say.
  *
  *   bun tests/fixtures/watchdog-app.ts LOG HANGS --silence MS [--recording] [--no-watchdog]
- *     [--sample] (--block MS | --busy MS)
+ *     [--sample] [--window --reopen MARKER] (--block MS | --busy MS)
  *
  * `--block MS` blocks this thread for MS; `--busy MS` keeps it working in bursts shorter than the
- * silence, for MS, then exits 0.
+ * silence, for MS, then exits 0. `--window` says the window is open; `--reopen MARKER` is what
+ * opens the app again: a process that writes MARKER.
  */
 
 import { spawn } from "node:child_process";
@@ -25,6 +26,14 @@ if (!has("--no-watchdog")) {
     silenceMs: num("--silence"),
     tickMs: 100,
     beatMs: 100,
+    windowOpen: () => has("--window"),
+    relaunch: has("--reopen")
+      ? [
+          process.execPath,
+          "-e",
+          `require("node:fs").appendFileSync(${JSON.stringify(process.argv[process.argv.indexOf("--reopen") + 1])}, "x")`,
+        ]
+      : null,
   });
 }
 const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });

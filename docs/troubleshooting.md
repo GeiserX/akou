@@ -77,7 +77,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **What akou does.** Before its first request every command gives the app 3 s to answer. When it does not, a command that changes something, such as `akou start`, gives it up to 10 s in all, so a busy akou is left alone. If it is still silent, the command stops akou and starts it again, then runs, all within about 15 s. A command that only reads, such as `akou status`, says akou is not answering and stops nothing; add `--restart` to restart it from there. If a call is recording, nothing is stopped, and the message says so. A restart does stop a final pass in progress, which runs again at the next start, and a dictation in progress, whose words are lost.
 
-The app also watches itself. When its own work stops for 10 s, it writes a line to `~/.config/akou/app.log`, and with no call recording it ends itself, so the next command starts a fresh one.
+The app also watches itself. When its own work stops for 10 s, it writes a line to `~/.config/akou/app.log`, and with no call recording it ends itself, so the next command starts a fresh one. If its window was open, it opens again a second later, at most once in ten minutes; after a second hang inside that time it stays closed, and opening akou from Applications brings it back.
 
 **Fix by hand.** When a call is recording and you want akou back before it ends, the message names akou's process: `kill -KILL` that number, then run the command again. The recording so far stays on disk and akou closes it at its next start. On macOS each restart leaves a few seconds of `sample` of the stuck process in `~/.config/akou/hangs/`; attach the newest one when you report the bug.
 

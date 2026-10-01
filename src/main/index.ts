@@ -235,7 +235,7 @@ import {
   type VocabFile,
   vocabPaths,
 } from "./vocab/files.ts";
-import { startWatchdog, type Watchdog } from "./watchdog.ts";
+import { relaunchCommand, startWatchdog, type Watchdog } from "./watchdog.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
@@ -304,6 +304,8 @@ export interface WindowShell {
   close(): Promise<void>;
   /** The global hotkey that starts and stops a call, or null when another app holds it. */
   registeredHotkey?(): string | null;
+  /** Is the main window open now? The watchdog opens the app again only if it was (DK-M8). */
+  isOpen?(): boolean;
 }
 
 export type WindowFactory = (app: AkouApp) => Promise<WindowShell>;
@@ -3606,6 +3608,8 @@ export class AkouApp implements ApiApp {
       logFile: this.appLog.file,
       hangsDir: join(this.configDir, HANGS_DIR),
       recording: () => this.manager.live() !== null,
+      windowOpen: () => this.window?.isOpen?.() ?? false,
+      relaunch: relaunchCommand(),
     });
   }
 

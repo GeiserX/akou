@@ -6,17 +6,18 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
+import { relaunchCommand } from "../src/main/watchdog.ts";
 import { tempDir } from "./helpers.ts";
 
 const APP = join(import.meta.dir, "fixtures", "watchdog-app.ts");
 const LONG = 60_000;
 const SILENCE = 1500;
 
-async function run(flags: string[]) {
-  const t = tempDir("akou-wd-");
+async function run(flags: string[], dir?: string) {
+  const t = dir ? { dir, cleanup: () => {} } : tempDir("akou-wd-");
   const log = join(t.dir, "app.log");
   const hangs = join(t.dir, "hangs");
   const proc = Bun.spawn(
@@ -156,6 +157,8 @@ describe("[DK-M8] the watchdog inside the app", () => {
         expect(readFileSync(join(r.hangs, files[0] as string), "utf8")).toContain(
           `[${r.proc.pid}]`,
         );
+        // A sample names the process's threads and libraries: the owner's alone.
+        expect(statSync(join(r.hangs, files[0] as string)).mode & 0o777).toBe(0o600);
         expect(r.log()).toContain("a sample of the stuck process is in");
       } finally {
         r.cleanup();
@@ -163,4 +166,63 @@ describe("[DK-M8] the watchdog inside the app", () => {
     },
     LONG,
   );
+  test.skipIf(process.platform === "win32")(
+    "with the window open the app is opened again after it ends, at most once in ten minutes",
+    async () => {
+      const t = tempDir("akou-wd-");
+      const marker = join(t.dir, "reopened.marker");
+      try {
+        const first = await run(["--block", "30000", "--window", "--reopen", marker], t.dir);
+        expect(await first.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
+        const deadline = performance.now() + 5000;
+        while (!existsSync(marker) && performance.now() < deadline) await Bun.sleep(50);
+        expect(readFileSync(marker, "utf8")).toBe("x");
+        expect(first.log()).toContain(
+          "info watchdog: opening akou again, because its window was open",
+        );
+        // The reopened app hangs too: it is ended, and not opened again.
+        const second = await run(["--block", "30000", "--window", "--reopen", marker], t.dir);
+        expect(await second.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
+        await Bun.sleep(1000);
+        expect(readFileSync(marker, "utf8")).toBe("x");
+        expect(second.log()).toMatch(
+          /warn watchdog: not opening akou again: it was reopened \d+ min ago/,
+        );
+      } finally {
+        t.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "positive control: with the window closed nothing is opened again",
+    async () => {
+      const t = tempDir("akou-wd-");
+      const marker = join(t.dir, "reopened.marker");
+      try {
+        const r = await run(["--block", "30000", "--reopen", marker], t.dir);
+        expect(await r.exitWithin(SILENCE + 8000)).toMatch(/^SIGKILL$/);
+        await Bun.sleep(1000);
+        expect(existsSync(marker)).toBe(false);
+        expect(r.log()).not.toContain("opening akou again");
+      } finally {
+        t.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test("the app is opened again through its bundle on macOS, and not at all elsewhere", () => {
+    expect(relaunchCommand("/Applications/akou.app/Contents/MacOS/bun", "darwin")).toEqual([
+      "/bin/sh",
+      "-c",
+      'sleep 1; exec /usr/bin/open -a "$1"',
+      "sh",
+      "/Applications/akou.app",
+    ]);
+    // The headless app the CLI starts from source, and other systems: the next command starts it.
+    expect(relaunchCommand("/usr/local/bin/bun", "darwin")).toBeNull();
+    expect(relaunchCommand("/Applications/akou.app/Contents/MacOS/bun", "linux")).toBeNull();
+  });
 });

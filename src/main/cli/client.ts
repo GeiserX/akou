@@ -18,7 +18,15 @@
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { processAlive } from "../../core/log/writer.ts";
@@ -108,6 +116,15 @@ export class StoppedHung extends Hung {
 
 /** What a program the CLI launches prints, in the config folder. */
 export const LAUNCH_LOG = "launch.log";
+/** At this size `launch.log` becomes `launch.log.1`, replacing the older one. */
+export const LAUNCH_LOG_MAX_BYTES = 1024 * 1024;
+
+/** Moves `file` to `file.1` once it reaches `max` bytes. Never throws. */
+export function rotate(file: string, max: number): void {
+  try {
+    if (statSync(file).size >= max) renameSync(file, `${file}.1`);
+  } catch {}
+}
 
 /** A probe answered this recently: the next request goes straight out. */
 const FRESH_MS = 5000;
@@ -454,7 +471,9 @@ export class ApiClient {
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     // What the launched program prints. The app writes its own `app.log` (DK-M8); this file holds
     // what it printed before it could, such as a start that failed.
-    const log = openSync(join(this.configDir, LAUNCH_LOG), "a", 0o600);
+    const file = join(this.configDir, LAUNCH_LOG);
+    rotate(file, LAUNCH_LOG_MAX_BYTES);
+    const log = openSync(file, "a", 0o600);
     try {
       const child = spawn(cmd[0] as string, cmd.slice(1), {
         detached: true,
