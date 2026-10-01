@@ -62,7 +62,7 @@ Every command takes `--json` and then prints one JSON answer, errors included. `
 
 A command that needs the app opens it in the background when it is not running. The exit codes are fixed: 0 ok, 3 nothing live, 64 usage, 69 unavailable, 70 software, 75 already recording, 77 permission, 124 timed out.
 
-When the app takes the connection but answers nothing for 3 s, it is hung. A command that changes something, `akou start` among them, then restarts it and runs, within about 15 s, and prints `akou was not answering; restarted it (N s)` on stderr. A command that only reads exits 69 saying akou is not answering; `--restart`, which every command takes, restarts it first. A call that is recording is never stopped this way: the command exits 69 and says how to restart akou by hand. See [akou does not answer](troubleshooting.md#akou-does-not-answer).
+When the app takes the connection but answers nothing for 3 s, it is hung. A command that changes something, `akou start` among them, then restarts it and runs, within about 15 s, and prints `akou was not answering; restarted it (N s)` on stderr. A command that only reads exits 69 saying akou is not answering; `--restart`, which every command takes, restarts it first. A call that is recording is never stopped this way: the command exits 69 and says how to restart akou by hand. `akou quit` returns once every process of the app is gone, the launcher and the helpers included, so a script can start akou again straight after. See [akou does not answer](troubleshooting.md#akou-does-not-answer).
 
 ## The local API
 

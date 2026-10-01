@@ -4,6 +4,7 @@
  * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
+import { processAlive } from "../../../core/log/writer.ts";
 import { finalText } from "../../asr/final-text.ts";
 import { shortModelName } from "../../asr/model-text.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN } from "../../asr/upgrade.ts";
@@ -22,6 +23,7 @@ import {
   ref,
   wall,
 } from "../context.ts";
+import { descendants, launcherOf, processTable, stopAll } from "../heal.ts";
 
 const start: Command = {
   name: "start",
@@ -413,6 +415,12 @@ const quit: Command = {
         "akou quit stops the app on this machine, and AKOU_URL points at a server, which it never stops; unset AKOU_URL to quit the local app",
       );
     }
+    // Every process that makes up the app, read before it starts to go: the app, the ElectroBun
+    // launcher above it and its helpers below (akou-m23).
+    const rt = ctx.client.runtime();
+    const rows = rt ? await processTable() : [];
+    const launcher = rt ? launcherOf(rows, rt.pid) : null;
+    const others = rt ? [...(launcher ? [launcher] : []), ...descendants(rows, rt.pid)] : [];
     let r: Awaited<ReturnType<typeof api>>;
     try {
       r = await api(ctx, "POST", "/quit", { launch: false });
@@ -430,12 +438,23 @@ const quit: Command = {
       return EXIT.ok;
     }
     if (r.status !== 202) return finish(ctx, r, () => "");
-    // Returns once the app is gone, so a script can start it again straight after.
+    // Returns once every process of the app is gone, so a script can start it again straight
+    // after: `runtime.json` goes before the process exits, and the launcher has outlived the app
+    // before (akou-m23).
     const deadline = performance.now() + 20_000;
-    while (ctx.client.runtime() && performance.now() < deadline) {
+    const appAlive = () => ctx.client.runtime() !== null || (!!rt && processAlive(rt.pid));
+    while (appAlive() && performance.now() < deadline) {
       await new Promise((res) => setTimeout(res, 50));
     }
-    const gone = ctx.client.runtime() === null;
+    let gone = !appAlive();
+    if (gone) {
+      // The launcher and the helpers end with the app; any still there a moment later are stopped.
+      const settle = performance.now() + 2000;
+      while (others.some(processAlive) && performance.now() < settle) {
+        await new Promise((res) => setTimeout(res, 50));
+      }
+      gone = (await stopAll(others.filter(processAlive))).length === 0;
+    }
     if (ctx.json) ctx.io.out(JSON.stringify({ ok: gone, running: !gone }));
     else if (gone) ctx.io.out("akou has quit");
     else ctx.io.err("akou: the app is still shutting down");

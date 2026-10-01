@@ -79,6 +79,8 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 The app also watches itself. When its own work stops for 10 s, it writes a line to `~/.config/akou/app.log`, and with no call recording it ends itself, so the next command starts a fresh one.
 
+To quit akou from a terminal, use `akou quit`: it stops a hung akou too, and returns once every akou process is gone. `kill` and `pkill -f akou` work on an akou that answers. `kill` on the launcher process alone does nothing.
+
 **Fix by hand.** When a call is recording and you want akou back before it ends, the message names akou's process: `kill -KILL` that number, then run the command again. The recording so far stays on disk and akou closes it at its next start. On macOS each restart leaves a few seconds of `sample` of the stuck process in `~/.config/akou/hangs/`; attach the newest one when you report the bug.
 
 ## Reporting a bug
