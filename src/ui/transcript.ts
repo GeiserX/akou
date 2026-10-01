@@ -37,7 +37,13 @@ export interface TranscriptDeps {
   hue(spk: string): number;
   play(lineId: string): void;
   speakerMenu(spk: string, anchor: HTMLElement): void;
-  fixWord(lineId: string, anchor: HTMLElement, selected: string): void;
+  /** `at`: where the selected word starts in the line as shown; `rect`: where to open next to. */
+  fixWord(
+    lineId: string,
+    anchor: HTMLElement,
+    selected: string,
+    near?: { at: number; rect: DOMRect },
+  ): void;
 }
 
 /** One transcript row. Everything from the line goes in as text. */
@@ -223,6 +229,7 @@ export class TranscriptPane {
 
   constructor(private readonly d: TranscriptDeps) {
     this.list.addEventListener("click", (e) => this.onClick(e));
+    this.list.addEventListener("dblclick", () => this.onDoubleClick());
     new FontKeys();
     const s = this.scroller;
     s.addEventListener("wheel", () => this.byHand(), { passive: true });
@@ -460,6 +467,32 @@ export class TranscriptPane {
       const sel = getSelection()?.toString().trim() ?? "";
       this.d.fixWord(id, t.closest(".fix") as HTMLElement, sel.length <= 60 ? sel : "");
     }
+  }
+
+  /**
+   * A double-click on a word of a committed line opens the fix next to that word, with it selected
+   * (WINDOW W4.9). The browser has already selected the word; a single click and a drag open
+   * nothing. The grey line still being spoken is outside this list, so it opens nothing either.
+   */
+  private onDoubleClick(): void {
+    const sel = getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    const range = sel.getRangeAt(0);
+    // The word is inside one line's text: its one text node holds both ends of the selection.
+    const node = range.startContainer;
+    const text = node.parentElement;
+    if (node.nodeType !== Node.TEXT_NODE || range.endContainer !== node) return;
+    if (!text?.classList.contains("text")) return;
+    const row = text.closest(".row") as HTMLElement | null;
+    const id = row?.dataset.id;
+    if (!row || !id || !this.list.contains(row)) return;
+    const raw = sel.toString();
+    const word = raw.trim();
+    // A word, not a mark: WebKit selects a lone "," or "?" on a double-click.
+    if (!/[\p{L}\p{N}]/u.test(word) || word.length > 60) return;
+    const at = range.startOffset + (raw.length - raw.trimStart().length);
+    const anchor = row.querySelector(".fix") as HTMLElement | null;
+    this.d.fixWord(id, anchor ?? text, word, { at, rect: range.getBoundingClientRect() });
   }
 
   /** The grey line still being spoken; it expires 3 s after its last update. */

@@ -3085,7 +3085,7 @@
         "tags": [
           "callVocab"
         ],
-        "description": "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, the words it put into a vocabulary file taken out again, and the terms it learned taken back (a `vocab.learned` revision with `term: null`). The log keeps every event.",
+        "description": "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, the words it put into a vocabulary file taken out again, the terms it learned taken back (a `vocab.learned` revision with `term: null`), and a term it renamed named back. The log keeps every event.",
         "parameters": [
           {
             "name": "id",
@@ -3122,8 +3122,67 @@
                     "items": {
                       "type": "string"
                     }
+                  },
+                  "renames": {}
+                },
+                "additionalProperties": false
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          },
+          "default": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-akou-modes": [
+          "app"
+        ],
+        "x-akou-access": "admin"
+      }
+    },
+    "/v1/calls/{id}/fix/forget": {
+      "post": {
+        "operationId": "callVocab.forget",
+        "tags": [
+          "callVocab"
+        ],
+        "description": "Forget a term a fix learned, at any time after the fix: `learned` is its `vocab.learned` id. The call's entries it came with are retracted, so its lines read as heard again, and it leaves the vocabulary file it was learned into (the whole entry when a fix wrote it, else only the heard forms the fix added). A `vocab.learned` revision with `term: null` tells the agents following the call.",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "required": true,
+            "description": "The call: its id, or `live`. GET routes, the questions and the post-call actions also take `last`.",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "learned": {
+                    "type": "string"
                   }
                 },
+                "required": [
+                  "learned"
+                ],
                 "additionalProperties": false
               }
             }

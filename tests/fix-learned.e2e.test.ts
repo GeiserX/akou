@@ -1,9 +1,10 @@
 /**
- * Telling the agent what a fix taught akou, over the API (docs/DESIGN.md section 5.4,
- * docs/ux/design-explorations/fix-a-word-on-the-line.md): a headless app on a seeded, ended call. A
- * fix that learns a term writes one `vocab.learned` event; Undo and the heard word written back take
- * it back; a read from a cursor carries `learned` only when a fix changed something after it; a
- * context pack lists the five newest. No test runs a real model.
+ * Telling the agent what a fix taught akou, and renaming or forgetting a learned term, over the API
+ * (docs/DESIGN.md section 5.4, docs/ux/design-explorations/fix-a-word-on-the-line.md): a headless app
+ * on a seeded, ended call. A fix that learns a term writes one `vocab.learned` event; Undo, Forget and
+ * the heard word written back take it back; a new spelling over a learned word renames it instead of
+ * adding a second term; a read from a cursor carries `learned` only when a fix changed something
+ * after it; a context pack lists the five newest. No test runs a real model.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
@@ -14,6 +15,8 @@ import { type AppRig, appRig } from "./api-helpers.ts";
 import { LogBuilder, T0, tempDir } from "./helpers.ts";
 
 const CALL = "01J8Z6Q4M2VX0K7B3D4E5F6G7H";
+/** A second, earlier-ended call in the same workspace, whose fix learns into the same file. */
+const CALL2 = "01J8Z6Q4M2VX0K7B3D4E5F6G7J";
 const LONG = 30_000;
 
 function seed(home: string): void {
@@ -28,6 +31,7 @@ function seed(home: string): void {
   line("l000004", 6, "ask mark about it");
   line("l000005", 8, "then mark said yes");
   line("l000006", 9, "we moved to vercell");
+  line("l000007", 10, "then marc us agreed");
   b.partEnded(1, "stop", 10);
   b.add({ type: "call.ended", reason: "stop" });
   const dir = join(home, "Recordings", "akou", "work", "2026-09-23_153612_f6g7h");
@@ -35,6 +39,26 @@ function seed(home: string): void {
   writeFileSync(
     join(dir, "events.jsonl"),
     `${b.events.map((e) => JSON.stringify(e)).join("\n")}\n`,
+  );
+  const b2 = new LogBuilder();
+  b2.created({ id: CALL2 });
+  b2.partStarted(1, T0);
+  b2.seg({
+    id: "l000001",
+    ch: "call",
+    spk: "c1",
+    a0: 1,
+    a1: 2,
+    w0: T0 + 1000,
+    text: "we moved to ver sell last week",
+  });
+  b2.partEnded(1, "stop", 10);
+  b2.add({ type: "call.ended", reason: "stop" });
+  const dir2 = join(home, "Recordings", "akou", "work", "2026-09-23_160000_f6g7j");
+  mkdirSync(join(dir2, "audio"), { recursive: true });
+  writeFileSync(
+    join(dir2, "events.jsonl"),
+    `${b2.events.map((e) => JSON.stringify(e)).join("\n")}\n`,
   );
 }
 
@@ -133,7 +157,7 @@ describe("the vocab.learned event", () => {
   );
 
   test(
-    "the same word fixed on one more line is told once",
+    "the same word fixed on one more line is told once, and Forget takes both lines back",
     async () => {
       const rig = await rigWith();
       // `mark` is a common word: each fix stays on its line, the term itself is learned once.
@@ -142,6 +166,9 @@ describe("the vocab.learned event", () => {
       expect((await texts(rig)).l000005).toBe("then Marc said yes");
       const ks = await learnedEvents(rig);
       expect(ks.map((k) => [k.term, k.heard])).toEqual([["Marc", ["mark"]]]);
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: ks[0]?.id });
+      const t = await texts(rig);
+      expect([t.l000004, t.l000005]).toEqual(["ask mark about it", "then mark said yes"]);
     },
     LONG,
   );
@@ -198,6 +225,24 @@ describe("the vocab.learned event", () => {
   );
 
   test(
+    "writing back the first fix's word keeps the term while a later fix of it still reads it",
+    async () => {
+      const rig = await rigWith();
+      // A stated word for the whole call, then the common word `mark` fixed on one line: that
+      // second entry is no news, so it writes no notice of its own.
+      await rig.api("POST", `/calls/${CALL}/fix`, { term: "Marc", heard: ["marc us"] });
+      await fixLine(rig, "l000004", "ask Marc about it");
+      expect((await learnedEvents(rig)).map((k) => k.term)).toEqual(["Marc"]);
+      const r = await fixLine(rig, "l000007", "then marc us agreed");
+      expect(r.body.reverted).toEqual([{ heard: "marc us", term: "Marc" }]);
+      // l000004 still reads Marc, so the agent is not told the word was taken back.
+      expect((await texts(rig)).l000004).toBe("ask Marc about it");
+      expect((await learnedEvents(rig)).map((k) => k.term)).toEqual(["Marc"]);
+    },
+    LONG,
+  );
+
+  test(
     "an agent's own correction is told apart from the user's by `by`",
     async () => {
       const rig = await rigWith();
@@ -208,6 +253,293 @@ describe("the vocab.learned event", () => {
         { "x-akou-client": "claude" },
       );
       expect((await learnedEvents(rig))[0]).toMatchObject({ term: "Vercel", by: "agent:claude" });
+    },
+    LONG,
+  );
+});
+
+describe("renaming a learned term", () => {
+  test(
+    "a new spelling over a learned word renames it in the call and the file, with no second term",
+    async () => {
+      const rig = await rigWith();
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const r = await fixLine(rig, "l000001", "deploy to Vercel.com today");
+      expect(r.status).toBe(200);
+      expect(r.body.pairs).toEqual([
+        expect.objectContaining({ heard: "versal", term: "Vercel.com", renamed: "Vercel" }),
+      ]);
+      expect((await texts(rig)).l000002).toBe("Vercel.com is down again");
+      // The call holds one entry for the heard form, renamed: a revision, not a second add.
+      const call = (await rig.api("GET", `/calls/${CALL}/vocab`)).body.callVocab as {
+        term: string;
+        heard: string[];
+      }[];
+      expect(call.filter((v) => v.heard.includes("versal")).map((v) => v.term)).toEqual([
+        "Vercel.com",
+      ]);
+      // The file's entry takes the new term and keeps its heard forms.
+      const file = await words(rig);
+      expect(file.map((e) => e.term)).not.toContain("Vercel");
+      expect(file).toContainEqual(
+        expect.objectContaining({ term: "Vercel.com", heard: ["versal"] }),
+      );
+      const ks = await learnedEvents(rig);
+      expect(ks.map((k) => [k.rev, k.term, k.was])).toEqual([
+        [1, "Vercel", undefined],
+        [2, "Vercel.com", "Vercel"],
+      ]);
+      expect(new Set(ks.map((k) => k.id)).size).toBe(1);
+      // Undo names it back everywhere.
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect((await texts(rig)).l000002).toBe("Vercel is down again");
+      expect((await words(rig)).map((e) => e.term)).toContain("Vercel");
+      expect((await words(rig)).map((e) => e.term)).not.toContain("Vercel.com");
+      expect((await learnedEvents(rig)).at(-1)).toMatchObject({
+        rev: 3,
+        term: "Vercel",
+        was: "Vercel.com",
+      });
+    },
+    LONG,
+  );
+});
+
+describe("renaming or forgetting when the file is in the way", () => {
+  /** Breaks the workspace's vocabulary file so it no longer parses. */
+  async function breakFile(rig: AppRig): Promise<void> {
+    const files = (await rig.api("GET", "/vocab?workspace=work")).body.files as {
+      scope: string;
+      path: string;
+    }[];
+    const path = files.find((f) => f.scope === "workspace")?.path as string;
+    writeFileSync(path, "entries:\n  - term: [unclosed\n");
+  }
+
+  test(
+    "a rename onto a term the file already holds leaves the file alone, so Undo loses nothing",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", "/vocab", { term: "Vercel.com", heard: ["vercom"], workspace: "work" });
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const r = await fixLine(rig, "l000001", "deploy to Vercel.com today");
+      expect(r.body.warnings).toEqual([expect.stringContaining("Vercel.com was not renamed")]);
+      // The call reads the new spelling; the file keeps both entries as they were.
+      expect((await texts(rig)).l000002).toBe("Vercel.com is down again");
+      expect(await words(rig)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ term: "Vercel", heard: ["versal"] }),
+          expect.objectContaining({ term: "Vercel.com", heard: ["vercom"] }),
+        ]),
+      );
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect(await words(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel.com", heard: ["vercom"] }),
+      );
+    },
+    LONG,
+  );
+
+  test(
+    "a file that no longer parses does not stop Undo of a rename, or Forget",
+    async () => {
+      const rig = await rigWith();
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const r = await fixLine(rig, "l000001", "deploy to Vercel.com today");
+      await breakFile(rig);
+      const u = await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect(u.status).toBe(200);
+      expect((await learnedEvents(rig)).at(-1)).toMatchObject({
+        term: "Vercel",
+        was: "Vercel.com",
+      });
+      const [k] = await learnedEvents(rig);
+      const f = await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id });
+      expect(f.status).toBe(200);
+      expect(f.body.forgotten).toMatchObject({ term: "Vercel", file: false });
+      expect(f.body.warnings).toEqual([expect.stringContaining("was not taken out of the file")]);
+      expect((await learnedEvents(rig)).at(-1)).toMatchObject({ term: null });
+      // The call's own entries are gone; the lines read whatever the file last held.
+      const call = (await rig.api("GET", `/calls/${CALL}/vocab`)).body.callVocab as unknown[];
+      expect(call).toEqual([]);
+    },
+    LONG,
+  );
+});
+
+describe("a file entry another call or a person shares", () => {
+  test(
+    "Forget in one call keeps what another call's fix learned into the same entry",
+    async () => {
+      const rig = await rigWith();
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const r = await rig.api("POST", `/calls/${CALL2}/fix`, {
+        line: "l000001",
+        text: "we moved to Vercel last week",
+      });
+      expect(r.status).toBe(200);
+      expect(await words(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: ["versal", "ver sell"] }),
+      );
+      const evs = (await rig.api("GET", `/calls/${CALL2}/events`)).body.events as Learned[];
+      const k = evs.find((e) => e.type === "vocab.learned");
+      const f = await rig.api("POST", `/calls/${CALL2}/fix/forget`, { learned: k?.id });
+      expect(f.body.forgotten).toMatchObject({ term: "Vercel", file: true });
+      // The other call's word stays for later calls.
+      expect(await words(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: ["versal"] }),
+      );
+    },
+    LONG,
+  );
+
+  test(
+    "a rename moves only this term's heard form out of an entry a person wrote, and Undo puts it back",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", "/vocab", { term: "Vercel", heard: ["vercell"], workspace: "work" });
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      expect(await words(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: ["vercell", "versal"] }),
+      );
+      const r = await fixLine(rig, "l000001", "deploy to Vercel.com today");
+      expect(r.body.pairs[0]).toMatchObject({ term: "Vercel.com", renamed: "Vercel" });
+      expect((await texts(rig)).l000002).toBe("Vercel.com is down again");
+      const after = await words(rig);
+      expect(after).toContainEqual(expect.objectContaining({ term: "Vercel", heard: ["vercell"] }));
+      expect(after).toContainEqual(
+        expect.objectContaining({ term: "Vercel.com", heard: ["versal"] }),
+      );
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      const back = await words(rig);
+      expect(back.map((e) => e.term)).not.toContain("Vercel.com");
+      expect(back).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: ["vercell", "versal"] }),
+      );
+    },
+    LONG,
+  );
+});
+
+describe("a file entry with no heard form", () => {
+  /** Call A learns `Marc` for the common word `mark`: the file holds `Marc` with no heard form. */
+  async function marcInBothCalls(rig: AppRig) {
+    const a = await rig.api("POST", `/calls/${CALL2}/fix`, { term: "Marc", heard: [] });
+    expect(a.body.undo.words).toEqual([expect.objectContaining({ term: "Marc", created: true })]);
+    // Call B fixes its own `mark`: the entry is there, so the file does not change.
+    const b = await fixLine(rig, "l000004", "ask Marc about it");
+    expect(b.body.undo.words).toEqual([]);
+    const evs = async (call: string) =>
+      ((await rig.api("GET", `/calls/${call}/events`)).body.events as Learned[]).filter(
+        (e) => e.type === "vocab.learned",
+      );
+    return { inA: (await evs(CALL2))[0], inB: (await evs(CALL))[0] };
+  }
+
+  test(
+    "Forget in the call that did not write it keeps it; in the call that did, removes it",
+    async () => {
+      const rig = await rigWith();
+      const { inA, inB } = await marcInBothCalls(rig);
+      expect(inA).toMatchObject({ term: "Marc", created: true });
+      expect(inB).toMatchObject({ term: "Marc", created: false });
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: inB?.id });
+      expect(await words(rig)).toContainEqual(expect.objectContaining({ term: "Marc", heard: [] }));
+      await rig.api("POST", `/calls/${CALL2}/fix/forget`, { learned: inA?.id });
+      expect((await words(rig)).map((e) => e.term)).not.toContain("Marc");
+    },
+    LONG,
+  );
+});
+
+describe("renaming a common word's fix", () => {
+  const callVocab = async (rig: AppRig) =>
+    (await rig.api("GET", `/calls/${CALL}/vocab`)).body.callVocab as {
+      id: string;
+      term: string;
+      heard: string[];
+      segs?: string[];
+    }[];
+
+  test(
+    "renames every call entry the term came with, and Undo names each one back",
+    async () => {
+      const rig = await rigWith();
+      // `mark` is a common word: the fix writes a line-scoped entry and a decode-only one.
+      await fixLine(rig, "l000004", "ask Marc about it");
+      expect((await callVocab(rig)).map((v) => v.term)).toEqual(["Marc", "Marc"]);
+      const r = await fixLine(rig, "l000004", "ask Marco about it");
+      expect(r.body.pairs[0]).toMatchObject({ term: "Marco", renamed: "Marc" });
+      // Neither entry still decodes or matches the old spelling.
+      expect((await callVocab(rig)).map((v) => v.term)).toEqual(["Marco", "Marco"]);
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect((await callVocab(rig)).map((v) => v.term)).toEqual(["Marc", "Marc"]);
+    },
+    LONG,
+  );
+
+  test(
+    "a rename the file refuses leaves the learned term owning nothing, so Forget keeps the other call's entry",
+    async () => {
+      const rig = await rigWith();
+      // Another call taught `Marco` with no heard form: the file holds it as a correction.
+      await rig.api("POST", `/calls/${CALL2}/fix`, { term: "Marco", heard: [] });
+      await fixLine(rig, "l000004", "ask Marc about it");
+      const r = await fixLine(rig, "l000004", "ask Marco about it");
+      expect(r.body.warnings).toEqual([expect.stringContaining("Marco was not renamed")]);
+      const last = (await learnedEvents(rig)).at(-1);
+      expect(last).toMatchObject({ term: "Marco", was: "Marc", created: false });
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: last?.id });
+      // The other call's word stays; this call's old `Marc` entry stays under its own term.
+      const file = (await words(rig)).map((e) => e.term);
+      expect(file).toContain("Marco");
+      expect(file).toContain("Marc");
+    },
+    LONG,
+  );
+});
+
+describe("forgetting a learned term", () => {
+  test(
+    "Forget takes it out of the call and out of the file, at any time after the fix",
+    async () => {
+      const rig = await rigWith();
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      await fixLine(rig, "l000003", "there plan works");
+      const [k] = await learnedEvents(rig);
+      const f = await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id });
+      expect(f.status).toBe(200);
+      expect(f.body.forgotten).toEqual({ term: "Vercel", vocab: 1, file: true });
+      const t = await texts(rig);
+      expect(t.l000001).toBe("deploy to versal today");
+      expect(t.l000002).toBe("versal is down again");
+      // A rewording is no vocabulary and stays.
+      expect(t.l000003).toBe("there plan works");
+      expect((await words(rig)).map((e) => e.term)).not.toContain("Vercel");
+      expect((await learnedEvents(rig)).map((x) => [x.rev, x.term])).toEqual([
+        [1, "Vercel"],
+        [2, null],
+      ]);
+      // Gone: a second Forget finds nothing.
+      expect((await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id })).status).toBe(
+        404,
+      );
+      expect((await rig.api("POST", `/calls/${CALL}/fix/forget`, {})).status).toBe(400);
+    },
+    LONG,
+  );
+
+  test(
+    "an entry the user wrote before keeps itself and loses only the heard form the fix added",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", "/vocab", { term: "Vercel", heard: ["vercell"], workspace: "work" });
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const [k] = await learnedEvents(rig);
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id });
+      expect(await words(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel", heard: ["vercell"] }),
+      );
     },
     LONG,
   );

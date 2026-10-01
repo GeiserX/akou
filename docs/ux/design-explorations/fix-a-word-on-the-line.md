@@ -115,7 +115,7 @@ The `vocab.add` already in the log says the call reads the word. What it cannot 
 The `akou_read` text adds one line per item, built the way `unreviewedNote` builds its line (`src/main/mcp/server.ts:1296`, `src/main/mcp/server.ts:554`):
 
 ```
-The user taught akou "Vercel" (heard "versal") at 15:41:07: 4 lines now read Vercel, lines you read before included. Spell it that way.
+The user taught akou "Vercel" (heard "versal") at 15:41:07: 4 lines now read Vercel, including any you read before. Spell it that way.
 The user took back "Hetzner" at 15:43:10: those lines read "hetzna" again.
 ```
 

@@ -303,6 +303,11 @@ export interface VocabLearned extends Envelope {
   vocab?: string[];
   /** On a rename: the term it had before. */
   was?: string;
+  /**
+   * This fix wrote the term's entry in the vocabulary file, rather than adding a heard form to one
+   * that was there. Forget removes an entry with no heard form left only when this is true.
+   */
+  created?: boolean;
 }
 
 export type ProposalStatus = "proposed" | "accepted" | "rejected";
@@ -616,6 +621,7 @@ const SPECS: { [T in EventType]: Spec } = {
     kept: opt(["workspace", "global", "call"]),
     vocab: opt("string[]"),
     was: opt("string"),
+    created: opt("boolean"),
   },
   "vocab.propose": {
     id: req("string"),
