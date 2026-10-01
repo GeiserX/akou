@@ -94,8 +94,11 @@ export interface FixedWord {
 
 /** A term a fix renamed, so Undo can name it back. */
 export interface FixRename {
-  /** The call's entry that was renamed. */
-  vocab: string;
+  /**
+   * The call's entries that were renamed: the one the word read from, and every other entry the
+   * learned term came with under the old term (the decode-only one of a common word's fix).
+   */
+  vocab: string[];
   /** The `vocab.learned` id that says so. */
   learned: string;
   from: string;
@@ -495,23 +498,39 @@ export function fixRoutes(r: Router<ApiApp>): void {
         if (target) {
           // A new spelling over a word the call already corrects: that term is renamed, in the
           // call and in the file it was learned into, instead of a second term being added.
-          await c.app.write(id, (cc) => {
-            const cur = cc.view.callVocabulary().find((v) => v.id === target.vocab);
-            if (!cur)
-              throw new HttpError(409, "line_changed", "the word changed while it was fixed");
-            return {
-              type: "vocab.add",
-              id: cur.id,
-              rev: cur.rev + 1,
-              term: p.term,
-              heard: cur.heard,
-              by: c.by,
-              ...(cur.segs ? { segs: cur.segs } : {}),
-              ...(cur.nth !== undefined ? { nth: cur.nth } : {}),
-              decode: cur.decode,
-            };
-          });
           const prev = view.learnedTerms().find((x) => x.vocab.includes(target.vocab));
+          const renamed: string[] = [];
+          for (const vid of new Set([target.vocab, ...(prev?.vocab ?? [])])) {
+            const e = await c.app
+              .write(id, (cc) => {
+                const cur = cc.view
+                  .callVocabulary()
+                  .find((v) => v.id === vid && v.term === target.from);
+                if (!cur) {
+                  if (vid === target.vocab) {
+                    throw new HttpError(409, "line_changed", "the word changed while it was fixed");
+                  }
+                  throw new HttpError(404, "not_found", vid);
+                }
+                return {
+                  type: "vocab.add",
+                  id: cur.id,
+                  rev: cur.rev + 1,
+                  term: p.term,
+                  heard: cur.heard,
+                  by: c.by,
+                  ...(cur.segs ? { segs: cur.segs } : {}),
+                  ...(cur.nth !== undefined ? { nth: cur.nth } : {}),
+                  decode: cur.decode,
+                };
+              })
+              .catch((err) => {
+                // Another entry of the term that is gone or reads another term stays as it is.
+                if (err instanceof HttpError && err.status === 404) return null;
+                throw err;
+              });
+            if (e) renamed.push(vid);
+          }
           const kept = prev?.kept ?? "call";
           let file = false;
           if (kept !== "call") {
@@ -528,7 +547,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
             }
           }
           const rename: FixRename = {
-            vocab: target.vocab,
+            vocab: renamed,
             learned: prev?.id ?? "",
             from: target.from,
             to: p.term,
@@ -543,8 +562,10 @@ export function fixRoutes(r: Router<ApiApp>): void {
             heard: prev?.heard ?? [p.heard],
             vocab: prev?.vocab ?? [target.vocab],
             kept,
-            // A renamed own entry, or the entry the move wrote, is this fix's own from now on.
-            created: file || prev?.created === true,
+            // A renamed own entry, or the entry the move wrote, is this fix's own from now on. A
+            // refused rename (the file already holds the new term) leaves the old entry under the
+            // old term, and the learned term owns no entry under the new one.
+            created: file,
             was: target.from,
             ...(prev ? { prev: prev.id } : {}),
             rename,
@@ -716,35 +737,42 @@ export function fixRoutes(r: Router<ApiApp>): void {
       let words = 0;
       let learned = 0;
       for (const r of b.renames ?? []) {
-        if (
-          typeof r?.vocab !== "string" ||
-          typeof r.from !== "string" ||
-          typeof r.to !== "string"
-        ) {
+        // `vocab` is every entry the rename revised; an older answer named one.
+        const ids =
+          typeof r?.vocab === "string"
+            ? [r.vocab]
+            : Array.isArray(r?.vocab)
+              ? r.vocab.filter((v: unknown) => typeof v === "string")
+              : [];
+        if (ids.length === 0 || typeof r.from !== "string" || typeof r.to !== "string") {
           continue;
         }
-        const e = await c.app
-          .write(id, (cc) => {
-            const cur = cc.view.callVocabulary().find((x) => x.id === r.vocab && x.term === r.to);
-            if (!cur) throw new HttpError(404, "not_found", r.vocab);
-            return {
-              type: "vocab.add",
-              id: cur.id,
-              rev: cur.rev + 1,
-              term: r.from,
-              heard: cur.heard,
-              by: c.by,
-              ...(cur.segs ? { segs: cur.segs } : {}),
-              ...(cur.nth !== undefined ? { nth: cur.nth } : {}),
-              decode: cur.decode,
-            };
-          })
-          .catch((err) => {
-            if (err instanceof HttpError && err.status === 404) return null;
-            throw err;
-          });
-        if (!e) continue;
-        vocab++;
+        let named = 0;
+        for (const vid of ids) {
+          const e = await c.app
+            .write(id, (cc) => {
+              const cur = cc.view.callVocabulary().find((x) => x.id === vid && x.term === r.to);
+              if (!cur) throw new HttpError(404, "not_found", vid);
+              return {
+                type: "vocab.add",
+                id: cur.id,
+                rev: cur.rev + 1,
+                term: r.from,
+                heard: cur.heard,
+                by: c.by,
+                ...(cur.segs ? { segs: cur.segs } : {}),
+                ...(cur.nth !== undefined ? { nth: cur.nth } : {}),
+                decode: cur.decode,
+              };
+            })
+            .catch((err) => {
+              if (err instanceof HttpError && err.status === 404) return null;
+              throw err;
+            });
+          if (e) named++;
+        }
+        if (named === 0) continue;
+        vocab += named;
         const ws =
           typeof r.workspace === "string" && validWorkspace(r.workspace) ? r.workspace : undefined;
         // A file that cannot be edited must not stop the rest of the Undo.

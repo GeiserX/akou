@@ -452,6 +452,53 @@ describe("a file entry with no heard form", () => {
   );
 });
 
+describe("renaming a common word's fix", () => {
+  const callVocab = async (rig: AppRig) =>
+    (await rig.api("GET", `/calls/${CALL}/vocab`)).body.callVocab as {
+      id: string;
+      term: string;
+      heard: string[];
+      segs?: string[];
+    }[];
+
+  test(
+    "renames every call entry the term came with, and Undo names each one back",
+    async () => {
+      const rig = await rigWith();
+      // `mark` is a common word: the fix writes a line-scoped entry and a decode-only one.
+      await fixLine(rig, "l000004", "ask Marc about it");
+      expect((await callVocab(rig)).map((v) => v.term)).toEqual(["Marc", "Marc"]);
+      const r = await fixLine(rig, "l000004", "ask Marco about it");
+      expect(r.body.pairs[0]).toMatchObject({ term: "Marco", renamed: "Marc" });
+      // Neither entry still decodes or matches the old spelling.
+      expect((await callVocab(rig)).map((v) => v.term)).toEqual(["Marco", "Marco"]);
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect((await callVocab(rig)).map((v) => v.term)).toEqual(["Marc", "Marc"]);
+    },
+    LONG,
+  );
+
+  test(
+    "a rename the file refuses leaves the learned term owning nothing, so Forget keeps the other call's entry",
+    async () => {
+      const rig = await rigWith();
+      // Another call taught `Marco` with no heard form: the file holds it as a correction.
+      await rig.api("POST", `/calls/${CALL2}/fix`, { term: "Marco", heard: [] });
+      await fixLine(rig, "l000004", "ask Marc about it");
+      const r = await fixLine(rig, "l000004", "ask Marco about it");
+      expect(r.body.warnings).toEqual([expect.stringContaining("Marco was not renamed")]);
+      const last = (await learnedEvents(rig)).at(-1);
+      expect(last).toMatchObject({ term: "Marco", was: "Marc", created: false });
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: last?.id });
+      // The other call's word stays; this call's old `Marc` entry stays under its own term.
+      const file = (await words(rig)).map((e) => e.term);
+      expect(file).toContain("Marco");
+      expect(file).toContain("Marc");
+    },
+    LONG,
+  );
+});
+
 describe("forgetting a learned term", () => {
   test(
     "Forget takes it out of the call and out of the file, at any time after the fix",
