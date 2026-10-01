@@ -35,6 +35,8 @@ const saved = (b: import("../helpers.ts").LogBuilder) => {
   b.seg({ id: "l000001", ch: "call", spk: "c1", w0: T0 + 1000, text: "the build and the build" });
   b.seg({ id: "l000002", ch: "call", spk: "c2", w0: T0 + 3000, text: "deploy to versal today" });
   b.seg({ id: "l000003", ch: "call", spk: "c1", w0: T0 + 6000, text: "is versal up" });
+  b.seg({ id: "l000004", ch: "call", spk: "c2", w0: T0 + 8000, text: "yes, it is" });
+  b.seg({ id: "l000005", ch: "call", spk: "c1", w0: T0 + 10000, text: "Vercel was heard right" });
   b.partEnded(1, "stop", 12);
   b.add({ type: "call.ended", reason: "stop" });
 };
@@ -70,6 +72,7 @@ async function wordAt(page: Page, line: string, word: string, nth = 0) {
         x: b.left + b.width / 2,
         y: b.top + b.height / 2,
         left: b.left,
+        top: b.top,
         bottom: b.bottom,
         at,
       };
@@ -187,6 +190,81 @@ describe("double-click a word to fix it (W4.9)", () => {
   );
 
   test(
+    "punctuation opens nothing, in either engine",
+    async () => {
+      let id = "";
+      await withRig({ seed: (home) => (id = seedCall(home, saved).id) }, async (rig) => {
+        const page = await rig.open(id);
+        await page.waitForSelector(row("l000004"));
+        // What WebKit does on a double-click on a mark: the mark alone selected, then dblclick.
+        const dblOn = (mark: string) =>
+          page.evaluate(
+            ([sel, m]) => {
+              const el = document.querySelector(`${sel} .text`) as HTMLElement;
+              const node = el.firstChild as Text;
+              const at = node.data.indexOf(m as string);
+              const r = document.createRange();
+              r.setStart(node, at);
+              r.setEnd(node, at + (m as string).length);
+              const s = getSelection() as Selection;
+              s.removeAllRanges();
+              s.addRange(r);
+              el.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+            },
+            [row("l000004"), mark] as const,
+          );
+        await dblOn(",");
+        await page.waitForTimeout(300);
+        expect(await popoverOpen(page)).toBe(false);
+        // Positive control: the same way on a word opens it.
+        await dblOn("yes");
+        await page.waitForSelector("#popover:not([hidden])");
+      });
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "on the newest line at the window's bottom edge, the popover opens above the word, inside the window",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir)] }, async (rig) => {
+        const id = await rig.startCall();
+        const page = await rig.open(id);
+        await page.setViewportSize({ width: 1024, height: 700 });
+        await until(
+          async () => (await page.locator("#state").textContent()) === "rec",
+          5000,
+          "rec",
+        );
+        const now = Date.now();
+        for (let i = 1; i <= 30; i++) {
+          const lid = `l${String(i).padStart(6, "0")}`;
+          await rig.write(
+            id,
+            seg(lid, `line number ${i} of the call`, { w0: now - (40 - i) * 1000 }),
+          );
+        }
+        await page.waitForSelector(row("l000030"));
+        await page.waitForTimeout(300);
+        const w = await doubleClick(page, "l000030", "number");
+        await page.waitForSelector("#popover:not([hidden])");
+        const box = (await page.locator("#popover").boundingBox()) as {
+          y: number;
+          height: number;
+        };
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.y + box.height).toBeLessThanOrEqual(700);
+        // The clicked word stays visible: the popover ends above it.
+        expect(box.y + box.height).toBeLessThanOrEqual(w.top);
+        expect(await selection(page)).toBe("number");
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "a final line opens it too",
     async () => {
       let id = "";
@@ -237,6 +315,14 @@ describe("a word a fix learned", () => {
           'Vercel, heard "versal", learned from a fix',
         );
         expect(await page.locator("#popover .fix-learned button").textContent()).toBe("Forget");
+        // A line where the word was heard right has no correction, so no row.
+        await page.keyboard.press("Escape");
+        await doubleClick(page, "l000005", "Vercel");
+        await page.waitForSelector("#popover:not([hidden])");
+        expect(await page.locator("#popover .fix-learned").count()).toBe(0);
+        await page.keyboard.press("Escape");
+        await doubleClick(page, "l000003", "Vercel");
+        await page.waitForSelector("#popover .fix-learned");
         expect(await selection(page)).toBe("Vercel");
         // The field has the keys, not Forget: Enter must never forget the word.
         expect(await page.evaluate(() => document.activeElement?.className)).toBe("fix-line");

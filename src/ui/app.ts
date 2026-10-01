@@ -1298,7 +1298,11 @@ class App {
     const r = anchor instanceof HTMLElement ? anchor.getBoundingClientRect() : anchor.at;
     if (!(anchor instanceof HTMLElement)) anchor = anchor.el;
     pop.style.left = `${Math.max(8, Math.min(innerWidth - 340, r.left))}px`;
-    pop.style.top = `${Math.min(innerHeight - 40, r.bottom + 6)}px`;
+    // Under the anchor, or above it when it does not fit below: the newest line sits at the
+    // window's bottom edge, and the popover never covers what was clicked.
+    const below = r.bottom + 6;
+    const fitsBelow = below + pop.offsetHeight <= innerHeight - 8;
+    pop.style.top = `${fitsBelow ? below : Math.max(8, r.top - 6 - pop.offsetHeight)}px`;
     this.popoverFrom = anchor;
     (pop.querySelector("input, select, button") as HTMLElement | null)?.focus();
   }
@@ -1461,7 +1465,7 @@ class App {
       h("button", { type: "submit", class: "go" }, "Fix"),
     );
     // A word that reads corrected by a term a fix learned: say so, and offer to forget it.
-    const learned = selected ? this.learnedFor(selected, shown) : undefined;
+    const learned = selected ? this.learnedFor(selected, lineId) : undefined;
     const known = learned
       ? [
           h(
@@ -1502,16 +1506,19 @@ class App {
   }
 
   /** The term a fix learned that this word of the line belongs to, if any. */
-  private learnedFor(word: string, line: string): LearnedTerm | undefined {
+  private learnedFor(word: string, lineId: string): LearnedTerm | undefined {
     const folded = tokenize(word).map((t) => t.folded);
-    if (folded.length === 0) return undefined;
-    const inLine = new Set(tokenize(line).map((t) => t.folded));
-    return this.view()
-      ?.learnedTerms()
-      .findLast((l) => {
-        const words = tokenize(l.term).map((t) => t.folded);
-        return folded.every((w) => words.includes(w)) && words.every((w) => inLine.has(w));
-      });
+    const v = this.view();
+    if (folded.length === 0 || !v) return undefined;
+    // Only where this call's correction gives the term on this line: a line where the word was
+    // heard right, or a term from an earlier call's file, has no row.
+    const corrected = new Set(
+      (v.resolve(lineId)?.corrections ?? []).filter((c) => c.scope === "call").map((c) => c.term),
+    );
+    return v.learnedTerms().findLast((l) => {
+      const words = tokenize(l.term).map((t) => t.folded);
+      return corrected.has(l.term) && folded.every((w) => words.includes(w));
+    });
   }
 
   /** Forget a learned term: out of the call and out of the file it went into. */

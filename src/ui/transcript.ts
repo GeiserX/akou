@@ -488,7 +488,8 @@ export class TranscriptPane {
     if (!row || !id || !this.list.contains(row)) return;
     const raw = sel.toString();
     const word = raw.trim();
-    if (word === "" || word.length > 60) return;
+    // A word, not a mark: WebKit selects a lone "," or "?" on a double-click.
+    if (!/[\p{L}\p{N}]/u.test(word) || word.length > 60) return;
     const at = range.startOffset + (raw.length - raw.trimStart().length);
     const anchor = row.querySelector(".fix") as HTMLElement | null;
     this.d.fixWord(id, anchor ?? text, word, { at, rect: range.getBoundingClientRect() });

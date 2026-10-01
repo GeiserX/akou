@@ -100,6 +100,8 @@ export interface FixRename {
   learned: string;
   from: string;
   to: string;
+  /** The heard forms of the renamed term: in a shared file entry, only these moved. */
+  heard: string[];
   workspace?: string;
   /** The vocabulary file's entry was renamed too. */
   file: boolean;
@@ -152,30 +154,75 @@ async function retractLearned(
 }
 
 /**
- * Renames a term in a vocabulary file, keeping its heard forms. Answers whether the file changed.
- * A file that already holds the new term is left alone (409): merging the two would lose the other
- * entry for good on Undo, which has nothing to restore it from.
+ * Whether a file entry is this fix's own: written by a fix, and holding no heard form but the ones
+ * this learned term carries. An entry a person wrote, or one another call's fix added forms to, is
+ * shared, and a rename or a Forget touches only this term's heard forms in it.
+ */
+function ownEntry(e: { source: string; heard: readonly string[] }, heard: readonly string[]) {
+  return (
+    e.source === "correction" && e.heard.every((h) => heard.some((x) => termKey(x) === termKey(h)))
+  );
+}
+
+/**
+ * Renames a learned term in a vocabulary file. An entry of this fix's own takes the new term and
+ * keeps its heard forms. A shared entry keeps its term; this term's heard forms move to a new entry
+ * under the new term. A file that already holds the new term is left alone (409), except on Undo
+ * (`back`), where this fix's own entry goes back into the entry it came out of. Answers whether the
+ * file changed.
  */
 async function renameInFile(
   app: ApiApp,
   workspace: string | undefined,
-  from: string,
-  to: string,
+  r: { from: string; to: string; heard: readonly string[]; back?: boolean },
 ): Promise<boolean> {
   const out = await editFile(targetPath(app, workspace), (file) => {
-    const had = file.entries.find((e) => termKey(e.term) === termKey(from));
-    if (!had || had.term === to) return null;
-    const into = file.entries.find((e) => e !== had && termKey(e.term) === termKey(to));
-    if (into) throw new HttpError(409, "term_exists", `the file already has ${into.term}`);
+    const had = file.entries.find((e) => termKey(e.term) === termKey(r.from));
+    if (!had || had.term === r.to) return null;
+    const own = ownEntry(had, r.heard);
+    const into = file.entries.find((e) => e !== had && termKey(e.term) === termKey(r.to));
+    if (into) {
+      if (!r.back || !own) {
+        throw new HttpError(409, "term_exists", `the file already has ${into.term}`);
+      }
+      const heard = [...into.heard];
+      for (const h of had.heard) {
+        if (!heard.some((x) => termKey(x) === termKey(h))) heard.push(h);
+      }
+      return { file: upsertEntry(removeEntry(file, had.term), { ...into, heard }), result: true };
+    }
+    if (own) {
+      return {
+        file: {
+          ...file,
+          entries: file.entries.map((e) => (e === had ? { ...had, term: r.to } : e)),
+        },
+        result: true,
+      };
+    }
+    const mine = (h: string) => r.heard.some((x) => termKey(x) === termKey(h));
+    const moved = had.heard.filter(mine);
+    if (moved.length === 0) return null;
+    const left = upsertEntry(file, { ...had, heard: had.heard.filter((h) => !mine(h)) });
     return {
-      file: { ...file, entries: file.entries.map((e) => (e === had ? { ...had, term: to } : e)) },
+      file: upsertEntry(left, {
+        term: r.to,
+        heard: moved,
+        source: "correction",
+        confirmed: true,
+        added_at: today(app.now()),
+      }),
       result: true,
     };
   });
   return out === true;
 }
 
-/** Takes a learned term out of the file it went into: the entry a fix wrote, or the forms it added. */
+/**
+ * Takes a learned term out of the file it went into: only the heard forms it carries, and the whole
+ * entry when it is this fix's own and nothing is left of it. What another call or a person put
+ * there stays.
+ */
 async function forgetInFile(
   app: ApiApp,
   workspace: string | undefined,
@@ -184,8 +231,10 @@ async function forgetInFile(
   const out = await editFile(targetPath(app, workspace), (file) => {
     const had = file.entries.find((e) => termKey(e.term) === termKey(l.term));
     if (!had) return null;
-    if (had.source === "correction") return { file: removeEntry(file, had.term), result: true };
     const heard = had.heard.filter((h) => !l.heard.some((x) => termKey(x) === termKey(h)));
+    if (had.source === "correction" && heard.length === 0) {
+      return { file: removeEntry(file, had.term), result: true };
+    }
     if (heard.length === had.heard.length) return null;
     return { file: upsertEntry(file, { ...had, heard }), result: true };
   });
@@ -455,7 +504,11 @@ export function fixRoutes(r: Router<ApiApp>): void {
           let file = false;
           if (kept !== "call") {
             try {
-              file = await renameInFile(c.app, workspace, target.from, p.term);
+              file = await renameInFile(c.app, workspace, {
+                from: target.from,
+                to: p.term,
+                heard: prev?.heard ?? [p.heard],
+              });
               if (file) filesChanged = true;
             } catch (err) {
               warnings.push(`${p.term} was not renamed in the file: ${(err as Error).message}`);
@@ -466,6 +519,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
             learned: prev?.id ?? "",
             from: target.from,
             to: p.term,
+            heard: prev?.heard ?? [p.heard],
             ...(workspace ? { workspace } : {}),
             file,
           };
@@ -675,7 +729,9 @@ export function fixRoutes(r: Router<ApiApp>): void {
         const ws =
           typeof r.workspace === "string" && validWorkspace(r.workspace) ? r.workspace : undefined;
         // A file that cannot be edited must not stop the rest of the Undo.
-        if (r.file && (await renameInFile(c.app, ws, r.to, r.from).catch(() => false))) words++;
+        const heard = Array.isArray(r.heard) ? r.heard.filter((h) => typeof h === "string") : [];
+        const back = { from: r.to, to: r.from, heard, back: true };
+        if (r.file && (await renameInFile(c.app, ws, back).catch(() => false))) words++;
         await c.app
           .write(id, (cc) => {
             const l = cc.view.learnedTerms().find((x) => x.id === r.learned && x.term === r.to);
