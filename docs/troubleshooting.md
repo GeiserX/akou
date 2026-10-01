@@ -77,6 +77,8 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **What akou does.** Before its first request every command gives the app 3 s to answer. When it does not, a command that changes something, such as `akou start`, stops akou and starts it again, then runs, all within about 15 s. A command that only reads, such as `akou status`, says akou is not answering and stops nothing; add `--restart` to restart it from there. If a call is recording, nothing is stopped, and the message says so.
 
+The app also watches itself. When its own work stops for 10 s, it writes a line to `~/.config/akou/app.log`, and with no call recording it ends itself, so the next command starts a fresh one.
+
 **Fix by hand.** When a call is recording and you want akou back before it ends, the message names akou's process: `kill -KILL` that number, then run the command again. The recording so far stays on disk and akou closes it at its next start. On macOS each restart leaves a few seconds of `sample` of the stuck process in `~/.config/akou/hangs/`; attach the newest one when you report the bug.
 
 ## Reporting a bug
@@ -85,6 +87,6 @@ Open an issue on the [issues page](https://github.com/GeiserX/akou/issues) with:
 
 - the output of `akou doctor`, which checks the models, the helper, the token, the API and the permissions;
 - the output of `akou --version`, and your macOS version;
-- the log that goes with the problem: a call's `logs/` folder inside its folder under `~/Recordings/akou`, or `~/.config/akou/app.log` when the command line started the app.
+- the log that goes with the problem: a call's `logs/` folder inside its folder under `~/Recordings/akou`, and `~/.config/akou/app.log`, the app's own log (`app.log.1` is the one before it). It names calls by id only, never a title or a word said.
 
 Never attach a recording, a transcript or notes from a real call. To report a security problem, follow the [security policy](https://github.com/GeiserX/akou/blob/main/SECURITY.md) and do not open a public issue.

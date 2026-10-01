@@ -24,6 +24,7 @@ import { join } from "node:path";
 import { processAlive } from "../../core/log/writer.ts";
 import { TOKEN_FILE } from "../api/guard.ts";
 import { RUNTIME_FILE } from "../app-info.ts";
+import { APP_LOG } from "../app-log.ts";
 import { resolvePaths } from "../config/schema.ts";
 import {
   ANSWER_MS,
@@ -104,6 +105,9 @@ export class Hung extends Unreachable {
 export class StoppedHung extends Hung {
   override name = "StoppedHung";
 }
+
+/** What a program the CLI launches prints, in the config folder. */
+export const LAUNCH_LOG = "launch.log";
 
 /** A probe answered this recently: the next request goes straight out. */
 const FRESH_MS = 5000;
@@ -432,7 +436,7 @@ export class ApiClient {
   }
 
   /**
-   * Starts the app headless, detached, with its output in `app.log`, and waits for its API. Two
+   * Starts the app headless, detached, with its output in `launch.log`, and waits for its API. Two
    * clients launching at once are fine: the second app finds the first one's lock and exits.
    */
   launch(waitMs: number = this.budget): Promise<Runtime> {
@@ -446,7 +450,9 @@ export class ApiClient {
     const cmd = this.launchCmd;
     if (!cmd || cmd.length === 0) throw new Unreachable("akou is not running");
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
-    const log = openSync(join(this.configDir, "app.log"), "a", 0o600);
+    // What the launched program prints. The app writes its own `app.log` (DK-M8); this file holds
+    // what it printed before it could, such as a start that failed.
+    const log = openSync(join(this.configDir, LAUNCH_LOG), "a", 0o600);
     try {
       const child = spawn(cmd[0] as string, cmd.slice(1), {
         detached: true,
@@ -465,7 +471,7 @@ export class ApiClient {
       await new Promise((r) => setTimeout(r, 25));
     }
     throw new Unreachable(
-      `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; see ${join(this.configDir, "app.log")}`,
+      `akou did not answer within ${Math.round(waitMs / 100) / 10} s of launching; see ${join(this.configDir, LAUNCH_LOG)} and ${join(this.configDir, APP_LOG)}`,
     );
   }
 

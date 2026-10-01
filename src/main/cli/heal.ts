@@ -26,6 +26,7 @@ import { spawn } from "node:child_process";
 import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../../core/log/writer.ts";
+import { HANGS_DIR } from "../app-log.ts";
 
 /** How long the app has to answer `/healthz` before it counts as hung. */
 export const ANSWER_MS = 3000;
@@ -38,7 +39,7 @@ export const SAMPLE_SECONDS = 3;
 export const SAMPLE_CAP_MS = 5000;
 /** Samples kept in `hangs/`; older ones are removed. */
 export const SAMPLES_KEPT = 5;
-export const HANGS_DIR = "hangs";
+export { HANGS_DIR };
 
 export type Probe = "answers" | "refused" | "silent";
 

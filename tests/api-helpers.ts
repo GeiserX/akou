@@ -90,6 +90,8 @@ export interface RigOptions {
   liveReviewEveryMs?: number;
   /** The machine's memory in GB, which the second pass's Qwen is offered by; the test machine's by default. */
   memoryGb?: number;
+  /** `app.log` and the watchdog, as the entry points run the app (DK-M8). */
+  supervise?: boolean;
 }
 
 /** A Linux box with no GPU and no llama-server, so no rig reports the test machine's own GPU. */
@@ -156,6 +158,7 @@ export async function appRig(o: RigOptions = {}): Promise<AppRig> {
     ...(o.metalHolder ? { metalHolder: o.metalHolder } : {}),
     ...(o.liveReviewEveryMs ? { liveReviewEveryMs: o.liveReviewEveryMs } : {}),
     ...(o.memoryGb ? { memoryGb: o.memoryGb } : {}),
+    ...(o.supervise ? { supervise: true } : {}),
     onLog: (level, msg) => logs.push({ level, msg }),
   });
   const port = app.server?.port as number;
