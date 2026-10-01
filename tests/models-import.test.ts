@@ -142,6 +142,31 @@ describe("[W3.19] a model imported from a folder is copied in one checked, async
     }
   });
 
+  test("a cancel during the last write installs nothing, and the files copied before it still count", async () => {
+    const t = tempDir("akou-import-");
+    try {
+      const from = join(t.dir, "stick");
+      mkdirSync(from, { recursive: true });
+      const one = bigFile(join(from, "one.bin"), "one.bin", 2);
+      const two = bigFile(join(from, "two.bin"), "two.bin", 2, 5);
+      const dir = join(t.dir, "models");
+      const stop = new AbortController();
+      // Cancelled as the second file's last bytes land: no chunk is read after that.
+      const r = await importModels(from, dir, [entryOf(BIG, [one, two])], {
+        signal: stop.signal,
+        onProgress: (p) => {
+          if (p.name === "two.bin" && p.bytes === p.total) stop.abort();
+        },
+      });
+      expect(r).toEqual({ copied: [`${BIG}/one.bin`], missing: [`${BIG}/two.bin`] });
+      expect(existsSync(modelFile(dir, BIG, "one.bin"))).toBe(true);
+      expect(existsSync(modelFile(dir, BIG, "two.bin"))).toBe(false);
+      expect(leftovers(dir)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
   test("the store shows a model being copied as downloading with its bytes, and Cancel stops it", async () => {
     const t = tempDir("akou-import-");
     try {
@@ -163,9 +188,12 @@ describe("[W3.19] a model imported from a folder is copied in one checked, async
       });
       try {
         expect(store.state(BIG)).toBe("missing");
-        const run = store.import(from);
+        let settled = false;
+        const run = store.import(from).finally(() => {
+          settled = true;
+        });
         let mid = 0;
-        while (store.state(BIG) === "downloading") {
+        while (!settled) {
           const s = store.size(BIG);
           if (s.bytes > 0 && s.bytes < s.size) {
             mid = s.bytes;
@@ -180,8 +208,18 @@ describe("[W3.19] a model imported from a folder is copied in one checked, async
         expect(store.state(BIG)).toBe("missing");
         expect(leftovers(dir)).toEqual([]);
         expect(logs).toContain(`model.import ${BIG} cancelled key test`);
-        // Control: not cancelled, the same import lands the model.
-        expect(await store.import(from)).toEqual({ copied: [`${BIG}/w.bin`], missing: [] });
+        // Two imports at once run one after the other: each owns the model while it copies, so
+        // Cancel stops the first and the second still lands the model.
+        const first = store.import(from);
+        const second = store.import(from);
+        while (store.size(BIG).bytes === 0) await tick();
+        // A delete while it copies is refused: removing the folder would fail the copy.
+        expect(() => store.delete(BIG, { defaults: new Set(), inUse: new Set() }, "test")).toThrow(
+          /downloading/,
+        );
+        expect(store.cancel(BIG, "test")).toBe(true);
+        expect(await first).toEqual({ copied: [], missing: [`${BIG}/w.bin`] });
+        expect(await second).toEqual({ copied: [`${BIG}/w.bin`], missing: [] });
         expect(store.state(BIG)).toBe("ready");
         expect(store.cancel(BIG, "test")).toBe(false);
       } finally {

@@ -777,7 +777,10 @@ async function copyChecked(
     } finally {
       await fh.close();
     }
-    if (h.digest("hex") !== f.sha256) return false;
+    // A short write would leave a truncated file whose source still hashed right.
+    if (h.digest("hex") !== f.sha256 || statSync(tmp).size !== f.size) return false;
+    // Cancelled during the last write: nothing is installed.
+    o.signal?.throwIfAborted();
     renameSync(tmp, target);
     moved = true;
     return true;
@@ -790,7 +793,8 @@ async function copyChecked(
  * `models import DIR` and `POST /models/import`: copies every file of `catalog` whose SHA-256
  * matches from `from/<model>/<file>` or, when that one is absent or does not match,
  * `from/<file>` into `dir`, for machines that cannot download. Answers the files copied and the
- * files still missing.
+ * files still missing. Cancelled (`o.signal`), it keeps the files already copied and lists the
+ * rest as missing.
  */
 export async function importModels(
   from: string,
@@ -805,11 +809,15 @@ export async function importModels(
       const target = modelFile(dir, m.id, f.name);
       let done = false;
       for (const source of [join(from, m.id, f.name), join(from, f.name)]) {
+        if (o.signal?.aborted) break;
         if (!existsSync(source) || statSync(source).size !== f.size) continue;
-        if (await copyChecked(m.id, f, source, target, o)) {
-          done = true;
+        try {
+          done = await copyChecked(m.id, f, source, target, o);
+        } catch (err) {
+          if (!o.signal?.aborted) throw err;
           break;
         }
+        if (done) break;
         o.onProgress?.({ model: m.id, name: f.name, bytes: 0, total: f.size });
       }
       if (done) {

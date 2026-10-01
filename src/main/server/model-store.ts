@@ -477,6 +477,8 @@ export class ModelStore {
   private readonly now: () => number;
   private readonly downloads = new Map<string, Download>();
   private readonly copies = new Map<string, Copy>();
+  /** The import running, if any: a second one waits for it, so one copy owns each model. */
+  private importing: Promise<unknown> = Promise.resolve();
   private readonly watchers = new Set<(e: DownloadEnd) => void>();
   private closed = false;
 
@@ -776,11 +778,21 @@ export class ModelStore {
   /**
    * Copies the files of `catalog` from a folder on this machine (`POST /models/import`), one model
    * at a time: while a model is copied it reads as downloading with its bytes so far, as a
-   * download does, and `cancel` stops its copy, which leaves its files missing.
+   * download does, and `cancel` stops its copy, which leaves its files missing. Imports run one
+   * after the other.
    */
-  async import(
+  import(
     from: string,
     catalog: readonly ModelSpecEntry[] = this.o.catalog(),
+  ): Promise<{ copied: string[]; missing: string[] }> {
+    const run = this.importing.then(() => this.copyAll(from, catalog));
+    this.importing = run.catch(() => {});
+    return run;
+  }
+
+  private async copyAll(
+    from: string,
+    catalog: readonly ModelSpecEntry[],
   ): Promise<{ copied: string[]; missing: string[] }> {
     const dir = this.o.dir();
     const copied: string[] = [];
@@ -789,17 +801,13 @@ export class ModelStore {
       const c: Copy = { bytes: new Map(), abort: new AbortController() };
       this.copies.set(m.id, c);
       try {
+        // Cancelled, it still answers the files it copied before.
         const r = await importModels(from, dir, [m], {
           onProgress: (p) => c.bytes.set(p.name, p.bytes),
           signal: c.abort.signal,
         });
         copied.push(...r.copied);
         missing.push(...r.missing);
-      } catch (err) {
-        if (!c.abort.signal.aborted) throw err;
-        for (const f of m.files) {
-          if (!existsSync(modelFile(dir, m.id, f.name))) missing.push(`${m.id}/${f.name}`);
-        }
       } finally {
         this.copies.delete(m.id);
       }
@@ -907,7 +915,8 @@ export class ModelStore {
 
   /** Deletes one model's folder and its ledger entry; the caller has checked it is free. */
   remove(id: string): number {
-    if (this.downloads.has(id)) {
+    // A copy from a folder too: deleting its folder would fail the copy's last step.
+    if (this.busy(id)) {
       throw new ModelRefused(409, "model_in_use", `${id} is downloading`, { model: id });
     }
     const path = join(this.o.dir(), id);
@@ -925,6 +934,7 @@ export class ModelStore {
     this.closed = true;
     for (const d of this.downloads.values()) if (d.timer) clearTimeout(d.timer);
     this.downloads.clear();
+    for (const c of this.copies.values()) c.abort.abort();
     this.watchers.clear();
   }
 }
