@@ -115,9 +115,9 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
   },
   "asr.final.model": {
     label: "Model after the call",
-    help: "Writes the final transcript. Qwen is the most accurate and needs a graphics chip.",
+    help: "Writes the final transcript. Qwen is the most accurate.",
     choices: [
-      ["auto", "Automatic: Qwen when it can run here"],
+      ["auto", "Automatic: Qwen when it is downloaded"],
       ["qwen3-asr-1.7b", "Qwen3-ASR"],
       ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
     ],

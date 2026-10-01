@@ -813,16 +813,20 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * Whether the running engine's model files are there: what a start and the final pass need. A
-   * change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
+   * Whether the running engine's model files are there, but `except`: what a start and the final
+   * pass need. A change to `asr.diarizer` mid-run never asks for models the running recognizer
+   * does not use.
    */
-  private runningModelsPresent(): boolean {
+  private runningModelsPresent(except: readonly string[] = []): boolean {
     const registry = modelsFor(
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
     );
-    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
+    return modelsPresent(
+      this.cfg.settings["asr.modelsDir"],
+      registry.filter((m) => !except.includes(m.id)),
+    );
   }
 
   /**
@@ -2311,11 +2315,14 @@ export class AkouApp implements ApiApp {
     }
   }
 
-  /** The recognizer models for the final pass, or null when there are none. */
-  private finalModels(): ModelSpec | null {
+  /**
+   * The models for the final pass, or null when they are not all here. On Qwen the pass needs the
+   * VAD and the speaker-label models but not Parakeet, which it never loads.
+   */
+  private finalModels(qwen = false): ModelSpec | null {
     // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
     if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
-    if (!this.runningModelsPresent()) return null;
+    if (!this.runningModelsPresent(qwen ? [RECOGNIZER] : [])) return null;
     return this.o.models !== undefined ? this.o.models : this.finalSherpaSpec();
   }
 
@@ -2354,12 +2361,12 @@ export class AkouApp implements ApiApp {
         why: "the final pass cannot read this call's audio: a part has no audio file, or the capture helper that decodes it is not there",
         unavailable: true,
       };
-    const base = this.finalModels();
-    if (!base) return { why: "the speech models are not downloaded", unavailable: true };
     const choice = this.finalChoice(asked);
     // Qwen asked for by name for this run and not here: refused, never Parakeet in its place.
     if (finalModelOf(asked) === "qwen" && choice.model !== "qwen")
       return { why: `Qwen cannot run this pass: ${choice.note}` };
+    const base = this.finalModels(choice.model === "qwen");
+    if (!base) return { why: "the speech models are not downloaded", unavailable: true };
     if (choice.note) this.log("info", `final ${id}: runs Parakeet: ${choice.note}`);
     const models: ModelSpec =
       choice.model === "qwen" ? { ...base, final: this.llamaSpec(QWEN_ASR) } : base;
@@ -2413,8 +2420,12 @@ export class AkouApp implements ApiApp {
   private ranModels(model: string, audioS: number, decodeS: number): void {
     const shelf = this.shelf;
     if (!shelf || this.givenRecognizer()) return;
-    const qwen = model === QWEN_ASR ? reviewModels("qwen", this.liveContext()) : [];
-    shelf.touch([...this.runningSet().map((m) => m.id), ...qwen]);
+    // On Qwen, Parakeet was not used (and may not be on disk).
+    const qwen = model === QWEN_ASR;
+    const set = this.runningSet()
+      .map((m) => m.id)
+      .filter((m) => !qwen || m !== RECOGNIZER);
+    shelf.touch([...set, ...(qwen ? reviewModels("qwen", this.liveContext()) : [])]);
     shelf.recordRun(model === QWEN_ASR ? QWEN_ASR : RECOGNIZER, audioS, decodeS);
   }
 
