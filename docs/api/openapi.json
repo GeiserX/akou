@@ -3733,7 +3733,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again.",
+        "description": "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, or a model's id) overrides `asr.final.model` for this run; a `qwen` that is not downloaded is refused.",
         "parameters": [
           {
             "name": "id",
@@ -3754,6 +3754,9 @@
                 "properties": {
                   "force": {
                     "type": "boolean"
+                  },
+                  "model": {
+                    "type": "string"
                   }
                 },
                 "additionalProperties": false

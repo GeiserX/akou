@@ -5,6 +5,7 @@
  */
 
 import { finalText } from "../../asr/final-text.ts";
+import { shortModelName } from "../../asr/model-text.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN } from "../../asr/upgrade.ts";
 import { bool, int, list, str } from "../args.ts";
 import { EXIT, Unreachable } from "../client.ts";
@@ -344,18 +345,27 @@ const show: Command = {
 const finalize: Command = {
   name: "finalize",
   summary: "Run the accurate final pass on an ended call",
-  usage: "akou finalize [CALL | -c CALL] [--force] [--json]",
+  usage: "akou finalize [CALL | -c CALL] [--force] [--model qwen|parakeet] [--json]",
   flags: {
     call: callFlag("last"),
     force: { type: "boolean", desc: "run it again on a call that already has a final layer" },
+    model: {
+      type: "string",
+      value: "MODEL",
+      desc: "the model for this run only: qwen or parakeet (default: asr.final.model)",
+    },
   },
-  examples: ["akou finalize last --force"],
+  examples: ["akou finalize last --force", "akou finalize last --force --model qwen"],
   run: async (ctx, p) => {
     const call = objectCall(p, p.positional[0]) ?? "last";
     const r = await api(ctx, "POST", `/calls/${enc(call)}/finalize`, {
-      body: { force: bool(p, "force") || undefined },
+      body: { force: bool(p, "force") || undefined, model: str(p, "model") },
     });
-    return finish(ctx, r, (b) => `Final pass started for ${b.call}`);
+    return finish(
+      ctx,
+      r,
+      (b) => `Final pass started for ${b.call}${b.model ? ` on ${shortModelName(b.model)}` : ""}`,
+    );
   },
 };
 

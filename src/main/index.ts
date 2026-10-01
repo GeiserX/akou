@@ -77,6 +77,7 @@ import {
   verifyAccelerator,
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
+import { chooseFinalModel, type FinalChoice, finalModelOf } from "./asr/final-model.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import {
@@ -2224,8 +2225,8 @@ export class AkouApp implements ApiApp {
 
   async finalize(
     id: string,
-    opts: { force?: boolean },
-  ): Promise<Outcome<{ call: string; started: boolean }>> {
+    opts: { force?: boolean; model?: string },
+  ): Promise<Outcome<{ call: string; started: boolean; model?: string }>> {
     const c = await this.call(id);
     if (c.live || c.status === "stopping") {
       return fail(409, "not_ended", "the call is still recording", { call: id });
@@ -2237,9 +2238,18 @@ export class AkouApp implements ApiApp {
         call: id,
       });
     }
-    const r = this.runFinal(id, true);
+    const r = this.runFinal(id, true, opts.model);
     if (r) return fail(501, "final_unavailable", r.why, { call: id });
-    return { ok: true, call: id, started: true };
+    const model = this.finalRuns.get(id)?.model;
+    return { ok: true, call: id, started: true, ...(model ? { model } : {}) };
+  }
+
+  /**
+   * The recognizer the next final pass runs: `asked` (`akou finalize --model`) or
+   * `asr.final.model`, never one whose files are missing.
+   */
+  finalChoice(asked?: string): FinalChoice {
+    return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], this.liveContext());
   }
 
   /**
@@ -2327,7 +2337,11 @@ export class AkouApp implements ApiApp {
    * Starts the final pass in the background. Returns null once started, or why it cannot run;
    * `unavailable` when the call lacks what the pass needs (readable audio, the models).
    */
-  private runFinal(id: string, force: boolean): { why: string; unavailable?: true } | null {
+  private runFinal(
+    id: string,
+    force: boolean,
+    asked?: string,
+  ): { why: string; unavailable?: true } | null {
     if (this.quitting) return { why: "akou is quitting" };
     if (this.finals.has(id)) return { why: "the final pass is already running" };
     const c = this.manager.controller(id);
@@ -2340,9 +2354,16 @@ export class AkouApp implements ApiApp {
         why: "the final pass cannot read this call's audio: a part has no audio file, or the capture helper that decodes it is not there",
         unavailable: true,
       };
-    const models = this.finalModels();
-    if (!models) return { why: "the speech models are not downloaded", unavailable: true };
-    const model = modelNameFor(models);
+    const base = this.finalModels();
+    if (!base) return { why: "the speech models are not downloaded", unavailable: true };
+    const choice = this.finalChoice(asked);
+    // Qwen asked for by name for this run and not here: refused, never Parakeet in its place.
+    if (finalModelOf(asked) === "qwen" && choice.model !== "qwen")
+      return { why: `Qwen cannot run this pass: ${choice.note}` };
+    if (choice.note) this.log("info", `final ${id}: runs Parakeet: ${choice.note}`);
+    const models: ModelSpec =
+      choice.model === "qwen" ? { ...base, final: this.llamaSpec(QWEN_ASR) } : base;
+    const model = models.final?.engine ?? modelNameFor(models);
     const ws = c.view.call?.workspace ?? "";
     this.finalRuns.set(id, { model, done_s: 0, total_s: 0, pushedAt: 0 });
     const p = finalizeCall(c, {
@@ -2356,7 +2377,7 @@ export class AkouApp implements ApiApp {
     })
       .then((r) => {
         if (!r.ok) this.log("warn", `final pass of ${id} failed: ${r.error}`);
-        else this.ranModels(r.audio_s ?? 0, r.decode_s ?? 0);
+        else this.ranModels(r.model ?? model, r.audio_s ?? 0, r.decode_s ?? 0);
       })
       .catch((err) => this.log("error", `final pass of ${id}: ${(err as Error).message}`))
       .finally(() => {
@@ -2389,11 +2410,12 @@ export class AkouApp implements ApiApp {
    * recognizer's speed on this machine is one run more (the Models page, SV-U6): the pass's decode
    * time alone, without the Worker's start, the model loads or the speaker labels.
    */
-  private ranModels(audioS: number, decodeS: number): void {
+  private ranModels(model: string, audioS: number, decodeS: number): void {
     const shelf = this.shelf;
     if (!shelf || this.givenRecognizer()) return;
-    shelf.touch(this.runningSet().map((m) => m.id));
-    shelf.recordRun(RECOGNIZER, audioS, decodeS);
+    const qwen = model === QWEN_ASR ? reviewModels("qwen", this.liveContext()) : [];
+    shelf.touch([...this.runningSet().map((m) => m.id), ...qwen]);
+    shelf.recordRun(model === QWEN_ASR ? QWEN_ASR : RECOGNIZER, audioS, decodeS);
   }
 
   /**
@@ -3165,6 +3187,11 @@ export class AkouApp implements ApiApp {
     const live = [
       ...setupModels(next.setup, ctx),
       ...(next.review ? reviewModels(next.review.model, ctx) : []),
+      // The final pass's Qwen, when the setting runs it or a pass runs it now.
+      ...(this.finalChoice().model === "qwen" ||
+      [...this.finalRuns.values()].some((r) => r.model === QWEN_ASR)
+        ? reviewModels("qwen", ctx)
+        : []),
     ];
     return {
       defaults: new Set([...this.registry().map((m) => m.id), ...live]),
