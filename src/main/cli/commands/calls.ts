@@ -23,7 +23,7 @@ import {
   ref,
   wall,
 } from "../context.ts";
-import { descendants, launcherOf, processTable, stopAll } from "../heal.ts";
+import { processTable, stopAll, stopList } from "../heal.ts";
 
 const start: Command = {
   name: "start",
@@ -422,8 +422,9 @@ const quit: Command = {
     const found = ctx.client.runtime();
     const rt = found && found.pid !== process.pid ? found : null;
     const rows = rt ? await processTable() : [];
-    const launcher = rt ? launcherOf(rows, rt.pid) : null;
-    const others = rt ? [...(launcher ? [launcher] : []), ...descendants(rows, rt.pid)] : [];
+    // Never this command, nor the processes between it and the app: a harness the app started may
+    // be the one running `akou quit`.
+    const others = rt ? stopList(rows, rt.pid).filter((p) => p !== rt.pid) : [];
     let r: Awaited<ReturnType<typeof api>>;
     try {
       r = await api(ctx, "POST", "/quit", { launch: false });

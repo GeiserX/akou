@@ -4,7 +4,7 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
 import { cliChild } from "./cli-helpers.ts";
@@ -19,6 +19,31 @@ const c = spawn(process.execPath, [${JSON.stringify(APP)}], { stdio: ["ignore", 
 c.stdout.on("data", (d) => process.stdout.write(d));
 setInterval(() => {}, 1000);
 `;
+
+/** The quit fixture started on its own, with `args`; its pids, and a kill for the cleanup. */
+async function startApp(home: string, args: string[]) {
+  const proc = Bun.spawn([process.execPath, APP, ...args], {
+    env: { ...process.env, AKOU_HOME: home },
+    stdout: "pipe",
+    stderr: "inherit",
+  });
+  const reader = proc.stdout.getReader();
+  let text = "";
+  while (!text.includes("ready\n")) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    text += new TextDecoder().decode(value);
+  }
+  reader.releaseLock();
+  const pid = (name: string) => Number(new RegExp(`${name} (\\d+)`).exec(text)?.[1] ?? 0);
+  const out = { app: pid("app"), helper: pid("helper"), harness: pid("harness") };
+  return {
+    ...out,
+    kill: () => {
+      for (const p of Object.values(out)) if (p && processAlive(p)) process.kill(p, "SIGKILL");
+    },
+  };
+}
 
 describe("[DK-M8] akou quit takes every process of the app down (akou-m23)", () => {
   test.skipIf(process.platform === "win32")(
@@ -58,6 +83,47 @@ describe("[DK-M8] akou quit takes every process of the app down (akou-m23)", () 
         for (const pid of [app, helper, launcher.pid]) {
           if (pid && processAlive(pid)) process.kill(pid, "SIGKILL");
         }
+        t.cleanup();
+      }
+    },
+    30_000,
+  );
+  test.skipIf(process.platform === "win32")(
+    "it waits for the app's process, not for runtime.json, which goes 6 s before the process does",
+    async () => {
+      const t = tempDir("akou-quit-");
+      const a = await startApp(t.dir, ["--linger", "6000"]);
+      try {
+        const quit = await cliChild({ ...process.env, AKOU_HOME: t.dir }, ["quit"]);
+        expect(quit.out.trim()).toBe("akou has quit");
+        expect(quit.ms).toBeGreaterThan(6000);
+        expect(processAlive(a.app)).toBe(false);
+        expect(processAlive(a.helper)).toBe(false);
+      } finally {
+        a.kill();
+        t.cleanup();
+      }
+    },
+    30_000,
+  );
+
+  test.skipIf(process.platform === "win32")(
+    "an agent the app started that runs akou quit is left running, and so is the quit it ran",
+    async () => {
+      const t = tempDir("akou-quit-");
+      const result = join(t.dir, "harness-quit.txt");
+      const a = await startApp(t.dir, ["--harness", result]);
+      try {
+        const deadline = performance.now() + 20_000;
+        while (!existsSync(result) && performance.now() < deadline) await Bun.sleep(100);
+        expect(readFileSync(result, "utf8").trim()).toBe("0 akou has quit");
+        expect(processAlive(a.app)).toBe(false);
+        expect(processAlive(a.helper)).toBe(false);
+        // Positive control of the rule: the harness was below the app when quit read the tree.
+        expect(a.harness).toBeGreaterThan(0);
+        expect(processAlive(a.harness)).toBe(true);
+      } finally {
+        a.kill();
         t.cleanup();
       }
     },
