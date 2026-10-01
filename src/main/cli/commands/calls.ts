@@ -417,7 +417,10 @@ const quit: Command = {
     }
     // Every process that makes up the app, read before it starts to go: the app, the ElectroBun
     // launcher above it and its helpers below (akou-m23).
-    const rt = ctx.client.runtime();
+    // An app in this very process (the tests' rigs) is never waited for as a process, nor are this
+    // process's children taken for its helpers.
+    const found = ctx.client.runtime();
+    const rt = found && found.pid !== process.pid ? found : null;
     const rows = rt ? await processTable() : [];
     const launcher = rt ? launcherOf(rows, rt.pid) : null;
     const others = rt ? [...(launcher ? [launcher] : []), ...descendants(rows, rt.pid)] : [];
