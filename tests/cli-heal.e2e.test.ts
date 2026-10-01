@@ -244,6 +244,32 @@ describe("[DK-M8] An app that takes the connection and never answers", () => {
     },
     LONG,
   );
+  test.skipIf(!POSIX)(
+    "concurrent requests through one client share one recovery: one sample, one restart",
+    async () => {
+      const h = await hungHome();
+      try {
+        const api = new ApiClient({ env: h.env, client: "mcp" });
+        const answers = await Promise.all([
+          api.request("POST", "/calls/live/stop"),
+          api.request("POST", "/calls/live/stop"),
+          api.request("POST", "/calls/live/stop"),
+        ]);
+        // Each got the new app's own answer: nothing is live.
+        expect(answers.map((a) => a.status)).toEqual([404, 404, 404]);
+        expect(api.takeNotes()).toHaveLength(1);
+        if (process.platform === "darwin") {
+          expect(readdirSync(join(h.cfg, "hangs")).filter((f) => f.endsWith(".txt"))).toHaveLength(
+            1,
+          );
+        }
+        await cliChild(h.env, ["quit"]);
+      } finally {
+        h.cleanup();
+      }
+    },
+    LONG,
+  );
 });
 
 describe("[DK-M8] the process tree the CLI reads without the API", () => {
