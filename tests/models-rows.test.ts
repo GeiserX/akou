@@ -355,7 +355,7 @@ describe("All models: the whole catalog by what each model does, the ones on dis
       expect(`${r.id}: ${catalogLine(r).length > 0}`).toBe(`${r.id}: true`);
     }
     const tier = rows(HERE).find((r) => r.id === "nemotron-en-80") as ModelRow;
-    expect(modelName(tier)).toBe("Nemotron English, 80 ms");
+    expect(modelName(tier)).toBe("Nemotron streaming, English, 80 ms");
     expect(catalogLine(tier)).toContain("Accuracy not measured yet.");
     expect(allModelsText(rows(HERE), "this Mac")).toBe(
       `5 on this Mac, ${MODELS.length - 5} more to download.`,

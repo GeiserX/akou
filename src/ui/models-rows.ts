@@ -60,7 +60,13 @@ const NAMES: Readonly<Record<string, string>> = {
   "silero-vad": "Voice detection",
   "nemotron-en-560": "Nemotron streaming, English",
   "nemotron-3.5-560": "Nemotron streaming, many languages",
-  "nemotron-3.5-1120": "Nemotron streaming, many languages, larger",
+  "nemotron-3.5-1120": "Nemotron streaming, many languages, 1 s",
+  "nemotron-3.5-80": "Nemotron streaming, many languages, 80 ms",
+  "nemotron-3.5-160": "Nemotron streaming, many languages, 160 ms",
+  "nemotron-3.5-320": "Nemotron streaming, many languages, 320 ms",
+  "nemotron-en-80": "Nemotron streaming, English, 80 ms",
+  "nemotron-en-160": "Nemotron streaming, English, 160 ms",
+  "nemotron-en-1120": "Nemotron streaming, English, 1 s",
 };
 
 /** What each build of Qwen3-ASR's program runs on, from the last part of its id. */

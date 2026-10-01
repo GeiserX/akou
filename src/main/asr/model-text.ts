@@ -36,12 +36,14 @@ export const MODEL_TEXT: Readonly<Record<string, ModelText>> = {
     name: "Nemotron English",
     lines: { live: "Words appear as they are said. English only." },
   },
-  // The other chunk sizes: named by how long each waits before it writes, as "1 s" above. Their
-  // accuracy in akou is not measured, and the lines say so rather than guess.
+  // The other chunk sizes: named by how long each waits before it writes, as "1 s" above, every
+  // line in one shape. Their accuracy in akou is not measured, and the lines say so rather than
+  // guess; the 80 ms tiers ran slower than real time in a smoke test on a busy machine, so they
+  // say they can fall behind.
   "nemotron-3.5-80": {
     name: "Nemotron 3.5, 80 ms",
     lines: {
-      live: "Writes after 80 ms, the shortest wait. Accuracy not measured yet. 35 languages.",
+      live: "Writes after 80 ms. Not timed yet: on a slow machine the transcript can fall behind. Accuracy not measured yet. 35 languages.",
     },
   },
   "nemotron-3.5-160": {
@@ -55,7 +57,7 @@ export const MODEL_TEXT: Readonly<Record<string, ModelText>> = {
   "nemotron-en-80": {
     name: "Nemotron English, 80 ms",
     lines: {
-      live: "Writes after 80 ms, the shortest wait. Accuracy not measured yet. English only.",
+      live: "Writes after 80 ms. Not timed yet: on a slow machine the transcript can fall behind. Accuracy not measured yet. English only.",
     },
   },
   "nemotron-en-160": {
@@ -64,9 +66,7 @@ export const MODEL_TEXT: Readonly<Record<string, ModelText>> = {
   },
   "nemotron-en-1120": {
     name: "Nemotron English, 1 s",
-    lines: {
-      live: "Waits about a second before writing. Accuracy not measured yet. English only.",
-    },
+    lines: { live: "Writes after about 1 s. Accuracy not measured yet. English only." },
   },
   "parakeet-tdt-0.6b-v3-fp32": {
     name: "Parakeet",

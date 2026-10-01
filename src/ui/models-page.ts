@@ -520,7 +520,10 @@ export class ModelsPage {
       // A streaming Nemotron is this section's own; Parakeet is shown where it belongs.
       const owner = family === "nemotron";
       const side = this.modelSide([own], owner);
-      const help = [s ? accuracyText(s.accuracy) : null, own.lines.live].filter((x) => x).join(" ");
+      // The family's measured figure belongs to its measured tiers only: a tier nobody measured
+      // (`own.accuracy` has no score) says so in its own line and gets no borrowed number.
+      const figure = s && own.accuracy.score !== null ? accuracyText(s.accuracy) : null;
+      const help = [figure, own.lines.live].filter((x) => x).join(" ");
       const checked =
         setting === e.id ||
         (setting === "nemotron" && family === "nemotron" && e.checked) ||

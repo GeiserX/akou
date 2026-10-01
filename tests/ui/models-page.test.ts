@@ -577,3 +577,57 @@ describe("the Models page", () => {
     UI_TIMEOUT,
   );
 });
+
+describe("a chunk size nobody measured, on the Live transcript list", () => {
+  /** An English tier with no score of its own (model-scores.ts), beside the measured 560 ms one. */
+  const TIER = "nemotron-en-80";
+  let other: UiRig;
+  let p: Page;
+  const box = tempDir("akou-ui-models-tier-");
+  let reg2: ModelRegistry;
+
+  beforeAll(async () => {
+    reg2 = modelRegistry();
+    const dir = join(box.dir, "models");
+    const catalog: ModelSpecEntry[] = [
+      reg2.entry(RECOGNIZER, ["a.onnx"]),
+      reg2.entry("silero-vad", ["vad.onnx"]),
+      reg2.entry(NEMOTRON, ["diar.onnx"]),
+      reg2.entry(TITANET, ["t.onnx"]),
+      { ...reg2.entry(STREAM, ["s.onnx"]), onDemand: true, serves: ["live"] } as ModelSpecEntry,
+      { ...reg2.entry(TIER, ["s80.onnx"]), onDemand: true, serves: ["live"] } as ModelSpecEntry,
+    ];
+    mkdirSync(dir, { recursive: true });
+    for (const m of catalog.slice(0, 4)) reg2.install(dir, m);
+    other = await uiRig({
+      modelRegistry: catalog,
+      settings: { "asr.modelsDir": dir, "asr.diarizer": "nemotron", "asr.languages": ["en"] },
+      jobs: { modelStore: { retryMs: [5, 5, 5], freeBytes: () => 1e12 } },
+    });
+    await until(() => other.app.recognizer() === "ready", 10_000, "the recognizer");
+    p = await other.open();
+    await p.click("#models-open");
+    await p.waitForSelector(`${LIVE} [data-setup="${TIER}"]`);
+  }, UI_TIMEOUT);
+
+  afterAll(async () => {
+    await other?.close();
+    reg2?.stop();
+    box.cleanup();
+  });
+
+  test(
+    "its row says it is not measured and never borrows the 560 ms tier's figure, which stays on that tier",
+    async () => {
+      const tier = (await p.textContent(`${LIVE} [data-setup="${TIER}"] .pg-help`)) ?? "";
+      expect(tier).toContain("Accuracy not measured yet.");
+      expect(tier).toContain("on a slow machine the transcript can fall behind");
+      expect(tier).not.toContain("wrong on");
+      // Positive control: the measured tier keeps the family's figure.
+      expect(await p.textContent(`${LIVE} [data-setup="${STREAM}"] .pg-help`)).toContain(
+        "wrong on meetings",
+      );
+    },
+    UI_TIMEOUT,
+  );
+});
