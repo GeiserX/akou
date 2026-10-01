@@ -161,6 +161,8 @@ export interface ApiApp {
     id: string,
     opts: { force?: boolean },
   ): Promise<Outcome<{ call: string; started: boolean }>>;
+  /** How far a running final pass is, or null when none runs for the call. Absent: never known. */
+  finalProgress?(id: string): { done_s: number; total_s: number; model: string } | null;
   /** `POST /calls/{id}/export`: the export folder, or the folder `to` names. */
   exportCall(id: string, o: { to?: string }): Promise<Outcome<ExportResult>>;
   /** `POST /calls/{id}/hooks`: the hooks of the stages named (default: every stage reached). */

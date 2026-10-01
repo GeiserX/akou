@@ -778,7 +778,8 @@ class App {
   }
 
   private drawFinal(v: CallView | null): void {
-    const n = v ? finalNote(v) : null;
+    const run = this.status?.finals?.find((f) => f.call === this.callId) ?? null;
+    const n = v ? finalNote(v, run) : null;
     const el = byId("final");
     const hand = v?.handoff();
     const bits: string[] = [];
