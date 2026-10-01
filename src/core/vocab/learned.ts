@@ -42,8 +42,8 @@ function who(by: string, start = true): string {
 
 /**
  * The line an agent reads for one item:
- * `The user taught akou "Vercel" (heard "versal") at 15:41:07: 4 lines now read Vercel, lines you
- * read before included. Spell it that way.`
+ * `The user taught akou "Vercel" (heard "versal") at 15:41:07: 4 lines now read Vercel, including any
+ * you read before. Spell it that way.`
  */
 export function learnedNote(x: LearnedItem): string {
   const heard = x.heard.length > 0 ? ` (heard ${x.heard.map((h) => `"${h}"`).join(", ")})` : "";
@@ -63,7 +63,7 @@ export function learnedNote(x: LearnedItem): string {
       ? ""
       : n === 1
         ? `: 1 line now reads ${x.term}, even if you read it before`
-        : `: ${n} lines now read ${x.term}, lines you read before included`;
+        : `: ${n} lines now read ${x.term}, including any you read before`;
   return `${who(x.by)} ${what} at ${x.time}${lines}. Spell it that way.`;
 }
 

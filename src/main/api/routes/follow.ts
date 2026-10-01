@@ -386,7 +386,7 @@ export function followRoutes(r: Router<ApiApp>): void {
     "/calls/:id/transcript",
     {
       id: "calls.transcript",
-      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor, newest last (`vocab.learned`), left out when there are none: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
+      doc: "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. With `since`, `learned` lists the terms fixes learned, renamed or took back after the cursor and up to the answer's `cursor`, newest last (`vocab.learned`), left out when there are none, and on the first page only when paging with `offset` or `afterLine`: lines read before may now read differently. A gone `afterLine` answers 409 `cursor_stale`.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },
@@ -573,7 +573,10 @@ export function followRoutes(r: Router<ApiApp>): void {
           })
         : [];
       const learned =
-        since > 0 ? v.learnedChanges(since, cursor).map((x) => learnedItem(x, tz)) : [];
+        // A page after the first carries none: offset paging keeps one cursor for every page.
+        since > 0 && (offset ?? 0) === 0
+          ? v.learnedChanges(since, cursor).map((x) => learnedItem(x, tz))
+          : [];
       return json(200, {
         call: call.id,
         state: v.state,
