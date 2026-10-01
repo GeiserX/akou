@@ -27,7 +27,7 @@ dependencies = [
 
 [[package]]
 name = "akou-diarize"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "ort",
  "parakeet-rs",

@@ -41,7 +41,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 ## The menu bar item moved after the first recording
 
-**Why.** Known in 0.5.3: akou replaces its menu bar item to change its image to the mark with the red dot, and macOS may put the new one in another spot.
+**Why.** Known in 0.5.4: akou replaces its menu bar item to change its image to the mark with the red dot, and macOS may put the new one in another spot.
 
 **Fix.** None needed. Command-drag the item back where you want it.
 
