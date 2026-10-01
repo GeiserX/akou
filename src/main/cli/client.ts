@@ -274,6 +274,8 @@ export class ApiClient {
   private launching: Promise<Runtime> | null = null;
   /** When the app last answered a probe (`performance.now()`), so a burst of requests probes once. */
   private answeredAt = Number.NEGATIVE_INFINITY;
+  /** The recovery of a hung app under way, which concurrent requests share (DK-M8). */
+  private healing: Promise<Runtime> | null = null;
   /** What the client did on its own since the last `takeNotes` (a restart), for the MCP answer. */
   private notes: string[] = [];
 
@@ -443,11 +445,11 @@ export class ApiClient {
   }
 
   /** Is an app answering? Never launches one. */
-  async running(): Promise<Runtime | null> {
+  async running(timeoutMs = 2000): Promise<Runtime | null> {
     const rt = this.runtime();
     if (!rt) return null;
     try {
-      const r = await this.send(rt, "GET", "/status", { timeoutMs: 2000 });
+      const r = await this.send(rt, "GET", "/status", { timeoutMs: Math.max(1, timeoutMs) });
       return r.status === 200 ? rt : null;
     } catch {
       return null;
@@ -487,7 +489,8 @@ export class ApiClient {
     }
     const deadline = performance.now() + waitMs;
     while (performance.now() < deadline) {
-      const rt = await this.running();
+      // A probe never runs past the wait: a slow answer is cut at the deadline.
+      const rt = await this.running(Math.min(2000, deadline - performance.now()));
       if (rt) return rt;
       await new Promise((r) => setTimeout(r, 25));
     }
@@ -523,6 +526,16 @@ export class ApiClient {
         `akou is not answering: it took the connection and sent nothing back for ${s} s (pid ${rt.pid}); nothing was restarted, as this command only reads: run it again with --restart to restart akou`,
       );
     }
+    // One recovery per client at a time: the MCP server sends concurrent requests through one
+    // client, and each must not sample, stop and relaunch the app again.
+    this.healing ??= this.heal(rt, launch, t0).finally(() => {
+      this.healing = null;
+    });
+    return this.healing;
+  }
+
+  /** The recovery itself: `answering` runs one at a time per client. */
+  private async heal(rt: Runtime, launch: boolean, t0: number): Promise<Runtime> {
     const rows = await processTable();
     const rec = await recordingBelow(rows, rt.pid);
     if (rec) throw new Hung(recordingMessage(rt.pid, rec));
@@ -547,6 +560,9 @@ export class ApiClient {
         "akou was not answering, so it was stopped; this command line cannot start it again: open the akou app and run the command again",
       );
     }
+    // The launch keeps its own cold budget even past HEAL_BUDGET_MS: the old app is gone by now,
+    // and a launch cut short leaves the user with no app at all, which is worse than a few
+    // seconds more.
     const next = await this.launch(
       Math.max(this.budget, HEAL_BUDGET_MS - (performance.now() - t0)),
     );
