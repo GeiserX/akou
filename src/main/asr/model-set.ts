@@ -10,10 +10,11 @@
  * `auto` prefers what is already on disk, so an upgrade never asks for a new download before the
  * next call:
  *
- * - **Final pass** (`asr.final.model`): `qwen` or `parakeet` as named. `auto` is Qwen when Qwen and
- *   its llama-server are here, on any machine, as `chooseFinalModel` runs it; else Parakeet when
- *   Parakeet is here. With neither, a first download fetches Qwen where the machine has room for it
- *   (`qwenRoom`: a GPU for it and 16 GB) and Parakeet elsewhere.
+ * - **Final pass** (`asr.final.model`), as `chooseFinalModel` runs it: `auto` and `qwen` prefer Qwen
+ *   with its llama-server, `parakeet` prefers Parakeet; the preferred one when it is here, else the
+ *   other one when it is here, on any machine. With neither, a named one is fetched, and `auto`
+ *   fetches Qwen where the machine has room for it (`qwenRoom`: a GPU for it and 16 GB) and
+ *   Parakeet elsewhere.
  * - **Live** (`asr.live`): `parakeet` as Parakeet; a named Nemotron when it is here, else Parakeet
  *   while Parakeet is here (a call runs it in the Nemotron's place and says why), else the named
  *   one. `auto` and `nemotron` are the downloaded Nemotron that hears the call's languages; with
@@ -63,15 +64,18 @@ export interface ModelSetContext {
 
 /** The final pass's recognizer to keep and fetch: Qwen or Parakeet. */
 export function intendedFinal(c: ModelSetContext): "qwen" | "parakeet" {
+  if (!c.catalog.includes(QWEN_ASR)) return "parakeet";
   const asked = finalModelOf(c.settings["asr.final.model"]);
-  const qwenHere = c.catalog.includes(QWEN_ASR);
-  if (asked === "parakeet" || !qwenHere) return "parakeet";
-  if (asked === "qwen") return "qwen";
-  // `auto` runs Qwen whenever it is downloaded (`chooseFinalModel`), on any machine.
   const qwenFiles = [QWEN_ASR, ...(c.runtime ? [c.runtime] : [])];
-  if (qwenFiles.every((id) => c.present(id))) return "qwen";
-  if (c.present(RECOGNIZER)) return "parakeet";
-  // Neither is here: a first download fetches Qwen only where it has room to run well.
+  const here = (m: "qwen" | "parakeet") =>
+    m === "qwen" ? qwenFiles.every((id) => c.present(id)) : c.present(RECOGNIZER);
+  // As `chooseFinalModel` runs it: the preferred model when it is here, else the other one.
+  const prefer = asked === "parakeet" ? "parakeet" : "qwen";
+  const other = prefer === "qwen" ? "parakeet" : "qwen";
+  if (here(prefer)) return prefer;
+  if (here(other)) return other;
+  // Neither is here: a named one is fetched; `auto` fetches Qwen only where it has room to run well.
+  if (asked) return asked;
   if (!c.machine || qwenRoom({ machine: c.machine } as LiveSetupContext) !== null)
     return "parakeet";
   return "qwen";

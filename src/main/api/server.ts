@@ -105,7 +105,7 @@ export interface ApiApp {
    * The final pass's model for `GET /models`: `asr.final.model`, the catalog id the setting names
    * (null for `auto`), and the id the next pass runs. Null in server mode.
    */
-  finalModel?(): { setting: string; named: string | null; next: string } | null;
+  finalModel?(): { setting: string; named: string | null; next: string | null } | null;
   /** Fetches one catalog model on purpose. Throws `ModelRefused`. */
   pullModel?(id: string): import("../server/model-store.ts").ModelView;
   /** Deletes one model under the sweep's rules. Throws `ModelRefused`. */
@@ -167,7 +167,15 @@ export interface ApiApp {
     opts: { force?: boolean; model?: string },
   ): Promise<Outcome<{ call: string; started: boolean; model?: string }>>;
   /** How far a running final pass is, or null when none runs for the call. Absent: never known. */
-  finalProgress?(id: string): { done_s: number; total_s: number; model: string } | null;
+  finalProgress?(id: string): {
+    done_s: number;
+    total_s: number;
+    model: string;
+    /** `starting`, `speakers` or `decoding`; null before the pass's first word. */
+    step: string | null;
+    /** The call whose Qwen pass this one waits for, or null. */
+    waiting: string | null;
+  } | null;
   /** `POST /calls/{id}/export`: the export folder, or the folder `to` names. */
   exportCall(id: string, o: { to?: string }): Promise<Outcome<ExportResult>>;
   /** `POST /calls/{id}/hooks`: the hooks of the stages named (default: every stage reached). */

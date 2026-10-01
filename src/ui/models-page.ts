@@ -94,7 +94,8 @@ import { wordsFor } from "./settings-labels.ts";
 interface FinalView {
   setting: string;
   named: string | null;
-  next: string;
+  /** Null when no final model is downloaded. */
+  next: string | null;
 }
 type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView; final?: FinalView };
 

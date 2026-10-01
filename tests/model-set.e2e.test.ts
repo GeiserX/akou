@@ -131,13 +131,21 @@ describe("Nemotron live and Qwen after the call: no Parakeet needed", () => {
     expect([kept.status, (kept.body as Body).error]).toEqual([409, "model_in_use"]);
   });
 
-  test("naming Parakeet for the final pass needs it again: not ready, and a call is refused until it is here", async () => {
-    await rig.api("PATCH", "/config", { "asr.final.model": RECOGNIZER });
+  test("naming Parakeet for the live lines needs it again; named for the final pass, Qwen writes until it is here", async () => {
+    await rig.api("PATCH", "/config", { "asr.live": "parakeet" });
     try {
       expect(((await rig.api("GET", "/models")).body as Body).state).toBe("missing");
       expect((await listed())[RECOGNIZER].default).toBe(true);
       const call = await rig.api("POST", "/calls", { title: "needs parakeet" });
       expect([call.status, (call.body as Body).error]).toEqual([503, "models_missing"]);
+    } finally {
+      await rig.api("PATCH", "/config", { "asr.live": "auto" });
+    }
+    await rig.api("PATCH", "/config", { "asr.final.model": RECOGNIZER });
+    try {
+      const m = (await rig.api("GET", "/models")).body as Body;
+      expect(m.state).toBe("ready");
+      expect(m.final).toEqual({ setting: RECOGNIZER, named: RECOGNIZER, next: QWEN_ASR });
     } finally {
       await rig.api("PATCH", "/config", { "asr.final.model": "auto" });
     }

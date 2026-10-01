@@ -100,14 +100,27 @@ describe("the chosen setups' models: Parakeet only when a setup uses it", () => 
 
   test("Parakeet is needed again the moment the live model or the final pass names it", () => {
     const named: [Partial<ModelSetSettings>, string[]][] = [
-      [{ "asr.final.model": RECOGNIZER }, ["nemotron-3.5-560", RECOGNIZER]],
       [{ "asr.live": "parakeet" }, [RECOGNIZER, QWEN_ASR, BUILD]],
+      // Named for the final pass with Parakeet here: Parakeet.
+      [{ "asr.final.model": RECOGNIZER }, ["nemotron-3.5-560", RECOGNIZER]],
     ];
-    for (const [settings, want] of named)
-      expect({ settings, got: chosenModels(ctx(OWNER, { settings })) }).toEqual({
+    for (const [settings, want] of named) {
+      const on = settings["asr.live"] ? OWNER : [...OWNER, RECOGNIZER];
+      expect({ settings, got: chosenModels(ctx(on, { settings })) }).toEqual({
         settings,
         got: want,
       });
+    }
+    // Named for the final pass with only Qwen here: the pass runs Qwen until Parakeet is
+    // downloaded (`chooseFinalModel`), so nothing is waited for; with neither, Parakeet is fetched.
+    const final = { "asr.final.model": RECOGNIZER };
+    expect(chosenModels(ctx(OWNER, { settings: final }))).toEqual([
+      "nemotron-3.5-560",
+      QWEN_ASR,
+      BUILD,
+    ]);
+    // With neither, Parakeet is fetched, and it writes the live lines too until Nemotron is here.
+    expect(chosenModels(ctx(HELPERS, { settings: final }))).toEqual([RECOGNIZER]);
   });
 
   test("the second pass's and dictation's Parakeet is kept while chosen, but a call never waits for it", () => {
