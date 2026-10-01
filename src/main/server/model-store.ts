@@ -460,6 +460,9 @@ export interface ModelView {
   set_default: { key: string; value: string } | null;
 }
 
+/** How old a copy's temporary file must be before a store that starts deletes it. */
+export const STALE_COPY_MS = 60_000;
+
 /** A model being copied from a folder (`POST /models/import`). */
 interface Copy {
   /** Bytes so far per file name. */
@@ -484,6 +487,31 @@ export class ModelStore {
 
   constructor(private readonly o: ModelStoreOptions) {
     this.now = o.now ?? Date.now;
+    this.clearStaleCopies();
+  }
+
+  /**
+   * Deletes the temporary files of copies from a folder that never finished: akou quit or crashed
+   * in the middle of one. Each copy writes `<file>.<random>.import`, so nothing else would ever
+   * delete them. A file written in the last minute may belong to a copy still running in another
+   * process (`akou models import`), so it stays.
+   */
+  private clearStaleCopies(): void {
+    const dir = this.o.dir();
+    const before = Date.now() - STALE_COPY_MS;
+    try {
+      for (const id of readdirSync(dir)) {
+        const at = join(dir, id);
+        if (!statSync(at).isDirectory()) continue;
+        for (const f of readdirSync(at)) {
+          if (!f.endsWith(".import")) continue;
+          const path = join(at, f);
+          if (statSync(path).mtimeMs < before) rmSync(path, { force: true });
+        }
+      }
+    } catch {
+      // No models folder yet, or one that cannot be read: nothing to clear.
+    }
   }
 
   /** Every model a request may name and the sweep may delete. */
@@ -798,6 +826,8 @@ export class ModelStore {
     const copied: string[] = [];
     const missing: string[] = [];
     for (const m of catalog) {
+      // akou is quitting: the copies stop, and the next start clears what they left.
+      if (this.closed) break;
       const c: Copy = { bytes: new Map(), abort: new AbortController() };
       this.copies.set(m.id, c);
       try {

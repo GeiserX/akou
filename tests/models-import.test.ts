@@ -9,7 +9,16 @@
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
 import { createHash } from "node:crypto";
-import { closeSync, existsSync, mkdirSync, openSync, readdirSync, writeSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  utimesSync,
+  writeFileSync,
+  writeSync,
+} from "node:fs";
 import { join } from "node:path";
 import {
   type DownloadProgress,
@@ -19,7 +28,7 @@ import {
   NEMOTRON,
   RECOGNIZER,
 } from "../src/main/asr/models.ts";
-import { ModelStore } from "../src/main/server/model-store.ts";
+import { ModelStore, STALE_COPY_MS } from "../src/main/server/model-store.ts";
 import { type AppRig, appRig, FAKE_MODELS } from "./api-helpers.ts";
 import { type ModelRegistry, modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
@@ -225,6 +234,66 @@ describe("[W3.19] a model imported from a folder is copied in one checked, async
       } finally {
         store.close();
       }
+    } finally {
+      t.cleanup();
+    }
+  });
+});
+
+describe("[W3.19] a copy cut short by quitting leaves nothing behind", () => {
+  function store(dir: string, big: ModelSpecEntry): ModelStore {
+    return new ModelStore({
+      dir: () => dir,
+      machine: () => [big],
+      catalog: () => [big],
+      autoDownload: () => false,
+      maxGb: () => 40,
+      unusedDays: () => 30,
+      log: () => {},
+    });
+  }
+
+  test("closing the store stops a copy in flight, and its temporary file goes", async () => {
+    const t = tempDir("akou-import-");
+    try {
+      const from = join(t.dir, "stick");
+      mkdirSync(from, { recursive: true });
+      const big = entryOf(BIG, [bigFile(join(from, "w.bin"), "w.bin", 32)]);
+      const dir = join(t.dir, "models");
+      mkdirSync(dir, { recursive: true });
+      const s = store(dir, big);
+      const run = s.import(from);
+      while (s.size(BIG).bytes === 0) await tick();
+      expect(leftovers(dir).length).toBe(1);
+      s.close();
+      expect(await run).toEqual({ copied: [], missing: [`${BIG}/w.bin`] });
+      expect(existsSync(modelFile(dir, BIG, "w.bin"))).toBe(false);
+      expect(leftovers(dir)).toEqual([]);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("a store that starts deletes the temporary files of copies that never ended, but not a fresh one", () => {
+    const t = tempDir("akou-import-");
+    try {
+      const dir = join(t.dir, "models");
+      mkdirSync(join(dir, BIG), { recursive: true });
+      // A copy killed with akou: the process died before its own cleanup ran.
+      const stale = join(dir, BIG, "w.bin.0a1b2c3d.import");
+      const old = join(dir, BIG, "w.bin.import");
+      // Another process's copy, still being written.
+      const fresh = join(dir, BIG, "w.bin.9f8e7d6c.import");
+      const model = join(dir, BIG, "w.bin");
+      for (const f of [stale, old, fresh, model]) writeFileSync(f, "x");
+      const past = (Date.now() - STALE_COPY_MS - 5_000) / 1000;
+      for (const f of [stale, old, model]) utimesSync(f, past, past);
+      store(dir, entryOf(BIG, [])).close();
+      expect(existsSync(stale)).toBe(false);
+      expect(existsSync(old)).toBe(false);
+      expect(existsSync(fresh)).toBe(true);
+      // Control: the model file itself, as old as the stale ones, is never touched.
+      expect(existsSync(model)).toBe(true);
     } finally {
       t.cleanup();
     }
