@@ -489,6 +489,235 @@ describe("DESIGN 7 parity with hark-viewer", () => {
   );
 
   test(
+    "[W4.1] The live transcript sits at the bottom: the space above a few lines, the newest and the grey line at the bottom edge, pinned as lines arrive, left alone once scrolled up",
+    async () => {
+      const t = tempDir("akou-wav-");
+      await withRig({ helperArgs: ["--wav", silentWav(t.dir, 120)] }, async (rig) => {
+        const id = await rig.startCall();
+        const line = (i: number) =>
+          rig.write(
+            id,
+            seg(`l7${String(i).padStart(5, "0")}`, `line ${i} of the call`, { w0: Date.now() + i }),
+          );
+        for (let i = 1; i <= 3; i++) await line(i);
+        const page = await rig.open(id, {
+          before: (p) => p.setViewportSize({ width: 1024, height: 700 }),
+        });
+        await page.waitForSelector("#lines .row >> nth=2");
+        // Where the rows are in the transcript's area: the space under the last one (a line, or the
+        // grey one being spoken) and over the first.
+        const place = () =>
+          page.evaluate(() => {
+            const s = (document.getElementById("scroller") as HTMLElement).getBoundingClientRect();
+            const rows = [...document.querySelectorAll("#lines .row, #partial:not([hidden]) .row")];
+            const first = (rows[0] as HTMLElement).getBoundingClientRect();
+            const last = rows.at(-1) as HTMLElement;
+            return {
+              below: s.bottom - last.getBoundingClientRect().bottom,
+              above: first.top - s.top,
+              last: last.dataset.id ?? "",
+            };
+          });
+        // On screen and within a row's padding and the area's own of the bottom edge.
+        // Read once the view stopped moving: a smooth scroll carries the last row past the edge.
+        const atEdge = async () => {
+          const b = (await place()).below;
+          await Bun.sleep(250);
+          return b === (await place()).below && b >= -1 && b <= 24;
+        };
+        await until(atEdge, 3000, "three lines at the bottom");
+        expect((await place()).above).toBeGreaterThan(200);
+        // The grey line still being spoken is the last row, at the bottom edge.
+        rig.app.manager.controller(id)?.view?.provisional.update({
+          ch: "call",
+          part: 1,
+          pseq: 1,
+          text: "still being said",
+          w0: Date.now(),
+          at: Date.now(),
+          spk: "c1",
+        });
+        await page.waitForSelector("#partial .row.draft");
+        await until(async () => (await place()).last === "draft-call", 3000, "grey line last");
+        expect(await atEdge()).toBe(true);
+        // Enough lines to scroll: each one arriving is the last row, at the bottom edge.
+        for (let i = 4; i <= 40; i++) await line(i);
+        await page.waitForSelector('#lines .row[data-id="l700040"]');
+        await page.waitForSelector("#partial", { state: "hidden", timeout: 6000 });
+        await until(atEdge, 3000, "pinned at line 40");
+        expect((await place()).last).toBe("l700040");
+        // Long lines close together, each taller than the 80 px that counts as scrolled up: the
+        // view follows them and never reads as scrolled (a smooth scroll's first steps did).
+        await page.evaluate(() => {
+          const w = window as unknown as { unpinned: number };
+          w.unpinned = 0;
+          let was = document.body.classList.contains("scrolled");
+          new MutationObserver(() => {
+            const now = document.body.classList.contains("scrolled");
+            if (now && !was) w.unpinned++;
+            was = now;
+          }).observe(document.body, { attributeFilter: ["class"] });
+        });
+        const long = "a long sentence that keeps going and going ".repeat(12);
+        for (const i of [101, 102, 103]) {
+          await rig.write(id, seg(`l7${i}`, long, { w0: Date.now() + i }));
+          await Bun.sleep(150);
+        }
+        await page.waitForSelector('#lines .row[data-id="l7103"]');
+        await until(atEdge, 3000, "pinned after the long lines");
+        expect((await place()).last).toBe("l7103");
+        expect(
+          await page.evaluate(() => (window as unknown as { unpinned: number }).unpinned),
+        ).toBe(0);
+        // A shorter window keeps the newest line at the bottom edge.
+        await page.setViewportSize({ width: 1024, height: 560 });
+        await until(atEdge, 3000, "pinned, shorter window");
+        // A narrower window, two sizes in a row and the font up twice with no wait keep it there
+        // too; none of these reads as the reader scrolling up.
+        await page.setViewportSize({ width: 774, height: 560 });
+        await until(atEdge, 3000, "pinned, narrower window");
+        await page.setViewportSize({ width: 1024, height: 640 });
+        await page.setViewportSize({ width: 900, height: 600 });
+        await until(atEdge, 3000, "pinned, two sizes in a row");
+        // The second key lands in the frame after the first re-pin, before its scroll event.
+        const twice = (key: string) =>
+          page.evaluate(async (k) => {
+            const press = () =>
+              (document.getElementById("scroller") as HTMLElement).dispatchEvent(
+                new KeyboardEvent("keydown", { key: k, bubbles: true }),
+              );
+            press();
+            await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+            press();
+          }, key);
+        await twice("+");
+        await until(atEdge, 3000, "pinned, font up twice");
+        await twice("-");
+        await until(atEdge, 3000, "pinned, font back down");
+        expect(
+          await page.evaluate(() => (window as unknown as { unpinned: number }).unpinned),
+        ).toBe(0);
+        // Scrolled up by the reader: a new line does not move the view, and Back to live shows.
+        await page.evaluate(() => {
+          const s = document.getElementById("scroller") as HTMLElement;
+          s.style.scrollBehavior = "auto";
+          s.scrollTop -= 300;
+        });
+        await page.waitForSelector("#jump", { state: "visible" });
+        const top = () =>
+          page.evaluate(() => (document.getElementById("scroller") as HTMLElement).scrollTop);
+        const held = await top();
+        await line(41);
+        await page.waitForSelector('#lines .row[data-id="l700041"]');
+        await Bun.sleep(300);
+        expect(await top()).toBe(held);
+        expect(await page.locator("#jump").isVisible()).toBe(true);
+        // Back to live goes straight down: on its way it never reads as scrolled up again.
+        await page.evaluate(() => {
+          (window as unknown as { unpinned: number }).unpinned = 0;
+          (document.getElementById("scroller") as HTMLElement).style.scrollBehavior = "";
+          (document.getElementById("jump") as HTMLElement).click();
+        });
+        await until(atEdge, 3000, "back at the bottom");
+        expect((await place()).last).toBe("l700041");
+        expect(
+          await page.evaluate(() => (window as unknown as { unpinned: number }).unpinned),
+        ).toBe(0);
+        // Again with nothing arriving since the reader scrolled up.
+        await page.evaluate(() => {
+          const s = document.getElementById("scroller") as HTMLElement;
+          s.scrollTo({ top: s.scrollTop - 300, behavior: "instant" });
+        });
+        await page.waitForSelector("#jump", { state: "visible" });
+        await page.evaluate(() => {
+          (window as unknown as { unpinned: number }).unpinned = 0;
+          (document.getElementById("jump") as HTMLElement).click();
+        });
+        await until(atEdge, 3000, "back at the bottom, nothing arriving");
+        expect(
+          await page.evaluate(() => (window as unknown as { unpinned: number }).unpinned),
+        ).toBe(0);
+        // Back to live from the top, with the window's own smooth scrolling, while long lines
+        // arrive: it lands on the newest line and stays pinned.
+        await page.evaluate(() => {
+          const s = document.getElementById("scroller") as HTMLElement;
+          s.style.scrollBehavior = "";
+          s.scrollTo({ top: 0, behavior: "instant" });
+        });
+        await page.waitForSelector("#jump", { state: "visible" });
+        const arriving = (async () => {
+          for (let i = 201; i <= 215; i++) {
+            await rig.write(id, seg(`l7${i}`, long, { w0: Date.now() + i }));
+            await Bun.sleep(40);
+          }
+        })();
+        await page.click("#jump");
+        await arriving;
+        await page.waitForSelector('#lines .row[data-id="l7215"]');
+        await until(atEdge, 3000, "pinned after Back to live while lines arrive");
+        expect((await place()).last).toBe("l7215");
+        expect(await page.locator("#jump").isVisible()).toBe(false);
+      });
+      t.cleanup();
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "[W4.1] A saved call opens at its end, its last line at the bottom edge over the player bar and under the final note",
+    async () => {
+      const id = "01J8Z6Q4M2VX0K7B3D4E5FRUNN";
+      await withRig(
+        {
+          seed: (home) => {
+            seedCall(home, (b) => {
+              b.created({ id });
+              b.partStarted(1, T0);
+              for (let i = 1; i <= 60; i++)
+                b.seg({
+                  id: `l${String(i).padStart(6, "0")}`,
+                  w0: T0 + i * 4000,
+                  text: `line number ${i} of the call`,
+                });
+              b.partEnded(1, "stop", 240);
+              b.add({ type: "call.ended", reason: "stop" });
+              b.add({ type: "final.started", pid: 1 });
+            });
+          },
+        },
+        async (rig) => {
+          const page = await rig.open(undefined, {
+            before: (p) => p.setViewportSize({ width: 1024, height: 700 }),
+          });
+          await page.click(`#calls li[data-id="${id}"] button`);
+          await page.waitForSelector("#lines .row >> nth=59");
+          await page.waitForSelector("#final:not([hidden])");
+          await page.waitForSelector("#player-bar:not([hidden])");
+          const below = () =>
+            page.evaluate(() => {
+              const s = (
+                document.getElementById("scroller") as HTMLElement
+              ).getBoundingClientRect();
+              const last = document.querySelector("#lines .row:last-child") as HTMLElement;
+              return s.bottom - last.getBoundingClientRect().bottom;
+            });
+          // Read once the view stopped moving: a smooth scroll carries the last line past the edge.
+          await until(
+            async () => {
+              const b = await below();
+              await Bun.sleep(250);
+              return b === (await below()) && b >= -1 && b <= 24;
+            },
+            3000,
+            "last line at the bottom edge",
+          );
+        },
+      );
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "Speaker chips: click to rename, merge and unmerge, rewriting rows in place",
     async () => {
       let id = "";
