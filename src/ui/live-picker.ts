@@ -234,6 +234,8 @@ export class LivePicker {
     this.button.setAttribute("aria-expanded", String(open));
     if (!open) {
       this.folder = null;
+      // Opened again, a slot with no model shows its box open again (W3.19).
+      this.adding = { live: null, review: null };
       return;
     }
     this.draw();
@@ -576,9 +578,12 @@ export class LivePicker {
   private async importFrom(slot: Slot): Promise<void> {
     const dir = this.folder?.text.trim() ?? "";
     if (dir === "") return;
-    const res = await this.d.t
+    const copying = this.d.t
       .request<{ copied?: string[] }>("POST", "/models/import", { dir })
       .catch(() => null);
+    // A model being copied reads as downloading: its bar moves and Cancel stops it.
+    const follow = setInterval(() => void this.load(), 1000);
+    const res = await copying.finally(() => clearInterval(follow));
     if (!res || res.status >= 400) {
       toast(`The models could not be copied: ${message(res?.body, "akou is out of reach")}.`);
       return;
