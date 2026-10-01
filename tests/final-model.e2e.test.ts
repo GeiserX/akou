@@ -166,18 +166,9 @@ describe("the final pass's model", () => {
     const dir = dirname(modelFile(models, RECOGNIZER, "a.onnx"));
     renameSync(dir, `${dir}.away`);
     try {
-      // The last pass may still be settling (409 final_running) a moment after its final.done.
-      const post = () => rig.api("POST", "/calls/last/finalize", { force: true });
-      let qwen = await post();
-      await until(
-        async () => {
-          if (qwen.status !== 409) return true;
-          qwen = await post();
-          return false;
-        },
-        10_000,
-        "the last pass to settle",
-      );
+      // Right after the last pass's final.done, while its llama-server may still be stopping: the
+      // app waits for it instead of answering 409 final_running.
+      const qwen = await rig.api("POST", "/calls/last/finalize", { force: true });
       expect(qwen.status).toBe(202);
       expect(qwen.body.model).toBe(QWEN_ASR);
       const id = qwen.body.call as string;
