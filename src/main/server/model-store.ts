@@ -19,6 +19,8 @@
  *   need) and the ones downloading. Each deletion is one `model.evicted` log line.
  * - **One model at a time** (SV-M6, SV-U6): `list` (state, last use, deletion date, the scores of
  *   `asr/model-scores.ts`, this machine's measured speed from `speed.json`), `pull` and `delete`.
+ * - **Imports** (`POST /models/import`): a model being copied from a folder reads as downloading,
+ *   with its bytes so far, the sweep leaves it, and Cancel stops its copy.
  *
  * This file is server code on purpose: `asr/models.ts` stays the catalog and the downloader.
  */
@@ -40,6 +42,7 @@ import {
   type CatalogEntry,
   DownloadRefused,
   downloadModels,
+  importModels,
   type ModelSpecEntry,
   modelFile,
   NEMOTRON,
@@ -457,6 +460,26 @@ export interface ModelView {
   set_default: { key: string; value: string } | null;
 }
 
+/** Whether process `pid` still runs: one owned by another user counts as running. */
+function running(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** How old a temporary file named without its process must be before a store that starts deletes it. */
+export const STALE_COPY_MS = 60_000;
+
+/** A model being copied from a folder (`POST /models/import`). */
+interface Copy {
+  /** Bytes so far per file name. */
+  bytes: Map<string, number>;
+  abort: AbortController;
+}
+
 /** The models the sweep and a delete must not touch: the default's set and what is in use. */
 export interface Held {
   defaults: ReadonlySet<string>;
@@ -466,11 +489,42 @@ export interface Held {
 export class ModelStore {
   private readonly now: () => number;
   private readonly downloads = new Map<string, Download>();
+  private readonly copies = new Map<string, Copy>();
+  /** The import running, if any: a second one waits for it, so one copy owns each model. */
+  private importing: Promise<unknown> = Promise.resolve();
   private readonly watchers = new Set<(e: DownloadEnd) => void>();
   private closed = false;
 
   constructor(private readonly o: ModelStoreOptions) {
     this.now = o.now ?? Date.now;
+    this.clearStaleCopies();
+  }
+
+  /**
+   * Deletes the temporary files of copies from a folder that never finished: akou quit or crashed
+   * in the middle of one. Each copy writes `<file>.<pid>.<random>.import`, so nothing else would
+   * ever delete them. A file whose process still runs stays, even a suspended `akou models import`
+   * that has written nothing for a while. A file named without a process (written before this
+   * naming) goes once it is a minute old.
+   */
+  private clearStaleCopies(): void {
+    const dir = this.o.dir();
+    const before = Date.now() - STALE_COPY_MS;
+    try {
+      for (const id of readdirSync(dir)) {
+        const at = join(dir, id);
+        if (!statSync(at).isDirectory()) continue;
+        for (const f of readdirSync(at)) {
+          if (!f.endsWith(".import")) continue;
+          const path = join(at, f);
+          const owner = /\.(\d+)\.[0-9a-f]{8}\.import$/.exec(f);
+          const gone = owner ? !running(Number(owner[1])) : statSync(path).mtimeMs < before;
+          if (gone) rmSync(path, { force: true });
+        }
+      }
+    } catch {
+      // No models folder yet, or one that cannot be read: nothing to clear.
+    }
   }
 
   /** Every model a request may name and the sweep may delete. */
@@ -518,7 +572,7 @@ export class ModelStore {
     let n = 0;
     for (const f of m.files) {
       if (existsSync(modelFile(dir, m.id, f.name))) continue;
-      n += f.size - (d?.bytes.get(f.name) ?? 0);
+      n += f.size - (d?.bytes.get(f.name) ?? this.copies.get(m.id)?.bytes.get(f.name) ?? 0);
     }
     return n;
   }
@@ -649,6 +703,12 @@ export class ModelStore {
    * download gives up. False when the model is not downloading.
    */
   cancel(id: string, by: string): boolean {
+    const c = this.copies.get(id);
+    if (c) {
+      c.abort.abort();
+      this.o.log("info", `model.import ${id} cancelled key ${by}`);
+      return true;
+    }
     const d = this.downloads.get(id);
     if (!d) return false;
     d.abort.abort();
@@ -720,7 +780,7 @@ export class ModelStore {
     if (days > 0) {
       for (const id of onDisk) {
         const last = l[id] as number;
-        if (now - last < days * DAY_MS || protect.has(id) || this.downloads.has(id)) continue;
+        if (now - last < days * DAY_MS || protect.has(id) || this.busy(id)) continue;
         const path = join(dir, id);
         const bytes = bytesUnder(path);
         try {
@@ -748,7 +808,54 @@ export class ModelStore {
   /** Whether a catalog model is on disk, downloading, or missing. */
   state(id: string): "ready" | "downloading" | "missing" {
     if (this.missing([id]).length === 0) return "ready";
-    return this.downloads.has(id) ? "downloading" : "missing";
+    return this.busy(id) ? "downloading" : "missing";
+  }
+
+  /** Downloading, or being copied from a folder. */
+  private busy(id: string): boolean {
+    return this.downloads.has(id) || this.copies.has(id);
+  }
+
+  /**
+   * Copies the files of `catalog` from a folder on this machine (`POST /models/import`), one model
+   * at a time: while a model is copied it reads as downloading with its bytes so far, as a
+   * download does, and `cancel` stops its copy, which leaves its files missing. Imports run one
+   * after the other.
+   */
+  import(
+    from: string,
+    catalog: readonly ModelSpecEntry[] = this.o.catalog(),
+  ): Promise<{ copied: string[]; missing: string[] }> {
+    const run = this.importing.then(() => this.copyAll(from, catalog));
+    this.importing = run.catch(() => {});
+    return run;
+  }
+
+  private async copyAll(
+    from: string,
+    catalog: readonly ModelSpecEntry[],
+  ): Promise<{ copied: string[]; missing: string[] }> {
+    const dir = this.o.dir();
+    const copied: string[] = [];
+    const missing: string[] = [];
+    for (const m of catalog) {
+      // akou is quitting: the copies stop, and the next start clears what they left.
+      if (this.closed) break;
+      const c: Copy = { bytes: new Map(), abort: new AbortController() };
+      this.copies.set(m.id, c);
+      try {
+        // Cancelled, it still answers the files it copied before.
+        const r = await importModels(from, dir, [m], {
+          onProgress: (p) => c.bytes.set(p.name, p.bytes),
+          signal: c.abort.signal,
+        });
+        copied.push(...r.copied);
+        missing.push(...r.missing);
+      } finally {
+        this.copies.delete(m.id);
+      }
+    }
+    return { copied, missing };
   }
 
   /** Bytes of the model on disk or fetched so far, and the catalog's total. */
@@ -851,7 +958,8 @@ export class ModelStore {
 
   /** Deletes one model's folder and its ledger entry; the caller has checked it is free. */
   remove(id: string): number {
-    if (this.downloads.has(id)) {
+    // A copy from a folder too: deleting its folder would fail the copy's last step.
+    if (this.busy(id)) {
       throw new ModelRefused(409, "model_in_use", `${id} is downloading`, { model: id });
     }
     const path = join(this.o.dir(), id);
@@ -869,6 +977,7 @@ export class ModelStore {
     this.closed = true;
     for (const d of this.downloads.values()) if (d.timer) clearTimeout(d.timer);
     this.downloads.clear();
+    for (const c of this.copies.values()) c.abort.abort();
     this.watchers.clear();
   }
 }

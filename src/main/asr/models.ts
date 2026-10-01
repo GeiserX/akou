@@ -15,16 +15,8 @@
  * Layout: `<models>/<model id>/<file>`.
  */
 
-import { createHash } from "node:crypto";
-import {
-  copyFileSync,
-  createReadStream,
-  existsSync,
-  mkdirSync,
-  renameSync,
-  rmSync,
-  statSync,
-} from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync } from "node:fs";
 import { open } from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
@@ -745,36 +737,98 @@ export async function downloadModels(
   return out;
 }
 
+/** What `importModels` reports and stops on, as a download does. */
+export interface ImportOptions {
+  /** The bytes of the file being copied so far. */
+  onProgress?(p: DownloadProgress): void;
+  /** Stops the copy; the file being copied is left out and nothing partial stays. */
+  signal?: AbortSignal;
+}
+
+/**
+ * Copies `source` into `target` in one pass, hashing the bytes as they are read, and moves the
+ * copy into place only when its SHA-256 matches. False on a mismatch, with nothing left behind.
+ * Asynchronous all the way: a 2.4 GB file never holds the thread that answers the API.
+ */
+async function copyChecked(
+  model: string,
+  f: ModelFileSpec,
+  source: string,
+  target: string,
+  o: ImportOptions,
+): Promise<boolean> {
+  mkdirSync(dirname(target), { recursive: true });
+  // One temporary file per copy, named with its process: two imports of the same file never write
+  // into each other's, and a store that starts deletes it only once that process is gone.
+  const tmp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.import`;
+  const h = createHash("sha256");
+  let moved = false;
+  try {
+    const fh = await open(tmp, "w");
+    try {
+      let bytes = 0;
+      for await (const chunk of createReadStream(source, { highWaterMark: 1 << 20 })) {
+        o.signal?.throwIfAborted();
+        const b = chunk as Buffer;
+        h.update(b);
+        await fh.write(b);
+        bytes += b.byteLength;
+        o.onProgress?.({ model, name: f.name, bytes, total: f.size });
+      }
+    } finally {
+      await fh.close();
+    }
+    // A short write would leave a truncated file whose source still hashed right.
+    if (h.digest("hex") !== f.sha256 || statSync(tmp).size !== f.size) return false;
+    // Cancelled during the last write: nothing is installed.
+    o.signal?.throwIfAborted();
+    renameSync(tmp, target);
+    moved = true;
+    return true;
+  } finally {
+    if (!moved) rmSync(tmp, { force: true });
+  }
+}
+
 /**
  * `models import DIR` and `POST /models/import`: copies every file of `catalog` whose SHA-256
- * matches from `from/<model>/<file>` or `from/<file>` into `dir`, for machines that cannot
- * download. Answers the files copied and the files still missing.
+ * matches from `from/<model>/<file>` or, when that one is absent or does not match,
+ * `from/<file>` into `dir`, for machines that cannot download. Answers the files copied and the
+ * files still missing. Cancelled (`o.signal`), it keeps the files already copied and lists the
+ * rest as missing.
  */
 export async function importModels(
   from: string,
   dir: string,
   catalog: readonly ModelSpecEntry[],
+  o: ImportOptions = {},
 ): Promise<{ copied: string[]; missing: string[] }> {
   const copied: string[] = [];
   const missing: string[] = [];
   for (const m of catalog) {
     for (const f of m.files) {
       const target = modelFile(dir, m.id, f.name);
-      const source = [join(from, m.id, f.name), join(from, f.name)].find(
-        (s) => existsSync(s) && statSync(s).size === f.size,
-      );
-      if (!source || (await sha256File(source)) !== f.sha256) {
-        // A file already there counts only at its full size, as `models list` reads it.
-        if (!existsSync(target) || statSync(target).size !== f.size) {
-          missing.push(`${m.id}/${f.name}`);
+      let done = false;
+      for (const source of [join(from, m.id, f.name), join(from, f.name)]) {
+        if (o.signal?.aborted) break;
+        if (!existsSync(source) || statSync(source).size !== f.size) continue;
+        try {
+          done = await copyChecked(m.id, f, source, target, o);
+        } catch (err) {
+          if (!o.signal?.aborted) throw err;
+          break;
         }
+        if (done) break;
+        o.onProgress?.({ model: m.id, name: f.name, bytes: 0, total: f.size });
+      }
+      if (done) {
+        copied.push(`${m.id}/${f.name}`);
         continue;
       }
-      mkdirSync(join(dir, m.id), { recursive: true });
-      const tmp = `${target}.import`;
-      copyFileSync(source, tmp);
-      renameSync(tmp, target);
-      copied.push(`${m.id}/${f.name}`);
+      // A file already there counts only at its full size, as `models list` reads it.
+      if (!existsSync(target) || statSync(target).size !== f.size) {
+        missing.push(`${m.id}/${f.name}`);
+      }
     }
   }
   return { copied, missing };

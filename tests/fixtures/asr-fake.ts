@@ -212,6 +212,8 @@ export interface FakeOptions {
   liveTierMs?: number;
   /** Loading a streaming engine throws (a missing or broken model). */
   liveFails?: boolean;
+  /** Pushing audio into a streaming engine's stream throws (a native decode error). */
+  livePushFails?: boolean;
   /**
    * Each streaming engine load busy-waits this long, and the set then holds one engine at a time,
    * as sherpa's does: loading another lets the one before go.
@@ -549,7 +551,7 @@ export class FakeModels implements ModelSet {
       this.liveEngines.length = 0;
       busyWait(this.o.liveLoadMs);
     }
-    const e = new FakeLiveEngine(id, this.o.liveTierMs ?? 560);
+    const e = new FakeLiveEngine(id, this.o.liveTierMs ?? 560, this.o.livePushFails);
     this.liveEngines.push(e);
     this.count(id);
     return e;
@@ -693,10 +695,15 @@ export class FakeLiveEngine implements LiveEngine {
   constructor(
     readonly id: string,
     readonly tierMs: number,
+    private readonly pushFails = false,
   ) {}
 
   open(lang: string): LiveStream {
     const s = new FakeLiveStream(this.tierMs / 1000, lang);
+    if (this.pushFails)
+      s.push = () => {
+        throw new Error("fake: the stream's decode failed");
+      };
     this.streams.push(s);
     return s;
   }

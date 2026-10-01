@@ -16,11 +16,13 @@
  *   are already there. Progress is `GET /models`. `{"model": id}` fetches that one model under the
  *   size cap and the free-space check (SV-M2).
  * - `POST /models/cancel`: `{"model": id}` stops that model's download; the partial file stays, so
- *   the next pull resumes. 404 when it is not downloading.
+ *   the next pull resumes. It also stops that model's copy by `POST /models/import`. 404 when it is
+ *   not downloading.
  * - `DELETE /models/{id}`: deletes one model under the sweep's rules; 409 `model_in_use` for the
  *   default's set or a model in use.
  * - `POST /models/import`: `{"dir": path}` copies every catalog file whose SHA-256 matches from that
- *   folder on this machine, as `akou models import DIR` does.
+ *   folder on this machine, as `akou models import DIR` does. The copy never holds the server:
+ *   while it runs, `GET /models` shows the model downloading with its bytes so far.
  *
  * Until the models are there, `POST /calls` answers `503 models_missing`.
  */
@@ -95,7 +97,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
     "/models/cancel",
     {
       id: "models.cancel",
-      doc: "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. 404 when the model is not downloading.",
+      doc: "Stop one model's download, started by models.pull or by a job that waits on it. The files already verified and the partial file stay, so the next pull resumes; a job waiting on the model fails. It also stops the model's copy by models.import, which then lists its files as missing. 404 when the model is not downloading.",
       access: "admin",
       modes: ["app", "server"],
       body: { model: "string" },
@@ -118,7 +120,7 @@ export function modelRoutes(r: Router<ApiApp>): void {
     "/models/import",
     {
       id: "models.import",
-      doc: "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing. 404 when the folder does not exist.",
+      doc: "Copy the speech models from a folder on this machine, for one that cannot download: every catalog file whose SHA-256 matches, from `<dir>/<model>/<file>` or `<dir>/<file>`, as `akou models import DIR` does. Answers the files copied and the files still missing once the copy ends; while it runs, models.get shows the model being copied as `downloading` with its bytes so far, and models.cancel stops it. 404 when the folder does not exist.",
       access: "admin",
       modes: ["app", "server"],
       body: { dir: "string" },
