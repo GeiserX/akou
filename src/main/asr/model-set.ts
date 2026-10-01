@@ -10,11 +10,10 @@
  * `auto` prefers what is already on disk, so an upgrade never asks for a new download before the
  * next call:
  *
- * - **Final pass** (`asr.final.model`): `qwen` or `parakeet` as named. `auto` is Parakeet on a
- *   machine with no room for Qwen (`qwenRoom`: a GPU for it and 16 GB). Where it has room, `auto` is
- *   Qwen when Qwen and its llama-server are here, else Parakeet when Parakeet is here, else Qwen.
- *   The final pass itself runs what `chooseFinalModel` picks from the files on disk; this only says
- *   what to keep and fetch, by the same rule.
+ * - **Final pass** (`asr.final.model`): `qwen` or `parakeet` as named. `auto` is Qwen when Qwen and
+ *   its llama-server are here, on any machine, as `chooseFinalModel` runs it; else Parakeet when
+ *   Parakeet is here. With neither, a first download fetches Qwen where the machine has room for it
+ *   (`qwenRoom`: a GPU for it and 16 GB) and Parakeet elsewhere.
  * - **Live** (`asr.live`): `parakeet` as Parakeet; a named Nemotron when it is here, else Parakeet
  *   while Parakeet is here (a call runs it in the Nemotron's place and says why), else the named
  *   one. `auto` and `nemotron` are the downloaded Nemotron that hears the call's languages; with
@@ -68,12 +67,14 @@ export function intendedFinal(c: ModelSetContext): "qwen" | "parakeet" {
   const qwenHere = c.catalog.includes(QWEN_ASR);
   if (asked === "parakeet" || !qwenHere) return "parakeet";
   if (asked === "qwen") return "qwen";
-  // `auto` runs Qwen only where it has room (`chooseFinalModel`), so it is kept only there.
-  if (!c.machine || qwenRoom({ machine: c.machine } as LiveSetupContext) !== null)
-    return "parakeet";
+  // `auto` runs Qwen whenever it is downloaded (`chooseFinalModel`), on any machine.
   const qwenFiles = [QWEN_ASR, ...(c.runtime ? [c.runtime] : [])];
   if (qwenFiles.every((id) => c.present(id))) return "qwen";
-  return c.present(RECOGNIZER) ? "parakeet" : "qwen";
+  if (c.present(RECOGNIZER)) return "parakeet";
+  // Neither is here: a first download fetches Qwen only where it has room to run well.
+  if (!c.machine || qwenRoom({ machine: c.machine } as LiveSetupContext) !== null)
+    return "parakeet";
+  return "qwen";
 }
 
 /** The live model to keep and fetch: a Nemotron's id, or Parakeet's. */

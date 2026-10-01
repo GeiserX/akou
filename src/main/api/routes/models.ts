@@ -46,17 +46,19 @@ export function modelRoutes(r: Router<ApiApp>): void {
     "/models",
     {
       id: "models.get",
-      doc: "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable.",
+      doc: "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`) and `next` (the id the next pass runs, never one that is not downloaded).",
       access: "admin",
       modes: ["app", "server"],
       ok: 200,
     },
     (c) => {
       const live = c.app.liveModels?.() ?? null;
+      const final = c.app.finalModel?.() ?? null;
       return json(200, {
         ...c.app.models(),
         models: c.app.modelRows?.() ?? [],
         ...(live ? { live } : {}),
+        ...(final ? { final } : {}),
       });
     },
   );

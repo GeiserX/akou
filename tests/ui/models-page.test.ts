@@ -160,6 +160,36 @@ describe("the Models page", () => {
   );
 
   test(
+    "After the call follows the final pass's setting: Qwen named shows Qwen with its Download and what writes until it is here, and Fast's Parakeet becomes a model of its own",
+    async () => {
+      // `auto` with Qwen missing: Parakeet, as before.
+      expect(await page.$(AFTER)).not.toBeNull();
+      await rig.api("PATCH", "/config", { "asr.final.model": QWEN_ASR });
+      const after = `#models-after [data-model="${QWEN_ASR}"]`;
+      try {
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(after);
+        const text = (await page.textContent(after)) ?? "";
+        expect(text).toContain("Qwen3-ASR 1.7B");
+        expect(text).toContain("Until it is downloaded, Parakeet v3 writes it.");
+        expect(await page.$(`${after} [data-action="download"]`)).not.toBeNull();
+        expect(await page.$(AFTER)).toBeNull();
+        const fast =
+          (await page.textContent(`#models-dictation [data-model="${RECOGNIZER}"]`)) ?? "";
+        expect(fast).toContain("Parakeet, on the processor");
+        expect(fast).not.toContain("same model as after the call");
+      } finally {
+        await rig.api("PATCH", "/config", { "asr.final.model": "auto" });
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(AFTER);
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
     "a refused download says why in plain words, with the model's name and no id",
     async () => {
       const cap = await setting("server.models_max_gb");

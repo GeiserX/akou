@@ -93,6 +93,8 @@ describe("the chosen setups' models: Parakeet only when a setup uses it", () => 
     for (const machine of [{ gpu: false, memoryGb: 64 }, { gpu: true, memoryGb: 8 }, null]) {
       expect(intendedFinal(ctx([], { machine }))).toBe("parakeet");
       expect(chosenModels(ctx([], { machine }))).toEqual([RECOGNIZER]);
+      // Qwen downloaded anyway: the final pass runs it on any machine, so it is what is kept.
+      expect(intendedFinal(ctx(OWNER, { machine }))).toBe("qwen");
     }
   });
 

@@ -77,7 +77,12 @@ import {
   verifyAccelerator,
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
-import { chooseFinalModel, type FinalChoice, finalModelOf } from "./asr/final-model.ts";
+import {
+  chooseFinalModel,
+  type FinalChoice,
+  finalModelId,
+  finalModelOf,
+} from "./asr/final-model.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import {
@@ -2284,6 +2289,18 @@ export class AkouApp implements ApiApp {
    * The recognizer the next final pass runs: `asked` (`akou finalize --model`) or
    * `asr.final.model`, never one whose files are missing.
    */
+  /** `GET /models`'s `final`: the setting, the model it names, and what the next pass runs. */
+  finalModel(): { setting: string; named: string | null; next: string } | null {
+    if (this.runMode === "server") return null;
+    const setting = this.cfg.settings["asr.final.model"];
+    const named = finalModelOf(setting);
+    return {
+      setting,
+      named: named ? finalModelId(named) : null,
+      next: finalModelId(this.finalChoice().model),
+    };
+  }
+
   finalChoice(asked?: string): FinalChoice {
     return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], this.liveContext());
   }
