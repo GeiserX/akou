@@ -9,24 +9,28 @@ import { describe, expect, test } from "bun:test";
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../src/core/log/writer.ts";
+import { ApiClient } from "../src/main/cli/client.ts";
 import {
+  ancestry,
   descendants,
   HEAL_BUDGET_MS,
   launcherOf,
   parsePs,
   recordingOut,
   stopAll,
+  stopList,
 } from "../src/main/cli/heal.ts";
 import { FAKE_HELPER, writeSettings } from "./api-helpers.ts";
 import { cliChild } from "./cli-helpers.ts";
 import { tempDir } from "./helpers.ts";
+import { mcpClient } from "./mcp-helpers.ts";
 
 const LONG = 60_000;
 const HUNG = join(import.meta.dir, "fixtures", "hung-app.ts");
 const POSIX = process.platform !== "win32";
 
 /** A home with a hung app in it; `record` gives the app a helper writing that file. */
-async function hungHome(record?: string) {
+async function hungHome(record?: string, busyMs?: number) {
   const t = tempDir("akou-hung-");
   writeSettings(t.dir, {
     "api.port": 0,
@@ -35,11 +39,19 @@ async function hungHome(record?: string) {
     "dictation.enabled": false,
   });
   const env = { ...process.env, AKOU_HOME: t.dir, AKOU_HEADLESS: undefined };
-  const proc = Bun.spawn([process.execPath, HUNG, ...(record ? ["--record", record] : [])], {
-    env: { ...process.env, AKOU_HOME: t.dir },
-    stdout: "pipe",
-    stderr: "inherit",
-  });
+  const proc = Bun.spawn(
+    [
+      process.execPath,
+      HUNG,
+      ...(record ? ["--record", record] : []),
+      ...(busyMs ? ["--busy", String(busyMs)] : []),
+    ],
+    {
+      env: { ...process.env, AKOU_HOME: t.dir },
+      stdout: "pipe",
+      stderr: "inherit",
+    },
+  );
   const reader = proc.stdout.getReader();
   let text = "";
   while (!text.includes("ready\n")) {
@@ -188,6 +200,50 @@ describe("[DK-M8] An app that takes the connection and never answers", () => {
     },
     LONG,
   );
+  test.skipIf(!POSIX)(
+    "a busy app that answers within the watchdog's 10 s of silence is left alone",
+    async () => {
+      // About 8 s of silence left when the CLI asks: past the first probe and the sample, inside 10 s.
+      const h = await hungHome(undefined, 9500);
+      try {
+        // `--restart` takes the path that would stop it.
+        const r = await cliChild(h.env, ["status", "--restart"]);
+        expect(r.err).not.toContain("restarted");
+        expect(r.err).not.toContain("not answering");
+        expect(r.ms).toBeGreaterThan(5000);
+        expect(processAlive(h.pid)).toBe(true);
+      } finally {
+        h.cleanup();
+      }
+    },
+    LONG,
+  );
+
+  test.skipIf(!POSIX)(
+    "an agent's tool call through akou mcp restarts a hung app, and the answer says so first",
+    async () => {
+      const h = await hungHome();
+      try {
+        const api = new ApiClient({ env: h.env, client: "mcp" });
+        const c = await mcpClient(api);
+        try {
+          // A tool that changes something; with no call live its own answer is "nothing live".
+          const r = await c.call("akou_stop");
+          expect(r.text).toMatch(/^akou was not answering; restarted it \(\d+ s\)\n/);
+          expect(r.text).toContain("nothing is recording");
+          // The next answer carries no note: the restart is said once.
+          const s = await c.call("akou_status");
+          expect(s.text).not.toContain("restarted");
+        } finally {
+          await c.close();
+        }
+        await cliChild(h.env, ["quit"]);
+      } finally {
+        h.cleanup();
+      }
+    },
+    LONG,
+  );
 });
 
 describe("[DK-M8] the process tree the CLI reads without the API", () => {
@@ -211,6 +267,25 @@ describe("[DK-M8] the process tree the CLI reads without the API", () => {
     expect(recordingOut(ps.find((r) => r.pid === 502)?.args ?? "")).toBe("/r/a/part-1.opus");
     // Dictation's helper is not a recording.
     expect(recordingOut(ps.find((r) => r.pid === 503)?.args ?? "")).toBeNull();
+  });
+
+  test("what a restart stops never includes the command asking, nor anything above it", () => {
+    // A harness the app started (700) runs a shell (701) that runs akou (702).
+    const rows = parsePs(
+      [
+        ...ps.map((r) => `${r.pid} ${r.ppid} ${r.args}`),
+        "  700   501 /usr/local/bin/claude",
+        "  701   700 /bin/zsh -c akou quit",
+        "  702   701 /usr/local/bin/akou quit",
+        "  703   702 /bin/ps -A",
+      ].join("\n"),
+    );
+    expect(stopList(rows, 501, 702)).toEqual([500, 501, 502, 503, 504, 703]);
+    // An app the asking process launched, as `akou mcp` does, is below it and still stopped.
+    expect(stopList(rows, 501, 1)).toContain(501);
+    // Positive control: run from outside the app, the same tree is stopped whole.
+    expect(stopList(rows, 501, 999)).toEqual([500, 501, 502, 503, 700, 504, 701, 702, 703]);
+    expect(ancestry(rows, 702)).toEqual([702, 701, 700, 501, 500]);
   });
 
   test.skipIf(!POSIX)(

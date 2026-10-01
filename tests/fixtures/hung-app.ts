@@ -6,10 +6,11 @@
  * on the blocked thread), which is how the desktop app behaves when its toolkit's main thread is
  * stuck. Only SIGKILL ends it.
  *
- *   AKOU_HOME=... bun tests/fixtures/hung-app.ts [--record FILE]
+ *   AKOU_HOME=... bun tests/fixtures/hung-app.ts [--record FILE] [--busy MS]
  *
  * `--record FILE` starts a child that records like a capture helper (`run --out FILE`, appending
- * to the file every 100 ms), so the CLI sees a recording in progress. Prints `ready` when hung.
+ * to the file every 100 ms), so the CLI sees a recording in progress. `--busy MS` blocks for MS
+ * only, then answers again: a busy app, not a hung one. Prints `ready` when it blocks.
  */
 
 import { spawn } from "node:child_process";
@@ -40,5 +41,7 @@ if (out) {
 process.on("SIGTERM", () => {});
 process.on("SIGINT", () => {});
 process.stdout.write("ready\n");
-// Let the line out, then hang for good.
-setTimeout(() => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0), 50);
+// Let the line out, then hang for good, or for `--busy` ms.
+const b = process.argv.indexOf("--busy");
+const busy = b >= 0 ? Number(process.argv[b + 1]) : undefined;
+setTimeout(() => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, busy), 50);

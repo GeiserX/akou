@@ -15,20 +15,28 @@
  *   any helper started with `run` and `--out`) that is still alive. Then nothing is stopped: the
  *   helper keeps writing the audio whatever the app does, and the user is told how to restart it.
  * - Otherwise, on macOS, a few seconds of `sample` of the hung process go into `hangs/` in the
- *   config folder, so the next hang leaves evidence. Then SIGTERM to the app, its children and the
- *   ElectroBun launcher above it, and SIGKILL after `TERM_GRACE_MS` to any of them still there.
+ *   config folder, so the next hang leaves evidence. The app gets the rest of `HUNG_MS` to answer;
+ *   then SIGTERM to the app, its children and the ElectroBun launcher above it, and SIGKILL after
+ *   `TERM_GRACE_MS` to any of them still there. Never the process asking, nor any process above
+ *   it: an agent the app started may be the one running the command (`stopList`).
  *
  * Process trees come from `ps`, so this works on macOS and Linux only; on Windows the CLI says the
  * app is not answering and stops nothing.
  */
 
 import { spawn } from "node:child_process";
-import { mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
+import { chmodSync, mkdirSync, readdirSync, rmSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { processAlive } from "../../core/log/writer.ts";
 
-/** How long the app has to answer `/healthz` before it counts as hung. */
+/** How long the app has to answer `/healthz` before the CLI looks closer. */
 export const ANSWER_MS = 3000;
+/**
+ * How long the app must stay silent before the CLI stops it: the watchdog's own silence inside
+ * the app, so the CLI and the app agree on what "hung" means. A busy app that answers within it
+ * is left alone.
+ */
+export const HUNG_MS = 10_000;
 /** The whole recovery, from the first unanswered probe to the command sent again. */
 export const HEAL_BUDGET_MS = 15_000;
 /** Between SIGTERM and SIGKILL. */
@@ -109,6 +117,38 @@ export function launcherOf(rows: readonly ProcRow[], pid: number): number | null
   const me = rows.find((r) => r.pid === pid);
   const parent = me && rows.find((r) => r.pid === me.ppid);
   return parent && /\/Contents\/MacOS\/launcher$/.test(parent.args.trim()) ? parent.pid : null;
+}
+
+/** `pid` and every process above it, nearest first. */
+export function ancestry(rows: readonly ProcRow[], pid: number): number[] {
+  const out: number[] = [];
+  let p: number | undefined = pid;
+  while (p !== undefined && p > 1 && !out.includes(p)) {
+    out.push(p);
+    p = rows.find((r) => r.pid === p)?.ppid;
+  }
+  return out;
+}
+
+/**
+ * What stopping the app stops: the launcher above it, the app, and every process below it, except
+ * `self` and the processes between `self` and the app. A harness the app
+ * started that runs `akou` is below the app, and must never be stopped by the command it ran.
+ */
+export function stopList(
+  rows: readonly ProcRow[],
+  appPid: number,
+  self: number = process.pid,
+): number[] {
+  // The chain from `self` up to the app; the app itself is still stopped. An app `self` launched
+  // (`akou mcp` starts one and stays its parent) is below `self`, and is stopped like any other.
+  const chain = ancestry(rows, self);
+  const at = chain.indexOf(appPid);
+  const keep = new Set([self, ...(at >= 0 ? chain.slice(0, at) : [])]);
+  const launcher = launcherOf(rows, appPid);
+  return [...(launcher ? [launcher] : []), appPid, ...descendants(rows, appPid)].filter(
+    (p) => !keep.has(p),
+  );
 }
 
 export interface Recording {
@@ -201,7 +241,12 @@ export async function sampleHung(
       .slice(SAMPLES_KEPT);
     for (const f of old) rmSync(join(dir, f), { force: true });
   } catch {}
-  return ok && sizeOf(file) !== null ? file : null;
+  if (!ok || sizeOf(file) === null) return null;
+  try {
+    // A sample names the process's threads and libraries: the owner's alone.
+    chmodSync(file, 0o600);
+  } catch {}
+  return file;
 }
 
 /**
