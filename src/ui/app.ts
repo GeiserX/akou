@@ -1474,7 +1474,9 @@ class App {
                 type: "button",
                 class: "forget",
                 attrs: { "aria-label": `Forget ${learned.term}` },
-                on: { click: () => this.forget(call, learned) },
+                on: {
+                  click: (e) => this.forget(call, learned, e.currentTarget as HTMLButtonElement),
+                },
               },
               "Forget",
             ),
@@ -1513,18 +1515,25 @@ class App {
   }
 
   /** Forget a learned term: out of the call and out of the file it went into. */
-  private forget(call: string, l: LearnedTerm): void {
+  private forget(call: string, l: LearnedTerm, button: HTMLButtonElement): void {
+    // One request: a second press while it runs would only find the term gone.
+    if (button.disabled) return;
+    button.disabled = true;
     void this.t
       .request("POST", `/calls/${call}/fix/forget`, { learned: l.id })
       .then((r) => {
         if (r.status >= 400) {
+          button.disabled = false;
           toast(message(r.body, `${l.term} could not be forgotten`), "error");
           return;
         }
         this.closePopover();
         toast(`Forgot ${l.term}. Its lines read as heard again.`, "info");
       })
-      .catch((err: Error) => toast(err.message, "error"));
+      .catch((err: Error) => {
+        button.disabled = false;
+        toast(err.message, "error");
+      });
   }
 
   /** What a fix did, in one quiet line, with Undo. */

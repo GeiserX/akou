@@ -152,8 +152,9 @@ async function retractLearned(
 }
 
 /**
- * Renames a term in a vocabulary file, keeping its heard forms. An entry already holding the new
- * term takes the old one's heard forms. Answers whether the file changed.
+ * Renames a term in a vocabulary file, keeping its heard forms. Answers whether the file changed.
+ * A file that already holds the new term is left alone (409): merging the two would lose the other
+ * entry for good on Undo, which has nothing to restore it from.
  */
 async function renameInFile(
   app: ApiApp,
@@ -165,14 +166,7 @@ async function renameInFile(
     const had = file.entries.find((e) => termKey(e.term) === termKey(from));
     if (!had || had.term === to) return null;
     const into = file.entries.find((e) => e !== had && termKey(e.term) === termKey(to));
-    if (into) {
-      const heard = [...into.heard];
-      for (const h of had.heard) {
-        if (heard.length < MAX_HEARD && !heard.some((x) => termKey(x) === termKey(h)))
-          heard.push(h);
-      }
-      return { file: upsertEntry(removeEntry(file, had.term), { ...into, heard }), result: true };
-    }
+    if (into) throw new HttpError(409, "term_exists", `the file already has ${into.term}`);
     return {
       file: { ...file, entries: file.entries.map((e) => (e === had ? { ...had, term: to } : e)) },
       result: true,
@@ -662,7 +656,8 @@ export function fixRoutes(r: Router<ApiApp>): void {
         vocab++;
         const ws =
           typeof r.workspace === "string" && validWorkspace(r.workspace) ? r.workspace : undefined;
-        if (r.file && (await renameInFile(c.app, ws, r.to, r.from))) words++;
+        // A file that cannot be edited must not stop the rest of the Undo.
+        if (r.file && (await renameInFile(c.app, ws, r.to, r.from).catch(() => false))) words++;
         await c.app
           .write(id, (cc) => {
             const l = cc.view.learnedTerms().find((x) => x.id === r.learned && x.term === r.to);
@@ -787,12 +782,24 @@ export function fixRoutes(r: Router<ApiApp>): void {
         if (e) vocab++;
       }
       let file = false;
+      const warnings: string[] = [];
       if (l.kept && l.kept !== "call") {
-        file = await forgetInFile(c.app, l.kept === "workspace" ? workspaceOf(view) : undefined, l);
-        if (file) c.app.vocabChanged();
+        // A file that cannot be edited is reported; the call still forgets the term.
+        try {
+          const ws = l.kept === "workspace" ? workspaceOf(view) : undefined;
+          file = await forgetInFile(c.app, ws, l);
+          if (file) c.app.vocabChanged();
+        } catch (err) {
+          warnings.push(`${l.term} was not taken out of the file: ${(err as Error).message}`);
+        }
       }
       await retractLearned(c, id, (x) => x.id === l.id);
-      return json(200, { ok: true, call: id, forgotten: { term: l.term, vocab, file } });
+      return json(200, {
+        ok: true,
+        call: id,
+        forgotten: { term: l.term, vocab, file },
+        ...(warnings.length > 0 ? { warnings } : {}),
+      });
     },
   );
 }

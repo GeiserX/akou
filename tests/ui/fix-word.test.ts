@@ -281,7 +281,15 @@ describe("a word a fix learned", () => {
         });
         await doubleClick(page, "l000002", "Vercel");
         await page.waitForSelector("#popover .fix-learned");
-        await page.click("#popover .fix-learned button");
+        // Two presses in a row send one request: the second would only find the term gone.
+        const forgets: string[] = [];
+        page.on("request", (q) => {
+          if (q.method() === "POST" && q.url().includes("/fix/forget")) forgets.push(q.url());
+        });
+        await page.$eval("#popover .fix-learned button", (b) => {
+          (b as HTMLButtonElement).click();
+          (b as HTMLButtonElement).click();
+        });
         await until(
           async () =>
             (await page.locator(`${row("l000003")} .text`).textContent()) === "is versal up",
@@ -292,6 +300,8 @@ describe("a word a fix learned", () => {
           "deploy to versal today",
         );
         await page.waitForSelector("#toast.info:not([hidden])");
+        await page.waitForTimeout(300);
+        expect(forgets).toHaveLength(1);
         expect(await page.locator("#toast").textContent()).toBe(
           "Forgot Vercel. Its lines read as heard again.",
         );

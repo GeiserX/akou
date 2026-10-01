@@ -249,6 +249,68 @@ describe("renaming a learned term", () => {
   );
 });
 
+describe("renaming or forgetting when the file is in the way", () => {
+  /** Breaks the workspace's vocabulary file so it no longer parses. */
+  async function breakFile(rig: AppRig): Promise<void> {
+    const files = (await rig.api("GET", "/vocab?workspace=work")).body.files as {
+      scope: string;
+      path: string;
+    }[];
+    const path = files.find((f) => f.scope === "workspace")?.path as string;
+    writeFileSync(path, "entries:\n  - term: [unclosed\n");
+  }
+
+  test(
+    "a rename onto a term the file already holds leaves the file alone, so Undo loses nothing",
+    async () => {
+      const rig = await rigWith();
+      await rig.api("POST", "/vocab", { term: "Vercel.com", heard: ["vercom"], workspace: "work" });
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const r = await fixLine(rig, "l000001", "deploy to Vercel.com today");
+      expect(r.body.warnings).toEqual([expect.stringContaining("Vercel.com was not renamed")]);
+      // The call reads the new spelling; the file keeps both entries as they were.
+      expect((await texts(rig)).l000002).toBe("Vercel.com is down again");
+      expect(await words(rig)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ term: "Vercel", heard: ["versal"] }),
+          expect.objectContaining({ term: "Vercel.com", heard: ["vercom"] }),
+        ]),
+      );
+      await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect(await words(rig)).toContainEqual(
+        expect.objectContaining({ term: "Vercel.com", heard: ["vercom"] }),
+      );
+    },
+    LONG,
+  );
+
+  test(
+    "a file that no longer parses does not stop Undo of a rename, or Forget",
+    async () => {
+      const rig = await rigWith();
+      await fixLine(rig, "l000001", "deploy to Vercel today");
+      const r = await fixLine(rig, "l000001", "deploy to Vercel.com today");
+      await breakFile(rig);
+      const u = await rig.api("POST", `/calls/${CALL}/fix/undo`, r.body.undo);
+      expect(u.status).toBe(200);
+      expect((await learnedEvents(rig)).at(-1)).toMatchObject({
+        term: "Vercel",
+        was: "Vercel.com",
+      });
+      const [k] = await learnedEvents(rig);
+      const f = await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: k?.id });
+      expect(f.status).toBe(200);
+      expect(f.body.forgotten).toMatchObject({ term: "Vercel", file: false });
+      expect(f.body.warnings).toEqual([expect.stringContaining("was not taken out of the file")]);
+      expect((await learnedEvents(rig)).at(-1)).toMatchObject({ term: null });
+      // The call's own entries are gone; the lines read whatever the file last held.
+      const call = (await rig.api("GET", `/calls/${CALL}/vocab`)).body.callVocab as unknown[];
+      expect(call).toEqual([]);
+    },
+    LONG,
+  );
+});
+
 describe("forgetting a learned term", () => {
   test(
     "Forget takes it out of the call and out of the file, at any time after the fix",
