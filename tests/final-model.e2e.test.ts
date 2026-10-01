@@ -116,13 +116,21 @@ describe("the final pass's model", () => {
     // Running: `GET /status` has how far it is and on which model, and so does the call.
     const st = await rig.api("GET", "/status");
     expect(st.body.finals).toEqual([
-      { call: id, done_s: expect.any(Number), total_s: expect.any(Number), model: QWEN_ASR },
+      {
+        call: id,
+        done_s: expect.any(Number),
+        total_s: expect.any(Number),
+        model: QWEN_ASR,
+        // llama-server answers its health check after 1.5 s: the pass is still starting it.
+        step: "starting",
+        waiting: null,
+      },
     ]);
+    expect((await cli(["status"])).out).toContain("Final: starting Qwen");
     expect(st.body.last.final).toMatchObject({ state: "running", model: QWEN_ASR });
     expect((await rig.api("GET", `/calls/${id}`)).body.final.progress).toMatchObject({
       model: QWEN_ASR,
     });
-    expect((await cli(["status"])).out).toContain("Final: running");
 
     await until(async () => (await dones(id)).length === 3, 30_000, "Qwen's final.done");
     expect((await dones(id))[2]?.model).toBe(QWEN_ASR);
@@ -180,9 +188,59 @@ describe("the final pass's model", () => {
         model: "parakeet",
       });
       expect(para.status).toBe(501);
-      expect(para.body.message).toContain("not downloaded");
+      expect(para.body.message).toContain("Parakeet cannot run this pass");
+      expect(para.body.message).toContain("Parakeet is not downloaded");
+      // Nothing started for it.
+      expect((await dones(id)).length).toBe(5);
+      expect((await rig.api("GET", "/status")).body.finals).toEqual([]);
     } finally {
       renameSync(`${dir}.away`, dir);
     }
+  });
+
+  test("with neither model on disk no pass starts, and the answer says why", async () => {
+    const qwen = dirname(modelFile(models, QWEN_ASR, "q.gguf"));
+    const para = dirname(modelFile(models, RECOGNIZER, "a.onnx"));
+    renameSync(qwen, `${qwen}.away`);
+    renameSync(para, `${para}.away`);
+    try {
+      const r = await rig.api("POST", "/calls/last/finalize", { force: true });
+      expect(r.status).toBe(501);
+      expect(r.body.message).toContain("no model can run the final pass");
+    } finally {
+      renameSync(`${qwen}.away`, qwen);
+      renameSync(`${para}.away`, para);
+    }
+  });
+
+  test("one Qwen pass at a time: a second waits for the first, says so, then runs", async () => {
+    const first = (await rig.api("GET", "/calls/last")).body.id as string;
+    const second = await rig.startCall({});
+    await until(
+      async () => (await rig.app.events(second, 0)).some((e) => e.type === "seg"),
+      15_000,
+      "a line",
+    );
+    expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await dones(second)).length === 1, 30_000, "its own pass");
+    const before = (await dones(first)).length;
+    const a = await rig.api("POST", `/calls/${first}/finalize`, { force: true, model: "qwen" });
+    const b = await rig.api("POST", `/calls/${second}/finalize`, { force: true, model: "qwen" });
+    expect([a.status, b.status]).toEqual([202, 202]);
+    // The fake llama-server takes 1.5 s to answer its health check, so the first is still on it.
+    const st = (await rig.api("GET", "/status")).body;
+    const waiting = st.finals.find((f: { call: string }) => f.call === second);
+    expect(waiting).toMatchObject({ waiting: first, model: QWEN_ASR });
+    expect((await rigCli(rig)(["status"])).out).toContain(
+      `Final: waiting for the pass on ${first} (Qwen)`,
+    );
+    await until(async () => (await dones(first)).length === before + 1, 30_000, "the first");
+    await until(async () => (await dones(second)).length === 2, 30_000, "the second, after it");
+    // The second pass began its work (its `vocab.used`) only once the first had written its end.
+    const firstEnd = (await dones(first)).at(-1)?.t as number;
+    const secondWork = (await rig.app.events(second, 0)).findLast((e) => e.type === "vocab.used")
+      ?.t as number;
+    expect(secondWork).toBeGreaterThanOrEqual(firstEnd);
+    expect((await dones(second)).at(-1)?.model).toBe(QWEN_ASR);
   });
 });

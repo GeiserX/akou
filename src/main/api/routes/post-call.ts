@@ -105,7 +105,7 @@ export function postCallRoutes(r: Router<ApiApp>): void {
     "/calls/:id/finalize",
     doc({
       id: "calls.finalize",
-      doc: "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, or a model's id) overrides `asr.final.model` for this run; a `qwen` that is not downloaded is refused.",
+      doc: "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, or a model's id) overrides `asr.final.model` for this run; a model that is not downloaded is refused, never replaced.",
       body: { "force?": "boolean", "model?": "string" },
       ok: 202,
     }),

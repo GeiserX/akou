@@ -49,6 +49,8 @@ describe("asr.final.model", () => {
     expect(chooseFinalModel("auto", ctx({ gpu: false, memoryGb: 8 }))).toEqual({ model: "qwen" });
     // An own llama-server (no build to download): Qwen's model alone decides.
     expect(chooseFinalModel("auto", ctx({ runtime: null }))).toEqual({ model: "qwen" });
+    // No Parakeet at all: Qwen, which never needs it.
+    expect(chooseFinalModel("auto", ctx({ missing: [RECOGNIZER] }))).toEqual({ model: "qwen" });
     for (const [why, c] of [
       ["no Qwen model", ctx({ missing: [QWEN_ASR] })],
       ["no llama-server build", ctx({ missing: [RUNTIME] })],
@@ -59,14 +61,16 @@ describe("asr.final.model", () => {
     }
   });
 
-  test("a named Qwen runs on any machine, never when it is not downloaded; Parakeet by name is Parakeet", () => {
-    expect(chooseFinalModel("qwen", ctx({ gpu: false, memoryGb: 8 }))).toEqual({ model: "qwen" });
-    expect(chooseFinalModel(QWEN_ASR, ctx())).toEqual({ model: "qwen" });
-    const missing = chooseFinalModel("qwen", ctx({ missing: [QWEN_ASR] }));
-    expect(missing.model).toBe("parakeet");
-    expect(missing.note).toContain(QWEN_ASR);
-    expect(chooseFinalModel("parakeet", ctx())).toEqual({ model: "parakeet" });
-    expect(chooseFinalModel(RECOGNIZER, ctx())).toEqual({ model: "parakeet" });
+  test("never an engine that is absent: the other one with a note, or none", () => {
+    // Parakeet preferred and gone: Qwen, saying why.
+    const para = chooseFinalModel("parakeet", ctx({ missing: [RECOGNIZER] }));
+    expect(para.model).toBe("qwen");
+    expect(para.note).toContain("Parakeet is not downloaded");
+    // Neither on disk: no model, and both reasons.
+    const none = chooseFinalModel("auto", ctx({ missing: [QWEN_ASR, RECOGNIZER] }));
+    expect(none.model).toBeNull();
+    expect(none.note).toContain("Qwen is not downloaded");
+    expect(none.note).toContain("Parakeet is not downloaded");
   });
 
   test("the short names are read as the ids, and anything else is refused", () => {
@@ -123,6 +127,7 @@ async function pass(engine: FakeQwen | undefined, language?: string) {
   const models = new FakeModels();
   const out: EventDraft[] = [];
   const moved: [number, number][] = [];
+  const movedSteps: [number, number, string][] = [];
   const result = await runFinalPass(
     {
       events: ended(),
@@ -130,7 +135,10 @@ async function pass(engine: FakeQwen | undefined, language?: string) {
       decode: LIST,
       pid: 1,
       language,
-      progress: (d, t) => moved.push([d, t]),
+      progress: (d, t, step) => {
+        moved.push([d, t]);
+        movedSteps.push([d, t, step]);
+      },
     },
     models,
     (d) => out.push(d),
@@ -138,7 +146,7 @@ async function pass(engine: FakeQwen | undefined, language?: string) {
     engine,
   );
   const segs = out.filter((d) => d.type === "seg" && d.text !== null) as Omit<Seg, "seq" | "t">[];
-  return { models, out, result, segs, moved };
+  return { models, out, result, segs, moved, movedSteps, steps: movedSteps.map((m) => m[2]) };
 }
 
 describe("the final pass on Qwen", () => {
@@ -184,6 +192,14 @@ describe("the final pass on Qwen", () => {
       step: "decode",
       error: `${QWEN_ASR} is unavailable: connection refused`,
     });
+  });
+
+  test("before its figures move it names its step: starting Qwen, labelling speakers, decoding", async () => {
+    const r = await pass(new FakeQwen());
+    const steps = r.steps.filter((x, i, all) => i === 0 || all[i - 1] !== x);
+    expect(steps).toEqual(["starting", "speakers", "decoding"]);
+    // Only decoding moves the figure.
+    for (const [d, , step] of r.movedSteps) if (step !== "decoding") expect(d).toBe(0);
   });
 
   test("how far it is: seconds of the call, from 0 to the whole call, moving inside the one part", async () => {

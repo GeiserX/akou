@@ -50,6 +50,7 @@ import {
   type ModelSpec,
   type PreparedHotwords,
 } from "./engine.ts";
+import type { FinalStep } from "./final-text.ts";
 import { callDecodeList, modelNameFor, streamHotwords, type VocabSource } from "./live-worker.ts";
 import { peak, prepareSpan } from "./pad.ts";
 import { siblingModule } from "./sibling.ts";
@@ -124,7 +125,7 @@ export interface FinalInput {
    * How far the pass is: seconds of the call covered and the call's length. Both channels count,
    * each by the audio it decodes, so it moves about evenly; nothing is written to the log for it.
    */
-  progress?(done_s: number, total_s: number): void;
+  progress?(done_s: number, total_s: number, step: FinalStep): void;
   options?: Partial<FinalOptions>;
 }
 
@@ -532,14 +533,25 @@ export async function runFinalPass(
     for (const p of parts)
       for (const ch of CHANNELS) if (energy.get(`${p}:${ch}`)) work += audio.length(p);
     let worked = 0;
-    const progress = (inChannel: number) =>
+    // Only decoding moves the figure; before it, the step says what the pass is doing.
+    const progress = (inChannel: number, at: FinalStep = "decoding") =>
       input.progress?.(
         work > 0 ? Math.min(callSeconds, (callSeconds * (worked + inChannel)) / work) : 0,
         callSeconds,
+        at,
       );
-    progress(0);
 
     step = "models";
+    progress(0, "starting");
+    // Qwen's llama-server starts now, so the step says so while it loads. A start that fails is
+    // tried again by the first piece's decode, which restarts it once before the pass fails.
+    if (engine) {
+      try {
+        await engine.load();
+      } catch (err) {
+        log("warn", `${engine.id} did not start: ${(err as Error).message}; trying again`);
+      }
+    }
     const glossary = input.glossary ?? input.decode?.entries.map((e) => e.term) ?? [];
     const hw = engine ? null : models.prepare(input.decode);
     if (hw) modelId = hw.recognizer.model;
@@ -559,6 +571,7 @@ export async function runFinalPass(
     const callParts = parts.filter((p) => energy.get(`${p}:call`));
     const spansByPart = new Map<number, DiarizedSpan[]>();
     if (callParts.length > 0) {
+      progress(0, "speakers");
       const lens = callParts.map((p) => audio.length(p));
       const all = new Float32Array(lens.reduce((a, b) => a + b, 0));
       let off = 0;
@@ -596,6 +609,7 @@ export async function runFinalPass(
 
     // 2 and 4. Whole-timeline decode, per part. The recognizer loaded in `prepare` above.
     step = "decode";
+    progress(0);
     const decodeFrom = performance.now();
     const languages = new Set<string>();
     let callText = false;
@@ -778,7 +792,7 @@ type ToFinal = {
 type FromFinal =
   | { type: "event"; draft: EventDraft }
   | { type: "log"; level: "info" | "warn" | "error"; msg: string }
-  | { type: "progress"; done_s: number; total_s: number }
+  | { type: "progress"; done_s: number; total_s: number; step: FinalStep }
   /** A child process the Worker started (llama-server) or saw end, for the host to kill orphans. */
   | { type: "child"; pid: number; alive: boolean }
   | { type: "done"; result: FinalResult; loads: Record<string, number> };
@@ -796,11 +810,14 @@ async function runInWorker(m: ToFinal, reply: (r: FromFinal) => void): Promise<v
   // The VAD and the speaker labels come from the model set; the words from Qwen when it is named.
   const { final: llama, ...setSpec } = m.models;
   let sent = Number.NEGATIVE_INFINITY;
-  const progress = (done_s: number, total_s: number) => {
+  let sentStep: FinalStep | null = null;
+  // A new step always goes; within decoding, at most once a second, and the last figure.
+  const progress = (done_s: number, total_s: number, step: FinalStep) => {
     const now = performance.now();
-    if (now - sent < PROGRESS_EVERY_MS && done_s < total_s) return;
+    if (step === sentStep && now - sent < PROGRESS_EVERY_MS && done_s < total_s) return;
     sent = now;
-    reply({ type: "progress", done_s, total_s });
+    sentStep = step;
+    reply({ type: "progress", done_s, total_s, step });
   };
   try {
     models = await loadModelSet(setSpec as ModelSpec);
@@ -877,8 +894,20 @@ export interface FinalizeOptions {
   vocab?: VocabSource;
   options?: Partial<FinalOptions>;
   onLog?(level: "info" | "warn" | "error", msg: string): void;
-  /** How far the pass is (`FinalInput.progress`), at most once a second. */
-  onProgress?(done_s: number, total_s: number): void;
+  /** How far the pass is (`FinalInput.progress`), at most once a second, and each new step. */
+  onProgress?(done_s: number, total_s: number, step: FinalStep): void;
+  /**
+   * Waited for after `final.started` is written and before the pass starts: the Qwen pass ahead,
+   * one at a time. The budget counts from when it resolves.
+   */
+  waitFor?: Promise<unknown>;
+  /** The wait is over and the pass starts. */
+  onStarted?(): void;
+  /**
+   * Aborts the pass (the app quitting): its Worker is terminated and its llama-server stopped,
+   * nothing more is written, and the next start's catch-up runs it again.
+   */
+  signal?: AbortSignal;
   /** Runs the pass on this thread. Tests only. */
   inThread?: boolean;
   /** The pass's deadline; defaults to `finalBudgetMs` of the call. */
@@ -921,7 +950,22 @@ export async function finalizeCall(
   // Written before the first await, so the pass is in the log by the time the caller answers: a
   // `finalize --force` followed by `akou wait` never takes the earlier final.done for this one.
   call.record({ type: "final.started", pid: process.pid, model });
+  type Out = FinalResult & { loads: Record<string, number> };
+  const quit: Out = {
+    ok: false,
+    model,
+    parts: [],
+    skipped: [],
+    error: "akou quit during the pass; it runs again at the next start",
+    loads: {},
+  };
   try {
+    if (o.waitFor) {
+      const aborted = new Promise<void>((r) => o.signal?.addEventListener("abort", () => r()));
+      await Promise.race([o.waitFor.catch(() => {}), aborted]);
+    }
+    if (o.signal?.aborted) return quit;
+    o.onStarted?.();
     const { events } = await readLog(join(call.dir, EVENTS_FILE));
     const view = fold(events);
     const msg: ToFinal = {
@@ -936,7 +980,6 @@ export async function finalizeCall(
     const clock = o.clock ?? realClock;
     const budget =
       o.budgetMs ?? finalBudgetMs(events) + (o.models.final ? FINAL_LLAMA_START_MS : 0);
-    type Out = FinalResult & { loads: Record<string, number> };
     return await new Promise<Out>((resolve) => {
       let settled = false;
       let w: Worker | null = null;
@@ -965,12 +1008,15 @@ export async function finalizeCall(
         () => failWith("timeout", `the final pass did not finish within ${budget} ms`),
         budget,
       );
+      // Quitting: the Worker and its llama-server go now, and the log keeps `final.started`.
+      o.signal?.addEventListener("abort", () => finish(quit), { once: true });
+      if (o.signal?.aborted) return finish(quit);
       // Nothing the pass sends after its end (a timeout) reaches the log.
       const onReply = (r: FromFinal) => {
         if (settled) return;
         if (r.type === "event") call.record(r.draft);
         else if (r.type === "log") o.onLog?.(r.level, r.msg);
-        else if (r.type === "progress") o.onProgress?.(r.done_s, r.total_s);
+        else if (r.type === "progress") o.onProgress?.(r.done_s, r.total_s, r.step);
         else if (r.type === "child") {
           if (r.alive) kids.add(r.pid);
           else kids.delete(r.pid);

@@ -4,10 +4,10 @@
  * either way (finalize-worker.ts).
  *
  * `auto` picks Qwen whenever its model and its llama-server are downloaded, on any machine, and
- * Parakeet only when they are not. A named Qwen is the same, but says why when it cannot run. A
- * model that is not downloaded never runs. With Qwen the pass never needs Parakeet on disk: the
- * model set loads its recognizer only when asked to decode, and the VAD and speaker labels are
- * models of their own.
+ * Parakeet only when they are not. A model that is not downloaded never runs: the setting falls
+ * back to the other model with a note, a run that names its model is refused, and with neither
+ * downloaded no pass runs. With Qwen the pass never needs Parakeet on disk: the model set loads its
+ * recognizer only when asked to decode, and the VAD and speaker labels are models of their own.
  */
 
 import { type LiveSetupContext, reviewModels } from "./live-setups.ts";
@@ -42,8 +42,9 @@ export function finalModelName(id: string | undefined): string | undefined {
 }
 
 export interface FinalChoice {
-  model: FinalModel;
-  /** Why the pass does not run what was asked for, or why `auto` did not pick Qwen. */
+  /** The recognizer the pass runs, or null when neither is downloaded. */
+  model: FinalModel | null;
+  /** Why the pass does not run the model the setting prefers, or why it cannot run at all. */
   note?: string;
 }
 
@@ -53,17 +54,25 @@ function qwenMissing(c: LiveSetupContext): string[] {
 }
 
 /**
- * The recognizer the next final pass runs for `setting`: Qwen whenever it is downloaded (`auto`
- * or named), else Parakeet. Never one whose files are missing.
+ * The recognizer the next final pass runs for `setting`, never one whose files are missing. `auto`
+ * and `qwen` prefer Qwen, `parakeet` prefers Parakeet; the preferred one runs when it is
+ * downloaded, else the other with a note saying why, else none. A run that names its model
+ * (`akou finalize --model`) takes no substitute: the host refuses it when `model` differs.
  */
 export function chooseFinalModel(setting: string, c: LiveSetupContext): FinalChoice {
-  if (finalModelOf(setting) === "parakeet") return { model: "parakeet" };
+  const want = finalModelOf(setting) ?? "qwen";
   const missing = qwenMissing(c);
-  if (missing.length > 0) {
-    return {
-      model: "parakeet",
-      note: `Qwen is not downloaded (needs ${missing.join(", ")}; \`akou models pull <id>\`)`,
-    };
-  }
-  return { model: "qwen" };
+  const why: Record<FinalModel, string | null> = {
+    qwen:
+      missing.length > 0
+        ? `Qwen is not downloaded (needs ${missing.join(", ")}; \`akou models pull <id>\`)`
+        : null,
+    parakeet: c.present(RECOGNIZER)
+      ? null
+      : `Parakeet is not downloaded (\`akou models pull ${RECOGNIZER}\`)`,
+  };
+  if (why[want] === null) return { model: want };
+  const other: FinalModel = want === "qwen" ? "parakeet" : "qwen";
+  if (why[other] === null) return { model: other, note: why[want] as string };
+  return { model: null, note: `${why[want]}, and ${why[other]}` };
 }

@@ -10,7 +10,7 @@
 
 import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
-import { finalText } from "../main/asr/final-text.ts";
+import { type FinalStep, finalText } from "../main/asr/final-text.ts";
 import { hotkeyLabel } from "../main/window/hotkey.ts";
 import type { AppStatus } from "./protocol.ts";
 
@@ -340,11 +340,16 @@ export interface FinalRun {
   done_s: number;
   total_s: number;
   model: string;
+  /** What the pass is doing before its figures move; absent from an older app. */
+  step?: FinalStep | null;
+  /** The call whose Qwen pass this one waits for. */
+  waiting?: string | null;
 }
 
 /**
- * The note under the header: `final transcript: running, 37 of 152 min (Qwen)` with the bar at the
- * audio decoded so far, `ready (Parakeet)`, `failed (Qwen: …)`. `run` is the app's live figure for
+ * The note under the header: `final transcript: starting Qwen`, `labelling speakers (Qwen)`, then
+ * `running, 37 of 152 min (Qwen)` with the bar at the audio decoded so far, `waiting for the pass on
+ * <id>` behind another Qwen pass, `ready (Parakeet)`, `failed (Qwen is unavailable: …)`. `run` is the app's live figure for
  * this call; without it (an older app, or before the first figure) the bar counts parts.
  */
 export function finalNote(v: CallView, run?: FinalRun | null): FinalNote | null {
@@ -362,7 +367,14 @@ export function finalNote(v: CallView, run?: FinalRun | null): FinalNote | null 
     const moving = run && run.total_s > 0;
     return {
       state: "running",
-      text: `final transcript: ${finalText({ state: "running", model, done_s: run?.done_s, total_s: run?.total_s })}`,
+      text: `final transcript: ${finalText({
+        state: "running",
+        model,
+        done_s: run?.done_s,
+        total_s: run?.total_s,
+        step: run?.step,
+        waiting: run?.waiting,
+      })}`,
       progress: moving ? Math.min(1, run.done_s / run.total_s) : f.partsDone.length / total,
     };
   }
