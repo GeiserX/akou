@@ -124,7 +124,7 @@ describe("[SV-U6] facts as plain sentences, each accuracy figure naming its test
       "Writes the accurate transcript when a call ends. About 5 words in 100 wrong on read speech. An hour of audio in 1.3 minutes.",
     );
     expect(bestHelp(row(QWEN_ASR))).toBe(
-      "The most accurate: about 3 words in 100 wrong on read speech. It also rewrites live lines and checks the words akou learns. Without it, dictation uses Fast.",
+      "The most accurate: about 3 words in 100 wrong on read speech. It also writes the final transcript after a call, rewrites live lines and checks the words akou learns. Without it, dictation uses Fast.",
     );
   });
 

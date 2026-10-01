@@ -242,7 +242,7 @@ export const LLAMA_CATALOG: readonly CatalogEntry[] = [
   {
     id: QWEN_ASR,
     ...MODEL_TEXT[QWEN_ASR],
-    job: "the best preset's recognizer: 30 languages, run by llama-server on Metal, Vulkan, CUDA, SYCL, ROCm or the CPU",
+    job: "the final transcript's and the best preset's recognizer: 30 languages, run by llama-server on Metal, Vulkan, CUDA, SYCL, ROCm or the CPU",
     licence: "Apache-2.0",
     source: "https://huggingface.co/Qwen/Qwen3-ASR-1.7B",
     serves: ["final"],

@@ -865,21 +865,18 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * Whether the running engine's model files are there, but `except`: what a start and the final
-   * pass need. A change to `asr.diarizer` mid-run never asks for models the running recognizer
-   * does not use.
+   * Whether the running engine's model files are there: what a call's start needs, the helpers and
+   * the chosen setups' models. A final pass has its own rule (`finalModelsPresent`). A change to
+   * `asr.diarizer` mid-run never asks for models the running recognizer does not use.
    */
-  private runningModelsPresent(except: readonly string[] = []): boolean {
+  private runningModelsPresent(): boolean {
     const registry = modelsFor(
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
       this.chosenModels(),
     );
-    return modelsPresent(
-      this.cfg.settings["asr.modelsDir"],
-      registry.filter((m) => !except.includes(m.id)),
-    );
+    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
   /**

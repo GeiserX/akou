@@ -200,7 +200,7 @@ export function bestHelp(r: ModelRow): string {
   const acc = accuracyText(r.accuracy);
   return [
     acc ? `The most accurate: ${lower(acc)}` : "The most accurate.",
-    "It also rewrites live lines and checks the words akou learns.",
+    "It also writes the final transcript after a call, rewrites live lines and checks the words akou learns.",
     "Without it, dictation uses Fast.",
   ].join(" ");
 }
