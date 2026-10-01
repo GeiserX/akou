@@ -22,13 +22,16 @@
  * - `POST /calls/{id}/fix {term, heard}`: the same for a correction stated with no line, as an
  *   agent passes on "it's Vercel, not versal": the person said it, so it applies to the whole call
  *   even for common words. A rewording is not learned into the workspace, and is noted.
- * - `POST /calls/{id}/fix/undo {vocab, notes, words}`: takes a fix back, given the `undo` of its
- *   answer: the call's entries are retracted, the note deleted, and the word (or only the heard form
- *   the fix added) leaves the vocabulary file again. The log keeps every event.
+ * - `POST /calls/{id}/fix/undo {vocab, notes, words, learned}`: takes a fix back, given the `undo`
+ *   of its answer: the call's entries are retracted, the note deleted, and the word (or only the heard
+ *   form the fix added) leaves the vocabulary file again. The log keeps every event.
+ *
+ * Every term a fix learns or takes back writes a `vocab.learned` revision, so an agent following the
+ * call is told (`learned` on read answers).
  */
 
-import type { EventDraft, VocabAdd } from "../../../core/log/events.ts";
-import type { CallView } from "../../../core/log/fold.ts";
+import type { EventDraft, LearnedKept, VocabAdd } from "../../../core/log/events.ts";
+import type { CallView, LearnedTerm } from "../../../core/log/fold.ts";
 import { type Correction, occurrences, tokenize } from "../../../core/vocab/correct.ts";
 import {
   type FixPair,
@@ -87,6 +90,8 @@ export interface FixUndo {
   vocab: string[];
   notes: string[];
   words: FixedWord[];
+  /** `vocab.learned` ids the fix wrote; Undo takes them back. */
+  learned: string[];
 }
 
 function today(now: number): string {
@@ -101,6 +106,29 @@ export function fixNote(pairs: readonly { heard: string; term: string }[]): stri
 function workspaceOf(view: CallView): string | undefined {
   const ws = view.call?.workspace;
   return ws && validWorkspace(ws) ? ws : undefined;
+}
+
+function keptIn(workspace: string | undefined): LearnedKept {
+  return workspace ? "workspace" : "global";
+}
+
+/** Writes a `vocab.learned` revision with `term: null` for the first term `match` picks. */
+async function retractLearned(
+  c: { app: ApiApp; by: string },
+  id: string,
+  match: (x: LearnedTerm, view: CallView) => boolean,
+): Promise<boolean> {
+  const e = await c.app
+    .write(id, (cc) => {
+      const l = cc.view.learnedTerms().find((x) => match(x, cc.view));
+      if (!l) throw new HttpError(404, "not_found", "no learned term");
+      return { type: "vocab.learned", id: l.id, rev: l.rev + 1, term: null, by: c.by };
+    })
+    .catch((err) => {
+      if (err instanceof HttpError && err.status === 404) return null;
+      throw err;
+    });
+  return e !== null;
 }
 
 /**
@@ -143,6 +171,16 @@ async function takeBack(
       throw err;
     });
   if (!call) return false;
+  const vid = (call as EventDraft & { id: string }).id;
+  // The learned term is taken back only once none of its call entries reads it any more: an entry
+  // that keeps other heard forms, or another entry the same fix wrote, still spells it that way.
+  await retractLearned(
+    c,
+    id,
+    (l, view) =>
+      l.vocab.includes(vid) &&
+      !view.callVocabulary().some((v) => l.vocab.includes(v.id) && v.term === l.term),
+  );
   const out = await editFile(targetPath(c.app, workspace), (file) => {
     const had = file.entries.find(
       (e) => termKey(e.term) === termKey(x.term) && e.source === "correction",
@@ -160,6 +198,16 @@ function checkPart(v: unknown, what: string): string {
   const bad = validateTerm(v.trim());
   if (bad) throw new HttpError(400, "bad_term", `${JSON.stringify(v)}: ${bad}`, { term: v });
   return v.trim();
+}
+
+/** Ids of the lines of the call that read this term now, whichever vocabulary corrects them. */
+function linesReading(view: CallView, term: string): Set<string> {
+  return new Set(
+    view
+      .lines("best")
+      .filter((l) => l.corrections.some((c) => c.term === term))
+      .map((l) => l.id),
+  );
 }
 
 /** Lines of the call whose rendering now carries this pair's correction. */
@@ -203,7 +251,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
       let pairs: FixPair[];
       let line: { id: string; w: number; raw: string } | null = null;
       const reverted: { heard: string; term: string }[] = [];
-      const undo: FixUndo = { vocab: [], notes: [], words: [] };
+      const undo: FixUndo = { vocab: [], notes: [], words: [], learned: [] };
       let filesChanged = false;
       if (b.line !== undefined) {
         if (typeof b.text !== "string" || b.text.trim() === "") {
@@ -262,6 +310,13 @@ export function fixRoutes(r: Router<ApiApp>): void {
       const workspace = workspaceOf(view);
       const warnings: string[] = [];
       const done: Omit<FixedPair, "lines">[] = [];
+      // What each learned term's `vocab.learned` will say, written once the call reads it.
+      const learned: {
+        term: string;
+        heard: string[];
+        vocab: string[];
+        kept: LearnedKept;
+      }[] = [];
       const add = async (draft: Pick<VocabAdd, "term" | "heard" | "segs" | "nth" | "decode">) => {
         const e = await c.app.write(id, (cc) => ({
           type: "vocab.add",
@@ -270,8 +325,17 @@ export function fixRoutes(r: Router<ApiApp>): void {
           by: c.by,
           ...draft,
         }));
-        undo.vocab.push((e as EventDraft & { id: string }).id);
+        const vid = (e as EventDraft & { id: string }).id;
+        undo.vocab.push(vid);
+        return vid;
       };
+      // The lines that read each term before this fix, so a notice counts only the lines it changed.
+      const readBefore = new Map<string, Set<string>>();
+      for (const p of pairs) {
+        for (const t of [p.term, p.added ?? ""]) {
+          if (t && !readBefore.has(t)) readBefore.set(t, linesReading(view, t));
+        }
+      }
       for (const p of pairs) {
         const kind = pairKind(p, isDict);
         const heard = p.heard && termKey(p.heard) !== "" ? [p.heard] : [];
@@ -287,28 +351,47 @@ export function fixRoutes(r: Router<ApiApp>): void {
             .some(
               (v) => !v.segs && v.term === term && forms.every((h) => v.heard.some((x) => x === h)),
             );
+        const ids: string[] = [];
+        // The call reads a term it did not before: the whole call, or decoding.
+        let newToCall = false;
         if (wide) {
           if (!had(p.term, heard)) {
-            await add({ term: p.term, heard, ...(kind === "term" ? {} : { decode: false }) });
+            ids.push(
+              await add({ term: p.term, heard, ...(kind === "term" ? {} : { decode: false }) }),
+            );
+            newToCall = true;
           }
         } else if (line && heard.length > 0) {
           const words = tokenize(p.heard).map((t) => t.folded);
           const nth = Math.max(0, occurrences(tokenize(line.raw), words).indexOf(p.from));
-          await add({ term: p.term, heard, segs: [line.id], nth, decode: false });
+          ids.push(await add({ term: p.term, heard, segs: [line.id], nth, decode: false }));
         }
         if (learnt && !wide && !had(learnt, [])) {
           // The term alone, for decoding: the heard form stays on its line.
-          await add({ term: learnt, heard: [] });
+          ids.push(await add({ term: learnt, heard: [] }));
+          newToCall = true;
         }
         if (learnt) {
+          let kept = keptIn(workspace);
+          let word: FixedWord | null = null;
           try {
-            const word = await learn(c.app, workspace, learnt, wide ? p.heard : "");
+            word = await learn(c.app, workspace, learnt, wide ? p.heard : "");
             if (word) {
               undo.words.push(word);
               filesChanged = true;
             }
           } catch (err) {
+            kept = "call";
             warnings.push(`${learnt} was not kept for later calls: ${(err as Error).message}`);
+          }
+          // Told once per term the fix taught. The same word fixed on one more line is no news.
+          if (newToCall || word) {
+            learned.push({
+              term: learnt,
+              heard: p.op === "replace" && heard.length > 0 ? heard : [],
+              vocab: ids,
+              kept,
+            });
           }
         }
         done.push({
@@ -339,7 +422,34 @@ export function fixRoutes(r: Router<ApiApp>): void {
         );
         undo.notes.push((e as EventDraft & { id: string }).id);
       }
-      const after = (await callOf(c)).view;
+      let after = (await callOf(c)).view;
+      // One notice per term: a stated word with several heard forms is one term taught.
+      const byTerm = new Map<string, (typeof learned)[number]>();
+      for (const k of learned) {
+        const had = byTerm.get(k.term);
+        if (!had) byTerm.set(k.term, { ...k, heard: [...k.heard], vocab: [...k.vocab] });
+        else {
+          for (const h of k.heard) if (!had.heard.includes(h)) had.heard.push(h);
+          had.vocab.push(...k.vocab);
+        }
+      }
+      for (const k of byTerm.values()) {
+        const before = readBefore.get(k.term) ?? new Set<string>();
+        const lines = [...linesReading(after, k.term)].filter((x) => !before.has(x)).length;
+        const e = await c.app.write(id, (cc) => ({
+          type: "vocab.learned",
+          id: nextItemId("k", cc.view.lastSeq),
+          rev: 1,
+          term: k.term,
+          heard: k.heard,
+          by: c.by,
+          lines,
+          kept: k.kept,
+          vocab: k.vocab,
+        }));
+        undo.learned.push((e as EventDraft & { id: string }).id);
+      }
+      if (byTerm.size > 0) after = (await callOf(c)).view;
       return json(200, {
         ok: true,
         call: id,
@@ -358,8 +468,13 @@ export function fixRoutes(r: Router<ApiApp>): void {
     "/calls/:id/fix/undo",
     doc({
       id: "callVocab.fixUndo",
-      doc: "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, and the words it put into a vocabulary file taken out again. The log keeps every event.",
-      body: { "vocab?": "string[]", "notes?": "string[]", "words?": "any" },
+      doc: "Take a fix back: send the `undo` its answer gave. The call's entries are retracted, its note deleted, the words it put into a vocabulary file taken out again, and the terms it learned taken back (a `vocab.learned` revision with `term: null`). The log keeps every event.",
+      body: {
+        "vocab?": "string[]",
+        "notes?": "string[]",
+        "words?": "any",
+        "learned?": "string[]",
+      },
       ok: 200,
     }),
     async (c) => {
@@ -368,6 +483,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
       let vocab = 0;
       let notes = 0;
       let words = 0;
+      let learned = 0;
       for (const vid of b.vocab ?? []) {
         if (typeof vid !== "string") continue;
         const e = await c.app
@@ -420,8 +536,13 @@ export function fixRoutes(r: Router<ApiApp>): void {
         });
         if (out) words++;
       }
+      for (const lid of b.learned ?? []) {
+        if (typeof lid === "string" && (await retractLearned(c, id, (x) => x.id === lid))) {
+          learned++;
+        }
+      }
       if (words > 0) c.app.vocabChanged();
-      return json(200, { ok: true, call: id, undone: { vocab, notes, words } });
+      return json(200, { ok: true, call: id, undone: { vocab, notes, words, learned } });
     },
   );
 }

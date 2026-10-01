@@ -25,6 +25,7 @@
 import { McpServer } from "@modelcontextprotocol/server";
 import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 import * as z from "zod";
+import { type LearnedItem, learnedNote } from "../../core/vocab/learned.ts";
 import { APP_VERSION } from "../app-info.ts";
 import type { ApiClient, ApiResponse, RequestOptions } from "../cli/client.ts";
 import { type Body, describeError, wall } from "../cli/context.ts";
@@ -552,6 +553,8 @@ export function createMcpServer(o: McpOptions): McpServer {
               ? [`${more} more new lines: call akou_read again with since: ${b.cursor}.`]
               : []),
             ...(unreviewedNote(b.unreviewed) ? [unreviewedNote(b.unreviewed).trim()] : []),
+            // What fixes taught akou since the cursor: lines read before may now read otherwise.
+            ...((b.learned as LearnedItem[] | undefined) ?? []).map(learnedNote),
           ].join("\n"),
           data: {
             call: b.call ?? a.call,
