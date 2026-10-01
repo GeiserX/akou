@@ -3429,11 +3429,11 @@ export class AkouApp implements ApiApp {
     if (!existsSync(from) || !statSync(from).isDirectory()) {
       throw new HttpError(404, "not_found", `no folder ${dir}`, { dir });
     }
-    const got = await importModels(
-      from,
-      this.cfg.settings["asr.modelsDir"],
-      this.o.modelRegistry ?? MODELS,
-    );
+    const catalog = this.o.modelRegistry ?? MODELS;
+    // Through the store: the Models page shows each model's bytes as it is copied.
+    const got = this.shelf
+      ? await this.shelf.import(from, catalog)
+      : await importModels(from, this.cfg.settings["asr.modelsDir"], catalog);
     for (const fn of this.statusWatchers) fn();
     return got;
   }

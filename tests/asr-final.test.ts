@@ -569,6 +569,56 @@ describe("after Stop, through the call's writer", () => {
     expect(c.view.final.state).toBe("failed");
   });
 
+  test("a pass that waited its turn leaves no listener on the app's quit signal", async () => {
+    const r = callRig();
+    r.engine.onStart = (s) => s.capturing();
+    const res = await r.mgr.start({ workspace: "work" });
+    if (!res.ok) throw new Error(res.error);
+    await r.mgr.stop();
+    const c = r.mgr.controller(res.call);
+    if (!c) throw new Error("no controller");
+    // The app's signal lives as long as the app, so a listener left on it holds its pass.
+    const quit = new AbortController();
+    const live = new Set<unknown>();
+    const add = quit.signal.addEventListener.bind(quit.signal);
+    const remove = quit.signal.removeEventListener.bind(quit.signal);
+    quit.signal.addEventListener = ((
+      type: string,
+      fn: () => void,
+      opts?: AddEventListenerOptions,
+    ) => {
+      live.add(fn);
+      add(type, fn, opts);
+    }) as typeof quit.signal.addEventListener;
+    quit.signal.removeEventListener = ((type: string, fn: () => void) => {
+      live.delete(fn);
+      remove(type, fn);
+    }) as typeof quit.signal.removeEventListener;
+    for (let i = 0; i < 2; i++) {
+      const out = await finalizeCall(c, {
+        models: spec(),
+        audio: { kind: "wav", files: { 1: join(res.folder, "missing.wav") } },
+        waitFor: Promise.resolve(),
+        signal: quit.signal,
+        inThread: true,
+      });
+      expect(out.ok).toBe(false);
+    }
+    expect(live.size).toBe(0);
+    // Control: the listener is there while a pass waits, and quitting still ends that pass.
+    const waiting = finalizeCall(c, {
+      models: spec(),
+      audio: { kind: "wav", files: { 1: join(res.folder, "missing.wav") } },
+      waitFor: new Promise(() => {}),
+      signal: quit.signal,
+      inThread: true,
+    });
+    await until(() => live.size === 1, 2000, "the wait's listener");
+    quit.abort();
+    expect((await waiting).error).toMatch(/akou quit/);
+    expect(live.size).toBe(0);
+  });
+
   test("a pass lets go of its models before it answers: the Worker it ends in frees none", async () => {
     const r = callRig();
     r.engine.onStart = (s) => s.capturing();
