@@ -1,5 +1,6 @@
 {
   "check:darwin": { "minPass": 1964, "maxSkip": 26 },
+  "check:linux": { "minPass": 1964, "maxSkip": 28 },
   "check:win32": { "minPass": 1944, "maxSkip": 60 },
   "ui:linux": { "minPass": 136, "maxSkip": 0 },
   "ui-webkit:linux": { "minPass": 43, "maxSkip": 0 },
