@@ -31,6 +31,7 @@ function seed(home: string): void {
   line("l000004", 6, "ask mark about it");
   line("l000005", 8, "then mark said yes");
   line("l000006", 9, "we moved to vercell");
+  line("l000007", 10, "then marc us agreed");
   b.partEnded(1, "stop", 10);
   b.add({ type: "call.ended", reason: "stop" });
   const dir = join(home, "Recordings", "akou", "work", "2026-09-23_153612_f6g7h");
@@ -224,6 +225,24 @@ describe("the vocab.learned event", () => {
   );
 
   test(
+    "writing back the first fix's word keeps the term while a later fix of it still reads it",
+    async () => {
+      const rig = await rigWith();
+      // A stated word for the whole call, then the common word `mark` fixed on one line: that
+      // second entry is no news, so it writes no notice of its own.
+      await rig.api("POST", `/calls/${CALL}/fix`, { term: "Marc", heard: ["marc us"] });
+      await fixLine(rig, "l000004", "ask Marc about it");
+      expect((await learnedEvents(rig)).map((k) => k.term)).toEqual(["Marc"]);
+      const r = await fixLine(rig, "l000007", "then marc us agreed");
+      expect(r.body.reverted).toEqual([{ heard: "marc us", term: "Marc" }]);
+      // l000004 still reads Marc, so the agent is not told the word was taken back.
+      expect((await texts(rig)).l000004).toBe("ask Marc about it");
+      expect((await learnedEvents(rig)).map((k) => k.term)).toEqual(["Marc"]);
+    },
+    LONG,
+  );
+
+  test(
     "an agent's own correction is told apart from the user's by `by`",
     async () => {
       const rig = await rigWith();
@@ -397,6 +416,37 @@ describe("a file entry another call or a person shares", () => {
       expect(back).toContainEqual(
         expect.objectContaining({ term: "Vercel", heard: ["vercell", "versal"] }),
       );
+    },
+    LONG,
+  );
+});
+
+describe("a file entry with no heard form", () => {
+  /** Call A learns `Marc` for the common word `mark`: the file holds `Marc` with no heard form. */
+  async function marcInBothCalls(rig: AppRig) {
+    const a = await rig.api("POST", `/calls/${CALL2}/fix`, { term: "Marc", heard: [] });
+    expect(a.body.undo.words).toEqual([expect.objectContaining({ term: "Marc", created: true })]);
+    // Call B fixes its own `mark`: the entry is there, so the file does not change.
+    const b = await fixLine(rig, "l000004", "ask Marc about it");
+    expect(b.body.undo.words).toEqual([]);
+    const evs = async (call: string) =>
+      ((await rig.api("GET", `/calls/${call}/events`)).body.events as Learned[]).filter(
+        (e) => e.type === "vocab.learned",
+      );
+    return { inA: (await evs(CALL2))[0], inB: (await evs(CALL))[0] };
+  }
+
+  test(
+    "Forget in the call that did not write it keeps it; in the call that did, removes it",
+    async () => {
+      const rig = await rigWith();
+      const { inA, inB } = await marcInBothCalls(rig);
+      expect(inA).toMatchObject({ term: "Marc", created: true });
+      expect(inB).toMatchObject({ term: "Marc", created: false });
+      await rig.api("POST", `/calls/${CALL}/fix/forget`, { learned: inB?.id });
+      expect(await words(rig)).toContainEqual(expect.objectContaining({ term: "Marc", heard: [] }));
+      await rig.api("POST", `/calls/${CALL2}/fix/forget`, { learned: inA?.id });
+      expect((await words(rig)).map((e) => e.term)).not.toContain("Marc");
     },
     LONG,
   );

@@ -239,6 +239,8 @@ export interface LearnedTerm {
   kept?: LearnedKept;
   /** The call's `vocab.add` ids it came with. */
   vocab: string[];
+  /** This fix wrote the file entry (`vocab.learned` `created`); absent on older events. */
+  created?: boolean;
   /** Its first revision, and the latest one with its time (epoch ms). */
   seq: number;
   lastSeq: number;
@@ -649,6 +651,9 @@ export class CallView {
           ...(e.lines !== undefined ? { lines: e.lines } : {}),
           ...((e.kept ?? cur?.kept) ? { kept: e.kept ?? cur?.kept } : {}),
           vocab: [...(e.vocab ?? cur?.vocab ?? [])],
+          ...((e.created ?? cur?.created) !== undefined
+            ? { created: e.created ?? cur?.created }
+            : {}),
           seq: cur?.seq ?? e.seq,
           lastSeq: e.seq,
           t: e.t,

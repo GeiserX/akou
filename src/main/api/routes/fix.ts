@@ -105,6 +105,8 @@ export interface FixRename {
   workspace?: string;
   /** The vocabulary file's entry was renamed too. */
   file: boolean;
+  /** Whether the learned term's file entry was this fix's own before the rename, for Undo. */
+  created: boolean;
 }
 
 export interface FixUndo {
@@ -158,9 +160,15 @@ async function retractLearned(
  * this learned term carries. An entry a person wrote, or one another call's fix added forms to, is
  * shared, and a rename or a Forget touches only this term's heard forms in it.
  */
-function ownEntry(e: { source: string; heard: readonly string[] }, heard: readonly string[]) {
+function ownEntry(
+  e: { source: string; heard: readonly string[] },
+  heard: readonly string[],
+  created: boolean,
+) {
   return (
-    e.source === "correction" && e.heard.every((h) => heard.some((x) => termKey(x) === termKey(h)))
+    created &&
+    e.source === "correction" &&
+    e.heard.every((h) => heard.some((x) => termKey(x) === termKey(h)))
   );
 }
 
@@ -174,12 +182,13 @@ function ownEntry(e: { source: string; heard: readonly string[] }, heard: readon
 async function renameInFile(
   app: ApiApp,
   workspace: string | undefined,
-  r: { from: string; to: string; heard: readonly string[]; back?: boolean },
+  r: { from: string; to: string; heard: readonly string[]; created: boolean; back?: boolean },
 ): Promise<boolean> {
   const out = await editFile(targetPath(app, workspace), (file) => {
     const had = file.entries.find((e) => termKey(e.term) === termKey(r.from));
     if (!had || had.term === r.to) return null;
-    const own = ownEntry(had, r.heard);
+    // On Undo the entry under the new term is this rename's own: it renamed it or wrote it.
+    const own = r.back === true || ownEntry(had, r.heard, r.created);
     const into = file.entries.find((e) => e !== had && termKey(e.term) === termKey(r.to));
     if (into) {
       if (!r.back || !own) {
@@ -226,13 +235,15 @@ async function renameInFile(
 async function forgetInFile(
   app: ApiApp,
   workspace: string | undefined,
-  l: Pick<LearnedTerm, "term" | "heard">,
+  l: Pick<LearnedTerm, "term" | "heard" | "created">,
 ): Promise<boolean> {
   const out = await editFile(targetPath(app, workspace), (file) => {
     const had = file.entries.find((e) => termKey(e.term) === termKey(l.term));
     if (!had) return null;
     const heard = had.heard.filter((h) => !l.heard.some((x) => termKey(x) === termKey(h)));
-    if (had.source === "correction" && heard.length === 0) {
+    // An entry with nothing left goes only when this fix wrote it: one another call wrote with no
+    // heard form, say `Marc` for `mark`, stays.
+    if (had.source === "correction" && heard.length === 0 && l.created === true) {
       return { file: removeEntry(file, had.term), result: true };
     }
     if (heard.length === had.heard.length) return null;
@@ -307,14 +318,13 @@ async function takeBack(
     });
   if (!call) return false;
   const vid = (call as EventDraft & { id: string }).id;
-  // The learned term is taken back only once none of its call entries reads it any more: an entry
-  // that keeps other heard forms, or another entry the same fix wrote, still spells it that way.
+  // The learned term is taken back only once no call entry reads it any more: one that keeps other
+  // heard forms, another entry the same fix wrote, or one a later fix of the same word added
+  // without a notice of its own, still spells it that way.
   await retractLearned(
     c,
     id,
-    (l, view) =>
-      l.vocab.includes(vid) &&
-      !view.callVocabulary().some((v) => l.vocab.includes(v.id) && v.term === l.term),
+    (l, view) => l.vocab.includes(vid) && !view.callVocabulary().some((v) => v.term === l.term),
   );
   const out = await editFile(targetPath(c.app, workspace), (file) => {
     const had = file.entries.find(
@@ -453,6 +463,8 @@ export function fixRoutes(r: Router<ApiApp>): void {
         heard: string[];
         vocab: string[];
         kept: LearnedKept;
+        /** This fix wrote the term's file entry. */
+        created: boolean;
         was?: string;
         /** A rename of a term learned before: its id. */
         prev?: string;
@@ -508,6 +520,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
                 from: target.from,
                 to: p.term,
                 heard: prev?.heard ?? [p.heard],
+                created: prev?.created === true,
               });
               if (file) filesChanged = true;
             } catch (err) {
@@ -522,6 +535,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
             heard: prev?.heard ?? [p.heard],
             ...(workspace ? { workspace } : {}),
             file,
+            created: prev?.created === true,
           };
           undo.renames.push(rename);
           learned.push({
@@ -529,6 +543,8 @@ export function fixRoutes(r: Router<ApiApp>): void {
             heard: prev?.heard ?? [p.heard],
             vocab: prev?.vocab ?? [target.vocab],
             kept,
+            // A renamed own entry, or the entry the move wrote, is this fix's own from now on.
+            created: file || prev?.created === true,
             was: target.from,
             ...(prev ? { prev: prev.id } : {}),
             rename,
@@ -596,6 +612,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
               heard: p.op === "replace" && heard.length > 0 ? heard : [],
               vocab: ids,
               kept,
+              created: word?.created === true,
             });
           }
         }
@@ -636,6 +653,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
         else {
           for (const h of k.heard) if (!had.heard.includes(h)) had.heard.push(h);
           had.vocab.push(...k.vocab);
+          had.created = had.created || k.created;
         }
       }
       for (const k of byTerm.values()) {
@@ -653,6 +671,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
             lines,
             kept: k.kept,
             vocab: k.vocab,
+            created: k.created,
             ...(k.was ? { was: k.was } : {}),
           };
         });
@@ -730,7 +749,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
           typeof r.workspace === "string" && validWorkspace(r.workspace) ? r.workspace : undefined;
         // A file that cannot be edited must not stop the rest of the Undo.
         const heard = Array.isArray(r.heard) ? r.heard.filter((h) => typeof h === "string") : [];
-        const back = { from: r.to, to: r.from, heard, back: true };
+        const back = { from: r.to, to: r.from, heard, created: true, back: true };
         if (r.file && (await renameInFile(c.app, ws, back).catch(() => false))) words++;
         await c.app
           .write(id, (cc) => {
@@ -746,6 +765,7 @@ export function fixRoutes(r: Router<ApiApp>): void {
               by: c.by,
               ...(l.kept ? { kept: l.kept } : {}),
               vocab: l.vocab,
+              created: r.created === true,
             };
           })
           .then(() => learned++)
