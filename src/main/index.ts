@@ -77,7 +77,12 @@ import {
   verifyAccelerator,
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
-import { chooseFinalModel, type FinalChoice, finalModelOf } from "./asr/final-model.ts";
+import {
+  chooseFinalModel,
+  type FinalChoice,
+  finalModelId,
+  finalModelOf,
+} from "./asr/final-model.ts";
 import type { FinalStep } from "./asr/final-text.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
@@ -110,6 +115,7 @@ import {
   llamaPlan,
   metalHolder,
 } from "./asr/llama-server.ts";
+import { chosenModels, keptModels, type ModelSetContext } from "./asr/model-set.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -813,9 +819,39 @@ export class AkouApp implements ApiApp {
     return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
   }
 
-  /** The models the next start needs (`asr.diarizer`): what the download card offers. */
+  /**
+   * The models the next start needs: the helpers for `asr.diarizer` and the speech models the
+   * chosen setups use (model-set.ts), so Parakeet is in it only when a setup uses it. What the
+   * download card and `POST /models/pull` fetch, and what makes the models ready.
+   */
   private registry(): readonly ModelSpecEntry[] {
-    return modelsFor(this.cfg.settings, hostPlatform(), this.o.modelRegistry ?? MODELS);
+    return modelsFor(
+      this.cfg.settings,
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
+    );
+  }
+
+  /**
+   * The speech models the live model, the second pass, the final pass and dictation use here, or
+   * undefined in server mode, whose jobs name their own recognizer and keep the older set.
+   */
+  private chosenModels(): string[] | undefined {
+    if (this.runMode === "server") return undefined;
+    return chosenModels(this.modelSetContext());
+  }
+
+  /** What `chosenModels` and `keptModels` read: the settings, the files here, the machine. */
+  private modelSetContext(): ModelSetContext {
+    const ctx = this.liveContext();
+    return {
+      settings: this.cfg.settings,
+      present: ctx.present,
+      catalog: ctx.catalog ?? [],
+      runtime: ctx.runtime,
+      ...(ctx.machine ? { machine: ctx.machine } : {}),
+    };
   }
 
   /** The speaker-label engine running now: the one the recognizer started with, else the setting. */
@@ -829,20 +865,33 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * Whether the running engine's model files are there, but `except`: what a start and the final
-   * pass need. A change to `asr.diarizer` mid-run never asks for models the running recognizer
-   * does not use.
+   * Whether the running engine's model files are there: what a call's start needs, the helpers and
+   * the chosen setups' models. A final pass has its own rule (`finalModelsPresent`). A change to
+   * `asr.diarizer` mid-run never asks for models the running recognizer does not use.
    */
-  private runningModelsPresent(except: readonly string[] = []): boolean {
+  private runningModelsPresent(): boolean {
     const registry = modelsFor(
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
     );
-    return modelsPresent(
-      this.cfg.settings["asr.modelsDir"],
-      registry.filter((m) => !except.includes(m.id)),
+    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
+  }
+
+  /**
+   * Whether a final pass has its models: the helpers of the running speaker-label engine, and
+   * Parakeet when Parakeet decodes. A pass needs no live model, and Qwen's own files are checked
+   * where Qwen is chosen (`chooseFinalModel`).
+   */
+  private finalModelsPresent(qwen: boolean): boolean {
+    const registry = modelsFor(
+      { "asr.diarizer": this.runningDiarizer() },
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+      qwen ? [] : [RECOGNIZER],
     );
+    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
 
   /**
@@ -2272,13 +2321,25 @@ export class AkouApp implements ApiApp {
    * The recognizer the next final pass runs: `asked` (`akou finalize --model`) or
    * `asr.final.model`, never one whose files are missing.
    */
+  /** `GET /models`'s `final`: the setting, the model it names, and what the next pass runs. */
+  finalModel(): { setting: string; named: string | null; next: string | null } | null {
+    if (this.runMode === "server") return null;
+    const setting = this.cfg.settings["asr.final.model"];
+    const named = finalModelOf(setting);
+    return {
+      setting,
+      named: named ? finalModelId(named) : null,
+      next: ((m) => (m ? finalModelId(m) : null))(this.finalChoice().model),
+    };
+  }
+
   finalChoice(asked?: string): FinalChoice {
     const ctx = this.liveContext();
     // A recognizer given on purpose (tests) stands for Parakeet: here with no test catalog, else
     // when the catalog's recognizer set is on disk, whatever that recognizer is called.
     const given =
       this.o.models !== undefined
-        ? this.givenRecognizer() || this.runningModelsPresent()
+        ? this.givenRecognizer() || this.finalModelsPresent(false)
         : ctx.present(RECOGNIZER);
     return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], {
       ...ctx,
@@ -2362,7 +2423,7 @@ export class AkouApp implements ApiApp {
   private finalModels(qwen = false): ModelSpec | null {
     // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
     if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
-    if (!this.runningModelsPresent(qwen ? [RECOGNIZER] : [])) return null;
+    if (!this.finalModelsPresent(qwen)) return null;
     return this.o.models !== undefined ? this.o.models : this.finalSherpaSpec();
   }
 
@@ -2891,12 +2952,15 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * The live Worker's Parakeet, already loaded at start, or null while no model is there. It picks
-   * the language itself, so a forced one is not sent (DC-E4).
+   * The live Worker's Parakeet, already loaded at start, or null while no model is there or
+   * Parakeet was never downloaded. It picks the language itself, so a forced one is not sent (DC-E4).
    */
   private fastEngine(): DictationEngine | null {
     const asr = this.asr;
-    return asr ? { name: "fast", decode: (samples) => asr.decode(samples) } : null;
+    // Parakeet is what `fast` decodes with: a machine that never downloaded it has no `fast`, so
+    // nothing offers it, and a live dictation whose stream fails says why instead of falling back.
+    if (!asr || (!this.givenRecognizer() && !this.liveContext().present(RECOGNIZER))) return null;
+    return { name: "fast", decode: (samples) => asr.decode(samples) };
   }
 
   /**
@@ -3249,6 +3313,7 @@ export class AkouApp implements ApiApp {
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
     );
   }
 
@@ -3273,7 +3338,12 @@ export class AkouApp implements ApiApp {
         : []),
     ];
     return {
-      defaults: new Set([...this.registry().map((m) => m.id), ...live]),
+      // The chosen second pass's and dictation's models stay too (keptModels).
+      defaults: new Set([
+        ...this.registry().map((m) => m.id),
+        ...live,
+        ...keptModels(this.modelSetContext()),
+      ]),
       inUse:
         this.asr !== null || this.finals.size > 0 || this.modelsPull.running
           ? new Set(this.runningSet().map((m) => m.id))

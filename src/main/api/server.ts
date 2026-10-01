@@ -101,6 +101,11 @@ export interface ApiApp {
   modelRows?(): import("../server/model-store.ts").ModelView[];
   /** The live setups for `GET /models`: each with its bars and models, and which one runs. Null in server mode. */
   liveModels?(): import("../asr/live-setups.ts").LiveView | null;
+  /**
+   * The final pass's model for `GET /models`: `asr.final.model`, the catalog id the setting names
+   * (null for `auto`), and the id the next pass runs. Null in server mode.
+   */
+  finalModel?(): { setting: string; named: string | null; next: string | null } | null;
   /** Fetches one catalog model on purpose. Throws `ModelRefused`. */
   pullModel?(id: string): import("../server/model-store.ts").ModelView;
   /** Deletes one model under the sweep's rules. Throws `ModelRefused`. */

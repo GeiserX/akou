@@ -480,7 +480,9 @@ export function hostPlatform(): string {
 /**
  * The models a machine needs for its settings (`asr.diarizer`) on its platform: the recognizer, the
  * VAD and TitaNet always, then Nemotron or pyannote, each only where it runs. An `onDemand` entry
- * (Qwen, the llama-server builds) is never in it. `akou models pull`
+ * (Qwen, the llama-server builds) is never in it. Given `chosen`, the speech models the chosen
+ * setups use (`chosenModels` in model-set.ts), Parakeet is in it only when a setup uses it, and the
+ * on-demand models they name (Qwen, its llama-server, a streaming Nemotron) are in it too. `akou models pull`
  * fetches these and `akou doctor` checks them. Tests pass their own registry, which loses the other
  * engine's entries the same way; an entry with no `platforms` (a test's) runs everywhere.
  */
@@ -488,17 +490,19 @@ export function modelsFor<T extends ModelSpecEntry>(
   settings: { readonly "asr.diarizer": string },
   platform: string,
   registry: readonly T[] = MODELS as unknown as readonly T[],
+  chosen?: readonly string[],
 ): readonly T[] {
   const diarizer = settings["asr.diarizer"] as DiarizerKind;
   const other = diarizer === "nemotron" ? ONLY.embeddings : ONLY.nemotron;
   return registry.filter((m) => {
     const c = m as Partial<CatalogEntry>;
     const platforms = c.platforms as readonly string[] | undefined;
-    return (
-      !other.includes(m.id) &&
-      !c.onDemand &&
-      (platforms === undefined || platforms.includes(platform))
-    );
+    if (other.includes(m.id) || (platforms !== undefined && !platforms.includes(platform)))
+      return false;
+    // With the chosen setups' models (model-set.ts): Parakeet, the one model of the default set a
+    // setup may not use, only when one does, and the on-demand models they name.
+    if (chosen) return chosen.includes(m.id) || (!c.onDemand && m.id !== RECOGNIZER);
+    return !c.onDemand;
   });
 }
 

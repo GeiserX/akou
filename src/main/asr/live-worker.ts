@@ -460,12 +460,16 @@ export class LivePipeline {
     }
   }
 
-  /** The call's decode list. Takes effect for the next stream; loads the recognizer now. */
+  /**
+   * The call's decode list. Takes effect for the next stream; loads the recognizer now, when its
+   * files are here: a machine that never downloaded Parakeet (no chosen setup uses it) loads it only
+   * if a decode ever asks for it.
+   */
   setDecodeList(list: DecodeList | null, version: number): void {
     this.list = list;
     this.listVersion = version;
     this.prepared = null;
-    this.hot();
+    if (this.models.recognizerHere?.() !== false) this.hot();
   }
 
   unmerge(from: string, into: string): void {
@@ -1083,7 +1087,7 @@ export class LivePipeline {
    */
   warmDictation(want: LiveChoice | null, callActive: boolean): void {
     this.dictationVad ??= this.models.vad();
-    this.hot();
+    if (this.models.recognizerHere?.() !== false) this.hot();
     if (!want || !this.models.liveEngine) return;
     if (!callActive && this.engine && this.engine.id !== want.engine) this.startEngine(undefined);
     if (!this.engine) this.models.liveEngine(want.engine);

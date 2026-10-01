@@ -8,7 +8,9 @@
  * - **Second pass** (the app only): Off, Qwen or Parakeet reviewing the finished sentences during
  *   the call (`asr.review.model`), and how often (`asr.review.everySeconds`).
  * - **After the call** (the app) or **Jobs** (server mode): the recognizer that writes the
- *   accurate transcript; in server mode a radio list of the recognizers a job may run by default.
+ *   accurate transcript, the one `asr.final.model` names or the one `auto` runs (`GET /models`
+ *   `final`), Qwen with its llama-server; in server mode a radio list of the recognizers a job may
+ *   run by default.
  * - **Dictation** (the app): Fast and Best, the engines dictation decodes with.
  * - **Speakers**: who spoke when, a radio list (`asr.diarizer`).
  * - **On this Mac** (or computer, or server): the graphics chip, the unused-days sweep, the size
@@ -88,7 +90,14 @@ import { twoStep } from "./server-common.ts";
 import type { ConfigReply, SchemaEntry } from "./settings.ts";
 import { wordsFor } from "./settings-labels.ts";
 
-type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView };
+/** The final pass's model (`GET /models` `final`): the setting, the id it names, what runs next. */
+interface FinalView {
+  setting: string;
+  named: string | null;
+  /** Null when no final model is downloaded. */
+  next: string | null;
+}
+type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView; final?: FinalView };
 
 /** The numbers of "On this Mac": each field's id, label, help and unit. */
 const NUMBERS = [
@@ -134,6 +143,7 @@ export class ModelsPage {
   private info: ModelsInfo | null = null;
   private rows: ModelRow[] = [];
   private live: LiveView | null = null;
+  private final: FinalView | null = null;
   private schema: Record<string, SchemaEntry> = {};
   private settings: Record<string, unknown> = {};
   private issues = new Map<string, string>();
@@ -242,6 +252,7 @@ export class ModelsPage {
     this.info = m;
     this.rows = m.models ?? [];
     this.live = m.live ?? null;
+    this.final = m.final ?? null;
     const busy =
       m.state === "downloading" ||
       this.rows.some((r) => r.state === "downloading") ||
@@ -662,12 +673,41 @@ export class ModelsPage {
     return s;
   }
 
+  /**
+   * The model After the call shows: the one `asr.final.model` names, else the one the next pass
+   * runs (`auto`), else Parakeet where the app says neither.
+   */
+  private afterCallId(): string {
+    return this.final?.named ?? this.final?.next ?? RECOGNIZER_ID;
+  }
+
+  /**
+   * After the call: the model that writes the final transcript, as the setting says, with Qwen's
+   * llama-server in the same Download. A named model that is not here says what writes it until it
+   * is.
+   */
   private afterCallSection(): HTMLElement | null {
-    const r = this.row(RECOGNIZER_ID) ?? this.rows.find((x) => x.kind === "speech" && x.default);
+    const r =
+      this.row(this.afterCallId()) ??
+      this.row(RECOGNIZER_ID) ??
+      this.rows.find((x) => x.kind === "speech" && x.default);
     if (!r) return null;
+    const models =
+      r.id === QWEN_ID
+        ? this.rowsOf(this.live?.slots.review.find((e) => e.id === QWEN_ID)?.models ?? [QWEN_ID])
+        : [r];
+    const next = this.final?.next;
+    const until =
+      next && next !== r.id
+        ? `Until it is downloaded, ${modelName(this.row(next) ?? { id: next, job: "" })} writes it.`
+        : "";
     const s = section(
       "After the call",
-      this.modelRow(modelName(r), afterCallHelp(r, this.here), [r]),
+      this.modelRow(
+        modelName(r),
+        [afterCallHelp(r, this.here), until].filter((x) => x).join(" "),
+        models,
+      ),
     );
     s.id = "models-after";
     return s;
@@ -678,7 +718,16 @@ export class ModelsPage {
     const best = this.row(QWEN_ID);
     if (!fast && !best) return null;
     const rows: HTMLElement[] = [];
-    if (fast && fast.state === "ready")
+    // With another model after the call, Fast's Parakeet is a model of its own here.
+    if (fast && this.afterCallId() !== RECOGNIZER_ID)
+      rows.push(
+        this.modelRow(
+          `Fast: ${modelName(fast)}`,
+          "Parakeet, on the processor: about 0.1 s for 5 s of speech.",
+          [fast],
+        ),
+      );
+    else if (fast && fast.state === "ready")
       rows.push(
         this.modelRow(
           `Fast: ${modelName(fast)}`,
