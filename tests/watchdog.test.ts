@@ -38,7 +38,11 @@ async function run(flags: string[]) {
   const read = () => (existsSync(log) ? readFileSync(log, "utf8") : "");
   /** Resolves with the exit, or null when the process is still alive after `ms`. */
   const exitWithin = (ms: number) =>
-    Promise.race([proc.exited.then(() => proc.signalCode), Bun.sleep(ms).then(() => null)]);
+    Promise.race([
+      // Windows ends a process with no signal to report: its exit code stands in.
+      proc.exited.then(() => proc.signalCode ?? `exit ${proc.exitCode}`),
+      Bun.sleep(ms).then(() => null),
+    ]);
   const cleanup = () => {
     for (const pid of [proc.pid, child]) if (pid && processAlive(pid)) process.kill(pid, "SIGKILL");
     t.cleanup();
@@ -52,8 +56,8 @@ describe("[DK-M8] the watchdog inside the app", () => {
     async () => {
       const r = await run(["--block", "30000"]);
       try {
-        const sig = await r.exitWithin(SILENCE + 8000);
-        expect(sig).toBe("SIGKILL");
+        const ended = await r.exitWithin(SILENCE + 8000);
+        expect(ended).toMatch(process.platform === "win32" ? /^exit \d+$/ : /^SIGKILL$/);
         const log = r.log();
         expect(log).toMatch(
           /^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} [+-]\d\d:\d\d error watchdog: the app's thread has not answered for \d+ s; no call is recording$/m,
