@@ -45,7 +45,12 @@ async function run(flags: string[], dir?: string) {
       Bun.sleep(ms).then(() => null),
     ]);
   const cleanup = () => {
-    for (const pid of [proc.pid, child]) if (pid && processAlive(pid)) process.kill(pid, "SIGKILL");
+    for (const pid of [proc.pid, child]) {
+      // A process can end between the check and the kill (an exiting child not yet reaped).
+      try {
+        if (pid && processAlive(pid)) process.kill(pid, "SIGKILL");
+      } catch {}
+    }
     t.cleanup();
   };
   return { proc, child, log: read, hangs, exitWithin, cleanup };
