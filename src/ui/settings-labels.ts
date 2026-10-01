@@ -119,6 +119,15 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["nemotron-en-1120", "Nemotron, English, 1 s"],
     ],
   },
+  "asr.final.model": {
+    label: "Model after the call",
+    help: "Writes the final transcript. Qwen is the most accurate; without a graphics chip, slow.",
+    choices: [
+      ["auto", "Automatic: Qwen when it is downloaded"],
+      ["qwen3-asr-1.7b", "Qwen3-ASR"],
+      ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
+    ],
+  },
   "asr.parakeet.decoding": {
     label: "Parakeet decoding",
     help: "Beam also leans toward your words, but can drop whole stretches.",

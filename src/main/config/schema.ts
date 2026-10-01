@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
+import { FINAL_MODELS, finalModelId } from "../asr/final-model.ts";
 import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
@@ -469,6 +470,12 @@ export const SETTINGS = {
     values: REVIEW_MODELS,
     default: "none",
     doc: "A second pass during a call, `none` or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same): every `asr.review.everySeconds`, the sentences Nemotron finished since the last review are decoded again, whole, and the new words replace the live lines once. `qwen`: Qwen3-ASR, the most accurate, about 10 to 13 GB of memory during a call; it needs its llama-server, and it goes off for the rest of a call it cannot keep up with. The window offers it only on a machine with a GPU for it and 16 GB of memory; set here, it runs anyway. `parakeet`: Parakeet, on the processor, with no extra memory. `none`: the live lines stay as Nemotron wrote them. It reviews Nemotron's lines only, so a call whose live model is Parakeet runs none. A line someone edited, or fixed a word on, keeps their text. `akou start --review` sets it for one call. A change applies from the next call.",
+  },
+  "asr.final.model": {
+    type: "string",
+    values: FINAL_MODELS,
+    default: "auto",
+    doc: "The model that writes the final transcript after a call: `auto`, or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same). `qwen`: Qwen3-ASR on its llama-server, the most accurate; it gives no word times, so each line keeps the times of the stretch it was cut from. While the pass runs it holds about 3 GB of memory and the GPU when there is one. Without a GPU it decodes on the processor, much slower, and a pass gets half the call's length plus 300 s before it is stopped as stuck, so on such a machine a long call can fail: set `parakeet` there. One Qwen pass runs at a time; another waits for it. `parakeet`: Parakeet, on the processor. `auto` picks `qwen` whenever its model and its llama-server are downloaded, else `parakeet`. A model that is not downloaded never runs: the setting falls back to the other model and says why in the log, and with neither downloaded no pass runs. On Qwen the pass does not need Parakeet on disk. Speaker labels are the same with either. A Qwen that cannot start, or fails twice in a row, fails the pass, and `akou finalize --force` runs it again. `akou finalize --model` sets it for one run, and is refused when that model is not downloaded; a pass stopped by a quit runs again at the next start on this setting's model. A change applies from the next pass.",
   },
   "asr.review.everySeconds": {
     type: "integer",
@@ -1199,9 +1206,14 @@ function crossCheck(s: Settings): { key: SettingKey; message: string }[] {
 /**
  * Old values rewritten in today's keys, so a file or a `PATCH /config` that carries one keeps
  * working and the next save writes the new form: `asr.live` `upgrade` is `nemotron` with
- * `asr.review.model` `qwen` (unless it names its own).
+ * `asr.review.model` `qwen` (unless it names its own). And short names read as the ids they name:
+ * `asr.final.model` `qwen` and `parakeet`.
  */
 export function legacyValues(values: Record<string, unknown>): Record<string, unknown> {
+  const short = values["asr.final.model"];
+  if (short === "qwen" || short === "parakeet") {
+    values = { ...values, "asr.final.model": finalModelId(short) };
+  }
   if (values["asr.live"] !== "upgrade") return values;
   return {
     ...values,

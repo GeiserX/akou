@@ -46,6 +46,12 @@ afterAll(async () => {
 describe("a final pass's progress", () => {
   test("running: in the status, the call and akou status; done: the figures go and the line says ready", async () => {
     const id = await rig.startCall({});
+    // The figures as the app holds them at the moment `final.done` is delivered, before the
+    // Worker has answered: a done call never shows progress, not even for a moment.
+    let atDone: unknown = "not seen";
+    const stop = rig.app.watch((call, e) => {
+      if (call === id && e.type === "final.done") atDone = rig.app.finalProgress(id);
+    });
     await until(
       async () => (await rig.app.events(id, 0)).some((e: LogEvent) => e.type === "seg"),
       20_000,
@@ -62,7 +68,14 @@ describe("a final pass's progress", () => {
     );
     const st = (await rig.api("GET", "/status")).body;
     expect(st.finals).toEqual([
-      { call: id, done_s: expect.any(Number), total_s: expect.any(Number), model: "fake-parakeet" },
+      {
+        call: id,
+        done_s: expect.any(Number),
+        total_s: expect.any(Number),
+        model: "fake-parakeet",
+        step: "decoding",
+        waiting: null,
+      },
     ]);
     expect(st.last.final).toMatchObject({ state: "running", model: "fake-parakeet" });
     expect((await rig.api("GET", `/calls/${id}`)).body.final.progress).toMatchObject({
@@ -71,16 +84,11 @@ describe("a final pass's progress", () => {
     const cli = rigCli(rig);
     expect((await cli(["status"])).out).toMatch(/Final: running, \d+ of \d+ s/);
 
-    await until(
-      async () => (await rig.app.events(id, 0)).some((e: LogEvent) => e.type === "final.done"),
-      30_000,
-      "final.done",
-    );
-    await until(
-      async () => (await rig.api("GET", "/status")).body.finals.length === 0,
-      5_000,
-      "the figures to go",
-    );
+    await until(() => atDone !== "not seen", 30_000, "final.done");
+    stop();
+    expect(atDone).toBeNull();
+    // And read once, with no wait, right after.
+    expect((await rig.api("GET", "/status")).body.finals).toEqual([]);
     expect((await rig.api("GET", `/calls/${id}`)).body.final).toMatchObject({
       state: "done",
       model: "fake-parakeet",

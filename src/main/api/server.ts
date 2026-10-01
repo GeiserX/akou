@@ -156,13 +156,21 @@ export interface ApiApp {
    * pass's recognizer (Parakeet with beam search). Absent: it cannot.
    */
   takesWords?(id: string): boolean;
-  /** Runs the final pass for an ended call. */
+  /** Runs the final pass for an ended call; `model` (`qwen`, `parakeet`) for this run only. */
   finalize(
     id: string,
-    opts: { force?: boolean },
-  ): Promise<Outcome<{ call: string; started: boolean }>>;
+    opts: { force?: boolean; model?: string },
+  ): Promise<Outcome<{ call: string; started: boolean; model?: string }>>;
   /** How far a running final pass is, or null when none runs for the call. Absent: never known. */
-  finalProgress?(id: string): { done_s: number; total_s: number; model: string } | null;
+  finalProgress?(id: string): {
+    done_s: number;
+    total_s: number;
+    model: string;
+    /** `starting`, `speakers` or `decoding`; null before the pass's first word. */
+    step: string | null;
+    /** The call whose Qwen pass this one waits for, or null. */
+    waiting: string | null;
+  } | null;
   /** `POST /calls/{id}/export`: the export folder, or the folder `to` names. */
   exportCall(id: string, o: { to?: string }): Promise<Outcome<ExportResult>>;
   /** `POST /calls/{id}/hooks`: the hooks of the stages named (default: every stage reached). */

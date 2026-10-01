@@ -82,6 +82,12 @@ describe("akou status: the Final line", () => {
     expect(
       finalLines(status(running, [{ call: "c2", done_s: 2225, total_s: 9120, model: QWEN_ASR }])),
     ).toEqual(["Final: running, 37 of 152 min (Qwen)"]);
+    // Before decoding moves: the step, and a pass waiting behind another Qwen pass.
+    const step = (more: Record<string, unknown>) =>
+      finalLines(status({ ...running, done_s: 0, ...more }));
+    expect(step({ step: "starting" })).toEqual(["Final: starting Qwen"]);
+    expect(step({ step: "speakers" })).toEqual(["Final: labelling speakers (Qwen)"]);
+    expect(step({ waiting: "c1" })).toEqual(["Final: waiting for the pass on c1 (Qwen)"]);
   });
 
   test("ready or failed within the hour; an older pass is no news; another call's pass is named", () => {

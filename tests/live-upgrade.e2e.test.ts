@@ -71,6 +71,9 @@ beforeAll(async () => {
       "asr.live": "upgrade",
       // An own llama-server needs no downloaded build.
       "asr.llamaServer": [process.execPath, FAKE_LLAMA, "--fake-log", llamaLog],
+      // The final pass after each call stays on Parakeet, so the llama-server starts counted here
+      // are the second pass's and dictation's only (`auto` would run Qwen once it is downloaded).
+      "asr.final.model": "parakeet",
       "asr.accelerator": "cpu",
     },
   });

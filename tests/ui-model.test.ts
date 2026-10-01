@@ -430,9 +430,17 @@ describe("the final pass note and the languages chip", () => {
       b.add({ type: "final.started", pid: 1, model: "qwen3-asr-1.7b" });
       b.add({ type: "final.failed", step: "decode", error: "qwen3-asr-1.7b is unavailable: down" });
     });
-    expect(finalNote(failed)?.text).toBe(
-      "final transcript: failed (Qwen: qwen3-asr-1.7b is unavailable: down)",
+    // The engine's own error names its id: the name takes its place, said once.
+    expect(finalNote(failed)?.text).toBe("final transcript: failed (Qwen is unavailable: down)");
+    // Before its figures move, the step.
+    const at = (step: "starting" | "speakers", waiting: string | null = null) =>
+      finalNote(running, { done_s: 0, total_s: 600, model: "qwen3-asr-1.7b", step, waiting });
+    expect(at("starting")?.text).toBe("final transcript: starting Qwen");
+    expect(at("speakers")?.text).toBe("final transcript: labelling speakers (Qwen)");
+    expect(at("starting", "01ABC")?.text).toBe(
+      "final transcript: waiting for the pass on 01ABC (Qwen)",
     );
+    expect(at("speakers")?.progress).toBe(0);
     const done = ended((b) => {
       b.add({ type: "final.started", pid: 1, model: "parakeet-tdt-0.6b-v3-fp32" });
       b.add({ type: "final.done", parts: [1], skipped: [{}], model: "parakeet-tdt-0.6b-v3-fp32" });
