@@ -460,7 +460,17 @@ export interface ModelView {
   set_default: { key: string; value: string } | null;
 }
 
-/** How old a copy's temporary file must be before a store that starts deletes it. */
+/** Whether process `pid` still runs: one owned by another user counts as running. */
+function running(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** How old a temporary file named without its process must be before a store that starts deletes it. */
 export const STALE_COPY_MS = 60_000;
 
 /** A model being copied from a folder (`POST /models/import`). */
@@ -492,9 +502,10 @@ export class ModelStore {
 
   /**
    * Deletes the temporary files of copies from a folder that never finished: akou quit or crashed
-   * in the middle of one. Each copy writes `<file>.<random>.import`, so nothing else would ever
-   * delete them. A file written in the last minute may belong to a copy still running in another
-   * process (`akou models import`), so it stays.
+   * in the middle of one. Each copy writes `<file>.<pid>.<random>.import`, so nothing else would
+   * ever delete them. A file whose process still runs stays, even a suspended `akou models import`
+   * that has written nothing for a while. A file named without a process (written before this
+   * naming) goes once it is a minute old.
    */
   private clearStaleCopies(): void {
     const dir = this.o.dir();
@@ -506,7 +517,9 @@ export class ModelStore {
         for (const f of readdirSync(at)) {
           if (!f.endsWith(".import")) continue;
           const path = join(at, f);
-          if (statSync(path).mtimeMs < before) rmSync(path, { force: true });
+          const owner = /\.(\d+)\.[0-9a-f]{8}\.import$/.exec(f);
+          const gone = owner ? !running(Number(owner[1])) : statSync(path).mtimeMs < before;
+          if (gone) rmSync(path, { force: true });
         }
       }
     } catch {

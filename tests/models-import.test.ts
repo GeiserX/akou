@@ -274,26 +274,50 @@ describe("[W3.19] a copy cut short by quitting leaves nothing behind", () => {
     }
   });
 
-  test("a store that starts deletes the temporary files of copies that never ended, but not a fresh one", () => {
+  test("a store that starts deletes the temporary files of copies whose process is gone, never a live one's", () => {
     const t = tempDir("akou-import-");
     try {
       const dir = join(t.dir, "models");
       mkdirSync(join(dir, BIG), { recursive: true });
-      // A copy killed with akou: the process died before its own cleanup ran.
-      const stale = join(dir, BIG, "w.bin.0a1b2c3d.import");
-      const old = join(dir, BIG, "w.bin.import");
-      // Another process's copy, still being written.
-      const fresh = join(dir, BIG, "w.bin.9f8e7d6c.import");
+      // A process that has exited: its copy can never finish.
+      const exited = Bun.spawnSync([process.execPath, "-e", "0"]).pid;
+      const dead = join(dir, BIG, `w.bin.${exited}.0a1b2c3d.import`);
+      // A process still running that has written nothing for minutes, as a suspended
+      // `akou models import` would be: its copy may still finish.
+      const live = join(dir, BIG, `w.bin.${process.pid}.9f8e7d6c.import`);
+      // Named before the process was in the name: the age decides.
+      const oldNamed = join(dir, BIG, "w.bin.11223344.import");
+      const freshNamed = join(dir, BIG, "w.bin.55667788.import");
       const model = join(dir, BIG, "w.bin");
-      for (const f of [stale, old, fresh, model]) writeFileSync(f, "x");
+      for (const f of [dead, live, oldNamed, freshNamed, model]) writeFileSync(f, "x");
       const past = (Date.now() - STALE_COPY_MS - 5_000) / 1000;
-      for (const f of [stale, old, model]) utimesSync(f, past, past);
+      for (const f of [dead, live, oldNamed, model]) utimesSync(f, past, past);
       store(dir, entryOf(BIG, [])).close();
-      expect(existsSync(stale)).toBe(false);
-      expect(existsSync(old)).toBe(false);
-      expect(existsSync(fresh)).toBe(true);
+      expect(existsSync(dead)).toBe(false);
+      expect(existsSync(live)).toBe(true);
+      expect(existsSync(oldNamed)).toBe(false);
+      expect(existsSync(freshNamed)).toBe(true);
       // Control: the model file itself, as old as the stale ones, is never touched.
       expect(existsSync(model)).toBe(true);
+    } finally {
+      t.cleanup();
+    }
+  });
+
+  test("a copy's temporary file is named with its process", async () => {
+    const t = tempDir("akou-import-");
+    try {
+      const from = join(t.dir, "stick");
+      mkdirSync(from, { recursive: true });
+      const spec = bigFile(join(from, "w.bin"), "w.bin", 1);
+      const dir = join(t.dir, "models");
+      const names: string[] = [];
+      await importModels(from, dir, [entryOf(BIG, [spec])], {
+        onProgress: () => names.push(...leftovers(dir)),
+      });
+      expect(names.length).toBeGreaterThan(0);
+      for (const n of names)
+        expect(n).toMatch(new RegExp(`w\\.bin\\.${process.pid}\\.[0-9a-f]{8}\\.import$`));
     } finally {
       t.cleanup();
     }

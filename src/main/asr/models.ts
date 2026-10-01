@@ -758,8 +758,9 @@ async function copyChecked(
   o: ImportOptions,
 ): Promise<boolean> {
   mkdirSync(dirname(target), { recursive: true });
-  // One temporary file per copy: two imports of the same file never write into each other's.
-  const tmp = `${target}.${randomBytes(4).toString("hex")}.import`;
+  // One temporary file per copy, named with its process: two imports of the same file never write
+  // into each other's, and a store that starts deletes it only once that process is gone.
+  const tmp = `${target}.${process.pid}.${randomBytes(4).toString("hex")}.import`;
   const h = createHash("sha256");
   let moved = false;
   try {
