@@ -1,6 +1,6 @@
 # Fixing a word on the live line, and telling the agent
 
-Two rules for fixing a word disagree. W9.3 in [WINDOW](../WINDOW.md#9-vocabulary) says a fix on a line only proposes a vocabulary entry, and nothing is written until Approve. What shipped in [#186](https://github.com/GeiserX/akou/pull/186) does the opposite: a fix learns the word at once, spreads it through the call, and offers Undo. This page says what akou does today, lists the choices, and ends with the questions to answer. It also covers the two things W9.3 never had: fixing a word by clicking it on the live transcript, and telling a following agent when the vocabulary changes.
+Two rules for fixing a word disagree. W9.3 in [WINDOW](../WINDOW.md#9-vocabulary) says a fix on a line only proposes a vocabulary entry, and nothing is written until Approve. What shipped in [#186](https://github.com/GeiserX/akou/pull/186) does the opposite: a fix learns the word at once, spreads it through the call, and offers Undo. This page says what akou does today, lists the choices, and ends with what we decided. It also covers the two things W9.3 never had: fixing a word by clicking it on the live transcript, and telling a following agent when the vocabulary changes.
 
 ## What happens today
 
@@ -55,14 +55,14 @@ W9.3 says it this way (`docs/ux/WINDOW.md:322`, bead akou-b6y.50): editing `vers
 
 [DESIGN 5.4](../../DESIGN.md#54-the-live-query-engine) already follows #186, in these words: "a fix on a line (below) is the user's own word and goes in at once, while the post-call pass and the skill write `vocab.propose`" (`docs/DESIGN.md:532`). W9.3 is the only place left that says otherwise.
 
-Dictation works differently. After a fix in the draft box, a chip asks `Learn "Kubernetes"?`, and ignoring it leaves the word in To review. That is DC-L4 and DC-L5 in [DICTATION](../DICTATION.md), `docs/ux/DICTATION.md:381`. The setting `dictation.learn` picks `ask`, the default, or `auto` or `off` (`src/main/config/schema.ts:846`). DC-L4 names W9.3 as the matching design for the window.
+Dictation works differently. After a fix in the draft box, a chip asks `Learn "Kubernetes"?`, and ignoring it leaves the word in To review. That is DC-L4 and DC-L5 in [DICTATION](../DICTATION.md), `docs/ux/DICTATION.md:381`. The setting `dictation.learn` picks `ask`, the default, or `auto` or `off` (`src/main/config/schema.ts:846`). Dictation keeps asking. The window does not, as decided below.
 
 ## The choices
 
 | | What it is | Per fix, the user does | An agent reads | What can go wrong | Size |
 |---|---|---|---|---|---|
 | **A** | Keep #186 as it is, close W9.3 | Fix, Enter. Undo within 10 s if wrong | Nothing new. On `akou_read`, earlier lines stay wrong in its context | A wrong fix spreads to the whole call and the workspace file, and the only sign is a 10 s toast. The agent keeps using the old spelling | 2 docs, no code |
-| **B** | A, plus a notice: a `vocab.learned` event in the call log and a `learned` field on the next read answer. The toast with Undo stays as it is | The same as A | Every read after the fix says which term was learned or taken back, and that earlier lines changed | A wrong fix still spreads, but the agent sees it and can say so. The agent gets one more line per fix | About 9 source files, 3 docs, 2 test files |
+| **B, chosen** | A, plus a notice: a `vocab.learned` event in the call log and a `learned` field on the next read answer. The toast with Undo stays as it is | The same as A | Every read after the fix says which term was learned or taken back, and that earlier lines changed | A wrong fix still spreads, but the agent sees it and can say so. The agent gets one more line per fix | About 9 source files, 3 docs, 2 test files |
 | **C** | W9.3 as written: a fix proposes, Approve writes | Fix, Enter, then open Words to review and press Approve for each term | Nothing until Approve, then the call's vocabulary changes | A queue nobody approves. Until Approve the rest of the call reads wrong, which undoes "fix once". #186's tests assert the opposite and have to be rewritten | About 5 source files, 3 docs, 3 test files |
 | **D** | B, plus a setting to choose between add-and-tell (B) and propose (C) | B or C, depending on the setting | As B, or as C | Two behaviours to build, test and document, and a user who forgets which one is on. akou has no per-workspace settings today, so this is either the first one or a global setting shaped like `dictation.learn` | B and C together, plus the setting and its page: the largest |
 
@@ -70,9 +70,9 @@ The sizes are estimates from the files each change would touch, not from a writt
 
 ## The click flow
 
-The ask is to click the word on the live transcript, type the right form and press Enter, and have the vocabulary change.
+The ask is to click the word on the live transcript, type the right form and press Enter, and have the vocabulary change. We open the fix on a double-click.
 
-1. **Click a word** on any committed line, live or final. A click with no text selected opens the fix popover next to that word, with the line in the field and the clicked word already selected. A drag still selects text for copying and opens nothing. The grey line still being spoken stays unclickable until it is committed.
+1. **Double-click a word** on any committed line, live or final. The fix popover opens next to that word, with the line in the field and the double-clicked word already selected. A single click does nothing new, so it still places the cursor and starts a selection. A drag still selects text for copying and opens nothing. The grey line still being spoken stays unclickable until it is committed.
 2. **Type the right form** over the selection and press Enter. Esc, or a click outside, closes the popover as it does today.
 3. **Everything after that is today's route.** The same `POST /calls/{id}/fix {line, text, rev}`, the same term and rewording rules, the same toast with Undo. The Fix button and the line menu stay for keyboard users.
 
@@ -123,16 +123,16 @@ The user took back "Hetzner" at 15:43:10: those lines read "hetzna" again.
 
 The window needs nothing new for the notice. The toast with Undo already tells the person.
 
-## Our recommendation
+## What we decided
 
-B. [#186](https://github.com/GeiserX/akou/pull/186) made "fix once and the whole call reads right" the point of the feature, and the request for a click on the live transcript asks for the same thing again. A queue that has to be approved is one more click after every fix, and a click like that stops being made, so under C the call keeps reading wrong. The real risk is a wrong fix spreading through the call and into the workspace file. Undo already covers that for 10 seconds, and a Forget on the word itself covers it after. The notice fixes the actual gap: today an agent following with `akou_read` never learns that lines it already read now say something else. W9.3 would close as superseded, and one new bead would carry the notice, the click on a word and Forget. What would change our mind: workspace files shared with other people, where a silent add changes their calls too, so the file side should propose, which is decision 3c; or wrong terms learned from fixes turning up often enough that Undo and Forget stop being enough.
+We keep what [#186](https://github.com/GeiserX/akou/pull/186) does, and we tell the agent. A fix learns the term at once, spreads it through the call when the heard form is not a common word, and shows the toast with Undo. Nothing waits for an Approve.
 
-## Where to decide
+We tell the agent in both ways: the `vocab.learned` event in the call log, and the `learned` field on read answers. The event comes back to an agent that reconnects or compacts. The field reaches an agent that follows with `akou_read` or `akou tail`.
 
-Answer with the letters, for example `1B 2c 3a 4a 5a`.
+A learned term goes to the call and to the workspace file at once, as today. A call with no workspace writes it to the global file.
 
-1. **What a fix does.** A: keep #186 as is. B: keep it and add the notice. C: propose, and write on Approve. D: B plus a setting to choose between B and C.
-2. **How the agent is told.** a: the `vocab.learned` event only. b: the `learned` read field only, built from `vocab.add` without knowing what was kept. c: both.
-3. **Where a learned term goes.** a: the call and the workspace file at once, as today, when the heard form is not a common word. b: the call only, and never a file from a fix. c: the call at once, and the file as a proposal in Words to review.
-4. **W9.3.** a: close it as superseded by #186, and file a new bead for what is chosen here. b: rewrite it to match what is chosen here.
-5. **The gesture that opens the fix.** a: a single click on a word. b: a double-click on a word, which leaves a single click for placing the cursor and selecting. c: neither, keep the Fix button and the line menu only.
+We closed W9.3 as superseded by this page, along with its bead, akou-b6y.50. One new bead, akou-5e1, carries the notice, the double-click, the rename and Forget.
+
+A double-click on a word opens the fix. A single click does nothing new. The Fix button and the line menu stay for the keyboard.
+
+We would look at the file side again if workspace files come to be shared with other people, since a silent add would then change their calls too. The same goes if wrong terms learned from fixes turn up often enough that Undo and Forget stop being enough.
