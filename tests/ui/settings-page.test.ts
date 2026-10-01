@@ -133,7 +133,7 @@ describe("the Settings page", () => {
         expect(home.filter((k) => !seen.has(k))).toEqual([]);
         // And the Models page holds each of those.
         await page.click("#models-open");
-        await page.waitForSelector("#page-models #models-go-helpers");
+        await page.waitForSelector("#page-models #models-go-all");
         const onModels = await page.$$eval("#page-models [data-key]:not(.pg-row)", (els) =>
           els.map((e) => (e as HTMLElement).dataset.key as string),
         );
