@@ -37,7 +37,7 @@ import { DictationSetup, grantOk } from "./dictation-setup.ts";
 import { h, replace, toast } from "./dom.ts";
 import { modelName } from "./models-rows.ts";
 import { message } from "./notepad.ts";
-import type { Transport } from "./protocol.ts";
+import type { Reply, Transport } from "./protocol.ts";
 import {
   backLink,
   button,
@@ -427,8 +427,14 @@ export class DictationPage {
   private async load(): Promise<void> {
     const read = ++this.reads;
     const app = this.mode === "app";
+    // A request that throws (akou out of reach) is said where the settings go, as a refused read
+    // is, so the page never stays on "Reading the dictation settings…".
+    const reach = (err: Error): Reply<ConfigReply> => ({
+      status: 599,
+      body: { message: `akou is out of reach (${err.message})` } as unknown as ConfigReply,
+    });
     const [cfg, server, status, dictation, mics, review] = await Promise.all([
-      this.t.request<ConfigReply>("GET", "/config"),
+      this.t.request<ConfigReply>("GET", "/config").catch(reach),
       app ? null : this.t.request<{ dictation?: { served_last_hour?: number } }>("GET", "/server"),
       app ? this.t.request<Status>("GET", "/status") : null,
       app ? this.readDictation() : null,
@@ -1571,7 +1577,12 @@ export class DictationPage {
 
   private async send(r: HTMLElement, patch: Record<string, unknown>): Promise<void> {
     const keys = Object.keys(patch);
-    const res = await this.t.request("PATCH", "/config", patch);
+    // A request that throws is refused like any save: the row and a toast say why, and a page
+    // change that saved first still goes ahead.
+    const res = await this.t.request("PATCH", "/config", patch).catch((err: Error) => ({
+      status: 599,
+      body: { message: `akou is out of reach (${err.message})` },
+    }));
     if (res.status >= 400) {
       this.refused(r, keys, res.body);
       return;
