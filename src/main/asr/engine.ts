@@ -211,6 +211,12 @@ export interface ModelSet {
    * cost one reload; `loads` counts it.
    */
   prepare(list: DecodeList | null): PreparedHotwords;
+  /**
+   * Whether the recognizer's files are here, so it can load. False when Parakeet was never
+   * downloaded because no chosen setup uses it (model-set.ts): the live pass and dictation then
+   * skip loading it ahead of time. Absent: always (a test's set).
+   */
+  recognizerHere?(): boolean;
   /** A VAD with its own stream state. */
   vad(): Vad;
   embedder(): Embedder;

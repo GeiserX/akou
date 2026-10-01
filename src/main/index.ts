@@ -109,6 +109,7 @@ import {
   llamaPlan,
   metalHolder,
 } from "./asr/llama-server.ts";
+import { chosenModels, keptModels, type ModelSetContext } from "./asr/model-set.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -797,9 +798,39 @@ export class AkouApp implements ApiApp {
     return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
   }
 
-  /** The models the next start needs (`asr.diarizer`): what the download card offers. */
+  /**
+   * The models the next start needs: the helpers for `asr.diarizer` and the speech models the
+   * chosen setups use (model-set.ts), so Parakeet is in it only when a setup uses it. What the
+   * download card and `POST /models/pull` fetch, and what makes the models ready.
+   */
   private registry(): readonly ModelSpecEntry[] {
-    return modelsFor(this.cfg.settings, hostPlatform(), this.o.modelRegistry ?? MODELS);
+    return modelsFor(
+      this.cfg.settings,
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
+    );
+  }
+
+  /**
+   * The speech models the live model, the second pass, the final pass and dictation use here, or
+   * undefined in server mode, whose jobs name their own recognizer and keep the older set.
+   */
+  private chosenModels(): string[] | undefined {
+    if (this.runMode === "server") return undefined;
+    return chosenModels(this.modelSetContext());
+  }
+
+  /** What `chosenModels` and `keptModels` read: the settings, the files here, the machine. */
+  private modelSetContext(): ModelSetContext {
+    const ctx = this.liveContext();
+    return {
+      settings: this.cfg.settings,
+      present: ctx.present,
+      catalog: ctx.catalog ?? [],
+      runtime: ctx.runtime,
+      ...(ctx.machine ? { machine: ctx.machine } : {}),
+    };
   }
 
   /** The speaker-label engine running now: the one the recognizer started with, else the setting. */
@@ -821,6 +852,7 @@ export class AkouApp implements ApiApp {
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
     );
     return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
@@ -3170,6 +3202,7 @@ export class AkouApp implements ApiApp {
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
     );
   }
 
@@ -3194,7 +3227,12 @@ export class AkouApp implements ApiApp {
         : []),
     ];
     return {
-      defaults: new Set([...this.registry().map((m) => m.id), ...live]),
+      // The chosen second pass's and dictation's models stay too (keptModels).
+      defaults: new Set([
+        ...this.registry().map((m) => m.id),
+        ...live,
+        ...keptModels(this.modelSetContext()),
+      ]),
       inUse:
         this.asr !== null || this.finals.size > 0 || this.modelsPull.running
           ? new Set(this.runningSet().map((m) => m.id))

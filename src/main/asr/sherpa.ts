@@ -462,6 +462,12 @@ export class SherpaModels implements ModelSet {
     this.decoding = spec.decoding ?? "greedy";
   }
 
+  recognizerHere(): boolean {
+    return ["encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"].every((n) =>
+      existsSync(this.file(RECOGNIZER, n)),
+    );
+  }
+
   private nemotron() {
     return {
       command: this.spec.diarizeHelper?.length ? this.spec.diarizeHelper : [DIARIZE_HELPER_NAME],
