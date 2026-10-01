@@ -811,7 +811,8 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         async (rig) => {
           const page = await rig.open(ids.run);
           await page.waitForSelector("#final:not([hidden])");
-          expect(await text(page, "#final-text")).toBe("final transcript: running (0 of 1 part)");
+          // A log with no model and no figure from the app yet: the note says running, the bar counts parts.
+          expect(await text(page, "#final-text")).toBe("final transcript: running");
           expect(await page.locator("#final-progress").isVisible()).toBe(true);
           await page.click(`#calls li[data-id="${ids.fail}"] button`);
           await until(
@@ -826,7 +827,7 @@ describe("DESIGN 7 parity with hark-viewer", () => {
           await until(
             async () =>
               (await text(page, "#final-text")) ===
-              "final transcript: ready (1 span skipped)  ·  the call side had energy but no text",
+              "final transcript: ready, 1 span skipped  ·  the call side had energy but no text",
             5000,
             "done note",
           );

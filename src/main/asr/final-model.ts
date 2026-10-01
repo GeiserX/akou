@@ -3,14 +3,14 @@
  * or Parakeet on sherpa-onnx. Speaker labels, cut points and the rest of the pass are the same
  * either way (finalize-worker.ts).
  *
- * `auto` picks Qwen when its model and its llama-server are downloaded and the machine has room
- * for it (`qwenRoom`: a GPU for it and `QWEN_MIN_MEMORY_GB` of memory, the rule the window offers
- * Qwen's second pass by), else Parakeet. A named Qwen runs whatever the machine, as the second
- * pass does, but only when it is downloaded: a model that is not downloaded never runs, and the
- * pass falls back to Parakeet with a note saying why.
+ * `auto` picks Qwen whenever its model and its llama-server are downloaded, on any machine, and
+ * Parakeet only when they are not. A named Qwen is the same, but says why when it cannot run. A
+ * model that is not downloaded never runs. With Qwen the pass never needs Parakeet on disk: the
+ * model set loads its recognizer only when asked to decode, and the VAD and speaker labels are
+ * models of their own.
  */
 
-import { type LiveSetupContext, qwenRoom, reviewModels } from "./live-setups.ts";
+import { type LiveSetupContext, reviewModels } from "./live-setups.ts";
 import { QWEN_ASR } from "./llama-catalog.ts";
 import { shortModelName } from "./model-text.ts";
 import { RECOGNIZER } from "./models.ts";
@@ -52,10 +52,12 @@ function qwenMissing(c: LiveSetupContext): string[] {
   return reviewModels("qwen", c).filter((m) => !c.present(m));
 }
 
-/** The recognizer the next final pass runs for `setting`, never one whose files are missing. */
+/**
+ * The recognizer the next final pass runs for `setting`: Qwen whenever it is downloaded (`auto`
+ * or named), else Parakeet. Never one whose files are missing.
+ */
 export function chooseFinalModel(setting: string, c: LiveSetupContext): FinalChoice {
-  const asked = finalModelOf(setting);
-  if (asked === "parakeet") return { model: "parakeet" };
+  if (finalModelOf(setting) === "parakeet") return { model: "parakeet" };
   const missing = qwenMissing(c);
   if (missing.length > 0) {
     return {
@@ -63,7 +65,5 @@ export function chooseFinalModel(setting: string, c: LiveSetupContext): FinalCho
       note: `Qwen is not downloaded (needs ${missing.join(", ")}; \`akou models pull <id>\`)`,
     };
   }
-  if (asked === "qwen") return { model: "qwen" };
-  const room = qwenRoom(c);
-  return room ? { model: "parakeet", note: room } : { model: "qwen" };
+  return { model: "qwen" };
 }

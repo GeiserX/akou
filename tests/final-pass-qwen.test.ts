@@ -43,15 +43,15 @@ function ctx(
 }
 
 describe("asr.final.model", () => {
-  test("auto picks Qwen only when it and its llama-server are downloaded and the machine has room", () => {
+  test("auto picks Qwen whenever it and its llama-server are downloaded, on any machine", () => {
     expect(chooseFinalModel("auto", ctx())).toEqual({ model: "qwen" });
+    // No GPU and little memory: still Qwen. The owner wants Qwen after every call it can run on.
+    expect(chooseFinalModel("auto", ctx({ gpu: false, memoryGb: 8 }))).toEqual({ model: "qwen" });
     // An own llama-server (no build to download): Qwen's model alone decides.
     expect(chooseFinalModel("auto", ctx({ runtime: null }))).toEqual({ model: "qwen" });
     for (const [why, c] of [
       ["no Qwen model", ctx({ missing: [QWEN_ASR] })],
       ["no llama-server build", ctx({ missing: [RUNTIME] })],
-      ["no GPU for it", ctx({ gpu: false })],
-      ["12 GB of memory", ctx({ memoryGb: 12 })],
     ] as const) {
       const choice = chooseFinalModel("auto", c);
       expect({ why, model: choice.model }).toEqual({ why, model: "parakeet" });

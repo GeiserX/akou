@@ -1,9 +1,10 @@
 /**
  * The final pass's model through the whole app (`asr.final.model`, `akou finalize --model`): a
- * call ends and its pass runs Parakeet (`auto` on a machine with no GPU); `akou finalize last
- * --force --model qwen` runs it again on Qwen, whose lines replace Parakeet's and whose name
- * `final.done`, `GET /calls/{id}` and `akou status` carry; while it runs, `GET /status` has how far
- * it is. A model that is not a final model is refused, and so is Qwen when it is not downloaded.
+ * call ends and its pass runs Qwen, `auto`'s choice once Qwen is downloaded, even on a machine
+ * with no GPU; `--model parakeet` and `--model qwen` override one run each, and Qwen's name reaches
+ * `final.done`, `GET /calls/{id}` and `akou status`; while it runs, `GET /status` has how far it is.
+ * A model that is not a final model is refused, and so is Qwen when it is not downloaded. On Qwen
+ * the pass runs with Parakeet's files gone.
  * Qwen is the fake llama-server (`asr.llamaServer`), the recognizer the fake of asr-fake.ts.
  */
 
@@ -88,7 +89,7 @@ async function dones(id: string): Promise<FinalDone[]> {
 }
 
 describe("the final pass's model", () => {
-  test("Parakeet by default here, then Qwen for one run with --force --model qwen", async () => {
+  test("Qwen by default once it is downloaded, on a machine with no GPU; --model overrides one run", async () => {
     const id = await rig.startCall({});
     await until(
       async () => (await rig.app.events(id, 0)).some((e) => e.type === "seg"),
@@ -96,11 +97,19 @@ describe("the final pass's model", () => {
       "a line",
     );
     expect((await rig.api("POST", "/calls/live/stop")).status).toBe(200);
-    await until(async () => (await dones(id)).length === 1, 20_000, "the first final.done");
-    expect((await dones(id))[0]?.model).toBe("fake-parakeet");
-    expect(requests()).toBe(0);
+    await until(async () => (await dones(id)).length === 1, 30_000, "the first final.done");
+    // `auto`, and the rig has no GPU: Qwen all the same.
+    expect((await dones(id))[0]?.model).toBe(QWEN_ASR);
+    expect(requests()).toBeGreaterThan(0);
 
     const cli = rigCli(rig);
+    const para = await cli(["finalize", "last", "--force", "--model", "parakeet"]);
+    expect(para.code).toBe(0);
+    expect(para.out).toContain(`Final pass started for ${id} on `);
+    await until(async () => (await dones(id)).length === 2, 30_000, "Parakeet's final.done");
+    expect((await dones(id))[1]?.model).toBe("fake-parakeet");
+    expect((await cli(["status"])).out).toContain("Final: ready (");
+
     const run = await cli(["finalize", "last", "--force", "--model", "qwen"]);
     expect(run.code).toBe(0);
     expect(run.out).toContain(`Final pass started for ${id} on Qwen`);
@@ -115,9 +124,8 @@ describe("the final pass's model", () => {
     });
     expect((await cli(["status"])).out).toContain("Final: running");
 
-    await until(async () => (await dones(id)).length === 2, 30_000, "Qwen's final.done");
-    expect((await dones(id))[1]?.model).toBe(QWEN_ASR);
-    expect(requests()).toBeGreaterThan(0);
+    await until(async () => (await dones(id)).length === 3, 30_000, "Qwen's final.done");
+    expect((await dones(id))[2]?.model).toBe(QWEN_ASR);
     const events = await rig.app.events(id, 0);
     const finals = new Map<string, Seg>();
     for (const e of events)
@@ -151,6 +159,39 @@ describe("the final pass's model", () => {
     expect(ok.status).toBe(202);
     expect(ok.body.model).toBe(QWEN_ASR);
     const id = ok.body.call as string;
-    await until(async () => (await dones(id)).length === 3, 30_000, "the third pass");
+    await until(async () => (await dones(id)).length === 4, 30_000, "the fourth pass");
+  });
+
+  test("on Qwen the pass needs no Parakeet on disk; Parakeet asked for without its files is refused", async () => {
+    const dir = dirname(modelFile(models, RECOGNIZER, "a.onnx"));
+    renameSync(dir, `${dir}.away`);
+    try {
+      // The last pass may still be settling (409 final_running) a moment after its final.done.
+      const post = () => rig.api("POST", "/calls/last/finalize", { force: true });
+      let qwen = await post();
+      await until(
+        async () => {
+          if (qwen.status !== 409) return true;
+          qwen = await post();
+          return false;
+        },
+        10_000,
+        "the last pass to settle",
+      );
+      expect(qwen.status).toBe(202);
+      expect(qwen.body.model).toBe(QWEN_ASR);
+      const id = qwen.body.call as string;
+      await until(async () => (await dones(id)).length === 5, 30_000, "a pass with no Parakeet");
+      expect((await dones(id))[4]?.model).toBe(QWEN_ASR);
+      // Control: Parakeet by name, with its files gone, cannot run.
+      const para = await rig.api("POST", "/calls/last/finalize", {
+        force: true,
+        model: "parakeet",
+      });
+      expect(para.status).toBe(501);
+      expect(para.body.message).toContain("not downloaded");
+    } finally {
+      renameSync(`${dir}.away`, dir);
+    }
   });
 });
