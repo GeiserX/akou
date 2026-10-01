@@ -551,8 +551,11 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         await page.evaluate(() => {
           const w = window as unknown as { unpinned: number };
           w.unpinned = 0;
+          let was = document.body.classList.contains("scrolled");
           new MutationObserver(() => {
-            if (document.body.classList.contains("scrolled")) w.unpinned++;
+            const now = document.body.classList.contains("scrolled");
+            if (now && !was) w.unpinned++;
+            was = now;
           }).observe(document.body, { attributeFilter: ["class"] });
         });
         const long = "a long sentence that keeps going and going ".repeat(12);
@@ -569,6 +572,31 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         // A shorter window keeps the newest line at the bottom edge.
         await page.setViewportSize({ width: 1024, height: 560 });
         await until(atEdge, 3000, "pinned, shorter window");
+        // A narrower window, two sizes in a row and the font up twice with no wait keep it there
+        // too; none of these reads as the reader scrolling up.
+        await page.setViewportSize({ width: 774, height: 560 });
+        await until(atEdge, 3000, "pinned, narrower window");
+        await page.setViewportSize({ width: 1024, height: 640 });
+        await page.setViewportSize({ width: 900, height: 600 });
+        await until(atEdge, 3000, "pinned, two sizes in a row");
+        // The second key lands in the frame after the first re-pin, before its scroll event.
+        const twice = (key: string) =>
+          page.evaluate(async (k) => {
+            const press = () =>
+              (document.getElementById("scroller") as HTMLElement).dispatchEvent(
+                new KeyboardEvent("keydown", { key: k, bubbles: true }),
+              );
+            press();
+            await new Promise((r) => requestAnimationFrame(() => setTimeout(r, 0)));
+            press();
+          }, key);
+        await twice("+");
+        await until(atEdge, 3000, "pinned, font up twice");
+        await twice("-");
+        await until(atEdge, 3000, "pinned, font back down");
+        expect(
+          await page.evaluate(() => (window as unknown as { unpinned: number }).unpinned),
+        ).toBe(0);
         // Scrolled up by the reader: a new line does not move the view, and Back to live shows.
         await page.evaluate(() => {
           const s = document.getElementById("scroller") as HTMLElement;
@@ -584,9 +612,51 @@ describe("DESIGN 7 parity with hark-viewer", () => {
         await Bun.sleep(300);
         expect(await top()).toBe(held);
         expect(await page.locator("#jump").isVisible()).toBe(true);
-        await page.click("#jump");
+        // Back to live goes straight down: on its way it never reads as scrolled up again.
+        await page.evaluate(() => {
+          (window as unknown as { unpinned: number }).unpinned = 0;
+          (document.getElementById("scroller") as HTMLElement).style.scrollBehavior = "";
+          (document.getElementById("jump") as HTMLElement).click();
+        });
         await until(atEdge, 3000, "back at the bottom");
         expect((await place()).last).toBe("l700041");
+        expect(
+          await page.evaluate(() => (window as unknown as { unpinned: number }).unpinned),
+        ).toBe(0);
+        // Again with nothing arriving since the reader scrolled up.
+        await page.evaluate(() => {
+          const s = document.getElementById("scroller") as HTMLElement;
+          s.scrollTo({ top: s.scrollTop - 300, behavior: "instant" });
+        });
+        await page.waitForSelector("#jump", { state: "visible" });
+        await page.evaluate(() => {
+          (window as unknown as { unpinned: number }).unpinned = 0;
+          (document.getElementById("jump") as HTMLElement).click();
+        });
+        await until(atEdge, 3000, "back at the bottom, nothing arriving");
+        expect(
+          await page.evaluate(() => (window as unknown as { unpinned: number }).unpinned),
+        ).toBe(0);
+        // Back to live from the top, with the window's own smooth scrolling, while long lines
+        // arrive: it lands on the newest line and stays pinned.
+        await page.evaluate(() => {
+          const s = document.getElementById("scroller") as HTMLElement;
+          s.style.scrollBehavior = "";
+          s.scrollTo({ top: 0, behavior: "instant" });
+        });
+        await page.waitForSelector("#jump", { state: "visible" });
+        const arriving = (async () => {
+          for (let i = 201; i <= 215; i++) {
+            await rig.write(id, seg(`l7${i}`, long, { w0: Date.now() + i }));
+            await Bun.sleep(40);
+          }
+        })();
+        await page.click("#jump");
+        await arriving;
+        await page.waitForSelector('#lines .row[data-id="l7215"]');
+        await until(atEdge, 3000, "pinned after Back to live while lines arrive");
+        expect((await place()).last).toBe("l7215");
+        expect(await page.locator("#jump").isVisible()).toBe(false);
       });
       t.cleanup();
     },
