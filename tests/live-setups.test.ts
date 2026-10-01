@@ -393,10 +393,17 @@ describe("[W3.19] the live panel's slots take any model that fills them, by id",
       null,
       () => "ready",
     );
+    // The three tiers `auto` knows, then the other chunk sizes, then Parakeet.
     expect(v.slots.live.map((e) => [e.id, e.checked])).toEqual([
       ["nemotron-3.5-560", false],
       ["nemotron-3.5-1120", true],
       ["nemotron-en-560", false],
+      ["nemotron-en-80", false],
+      ["nemotron-en-160", false],
+      ["nemotron-en-1120", false],
+      ["nemotron-3.5-80", false],
+      ["nemotron-3.5-160", false],
+      ["nemotron-3.5-320", false],
       [RECOGNIZER, false],
     ]);
     expect(v.slots.review.map((e) => [e.id, e.models, e.checked])).toEqual([
@@ -412,6 +419,12 @@ describe("[W3.19] the live panel's slots take any model that fills them, by id",
       null,
       null,
       "Nemotron English does not hear es.",
+      "Nemotron English, 80 ms does not hear es.",
+      "Nemotron English, 160 ms does not hear es.",
+      "Nemotron English, 1 s does not hear es.",
+      null,
+      null,
+      null,
       null,
     ]);
     const ja = liveView(ctx({ languages: ["en", "ja"] }), null, () => "ready");
@@ -427,5 +440,36 @@ describe("[W3.19] the live panel's slots take any model that fills them, by id",
       "It reviews Nemotron's lines; the live model is Parakeet.",
       "Parakeet already writes the live lines.",
     ]);
+  });
+});
+
+describe("the Models page's advice: why a model does not suit this machine or these languages", () => {
+  const state = (id: string) => (EVERYTHING.has(id) ? "ready" : "missing") as "ready" | "missing";
+
+  test("a live model that does not hear a language says so, downloaded or not", () => {
+    const v = liveView(ctx({ languages: ["en", "es"], machine: ROOMY }), null, state);
+    // Nemotron English is here, and every English-only tier is not: each says the same.
+    expect(v.advice["nemotron-en-560"]).toBe("Nemotron English does not hear es.");
+    expect(v.advice["nemotron-en-80"]).toBe("Nemotron English, 80 ms does not hear es.");
+    expect(v.advice["nemotron-3.5-80"]).toBeUndefined();
+    expect(v.advice[RECOGNIZER]).toBeUndefined();
+    // Positive control: English alone leaves the English tiers without advice.
+    expect(liveView(ctx({ languages: ["en"], machine: ROOMY }), null, state).advice).toEqual({});
+  });
+
+  test("Qwen on a machine that cannot keep up says why before it is downloaded, unlike the second pass's slot", () => {
+    const gone = new Set([RECOGNIZER, "nemotron-en-560"]);
+    const small = ctx({ on: gone, machine: { gpu: true, memoryGb: 8 } });
+    const v = liveView(small, null, (id) => (gone.has(id) ? "ready" : "missing"));
+    expect(v.advice[QWEN_ASR]).toBe(
+      `Needs ${QWEN_MIN_MEMORY_GB} GB of memory; this computer has 8 GB.`,
+    );
+    // The slot still waits for the download before it gives the machine's advice.
+    expect(v.slots.review.find((e) => e.id === QWEN_ASR)?.blocked).toBeNull();
+    expect(liveView(ctx({ machine: { ...ROOMY, gpu: false } }), null, state).advice[QWEN_ASR]).toBe(
+      "Qwen would run on the processor here, too slow to keep up with a call.",
+    );
+    // Positive control: a roomy Mac gets none.
+    expect(liveView(ctx({ machine: ROOMY }), null, state).advice[QWEN_ASR]).toBeUndefined();
   });
 });

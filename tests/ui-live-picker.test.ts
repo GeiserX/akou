@@ -98,6 +98,7 @@ function view(o: {
       running: null,
       choices: [],
     },
+    advice: {},
     slots: {
       live: o.live ?? [entry(NEM, true), entry(STEADY), entry(PK)],
       review: o.review ?? [entry(QWEN, false, [QWEN, RUNTIME]), entry(PK)],
