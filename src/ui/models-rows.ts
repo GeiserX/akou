@@ -60,7 +60,13 @@ const NAMES: Readonly<Record<string, string>> = {
   "silero-vad": "Voice detection",
   "nemotron-en-560": "Nemotron streaming, English",
   "nemotron-3.5-560": "Nemotron streaming, many languages",
-  "nemotron-3.5-1120": "Nemotron streaming, many languages, larger",
+  "nemotron-3.5-1120": "Nemotron streaming, many languages, 1 s",
+  "nemotron-3.5-80": "Nemotron streaming, many languages, 80 ms",
+  "nemotron-3.5-160": "Nemotron streaming, many languages, 160 ms",
+  "nemotron-3.5-320": "Nemotron streaming, many languages, 320 ms",
+  "nemotron-en-80": "Nemotron streaming, English, 80 ms",
+  "nemotron-en-160": "Nemotron streaming, English, 160 ms",
+  "nemotron-en-1120": "Nemotron streaming, English, 1 s",
 };
 
 /** What each build of Qwen3-ASR's program runs on, from the last part of its id. */
@@ -73,9 +79,13 @@ const BUILDS: Readonly<Record<string, string>> = {
   sycl: "an Intel graphics card",
 };
 
-/** A model's name in words; a model the page has no name for keeps its id. */
-export function modelName(r: Pick<ModelRow, "id" | "job">): string {
+/**
+ * A model's name in words: the page's own, else the catalog's (`name`), else, for a model nobody
+ * named, its id.
+ */
+export function modelName(r: Pick<ModelRow, "id" | "job"> & { name?: string | null }): string {
   if (NAMES[r.id]) return NAMES[r.id] as string;
+  if (r.name) return r.name;
   if (r.id.startsWith("llama-server")) {
     const on = BUILDS[r.id.slice(r.id.lastIndexOf("-") + 1)];
     return on ? `Qwen3-ASR's program for ${on}` : "Qwen3-ASR's program";
@@ -190,7 +200,7 @@ export function bestHelp(r: ModelRow): string {
   const acc = accuracyText(r.accuracy);
   return [
     acc ? `The most accurate: ${lower(acc)}` : "The most accurate.",
-    "It also rewrites live lines and checks the words akou learns.",
+    "It also writes the final transcript after a call, rewrites live lines and checks the words akou learns.",
     "Without it, dictation uses Fast.",
   ].join(" ");
 }
@@ -219,6 +229,60 @@ export function helperHelp(r: ModelRow): string {
 
 function capital(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+/** What a model does in a call, the four groups of the All models page. */
+export type Role = "live" | "final" | "speakers" | "helpers";
+export const ROLES: readonly Role[] = ["live", "final", "speakers", "helpers"];
+
+/**
+ * A model's group: a recognizer that writes the transcript after the call is `final` even when it
+ * can also stream (Parakeet); one that only streams is `live`.
+ */
+export function roleOf(r: Pick<ModelRow, "kind" | "after_call">): Role {
+  if (r.kind === "speech") return r.after_call ? "final" : "live";
+  return r.kind === "speakers" ? "speakers" : "helpers";
+}
+
+/** Each group's title; server mode has jobs, not calls. */
+export function roleTitle(role: Role, server: boolean): string {
+  if (role === "live") return "Live transcript";
+  if (role === "final") return server ? "Jobs" : "After the call";
+  return role === "speakers" ? "Speakers" : "Helpers";
+}
+
+const ON_DISK_FIRST: Readonly<Record<ModelRow["state"], number>> = {
+  ready: 0,
+  downloading: 1,
+  missing: 2,
+};
+
+/**
+ * The whole catalog in its four groups, empty groups left out, each with the models on disk first,
+ * then the ones downloading, then the rest, in the catalog's order within each.
+ */
+export function catalogGroups(rows: readonly ModelRow[]): { role: Role; rows: ModelRow[] }[] {
+  return ROLES.map((role) => ({
+    role,
+    rows: rows
+      .filter((r) => roleOf(r) === role)
+      .map((r, i) => ({ r, i }))
+      .sort((a, b) => ON_DISK_FIRST[a.r.state] - ON_DISK_FIRST[b.r.state] || a.i - b.i)
+      .map((x) => x.r),
+  })).filter((g) => g.rows.length > 0);
+}
+
+/** A model's line on the All models page: its live line for a streaming model, else what it does. */
+export function catalogLine(r: ModelRow): string {
+  if (roleOf(r) === "live" && r.lines.live) return r.lines.live;
+  return helperHelp(r);
+}
+
+/** The All models row's line on the main page: how many are here and how many more there are. */
+export function allModelsText(rows: readonly ModelRow[], here: string): string {
+  const on = rows.filter((r) => r.state === "ready").length;
+  const more = rows.length - on;
+  return more === 0 ? `Every model is on ${here}.` : `${on} on ${here}, ${more} more to download.`;
 }
 
 /** The page's line under its title: how much is on this computer, and that none of it leaves. */

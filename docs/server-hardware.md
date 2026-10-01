@@ -8,9 +8,9 @@ The large speech model, Qwen3-ASR, runs on llama-server, and a GPU makes it many
 
 | GPU | Image | Add to `docker run` |
 |---|---|---|
-| None | `drumsergio/akou:0.5.2` | Nothing |
-| Intel (integrated or Arc) or AMD | `drumsergio/akou:0.5.2-vulkan` | `--device /dev/dri --group-add $(stat -c %g /dev/dri/renderD128)` |
-| NVIDIA | `drumsergio/akou:0.5.2-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
+| None | `drumsergio/akou:0.5.4` | Nothing |
+| Intel (integrated or Arc) or AMD | `drumsergio/akou:0.5.4-vulkan` | `--device /dev/dri --group-add $(stat -c %g /dev/dri/renderD128)` |
+| NVIDIA | `drumsergio/akou:0.5.4-cuda` | `--gpus all`, with the [NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html) on the host. The image carries the CUDA runtime; the host needs only the driver (570 or newer on x64) |
 | Apple silicon | None: Docker on macOS has no GPU | Run akou on the Mac itself ([A Mac as the server](server.md#a-mac-as-the-server)); it uses Metal |
 
 `--group-add` gives the container's user the group that owns the render node on the host (`render` on most distributions). Without it the GPU is there but akou cannot open it, and it says so. In compose, the Vulkan image takes:

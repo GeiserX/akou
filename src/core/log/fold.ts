@@ -247,6 +247,8 @@ export interface FinalState {
   partsDone: number[];
   done?: FinalDone;
   failed?: FinalFailed;
+  /** The recognizer of the last pass, as its `final.started` or `final.done` names it. */
+  model?: string;
 }
 
 // ---------------------------------------------------------------------------
@@ -629,6 +631,7 @@ export class CallView {
       case "final.started":
         this._final.state = "running";
         this._final.failed = undefined;
+        this._final.model = e.model;
         break;
       case "final.part.done": {
         if (!this._final.partsDone.includes(e.part)) this._final.partsDone.push(e.part);
@@ -643,6 +646,7 @@ export class CallView {
       case "final.done":
         this._final.state = "done";
         this._final.done = e;
+        if (e.model) this._final.model = e.model;
         break;
       case "final.failed":
         this._final.state = "failed";

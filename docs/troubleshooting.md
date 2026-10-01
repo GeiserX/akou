@@ -22,7 +22,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **Why.** akou transcribes with speech models it does not ship, and it does not start a recording until they are on disk.
 
-**Fix.** Click **Set up** beside "Models missing", or open the **Models** page, and download the speech models (about 3.0 GB). From a terminal, `akou models pull` does the same with progress per file.
+**Fix.** Click **Set up** beside "Models missing", or open the **Models** page, and download the speech models (about 3.0 to 3.7 GB, by what your Mac runs). From a terminal, `akou models pull` does the same with progress per file.
 
 ## `akou start` answers `503 models_missing`
 
@@ -41,7 +41,7 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 ## The menu bar item moved after the first recording
 
-**Why.** Known in 0.5.2: akou replaces its menu bar item to change its image to the mark with the red dot, and macOS may put the new one in another spot.
+**Why.** Known in 0.5.4: akou replaces its menu bar item to change its image to the mark with the red dot, and macOS may put the new one in another spot.
 
 **Fix.** None needed. Command-drag the item back where you want it.
 

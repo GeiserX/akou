@@ -2,6 +2,69 @@
 
 All notable changes to akou. Versions follow [semantic versioning](https://semver.org); while the version is 0.x, every release is a prerelease.
 
+## 0.5.4 — Qwen writes the final transcript, and a Mac on Nemotron and Qwen needs no Parakeet
+
+On 0.5.3 the final transcript always came from Parakeet, whatever was downloaded, and every Mac needed Parakeet before it could record. A long final pass showed no progress until it ended. In 0.5.4 Qwen writes the final transcript whenever it is downloaded, and a Mac that runs Nemotron for the live lines and Qwen after the call keeps no Parakeet at all. The final pass says how far it is, in the window and in `akou status`, and the Models page lists the whole catalog.
+
+### After the call
+- **Qwen writes the final transcript whenever it is downloaded.** `asr.final.model` picks the model. `auto`, the default, runs Qwen3-ASR when Qwen and its llama-server are on disk, and Parakeet when they are not. `qwen` or `parakeet` names one model. A model that is not downloaded never runs. The setting falls back to the other one and the log says why, as [docs/configuration.md](docs/configuration.md) describes. If Qwen cannot start or fails twice in a row, the pass fails with Qwen's error and does not switch to Parakeet halfway (#218).
+- **`akou finalize --force --model qwen` reruns a past call on Qwen.** `--model` overrides the setting for one run. akou refuses a model that is not downloaded and starts no pass (#218).
+- **One Qwen pass runs at a time.** A second pass waits its turn, and its note names the call it waits for. Quitting akou stops a running pass and its llama-server, and the next start runs the pass again (#218).
+- **The final pass shows how far it is.** The window's note and bar read `final transcript: running, 37 of 152 min (Qwen)`, and `akou status` prints the same on a `Final:` line. Before the minutes move, the pass names its step, `starting Qwen` and then `labelling speakers` (#217, #218).
+
+### Models
+- **A Mac needs only the models its chosen setups use.** With Nemotron for the live lines and Qwen after the call, that means Nemotron, Qwen with its llama-server, the voice detector and the two speaker models. Parakeet is not on the list. It stays in the catalog, and once downloaded it has a Remove like any other model. An upgraded Mac keeps what it has and downloads nothing new before its next call (#219).
+- **A fast dictation without Parakeet gets a plain `models_missing` answer**, because the fast engine is Parakeet (#219).
+- **The All models page lists the whole catalog** for this Mac, grouped as Live transcript, After the call, Speakers and Helpers, with Download or Remove on each. A model that does not suit this Mac or the call's languages says why under its name and keeps its Download. The Helpers page is folded into it (#216).
+- **Six more streaming Nemotron tiers**: English at 80, 160 and 1120 ms, and Nemotron 3.5 at 80, 160 and 320 ms, about 0.66 to 0.68 GB each. Nobody has measured their accuracy or speed yet, so `auto` never picks one. The 80 ms tiers can fall behind on a slow machine (#216).
+- **A faded model row keeps its Download at full strength.** When the call's languages rule a model out, only its radio and name fade (#215).
+
+### Live calls and agents
+- **A read waits up to 30 s for the second pass**, up from 20 s. Qwen took 19 to 20 s on about 3 minutes of backlog and hit the old cap about half the time (#212).
+- **The [akou skill](skills/akou/SKILL.md) no longer reminds anyone about consent**, as the window stopped doing in 0.5.3. Telling the others you are recording stays your job (#211).
+- The [compose example](examples/compose/telegram-archive/.env.example) pins the published 0.5.3 images (#214).
+
+The HTTP API only adds fields. `GET /status` has `finals[]` and `last.final`, `GET /calls/{id}` has `final.progress`, `POST /calls/{id}/finalize` takes `model`, and `GET /models` has `final` and `live.advice`. The `final.started` and `final.done` events name the model that ran.
+
+### Known limitations
+- **After installing a new build, macOS asks for Accessibility again**, because the app is ad-hoc signed. Allow akou again in System Settings, then Privacy & Security, then Accessibility, as [docs/troubleshooting.md](docs/troubleshooting.md#the-dictation-key-does-nothing) shows.
+- **A 0.5.3 Mac with Parakeet and no Qwen keeps running Parakeet after the call** until Qwen is downloaded from the Models page.
+- **Without a GPU, Qwen decodes on the processor and is slow.** A pass gets half the call's length plus 300 s, so a long call can run out of time. Set `asr.final.model` to `parakeet` on such a machine.
+- Every item under 0.5.3's Known limitations still applies.
+
+## 0.5.3 — pick the live model and a second pass by name, and dictate with no wait
+
+On 0.5.2 the live menu named setups instead of models, and dictation could wait about 10 s for Qwen to load. In 0.5.3 one panel picks the live model by name and, as a separate choice, a second pass that goes back over the lines. The second pass also runs before an agent reads the call, so the agent reads corrected lines. Dictation types with the live model by default, shows everything you say, and its key works as soon as Accessibility is granted.
+
+### The window
+- **One panel picks the live model and the second pass.** It lists the downloaded models by name, one plain line each, with no Automatic row. The second pass is Off by default, or Qwen or Parakeet every 1, 2 or 5 minutes (#199, #203).
+- **Add a model from the panel.** Each slot ends in Add a model, which downloads a model that fits the slot right there, with progress and Cancel. "From a folder…" copies a model you already have (#203).
+- **The 1120 ms Nemotron is named "Nemotron 3.5, 1 s"**, after its wait. Nothing measured backed calling it steadier (#209).
+- **The recording popup's level bars move**, and the extra space past Stop is gone (#202).
+- **No consent reminder row when a call starts.** Telling the others you are recording stays your job (#204).
+
+### Transcription
+- **Parakeet can be the second pass.** On FLEURS it has 16% fewer errors than the live stream alone in English and 46% fewer in Spanish, and it adds no memory, because the live Worker already has Parakeet loaded. A line someone edited or fixed a word on keeps their text, and that now holds for Qwen's pass too (#200).
+- **The second pass runs before an agent reads the call.** With a second pass on, a read of a live call first reviews the lines closed since the last review. A read waits at most 20 s, and its answer counts the lines it did not reach as `unreviewed`. `akou tail -f` and `akou watch` read with `review=skip` and never wait (#206).
+
+### Dictation
+- **Dictation types with the live model by default**, with no wait for a model to load. `dictation.final` picks the text that goes in: `live`, the default and the fastest, `parakeet` or `qwen`, as [docs/configuration.md](docs/configuration.md) lists. `live` gives up 3.0 points of word error rate in English and 0.6 in Spanish against Parakeet. akou loads dictation's models first when the app starts. It keeps a press made while they load, and the pill says "loading model" (#207).
+- **The pill shows everything you say.** It grows up to eight lines, then scrolls, pinned to the newest words (#205).
+- **The dictation key works once Accessibility is granted**, with no restart of akou (#208).
+
+### Docs
+- **The docs are a site** at [geiserx.github.io/akou](https://geiserx.github.io/akou/) (#190), and the site and README show the real app (#201).
+- The live panel's [design drawings](docs/ux/design-explorations/lm-live-menu-slots.html) are in the repo (#198), and the [compose example](examples/compose/telegram-archive/.env.example) pins the published 0.5.2 images (#197).
+
+The HTTP API only adds fields. `POST /calls` takes `review` and `reviewEvery`, `GET /status` has `live.review`, a live call's transcript read has `unreviewed`, and `GET /v1/dictation` has `final` and `live`. With the second pass Off, the default, no read waits.
+
+### Known limitations
+- **After installing a new build, macOS asks for Accessibility again**, because the app is ad-hoc signed. Allow akou again in System Settings, then Privacy & Security, then Accessibility ([docs/troubleshooting.md](docs/troubleshooting.md#the-dictation-key-does-nothing)).
+- **The late Accessibility grant has not been checked on a real Mac yet.** The tests cover the helper and the app, but not a real grant and key tap.
+- **With Qwen as the second pass and 5 minutes of lines pending, a read reaches its 20 s cap about half the time.** It then answers with the rest counted as `unreviewed`.
+- **Parakeet in dictation can drop sentence ends on quiet speech**, because the pause finder hears the raw signal. That hits `dictation.final` `parakeet` and the fallback when no streaming model is downloaded.
+- Every item under 0.5.2's Known limitations still applies.
+
 ## 0.5.2 — every setting is a page of plain words, and first run asks only what you need
 
 On 0.5.1, Settings, Models and Dictation were dialogs full of config keys that did not close like a normal window. In 0.5.2 each one is a page of the main window with plain rows, and you leave it from the sidebar. A first run now asks what you will use akou for and sets up only that. Your API key moves into the macOS Keychain.

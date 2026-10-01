@@ -26,6 +26,7 @@ import { join } from "node:path";
 import { ACTIVATIONS } from "../../core/dictation/activation.ts";
 import { parseCidr } from "../api/net.ts";
 import { ACCELERATOR_SETTINGS } from "../asr/accelerator.ts";
+import { FINAL_MODELS, finalModelId } from "../asr/final-model.ts";
 import { LIVE_ENGINE_SETTINGS } from "../asr/live-engines.ts";
 import { LIVE_SETTINGS, REVIEW_MODELS } from "../asr/live-setups.ts";
 import { defaultModelsDir } from "../asr/models.ts";
@@ -462,13 +463,19 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_SETTINGS,
     default: "auto",
-    doc: "The model that writes the live transcript of a call: `auto`, or a model's id (`nemotron-3.5-560`, `nemotron-3.5-1120`, `nemotron-en-560`, `parakeet-tdt-0.6b-v3-fp32`), as the Record row's Live panel saves it. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `auto` picks `nemotron` when its model is downloaded, else `parakeet`. A model that is not downloaded never runs. `upgrade`, the old value, is read as `nemotron` with `asr.review.model` `qwen`, and saved that way. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its model.",
+    doc: "The model that writes the live transcript of a call: `auto`, or a model's id (`nemotron-3.5-560`, `nemotron-3.5-1120`, `nemotron-en-560`, `parakeet-tdt-0.6b-v3-fp32`, or another chunk size of a streaming Nemotron: `nemotron-en-80`, `nemotron-en-160`, `nemotron-en-1120`, `nemotron-3.5-80`, `nemotron-3.5-160`, `nemotron-3.5-320`), as the Record row's Live panel saves it. `nemotron`: streaming Nemotron (`asr.live.engine` picks which), a word shown is never taken back. `parakeet`: Parakeet re-decodes each stretch between pauses, and words on screen can change. `auto` picks `nemotron` when its model is downloaded, else `parakeet`. A model that is not downloaded never runs. `upgrade`, the old value, is read as `nemotron` with `asr.review.model` `qwen`, and saved that way. `akou start --live` sets it for one call. A change applies from the next call; a running call keeps its model.",
   },
   "asr.review.model": {
     type: "string",
     values: REVIEW_MODELS,
     default: "none",
     doc: "A second pass during a call, `none` or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same): every `asr.review.everySeconds`, the sentences Nemotron finished since the last review are decoded again, whole, and the new words replace the live lines once. `qwen`: Qwen3-ASR, the most accurate, about 10 to 13 GB of memory during a call; it needs its llama-server, and it goes off for the rest of a call it cannot keep up with. The window offers it only on a machine with a GPU for it and 16 GB of memory; set here, it runs anyway. `parakeet`: Parakeet, on the processor, with no extra memory. `none`: the live lines stay as Nemotron wrote them. It reviews Nemotron's lines only, so a call whose live model is Parakeet runs none. A line someone edited, or fixed a word on, keeps their text. `akou start --review` sets it for one call. A change applies from the next call.",
+  },
+  "asr.final.model": {
+    type: "string",
+    values: FINAL_MODELS,
+    default: "auto",
+    doc: "The model that writes the final transcript after a call: `auto`, or a model's id (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`; `qwen` and `parakeet` name the same). `qwen`: Qwen3-ASR on its llama-server, the most accurate; it gives no word times, so each line keeps the times of the stretch it was cut from. While the pass runs it holds about 3 GB of memory and the GPU when there is one. Without a GPU it decodes on the processor, much slower, and a pass gets half the call's length plus 300 s before it is stopped as stuck, so on such a machine a long call can fail: set `parakeet` there. One Qwen pass runs at a time; another waits for it. `parakeet`: Parakeet, on the processor. `auto` picks `qwen` whenever its model and its llama-server are downloaded, else `parakeet`. A model that is not downloaded never runs: the setting falls back to the other model and says why in the log, and with neither downloaded no pass runs. On Qwen the pass does not need Parakeet on disk. Speaker labels are the same with either. A Qwen that cannot start, or fails twice in a row, fails the pass, and `akou finalize --force` runs it again. `akou finalize --model` sets it for one run, and is refused when that model is not downloaded; a pass stopped by a quit runs again at the next start on this setting's model. A change applies from the next pass.",
   },
   "asr.review.everySeconds": {
     type: "integer",
@@ -481,7 +488,7 @@ export const SETTINGS = {
     type: "string",
     values: LIVE_ENGINE_SETTINGS,
     default: "auto",
-    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
+    doc: "The streaming model that writes the live transcript when `asr.live` resolves to `nemotron`: `auto` picks by `asr.languages` (English only: `nemotron-en-560`; Spanish only: `nemotron-3.5-1120`; anything else: `nemotron-3.5-560`, which follows a switch of language), or name one. The other chunk sizes (`nemotron-en-80`, `nemotron-en-160`, `nemotron-en-1120`, `nemotron-3.5-80`, `nemotron-3.5-160`, `nemotron-3.5-320`) run only when named: a shorter chunk writes a word sooner, and `auto` never picks one. A word it shows is never taken back. Its model is fetched with `akou models pull <name>`; while none is downloaded, live lines come from Parakeet re-decoding pauses. A change applies from the next call; a running call keeps its model.",
   },
   "asr.segmentPause": {
     type: "number",
@@ -1199,9 +1206,14 @@ function crossCheck(s: Settings): { key: SettingKey; message: string }[] {
 /**
  * Old values rewritten in today's keys, so a file or a `PATCH /config` that carries one keeps
  * working and the next save writes the new form: `asr.live` `upgrade` is `nemotron` with
- * `asr.review.model` `qwen` (unless it names its own).
+ * `asr.review.model` `qwen` (unless it names its own). And short names read as the ids they name:
+ * `asr.final.model` `qwen` and `parakeet`.
  */
 export function legacyValues(values: Record<string, unknown>): Record<string, unknown> {
+  const short = values["asr.final.model"];
+  if (short === "qwen" || short === "parakeet") {
+    values = { ...values, "asr.final.model": finalModelId(short) };
+  }
   if (values["asr.live"] !== "upgrade") return values;
   return {
     ...values,

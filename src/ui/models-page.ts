@@ -8,11 +8,18 @@
  * - **Second pass** (the app only): Off, Qwen or Parakeet reviewing the finished sentences during
  *   the call (`asr.review.model`), and how often (`asr.review.everySeconds`).
  * - **After the call** (the app) or **Jobs** (server mode): the recognizer that writes the
- *   accurate transcript; in server mode a radio list of the recognizers a job may run by default.
+ *   accurate transcript, the one `asr.final.model` names or the one `auto` runs (`GET /models`
+ *   `final`), Qwen with its llama-server; in server mode a radio list of the recognizers a job may
+ *   run by default.
  * - **Dictation** (the app): Fast and Best, the engines dictation decodes with.
  * - **Speakers**: who spoke when, a radio list (`asr.diarizer`).
  * - **On this Mac** (or computer, or server): the graphics chip, the unused-days sweep, the size
- *   cap, what a job's missing model does (server mode), and a row to the helpers.
+ *   cap, and what a job's missing model does (server mode).
+ *
+ * A row above the sections leads to **All models**: every model of the catalog for this machine in
+ * four groups, Live transcript, After the call (Jobs in server mode), Speakers and Helpers, the ones
+ * on disk first. Each has its size and Download, or its size and Remove; one that does not suit this
+ * machine or the call's languages says why in a line under its name and keeps its Download.
  *
  * Each fact is a plain sentence from the numbers in `asr/model-scores.ts` and
  * `asr/live-setups.ts`, each accuracy figure naming its test set (`models-rows.ts`). A model shows
@@ -32,15 +39,16 @@ import { everyChoices } from "./live-options.ts";
 import {
   accuracyText,
   afterCallHelp,
+  allModelsText,
   autoHelp,
   bestHelp,
+  catalogGroups,
+  catalogLine,
   DEFAULTS,
   DIARIZERS,
   everyLabel,
   gbText,
-  helperHelp,
   hourText,
-  joinAnd,
   keptText,
   type LiveView,
   liveHelp,
@@ -54,6 +62,7 @@ import {
   RECOGNIZER_ID,
   reasonText,
   removeRefusal,
+  roleTitle,
   speakersHelp,
   totalText,
 } from "./models-rows.ts";
@@ -81,7 +90,14 @@ import { twoStep } from "./server-common.ts";
 import type { ConfigReply, SchemaEntry } from "./settings.ts";
 import { wordsFor } from "./settings-labels.ts";
 
-type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView };
+/** The final pass's model (`GET /models` `final`): the setting, the id it names, what runs next. */
+interface FinalView {
+  setting: string;
+  named: string | null;
+  /** Null when no final model is downloaded. */
+  next: string | null;
+}
+type ModelsReply = ModelsInfo & { models?: ModelRow[]; live?: LiveView; final?: FinalView };
 
 /** The numbers of "On this Mac": each field's id, label, help and unit. */
 const NUMBERS = [
@@ -127,13 +143,14 @@ export class ModelsPage {
   private info: ModelsInfo | null = null;
   private rows: ModelRow[] = [];
   private live: LiveView | null = null;
+  private final: FinalView | null = null;
   private schema: Record<string, SchemaEntry> = {};
   private settings: Record<string, unknown> = {};
   private issues = new Map<string, string>();
   /** What each number field held when drawn, so leaving saves only an edit. */
   private shownNumbers = new Map<string, string>();
   private platform = "";
-  /** The helpers' page is on screen instead of the page itself. */
+  /** The All models page is on screen instead of the page itself. */
   private sub = false;
   private readonly armed = new Map<string, number>();
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -172,7 +189,8 @@ export class ModelsPage {
     await this.saveTyped();
     if (n !== this.shows) return;
     this.shown = true;
-    this.sub = key === "helpers";
+    // `helpers`, the older name of the page that listed the models no section places.
+    this.sub = key === "all" || key === "helpers";
     // The poll stops while the page reads everything; a poll that lands meanwhile draws nothing.
     this.stop();
     this.polls++;
@@ -192,7 +210,7 @@ export class ModelsPage {
     else toast(message(cfg?.body, "the settings could not be read"));
     if (models && models.status === 200) this.take(models.body);
     this.draw();
-    if (key && key !== "helpers") this.goTo(key);
+    if (key && !this.sub) this.goTo(key);
   }
 
   /** The page is left: what is still typed into a number is saved, and the page stops following. */
@@ -234,6 +252,7 @@ export class ModelsPage {
     this.info = m;
     this.rows = m.models ?? [];
     this.live = m.live ?? null;
+    this.final = m.final ?? null;
     const busy =
       m.state === "downloading" ||
       this.rows.some((r) => r.state === "downloading") ||
@@ -303,15 +322,15 @@ export class ModelsPage {
     if (this.sub) {
       replace(
         this.head,
-        pageHead("Helpers", {
+        pageHead("All models", {
           back: backLink("Models", () => {
             this.sub = false;
             this.draw();
-            this.col.querySelector<HTMLElement>("#models-go-helpers")?.focus();
+            this.col.querySelector<HTMLElement>("#models-go-all")?.focus();
           }),
         }),
       );
-      replace(this.lists, ...this.helperSections());
+      replace(this.lists, ...this.allSections());
       return;
     }
     this.drawState();
@@ -325,9 +344,9 @@ export class ModelsPage {
           this.dictationSection(),
           this.speakersSection(),
         ];
-    replace(this.lists, ...sections);
-    const helpers = this.settingsBox.querySelector("#models-go-helpers");
-    if (helpers) helpers.replaceWith(this.helpersRow());
+    const all = section("", this.allRow());
+    all.id = "models-all";
+    replace(this.lists, all, ...sections);
   }
 
   /** The line under the title: the total here, or the speech models' download. */
@@ -512,7 +531,10 @@ export class ModelsPage {
       // A streaming Nemotron is this section's own; Parakeet is shown where it belongs.
       const owner = family === "nemotron";
       const side = this.modelSide([own], owner);
-      const help = [s ? accuracyText(s.accuracy) : null, own.lines.live].filter((x) => x).join(" ");
+      // The family's measured figure belongs to its measured tiers only: a tier nobody measured
+      // (`own.accuracy` has no score) says so in its own line and gets no borrowed number.
+      const figure = s && own.accuracy.score !== null ? accuracyText(s.accuracy) : null;
+      const help = [figure, own.lines.live].filter((x) => x).join(" ");
       const checked =
         setting === e.id ||
         (setting === "nemotron" && family === "nemotron" && e.checked) ||
@@ -651,12 +673,41 @@ export class ModelsPage {
     return s;
   }
 
+  /**
+   * The model After the call shows: the one `asr.final.model` names, else the one the next pass
+   * runs (`auto`), else Parakeet where the app says neither.
+   */
+  private afterCallId(): string {
+    return this.final?.named ?? this.final?.next ?? RECOGNIZER_ID;
+  }
+
+  /**
+   * After the call: the model that writes the final transcript, as the setting says, with Qwen's
+   * llama-server in the same Download. A named model that is not here says what writes it until it
+   * is.
+   */
   private afterCallSection(): HTMLElement | null {
-    const r = this.row(RECOGNIZER_ID) ?? this.rows.find((x) => x.kind === "speech" && x.default);
+    const r =
+      this.row(this.afterCallId()) ??
+      this.row(RECOGNIZER_ID) ??
+      this.rows.find((x) => x.kind === "speech" && x.default);
     if (!r) return null;
+    const models =
+      r.id === QWEN_ID
+        ? this.rowsOf(this.live?.slots.review.find((e) => e.id === QWEN_ID)?.models ?? [QWEN_ID])
+        : [r];
+    const next = this.final?.next;
+    const until =
+      next && next !== r.id
+        ? `Until it is downloaded, ${modelName(this.row(next) ?? { id: next, job: "" })} writes it.`
+        : "";
     const s = section(
       "After the call",
-      this.modelRow(modelName(r), afterCallHelp(r, this.here), [r]),
+      this.modelRow(
+        modelName(r),
+        [afterCallHelp(r, this.here), until].filter((x) => x).join(" "),
+        models,
+      ),
     );
     s.id = "models-after";
     return s;
@@ -667,7 +718,16 @@ export class ModelsPage {
     const best = this.row(QWEN_ID);
     if (!fast && !best) return null;
     const rows: HTMLElement[] = [];
-    if (fast && fast.state === "ready")
+    // With another model after the call, Fast's Parakeet is a model of its own here.
+    if (fast && this.afterCallId() !== RECOGNIZER_ID)
+      rows.push(
+        this.modelRow(
+          `Fast: ${modelName(fast)}`,
+          "Parakeet, on the processor: about 0.1 s for 5 s of speech.",
+          [fast],
+        ),
+      );
+    else if (fast && fast.state === "ready")
       rows.push(
         this.modelRow(
           `Fast: ${modelName(fast)}`,
@@ -774,38 +834,14 @@ export class ModelsPage {
     });
   }
 
-  /** The models no section above places: the helpers, then any other model. */
-  private others(): { helpers: ModelRow[]; rest: ModelRow[] } {
-    const placed = new Set<string>([
-      RECOGNIZER_ID,
-      QWEN_ID,
-      ...Object.values(DIARIZERS).flat(),
-      ...(this.live?.setups.find((s) => s.id === "nemotron")?.models.map((m) => m.id) ?? []),
-    ]);
-    if (this.server)
-      for (const r of this.rows) if (r.kind === "speech" && r.after_call) placed.add(r.id);
-    const left = this.rows.filter((r) => !placed.has(r.id));
-    return {
-      helpers: left.filter((r) => r.kind === "helper"),
-      rest: left.filter((r) => r.kind !== "helper"),
-    };
-  }
-
-  private helpersRow(): HTMLElement {
-    const { helpers, rest } = this.others();
-    const n = helpers.length + rest.length;
-    const holds = [
-      helpers.some((r) => r.id === "silero-vad") ? "Voice detection" : "",
-      helpers.some((r) => r.id.startsWith("llama-server")) ? "the program Qwen3-ASR runs in" : "",
-      rest.length > 0 ? "other models" : "",
-    ].filter((x) => x);
-    const help = joinAnd(holds);
+  /** The row to All models: how many models are here and how many more there are. */
+  private allRow(): HTMLElement {
     return linkRow(
       {
-        label: "Helpers",
-        help: help ? `${help.charAt(0).toUpperCase()}${help.slice(1)}.` : "",
-        value: String(n),
-        id: "models-go-helpers",
+        label: "All models",
+        help: allModelsText(this.rows, this.here),
+        value: String(this.rows.length),
+        id: "models-go-all",
       },
       () => {
         this.sub = true;
@@ -815,15 +851,32 @@ export class ModelsPage {
     );
   }
 
-  private helperSections(): HTMLElement[] {
-    const { helpers, rest } = this.others();
-    const rowsOf = (list: ModelRow[]) =>
-      list.map((r) => this.modelRow(modelName(r), helperHelp(r), [r]));
-    // The page's title already says Helpers; a section title only sets them apart from the others.
-    return [
-      helpers.length > 0 ? section(rest.length > 0 ? "Helpers" : "", ...rowsOf(helpers)) : null,
-      rest.length > 0 ? section("Other models", ...rowsOf(rest)) : null,
-    ].filter((x): x is HTMLElement => x !== null);
+  /** The All models page: the whole catalog by what each model does, the ones on disk first. */
+  private allSections(): HTMLElement[] {
+    const advice = this.live?.advice ?? {};
+    return catalogGroups(this.rows).map((g) => {
+      const s = section(
+        roleTitle(g.role, this.server),
+        ...g.rows.map((r) => this.catalogRow(r, advice[r.id] ?? null)),
+      );
+      s.dataset.role = g.role;
+      return s;
+    });
+  }
+
+  /**
+   * One model of All models: its name, what it does, and under that why it does not suit this
+   * machine when it does not; on the right its size with Download, or with Remove where allowed.
+   */
+  private catalogRow(r: ModelRow, why: string | null): HTMLElement {
+    const side = this.modelSide([r], true);
+    const help =
+      side.help ?? h("span", {}, catalogLine(r), why ? h("span", { class: "pg-why" }, why) : null);
+    const el = row({ label: modelName(r), help }, ...side.controls);
+    el.dataset.model = r.id;
+    el.dataset.state = side.state;
+    if (why) el.dataset.advice = "";
+    return el;
   }
 
   // -------------------------------------------------------------------------
@@ -862,7 +915,6 @@ export class ModelsPage {
         ),
       );
     }
-    rows.push(this.helpersRow());
     const title = this.server ? "On this server" : `On ${this.here}`;
     replace(this.settingsBox, section(title, ...rows));
   }

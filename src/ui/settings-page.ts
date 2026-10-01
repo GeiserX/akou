@@ -153,12 +153,13 @@ const SUBS: Record<string, SubPage> = {
   },
   speech: {
     title: "Speech engines",
-    help: "Which streaming model, decoding, threads, pause length, models folder.",
+    help: "Which streaming model, decoding, the final transcript's model, threads, models folder.",
     groups: [
       {
         title: "Live transcript",
         keys: ["asr.live.engine", "asr.parakeet.decoding", "asr.segmentPause", "asr.segmentWindow"],
       },
+      { title: "Final transcript", keys: ["asr.final.model"] },
       { title: "Engines", keys: ["asr.threads", "asr.modelsDir"] },
       { title: "Programs", keys: ["asr.llamaServer", "asr.diarizeHelper"] },
     ],

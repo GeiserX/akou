@@ -2,7 +2,7 @@
   "openapi": "3.1.0",
   "info": {
     "title": "akou",
-    "version": "0.5.2",
+    "version": "0.5.4",
     "description": "The akou API over HTTP. Every operation is marked with the modes that serve it (`x-akou-modes`: the desktop app, server mode, or both) and the key it needs (`x-akou-access`). Generated from the route table; do not edit by hand.",
     "license": {
       "name": "GPL-3.0-or-later",
@@ -432,7 +432,7 @@
         "tags": [
           "models"
         ],
-        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable.",
+        "description": "The speech models on disk: `missing`, `downloading` with bytes so far, `ready` or `failed`. `models` lists every catalog model with its kind (`speech`, `speakers`, `helper`), languages, state, size, last use, the date the sweep will delete it, whether it is the default's or in use, its accuracy and speed scores (0 to 100, with the measured number, its source and the formula, or `not_measured` with the reason), this machine's measured real-time factor, and the setting that makes it the default. In the app, `live` lists the live setups (`asr.live`): each with its accuracy, latency, cores and memory bars, the models it needs and their state, whether the next call runs it (`selected`) and whether the live call does (`running`), and why one is unavailable; and `live.advice`, one plain line by model id for a model that does not suit this machine or the call's languages (a live model that does not hear one of them, Qwen with no GPU or too little memory), whether or not it is downloaded. Advice only: the model can still be downloaded and chosen. In the app, `final` is the final pass's model: `setting` (`asr.final.model`), `named` (the model id the setting names, null for `auto`) and `next` (the id the next pass runs, never one that is not downloaded; null when neither is).",
         "responses": {
           "200": {
             "description": "OK",
@@ -1379,7 +1379,7 @@
         "tags": [
           "calls"
         ],
-        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 20 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
+        "description": "The call's transcript, every line with its local wall-clock time and speaker. With a second pass on (`asr.review.model`), the live call's closed lines are reviewed first, waiting at most 30 s, and `unreviewed` counts those it had not reviewed yet; a line whose review failed keeps the streaming text and is not counted. `layer` picks the live lines, the final pass, or the best of both; `from`, `to`, `speaker` and `since` narrow it; `limitTokens` keeps the newest lines that fit, or with `offset` or `afterLine` reads a page from that line on; with `since` it keeps the lines changed earliest after the cursor, and `cursor` covers only those. A gone `afterLine` answers 409 `cursor_stale`.",
         "parameters": [
           {
             "name": "id",
@@ -1495,7 +1495,7 @@
             "name": "review",
             "in": "query",
             "required": false,
-            "description": "With a second pass on and `format` json: `wait` reviews the live call's closed lines first (at most 20 s); `skip` answers at once, for a follower that reads on every event.",
+            "description": "With a second pass on and `format` json: `wait` reviews the live call's closed lines first (at most 30 s); `skip` answers at once, for a follower that reads on every event.",
             "schema": {
               "type": "string",
               "enum": [
@@ -1533,7 +1533,7 @@
         "tags": [
           "calls"
         ],
-        "description": "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. With a second pass on, the live call's closed lines are reviewed first, waiting at most 20 s; `unreviewed` counts those it had not reviewed yet, and a line whose review failed keeps the streaming text and is not counted. Changes nothing else.",
+        "description": "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. With a second pass on, the live call's closed lines are reviewed first, waiting at most 30 s; `unreviewed` counts those it had not reviewed yet, and a line whose review failed keeps the streaming text and is not counted. Changes nothing else.",
         "parameters": [
           {
             "name": "id",
@@ -3733,7 +3733,7 @@
         "tags": [
           "calls"
         ],
-        "description": "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again.",
+        "description": "Run the final pass on an ended call, the best transcript akou can make. Answers at once; the pass runs after. It runs by itself after every call, so this is for a pass that failed or for `force` to run it again. `model` (`qwen` or `parakeet`, or a model's id) overrides `asr.final.model` for this run; a model that is not downloaded is refused, never replaced.",
         "parameters": [
           {
             "name": "id",
@@ -3754,6 +3754,9 @@
                 "properties": {
                   "force": {
                     "type": "boolean"
+                  },
+                  "model": {
+                    "type": "string"
                   }
                 },
                 "additionalProperties": false

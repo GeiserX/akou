@@ -401,9 +401,51 @@ describe("the final pass note and the languages chip", () => {
       });
     });
     expect(finalNote(done)?.text).toBe(
-      "final transcript: ready (2 spans skipped)  ·  call side had energy but no text",
+      "final transcript: ready, 2 spans skipped  ·  call side had energy but no text",
     );
     expect(languages(done)).toEqual([]);
+  });
+
+  test("a running pass on Qwen: the note names it and moves with the audio decoded, not parts", () => {
+    const running = ended((b) => b.add({ type: "final.started", pid: 1, model: "qwen3-asr-1.7b" }));
+    // Before the app's first figure: the model, and the parts bar.
+    expect(finalNote(running)).toEqual({
+      state: "running",
+      text: "final transcript: running (Qwen)",
+      progress: 0,
+    });
+    // Mid-way through a one-part call: minutes, and the bar at that fraction, not at 0 of 1 part.
+    const mid = finalNote(running, {
+      done_s: 37 * 60 + 20,
+      total_s: 152 * 60,
+      model: "qwen3-asr-1.7b",
+    });
+    expect(mid?.text).toBe("final transcript: running, 37 of 152 min (Qwen)");
+    expect(mid?.progress).toBeCloseTo((37 * 60 + 20) / (152 * 60), 5);
+    // A short call counts seconds.
+    expect(finalNote(running, { done_s: 20.4, total_s: 45, model: "qwen3-asr-1.7b" })?.text).toBe(
+      "final transcript: running, 20 of 45 s (Qwen)",
+    );
+    const failed = ended((b) => {
+      b.add({ type: "final.started", pid: 1, model: "qwen3-asr-1.7b" });
+      b.add({ type: "final.failed", step: "decode", error: "qwen3-asr-1.7b is unavailable: down" });
+    });
+    // The engine's own error names its id: the name takes its place, said once.
+    expect(finalNote(failed)?.text).toBe("final transcript: failed (Qwen is unavailable: down)");
+    // Before its figures move, the step.
+    const at = (step: "starting" | "speakers", waiting: string | null = null) =>
+      finalNote(running, { done_s: 0, total_s: 600, model: "qwen3-asr-1.7b", step, waiting });
+    expect(at("starting")?.text).toBe("final transcript: starting Qwen");
+    expect(at("speakers")?.text).toBe("final transcript: labelling speakers (Qwen)");
+    expect(at("starting", "01ABC")?.text).toBe(
+      "final transcript: waiting for the pass on 01ABC (Qwen)",
+    );
+    expect(at("speakers")?.progress).toBe(0);
+    const done = ended((b) => {
+      b.add({ type: "final.started", pid: 1, model: "parakeet-tdt-0.6b-v3-fp32" });
+      b.add({ type: "final.done", parts: [1], skipped: [{}], model: "parakeet-tdt-0.6b-v3-fp32" });
+    });
+    expect(finalNote(done)?.text).toBe("final transcript: ready (Parakeet), 1 span skipped");
   });
 
   test("the languages chip only when a model reported them", () => {

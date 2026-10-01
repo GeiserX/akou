@@ -189,7 +189,7 @@ Status words:
 - F3.5 the agent watches `callAudio` and acts on `dead`: **carried (M1)**; akou restarts automatically after 60 s, the agent informs the user.
 - F3.6 restart keeps one call: **carried (M1)**.
 - F3.7 stop, quit, post-call: **carried (M1)**; the hand-off runs by itself.
-- F3.8 consent reminder: **carried (M1)** in the skill; in the window **dropped** (2026-09-30): a row on every start that had to be dismissed each time was noise, and telling the others stays the user's job.
+- F3.8 consent reminder: **dropped** (2026-09-30), in the window and in the skill: a row on every start that had to be dismissed each time was noise, and telling the others stays the user's job.
 - F3.29 observed good behaviour (right workspace, verify active, report folder and URL, periodic health checks): **carried (M1)** as skill rules.
 - I3.3 POST endpoints with a custom header: **changed (M1)**, see F2.3.
 - I3.4 folder layout the skill relied on: **changed (M1)**; the skill has no folder knowledge.

@@ -28,6 +28,13 @@ export const LIVE_ENGINES = {
   "nemotron-en-560": { tierMs: 560, languages: ["en"], multilingual: false },
   "nemotron-3.5-560": { tierMs: 560, languages: NEMOTRON_35_LANGUAGES, multilingual: true },
   "nemotron-3.5-1120": { tierMs: 1120, languages: NEMOTRON_35_LANGUAGES, multilingual: true },
+  // The other chunk sizes (models.ts MORE_TIERS): run only when named, never `auto`'s pick.
+  "nemotron-en-80": { tierMs: 80, languages: ["en"], multilingual: false },
+  "nemotron-en-160": { tierMs: 160, languages: ["en"], multilingual: false },
+  "nemotron-en-1120": { tierMs: 1120, languages: ["en"], multilingual: false },
+  "nemotron-3.5-80": { tierMs: 80, languages: NEMOTRON_35_LANGUAGES, multilingual: true },
+  "nemotron-3.5-160": { tierMs: 160, languages: NEMOTRON_35_LANGUAGES, multilingual: true },
+  "nemotron-3.5-320": { tierMs: 320, languages: NEMOTRON_35_LANGUAGES, multilingual: true },
 } as const satisfies Record<string, LiveEngineInfo>;
 
 export type LiveEngineId = keyof typeof LIVE_ENGINES;

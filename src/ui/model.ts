@@ -10,6 +10,7 @@
 
 import { formatWall } from "../core/log/clock.ts";
 import type { CallView } from "../core/log/fold.ts";
+import { type FinalStep, finalText } from "../main/asr/final-text.ts";
 import { hotkeyLabel } from "../main/window/hotkey.ts";
 import type { AppStatus } from "./protocol.ts";
 
@@ -334,26 +335,52 @@ export interface FinalNote {
   progress?: number;
 }
 
-export function finalNote(v: CallView): FinalNote | null {
+/** A running pass as the app's status reports it (`finals[]`): how far it is, and its model. */
+export interface FinalRun {
+  done_s: number;
+  total_s: number;
+  model: string;
+  /** What the pass is doing before its figures move; absent from an older app. */
+  step?: FinalStep | null;
+  /** The call whose Qwen pass this one waits for. */
+  waiting?: string | null;
+}
+
+/**
+ * The note under the header: `final transcript: starting Qwen`, `labelling speakers (Qwen)`, then
+ * `running, 37 of 152 min (Qwen)` with the bar at the audio decoded so far, `waiting for the pass on
+ * <id>` behind another Qwen pass, `ready (Parakeet)`, `failed (Qwen is unavailable: …)`. `run` is the app's live figure for
+ * this call; without it (an older app, or before the first figure) the bar counts parts.
+ */
+export function finalNote(v: CallView, run?: FinalRun | null): FinalNote | null {
   const f = v.final;
   if (f.state === "none") return null;
+  const model = run?.model ?? f.model;
   if (f.state === "failed") {
     return {
       state: "failed",
-      text: `final transcript: failed${f.failed ? ` (${f.failed.error})` : ""}`,
+      text: `final transcript: ${finalText({ state: "failed", model, error: f.failed?.error })}`,
     };
   }
   if (f.state === "running") {
     const total = Math.max(1, v.parts().length);
+    const moving = run && run.total_s > 0;
     return {
       state: "running",
-      text: `final transcript: running (${f.partsDone.length} of ${total} ${total === 1 ? "part" : "parts"})`,
-      progress: f.partsDone.length / total,
+      text: `final transcript: ${finalText({
+        state: "running",
+        model,
+        done_s: run?.done_s,
+        total_s: run?.total_s,
+        step: run?.step,
+        waiting: run?.waiting,
+      })}`,
+      progress: moving ? Math.min(1, run.done_s / run.total_s) : f.partsDone.length / total,
     };
   }
-  const skipped = f.done?.skipped.length ?? 0;
-  const bits = ["final transcript: ready"];
-  if (skipped > 0) bits[0] += ` (${skipped} ${skipped === 1 ? "span" : "spans"} skipped)`;
+  const bits = [
+    `final transcript: ${finalText({ state: "done", model, skipped: f.done?.skipped.length ?? 0 })}`,
+  ];
   if (f.done?.warning) bits.push(f.done.warning);
   return { state: "done", text: bits.join("  ·  ") };
 }

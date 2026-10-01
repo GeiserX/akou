@@ -33,7 +33,7 @@ export function queryRoutes(r: Router<ApiApp>): void {
     "/calls/:id/context",
     {
       id: "calls.context",
-      doc: "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. With a second pass on, the live call's closed lines are reviewed first, waiting at most 20 s; `unreviewed` counts those it had not reviewed yet, and a line whose review failed keeps the streaming text and is not counted. Changes nothing else.",
+      doc: "A small, cited context for a question about the call: the lines that answer it, the memo and the call's state, within `budget` tokens. With a second pass on, the live call's closed lines are reviewed first, waiting at most 30 s; `unreviewed` counts those it had not reviewed yet, and a line whose review failed keeps the streaming text and is not counted. Changes nothing else.",
       access: "admin",
       modes: ["app"],
       params: { id: CALL_ID },

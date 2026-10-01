@@ -313,6 +313,8 @@ export interface AsrLag extends Envelope {
 export interface FinalStarted extends Envelope {
   type: "final.started";
   pid: number;
+  /** The recognizer the pass decodes with (`qwen3-asr-1.7b`, `parakeet-tdt-0.6b-v3-fp32`). */
+  model?: string;
 }
 
 export interface FinalPartDone extends Envelope {
@@ -326,6 +328,8 @@ export interface FinalDone extends Envelope {
   languages?: string[];
   skipped: unknown[];
   warning?: string;
+  /** The recognizer the pass decoded with. */
+  model?: string;
 }
 
 export interface FinalFailed extends Envelope {
@@ -595,13 +599,14 @@ const SPECS: { [T in EventType]: Spec } = {
     detail: req("string"),
   },
   "asr.lag": { part: req("int"), seconds: req("number") },
-  "final.started": { pid: req("int") },
+  "final.started": { pid: req("int"), model: opt("string") },
   "final.part.done": { part: req("int") },
   "final.done": {
     parts: req("number[]"),
     languages: opt("string[]"),
     skipped: req("array"),
     warning: opt("string"),
+    model: opt("string"),
   },
   "final.failed": { step: req("string"), error: req("string") },
   "share.started": { bind: req("string"), expires: req("any"), include: req("object") },

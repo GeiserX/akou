@@ -3299,9 +3299,18 @@ input.pg-radio:focus-visible {
   outline: 2px solid var(--line2);
   outline-offset: 2px;
 }
+/* A choice that does not fit fades its radio and name only: its size, Download and reason stay
+   at full strength, since a model that is not for this call can still be downloaded. */
 .pg-choice.dis {
-  opacity: 0.55;
   cursor: default;
+}
+.pg-choice.dis > .pg-radio,
+.pg-choice.dis .pg-name {
+  opacity: 0.55;
+}
+/* Why a model does not suit this machine or the call's languages: its own line under the facts. */
+.pg-why {
+  display: block;
 }
 .pg-default {
   color: var(--dim);

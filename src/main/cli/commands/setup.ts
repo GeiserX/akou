@@ -13,6 +13,7 @@ import { type AcceleratorSetting, detectAccelerator, hostProbe } from "../../asr
 import { type LiveSetupContext, liveView } from "../../asr/live-setups.ts";
 import { llamaRuntime } from "../../asr/llama-server.ts";
 import { score as scoreOf, scoresOf } from "../../asr/model-scores.ts";
+import { chosenModelsHere } from "../../asr/model-set.ts";
 import {
   type CatalogEntry,
   DownloadRefused,
@@ -134,9 +135,19 @@ const token: Command = {
   },
 };
 
-/** The models this machine needs for its `asr.diarizer` (or the registry a test gives). */
+/**
+ * The models this machine needs: the helpers for its `asr.diarizer` and the speech models its
+ * chosen setups use (model-set.ts), so Parakeet only when one uses it (or the registry a test gives).
+ */
 function registry(ctx: Ctx): readonly ModelSpecEntry[] {
-  return ctx.models ?? modelsFor(loadConfig(ctx.io.env).settings, hostPlatform());
+  if (ctx.models) return ctx.models;
+  const settings = loadConfig(ctx.io.env).settings;
+  return modelsFor(
+    settings,
+    hostPlatform(),
+    MODELS,
+    chosenModelsHere(settings, MODELS, hostPlatform(), ctx.io.env),
+  );
 }
 
 function modelsDir(ctx: Ctx): string {

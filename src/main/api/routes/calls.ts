@@ -75,6 +75,9 @@ export function callDetail(c: CallController, app: ApiApp, now: number) {
       partsDone: v.final.partsDone,
       warning: v.final.done?.warning ?? null,
       error: v.final.failed?.error ?? null,
+      // The recognizer of the last pass, and while one runs, how far it is.
+      model: v.final.model ?? null,
+      progress: app.finalProgress?.(c.id) ?? null,
     },
     cursor: v.lastSeq,
     now,

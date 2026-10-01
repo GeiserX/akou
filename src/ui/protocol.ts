@@ -154,6 +154,15 @@ export interface AppStatus {
     reviewName?: string;
   } | null;
   last: { call: string; title: string; state: string; endedAt: number | null } | null;
+  /** Every final pass running now, with how far it is; absent from an older app. */
+  finals?: {
+    call: string;
+    done_s: number;
+    total_s: number;
+    model: string;
+    step?: "starting" | "speakers" | "decoding" | null;
+    waiting?: string | null;
+  }[];
   asr: { state: string; reason?: string; model?: string };
   /** The speech models on disk (`GET /models`); absent from an older app. */
   models?: ModelsInfo;

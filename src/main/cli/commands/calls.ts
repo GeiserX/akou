@@ -4,6 +4,8 @@
  * `calls rename`, `workspaces` and `workspace add`, `show`, `finalize`, `enhance`, `quit`. The hand-off commands are in `handoff.ts`.
  */
 
+import { finalText } from "../../asr/final-text.ts";
+import { shortModelName } from "../../asr/model-text.ts";
 import { REVIEW_EVERY_MAX, REVIEW_EVERY_MIN } from "../../asr/upgrade.ts";
 import { bool, int, list, str } from "../args.ts";
 import { EXIT, Unreachable } from "../client.ts";
@@ -146,6 +148,7 @@ function statusText(s: Body, color = false): string {
       out.push(`Last: "${s.last.title}", ${s.last.state}, ended ${wall(s.last.endedAt)}`);
     }
   }
+  out.push(...finalLines(s));
   const asr = s.asr ?? {};
   out.push(`Speech: ${asr.state}${asr.reason ? ` (${asr.reason})` : ""}`);
   const pr = s.provider ?? {};
@@ -153,6 +156,33 @@ function statusText(s: Body, color = false): string {
   out.push(`Share: ${s.share?.active ? "on" : "off"}`);
   for (const i of s.config?.issues ?? []) out.push(`Setting refused: ${i.message}`);
   return out.join("\n");
+}
+
+/** A pass that ended longer ago than this is no news: `akou status` leaves it out. */
+export const FINAL_NEWS_MS = 60 * 60_000;
+
+/**
+ * The `Final:` lines: the last call's pass while it runs, when it failed, or when it ended within
+ * the last hour; and a pass running on another call (`finals`), named by its call.
+ */
+export function finalLines(s: Body): string[] {
+  const out: string[] = [];
+  const f = s.last?.final;
+  const now = Number(s.app?.startedAt ?? 0) + Number(s.app?.uptimeMs ?? 0);
+  if (
+    f &&
+    (f.state === "running" ||
+      f.state === "failed" ||
+      (f.state === "done" && f.endedAt !== null && now - f.endedAt <= FINAL_NEWS_MS))
+  ) {
+    const warning = f.state === "done" && f.warning ? `; ${f.warning}` : "";
+    out.push(`Final: ${finalText(f)}${warning}`);
+  }
+  for (const r of (s.finals ?? []) as Body[]) {
+    if (r.call === s.last?.call) continue;
+    out.push(`Final of ${r.call}: ${finalText({ state: "running", ...r })}`);
+  }
+  return out;
 }
 
 const status: Command = {
@@ -315,18 +345,27 @@ const show: Command = {
 const finalize: Command = {
   name: "finalize",
   summary: "Run the accurate final pass on an ended call",
-  usage: "akou finalize [CALL | -c CALL] [--force] [--json]",
+  usage: "akou finalize [CALL | -c CALL] [--force] [--model qwen|parakeet] [--json]",
   flags: {
     call: callFlag("last"),
     force: { type: "boolean", desc: "run it again on a call that already has a final layer" },
+    model: {
+      type: "string",
+      value: "MODEL",
+      desc: "the model for this run only: qwen or parakeet (default: asr.final.model)",
+    },
   },
-  examples: ["akou finalize last --force"],
+  examples: ["akou finalize last --force", "akou finalize last --force --model qwen"],
   run: async (ctx, p) => {
     const call = objectCall(p, p.positional[0]) ?? "last";
     const r = await api(ctx, "POST", `/calls/${enc(call)}/finalize`, {
-      body: { force: bool(p, "force") || undefined },
+      body: { force: bool(p, "force") || undefined, model: str(p, "model") },
     });
-    return finish(ctx, r, (b) => `Final pass started for ${b.call}`);
+    return finish(
+      ctx,
+      r,
+      (b) => `Final pass started for ${b.call}${b.model ? ` on ${shortModelName(b.model)}` : ""}`,
+    );
   },
 };
 

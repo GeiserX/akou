@@ -35,7 +35,7 @@ Signing and notarization will come later. The [release workflow](https://github.
 
 ## The speech models
 
-akou transcribes on your Mac, with speech models it does not ship. The first time the window opens it shows a card: **Download speech models**. It is one download of about 3.0 GB into `~/Library/Application Support/akou/models`: the recognizer, the voice-activity model and the two speaker models (Nemotron 3 Diarization and TitaNet). With `asr.diarizer` set to `embeddings` it is about 2.6 GB, with pyannote in place of Nemotron. Every file is checked against a SHA-256 written into akou's code, and a file that does not match is thrown away. Nothing else is sent anywhere.
+akou transcribes on your Mac, with speech models it does not ship. The first time the window opens it shows a card: **Download speech models**. It is one download into `~/Library/Application Support/akou/models` of the models your setup uses: the voice-activity model, the two speaker models (Nemotron 3 Diarization and TitaNet), and the speech models. On a Mac with a GPU and 16 GB of memory those are streaming Nemotron for the live transcript and Qwen3-ASR with its llama-server for the transcript after the call, about 3.7 GB in all. With less memory, Parakeet does both, about 3.0 GB. With `asr.diarizer` set to `embeddings`, pyannote takes Nemotron 3 Diarization's place. Parakeet stays one Download away on the Models page, and any model no setup uses can be removed there. Every file is checked against a SHA-256 written into akou's code, and a file that does not match is thrown away. Nothing else is sent anywhere.
 
 From a terminal it is the same download, with progress per file:
 

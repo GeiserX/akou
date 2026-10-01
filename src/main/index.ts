@@ -77,6 +77,13 @@ import {
   verifyAccelerator,
 } from "./asr/accelerator.ts";
 import type { DiarizerKind, LlamaEngineSpec, ModelSpec, ParakeetDecoding } from "./asr/engine.ts";
+import {
+  chooseFinalModel,
+  type FinalChoice,
+  finalModelId,
+  finalModelOf,
+} from "./asr/final-model.ts";
+import type { FinalStep } from "./asr/final-text.ts";
 import { type FinalAudioSpec, finalizeCall } from "./asr/finalize-worker.ts";
 import { chooseLiveEngine, type LiveChoice } from "./asr/live-engines.ts";
 import {
@@ -96,6 +103,7 @@ import {
   type LineUpgrader,
   LiveAsr,
   type LiveReview,
+  modelNameFor,
   recognizerReviewer,
   type VocabSource,
 } from "./asr/live-worker.ts";
@@ -107,6 +115,7 @@ import {
   llamaPlan,
   metalHolder,
 } from "./asr/llama-server.ts";
+import { chosenModels, keptModels, type ModelSetContext } from "./asr/model-set.ts";
 import {
   DownloadRefused,
   downloadModels,
@@ -236,6 +245,8 @@ export const APP_LOCK = "akou.lock";
 export const QUIT_FINAL_GRACE_MS = 5_000;
 /** How long a settings change waits for the dictation helper to take or refuse new keys. */
 const REBIND_ANSWER_MS = 3_000;
+/** A running final pass pushes the status to the window at most this often, so its note moves. */
+export const FINAL_PUSH_MS = 2_000;
 /** How often dictation looks whether a final pass still holds the GPU `best` gave way to (DC-E2). */
 export const BEST_REWARM_MS = 5_000;
 /**
@@ -559,6 +570,30 @@ export class AkouApp implements ApiApp {
   /** The word lists that tell a real word from a mishearing (DESIGN 5.4), read on first use. */
   private readonly dictionaries: Dictionaries;
   private readonly finals = new Map<string, Promise<unknown>>();
+  /**
+   * How far each running final pass is, and its recognizer: seconds of the call covered and the
+   * call's length (0 until the pass has read it). In memory only; `GET /status` and
+   * `GET /calls/{id}` read it, and the window gets it with the status.
+   */
+  private readonly finalRuns = new Map<
+    string,
+    {
+      model: string;
+      done_s: number;
+      total_s: number;
+      pushedAt: number;
+      step: FinalStep | null;
+      /** The call whose Qwen pass this one waits for, until it starts. */
+      waiting: string | null;
+    }
+  >();
+  /**
+   * The last Qwen pass started or queued, and its end: one Qwen pass at a time app-wide, since a
+   * second llama-server on Metal stops the first.
+   */
+  private qwenLine: { call: string; done: Promise<unknown> } | null = null;
+  /** Aborts every running final pass when the app quits past `QUIT_FINAL_GRACE_MS`. */
+  private readonly finalStop = new AbortController();
   /** Per call, the hand-off work in order: one export or hook round at a time. */
   private readonly handoffs = new Map<string, Promise<unknown>>();
   private readonly reexports = new Map<string, ReturnType<typeof setTimeout>>();
@@ -784,9 +819,39 @@ export class AkouApp implements ApiApp {
     return { state: checking ? "checking" : "unavailable", id: p.id, harness, reason: a.reason };
   }
 
-  /** The models the next start needs (`asr.diarizer`): what the download card offers. */
+  /**
+   * The models the next start needs: the helpers for `asr.diarizer` and the speech models the
+   * chosen setups use (model-set.ts), so Parakeet is in it only when a setup uses it. What the
+   * download card and `POST /models/pull` fetch, and what makes the models ready.
+   */
   private registry(): readonly ModelSpecEntry[] {
-    return modelsFor(this.cfg.settings, hostPlatform(), this.o.modelRegistry ?? MODELS);
+    return modelsFor(
+      this.cfg.settings,
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
+    );
+  }
+
+  /**
+   * The speech models the live model, the second pass, the final pass and dictation use here, or
+   * undefined in server mode, whose jobs name their own recognizer and keep the older set.
+   */
+  private chosenModels(): string[] | undefined {
+    if (this.runMode === "server") return undefined;
+    return chosenModels(this.modelSetContext());
+  }
+
+  /** What `chosenModels` and `keptModels` read: the settings, the files here, the machine. */
+  private modelSetContext(): ModelSetContext {
+    const ctx = this.liveContext();
+    return {
+      settings: this.cfg.settings,
+      present: ctx.present,
+      catalog: ctx.catalog ?? [],
+      runtime: ctx.runtime,
+      ...(ctx.machine ? { machine: ctx.machine } : {}),
+    };
   }
 
   /** The speaker-label engine running now: the one the recognizer started with, else the setting. */
@@ -800,14 +865,31 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * Whether the running engine's model files are there: what a start and the final pass need. A
-   * change to `asr.diarizer` mid-run never asks for models the running recognizer does not use.
+   * Whether the running engine's model files are there: what a call's start needs, the helpers and
+   * the chosen setups' models. A final pass has its own rule (`finalModelsPresent`). A change to
+   * `asr.diarizer` mid-run never asks for models the running recognizer does not use.
    */
   private runningModelsPresent(): boolean {
     const registry = modelsFor(
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
+    );
+    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
+  }
+
+  /**
+   * Whether a final pass has its models: the helpers of the running speaker-label engine, and
+   * Parakeet when Parakeet decodes. A pass needs no live model, and Qwen's own files are checked
+   * where Qwen is chosen (`chooseFinalModel`).
+   */
+  private finalModelsPresent(qwen: boolean): boolean {
+    const registry = modelsFor(
+      { "asr.diarizer": this.runningDiarizer() },
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+      qwen ? [] : [RECOGNIZER],
     );
     return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
   }
@@ -1171,6 +1253,8 @@ export class AkouApp implements ApiApp {
 
   private onEvent(id: string, e: LogEvent): void {
     this.asr?.onEvent(id, e);
+    // A pass that has ended has no figure any more, before anyone reads the status for its end.
+    if (e.type === "final.done" || e.type === "final.failed") this.finalRuns.delete(id);
     // A language the recognizer just detected may bring its word list.
     if (e.type === "seg" && e.lang) {
       const c = this.manager.controller(id);
@@ -2177,8 +2261,16 @@ export class AkouApp implements ApiApp {
           }
         : null,
       last: last
-        ? { call: last.id, title: last.title, state: last.state, endedAt: last.endedAt }
+        ? {
+            call: last.id,
+            title: last.title,
+            state: last.state,
+            endedAt: last.endedAt,
+            final: await this.finalStatus(last.id),
+          }
         : null,
+      // Every final pass running now, the last call's or an older one's, with how far it is.
+      finals: [...this.finalRuns.keys()].map((call) => ({ call, ...this.finalProgress(call) })),
       asr: {
         ...this.asrState,
         loads: this.asr?.loads ?? {},
@@ -2202,12 +2294,16 @@ export class AkouApp implements ApiApp {
 
   async finalize(
     id: string,
-    opts: { force?: boolean },
-  ): Promise<Outcome<{ call: string; started: boolean }>> {
+    opts: { force?: boolean; model?: string },
+  ): Promise<Outcome<{ call: string; started: boolean; model?: string }>> {
     const c = await this.call(id);
     if (c.live || c.status === "stopping") {
       return fail(409, "not_ended", "the call is still recording", { call: id });
     }
+    // A pass whose end is in the log is only settling (its Worker and llama-server stopping):
+    // waited for, so `akou wait --for final.done` then `akou finalize --force` is never refused.
+    const settling = this.finals.get(id);
+    if (settling && c.view.final.state !== "running") await settling;
     if (this.finals.has(id))
       return fail(409, "final_running", "the final pass is running", { call: id });
     if (finalCurrent(c.view) && !opts.force) {
@@ -2215,9 +2311,92 @@ export class AkouApp implements ApiApp {
         call: id,
       });
     }
-    const r = this.runFinal(id, true);
+    const r = this.runFinal(id, true, opts.model);
     if (r) return fail(501, "final_unavailable", r.why, { call: id });
-    return { ok: true, call: id, started: true };
+    const model = this.finalRuns.get(id)?.model;
+    return { ok: true, call: id, started: true, ...(model ? { model } : {}) };
+  }
+
+  /**
+   * The recognizer the next final pass runs: `asked` (`akou finalize --model`) or
+   * `asr.final.model`, never one whose files are missing.
+   */
+  /** `GET /models`'s `final`: the setting, the model it names, and what the next pass runs. */
+  finalModel(): { setting: string; named: string | null; next: string | null } | null {
+    if (this.runMode === "server") return null;
+    const setting = this.cfg.settings["asr.final.model"];
+    const named = finalModelOf(setting);
+    return {
+      setting,
+      named: named ? finalModelId(named) : null,
+      next: ((m) => (m ? finalModelId(m) : null))(this.finalChoice().model),
+    };
+  }
+
+  finalChoice(asked?: string): FinalChoice {
+    const ctx = this.liveContext();
+    // A recognizer given on purpose (tests) stands for Parakeet: here with no test catalog, else
+    // when the catalog's recognizer set is on disk, whatever that recognizer is called.
+    const given =
+      this.o.models !== undefined
+        ? this.givenRecognizer() || this.finalModelsPresent(false)
+        : ctx.present(RECOGNIZER);
+    return chooseFinalModel(asked ?? this.cfg.settings["asr.final.model"], {
+      ...ctx,
+      present: (id) => (id === RECOGNIZER ? given : ctx.present(id)),
+    });
+  }
+
+  /**
+   * A call's final pass for `GET /status`: its state, recognizer, how far it is while it runs,
+   * and when it ended. From the open call's view, else from its log, read again only when the log
+   * grew.
+   */
+  private async finalStatus(id: string): Promise<FinalStatus | null> {
+    let f = this.manager.controller(id)?.view.final;
+    if (!f) {
+      const dir = this.manager.summary(id)?.dir;
+      if (!dir) return null;
+      const file = join(dir, EVENTS_FILE);
+      const size = existsSync(file) ? statSync(file).size : 0;
+      const cached = this.finalSeen.get(id);
+      if (cached?.size === size) f = cached.final;
+      else {
+        f = fold((await readLog(file)).events).final;
+        this.finalSeen.set(id, { size, final: f });
+      }
+    }
+    const run = f.state === "running" ? this.finalProgress(id) : null;
+    const end = f.state === "done" ? f.done : f.state === "failed" ? f.failed : undefined;
+    return {
+      state: f.state,
+      model: run?.model ?? f.model ?? null,
+      done_s: run?.done_s ?? null,
+      total_s: run?.total_s ?? null,
+      step: run?.step ?? null,
+      waiting: run?.waiting ?? null,
+      endedAt: end?.t ?? null,
+      skipped: f.state === "done" ? (f.done?.skipped.length ?? 0) : 0,
+      warning: f.state === "done" ? (f.done?.warning ?? null) : null,
+      error: f.state === "failed" ? (f.failed?.error ?? null) : null,
+    };
+  }
+
+  /** The final state of calls not open, by the size of the log it was read from. */
+  private readonly finalSeen = new Map<string, { size: number; final: CallView["final"] }>();
+
+  /** How far a running final pass is, or null when none runs for the call. */
+  finalProgress(id: string): FinalProgress | null {
+    const r = this.finalRuns.get(id);
+    return r
+      ? {
+          done_s: round1(r.done_s),
+          total_s: round1(r.total_s),
+          model: r.model,
+          step: r.step,
+          waiting: r.waiting,
+        }
+      : null;
   }
 
   /**
@@ -2237,11 +2416,14 @@ export class AkouApp implements ApiApp {
     }
   }
 
-  /** The recognizer models for the final pass, or null when there are none. */
-  private finalModels(): ModelSpec | null {
+  /**
+   * The models for the final pass, or null when they are not all here. On Qwen the pass needs the
+   * VAD and the speaker-label models but not Parakeet, which it never loads.
+   */
+  private finalModels(qwen = false): ModelSpec | null {
     // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
     if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
-    if (!this.runningModelsPresent()) return null;
+    if (!this.finalModelsPresent(qwen)) return null;
     return this.o.models !== undefined ? this.o.models : this.finalSherpaSpec();
   }
 
@@ -2263,7 +2445,11 @@ export class AkouApp implements ApiApp {
    * Starts the final pass in the background. Returns null once started, or why it cannot run;
    * `unavailable` when the call lacks what the pass needs (readable audio, the models).
    */
-  private runFinal(id: string, force: boolean): { why: string; unavailable?: true } | null {
+  private runFinal(
+    id: string,
+    force: boolean,
+    asked?: string,
+  ): { why: string; unavailable?: true } | null {
     if (this.quitting) return { why: "akou is quitting" };
     if (this.finals.has(id)) return { why: "the final pass is already running" };
     const c = this.manager.controller(id);
@@ -2276,25 +2462,83 @@ export class AkouApp implements ApiApp {
         why: "the final pass cannot read this call's audio: a part has no audio file, or the capture helper that decodes it is not there",
         unavailable: true,
       };
-    const models = this.finalModels();
-    if (!models) return { why: "the speech models are not downloaded", unavailable: true };
+    // The engine first, so the presence check below is that engine's own.
+    const choice = this.finalChoice(asked);
+    const named = finalModelOf(asked);
+    const title = (m: string) => (m === "qwen" ? "Qwen" : "Parakeet");
+    // A model asked for by name for this run and not here: refused, never the other in its place.
+    if (named && choice.model !== named)
+      return { why: `${title(named)} cannot run this pass: ${choice.note}` };
+    if (!choice.model)
+      return { why: `no model can run the final pass: ${choice.note}`, unavailable: true };
+    const base = this.finalModels(choice.model === "qwen");
+    if (!base) return { why: "the speech models are not downloaded", unavailable: true };
+    if (choice.note) this.log("info", `final ${id}: runs ${title(choice.model)}: ${choice.note}`);
+    const qwen = choice.model === "qwen";
+    const models: ModelSpec = qwen ? { ...base, final: this.llamaSpec(QWEN_ASR) } : base;
+    const model = models.final?.engine ?? modelNameFor(models);
     const ws = c.view.call?.workspace ?? "";
+    // One Qwen pass at a time: this one waits for the one ahead of it.
+    const ahead = qwen ? this.qwenLine : null;
+    this.finalRuns.set(id, {
+      model,
+      done_s: 0,
+      total_s: 0,
+      pushedAt: 0,
+      step: null,
+      waiting: ahead?.call ?? null,
+    });
     const p = finalizeCall(c, {
       models,
       audio,
       vocab: this.vocabCache.get(ws),
       inThread: this.o.asrInThread,
       clock: this.clock,
+      signal: this.finalStop.signal,
+      ...(ahead ? { waitFor: ahead.done } : {}),
+      onStarted: () => {
+        const r = this.finalRuns.get(id);
+        if (r?.waiting) {
+          r.waiting = null;
+          for (const fn of this.statusWatchers) fn();
+        }
+      },
       onLog: (level, msg) => this.log(level, `final ${id}: ${msg}`),
+      onProgress: (done_s, total_s, step) => this.finalMoved(id, done_s, total_s, step),
     })
       .then((r) => {
         if (!r.ok) this.log("warn", `final pass of ${id} failed: ${r.error}`);
-        else this.ranModels(r.audio_s ?? 0, r.decode_s ?? 0);
+        else this.ranModels(r.model ?? model, r.audio_s ?? 0, r.decode_s ?? 0);
       })
       .catch((err) => this.log("error", `final pass of ${id}: ${(err as Error).message}`))
-      .finally(() => this.finals.delete(id));
+      .finally(() => {
+        this.finals.delete(id);
+        this.finalRuns.delete(id);
+        if (this.qwenLine?.call === id) this.qwenLine = null;
+        for (const fn of this.statusWatchers) fn();
+      });
+    if (qwen) this.qwenLine = { call: id, done: p };
     this.finals.set(id, p);
+    for (const fn of this.statusWatchers) fn();
     return null;
+  }
+
+  /**
+   * A running pass moved: kept for `GET /status`, and the status pushed to the window at most
+   * every `FINAL_PUSH_MS`, so its note moves without a log event per piece.
+   */
+  private finalMoved(id: string, done_s: number, total_s: number, step: FinalStep): void {
+    const r = this.finalRuns.get(id);
+    if (!r) return;
+    const stepped = r.step !== step;
+    r.done_s = done_s;
+    r.total_s = total_s;
+    r.step = step;
+    const now = this.clock.now();
+    // A new step is pushed at once; figures within decoding at most every `FINAL_PUSH_MS`.
+    if (!stepped && now - r.pushedAt < FINAL_PUSH_MS) return;
+    r.pushedAt = now;
+    for (const fn of this.statusWatchers) fn();
   }
 
   /**
@@ -2302,11 +2546,16 @@ export class AkouApp implements ApiApp {
    * recognizer's speed on this machine is one run more (the Models page, SV-U6): the pass's decode
    * time alone, without the Worker's start, the model loads or the speaker labels.
    */
-  private ranModels(audioS: number, decodeS: number): void {
+  private ranModels(model: string, audioS: number, decodeS: number): void {
     const shelf = this.shelf;
     if (!shelf || this.givenRecognizer()) return;
-    shelf.touch(this.runningSet().map((m) => m.id));
-    shelf.recordRun(RECOGNIZER, audioS, decodeS);
+    // On Qwen, Parakeet was not used (and may not be on disk).
+    const qwen = model === QWEN_ASR;
+    const set = this.runningSet()
+      .map((m) => m.id)
+      .filter((m) => !qwen || m !== RECOGNIZER);
+    shelf.touch([...set, ...(qwen ? reviewModels("qwen", this.liveContext()) : [])]);
+    shelf.recordRun(model === QWEN_ASR ? QWEN_ASR : RECOGNIZER, audioS, decodeS);
   }
 
   /**
@@ -2703,12 +2952,15 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * The live Worker's Parakeet, already loaded at start, or null while no model is there. It picks
-   * the language itself, so a forced one is not sent (DC-E4).
+   * The live Worker's Parakeet, already loaded at start, or null while no model is there or
+   * Parakeet was never downloaded. It picks the language itself, so a forced one is not sent (DC-E4).
    */
   private fastEngine(): DictationEngine | null {
     const asr = this.asr;
-    return asr ? { name: "fast", decode: (samples) => asr.decode(samples) } : null;
+    // Parakeet is what `fast` decodes with: a machine that never downloaded it has no `fast`, so
+    // nothing offers it, and a live dictation whose stream fails says why instead of falling back.
+    if (!asr || (!this.givenRecognizer() && !this.liveContext().present(RECOGNIZER))) return null;
+    return { name: "fast", decode: (samples) => asr.decode(samples) };
   }
 
   /**
@@ -3061,6 +3313,7 @@ export class AkouApp implements ApiApp {
       { "asr.diarizer": this.runningDiarizer() },
       hostPlatform(),
       this.o.modelRegistry ?? MODELS,
+      this.chosenModels(),
     );
   }
 
@@ -3078,9 +3331,19 @@ export class AkouApp implements ApiApp {
     const live = [
       ...setupModels(next.setup, ctx),
       ...(next.review ? reviewModels(next.review.model, ctx) : []),
+      // The final pass's Qwen, when the setting runs it or a pass runs it now.
+      ...(this.finalChoice().model === "qwen" ||
+      [...this.finalRuns.values()].some((r) => r.model === QWEN_ASR)
+        ? reviewModels("qwen", ctx)
+        : []),
     ];
     return {
-      defaults: new Set([...this.registry().map((m) => m.id), ...live]),
+      // The chosen second pass's and dictation's models stay too (keptModels).
+      defaults: new Set([
+        ...this.registry().map((m) => m.id),
+        ...live,
+        ...keptModels(this.modelSetContext()),
+      ]),
       inUse:
         this.asr !== null || this.finals.size > 0 || this.modelsPull.running
           ? new Set(this.runningSet().map((m) => m.id))
@@ -3333,8 +3596,12 @@ export class AkouApp implements ApiApp {
       const running = [...this.finals.values()];
       if (running.length > 0) {
         const r = await withDeadline(realClock, Promise.allSettled(running), QUIT_FINAL_GRACE_MS);
-        if (!r.ok)
-          this.log("info", "a final pass is still running; it runs again at the next start");
+        if (!r.ok) {
+          // Its Worker and llama-server stop now: a Worker dies with the app, its child does not.
+          this.finalStop.abort();
+          await Promise.allSettled(running);
+          this.log("info", "a final pass was stopped; it runs again at the next start");
+        }
       }
       await this.dictationSvc?.close();
       this.remoteDictation?.close();
@@ -3455,6 +3722,39 @@ if (import.meta.main) {
   for (const sig of ["SIGINT", "SIGTERM"] as const) process.on(sig, () => void app.quit());
   await app.closed;
   process.exit(0);
+}
+
+/** How far a running final pass is (`GET /calls/{id}` `final.progress`, `GET /status` `finals[]`). */
+export interface FinalProgress {
+  done_s: number;
+  total_s: number;
+  model: string;
+  step: FinalStep | null;
+  waiting: string | null;
+}
+
+/** A call's final pass as `GET /status` reports it (`last.final`). */
+export interface FinalStatus {
+  state: "none" | "running" | "done" | "failed";
+  /** The recognizer's id, or null when the log does not name one (an older pass). */
+  model: string | null;
+  /** Seconds of the call the running pass has covered, over both channels; null when not running here. */
+  done_s: number | null;
+  /** The call's length in seconds, once the running pass has read it (0 before). */
+  total_s: number | null;
+  /** What the running pass is doing before its figures move; null when not running here. */
+  step: FinalStep | null;
+  /** The call whose Qwen pass this one waits for; null when not waiting. */
+  waiting: string | null;
+  /** `t` of `final.done` or `final.failed`. */
+  endedAt: number | null;
+  skipped: number;
+  warning: string | null;
+  error: string | null;
+}
+
+function round1(x: number): number {
+  return Math.round(x * 10) / 10;
 }
 
 /** The live call's model and second pass by name, for the window: `Nemotron 3.5`, `Qwen`. */

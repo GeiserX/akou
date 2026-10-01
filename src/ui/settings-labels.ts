@@ -110,7 +110,22 @@ export const WORDS: Readonly<Record<string, SettingWords>> = {
       ["auto", "Automatic, by your languages"],
       ["nemotron-en-560", "Nemotron, English"],
       ["nemotron-3.5-560", "Nemotron, many languages"],
-      ["nemotron-3.5-1120", "Nemotron, many languages, larger"],
+      ["nemotron-3.5-1120", "Nemotron, many languages, 1 s"],
+      ["nemotron-3.5-80", "Nemotron, many languages, 80 ms"],
+      ["nemotron-3.5-160", "Nemotron, many languages, 160 ms"],
+      ["nemotron-3.5-320", "Nemotron, many languages, 320 ms"],
+      ["nemotron-en-80", "Nemotron, English, 80 ms"],
+      ["nemotron-en-160", "Nemotron, English, 160 ms"],
+      ["nemotron-en-1120", "Nemotron, English, 1 s"],
+    ],
+  },
+  "asr.final.model": {
+    label: "Model after the call",
+    help: "Writes the final transcript. Qwen is the most accurate; without a graphics chip, slow.",
+    choices: [
+      ["auto", "Automatic: Qwen when it is downloaded"],
+      ["qwen3-asr-1.7b", "Qwen3-ASR"],
+      ["parakeet-tdt-0.6b-v3-fp32", "Parakeet"],
     ],
   },
   "asr.parakeet.decoding": {
