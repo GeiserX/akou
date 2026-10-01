@@ -119,11 +119,20 @@ export class ScrollPin {
       document.body.classList.toggle("scrolled", !this.pinned);
     });
     jump.addEventListener("click", () => this.backToLive());
+    // The area gets shorter (the player bar, the final note, a smaller window) or its lines taller
+    // (+ and -) with no new content and no scroll: a pinned view goes back to the bottom.
+    const resized = new ResizeObserver(() => this.follow());
+    resized.observe(scroller);
+    for (const c of scroller.children) resized.observe(c);
   }
 
-  /** After new content: stays at the bottom only while pinned. */
+  /**
+   * After new content: stays at the bottom only while pinned. At once, not smoothly: a smooth
+   * scroll's first steps read as a reader scrolling up and unpin the view before it lands.
+   */
   follow(): void {
-    if (this.pinned) this.scroller.scrollTop = this.scroller.scrollHeight;
+    if (this.pinned)
+      this.scroller.scrollTo({ top: this.scroller.scrollHeight, behavior: "instant" });
   }
 
   backToLive(): void {
