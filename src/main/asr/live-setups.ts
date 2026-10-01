@@ -518,6 +518,13 @@ export interface LiveView {
   review: ReviewView;
   /** The live panel's two slots: every catalog model that can fill each. */
   slots: { live: SlotEntry[]; review: SlotEntry[] };
+  /**
+   * Why a catalog model does not suit this machine or the call's languages, one plain line by its
+   * id, whether or not it is downloaded: a live model that does not hear one of the languages
+   * (`liveCannot`), Qwen with no GPU for it or too little memory (`qwenRoom`). Advice, not a block:
+   * the Models page still offers its Download, and a model chosen anyway runs.
+   */
+  advice: Record<string, string>;
 }
 
 export function liveView(
@@ -530,6 +537,13 @@ export function liveView(
   const review = c.review && isReviewModel(c.review) ? c.review : "none";
   const inCatalog = (id: string) => !c.catalog || c.catalog.includes(id);
   const nextId = next.setup === "parakeet" ? RECOGNIZER : (next.choice?.engine ?? null);
+  const advice: Record<string, string> = {};
+  for (const id of LIVE_SLOT.filter(inCatalog)) {
+    const why = liveCannot(id, c.languages);
+    if (why) advice[id] = why;
+  }
+  const room = inCatalog(QWEN_ASR) ? qwenRoom(c) : null;
+  if (room) advice[QWEN_ASR] = room;
   return {
     setting: isLiveSetting(c.setting) ? c.setting : "auto",
     next: next.setup,
@@ -600,5 +614,6 @@ export function liveView(
         return { id, models: ids, checked: next.review?.model === kind, blocked: why };
       }),
     },
+    advice,
   };
 }

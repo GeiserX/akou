@@ -126,6 +126,17 @@ const HF_NEMOTRON_35_560 =
 const HF_NEMOTRON_35_1120 =
   "https://huggingface.co/csukuangfj2/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-1120ms-int8-2026-06-11/resolve/cba1c96ca5ef0e8393b50584ae153a79145dc492";
 
+/**
+ * The same two models exported at other chunk sizes, one repository each, pinned by revision. The
+ * encoder differs per chunk size; the decoder, joiner and symbol table are the same bytes as the
+ * 560 ms tier's. The live path drives them exactly as it drives the tiers above.
+ */
+const HF_STREAMING = "https://huggingface.co/csukuangfj2";
+const HF_NEMOTRON_EN_TIER = (ms: number, rev: string) =>
+  `${HF_STREAMING}/sherpa-onnx-nemotron-speech-streaming-en-0.6b-${ms}ms-int8-2026-04-25/resolve/${rev}`;
+const HF_NEMOTRON_35_TIER = (ms: number, rev: string) =>
+  `${HF_STREAMING}/sherpa-onnx-nemotron-3.5-asr-streaming-0.6b-${ms}ms-int8-2026-06-11/resolve/${rev}`;
+
 /** A streaming Nemotron's symbol table (sherpa-onnx names it tokens.txt). */
 const SYMBOLS_FILE = "tokens.txt";
 
@@ -155,6 +166,89 @@ function nemotron35Shared(base: string): ModelFileSpec[] {
     }),
   ];
 }
+
+/** The decoder, joiner and symbol table every English Nemotron tier shares, byte for byte. */
+function nemotronEnShared(base: string): ModelFileSpec[] {
+  return [
+    liveFile(base, "decoder.int8.onnx", {
+      sha256: "0be9702c2f427a2b6bb241d298e0d3836a558de1f5b9fd3018f1cce6e2b3fa98",
+      size: 7257753,
+    }),
+    liveFile(base, "joiner.int8.onnx", {
+      sha256: "a35eac38a22ebceb04d230ed7afe0d68f446ba6914a036b97f14fece95967e23",
+      size: 1735862,
+    }),
+    liveFile(base, SYMBOLS_FILE, {
+      sha256: "dc0b4584ab2e4ddbf888425c076c61b736e7356a015250db7d307e6f1a8188ff",
+      size: 8952,
+    }),
+  ];
+}
+
+/**
+ * One more chunk size of a streaming Nemotron: its own encoder, the shared rest. Fetched only when
+ * named, like every live model; `auto` never picks one (live-engines.ts).
+ */
+function streamingTier(
+  family: "en" | "3.5",
+  ms: number,
+  rev: string,
+  encoder: { sha256: string; size: number },
+): CatalogEntry {
+  const id = `nemotron-${family}-${ms}`;
+  const base = family === "en" ? HF_NEMOTRON_EN_TIER(ms, rev) : HF_NEMOTRON_35_TIER(ms, rev);
+  const en = family === "en";
+  return {
+    id,
+    ...MODEL_TEXT[id],
+    job: `live recognition, ${en ? "English" : "35 languages and switching between them"}, streaming at ${ms} ms (asr.live.engine)`,
+    licence: en ? "NVIDIA Open Model License" : "OpenMDW-1.1",
+    source: en
+      ? "https://huggingface.co/nvidia/nemotron-speech-streaming-en-0.6b"
+      : "https://huggingface.co/nvidia/nemotron-3.5-asr-streaming-0.6b",
+    serves: ["live"],
+    runtime: "sherpa-onnx",
+    ...EVERYWHERE,
+    languages: en ? ["en"] : NEMOTRON_35_LANGUAGES,
+    onDemand: true,
+    files: [
+      liveFile(base, "encoder.int8.onnx", encoder),
+      ...(en ? nemotronEnShared(base) : nemotron35Shared(base)),
+    ],
+  };
+}
+
+/**
+ * The other chunk sizes of the two streaming Nemotrons: a shorter chunk writes a word sooner, a
+ * longer one sees more audio before it writes. Their accuracy and speed in akou are not measured
+ * (model-scores.ts); docs/research/model-catalog-2026-10.md lists them.
+ */
+const MORE_TIERS: readonly CatalogEntry[] = [
+  streamingTier("en", 80, "2866f44b7af4fd6d0da5ce712772b3497b0871bf", {
+    sha256: "29a6aaf9155f25562a08a1aeea1f1a1a5d24b2f44a1d68211faf8a92073d1df6",
+    size: 652916847,
+  }),
+  streamingTier("en", 160, "237e551abd7a411ef92d3595454d9f6ab5fe7d6c", {
+    sha256: "71111f61b18e1e65e01e369434a5c0434868d2f44892742ae54240600c681209",
+    size: 652916849,
+  }),
+  streamingTier("en", 1120, "b0b6bae3da99ea3d81b315ba018e951501850c2c", {
+    sha256: "7d2246da3c077e8b57698d398e09d8ca67f50de73b3468af397b22213ce72117",
+    size: 652916852,
+  }),
+  streamingTier("3.5", 80, "2ac5952ae18a2cc010c25e3fd96ad20cf254bd09", {
+    sha256: "411e1222810f4a4cf0a3704c7609597a12def5b4ad2c7347a24ccd40d895484d",
+    size: 657601516,
+  }),
+  streamingTier("3.5", 160, "b3a4dbde84fba1a13cb4270e6730b525ac6a2db6", {
+    sha256: "e1b39e5e16bef578a54ed2fba5f031438e000cc36c3ea2ca49d55699d5baebd4",
+    size: 657601518,
+  }),
+  streamingTier("3.5", 320, "424ce58898995b713f84341f2e1492f9207a26aa", {
+    sha256: "f79c3fcc149f268b54b7d5754bdc2ba5c47c16b1fc70d15728a56f6efbf60ca5",
+    size: 657601518,
+  }),
+];
 
 /** The live pass's streaming engines (live-engines.ts): fetched when a call's setting needs one. */
 const LIVE_MODELS: readonly CatalogEntry[] = [
@@ -368,6 +462,7 @@ export const MODELS: readonly CatalogEntry[] = [
     ],
   },
   ...LIVE_MODELS,
+  ...MORE_TIERS,
   ...LLAMA_CATALOG,
 ];
 

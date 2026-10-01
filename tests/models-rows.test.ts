@@ -10,15 +10,24 @@ import { describe, expect, test } from "bun:test";
 import { LIVE_SETUPS, type LiveView, REVIEWS } from "../src/main/asr/live-setups.ts";
 import { LLAMA_CATALOG, QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { type Measure, type NotMeasured, SCORES } from "../src/main/asr/model-scores.ts";
-import { modelsFor, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
+import {
+  type CatalogEntry,
+  MODELS,
+  modelsFor,
+  NEMOTRON,
+  RECOGNIZER,
+} from "../src/main/asr/models.ts";
 import { SETTINGS } from "../src/main/config/schema.ts";
-import { scoreView } from "../src/main/server/model-store.ts";
+import { kindOf, scoreView } from "../src/main/server/model-store.ts";
 import { PRESETS } from "../src/main/server/presets.ts";
 import {
   accuracyText,
   afterCallHelp,
+  allModelsText,
   autoHelp,
   bestHelp,
+  catalogGroups,
+  catalogLine,
   DEFAULTS,
   DIARIZERS,
   gbText,
@@ -34,6 +43,8 @@ import {
   RECOGNIZER_ID,
   reasonText,
   removeRefusal,
+  roleOf,
+  roleTitle,
   sizeText,
   speakersHelp,
   totalText,
@@ -97,6 +108,7 @@ function view(o: Partial<LiveView>): LiveView {
     setups: (["nemotron", "parakeet", "voxtral"] as const).map(setup),
     review: { setting: "none", everySeconds: 60, next: null, running: null, choices: [] },
     slots: { live: [], review: [] },
+    advice: {},
     runningId: null,
     ...o,
   };
@@ -287,5 +299,67 @@ describe("[SV-U6] sizes and the page's own names", () => {
     for (const [key, value] of Object.entries(DEFAULTS))
       expect([key, reg[key]?.default]).toEqual([key, value]);
     expect(MODELS_KEYS.filter((k) => !(k in SETTINGS))).toEqual([]);
+  });
+});
+
+describe("All models: the whole catalog by what each model does, the ones on disk first", () => {
+  /** The real catalog as `GET /models` would list it, with `here` on disk. */
+  const rows = (here: ReadonlySet<string>): ModelRow[] =>
+    (MODELS as readonly CatalogEntry[]).map((m) =>
+      row(m.id, {
+        kind: kindOf(m),
+        job: m.job,
+        name: m.name ?? null,
+        lines: { ...(m.lines ?? {}) },
+        streaming: m.serves.includes("live"),
+        after_call: m.serves.includes("final"),
+        state: here.has(m.id) ? "ready" : "missing",
+        size: m.files.reduce((n, f) => n + f.size, 0),
+      }),
+    );
+  const HERE = new Set([RECOGNIZER, "silero-vad", NEMOTRON, "titanet-small", "nemotron-3.5-560"]);
+
+  test("every catalog model is in exactly one group, and each group lists the ones on disk first", () => {
+    const all = rows(HERE);
+    const groups = catalogGroups(all);
+    expect(groups.map((g) => g.role)).toEqual(["live", "final", "speakers", "helpers"]);
+    const listed = groups.flatMap((g) => g.rows.map((r) => r.id));
+    expect(listed.sort()).toEqual(all.map((r) => r.id).sort());
+    const of = (role: string) => groups.find((g) => g.role === role)?.rows.map((r) => r.id) ?? [];
+    // Nemotron 3.5 at 560 ms is here, so it leads its group; the rest keep the catalog's order.
+    expect(of("live")).toEqual([
+      "nemotron-3.5-560",
+      "nemotron-en-560",
+      "nemotron-3.5-1120",
+      "nemotron-en-80",
+      "nemotron-en-160",
+      "nemotron-en-1120",
+      "nemotron-3.5-80",
+      "nemotron-3.5-160",
+      "nemotron-3.5-320",
+    ]);
+    // Parakeet streams too, but it writes the transcript after the call: it is a final model.
+    expect(of("final")).toEqual([RECOGNIZER, QWEN_ID]);
+    expect(of("speakers")).toEqual([NEMOTRON, "titanet-small", "pyannote-segmentation-3.0"]);
+    expect(of("helpers")[0]).toBe("silero-vad");
+    expect(roleOf({ kind: "speech", after_call: false })).toBe("live");
+    expect(roleTitle("final", true)).toBe("Jobs");
+    expect(roleTitle("final", false)).toBe("After the call");
+    // Positive control: with nothing here the live group is in the catalog's own order.
+    expect(catalogGroups(rows(new Set()))[0]?.rows[0]?.id).toBe("nemotron-en-560");
+  });
+
+  test("every model has a name and a line, never its id; the count line says what is here", () => {
+    for (const r of rows(HERE)) {
+      expect(`${r.id}: ${modelName(r) === r.id}`).toBe(`${r.id}: false`);
+      expect(`${r.id}: ${catalogLine(r).length > 0}`).toBe(`${r.id}: true`);
+    }
+    const tier = rows(HERE).find((r) => r.id === "nemotron-en-80") as ModelRow;
+    expect(modelName(tier)).toBe("Nemotron streaming, English, 80 ms");
+    expect(catalogLine(tier)).toContain("Accuracy not measured yet.");
+    expect(allModelsText(rows(HERE), "this Mac")).toBe(
+      `5 on this Mac, ${MODELS.length - 5} more to download.`,
+    );
+    expect(allModelsText([row("a")], "this Mac")).toBe("Every model is on this Mac.");
   });
 });

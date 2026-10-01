@@ -48,9 +48,9 @@ beforeAll(async () => {
     reg.entry(NEMOTRON, ["diar.onnx"]),
     reg.entry(PYANNOTE, ["seg.onnx"]),
     reg.entry(TITANET, ["t.onnx"]),
-    // Qwen fetched on demand only: missing here.
-    { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true } as ModelSpecEntry,
-    { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true } as ModelSpecEntry,
+    // Qwen fetched on demand only: missing here. Each says what it serves, as the catalog does.
+    { ...reg.entry(QWEN_ASR, ["q.gguf"]), onDemand: true, serves: ["final"] } as ModelSpecEntry,
+    { ...reg.entry(STREAM, ["s.onnx"]), onDemand: true, serves: ["live"] } as ModelSpecEntry,
   ];
   mkdirSync(models, { recursive: true });
   for (const m of catalog.slice(0, 5)) reg.install(models, m);
@@ -184,6 +184,108 @@ describe("the Models page", () => {
         await page.click("#calls-open");
         await page.click("#models-open");
         await page.waitForSelector(AFTER);
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "a model that does not fit the call's languages keeps its size and a full-strength Download, and says why under its name",
+    async () => {
+      await rig.api("PATCH", "/config", { "asr.languages": ["en", "es"] });
+      const row = `${LIVE} [data-setup="${STREAM}"]`;
+      /** How visible an element is on screen: its opacity times every ancestor's. */
+      const seen = (sel: string) =>
+        page.$eval(sel, (el) => {
+          let o = 1;
+          for (let e: Element | null = el; e; e = e.parentElement)
+            o *= Number(getComputedStyle(e).opacity);
+          return o;
+        });
+      try {
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${row}[data-state="blocked"]`);
+        expect(await page.textContent(`${row} .pg-help`)).toBe(
+          "Nemotron English does not hear es.",
+        );
+        expect(await page.textContent(`${row} .pg-value`)).toMatch(/^\d+ (KB|MB)$|GB$/);
+        const get = `${row} [data-action="download"]`;
+        expect(await page.isEnabled(get)).toBe(true);
+        // The radio and the name fade to say "not for this call"; the Download does not.
+        expect(await seen(`${row} .pg-name`)).toBeLessThan(1);
+        expect(await seen(get)).toBe(1);
+        expect(await seen(`${row} .pg-help`)).toBe(1);
+      } finally {
+        await rig.api("PATCH", "/config", { "asr.languages": ["en"] });
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${row}[data-state="missing"]`);
+      }
+    },
+    UI_TIMEOUT,
+  );
+
+  test(
+    "All models: every model in four groups, the ones here first, each missing one with its size and a full-strength Download, and why one does not suit the call under its name",
+    async () => {
+      await rig.api("PATCH", "/config", { "asr.languages": ["en", "es"] });
+      const ALL = "#page-models";
+      try {
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector("#models-go-all");
+        expect(await page.textContent("#models-go-all")).toMatch(
+          /5 on this (Mac|computer), 2 more to download\./,
+        );
+        await page.click("#models-go-all");
+        await page.waitForSelector(`${ALL} section[data-role]`);
+        const groups = await page.$$eval(`${ALL} section[data-role]`, (els) =>
+          els.map((e) => ({
+            role: (e as HTMLElement).dataset.role,
+            ids: [...e.querySelectorAll<HTMLElement>("[data-model]")].map((r) => r.dataset.model),
+          })),
+        );
+        expect(groups).toEqual([
+          { role: "live", ids: [STREAM] },
+          { role: "final", ids: [RECOGNIZER, QWEN_ASR] },
+          { role: "speakers", ids: [NEMOTRON, PYANNOTE, TITANET] },
+          { role: "helpers", ids: ["silero-vad"] },
+        ]);
+        // Every missing model has its size and a Download; nothing on disk offers one.
+        const rows = await page.$$eval(`${ALL} [data-model]`, (els) =>
+          els.map((e) => ({
+            id: (e as HTMLElement).dataset.model,
+            state: (e as HTMLElement).dataset.state,
+            get: e.querySelector('[data-action="download"]') !== null,
+            size: e.querySelector(".pg-value")?.textContent ?? "",
+          })),
+        );
+        for (const r of rows) {
+          expect(`${r.id}: ${r.get}`).toBe(`${r.id}: ${r.state === "missing"}`);
+          expect(r.size).toMatch(/\d (KB|MB|GB)$/);
+        }
+        expect(rows.filter((r) => r.state === "missing").map((r) => r.id)).toEqual([
+          STREAM,
+          QWEN_ASR,
+        ]);
+        // The English-only model says why it does not suit English and Spanish, and keeps its
+        // Download at full strength.
+        const stream = `${ALL} [data-model="${STREAM}"]`;
+        expect(await page.textContent(`${stream} .pg-why`)).toBe(
+          "Nemotron English does not hear es.",
+        );
+        expect(await page.isEnabled(`${stream} [data-action="download"]`)).toBe(true);
+        const words = await page.innerText(ALL);
+        for (const bad of [RECOGNIZER, QWEN_ASR, STREAM, "asr.", "server."])
+          expect(`${bad}: ${words.includes(bad)}`).toBe(`${bad}: false`);
+        await page.click(`${ALL} .pg-back`);
+        await page.waitForSelector(`${LIVE} [data-setup]`);
+      } finally {
+        await rig.api("PATCH", "/config", { "asr.languages": ["en"] });
+        await page.click("#calls-open");
+        await page.click("#models-open");
+        await page.waitForSelector(`${LIVE} [data-setup="${STREAM}"][data-state="missing"]`);
       }
     },
     UI_TIMEOUT,
@@ -426,18 +528,19 @@ describe("the Models page", () => {
   );
 
   test(
-    "the helpers are one row away, with a way back",
+    "All models is one row away, with a way back",
     async () => {
-      await page.click("#models-go-helpers");
+      await page.click("#models-go-all");
       await page.waitForSelector("#page-models .pg-back");
       const text = await page.innerText("#page-models");
       expect(text).toContain("Voice detection");
-      // TitaNet is here, not under a speaker choice.
+      // TitaNet is listed too, though no speaker choice is its own.
       expect(text).toContain("Speaker voices");
+      expect(text).toContain("Qwen3-ASR 1.7B");
       await page.click("#page-models .pg-back");
       await page.waitForSelector(`${LIVE} [data-setup]`);
       expect(await page.evaluate(() => (document.activeElement as HTMLElement | null)?.id)).toBe(
-        "models-go-helpers",
+        "models-go-all",
       );
     },
     UI_TIMEOUT,
@@ -500,6 +603,60 @@ describe("the Models page", () => {
       await page.setViewportSize({ width: 480, height: 800 });
       const overflow = await page.$eval("#pages", (d) => d.scrollWidth - d.clientWidth);
       expect(overflow <= 0).toBe(true);
+    },
+    UI_TIMEOUT,
+  );
+});
+
+describe("a chunk size nobody measured, on the Live transcript list", () => {
+  /** An English tier with no score of its own (model-scores.ts), beside the measured 560 ms one. */
+  const TIER = "nemotron-en-80";
+  let other: UiRig;
+  let p: Page;
+  const box = tempDir("akou-ui-models-tier-");
+  let reg2: ModelRegistry;
+
+  beforeAll(async () => {
+    reg2 = modelRegistry();
+    const dir = join(box.dir, "models");
+    const catalog: ModelSpecEntry[] = [
+      reg2.entry(RECOGNIZER, ["a.onnx"]),
+      reg2.entry("silero-vad", ["vad.onnx"]),
+      reg2.entry(NEMOTRON, ["diar.onnx"]),
+      reg2.entry(TITANET, ["t.onnx"]),
+      { ...reg2.entry(STREAM, ["s.onnx"]), onDemand: true, serves: ["live"] } as ModelSpecEntry,
+      { ...reg2.entry(TIER, ["s80.onnx"]), onDemand: true, serves: ["live"] } as ModelSpecEntry,
+    ];
+    mkdirSync(dir, { recursive: true });
+    for (const m of catalog.slice(0, 4)) reg2.install(dir, m);
+    other = await uiRig({
+      modelRegistry: catalog,
+      settings: { "asr.modelsDir": dir, "asr.diarizer": "nemotron", "asr.languages": ["en"] },
+      jobs: { modelStore: { retryMs: [5, 5, 5], freeBytes: () => 1e12 } },
+    });
+    await until(() => other.app.recognizer() === "ready", 10_000, "the recognizer");
+    p = await other.open();
+    await p.click("#models-open");
+    await p.waitForSelector(`${LIVE} [data-setup="${TIER}"]`);
+  }, UI_TIMEOUT);
+
+  afterAll(async () => {
+    await other?.close();
+    reg2?.stop();
+    box.cleanup();
+  });
+
+  test(
+    "its row says it is not measured and never borrows the 560 ms tier's figure, which stays on that tier",
+    async () => {
+      const tier = (await p.textContent(`${LIVE} [data-setup="${TIER}"] .pg-help`)) ?? "";
+      expect(tier).toContain("Accuracy not measured yet.");
+      expect(tier).toContain("on a slow machine the transcript can fall behind");
+      expect(tier).not.toContain("wrong on");
+      // Positive control: the measured tier keeps the family's figure.
+      expect(await p.textContent(`${LIVE} [data-setup="${STREAM}"] .pg-help`)).toContain(
+        "wrong on meetings",
+      );
     },
     UI_TIMEOUT,
   );

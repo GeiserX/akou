@@ -16,8 +16,13 @@ import {
   writeFileSync,
 } from "node:fs";
 import { join } from "node:path";
+import { LIVE_ENGINES } from "../src/main/asr/live-engines.ts";
+import { SCORES } from "../src/main/asr/model-scores.ts";
+import { MODEL_TEXT } from "../src/main/asr/model-text.ts";
 import {
+  type CatalogEntry,
   ChecksumError,
+  catalogProblems,
   DownloadRefused,
   defaultModelsDir,
   downloadFile,
@@ -37,6 +42,16 @@ import {
 } from "../src/main/asr/models.ts";
 import { recognizerConfig, SherpaRecognizer, writeBpeVocab } from "../src/main/asr/sherpa.ts";
 import { tempDir } from "./helpers.ts";
+
+/** The other chunk sizes of the streaming Nemotrons, in the catalog's order. */
+const TIERS = [
+  "nemotron-en-80",
+  "nemotron-en-160",
+  "nemotron-en-1120",
+  "nemotron-3.5-80",
+  "nemotron-3.5-160",
+  "nemotron-3.5-320",
+];
 
 const cleanups: (() => void)[] = [];
 afterEach(() => {
@@ -88,9 +103,15 @@ describe("the registry", () => {
     ]);
     expect(
       MODELS.filter((m) => m.onDemand)
-        .slice(0, 4)
+        .slice(0, 10)
         .map((m) => m.id),
-    ).toEqual(["nemotron-en-560", "nemotron-3.5-560", "nemotron-3.5-1120", "qwen3-asr-1.7b"]);
+    ).toEqual([
+      "nemotron-en-560",
+      "nemotron-3.5-560",
+      "nemotron-3.5-1120",
+      ...TIERS,
+      "qwen3-asr-1.7b",
+    ]);
     for (const m of MODELS) {
       expect(m.licence).toMatch(
         /^(MIT|CC-BY-4\.0|Apache-2\.0|OpenMDW-1\.1|NVIDIA Open Model License)$/,
@@ -107,6 +128,55 @@ describe("the registry", () => {
     const names = MODELS[0]?.files.map((f) => f.name);
     expect(names).toContain("tokenizer.json");
     expect(names).toContain("tokens.txt");
+  });
+
+  test("each other chunk size of a streaming Nemotron runs as the 560 ms tier does: its own encoder, the same rest, a live engine row, a name and a line, and no score anyone guessed", () => {
+    /** What is wrong with a tier entry, against the 560 ms tier of its family; empty when whole. */
+    const problems = (m: CatalogEntry, engines: Record<string, { tierMs: number }>): string[] => {
+      const out: string[] = [];
+      const [, family, ms] = /^nemotron-(en|3\.5)-(\d+)$/.exec(m.id) ?? [];
+      if (!family || !ms) return [`${m.id}: not a tier id`];
+      const base = MODELS.find((x) => x.id === `nemotron-${family}-560`) as CatalogEntry;
+      if (m.files.map((f) => f.name).join() !== base.files.map((f) => f.name).join())
+        out.push("files differ from the 560 ms tier's");
+      for (const f of m.files) {
+        if (!f.url.includes(`-${ms}ms-int8-`))
+          out.push(`${f.name}: url is not the ${ms} ms export`);
+        if (!/\/resolve\/[0-9a-f]{40}\//.test(f.url)) out.push(`${f.name}: url not pinned`);
+        const same = base.files.find((b) => b.name === f.name);
+        if (f.name === "encoder.int8.onnx") {
+          if (same?.sha256 === f.sha256) out.push("encoder is the 560 ms tier's");
+        } else if (same?.sha256 !== f.sha256 || same?.size !== f.size)
+          out.push(`${f.name}: not the shared file`);
+      }
+      if (engines[m.id]?.tierMs !== Number(ms)) out.push("no live engine row with its chunk");
+      if (m.licence !== base.licence || m.source !== base.source) out.push("licence or source");
+      if (JSON.stringify(m.languages) !== JSON.stringify(base.languages)) out.push("languages");
+      if (!m.onDemand || m.serves.join() !== "live") out.push("not an on-demand live model");
+      if (!MODEL_TEXT[m.id]?.name || !MODEL_TEXT[m.id]?.lines.live) out.push("no name or line");
+      const sc = SCORES[m.id];
+      if (!sc || !("notMeasured" in sc.accuracy) || !("notMeasured" in sc.speed))
+        out.push("a score nobody measured");
+      return out;
+    };
+    const tiers = MODELS.filter((m) => TIERS.includes(m.id));
+    expect(tiers.map((m) => m.id)).toEqual(TIERS);
+    for (const m of tiers)
+      expect(`${m.id}: ${problems(m, LIVE_ENGINES).join("; ")}`).toBe(`${m.id}: `);
+    expect(catalogProblems(MODELS)).toEqual([]);
+    // Every encoder is its own file.
+    expect(new Set(tiers.map((m) => m.files[0]?.sha256)).size).toBe(tiers.length);
+    // Positive control: a tier whose engine row has the wrong chunk, or a shared file that is not
+    // the shared one, is caught.
+    const one = tiers[0] as CatalogEntry;
+    expect(problems(one, { ...LIVE_ENGINES, [one.id]: { tierMs: 560 } })).toContain(
+      "no live engine row with its chunk",
+    );
+    const bent = {
+      ...one,
+      files: one.files.map((f) => (f.name === "joiner.int8.onnx" ? { ...f, size: 1 } : f)),
+    };
+    expect(problems(bent, LIVE_ENGINES)).toContain("joiner.int8.onnx: not the shared file");
   });
 
   test("Nemotron is the 400 MB ONNX export pinned to a revision, under NVIDIA's OpenMDW licence", () => {

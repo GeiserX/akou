@@ -615,11 +615,11 @@ describe("[DK-M7] the macOS window's title bar strip", () => {
               expect([home.title, sub.title]).toEqual(onMac.map((top) => top - 28));
               expect(`${platform}: ${zooms()}`).toBe(`${platform}: 0`);
             }
-            // The Models page and its Helpers page start under the same strip, with the same drag.
+            // The Models page and its All models page start under the same strip, with the same drag.
             await page.click("#models-open");
             await page.waitForSelector("#page-models .pg-top h1");
             const models = await pageTitleBar(page, "#page-models");
-            await page.click("#models-go-helpers");
+            await page.click("#models-go-all");
             await page.waitForSelector("#page-models .pg-back");
             const helpers = await pageTitleBar(page, "#page-models");
             if (platform === "darwin") {
