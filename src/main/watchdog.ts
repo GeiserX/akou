@@ -11,6 +11,8 @@
  *    llama-server) with SIGKILL, since SIGTERM is handled on the stuck thread or on the window
  *    toolkit's, which is what stuck it. The ElectroBun launcher exits when its child does. The next
  *    `akou` command starts a fresh app.
+ *    When the window was open, it opens the app again a second later (`open -a` on the bundle), at
+ *    most once per `REOPEN_MS`, so a person using only the window does not see akou vanish.
  * 3. With a call recording, it ends nothing: the capture helper writes the audio to its file
  *    whatever the app does, and the CLI tells the user how to restart by hand. It writes a second
  *    line if the app's thread comes back.
@@ -44,6 +46,27 @@ export interface WatchdogOptions {
   tickMs?: number;
   /** The process to sample and end; this one by default (tests point it at a child). */
   pid?: number;
+  /** Is the window open? Read at every beat; when it was, the app is opened again after it ends. */
+  windowOpen?: () => boolean;
+  /** What opens the app again (`relaunchCommand`); null opens nothing. */
+  relaunch?: readonly string[] | null;
+  reopenMs?: number;
+}
+
+/** Opening the app again after the watchdog ends it, at most this often. */
+export const REOPEN_MS = 10 * 60_000;
+
+/**
+ * How to open the desktop app again once it has ended: `open -a` on its bundle, a second later so
+ * the ended process is gone and LaunchServices starts a new one. Null outside a macOS bundle.
+ */
+export function relaunchCommand(
+  execPath: string = process.execPath,
+  platform: string = process.platform,
+): string[] | null {
+  const m = /^(.*\.app)\/Contents\/MacOS\/[^/]+$/.exec(execPath);
+  if (platform !== "darwin" || !m) return null;
+  return ["/bin/sh", "-c", 'sleep 1; exec /usr/bin/open -a "$1"', "sh", m[1] as string];
 }
 
 export interface Watchdog {
@@ -53,8 +76,8 @@ export interface Watchdog {
 /** The Worker. `workerData`: `{ beats, cfg }`; `beats` is an Int32Array over shared memory. */
 const SOURCE = String.raw`
 const { workerData } = require("node:worker_threads");
-const { appendFileSync, mkdirSync, readdirSync, rmSync } = require("node:fs");
-const { spawnSync } = require("node:child_process");
+const { appendFileSync, chmodSync, mkdirSync, readdirSync, rmSync, statSync, writeFileSync } = require("node:fs");
+const { spawn, spawnSync } = require("node:child_process");
 const { join } = require("node:path");
 const { beats, cfg } = workerData;
 const pad = (n, w = 2) => String(n).padStart(w, "0");
@@ -75,7 +98,10 @@ function sample() {
     const file = join(cfg.hangsDir, "hang-" + new Date().toISOString().replace(/[:.]/g, "-") + ".txt");
     const r = spawnSync("/usr/bin/sample", [String(cfg.pid), String(cfg.sampleSeconds), "-file", file],
       { stdio: "ignore", timeout: (cfg.sampleSeconds + 2) * 1000 });
-    if (r.status === 0) line("info", "a sample of the stuck process is in " + file);
+    if (r.status === 0) {
+      chmodSync(file, 0o600);
+      line("info", "a sample of the stuck process is in " + file);
+    }
     const old = readdirSync(cfg.hangsDir).filter((f) => /^hang-.*\.txt$/.test(f)).sort().reverse().slice(5);
     for (const f of old) rmSync(join(cfg.hangsDir, f), { force: true });
   } catch {}
@@ -90,6 +116,28 @@ function below(root) {
     for (const [pid, ppid] of rows) if (ppid === p && !out.includes(pid)) { out.push(pid); queue.push(pid); }
   }
   return out;
+}
+// Opens akou again after it ends, when its window was open, at most once per REOPEN_MS: a person
+// who uses only the window would otherwise see it vanish. The stamp file is what bounds it, so a
+// reopened app that hangs again is not reopened again.
+function reopen() {
+  if (!cfg.relaunch || Atomics.load(beats, 2) !== 1) return;
+  const stamp = join(cfg.hangsDir, "reopened");
+  try {
+    const ago = Date.now() - statSync(stamp).mtimeMs;
+    if (ago < cfg.reopenMs) {
+      line("warn", "not opening akou again: it was reopened " + Math.round(ago / 60000) + " min ago");
+      return;
+    }
+  } catch {}
+  try {
+    mkdirSync(cfg.hangsDir, { recursive: true, mode: 0o700 });
+    writeFileSync(stamp, "", { mode: 0o600 });
+    spawn(cfg.relaunch[0], cfg.relaunch.slice(1), { detached: true, stdio: "ignore" }).unref();
+    line("info", "opening akou again, because its window was open");
+  } catch (e) {
+    line("warn", "could not open akou again: " + e.message);
+  }
 }
 let last = Atomics.load(beats, 0);
 let still = 0;
@@ -117,13 +165,15 @@ setInterval(() => {
   if (!cfg.end) return;
   line("warn", "ending akou (pid " + cfg.pid + "), so the next command starts a fresh one");
   if (process.platform !== "win32") for (const pid of below(cfg.pid)) { try { process.kill(pid, "SIGKILL"); } catch {} }
+  // After the helpers go and before akou does: the opener must not be among what is ended.
+  reopen();
   try { process.kill(cfg.pid, "SIGKILL"); } catch {}
 }, workerData.cfg.tickMs);
 `;
 
 /** Starts the watchdog: the beat on this thread, and the Worker that watches it. */
 export function startWatchdog(o: WatchdogOptions): Watchdog {
-  const beats = new Int32Array(new SharedArrayBuffer(8));
+  const beats = new Int32Array(new SharedArrayBuffer(12));
   const beat = () => {
     Atomics.add(beats, 0, 1);
     let rec = false;
@@ -131,6 +181,11 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
       rec = o.recording();
     } catch {}
     Atomics.store(beats, 1, rec ? 1 : 0);
+    let open = false;
+    try {
+      open = o.windowOpen?.() ?? false;
+    } catch {}
+    Atomics.store(beats, 2, open ? 1 : 0);
   };
   beat();
   const cfg = {
@@ -142,6 +197,8 @@ export function startWatchdog(o: WatchdogOptions): Watchdog {
     tickMs: o.tickMs ?? TICK_MS,
     sampleSeconds: WATCHDOG_SAMPLE_SECONDS,
     pid: o.pid ?? process.pid,
+    relaunch: o.relaunch ?? null,
+    reopenMs: o.reopenMs ?? REOPEN_MS,
   };
   const url = URL.createObjectURL(new Blob([SOURCE], { type: "application/javascript" }));
   const worker = new Worker(url, { workerData: { beats, cfg } } as WorkerOptions);

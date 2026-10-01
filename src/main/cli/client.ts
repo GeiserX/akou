@@ -18,7 +18,15 @@
  */
 
 import { spawn } from "node:child_process";
-import { closeSync, existsSync, mkdirSync, openSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  statSync,
+} from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
 import { processAlive } from "../../core/log/writer.ts";
@@ -28,10 +36,9 @@ import { APP_LOG } from "../app-log.ts";
 import { resolvePaths } from "../config/schema.ts";
 import {
   ANSWER_MS,
-  descendants,
   HANGS_DIR,
   HEAL_BUDGET_MS,
-  launcherOf,
+  HUNG_MS,
   probe,
   processTable,
   type Recording,
@@ -39,6 +46,7 @@ import {
   sampleHung,
   seconds,
   stopAll,
+  stopList,
 } from "./heal.ts";
 
 /** Exit codes (DESIGN 6.1). */
@@ -108,6 +116,15 @@ export class StoppedHung extends Hung {
 
 /** What a program the CLI launches prints, in the config folder. */
 export const LAUNCH_LOG = "launch.log";
+/** At this size `launch.log` becomes `launch.log.1`, replacing the older one. */
+export const LAUNCH_LOG_MAX_BYTES = 1024 * 1024;
+
+/** Moves `file` to `file.1` once it reaches `max` bytes. Never throws. */
+export function rotate(file: string, max: number): void {
+  try {
+    if (statSync(file).size >= max) renameSync(file, `${file}.1`);
+  } catch {}
+}
 
 /** A probe answered this recently: the next request goes straight out. */
 const FRESH_MS = 5000;
@@ -257,6 +274,8 @@ export class ApiClient {
   private launching: Promise<Runtime> | null = null;
   /** When the app last answered a probe (`performance.now()`), so a burst of requests probes once. */
   private answeredAt = Number.NEGATIVE_INFINITY;
+  /** What the client did on its own since the last `takeNotes` (a restart), for the MCP answer. */
+  private notes: string[] = [];
 
   constructor(readonly o: ClientOptions) {
     this.configDir = resolvePaths(o.env).configDir;
@@ -452,7 +471,9 @@ export class ApiClient {
     mkdirSync(this.configDir, { recursive: true, mode: 0o700 });
     // What the launched program prints. The app writes its own `app.log` (DK-M8); this file holds
     // what it printed before it could, such as a start that failed.
-    const log = openSync(join(this.configDir, LAUNCH_LOG), "a", 0o600);
+    const file = join(this.configDir, LAUNCH_LOG);
+    rotate(file, LAUNCH_LOG_MAX_BYTES);
+    const log = openSync(file, "a", 0o600);
     try {
       const child = spawn(cmd[0] as string, cmd.slice(1), {
         detached: true,
@@ -506,14 +527,13 @@ export class ApiClient {
     const rec = await recordingBelow(rows, rt.pid);
     if (rec) throw new Hung(recordingMessage(rt.pid, rec));
     await sampleHung(rt.pid, join(this.configDir, HANGS_DIR));
-    // A slow app, not a hung one: it answers now, so nothing is stopped.
-    if ((await probe(rt.port, 1000)) === "answers") {
+    // A busy app, not a hung one, answers within the watchdog's silence: it is left alone.
+    const rest = Math.max(1000, HUNG_MS - (performance.now() - t0));
+    if ((await probe(rt.port, rest)) === "answers") {
       this.answeredAt = performance.now();
       return rt;
     }
-    const launcher = launcherOf(rows, rt.pid);
-    const pids = [...(launcher ? [launcher] : []), rt.pid, ...descendants(rows, rt.pid)];
-    const left = await stopAll(pids);
+    const left = await stopAll(stopList(rows, rt.pid));
     if (left.length > 0) {
       throw new Hung(
         `akou is not answering and could not be stopped (pid ${left.join(", ")} is still there); stop it with kill -KILL ${left.join(" ")} and run the command again`,
@@ -531,8 +551,15 @@ export class ApiClient {
       Math.max(this.budget, HEAL_BUDGET_MS - (performance.now() - t0)),
     );
     this.answeredAt = performance.now();
-    this.o.note?.(`akou was not answering; restarted it (${seconds(t0)} s)`);
+    const line = `akou was not answering; restarted it (${seconds(t0)} s)`;
+    this.notes.push(line);
+    this.o.note?.(line);
     return next;
+  }
+
+  /** The lines of what the client did on its own since the last call (DK-M8), then none. */
+  takeNotes(): string[] {
+    return this.notes.splice(0);
   }
 
   tokenPath(): string {

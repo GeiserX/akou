@@ -5,9 +5,10 @@
  */
 
 import { describe, expect, test } from "bun:test";
-import { existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { AppLog, logStamp } from "../src/main/app-log.ts";
+import { ApiClient, LAUNCH_LOG, LAUNCH_LOG_MAX_BYTES, rotate } from "../src/main/cli/client.ts";
 import { appRig } from "./api-helpers.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -77,5 +78,34 @@ describe("[DK-M8] app.log", () => {
   test("the stamp is local wall-clock time with its offset", () => {
     const d = new Date(2026, 0, 2, 3, 4, 5, 6);
     expect(logStamp(d)).toStartWith("2026-01-02 03:04:05.006 ");
+  });
+  test("launch.log, what a program the CLI launches prints, moves to launch.log.1 at 1 MB", async () => {
+    const t = tempDir();
+    try {
+      const dir = join(t.dir, ".config", "akou");
+      mkdirSync(dir, { recursive: true });
+      const file = join(dir, LAUNCH_LOG);
+      writeFileSync(file, "x".repeat(LAUNCH_LOG_MAX_BYTES));
+      const client = new ApiClient({
+        env: { AKOU_HOME: t.dir },
+        client: "test",
+        launch: [process.execPath, "-e", "console.log('launched')"],
+        launchBudgetMs: 300,
+      });
+      // Nothing answers: the launch is refused, after it ran.
+      await expect(client.launch()).rejects.toThrow("did not answer");
+      expect(statSync(`${file}.1`).size).toBe(LAUNCH_LOG_MAX_BYTES);
+      const deadline = performance.now() + 3000;
+      while (!readFileSync(file, "utf8").includes("launched") && performance.now() < deadline) {
+        await Bun.sleep(50);
+      }
+      expect(readFileSync(file, "utf8")).toBe("launched\n");
+      // Positive control: a log under the cap stays where it is.
+      rmSync(`${file}.1`);
+      rotate(file, LAUNCH_LOG_MAX_BYTES);
+      expect(existsSync(`${file}.1`)).toBe(false);
+    } finally {
+      t.cleanup();
+    }
   });
 });

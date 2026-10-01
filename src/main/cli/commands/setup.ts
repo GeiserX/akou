@@ -168,9 +168,22 @@ function quickState(dir: string, m: ModelSpecEntry): string {
       : `incomplete (${ok}/${m.files.length})`;
 }
 
-/** `models import DIR` (models.ts `importModels`), into this machine's models folder. */
+/**
+ * `models import DIR` (models.ts `importModels`), into this machine's models folder. A long copy
+ * says how far it is on stderr, one line per tenth of each file; `--json` prints nothing until done.
+ */
 function importModels(ctx: Ctx, from: string): Promise<{ copied: string[]; missing: string[] }> {
-  return importModelFiles(from, modelsDir(ctx), registry(ctx));
+  const said = new Map<string, number>();
+  return importModelFiles(from, modelsDir(ctx), registry(ctx), {
+    onProgress: (p) => {
+      if (ctx.json || p.total === 0) return;
+      const key = `${p.model}/${p.name}`;
+      const tenth = Math.floor((10 * p.bytes) / p.total);
+      if (tenth === 0 || tenth <= (said.get(key) ?? 0)) return;
+      said.set(key, tenth);
+      ctx.io.err(`Copying ${key}: ${tenth * 10}%`);
+    },
+  });
 }
 
 /**

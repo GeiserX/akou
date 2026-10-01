@@ -257,8 +257,8 @@ export const REVIEWS: Readonly<Record<Reviewer, ReviewInfo>> = {
     // 4.29 % (46 % fewer), on the recognizer the live Worker already holds
     // (docs/research/asr-architecture.md section 3.2).
     plain:
-      "Rewrites the finished sentences with Parakeet, on the processor, with no extra memory. On read speech it cuts Nemotron's mistakes by a sixth in English and by almost half in Spanish.",
-    line: "Fewer mistakes, on the processor, with no extra memory.",
+      "Rewrites the finished sentences with Parakeet, on the processor, with little extra memory. On read speech it cuts Nemotron's mistakes by a sixth in English and by almost half in Spanish.",
+    line: "Fewer mistakes, on the processor, with little extra memory.",
   },
 };
 

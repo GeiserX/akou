@@ -235,7 +235,7 @@ import {
   type VocabFile,
   vocabPaths,
 } from "./vocab/files.ts";
-import { startWatchdog, type Watchdog } from "./watchdog.ts";
+import { relaunchCommand, startWatchdog, type Watchdog } from "./watchdog.ts";
 import { Bridge } from "./window/bridge.ts";
 import { buildUi } from "./window/bundle.ts";
 import { dictationHotkeyDefault, fixLastDefault } from "./window/hotkey.ts";
@@ -304,6 +304,8 @@ export interface WindowShell {
   close(): Promise<void>;
   /** The global hotkey that starts and stops a call, or null when another app holds it. */
   registeredHotkey?(): string | null;
+  /** Is the main window open now? The watchdog opens the app again only if it was (DK-M8). */
+  isOpen?(): boolean;
 }
 
 export type WindowFactory = (app: AkouApp) => Promise<WindowShell>;
@@ -3429,11 +3431,11 @@ export class AkouApp implements ApiApp {
     if (!existsSync(from) || !statSync(from).isDirectory()) {
       throw new HttpError(404, "not_found", `no folder ${dir}`, { dir });
     }
-    const got = await importModels(
-      from,
-      this.cfg.settings["asr.modelsDir"],
-      this.o.modelRegistry ?? MODELS,
-    );
+    const catalog = this.o.modelRegistry ?? MODELS;
+    // Through the store: the Models page shows each model's bytes as it is copied.
+    const got = this.shelf
+      ? await this.shelf.import(from, catalog)
+      : await importModels(from, this.cfg.settings["asr.modelsDir"], catalog);
     for (const fn of this.statusWatchers) fn();
     return got;
   }
@@ -3606,6 +3608,8 @@ export class AkouApp implements ApiApp {
       logFile: this.appLog.file,
       hangsDir: join(this.configDir, HANGS_DIR),
       recording: () => this.manager.live() !== null,
+      windowOpen: () => this.window?.isOpen?.() ?? false,
+      relaunch: relaunchCommand(),
     });
   }
 

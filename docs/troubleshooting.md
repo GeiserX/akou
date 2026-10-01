@@ -75,9 +75,9 @@ xattr -dr com.apple.quarantine /Applications/akou.app
 
 **Why.** Some of akou's work waits on the window's toolkit, and when the toolkit stops responding akou waits with it. It still takes connections on its port but answers none, and a plain `kill` or `pkill` does not end it. The recording itself is not affected: the capture helper writes the audio to its file on its own.
 
-**What akou does.** Before its first request every command gives the app 3 s to answer. When it does not, a command that changes something, such as `akou start`, stops akou and starts it again, then runs, all within about 15 s. A command that only reads, such as `akou status`, says akou is not answering and stops nothing; add `--restart` to restart it from there. If a call is recording, nothing is stopped, and the message says so.
+**What akou does.** Before its first request every command gives the app 3 s to answer. When it does not, a command that changes something, such as `akou start`, gives it up to 10 s in all, so a busy akou is left alone. If it is still silent, the command stops akou and starts it again, then runs, all within about 15 s. A command that only reads, such as `akou status`, says akou is not answering and stops nothing; add `--restart` to restart it from there. If a call is recording, nothing is stopped, and the message says so. A restart does stop a final pass in progress, which runs again at the next start, and a dictation in progress, whose words are lost.
 
-The app also watches itself. When its own work stops for 10 s, it writes a line to `~/.config/akou/app.log`, and with no call recording it ends itself, so the next command starts a fresh one.
+The app also watches itself. When its own work stops for 10 s, it writes a line to `~/.config/akou/app.log`, and with no call recording it ends itself, so the next command starts a fresh one. If its window was open, it opens again a second later, at most once in ten minutes; after a second hang inside that time it stays closed, and opening akou from Applications brings it back.
 
 To quit akou from a terminal, use `akou quit`: it stops a hung akou too, and returns once every akou process is gone. `kill` and `pkill -f akou` work on an akou that answers. `kill` on the launcher process alone does nothing.
 
