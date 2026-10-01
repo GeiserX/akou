@@ -50,7 +50,7 @@ import {
   type WordHyp,
 } from "./engine.ts";
 import { isLiveEngine, LIVE_ENGINES, type LiveEngineInfo } from "./live-engines.ts";
-import { modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
+import { modelEntry, modelFile, NEMOTRON, NEMOTRON_FILE, RECOGNIZER } from "./models.ts";
 import { DIARIZE_HELPER_NAME, NemotronDiarizer, NemotronStream } from "./nemotron.ts";
 
 // biome-ignore lint/suspicious/noExplicitAny: sherpa-onnx-node ships no TypeScript types.
@@ -462,10 +462,9 @@ export class SherpaModels implements ModelSet {
     this.decoding = spec.decoding ?? "greedy";
   }
 
+  /** Every file of Parakeet's catalog entry is in place (each moves in only once verified). */
   recognizerHere(): boolean {
-    return ["encoder.onnx", "decoder.onnx", "joiner.onnx", "tokens.txt"].every((n) =>
-      existsSync(this.file(RECOGNIZER, n)),
-    );
+    return modelEntry(RECOGNIZER).files.every((f) => existsSync(this.file(RECOGNIZER, f.name)));
   }
 
   private nemotron() {

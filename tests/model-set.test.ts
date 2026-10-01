@@ -185,3 +185,29 @@ describe("the live Worker with no Parakeet on disk", () => {
     expect(here.loads()).toBeGreaterThan(0);
   });
 });
+
+describe("Parakeet counts as here only with every one of its files", () => {
+  test("a folder missing its 2.4 GB weights or its tokenizer is not here; all six are", async () => {
+    const { SherpaModels } = await import("../src/main/asr/sherpa.ts");
+    const { mkdtempSync, mkdirSync, rmSync, writeFileSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "akou-parakeet-here-"));
+    try {
+      const entry = MODELS.find((m) => m.id === RECOGNIZER);
+      const names = entry?.files.map((f) => f.name) ?? [];
+      expect(names).toHaveLength(6);
+      mkdirSync(join(dir, RECOGNIZER), { recursive: true });
+      const models = new SherpaModels({ dir, cacheDir: join(dir, ".cache") });
+      for (const gone of ["encoder.weights", "tokenizer.json"]) {
+        for (const n of names) writeFileSync(join(dir, RECOGNIZER, n), "");
+        rmSync(join(dir, RECOGNIZER, gone));
+        expect(`${gone}: ${models.recognizerHere()}`).toBe(`${gone}: false`);
+      }
+      for (const n of names) writeFileSync(join(dir, RECOGNIZER, n), "");
+      expect(models.recognizerHere()).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});

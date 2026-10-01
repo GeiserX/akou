@@ -7,12 +7,15 @@
  */
 
 import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from "bun:test";
-import { existsSync, mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { Probe } from "../src/main/asr/accelerator.ts";
 import { QWEN_ASR } from "../src/main/asr/llama-catalog.ts";
 import { MODELS, type ModelSpecEntry, NEMOTRON, RECOGNIZER } from "../src/main/asr/models.ts";
-import { type AppRig, appRig, NO_GPU } from "./api-helpers.ts";
+import { type AppRig, appRig, NO_GPU, speechWav } from "./api-helpers.ts";
+import { until } from "./capture-helpers.ts";
+import { concat, silence, speak } from "./fixtures/asr-fake.ts";
+import { monoWav } from "./fixtures/audio.ts";
 import { type ModelRegistry, modelRegistry } from "./fixtures/model-registry.ts";
 import { tempDir } from "./helpers.ts";
 
@@ -66,6 +69,23 @@ afterAll(async () => {
   home.cleanup();
 });
 
+/** A dictation clip sent to `POST /v1/dictations` on one engine. */
+async function dictate(r: AppRig, engine: string): Promise<{ status: number; body: Body }> {
+  const form = new FormData();
+  form.append(
+    "file",
+    new Blob([monoWav(concat(silence(0.6), speak(["hello"]), silence(1)))]),
+    "c.wav",
+  );
+  form.append("engine", engine);
+  const res = await fetch(`http://127.0.0.1:${r.port}/v1/dictations`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${r.token}`, "x-akou-client": "test" },
+    body: form,
+  });
+  return { status: res.status, body: await res.json() };
+}
+
 const listed = async (): Promise<Record<string, Body>> =>
   Object.fromEntries(
     ((await rig.api("GET", "/models")).body as Body).models.map((m: Body) => [m.id, m]),
@@ -88,6 +108,11 @@ describe("Nemotron live and Qwen after the call: no Parakeet needed", () => {
     await rig.api("POST", "/calls/live/stop");
   });
 
+  test("dictation's fast engine is Parakeet: without it, a fast dictation is refused in plain words, never decoded on missing files", async () => {
+    const fast = await dictate(rig, "fast");
+    expect([fast.status, fast.body.error]).toEqual([503, "models_missing"]);
+  });
+
   test("Parakeet is a model like any other: Download fetches it, and Remove deletes it", async () => {
     const got = await rig.api("POST", "/models/pull", { model: RECOGNIZER });
     expect(got.status).toBeLessThan(300);
@@ -95,6 +120,9 @@ describe("Nemotron live and Qwen after the call: no Parakeet needed", () => {
     while ((await listed())[RECOGNIZER].state !== "ready" && Date.now() < deadline)
       await Bun.sleep(50);
     expect((await listed())[RECOGNIZER]).toMatchObject({ state: "ready", default: false });
+    // Positive control: with Parakeet here, fast dictates.
+    const fast = await dictate(rig, "fast");
+    expect([fast.status, fast.body.engine]).toEqual([200, "fast"]);
     const del = await rig.api("DELETE", `/models/${RECOGNIZER}`);
     expect(del.status).toBe(200);
     expect(existsSync(join(models, RECOGNIZER))).toBe(false);
@@ -114,5 +142,95 @@ describe("Nemotron live and Qwen after the call: no Parakeet needed", () => {
       await rig.api("PATCH", "/config", { "asr.final.model": "auto" });
     }
     expect(((await rig.api("GET", "/models")).body as Body).state).toBe("ready");
+  });
+});
+
+describe("a final pass on Qwen with no Parakeet ever downloaded", () => {
+  const FAKE_LLAMA = join(import.meta.dir, "fixtures", "fake-llama-server.ts");
+  const box = tempDir("akou-model-set-final-");
+  let reg2: ModelRegistry;
+  let r: AppRig;
+  let dir: string;
+
+  beforeAll(async () => {
+    reg2 = modelRegistry();
+    const ids = [RECOGNIZER, "silero-vad", NEMOTRON, "titanet-small", LIVE, QWEN_ASR];
+    const cat = ids.map(
+      (id) =>
+        ({
+          ...(MODELS.find((m) => m.id === id) as ModelSpecEntry),
+          files: reg2.entry(id, [`${id}.bin`]).files,
+        }) as ModelSpecEntry,
+    );
+    dir = join(box.dir, "models");
+    mkdirSync(dir, { recursive: true });
+    for (const m of cat.filter((x) => x.id !== RECOGNIZER)) reg2.install(dir, m);
+    const wav = speechWav(box.dir);
+    r = await appRig({
+      modelRegistry: cat,
+      helperArgs: ["--wav", wav],
+      finalAudio: ({ parts }) => ({
+        kind: "wav",
+        files: Object.fromEntries(parts.map((p) => [p, wav])),
+      }),
+      settings: {
+        "asr.modelsDir": dir,
+        "asr.diarizer": "nemotron",
+        "asr.languages": ["en", "es"],
+        "asr.llamaServer": [process.execPath, FAKE_LLAMA, "--fake-log", join(box.dir, "llama.log")],
+      },
+    });
+    await until(() => r.app.recognizer() === "ready", 10_000, "the recognizer");
+  });
+
+  afterAll(async () => {
+    await r?.close();
+    reg2?.stop();
+    box.cleanup();
+  });
+
+  const dones = async (id: string) =>
+    (await r.app.events(id, 0)).filter((e) => e.type === "final.done") as { model?: string }[];
+
+  test("a call ends and its pass runs Qwen to the end; an old call reruns on Qwen with the live model gone too", async () => {
+    expect(existsSync(join(dir, RECOGNIZER))).toBe(false);
+    const id = await r.startCall({});
+    await until(
+      async () => (await r.app.events(id, 0)).some((e) => e.type === "seg"),
+      15_000,
+      "a line",
+    );
+    expect((await r.api("POST", "/calls/live/stop")).status).toBe(200);
+    await until(async () => (await dones(id)).length === 1, 30_000, "the final.done");
+    expect((await dones(id))[0]?.model).toBe(QWEN_ASR);
+    await until(
+      async () => (await r.api("GET", `/calls/${id}`)).body.final?.state === "done",
+      10_000,
+      "the call's final state",
+    );
+    // A pass needs no live model: with Nemotron gone as well, the old call reruns on Qwen.
+    const live = join(dir, LIVE);
+    renameSync(live, `${live}.away`);
+    try {
+      let again = await r.api("POST", "/calls/last/finalize", { force: true, model: "qwen" });
+      await until(
+        async () => {
+          if (again.status !== 409) return true;
+          again = await r.api("POST", "/calls/last/finalize", { force: true, model: "qwen" });
+          return false;
+        },
+        10_000,
+        "the last pass to settle",
+      );
+      expect([again.status, again.body.model]).toEqual([202, QWEN_ASR]);
+      await until(async () => (await dones(id)).length === 2, 30_000, "the rerun's final.done");
+      expect((await dones(id))[1]?.model).toBe(QWEN_ASR);
+      // Control: Parakeet named for a run, with no Parakeet here, is refused, not started.
+      const para = await r.api("POST", "/calls/last/finalize", { force: true, model: "parakeet" });
+      expect(para.status).toBe(501);
+      expect(para.body.message).toContain("not downloaded");
+    } finally {
+      renameSync(`${live}.away`, live);
+    }
   });
 });

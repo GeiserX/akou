@@ -867,6 +867,21 @@ export class AkouApp implements ApiApp {
   }
 
   /**
+   * Whether a final pass has its models: the helpers of the running speaker-label engine, and
+   * Parakeet when Parakeet decodes. A pass needs no live model, and Qwen's own files are checked
+   * where Qwen is chosen (`chooseFinalModel`).
+   */
+  private finalModelsPresent(qwen: boolean): boolean {
+    const registry = modelsFor(
+      { "asr.diarizer": this.runningDiarizer() },
+      hostPlatform(),
+      this.o.modelRegistry ?? MODELS,
+      qwen ? [] : [RECOGNIZER],
+    );
+    return modelsPresent(this.cfg.settings["asr.modelsDir"], registry);
+  }
+
+  /**
    * What the next call's live setup depends on here: the settings (or a call's own `live` and
    * review), memory and models on disk.
    */
@@ -2375,7 +2390,7 @@ export class AkouApp implements ApiApp {
   private finalModels(qwen = false): ModelSpec | null {
     // A recognizer given on purpose (tests) runs at once, unless a model registry is given too.
     if (this.o.models !== undefined && !this.o.modelRegistry) return this.o.models;
-    if (!this.runningModelsPresent(qwen ? [RECOGNIZER] : [])) return null;
+    if (!this.finalModelsPresent(qwen)) return null;
     return this.o.models !== undefined ? this.o.models : this.finalSherpaSpec();
   }
 
@@ -2876,12 +2891,15 @@ export class AkouApp implements ApiApp {
   }
 
   /**
-   * The live Worker's Parakeet, already loaded at start, or null while no model is there. It picks
-   * the language itself, so a forced one is not sent (DC-E4).
+   * The live Worker's Parakeet, already loaded at start, or null while no model is there or
+   * Parakeet was never downloaded. It picks the language itself, so a forced one is not sent (DC-E4).
    */
   private fastEngine(): DictationEngine | null {
     const asr = this.asr;
-    return asr ? { name: "fast", decode: (samples) => asr.decode(samples) } : null;
+    // Parakeet is what `fast` decodes with: a machine that never downloaded it has no `fast`, so
+    // nothing offers it, and a live dictation whose stream fails says why instead of falling back.
+    if (!asr || (!this.givenRecognizer() && !this.liveContext().present(RECOGNIZER))) return null;
+    return { name: "fast", decode: (samples) => asr.decode(samples) };
   }
 
   /**
